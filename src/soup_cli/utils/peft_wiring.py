@@ -434,18 +434,7 @@ def _fixup_lorafa_state_dict_devices(optimizer: Any) -> Any:
                             if isinstance(v, torch.Tensor) and v.device != p.device:
                                 opt.state[n][k] = v.to(p.device)
 
-    if hasattr(optimizer, "register_load_state_dict_post_hook"):
-        optimizer.register_load_state_dict_post_hook(
-            lambda opt, *args, **kwargs: _cast_state_tensors(opt)
-        )
-
-    orig_load_state_dict = optimizer.load_state_dict
-
-    def wrapped_load_state_dict(state_dict: dict[str, Any]) -> None:
-        orig_load_state_dict(state_dict)
-        _cast_state_tensors(optimizer)
-
-    optimizer.load_state_dict = wrapped_load_state_dict
+    optimizer.register_load_state_dict_post_hook(_cast_state_tensors)
     return optimizer
 
 

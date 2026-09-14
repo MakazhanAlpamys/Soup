@@ -335,10 +335,10 @@ training:
     alpha: 16
 ```
 
-### Operating Point & Trade-offs
-- **Activation Memory:** Freezing $A$ avoids storing input activations $x \in \mathbb{R}^{B \times L \times d_{in}}$ for adapter backpropagation. Only $u = A x \in \mathbb{R}^{B \times L \times r}$ is retained, cutting adapter activation footprint by a factor of $\approx r / d_{in}$ (~256× reduction for rank 16 on hidden dim 4096).
-- **Optimizer Memory:** Trains 50% fewer parameters per adapted projection (only $B$), reducing AdamW optimizer states (`exp_avg_B`, `exp_avg_sq_B`) by half for square projections.
-- **Throughput:** Negligible overhead for $(A A^\top)^{-1}$ projection ($r \times r$ linear solve) while eliminating the backward gradient calculation for $A$.
+### Operating Point & Caveats
+- **Measured Adapter Operating Point:** Trains exactly 50.0% fewer parameters per adapted projection (trains $B$, freezes $A$), reducing AdamW optimizer states (`exp_avg_B`, `exp_avg_sq_B`) by half for square projections.
+- **Analytic Activation Retention:** Freezing $A$ avoids storing input activations $x \in \mathbb{R}^{B \times L \times d_{in}}$ for adapter backpropagation through $A$. Only $u = A x \in \mathbb{R}^{B \times L \times r}$ is retained, yielding an analytic adapter activation ratio of $r / d_{in}$ (~256× reduction for rank 16 on hidden dim 4096).
+- **Scope & Limitations:** These values represent a micro-benchmark operating point and an analytic saved-tensor ratio for the adapter projections — **they are not total or peak LLM VRAM savings, an end-to-end throughput result, or a quality claim.** Peak training VRAM in full LLM fine-tuning is dominated by base model activations, KV caches, and weights; total end-to-end VRAM savings are substantially smaller. Downstream task quality and end-to-end throughput vs standard LoRA remain unmeasured. See [`benchmarks/gate-725-lorafa-operating-point.md`](../benchmarks/gate-725-lorafa-operating-point.md) for measured figures.
 - **Compatibility:** Supported on the `transformers` backend for `sft`, `pretrain`, and `embedding` tasks. Mutually exclusive with `loraplus_lr_ratio` (which differentiates $A$ and $B$ rates), `use_galore`, non-AdamW optimizers, and the `mlx` backend. Requires explicit `lora.r` and `lora.alpha`.
 
 
