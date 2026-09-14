@@ -252,6 +252,29 @@ def test_new_mlx_gaps_use_liger_and_neftune_alpha_are_reported(config_at):
     assert {"training.use_liger", "training.neftune_alpha"} <= reported
 
 
+def test_961_four_reachable_fields_reported_together(config_at):
+    """#961 box 4: several new fields at once -> rows+count."""
+    from soup_cli.config.backend_support import check_config
+    from soup_cli.config.loader import load_config
+
+    cfg = load_config(
+        config_at(
+            "sft",
+            "mlx",
+            "  use_mod: true\n  moe_lora: true\n"
+            "  quantization_aware: true\n  use_fsdp2_compile: true",
+        )
+    )
+    rows = check_config(cfg)
+    assert {e.field for e in rows} == {
+        "training.use_mod",
+        "training.moe_lora",
+        "training.quantization_aware",
+        "training.use_fsdp2_compile",
+    }
+    assert len(rows) == 4
+
+
 def test_only_fields_the_user_actually_set_are_reported(config_at):
     """Not all 275 — and not the other MLX gaps the user never touched."""
     from soup_cli.config.backend_support import check_config
