@@ -2903,9 +2903,20 @@ def recipe(
         except (TypeError, ValueError) as exc:
             console.print(f"[red]Recipe failed: {_escape(str(exc))}[/]")
             raise typer.Exit(1) from exc
+        provider_calls = result.get("provider_call_count", 0)
+        provider_failures = result.get("provider_failure_count", 0)
+        provider_summary = ""
+        if isinstance(provider_calls, int) and provider_calls:
+            call_label = "call" if provider_calls == 1 else "calls"
+            failure_label = "failure" if provider_failures == 1 else "failures"
+            provider_summary = (
+                f" {provider_calls} provider {call_label}, "
+                f"{provider_failures} {failure_label}."
+            )
         console.print(
             f"[green]Recipe executed.[/] "
             f"{len(result.get('completed_nodes', ()))} node(s) completed."
+            f"{provider_summary}"
         )
         return
 

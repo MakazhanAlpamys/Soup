@@ -30,7 +30,9 @@ import os
 import re
 import stat as _stat
 import tempfile
-from typing import TYPE_CHECKING, Any, Dict, List, Mapping, Optional, Sequence
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, Dict, List, Mapping, Optional, Sequence, Tuple
+from urllib.parse import urlsplit
 
 from soup_cli.utils.paths import is_under_cwd
 
@@ -43,6 +45,30 @@ _LOG = logging.getLogger("soup_cli.utils.recipe_run")
 _MAX_NODE_ROWS = 1_000_000
 _MAX_CODE_LEN = 64 * 1024
 _MAX_PROMPT_LEN = 32 * 1024
+
+
+@dataclass(frozen=True)
+class _ProviderNodeResult:
+    rows: Tuple[Mapping[str, Any], ...]
+    call_count: int
+    failure_count: int
+
+
+def _provider_endpoint_label(provider: Optional[str], base_url: Optional[str]) -> str:
+    """Return a credential-free origin label for provider failure messages."""
+    if base_url is None:
+        return f"{provider or 'provider'} default endpoint"
+    try:
+        parsed = urlsplit(base_url)
+        host = parsed.hostname
+        port = parsed.port
+    except ValueError:
+        return f"{provider or 'provider'} endpoint"
+    if not parsed.scheme or not host:
+        return f"{provider or 'provider'} endpoint"
+    display_host = f"[{host}]" if ":" in host else host
+    suffix = f":{port}" if port is not None else ""
+    return f"{parsed.scheme}://{display_host}{suffix}"
 
 
 def _ensure_str(value: Any, *, name: str, max_len: int = 4096) -> str:
@@ -269,7 +295,7 @@ def _node_llm_text(
     judge_provider: Optional[str],
     judge_model: Optional[str],
     judge_base_url: Optional[str],
-) -> List[Mapping[str, Any]]:
+) -> _ProviderNodeResult:
     """Call an LLM provider with ``node.config.prompt.format(**row)``."""
     prompt_template = node.config.get("prompt")
     if not isinstance(prompt_template, str) or not prompt_template:
@@ -287,7 +313,7 @@ def _node_llm_text(
         for row in rows:
             rendered = _row_template(prompt_template, row)
             out.append({**row, node.name: f"llm_text(offline): {rendered[:80]}"})
-        return out
+        return _ProviderNodeResult(tuple(out), call_count=0, failure_count=0)
 
     from soup_cli.utils.data_forge import make_judge_provider_fn
 
@@ -295,23 +321,32 @@ def _node_llm_text(
         judge_provider,
         model=judge_model or "llama3.1",
         base_url=judge_base_url,
+        raise_on_error=True,
     )
     rows = _merge_inputs(inputs)
     out_rows: List[Mapping[str, Any]] = []
+    failures = 0
     for row in rows:
         rendered = _row_template(prompt_template, row)
         try:
             reply = judge_fn(rendered)
         except Exception as exc:  # noqa: BLE001
             _LOG.debug("llm_text node %s judge raised: %s", node.name, exc)
+            failures += 1
             continue
         if not isinstance(reply, Mapping):
+            failures += 1
             continue
-        text = reply.get("text") or ""
+        text = reply.get("text")
         if not isinstance(text, str):
+            failures += 1
             continue
         out_rows.append({**row, node.name: text})
-    return out_rows
+    return _ProviderNodeResult(
+        tuple(out_rows),
+        call_count=len(rows),
+        failure_count=failures,
+    )
 
 
 def _node_judge(
@@ -321,7 +356,7 @@ def _node_judge(
     judge_provider: Optional[str],
     judge_model: Optional[str],
     judge_base_url: Optional[str],
-) -> List[Mapping[str, Any]]:
+) -> _ProviderNodeResult:
     """Binary OK/REJECT classification via an LLM provider.
 
     Rows for which the model emits a string containing ``"OK"`` are kept
@@ -340,7 +375,11 @@ def _node_judge(
 
     if judge_provider is None:
         rows = _merge_inputs(inputs)
-        return [{**row, node.name: True} for row in rows]
+        return _ProviderNodeResult(
+            tuple({**row, node.name: True} for row in rows),
+            call_count=0,
+            failure_count=0,
+        )
 
     from soup_cli.utils.data_forge import make_judge_provider_fn
 
@@ -348,22 +387,34 @@ def _node_judge(
         judge_provider,
         model=judge_model or "llama3.1",
         base_url=judge_base_url,
+        raise_on_error=True,
     )
     rows = _merge_inputs(inputs)
     kept: List[Mapping[str, Any]] = []
+    failures = 0
     for row in rows:
         rendered = _row_template(prompt_template, row)
         try:
             reply = judge_fn(rendered)
         except Exception as exc:  # noqa: BLE001
             _LOG.debug("judge node %s raised: %s", node.name, exc)
+            failures += 1
             continue
         if not isinstance(reply, Mapping):
+            failures += 1
             continue
-        text = (reply.get("text") or "").upper()
+        text = reply.get("text")
+        if not isinstance(text, str):
+            failures += 1
+            continue
+        text = text.upper()
         if "OK" in text and "REJECT" not in text:
             kept.append({**row, node.name: True})
-    return kept
+    return _ProviderNodeResult(
+        tuple(kept),
+        call_count=len(rows),
+        failure_count=failures,
+    )
 
 
 def _node_code(
@@ -560,7 +611,8 @@ def run_recipe(
 
     Returns:
         Mapping with ``status`` (``"completed"`` or ``"failed"``),
-        ``completed_nodes`` (list of names), and ``node_row_counts``.
+        ``completed_nodes`` (list of names), ``node_row_counts``, and aggregate
+        plus per-node provider call/failure counts.
 
     Raises:
         TypeError: if ``dag`` is not a ``RecipeDAG``.
@@ -609,6 +661,8 @@ def run_recipe(
     state = _load_checkpoint(real) if resume else {}
     state.setdefault("completed_nodes", [])
     state.setdefault("node_row_counts", {})
+    state.setdefault("provider_call_counts", {})
+    state.setdefault("provider_failure_counts", {})
     state["status"] = "running"
     _save_checkpoint(real, state)
 
@@ -660,6 +714,16 @@ def run_recipe(
                 raise ValueError(
                     f"unknown node kind: {node.kind!r}"
                 )  # pragma: no cover — gate by NODE_KINDS at parse
+            if isinstance(result, _ProviderNodeResult):
+                state["provider_call_counts"][name] = result.call_count
+                state["provider_failure_counts"][name] = result.failure_count
+                if result.call_count and result.failure_count == result.call_count:
+                    endpoint = _provider_endpoint_label(judge_provider, judge_base_url)
+                    raise ValueError(
+                        f"{node.kind} node {name!r}: all {result.call_count} "
+                        f"provider calls failed for {endpoint}"
+                    )
+                result = result.rows
         except Exception as exc:
             state["status"] = "failed"
             state["failed_node"] = name
@@ -685,10 +749,16 @@ def run_recipe(
 
     state["status"] = "completed"
     _save_checkpoint(real, state)
+    provider_call_counts = dict(state["provider_call_counts"])
+    provider_failure_counts = dict(state["provider_failure_counts"])
     return {
         "status": "completed",
         "completed_nodes": tuple(state["completed_nodes"]),
         "node_row_counts": dict(state["node_row_counts"]),
+        "provider_call_counts": provider_call_counts,
+        "provider_failure_counts": provider_failure_counts,
+        "provider_call_count": sum(provider_call_counts.values()),
+        "provider_failure_count": sum(provider_failure_counts.values()),
         "output_dir": real,
     }
 

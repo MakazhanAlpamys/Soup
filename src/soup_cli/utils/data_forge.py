@@ -523,6 +523,10 @@ _OLLAMA_DEFAULT_URL = "http://localhost:11434"
 _VLLM_DEFAULT_URL = "http://localhost:8000"
 
 
+class ProviderCallError(RuntimeError):
+    """A live provider request failed before producing a valid completion."""
+
+
 def make_judge_provider_fn(
     provider: str,
     *,
@@ -530,6 +534,7 @@ def make_judge_provider_fn(
     base_url: Optional[str] = None,
     temperature: float = 0.7,
     timeout_seconds: float = 60.0,
+    raise_on_error: bool = False,
 ) -> "Callable[[str], Mapping[str, Any]]":
     """Build a ``judge(prompt) -> {'text': str}`` callable for ``provider``.
 
@@ -540,16 +545,20 @@ def make_judge_provider_fn(
         base_url: HTTP base URL (Ollama / vLLM only). Defaults to loopback.
         temperature: sampling temperature.
         timeout_seconds: per-call HTTP timeout.
+        raise_on_error: raise :class:`ProviderCallError` for transport, HTTP,
+            or malformed-response failures instead of returning empty text.
 
     Returns:
         Callable signature ``(prompt: str) -> Mapping[str, Any]``. The
-        returned mapping always carries a ``"text"`` field (possibly empty
-        on backend failure — matches the ``synthesise_forge_rows`` judge
-        contract that ignores non-Mapping or empty-text replies).
+        returned mapping always carries a ``"text"`` field. By default it
+        remains empty on backend failure to preserve the forge caller's
+        established best-effort contract; ``raise_on_error=True`` makes those
+        failures explicit for callers that need accounting.
 
     Raises:
         ValueError: unknown provider, bad URL, or missing Anthropic key.
         ImportError: if ``httpx`` is not installed.
+        ProviderCallError: a live request failed and ``raise_on_error`` is true.
     """
     if not isinstance(provider, str):
         raise TypeError("provider must be a string")
@@ -576,6 +585,8 @@ def make_judge_provider_fn(
         raise TypeError("temperature must be a number")
     if temperature < 0 or temperature > 2:
         raise ValueError("temperature must be in [0, 2]")
+    if not isinstance(raise_on_error, bool):
+        raise TypeError("raise_on_error must be a bool")
 
     try:
         import httpx
@@ -584,6 +595,17 @@ def make_judge_provider_fn(
             "httpx is required for live judge providers. "
             "Run: pip install httpx"
         ) from exc
+
+    def _failed(
+        message: str,
+        *,
+        cause: Optional[BaseException] = None,
+    ) -> Mapping[str, Any]:
+        if raise_on_error:
+            if cause is None:
+                raise ProviderCallError(message)
+            raise ProviderCallError(message) from cause
+        return {"text": ""}
 
     if canonical == "ollama":
         from soup_cli.data.providers.ollama import validate_ollama_url
@@ -594,7 +616,7 @@ def make_judge_provider_fn(
 
         def _ollama_judge(prompt: str) -> Mapping[str, Any]:
             if not isinstance(prompt, str):
-                return {"text": ""}
+                return _failed("ollama provider prompt must be a string")
             try:
                 resp = httpx.post(
                     api_url,
@@ -609,17 +631,19 @@ def make_judge_provider_fn(
                 )
             except Exception as exc:  # noqa: BLE001 — httpx error variety
                 _LOG.debug("ollama judge HTTP error: %s", exc)
-                return {"text": ""}
+                return _failed("ollama provider request failed", cause=exc)
             if resp.status_code != 200:
                 _LOG.debug("ollama judge status=%d", resp.status_code)
-                return {"text": ""}
+                return _failed(f"ollama provider returned HTTP {resp.status_code}")
             try:
                 data = resp.json()
                 text = data["choices"][0]["message"]["content"]
-            except (KeyError, IndexError, TypeError, ValueError) as exc:
+            except (AttributeError, KeyError, IndexError, TypeError, ValueError) as exc:
                 _LOG.debug("ollama judge parse error: %s", exc)
-                return {"text": ""}
-            return {"text": text if isinstance(text, str) else ""}
+                return _failed("ollama provider returned a malformed response", cause=exc)
+            if not isinstance(text, str):
+                return _failed("ollama provider returned non-string text")
+            return {"text": text}
 
         return _ollama_judge
 
@@ -634,7 +658,7 @@ def make_judge_provider_fn(
 
         def _anthropic_judge(prompt: str) -> Mapping[str, Any]:
             if not isinstance(prompt, str):
-                return {"text": ""}
+                return _failed("anthropic provider prompt must be a string")
             try:
                 resp = httpx.post(
                     "https://api.anthropic.com/v1/messages",
@@ -653,19 +677,19 @@ def make_judge_provider_fn(
                 )
             except Exception as exc:  # noqa: BLE001
                 _LOG.debug("anthropic judge HTTP error: %s", exc)
-                return {"text": ""}
+                return _failed("anthropic provider request failed", cause=exc)
             if resp.status_code != 200:
                 _LOG.debug("anthropic judge status=%d", resp.status_code)
-                return {"text": ""}
+                return _failed(f"anthropic provider returned HTTP {resp.status_code}")
             try:
                 data = resp.json()
                 blocks = data["content"]
                 text = "".join(
                     b["text"] for b in blocks if b.get("type") == "text"
                 )
-            except (KeyError, IndexError, TypeError, ValueError) as exc:
+            except (AttributeError, KeyError, IndexError, TypeError, ValueError) as exc:
                 _LOG.debug("anthropic judge parse error: %s", exc)
-                return {"text": ""}
+                return _failed("anthropic provider returned a malformed response", cause=exc)
             return {"text": text}
 
         return _anthropic_judge
@@ -679,7 +703,7 @@ def make_judge_provider_fn(
 
     def _vllm_judge(prompt: str) -> Mapping[str, Any]:
         if not isinstance(prompt, str):
-            return {"text": ""}
+            return _failed("vllm provider prompt must be a string")
         try:
             resp = httpx.post(
                 api_url,
@@ -694,17 +718,19 @@ def make_judge_provider_fn(
             )
         except Exception as exc:  # noqa: BLE001
             _LOG.debug("vllm judge HTTP error: %s", exc)
-            return {"text": ""}
+            return _failed("vllm provider request failed", cause=exc)
         if resp.status_code != 200:
             _LOG.debug("vllm judge status=%d", resp.status_code)
-            return {"text": ""}
+            return _failed(f"vllm provider returned HTTP {resp.status_code}")
         try:
             data = resp.json()
             text = data["choices"][0]["message"]["content"]
         except (KeyError, IndexError, TypeError, ValueError) as exc:
             _LOG.debug("vllm judge parse error: %s", exc)
-            return {"text": ""}
-        return {"text": text if isinstance(text, str) else ""}
+            return _failed("vllm provider returned a malformed response", cause=exc)
+        if not isinstance(text, str):
+            return _failed("vllm provider returned non-string text")
+        return {"text": text}
 
     return _vllm_judge
 
@@ -714,6 +740,7 @@ __all__ = [
     "ForgePlan",
     "ForgeRow",
     "JUDGE_PROVIDERS",
+    "ProviderCallError",
     "ProvenanceRecord",
     "build_forge_plan",
     "chunk_document",
