@@ -2003,9 +2003,15 @@ class TrainingConfig(BaseModel):
         ge=0.0,
         le=1.0,
         description=(
-            "Probability of sampling from the teacher distribution at "
-            "rollout time. 0.0 = student-only; 1.0 = teacher-only. "
-            "Typical range 0.2-0.5. (v0.70.0)"
+            "Teacher mixture used by MiniLLM. Offline "
+            "(minillm_on_policy=false): weight of the teacher distribution "
+            "in the reverse-KL target "
+            "(ratio * teacher + (1 - ratio) * stopgrad(student)). 0.0 is "
+            "rejected when MiniLLM is enabled because the teacher then has "
+            "zero weight. On-policy: probability of sampling from the "
+            "teacher at rollout time; 0.0 = student-only sampling, and the "
+            "loss is still KL(student || teacher). Typical range 0.2-0.5. "
+            "(v0.70.0; offline zero rejected in #692)"
         ),
     )
     minillm_length_normalize: bool = Field(
@@ -6450,6 +6456,12 @@ class SoupConfig(BaseModel):
         backend. Setting any minillm_* tunable without
         ``minillm_enabled=True`` is rejected (silent no-op footgun
         mirroring v0.52 distill / v0.62 grace_codebook policy).
+
+        v0.75.x #692 — ``minillm_enabled`` + offline blend + mix ratio 0
+        is the inverse footgun: the teacher is loaded and forwarded, then
+        given zero weight. Rejected at parse. Ratio 0 stays legal on the
+        on-policy path (student-only sampling, loss still KL(student ||
+        teacher)).
         """
         tcfg = self.training
         any_field_set = (
@@ -6510,6 +6522,19 @@ class SoupConfig(BaseModel):
             raise ValueError(
                 "minillm_rollout_length requires minillm_on_policy=True "
                 "(unused by the offline distribution blend)"
+            )
+        # v0.75.x #692 — offline blend at mix 0 is KL(student || stopgrad(student)).
+        if (
+            not tcfg.minillm_on_policy
+            and tcfg.minillm_teacher_mix_ratio == 0.0
+        ):
+            raise ValueError(
+                "minillm_enabled with minillm_on_policy=false requires "
+                "minillm_teacher_mix_ratio > 0; ratio 0 makes the offline "
+                "reverse-KL target the detached student (no teacher signal). "
+                "Set minillm_teacher_mix_ratio in (0, 1], or set "
+                "minillm_on_policy=true (ratio 0 then means student-only "
+                "sampling while the loss stays KL(student || teacher))"
             )
         return self
 
