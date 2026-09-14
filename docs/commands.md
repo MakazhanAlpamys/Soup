@@ -156,12 +156,16 @@ soup recipes list                             List all 169 ready-made recipes
 soup recipes show llama3.1-8b-sft            Print recipe YAML
 soup recipes use llama3.1-8b-sft             Copy recipe to soup.yaml
 soup recipes search "reasoning"              Search by keyword/task/size
-soup registry push --run-id <id> --name n --tag v1  Register runsoup registry list [--name n] [--tag v1]     List registry entriessoup registry show <ref>                      Entry details + artifacts + ancestors
+soup registry push --run-id <id> --name n --tag v1  Register run
+soup registry list [--name n] [--tag v1]     List registry entries
+soup registry show <ref>                      Entry details + artifacts + ancestors
 soup registry diff <a> <b>                    Side-by-side config + eval delta
 soup registry search "medical"                Search name/base/task/notes
 soup registry promote <ref> --tag prod        Tag an entry (e.g. promote to prod)
 soup registry delete <ref> --yes              Remove entry (cascades)
-soup history <name>                           Lineage DAG tree for a namesoup can pack --entry-id <id> --out r.can     Pack registry entry as .cansoup can inspect r.can                        Preview manifest without extracting
+soup history <name>                           Lineage DAG tree for a name
+soup can pack --entry-id <id> --out r.can     Pack registry entry as .can
+soup can inspect r.can                        Preview manifest without extracting
 soup can verify r.can                         Verify schema + config parseability
 soup can fork r.can --out fork.can --modify training.lr=5e-5  Fork + re-pack
 soup can run r.can --yes [--deploy] [--env-capture env.txt]  Run a .can end-to-end
