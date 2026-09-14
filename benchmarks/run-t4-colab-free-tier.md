@@ -62,12 +62,45 @@ resident      2101 MB (embeddings + adapters)
 peak VRAM     ~3.02 GB at batch 1 x seq 256 (logits 0.46 GB)
 free VRAM     15.10 GB
 forecast      31-46 tok/s (from 2.20 TFLOPS measured on this card @ 1185 MHz)
-              STALE (#714): #648 changed the compute probe to measure the GEMM
-              ceiling in the card's resolved stream dtype (float16 here)
-              instead of bf16 through Turing's software emulation. Re-measured
-              in notebooks/proof-4gb.ipynb (the run behind #910): 288-423 tok/s
-              (from 20.39 TFLOPS measured on this card, float16 @ 525 MHz).
 ```
+
+**STALE, #714: the `31-46 tok/s` line above is superseded, not current.** #648
+changed the compute probe to measure the GEMM ceiling in the card's resolved
+stream dtype instead of bf16 through Turing's software emulation, and this
+run's session predates that fix. `notebooks/proof-4gb.ipynb` (the run behind
+#910, pinned to v0.75.0, which carries #648) re-ran the same probe in a later
+session and its panel printed, verbatim:
+
+```
+forecast      288-423 tok/s — a compute-bound bound, not a promise
+              (from 20.39 TFLOPS measured on this card now using float16 @ 525 MHz)
+```
+
+**This is not a controlled dtype-isolated comparison, and the two sessions ran
+different plans** — #910's own record shows base store 5.70 GB (was 3.60 GB),
+an extra 1051 MB large-layer slot, and 0 MB resident beyond adapters (was
+2101 MB). The clock figures are not a control either: `sm_clock_mhz()`
+(`layer_stream_runtime.py:1220`) takes a single post-hoc `nvidia-smi` sample,
+and its own docstring records this box's boost clock moving 442-952 MHz
+*inside one measurement run*, and 3.5 and 6.75 TFLOPS from two sessions at the
+same reported clock. 525 MHz measured against 20.39 TFLOPS would be 94.8% of
+that clock's scaled peak — implausibly high for a real GEMM — so the printed
+clock does not describe the rate that was actually sustained; treat it as
+decoration, per the helper's own docstring, not as an experimental control.
+
+What does hold up despite that: the ~9.3x jump is consistent across all three
+published quantities (`20.39 / 2.20` = 9.27, `288 / 31` = 9.29, `423 / 46` =
+9.20), which is the right order of magnitude for a probe that stopped running
+in bf16-through-emulation and started running in the card's native fp16 —
+consistent with, not proof of, the dtype being the whole cause.
+
+**The new bracket remains unvalidated against a measured tok/s from this run**
+— #714 asked for the bracket to be checked against a measured tok/s, which
+this run does not have: the trainer's own metrics render in the notebook as
+`<IPython.core.display.HTML object>` rather than a captured
+`train_samples_per_second`, and the notebook deliberately quotes no tok/s
+either (see below). This record fixes a wrong forecast; it does not close the
+validation #714 also asked for. That half should be tracked as its own issue.
 
 LoRA applied: **3,407,872 trainable / 8,030,261,248 total (0.04%)**.
 
@@ -124,7 +157,10 @@ the gap has been seen rather than reasoned about.
 
 - **No throughput claim. None.** The card was under an artificial memory cap;
   that is not a benchmark, and the notebook deliberately quotes no tok/s either.
-  The panel's `31-46 tok/s` is a *compute bound derived from a GEMM probe*, not a
+  The panel's `31-46 tok/s` is **stale — see "What the pre-flight panel
+  printed" above (#714)**, superseded by `288-423 tok/s` from a corrected
+  probe, and still unvalidated against a measured tok/s either way. Whichever
+  bracket is current, it is a *compute bound derived from a GEMM probe*, not a
   measurement of what this run achieved — the two are routinely confused, which
   is why the forecast is printed with the clock it was taken at.
 - **Backward / gradient exactness at 8B on Turing is not shown.** An adapter with
