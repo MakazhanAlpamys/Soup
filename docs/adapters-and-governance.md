@@ -74,7 +74,7 @@ soup lock write \
   --dataset-sha $DATA_SHA \
   --env-hash $(jq -r .closure soup-env.lock) \
   -o soup.lock
-# Teammates re-check the lock; exit 3 on drift.
+# Teammates re-check the lock; exit 2 on drift.
 soup lock check soup.lock \
   --base-model meta-llama/Llama-3.1-8B \
   --base-sha $BASE_SHA --dataset-sha $DATA_SHA --env-hash $ENV_HASH

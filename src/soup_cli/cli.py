@@ -12,10 +12,22 @@ from soup_cli.utils.encoding import force_utf8_stdio
 force_utf8_stdio()
 _utf8_bootstrap_done = True
 
+import click.exceptions  # noqa: E402
 import typer  # noqa: E402
 from rich.console import Console  # noqa: E402
 
 from soup_cli import __version__  # noqa: E402
+from soup_cli.utils.exit_codes import EXIT_USAGE_ERROR  # noqa: E402
+
+# Align Click/Typer usage errors (e.g. unknown options like --bogus) with
+# the project-wide 0/2/3 taxonomy (#813): 3 = EXIT_USAGE_ERROR.
+click.exceptions.UsageError.exit_code = EXIT_USAGE_ERROR
+try:
+    import typer._click.exceptions  # noqa: E402
+
+    typer._click.exceptions.UsageError.exit_code = EXIT_USAGE_ERROR
+except (ImportError, AttributeError):
+    pass
 from soup_cli.commands import (  # noqa: E402
     adapters,
     autopilot,
