@@ -369,9 +369,12 @@ def deploy_to_canary(
         }
     name = os.path.basename(str(adapter_path).rstrip("/\\")) or "canary"
     ok = _post_activate(endpoint, name)
+    # activate_adapter is a full hot-swap (100% of traffic), not a canary
+    # split; canary_router.route()/BucketStats never ran, so there is no
+    # verdict to report here even when the POST itself succeeded.
     return {
         "deployed": ok,
-        "canary_verdict": "OK" if ok else None,
+        "canary_verdict": None,
         "notes": "" if ok else "activate POST failed",
     }
 
