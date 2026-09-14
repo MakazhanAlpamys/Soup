@@ -121,13 +121,44 @@ _MLX_SFT: tuple[SupportEntry, ...] = (
     SupportEntry(
         "training.use_liger",
         IGNORED,
-        "Liger fused kernels have no MLX implementation",
+        "Liger fused kernels have no MLX implementation; soup train also "
+        "refuses the run on a non-CUDA device before MLX starts",
         trainer_reads=True,
     ),
     SupportEntry(
         "training.neftune_alpha",
         IGNORED,
         "NEFT noise is applied on the transformers training path, not MLX",
+        trainer_reads=True,
+    ),
+    # #958. #903 named eleven CUDA-only fields and #911 added two. Of the other
+    # nine, only these four load on backend=mlx. use_cut_ce,
+    # kernel_auto_compose, use_longlora, activation_offloading and
+    # packing_cross_doc_attn_mask are refused at config load on mlx, so a
+    # config setting them never reaches this check, and listing them as
+    # ignored would be false.
+    SupportEntry(
+        "training.use_mod",
+        IGNORED,
+        "Mixture-of-Depths routers are installed on the transformers model, not MLX",
+        trainer_reads=True,
+    ),
+    SupportEntry(
+        "training.moe_lora",
+        IGNORED,
+        "MLX LoRA targets its own layer list; expert FFN layers are not added",
+        trainer_reads=True,
+    ),
+    SupportEntry(
+        "training.quantization_aware",
+        IGNORED,
+        "QAT uses torchao on the transformers path; MLX trains without fake quantization",
+        trainer_reads=True,
+    ),
+    SupportEntry(
+        "training.use_fsdp2_compile",
+        IGNORED,
+        "FSDP2 and torch.compile are transformers-only; MLX runs on one device",
         trainer_reads=True,
     ),
 )

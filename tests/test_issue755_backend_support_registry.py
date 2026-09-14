@@ -50,20 +50,29 @@ def config_at(tmp_path):
         train_file.write_text(
             '{"instruction": "a", "output": "b"}\n', encoding="utf-8"
         )
-        body = textwrap.dedent(
-            f"""\
-            base: some-model
-            task: {task}
-            backend: {backend}
-            data:
-              train: {train_file}
-              format: alpaca
-            {textwrap.indent(data, "  ") if data else ""}
-            training:
-            {textwrap.indent(training or "  epochs: 1", "  ")}
-            output: {tmp_path / "out"}
-            """
-        )
+        def block(text: str) -> str:
+            # Every line nests under its key however the caller indented it. The
+            # old f-string template was dedented as a whole, so the second line of
+            # a multi-line block had to repeat the template's own indentation.
+            return textwrap.indent(textwrap.dedent(text), "  ")
+
+        lines = [
+            "base: some-model",
+            f"task: {task}",
+            f"backend: {backend}",
+            "data:",
+            f"  train: {train_file}",
+            "  format: alpaca",
+        ]
+        if data:
+            lines.append(block(data))
+        lines += [
+            "training:",
+            block(training or "epochs: 1"),
+            f"output: {tmp_path / 'out'}",
+            "",
+        ]
+        body = "\n".join(lines)
         path = tmp_path / "soup.yaml"
         path.write_text(body, encoding="utf-8")
         return str(path)
@@ -148,7 +157,7 @@ def test_registry_covers_every_field_the_mlx_trainer_warns_about():
         ):
             for arg in ast.walk(node):
                 if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
-                    warned.update(re.findall(r"\b(?:training|data)\.[a-z_]+", arg.value))
+                    warned.update(re.findall(r"\b(?:training|data)\.[a-z0-9_]+", arg.value))
 
     assert warned, "found no dotted field names in mlx_sft.py's warning list"
     registered = {e.field for e in unsupported_for("sft", "mlx")}
@@ -192,11 +201,61 @@ def test_new_mlx_gaps_use_liger_and_neftune_alpha_are_reported(config_at):
 
     cfg = load_config(
         config_at(
-            "sft", "mlx", "  use_liger: true\n              neftune_alpha: 5"
+            "sft", "mlx", "  use_liger: true\n  neftune_alpha: 5"
         )
     )
     reported = {e.field for e in check_config(cfg)}
     assert {"training.use_liger", "training.neftune_alpha"} <= reported
+
+
+def test_the_four_loadable_mlx_gaps_from_958_are_reported_together(config_at):
+    """#958: several newly declared fields set at once each get a row."""
+    from soup_cli.config.backend_support import check_config, unsupported_for
+    from soup_cli.config.loader import load_config
+
+    cfg = load_config(
+        config_at(
+            "sft",
+            "mlx",
+            "  use_mod: true\n  moe_lora: true\n  quantization_aware: true\n"
+            "  use_fsdp2_compile: true\n  seed: 7",
+        )
+    )
+    reported = [e.field for e in check_config(cfg)]
+    assert sorted(reported) == [
+        "training.moe_lora",
+        "training.quantization_aware",
+        "training.seed",
+        "training.use_fsdp2_compile",
+        "training.use_mod",
+    ]
+    assert len(unsupported_for("sft", "mlx")) == 13
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("use_cut_ce", "true"),
+        ("kernel_auto_compose", "true"),
+        ("use_longlora", "true"),
+        ("activation_offloading", "cpu"),
+        ("packing_cross_doc_attn_mask", "true"),
+    ],
+)
+def test_fields_refused_at_load_on_mlx_are_not_declared_ignored(field, value, config_at):
+    """#958: these five are refused before any check could report them.
+
+    A table row would claim MLX silently drops a setting that the schema in
+    fact rejects, and ``doctor --config`` could never show it. If one of them
+    starts loading on mlx, this fails and the row can be added then.
+    """
+    from soup_cli.config.backend_support import unsupported_for
+    from soup_cli.config.loader import load_config
+
+    # load_config reports the validation error and exits.
+    with pytest.raises(SystemExit):
+        load_config(config_at("sft", "mlx", f"  {field}: {value}"))
+    assert f"training.{field}" not in {e.field for e in unsupported_for("sft", "mlx")}
 
 
 def test_only_fields_the_user_actually_set_are_reported(config_at):

@@ -213,6 +213,26 @@ class MLXSFTTrainerWrapper:
             unsupported.append(
                 "training.use_liger (Liger fused kernels have no MLX implementation)"
             )
+        if tcfg.use_mod:
+            unsupported.append(
+                "training.use_mod (Mixture-of-Depths routers are installed on the "
+                "transformers model, not MLX)"
+            )
+        if tcfg.moe_lora:
+            unsupported.append(
+                "training.moe_lora (MLX LoRA targets its own layer list; expert FFN "
+                "layers are not added)"
+            )
+        if tcfg.quantization_aware:
+            unsupported.append(
+                "training.quantization_aware (QAT uses torchao on the transformers "
+                "path; MLX trains without fake quantization)"
+            )
+        if tcfg.use_fsdp2_compile:
+            unsupported.append(
+                "training.use_fsdp2_compile (FSDP2 and torch.compile are "
+                "transformers-only; MLX runs on one device)"
+            )
         if tcfg.neftune_alpha is not None:
             unsupported.append(
                 "training.neftune_alpha (NEFT noise is applied on the "
