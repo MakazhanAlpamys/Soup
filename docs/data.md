@@ -207,7 +207,7 @@ expectations:
   - {name: expect_token_length_between, args: {min_tokens: 16, max_tokens: 4096}}
   - {name: expect_no_refusal_pattern}
 EOF
-soup expect data.jsonl suite.yaml   # exit 3 on suite failure
+soup expect data.jsonl suite.yaml   # exit 2 on suite failure
 
 # Magpie synthetic data — chat-template-prefix harvest (live, v0.71.6)
 soup data gen-magpie --base meta-llama/Llama-3.1-8B-Instruct \
@@ -833,7 +833,7 @@ soup data clean ./data/train.jsonl -o ./data/clean.jsonl --dry-run
 ```
 
 `soup data validate` exits with code `0` when at least one row is usable and the
-optional minimum valid fraction is met. It exits with code `1` for input errors,
+optional minimum valid fraction is met. It exits with code `3` for input errors,
 such as a missing file or an undetectable format, and code `2` when a non-empty
 dataset has no usable rows or falls below `--min-valid-fraction`. A partially valid
 dataset still exits with code `0` when no minimum is specified.
