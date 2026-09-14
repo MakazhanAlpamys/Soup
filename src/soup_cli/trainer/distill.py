@@ -532,15 +532,11 @@ class DistillTrainerWrapper:
         class _DistillTrainer(Trainer):
             def __init__(self, *args, **kwargs):
                 super().__init__(*args, **kwargs)
-                # compute_loss below returns a mean over its own microbatch and
-                # never divides by num_items_in_batch, which it accepts and
-                # ignores. Transformers skips its own gradient-accumulation
-                # compensation for a model it classifies as consuming loss
-                # kwargs, so leaving this True makes the accumulated gradient
-                # scale with gradient_accumulation_steps: the same effective
-                # batch split four ways gives four times the gradient. Opting
-                # out restores the division Transformers would otherwise do.
-                self.model_accepts_loss_kwargs = False
+                # compute_loss consumes Trainer's full accumulation-window
+                # target count. Keeping this True makes Trainer collect that
+                # count and skip its fixed 1 / gradient_accumulation_steps
+                # fallback, which would weight unequal microbatches equally.
+                self.model_accepts_loss_kwargs = True
 
             def compute_loss(
                 self,
@@ -554,6 +550,32 @@ class DistillTrainerWrapper:
                 labels = inputs.get("labels")
                 outputs = model(**{k: v for k, v in inputs.items() if k != "labels"})
                 student_logits = outputs.logits
+
+                def _token_weighted_accumulation(loss):
+                    """Turn this microbatch mean into its share of the window mean."""
+                    if num_items_in_batch is None or labels is None:
+                        return loss
+                    local_items = labels[..., 1:].ne(-100).sum().to(
+                        device=loss.device, dtype=loss.dtype
+                    )
+                    if torch.is_tensor(num_items_in_batch):
+                        window_items = num_items_in_batch.to(
+                            device=loss.device, dtype=loss.dtype
+                        )
+                    else:
+                        window_items = loss.new_tensor(num_items_in_batch)
+                    weighted = loss * local_items / window_items.clamp(min=1)
+
+                    # Match Trainer.compute_loss when it gathers one global
+                    # token count: DDP averages gradients, so compensate for
+                    # that average after normalising by the global denominator.
+                    if self.args.average_tokens_across_devices:
+                        loss_scale = self.accelerator.num_processes
+                        parallelism = getattr(self.accelerator, "parallelism_config", None)
+                        if parallelism is not None:
+                            loss_scale //= parallelism.tp_size
+                        weighted *= loss_scale if self.args.n_gpu <= 1 else self.args.n_gpu
+                    return weighted
 
                 ce_loss = torch.tensor(0.0, device=student_logits.device)
                 if labels is not None:
@@ -570,6 +592,7 @@ class DistillTrainerWrapper:
                 # been used (and freed) during dataset construction, so there
                 # is no teacher forward / logit term here.
                 if _sequence_mode:
+                    ce_loss = _token_weighted_accumulation(ce_loss)
                     return (ce_loss, outputs) if return_outputs else ce_loss
 
                 # v0.71.18 #257 — true on-policy MiniLLM rollout. Samples a
@@ -586,6 +609,7 @@ class DistillTrainerWrapper:
                     total = _CE_WEIGHT * ce_loss + _DISTILL_WEIGHT * rollout_loss
                     if anchor is not None:
                         total = total + anchor
+                    total = _token_weighted_accumulation(total)
                     return (total, outputs) if return_outputs else total
 
                 # v0.71.18 #258 — aligned ULD. Decode the student ids to text,
@@ -651,6 +675,7 @@ class DistillTrainerWrapper:
                         labels=labels,
                     )
                     total = _CE_WEIGHT * ce_loss + _DISTILL_WEIGHT * distill_loss
+                    total = _token_weighted_accumulation(total)
                     return (total, outputs) if return_outputs else total
 
                 # Bridge devices: HF Trainer may auto-move the student to
@@ -700,6 +725,7 @@ class DistillTrainerWrapper:
                 total = _CE_WEIGHT * ce_loss + _DISTILL_WEIGHT * distill_loss
                 if anchor is not None:
                     total = total + anchor
+                total = _token_weighted_accumulation(total)
                 return (total, outputs) if return_outputs else total
 
         # ``DataCollatorForSeq2Seq`` pads ``input_ids`` and ``attention_mask``

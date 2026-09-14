@@ -424,6 +424,9 @@ training:
 Loss = student CE + (T**2) × KL(teacher_logits / T  ||  student_logits / T).
 Teacher is loaded once, frozen via `requires_grad_(False)` + `.eval()`, and its
 inputs / logits are auto-bridged across CPU / CUDA devices.
+Gradient accumulation uses the number of shifted, non-masked training targets across the complete
+optimizer window. Splitting the same rows into unequal-length microbatches therefore preserves the
+full-batch token mean instead of weighting every microbatch equally.
 
 The token-divergence kernel evaluates all three divergences in FP32 and deliberately
 returns an FP32 scalar, including for FP16/BF16 logits. Forward-KL values can therefore

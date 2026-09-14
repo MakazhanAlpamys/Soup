@@ -348,6 +348,27 @@ Three facts that narrow the cause:
 - The system commit limit is **36.7 GB** (31.7 GB RAM + a 5 GB page file), so
   the crash at ~106 GB is **not** copy-on-write commit exhaustion; read-only
   file mappings do not charge commit.
+
+  > **WRONG — corrected 2026-09-13, and this bullet is why the mechanism
+  > stayed unexplained. `safe_open` maps the file PRIVATELY, so mapping
+  > charges commit for the file's whole size without touching physical
+  > memory.** Measured by opening the 20-file fixture one file at a time,
+  > reading nothing, and printing the commit CHARGE (`limit - available`, the
+  > quantity that survives Windows growing the pagefile underneath the
+  > measurement): 48.99 GB mapped raised the charge by **46.17 GB**, free
+  > physical memory never moved (12.9-13.5 GB throughout), and closing every
+  > handle returned the charge to its baseline. The 36.7 GB above was an
+  > instantaneous sample of a limit that GROWS — `AutomaticManagedPagefile`
+  > is on, and it was observed going 39.44 -> 84.33 GB inside one
+  > measurement — so it never was the ceiling this bullet treats it as. The
+  > crash point is where the pagefile stops keeping up, which is why
+  > ~96-106 GB reproduced in magnitude but not exactly. Second, independent
+  > confirmation: the same repro in `perfile` mode WITH `--touch`, run while
+  > the box was busy, produced no access violation at all — it raised
+  > `OSError: The paging file is too small for this operation to complete.
+  > (os error 1455)`, i.e. `ERROR_COMMITMENT_LIMIT`, on the second
+  > `safe_open`. Same cause, reported properly because the allocation failed
+  > at map time rather than at fault time.
 - The per-file variant "read" 137 GB in 3 s, i.e. it read nothing: with no
   consumer touching the pages the views are free. The all-open variant spent
   0.42 s per file, which is the D: drive's sequential rate — so with 60+ live
@@ -383,6 +404,13 @@ is not. The threshold's mechanism is not established (commit is 36.7 GB, so
 it is not commit; the reads are lazy views, so it is not resident memory);
 its value is. Filed as #926 with this table.
 
+**Corrected 2026-09-13: the mechanism IS commit**, and the parenthesis above
+is wrong for the reason given in the §13 correction — mapping charges commit
+privately, and the 36.7 GB limit it rules the theory out with is a limit that
+grows. The bytes-not-files finding stands and is now explained: a private
+mapping charges its file's SIZE, so what matters is the total mapped, at 14
+handles or at 62.
+
 ## 15. The workaround used to get past it, and what it does NOT change
 
 `stream_probe.py --lazy-shard-handles` replaces `safetensors.safe_open` for
@@ -407,6 +435,12 @@ view keeps its whole file mapped, so an LRU of two handles alone would not
 bound the live mappings; only tensors the sharder OWNS (a copy) release
 them. The workaround did the right thing for the wrong reason, and the
 sentence above is left as written.
+
+What the retained view actually COSTS is now measured (the §13 correction):
+a private mapping charges COMMIT for its whole file, so a view held past its
+handle keeps ~6.85 GB of commit charged here in order to carry a 1.71 GB
+tensor. Copying is cheaper than retaining, which is why the workaround's copy
+was the right call even though its stated reason was not.
 
 ## 16. Sharding and build, with the workaround
 

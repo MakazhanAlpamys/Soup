@@ -112,11 +112,13 @@ def parse_args() -> argparse.Namespace:
         "--lazy-shard-handles",
         action="store_true",
         help=(
-            "MEASUREMENT WORKAROUND for the shipped sharder, which holds every source "
-            "shard's mmap open at once and dies with an access violation on Windows past "
-            "~100 GB of live mappings: during sharding ONLY, safe_open is replaced by a "
-            "wrapper that opens at most two files at a time and returns copies. The "
-            "runtime and every timed number still come from the shipped code"
+            "OBSOLETE since #926: the shipped sharder now keeps at most two source "
+            "handles alive and every read owns its memory. Kept so the 2026-09-12 record "
+            "can be re-run as it was: before #926 the sharder held every source shard's "
+            "mmap open at once and died with an access violation on Windows past ~100 GB "
+            "of live mappings, and this flag replaced safe_open during sharding ONLY with "
+            "a wrapper of the same shape, so the runtime and every timed number still "
+            "came from the shipped code"
         ),
     )
     parser.add_argument("--out", required=True, help="JSON results file, rewritten per point")

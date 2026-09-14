@@ -22,15 +22,16 @@ exactly these tensors.
 module sits on the light CLI's import path.
 """
 
-import contextlib
+import collections.abc
 import json
 import logging
 import math
 import os
 import re
 import tempfile
+from collections import OrderedDict
 from dataclasses import asdict, dataclass, field
-from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, Iterator, List, Mapping, Optional, Tuple
 
 from soup_cli import __version__
 
@@ -76,6 +77,13 @@ _MAX_TENSOR_ELEMENTS = 2**31
 _MAX_EXTERNAL_TENSOR_ELEMENTS = 2**36
 _MAX_SHARD_FILES = 4096
 _MAX_TOTAL_TENSORS = 200_000
+# Source safe_open handles the sharder keeps alive at once (#926). Pass 2 used
+# to hold EVERY source shard's mapping for the whole pass; on Windows that
+# dies with an access violation once ~96-106 GB of safetensors mappings are
+# alive in one process, whatever the file count, so a real 70B (30 files,
+# 141 GB) could not be sharded there. A decoder layer needs one file, or two
+# at a boundary; see _SourceHandles for why more is never needed for safety.
+_MAX_LIVE_SOURCE_HANDLES = 2
 
 _INDEX_NAME = "index.json"
 _EXTRAS_NAME = "extras.safetensors"
@@ -1259,12 +1267,9 @@ def shard_checkpoint(
     total_params = 0
     layer_keys = set()
     shared_specs: Dict[str, Tuple[Tuple[int, ...], str]] = {}
-    # ExitStack, not a dict comprehension of __enter__(): if shard N fails to
-    # open, everything opened before it must still be closed.
-    with contextlib.ExitStack() as stack:
-        handles = {
-            path: stack.enter_context(safe_open(path, framework="pt")) for path in shards
-        }
+    # At most _MAX_LIVE_SOURCE_HANDLES source files are mapped at once (#926);
+    # a failed open, or a raise anywhere below, still releases the live ones.
+    with _SourceHandles(shards, safe_open) as handles:
         for idx in range(n_layers):
             prefix = f"model.layers.{idx}."
             blob = {}
@@ -1491,8 +1496,150 @@ def _require_all_quantised(suffixes: Tuple[str, ...], matched: Iterable[str]) ->
         )
 
 
+class _SourceHandles(collections.abc.Mapping):
+    """Least-recently-used cache of live ``safe_open`` handles over ``shards``.
+
+    ``handles[path]`` opens on demand and evicts the least recently used
+    handle once ``capacity`` are alive; leaving the ``with`` block (or
+    ``close()``) releases every live handle, even when one release raises.
+    Only discovered shards are accepted, so a mapping bug cannot open an
+    arbitrary file, and membership, iteration and ``len`` never open anything.
+
+    WHAT THE CAP BUYS (#926, measured 2026-09-13): ``safe_open`` maps the file
+    PRIVATELY, so a live handle charges Windows commit for the file's whole
+    size — 48.99 GB of mappings raised the commit charge 46.17 GB while free
+    physical memory never moved, and closing them returned it. Every source
+    shard open at once therefore charged the whole checkpoint (~138 GB for a
+    70B), which no pagefile kept up with; two handles charge two files.
+
+    Why a cap this small is safe: decoder layers are contiguous in HF
+    checkpoints, so pass 2 needs one file per layer, or two at a boundary. An
+    access pattern that needs more merely re-opens a file (a header parse, not
+    a read) and is never wrong, because every tensor the readers hand out owns
+    its memory (``_own``) — nothing outlives the handle it was read through.
+
+    NOT a general-purpose mapping: ``__getitem__`` opens files and evicts, so
+    the ``Mapping`` mixins that call it for every key are refused rather than
+    inherited (see ``_refuse``). ``Mapping`` is the declared shape because
+    ``_read_oq_tensor`` annotates this object as one.
+    """
+
+    def __init__(
+        self,
+        shards: Iterable[str],
+        opener: Callable[..., Any],
+        capacity: int = _MAX_LIVE_SOURCE_HANDLES,
+    ) -> None:
+        if capacity < 1:
+            raise ValueError(f"capacity must be at least 1, got {capacity}")
+        self._allowed = frozenset(shards)
+        self._opener = opener
+        self._capacity = int(capacity)
+        self._live: "OrderedDict[str, Any]" = OrderedDict()
+        self._released = False
+
+    def __getitem__(self, path: str) -> Any:
+        if self._released:
+            raise RuntimeError("source handles already released")
+        if path not in self._allowed:
+            raise KeyError(path)
+        handle = self._live.get(path)
+        if handle is not None:
+            self._live.move_to_end(path)
+            return handle
+        while len(self._live) >= self._capacity:
+            _stale, victim = self._live.popitem(last=False)
+            victim.__exit__(None, None, None)
+        handle = self._opener(path, framework="pt").__enter__()
+        self._live[path] = handle
+        return handle
+
+    def __contains__(self, path: object) -> bool:
+        return path in self._allowed
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(sorted(self._allowed))
+
+    def __len__(self) -> int:
+        return len(self._allowed)
+
+    def _refuse(self, *_args: Any, **_kwargs: Any) -> Any:
+        """Refuse the ``Mapping`` mixins that would open files behind the caller.
+
+        ``Mapping`` implements ``get``/``items``/``values``/``__eq__`` on top of
+        ``__getitem__``, which here OPENS A FILE and can evict another handle.
+        ``get`` reads as a side-effect-free peek and is not one; ``items`` and
+        ``values`` would open every shard in the checkpoint, which is the cost
+        #926 exists to remove. Subscript the paths you actually need instead.
+        """
+        raise TypeError(
+            "_SourceHandles does not support get/items/values/equality: they "
+            "would open source files through __getitem__. Subscript the paths "
+            "you need (handles[path]) instead."
+        )
+
+    get = _refuse
+    items = _refuse
+    values = _refuse
+    __eq__ = _refuse
+    __ne__ = _refuse
+    __hash__ = None  # type: ignore[assignment]  # mutable cache, never a key
+
+    def close(self) -> None:
+        """Release every live handle; a raising release does not stop the rest."""
+        self._released = True
+        failures: List[Exception] = []
+        while self._live:
+            path, handle = self._live.popitem(last=False)
+            try:
+                handle.__exit__(None, None, None)
+            except Exception as exc:  # noqa: BLE001 — collected, reported below
+                failures.append(exc)
+                logger.warning("layer-stream sharder: releasing %s failed: %s", path, exc)
+        if failures:
+            # Only the first can propagate, so the rest are logged above rather
+            # than dropped: with capacity 2 a "both handles failed" close is an
+            # ordinary case, not a contrived one, and a lost second failure is
+            # the same silence #926 is about.
+            raise failures[0]
+
+    def __enter__(self) -> "_SourceHandles":
+        return self
+
+    def __exit__(
+        self,
+        exc_type: Optional[type] = None,
+        exc: Optional[BaseException] = None,
+        traceback: Optional[Any] = None,
+    ) -> None:
+        self.close()
+
+
+def _own(view: Any, candidate: Any) -> Any:
+    """``candidate`` if it already owns its memory, else a copy of ``view``.
+
+    ``get_tensor`` is a zero-copy view whose storage keeps the WHOLE source
+    file mapped for as long as the view lives — measured: the view still reads
+    correctly after its handle's ``__exit__``, so releasing a handle is not
+    what frees the mapping, dropping the last view into it is. The sharder
+    keeps norms, embeddings and the head until it writes them, so a retained
+    view would hold its file's mapping, and on Windows its file's whole COMMIT
+    CHARGE, past the handle's release and defeat the ``_SourceHandles`` bound
+    (#926). ``Tensor.to`` and ``Tensor.contiguous`` return ``self`` when they
+    have nothing to do, so identity is the exact test for "still the view".
+
+    The cost is real and is accepted deliberately: a read whose dtype already
+    matches used to pass the mapping through untouched, and now copies it, so
+    pass 2 moves roughly the checkpoint's own bytes an extra time (bounded to
+    one layer at a time, so no new peak). It buys the bound — holding a 1.71 GB
+    tensor as a view charges its 6.85 GB file, where the copy charges 1.71 GB —
+    which is what lets a 70B shard at all on this platform.
+    """
+    return view.clone() if candidate is view else candidate
+
+
 def _read_tensor(handle: Any, key: str, dtype: str) -> "Any":
-    """Materialise one tensor, size-capped, converted to the target dtype."""
+    """Materialise one OWNED tensor, size-capped, converted to the target dtype."""
     import torch
 
     shape = handle.get_slice(key).get_shape()
@@ -1503,11 +1650,12 @@ def _read_tensor(handle: Any, key: str, dtype: str) -> "Any":
             f"({elements} elements > {_MAX_TENSOR_ELEMENTS})"
         )
     target = getattr(torch, dtype)
-    return handle.get_tensor(key).to(target).contiguous()
+    view = handle.get_tensor(key)
+    return _own(view, view.to(target).contiguous())
 
 
 def _read_raw_tensor(handle: Any, key: str) -> "Any":
-    """Materialise one tensor without destroying packed integer storage."""
+    """Materialise one OWNED tensor without destroying packed integer storage."""
     shape = handle.get_slice(key).get_shape()
     elements = math.prod(int(dim) for dim in shape)
     if elements > _MAX_TENSOR_ELEMENTS:
@@ -1515,7 +1663,8 @@ def _read_raw_tensor(handle: Any, key: str) -> "Any":
             f"tensor {key} is too large for layer streaming "
             f"({elements} elements > {_MAX_TENSOR_ELEMENTS})"
         )
-    return handle.get_tensor(key).contiguous()
+    view = handle.get_tensor(key)
+    return _own(view, view.contiguous())
 
 
 def _read_oq_tensor(
