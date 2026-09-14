@@ -185,6 +185,11 @@ class PretrainTrainerWrapper:
         # trainer exists (attach_loraplus_optimizer), so it must NOT be forwarded
         # here (#724).
 
+        # LoRA-FA — freezes LoRA A matrices and trains B matrices. Not a
+        # TrainingArguments field: the optimizer is built and attached after the
+        # trainer exists (attach_lorafa_optimizer), so it must NOT be forwarded
+        # here (#725).
+
         # GaLore — memory-efficient full-parameter training
         if tcfg.use_galore:
             from soup_cli.utils.galore import get_galore_optimizer_and_params
@@ -269,12 +274,15 @@ class PretrainTrainerWrapper:
         from soup_cli.utils.peft_wiring import (
             attach_curriculum_callback,
             attach_lisa_callback,
+            attach_lorafa_optimizer,
             attach_loraplus_optimizer,
             attach_plugin_callback,
             attach_relora_callback,
         )
         # LoRA+ optimizer (#724) — build and attach now that the trainer exists.
         attach_loraplus_optimizer(self.trainer, tcfg)
+        # LoRA-FA optimizer (#725) — build and attach now that the trainer exists.
+        attach_lorafa_optimizer(self.trainer, tcfg)
         attach_relora_callback(self.trainer, tcfg)
         # #307 — LISA layerwise importance sampling (v0.71.34 #267 for sft).
         attach_lisa_callback(self.trainer, tcfg)
