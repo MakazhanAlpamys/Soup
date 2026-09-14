@@ -64,7 +64,7 @@ class LoraConfig(BaseModel):
         ge=0,
         description=(
             "LoRA rank. 0 = full fine-tuning: no adapter, every base "
-            "parameter trains (sft + transformers + text + "
+            "parameter trains (sft / embedding + transformers + text + "
             "quantization='none' only)."
         ),
     )
@@ -1500,8 +1500,9 @@ class TrainingConfig(BaseModel):
         gt=0.0,
         le=1.0,
         description=(
-            "Symmetric clipping radius for grpo_variant='two_sided'. "
-            "Required when grpo_variant='two_sided'; rejected otherwise."
+            "Symmetric clipping radius for grpo_variant='two_sided' (required) "
+            "or grpo_variant='gspo' (optional sequence clipping radius, "
+            "defaults to 0.2). Rejected for all other variants."
         ),
     )
     grpo_fp16: bool = Field(
@@ -3470,21 +3471,19 @@ class TrainingConfig(BaseModel):
 
     @model_validator(mode="after")
     def _validate_grpo_variant_delta(self) -> "TrainingConfig":
-        """v0.50.0 Part A — grpo_variant='two_sided' requires grpo_delta.
+        """v0.50.0 Part A / #744 — grpo_variant='two_sided' requires grpo_delta.
 
-        Conversely, grpo_delta is only meaningful for the two_sided variant;
-        setting it on any other variant (or with no variant) is rejected
-        as a probable footgun (matches v0.40.0 Part D ``preference_loss_weights``
-        + ``preference_loss`` mutually-exclusive policy).
+        grpo_variant='gspo' optionally accepts grpo_delta as sequence clipping radius.
+        Setting grpo_delta on any other variant (or with no variant) is rejected.
         """
         if self.grpo_variant == "two_sided" and self.grpo_delta is None:
             raise ValueError(
                 "grpo_variant='two_sided' requires grpo_delta "
                 "(symmetric clipping radius, (0, 1])"
             )
-        if self.grpo_delta is not None and self.grpo_variant != "two_sided":
+        if self.grpo_delta is not None and self.grpo_variant not in ("two_sided", "gspo"):
             raise ValueError(
-                "grpo_delta is only valid when grpo_variant='two_sided'; "
+                "grpo_delta is only valid when grpo_variant is 'two_sided' or 'gspo'; "
                 f"got grpo_variant={self.grpo_variant!r}"
             )
         return self
@@ -4175,6 +4174,44 @@ def _validate_reward_hack_controller(tcfg: Any) -> None:
             )
 
 
+#: Root-level keys that :class:`SoupConfig` accepts and moves under ``training``
+#: before validation (v0.40.1 Part B). The unknown-key detector reads this
+#: tuple too, so the two can never disagree about which spellings are legal.
+ROOT_LEVEL_MISPLACED_KEYS: tuple[str, ...] = ("lora",)
+
+
+def remap_root_level_misplaced_keys(values):
+    """Move a root-level ``lora`` block under ``training`` (v0.40.1 Part B).
+
+    Users naturally write top-level ``lora:`` (LlamaFactory / Axolotl
+    convention) while Soup nests it under ``training``. Without the remap,
+    Pydantic silently dropped the misplaced key — including its
+    ``init_strategy`` validation.
+
+    The caller's dict is never mutated — the work happens on shallow copies,
+    matching the v0.33.0 #47 / v0.40.0 Part B immutability policy. A key
+    present at BOTH levels is a ``ValueError``: there is no right answer to
+    pick silently.
+    """
+    if not isinstance(values, dict):
+        return values
+    # Detect any misplaced key first so we avoid copying when not needed.
+    misplaced_keys = [k for k in ROOT_LEVEL_MISPLACED_KEYS if k in values]
+    if not misplaced_keys:
+        return values
+    new_values = dict(values)
+    new_training = dict(new_values.get("training") or {})
+    for misplaced in misplaced_keys:
+        if misplaced in new_training:
+            raise ValueError(
+                f"{misplaced!r} found at both root and training level — "
+                f"keep only one (training.{misplaced} preferred)."
+            )
+        new_training[misplaced] = new_values.pop(misplaced)
+    new_values["training"] = new_training
+    return new_values
+
+
 class SoupConfig(BaseModel):
     """Root config for soup.yaml."""
 
@@ -4255,29 +4292,12 @@ class SoupConfig(BaseModel):
         under ``training``. Without remap, Pydantic silently drops the
         misplaced key — including ``lora.init_strategy`` validation.
 
-        Migrate root-level ``lora`` into ``training.lora`` so nested
-        validation (Literal["random","pissa","olora"]) actually fires.
-
-        Caller's dict is never mutated — we work on shallow copies, matching
-        v0.33.0 #47 / v0.40.0 Part B immutability policy.
+        Delegates to :func:`remap_root_level_misplaced_keys` so the unknown-key
+        detector (``config/unknown_keys.py``) applies the *same* normalisation
+        before it walks a raw config: a spelling this validator accepts must
+        not be one the detector refuses (#879).
         """
-        if not isinstance(values, dict):
-            return values
-        # Detect any misplaced key first so we avoid copying when not needed.
-        misplaced_keys = [k for k in ("lora",) if k in values]
-        if not misplaced_keys:
-            return values
-        new_values = dict(values)
-        new_training = dict(new_values.get("training") or {})
-        for misplaced in misplaced_keys:
-            if misplaced in new_training:
-                raise ValueError(
-                    f"{misplaced!r} found at both root and training level — "
-                    f"keep only one (training.{misplaced} preferred)."
-                )
-            new_training[misplaced] = new_values.pop(misplaced)
-        new_values["training"] = new_training
-        return new_values
+        return remap_root_level_misplaced_keys(values)
 
     @model_validator(mode="after")
     def _validate_v028_speed_memory_supported_tasks(self) -> "SoupConfig":
@@ -5023,9 +5043,9 @@ class SoupConfig(BaseModel):
         mutually exclusive with the LoRA feature flags and with the other two
         (each independently decides what trains).
 
-        Scoped to ``task='sft'`` ON PURPOSE. ``classifier`` / ``reranker`` /
-        ``cross_encoder`` (``classifier_lora``, v0.71.12 #146) and ``asr``
-        (``asr_lora``, v0.71.32) have gated LoRA behind their own opt-in flag
+        Scoped to ``task in ('sft', 'embedding')`` (#340, #700). ``classifier`` /
+        ``reranker`` / ``cross_encoder`` (``classifier_lora``, v0.71.12 #146) and
+        ``asr`` (``asr_lora``, v0.71.32) have gated LoRA behind their own opt-in flag
         for releases, so ``lora.r: 0`` already parses and is already harmless
         there; a blanket gate would break configs that work today. Tasks that
         do pass the rank straight to peft keep their existing behaviour
@@ -5033,7 +5053,7 @@ class SoupConfig(BaseModel):
         a new refusal this issue never measured.
         """
         tcfg = self.training
-        if tcfg.lora.r != 0 or self.task != "sft":
+        if tcfg.lora.r != 0 or self.task not in ("sft", "embedding"):
             return self
         if tcfg.stream_layers:
             # Streaming has its own, more specific refusal (the decoder lives
@@ -5044,7 +5064,7 @@ class SoupConfig(BaseModel):
             raise ValueError(
                 f"training.lora.r=0 (full fine-tuning) requires "
                 f"backend='transformers'; got backend={self.backend!r}. The "
-                f"full-FT branch is wired in the transformers SFT trainer."
+                f"full-FT branch is wired in the transformers SFT and embedding trainers."
             )
         if self.modality != "text":
             raise ValueError(

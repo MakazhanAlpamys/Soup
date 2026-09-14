@@ -497,11 +497,31 @@ class TestNVFP4:
             )
 
     def test_apply_live_gated(self):
-        """v0.71.21 #141 lifted the stub — now a friendly Blackwell gate."""
-        from soup_cli.utils.advanced_precision import apply_nvfp4
+        """v0.71.21 #141 lifted the stub — now a friendly Blackwell gate.
 
-        with pytest.raises(RuntimeError, match="Blackwell"):
+        The gate is hardware-dependent, so the assertion has to be too. Asserting
+        the Blackwell refusal unconditionally encoded the assumption that the test
+        machine is NOT Blackwell: on an RTX 50-series card (SM 12.0) the hardware
+        gate correctly passes, the next gate decides instead, and the regex missed.
+        Verified on an RTX 5070 (sm_120), where the message is the torchao one.
+        """
+        from soup_cli.utils.advanced_precision import apply_nvfp4, is_blackwell_gpu
+
+        if not is_blackwell_gpu():
+            with pytest.raises(RuntimeError, match="Blackwell"):
+                apply_nvfp4(object())
+            return
+
+        # On Blackwell the hardware gate must NOT be what refuses. Which gate
+        # refuses instead depends on the environment (torchao absent here), so
+        # only the hardware property is asserted -- pinning the torchao text
+        # would re-encode an environment assumption, which is the defect this
+        # is fixing.
+        with pytest.raises(RuntimeError) as excinfo:
             apply_nvfp4(object())
+        message = str(excinfo.value)
+        assert "no Blackwell device detected" not in message, message
+        assert "Blackwell" not in message, message
 
 
 class TestUnslothBNB4Bit:

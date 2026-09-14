@@ -153,7 +153,12 @@ class TestCli:
 
     def test_replay_renders(self, tmp_path, monkeypatch):
         monkeypatch.setenv("SOUP_DB_PATH", str(tmp_path / "y.db"))
+        from rich.console import Console
+
+        from soup_cli.commands import runs as runs_command
         from soup_cli.experiment.tracker import ExperimentTracker
+
+        monkeypatch.setattr(runs_command, "console", Console(no_color=True))
 
         tracker = ExperimentTracker()
         run_id = tracker.start_run(
@@ -168,8 +173,17 @@ class TestCli:
         )
         tracker.close()
         runner = CliRunner()
-        result = runner.invoke(app, ["runs", "replay", run_id, "--no-plot"])
+        result = runner.invoke(
+            app,
+            ["runs", "replay", run_id],
+        )
         assert result.exit_code == 0, (result.output, repr(result.exception))
         assert run_id in result.output
         # Summary should reference initial / final loss
         assert "2.0" in result.output or "2.00" in result.output
+        assert "Training Loss" in result.output
+        assert "\x1b" not in result.output
+
+        no_plot = runner.invoke(app, ["runs", "replay", run_id, "--no-plot"])
+        assert no_plot.exit_code == 0, (no_plot.output, repr(no_plot.exception))
+        assert "Training Loss" not in no_plot.output

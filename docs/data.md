@@ -313,7 +313,26 @@ soup ingest --source otel         --logs ./otel-spans.jsonl
 soup ingest --source openai-stored --logs ./oai-stored-completions.jsonl
 ```
 
-The CLI never makes the network call — operators export from their SaaS dashboard or vendor API, then point `soup ingest` at the local file. Auth env vars (`LANGFUSE_KEY` / `LANGSMITH_API_KEY` / `HELICONE_API_KEY` / `OPENPIPE_API_KEY` / `OPENAI_API_KEY` / `OTEL_EXPORTER_OTLP_HEADERS`) are advisory only — Soup surfaces which one is unset so operators wire creds before the SaaS-side export. A PII reminder fires on every ingest run (matches v0.26.0 Trace-to-Preference policy).
+With `--logs` the CLI never makes a network call — operators export from their SaaS dashboard or vendor API, then point `soup ingest` at the local file. Auth env vars (`LANGFUSE_PUBLIC_KEY` + `LANGFUSE_SECRET_KEY` / `LANGSMITH_API_KEY` / `HELICONE_API_KEY` / `OPENPIPE_API_KEY` / `OPENAI_API_KEY` / `OTEL_EXPORTER_OTLP_HEADERS`) are advisory on that path — Soup surfaces which ones authenticate the source. A PII reminder fires on every ingest run (matches v0.26.0 Trace-to-Preference policy).
+
+### Live pull from Langfuse (`--pull`, #204)
+
+Langfuse is the one source Soup can fetch directly, so there is no export step:
+
+```bash
+export LANGFUSE_PUBLIC_KEY=pk-lf-...   # Project Settings -> API Keys
+export LANGFUSE_SECRET_KEY=sk-lf-...
+export LANGFUSE_HOST=https://us.cloud.langfuse.com   # optional: default is https://cloud.langfuse.com
+soup ingest --source langfuse --pull --since 7d --output traces.jsonl
+```
+
+- **What one row is.** One output row per `GENERATION` observation in the window — the unit that carries a model, the exact input it was given and the output it produced — read from Langfuse's Observations API v2 (`/api/public/traces` is removed from Langfuse Cloud on 2026-11-16) and checked again on each observation, so a server that ignores the `type` filter cannot turn spans or tool calls into rows — they are counted as skipped in the summary. A row's `trace_id` is the observation id. The API returns plain-text input and output as-is but structured values (chat message lists, objects) as JSON inside a string; those are decoded, and a chat message list becomes a `prompt` of every message's content joined by newlines (system prompt included), the same flattening `parse_langfuse` applies to a `{"messages": [...]}` export. An agent trace therefore yields one row per LLM call it made; its spans and tool calls yield none. Generations with no input or no output are skipped and counted in the summary line, so a pull that matched nothing usable says so instead of writing an empty file silently.
+- **Credentials.** Read from the environment only, never from a flag, so they never reach the audit log's argv. `LANGFUSE_BASE_URL` is honoured before `LANGFUSE_HOST`, the same precedence as the Langfuse SDK. The key pair is not written to the output, the console, debug logs or error messages.
+- **Host checks.** HTTPS only. The host goes through the same SSRF validator as `--slack-url`; a private, link-local or loopback address (self-hosted Langfuse) additionally needs `--allow-private-host`. Redirects are refused rather than followed with credentials attached.
+- **Bounds.** `--since` accepts `30m` / `24h` / `7d` up to `365d` (default `7d`). Each request is bounded by a 30 s wall-clock deadline covering the connect and the whole response — a server that drip-feeds bytes cannot outlast it — and a response is capped at 64 MiB. Pages hold 100 generations; if results are still pending after `--max-pages` pages (default 100, max 10 000), the command stops with exit 1 and writes nothing — the output streams to a staging file, so an earlier file at `--output` is left untouched. HTTP 429 is retried up to 5 times, honouring `Retry-After` with a 60 s ceiling, and a pagination cursor the server repeats stops the pull instead of spending the rest of the page budget.
+- **Without `--pull`** nothing changes: the pull code is not imported and no connection is opened.
+
+The other sources have no live pull yet — export them and pass `--logs`.
 
 
 ## Prompt Mining (`soup prune-prompt`)
@@ -665,8 +684,25 @@ not byte-identically (a streaming source's size generally can't be known ahead o
 On the local (eager) and all-hub-name paths, `data.val_split` is applied per source before
 `over`/`probs` pad it with copies of its own rows, so a padded row can never land on both
 sides of the split; `concat`/`under` never duplicate rows and still split the combined
-result as before. This does not reach the streaming path below, which still splits after
-combining and can still duplicate a row across `train` and `val` under `over`/`probs`.
+result as before.
+
+The streaming path reaches the same guarantee by a different route (#702). A stream is not
+countable ahead of time, so there is nothing to take a fraction of before interleaving
+starts; instead, once `over` has been materialised, the split is sized over the *distinct*
+rows and val is taken from the end of the stream, preferring rows whose content occurs only
+once, so train keeps every row and all of its oversampling. Only if there are too few such
+rows is repeated content moved to val, and then its other copies are withheld from train
+and the number withheld is printed as a warning. A split that would leave train empty
+raises instead. Because val comes from distinct rows in stream order rather than from each
+source in turn, **it is not balanced across sources**: with 100 rows against 10 under
+`val_split: 0.1`, every val row comes from the larger source, since the smaller one's rows
+are all recycled. The eager path's per-source carve-out is mixture-representative; this one
+is not.
+
+`concat`/`under`/`probs` do not *add* duplicates on the streaming path (only `over` uses
+`stopping_strategy="all_exhausted"`), so they keep the ordinary positional split. That is a
+statement about interleaving, not about your data: rows that are already duplicated in a
+source can still land on both sides of the split under any strategy, on either path.
 
 Splitting before padding also means the requested `val_split` fraction is no longer exact
 under `over`/`probs`: it is taken from each source's own (smaller, unpadded) row count, so
@@ -737,6 +773,9 @@ soup data inspect ./data/train.jsonl
 soup data validate ./data/train.jsonl
 soup data validate ./data/train.jsonl --format alpaca
 
+# Require at least 90% of rows to be usable
+soup data validate ./data/train.jsonl --min-valid-fraction 0.9
+
 # Convert between formats
 soup data convert ./data/train.jsonl --to sharegpt --output converted.jsonl
 
@@ -754,6 +793,12 @@ soup data filter ./data/train.jsonl --coherence 0.3
 soup data filter ./data/train.jsonl --perplexity 500 --coherence 0.3
 soup data filter ./data/train.jsonl --score-only  # add scores without filtering
 ```
+
+`soup data validate` exits with code `0` when at least one row is usable and the
+optional minimum valid fraction is met. It exits with code `1` for input errors,
+such as a missing file or an undetectable format, and code `2` when a non-empty
+dataset has no usable rows or falls below `--min-valid-fraction`. A partially valid
+dataset still exits with code `0` when no minimum is specified.
 
 
 ## Demo Datasets (`soup data demo`)
@@ -963,11 +1008,15 @@ soup data lint ./data/prefs.jsonl --model meta-llama/Llama-3.1-8B-Instruct  # ex
 ```
 
 Five checks: `length_bias` — the **#1 silent DPO degradation**: `chosen`
-systematically longer than `rejected`, reported as a Cohen's d effect size —
+systematically longer than `rejected`, reported as a Cohen's d effect size; MAJOR
+needs |d| >= 0.8 and mean lengths at least 10% apart, MINOR |d| >= 0.3 and 5%, so a
+consistent one-word gap between near-constant lengths is not flagged —
 `label_imbalance` (KTO desirable:undesirable ratio), `near_duplicates`
 (MinHash/LSH, reuses the `soup data dedup` kernel; requires
 `pip install "soup-cli[data]"`, degrades to an advisory skip otherwise),
 `identical_pairs` (`chosen == rejected` — zero preference signal), and
 `prompt_leak` (the prompt echoed verbatim inside the completion, a common
-synthetic-data pipeline bug). Same OK/MINOR/MAJOR taxonomy and exit codes as
+synthetic-data pipeline bug). For conversational `chosen` / `rejected` (message
+lists), `length_bias` and `prompt_leak` read only the assistant turns, since the
+leading user turn is the prompt itself. Same OK/MINOR/MAJOR taxonomy and exit codes as
 `soup data doctor`.

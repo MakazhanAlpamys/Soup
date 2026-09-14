@@ -1,6 +1,7 @@
 """Tests for AWQ and GPTQ export — config, validation, CLI."""
 
 import builtins
+import re
 import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -10,6 +11,18 @@ import pytest
 from click.exceptions import Exit as ClickExit
 
 from soup_cli.commands.export import SUPPORTED_FORMATS
+
+# Rich colours per character on a colour-capable runner and WRAPS at the
+# terminal width, drawing box borders between the fragments of a wrapped help
+# line. Strip ANSI escapes and box-drawing characters, then collapse
+# whitespace, before any substring match on CLI output.
+_ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
+_BOX_RE = re.compile(r"[\u2500-\u257f]")
+
+
+def _plain(text: str) -> str:
+    """ANSI- and border-stripped, whitespace-collapsed CLI output."""
+    return " ".join(_BOX_RE.sub(" ", _ANSI_RE.sub("", text)).split())
 
 
 def _mock_import(awq_mock=None, gptq_mock=None):
@@ -90,6 +103,23 @@ class TestAwqExportCLI:
         result = runner.invoke(app, ["export", "--help"])
         assert "gptq" in result.output.lower()
 
+    def test_calibration_help_names_both_required_formats(self):
+        """The shared option must not imply AWQ can omit calibration data.
+
+        Asserted on the Click parameter rather than on rendered ``--help``:
+        Rich wraps prose inside its box borders at any terminal width, so a
+        substring match on the rendered text breaks on an unrelated width or
+        help-string change.
+        """
+        import typer
+
+        from soup_cli.cli import app
+
+        cmd = typer.main.get_command(app).commands["export"]
+        param = next(p for p in cmd.params if "--calibration-data" in p.opts)
+
+        assert param.help == "Path to calibration JSONL. Required for AWQ and GPTQ."
+
 
 # ─── GPTQ Export CLI Tests ────────────────────────────────────────────────
 
@@ -116,7 +146,7 @@ class TestGptqExportCLI:
 class TestAwqExportFunction:
     """Test _export_awq logic."""
 
-    def test_export_awq_import_error(self, tmp_path):
+    def test_export_awq_import_error(self, tmp_path, monkeypatch):
         """AWQ export should print friendly error when autoawq not installed."""
         from typer.testing import CliRunner
 
@@ -124,18 +154,170 @@ class TestAwqExportFunction:
 
         model_dir = tmp_path / "model"
         model_dir.mkdir()
+        cal_file = tmp_path / "cal.jsonl"
+        cal_file.write_text('{"text": "sample"}\n', encoding="utf-8")
+        monkeypatch.chdir(tmp_path)
 
         runner = CliRunner()
         result = runner.invoke(
-            app, ["export", "--model", str(model_dir), "--format", "awq"]
+            app,
+            [
+                "export", "--model", str(model_dir), "--format", "awq",
+                "--calibration-data", str(cal_file),
+            ],
         )
         assert result.exit_code != 0
         assert "autoawq" in result.output.lower() or "not installed" in result.output.lower()
 
-    def test_export_awq_calls_quantize(self, tmp_path):
-        """AWQ export should call AutoAWQForCausalLM methods."""
+    def test_export_awq_no_calibration_data_raises(self, tmp_path, capsys):
+        """AWQ must not delegate missing calibration data to AutoAWQ's implicit
+        large dataset download, and must fail before importing or loading a model."""
         model_dir = tmp_path / "model"
         model_dir.mkdir()
+
+        real_import = builtins.__import__
+
+        def reject_awq_import(name, *args, **kwargs):
+            if name == "awq":
+                pytest.fail("AWQ was imported before calibration validation")
+            return real_import(name, *args, **kwargs)
+
+        import soup_cli.commands.export as export_mod
+
+        with mock_patch.object(builtins, "__import__", side_effect=reject_awq_import):
+            with pytest.raises(ClickExit):
+                export_mod._export_awq(
+                    model_dir, None, None, bits=4, group_size=128,
+                    calibration_data=None,
+                )
+        output = _plain(capsys.readouterr().out)
+        assert "AWQ export requires --calibration-data" in output
+        assert "default calibration dataset" in output
+
+    def test_export_awq_empty_calibration_file_raises(self, tmp_path):
+        """An empty or malformed calibration file fails before model loading."""
+        model_dir = tmp_path / "model"
+        model_dir.mkdir()
+        cal_file = tmp_path / "cal.jsonl"
+        cal_file.write_text("\nnot json\n", encoding="utf-8")
+
+        real_import = builtins.__import__
+
+        def reject_awq_import(name, *args, **kwargs):
+            if name == "awq":
+                pytest.fail("AWQ was imported before calibration validation")
+            return real_import(name, *args, **kwargs)
+
+        import soup_cli.commands.export as export_mod
+
+        with mock_patch.object(builtins, "__import__", side_effect=reject_awq_import):
+            with mock_patch(
+                "soup_cli.commands.export._validate_calibration_path",
+                return_value=cal_file,
+            ):
+                with pytest.raises(ClickExit):
+                    export_mod._export_awq(
+                        model_dir, None, None, bits=4, group_size=128,
+                        calibration_data=str(cal_file),
+                    )
+
+    @pytest.mark.parametrize(
+        "payload",
+        ["[]", "null", '"plain JSON string"', "42"],
+        ids=["array", "null", "string", "number"],
+    )
+    def test_export_awq_rejects_non_object_json_rows(self, tmp_path, capsys, payload):
+        """Valid JSON scalars and arrays are not valid JSONL calibration rows."""
+        model_dir = tmp_path / "model"
+        model_dir.mkdir()
+        cal_file = tmp_path / "cal.jsonl"
+        cal_file.write_text(f"{payload}\n", encoding="utf-8")
+
+        real_import = builtins.__import__
+
+        def reject_awq_import(name, *args, **kwargs):
+            if name == "awq":
+                pytest.fail("AWQ was imported before calibration validation")
+            return real_import(name, *args, **kwargs)
+
+        import soup_cli.commands.export as export_mod
+
+        with mock_patch.object(builtins, "__import__", side_effect=reject_awq_import):
+            with mock_patch(
+                "soup_cli.commands.export._validate_calibration_path",
+                return_value=cal_file,
+            ):
+                with pytest.raises(ClickExit):
+                    export_mod._export_awq(
+                        model_dir, None, None, bits=4, group_size=128,
+                        calibration_data=str(cal_file),
+                    )
+
+        assert "No usable calibration samples" in capsys.readouterr().out
+
+    def test_export_awq_rejects_non_utf8_calibration_before_import(self, tmp_path, capsys):
+        model_dir = tmp_path / "model"
+        model_dir.mkdir()
+        cal_file = tmp_path / "cal.jsonl"
+        cal_file.write_bytes(b'\xff{"text": "sample"}\n')
+
+        real_import = builtins.__import__
+
+        def reject_awq_import(name, *args, **kwargs):
+            if name == "awq":
+                pytest.fail("AWQ was imported before calibration validation")
+            return real_import(name, *args, **kwargs)
+
+        import soup_cli.commands.export as export_mod
+
+        with mock_patch.object(builtins, "__import__", side_effect=reject_awq_import):
+            with mock_patch(
+                "soup_cli.commands.export._validate_calibration_path",
+                return_value=cal_file,
+            ):
+                with pytest.raises(ClickExit):
+                    export_mod._export_awq(
+                        model_dir, None, None, bits=4, group_size=128,
+                        calibration_data=str(cal_file),
+                    )
+
+        # Rich's highlighter colours the "8" in "UTF-8" as a number.
+        assert "not valid UTF-8" in _plain(capsys.readouterr().out)
+
+    def test_export_awq_rejects_unreadable_calibration_before_import(self, tmp_path, capsys):
+        model_dir = tmp_path / "model"
+        model_dir.mkdir()
+        cal_dir = tmp_path / "calibration-directory"
+        cal_dir.mkdir()
+
+        real_import = builtins.__import__
+
+        def reject_awq_import(name, *args, **kwargs):
+            if name == "awq":
+                pytest.fail("AWQ was imported before calibration validation")
+            return real_import(name, *args, **kwargs)
+
+        import soup_cli.commands.export as export_mod
+
+        with mock_patch.object(builtins, "__import__", side_effect=reject_awq_import):
+            with mock_patch(
+                "soup_cli.commands.export._validate_calibration_path",
+                return_value=cal_dir,
+            ):
+                with pytest.raises(ClickExit):
+                    export_mod._export_awq(
+                        model_dir, None, None, bits=4, group_size=128,
+                        calibration_data=str(cal_dir),
+                    )
+
+        assert "Could not read calibration data" in capsys.readouterr().out
+
+    def test_export_awq_calls_quantize(self, tmp_path):
+        """AWQ export should pass the explicit calibration rows to AutoAWQ."""
+        model_dir = tmp_path / "model"
+        model_dir.mkdir()
+        cal_file = tmp_path / "cal.jsonl"
+        cal_file.write_text('{"text": "sample"}\n', encoding="utf-8")
 
         mock_model = MagicMock()
         mock_awq_class = MagicMock()
@@ -157,18 +339,29 @@ class TestAwqExportFunction:
                     "soup_cli.commands.export._validate_output_path",
                     return_value=out_path,
                 ):
-                    export_mod._export_awq(
-                        model_dir, str(out_path), None,
-                        bits=4, group_size=128, calibration_data=None,
-                    )
-                    mock_awq_class.from_pretrained.assert_called_once()
-                    mock_model.quantize.assert_called_once()
-                    mock_model.save_quantized.assert_called_once()
+                    with mock_patch(
+                        "soup_cli.commands.export._validate_calibration_path",
+                        return_value=cal_file,
+                    ):
+                        export_mod._export_awq(
+                            model_dir, str(out_path), None,
+                            bits=4, group_size=128,
+                            calibration_data=str(cal_file),
+                        )
+        mock_awq_class.from_pretrained.assert_called_once()
+        mock_model.quantize.assert_called_once_with(
+            mock_tokenizer,
+            quant_config={"zero_point": True, "q_group_size": 128, "w_bit": 4},
+            calib_data=["sample"],
+        )
+        mock_model.save_quantized.assert_called_once()
 
     def test_export_awq_default_output_path(self, tmp_path):
         """Default AWQ output path should be model_name + _awq suffix."""
         model_dir = tmp_path / "my_model"
         model_dir.mkdir()
+        cal_file = tmp_path / "cal.jsonl"
+        cal_file.write_text('{"text": "sample"}\n', encoding="utf-8")
 
         mock_model = MagicMock()
         mock_awq_class = MagicMock()
@@ -185,13 +378,17 @@ class TestAwqExportFunction:
                 "transformers.AutoTokenizer.from_pretrained",
                 return_value=mock_tokenizer,
             ):
-                export_mod._export_awq(
-                    model_dir, None, None, bits=4, group_size=128,
-                    calibration_data=None,
-                )
-                save_call = mock_model.save_quantized.call_args
-                output_path = save_call[0][0]
-                assert "my_model_awq" in output_path
+                with mock_patch(
+                    "soup_cli.commands.export._validate_calibration_path",
+                    return_value=cal_file,
+                ):
+                    export_mod._export_awq(
+                        model_dir, None, None, bits=4, group_size=128,
+                        calibration_data=str(cal_file),
+                    )
+                    save_call = mock_model.save_quantized.call_args
+                    output_path = save_call[0][0]
+                    assert "my_model_awq" in output_path
 
     def test_export_awq_with_calibration_data(self, tmp_path):
         """AWQ export with calibration data should load and pass it."""
@@ -594,6 +791,8 @@ class TestAwqGptqImportErrorSurfacesRealCause:
     def test_awq_transitive_import_failure_message(self, tmp_path, capsys):
         model_dir = tmp_path / "model"
         model_dir.mkdir()
+        cal_file = tmp_path / "cal.jsonl"
+        cal_file.write_text('{"text": "sample"}\n', encoding="utf-8")
 
         real_import = builtins.__import__
 
@@ -605,11 +804,15 @@ class TestAwqGptqImportErrorSurfacesRealCause:
         import soup_cli.commands.export as export_mod
 
         with mock_patch.object(builtins, "__import__", side_effect=custom_import):
-            with pytest.raises(ClickExit):
-                export_mod._export_awq(
-                    model_dir, None, None, bits=4, group_size=128,
-                    calibration_data=None,
-                )
+            with mock_patch(
+                "soup_cli.commands.export._validate_calibration_path",
+                return_value=cal_file,
+            ):
+                with pytest.raises(ClickExit):
+                    export_mod._export_awq(
+                        model_dir, None, None, bits=4, group_size=128,
+                        calibration_data=str(cal_file),
+                    )
         output = capsys.readouterr().out
         assert "libbar.so" in output
         assert "not installed" not in output.lower()

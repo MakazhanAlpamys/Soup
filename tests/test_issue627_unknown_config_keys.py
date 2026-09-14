@@ -144,6 +144,40 @@ class TestTheControl:
                 offenders[name] = [u.path for u in unknown]
         assert offenders == {}
 
+
+    def test_every_bundled_fetch_example_is_clean(self) -> None:
+        """``soup fetch examples`` ships configs too, and two of them were not.
+
+        Both bundled YAML examples carried a top-level ``lora:`` block that the
+        schema has never had (it lives under ``training``), so their LoRA
+        settings had never applied -- and once the loader refuses unknown keys
+        (v0.75.0) both would have refused to load. The recipe catalog had this
+        guard; the fetch catalog did not. Loading through the real loader is
+        the second half: a clean scan of a config that then fails validation
+        would still be a broken example.
+        """
+        import os
+
+        import yaml
+
+        from soup_cli.config.loader import load_config_from_string
+        from soup_cli.utils.fetch_examples import fetch_examples_dir, list_entries
+
+        entries = [e for e in list_entries("examples").values() if e.filename.endswith(".yaml")]
+        assert len(entries) >= 2, "the bundled example catalog shrank"
+        for entry in entries:
+            text = Path(os.path.join(fetch_examples_dir(), entry.filename)).read_text(
+                encoding="utf-8"
+            )
+            unknown = find_unknown_config_keys(yaml.safe_load(text))
+            assert unknown == [], (entry.name, [u.path for u in unknown])
+            assert load_config_from_string(text).training.lora.r == 16, entry.name
+            # The remap makes a root-level ``lora:`` LEGAL, so the two checks
+            # above cannot see the canonical-spelling fix; pin the text itself.
+            assert "lora" not in yaml.safe_load(text), (
+                f"{entry.name}: the bundled example spells lora: at the root; "
+                "the canonical spelling is training.lora"
+            )
     def test_non_mapping_values_do_not_crash_the_walk(self) -> None:
         raw = _raw()
         raw["training"] = "not-a-mapping"
@@ -496,8 +530,18 @@ class TestOneReportPerLoad:
 
     A per-key report is worse in exactly the case that matters: a config
     copied from a newer Soup trips several keys at once, and N panels bury the
-    list they are supposed to present.
+    list they are supposed to present. The same class pins what the loader
+    does with that one report on each side of the severity switch: return it
+    (``"error"``) or print it once (``"warn"``).
     """
+
+    TWO_TYPOS = {
+        "base": "hf/model",
+        "task": "sft",
+        "data": {"train": "./t.jsonl", "format": "auto", "max_len": 512},
+        "training": {"epochs": 1, "quantizaton": "4bit"},
+        "output": "./o",
+    }
 
     def _four_typos(self) -> list:
         raw = _raw(extra_data="{max_len: 512, val_splt: 0.1}")
@@ -518,27 +562,40 @@ class TestOneReportPerLoad:
         msg = format_unknown_keys(self._four_typos())
         assert msg.count(f"v{UNKNOWN_KEY_REJECTION_VERSION}") == 1
 
-    def test_the_loader_prints_a_single_warning_block(self) -> None:
-        """Four unknown keys must not produce four ``Warning:`` headers."""
+    def test_the_loader_returns_a_single_refusal_naming_every_key(self, monkeypatch) -> None:
+        """Under the shipped ``"error"`` switch: one message, nothing printed.
+
+        Printing is the caller's job on this branch (``SystemExit`` for the
+        CLI, ``ValueError`` for the API), so a report that printed *and*
+        returned would show the operator the same list twice.
+        """
         from soup_cli.config import loader
 
         printed: list[str] = []
-        original = loader.console.print
-        loader.console.print = lambda *a, **k: printed.append(" ".join(str(x) for x in a))
-        try:
-            loader._report_unknown_keys(
-                {
-                    "base": "hf/model",
-                    "task": "sft",
-                    "data": {"train": "./t.jsonl", "format": "auto", "max_len": 512},
-                    "training": {"epochs": 1, "quantizaton": "4bit"},
-                    "output": "./o",
-                }
-            )
-        finally:
-            loader.console.print = original
+        monkeypatch.setattr(
+            loader.console, "print", lambda *a, **k: printed.append(" ".join(str(x) for x in a))
+        )
+        message = loader._report_unknown_keys(dict(self.TWO_TYPOS))
 
+        assert printed == []
+        assert message is not None
+        assert "data.max_len" in message and "training.quantizaton" in message
+        # The refusal must not say the run proceeded without the key.
+        assert "not applied" not in message.lower()
+        assert "Refused." in message
+
+    def test_the_loader_prints_a_single_warning_block_under_warn(self, monkeypatch) -> None:
+        """The other side of the switch stays pinned: four keys, one ``Warning:``."""
+        from soup_cli.config import loader
+
+        printed: list[str] = []
+        monkeypatch.setattr(loader, "UNKNOWN_KEY_SEVERITY", "warn")
+        monkeypatch.setattr(
+            loader.console, "print", lambda *a, **k: printed.append(" ".join(str(x) for x in a))
+        )
+        assert loader._report_unknown_keys(dict(self.TWO_TYPOS)) is None
         assert sum("Warning:" in line for line in printed) == 1
+        assert sum("Not applied." in line for line in printed) == 1
 
 
 class TestTheSweepGuardIsIndependentOfTheDeadline:
@@ -581,12 +638,18 @@ class TestTheSweepGuardIsIndependentOfTheDeadline:
             _reject_unknown_sweep_params(self._swept("lora_rank", 8))
         assert UNKNOWN_KEY_REJECTION_VERSION not in str(excinfo.value)
 
-    def test_it_raises_even_though_the_loader_only_warns(self) -> None:
-        """The switch governs the loader, not the sweep -- pinned, not assumed."""
+    @pytest.mark.parametrize("severity", ["warn", "error"])
+    def test_it_raises_whatever_the_loader_switch_says(self, monkeypatch, severity) -> None:
+        """The switch governs the loader, not the sweep -- pinned on both sides.
+
+        v0.74 shipped the loader at ``"warn"`` and v0.75 at ``"error"``; the
+        sweep guard raised under both, and this parametrisation is what keeps
+        that true rather than assumed.
+        """
         from soup_cli.commands.sweep import _reject_unknown_sweep_params
         from soup_cli.config import loader
 
-        assert loader.UNKNOWN_KEY_SEVERITY == "warn"
+        monkeypatch.setattr(loader, "UNKNOWN_KEY_SEVERITY", severity)
         with pytest.raises(ValueError):
             _reject_unknown_sweep_params(self._swept("lora_rank", 8))
 
@@ -815,11 +878,29 @@ class TestTheLoaderIsActuallyWiredUp:
         monkeypatch.setattr(loader.console, "print", record)
         return printed
 
-    def test_load_config_from_string_reports_an_unknown_key(self, monkeypatch) -> None:
+    def test_load_config_from_string_refuses_an_unknown_key(self, monkeypatch) -> None:
+        """The shipped switch: the API/UI call site raises, and names the key."""
         from soup_cli.config.loader import load_config_from_string
 
         printed = self._recording_console(monkeypatch)
-        load_config_from_string(self.TYPOD)
+        with pytest.raises(ValueError) as excinfo:
+            load_config_from_string(self.TYPOD)
+        assert "quantizaton" in str(excinfo.value), "the refusal never named the typo"
+        assert "unknown config key" in str(excinfo.value)
+        # A refusal that still promised a *future* rejection would be lying,
+        # and one that said "not applied" would read as if the run went ahead.
+        assert UNKNOWN_KEY_REJECTION_VERSION not in str(excinfo.value)
+        assert "Refused." in str(excinfo.value)
+        assert "not applied" not in str(excinfo.value).lower()
+        assert printed == [], "the API call site must raise, not print"
+
+    def test_load_config_from_string_warns_under_warn_severity(self, monkeypatch) -> None:
+        """The pre-v0.75 branch stays pinned: report, name the deadline, proceed."""
+        from soup_cli.config import loader
+
+        monkeypatch.setattr(loader, "UNKNOWN_KEY_SEVERITY", "warn")
+        printed = self._recording_console(monkeypatch)
+        loader.load_config_from_string(self.TYPOD)
         joined = "\n".join(printed)
         assert "quantizaton" in joined, "the API/UI call site never reported the typo"
         assert "unknown config key" in joined
@@ -833,17 +914,34 @@ class TestTheLoaderIsActuallyWiredUp:
         load_config_from_string(self.CLEAN)
         assert printed == [], f"a clean config produced output: {printed}"
 
-    def test_load_config_reports_an_unknown_key(self, monkeypatch, tmp_path) -> None:
+    def test_load_config_refuses_an_unknown_key(self, monkeypatch, tmp_path) -> None:
         """The file call site is a separate branch from the string one."""
         from soup_cli.config.loader import load_config
 
         path = tmp_path / "soup.yaml"
         path.write_text(self.TYPOD, encoding="utf-8")
         printed = self._recording_console(monkeypatch)
-        load_config(path)
+        with pytest.raises(SystemExit) as excinfo:
+            load_config(path)
+        assert excinfo.value.code == 1
         joined = "\n".join(printed)
         assert "quantizaton" in joined, "the CLI call site never reported the typo"
         assert "unknown config key" in joined
+        assert "Refused." in joined and "Not applied." not in joined
+
+    def test_load_config_warns_under_warn_severity(self, monkeypatch, tmp_path) -> None:
+        from soup_cli.config import loader
+
+        path = tmp_path / "soup.yaml"
+        path.write_text(self.TYPOD, encoding="utf-8")
+        monkeypatch.setattr(loader, "UNKNOWN_KEY_SEVERITY", "warn")
+        printed = self._recording_console(monkeypatch)
+        loader.load_config(path)
+        joined = "\n".join(printed)
+        assert "quantizaton" in joined, "the CLI call site never reported the typo"
+        assert "unknown config key" in joined
+        assert "Not applied." in joined, "a warning must say the key was ignored"
+        assert UNKNOWN_KEY_REJECTION_VERSION in joined, "the warning lost its deadline"
 
     def test_load_config_is_silent_on_a_clean_config(self, monkeypatch, tmp_path) -> None:
         from soup_cli.config.loader import load_config
@@ -880,3 +978,312 @@ class TestTheLoaderIsActuallyWiredUp:
 
         monkeypatch.setattr(loader, "UNKNOWN_KEY_SEVERITY", "error")
         assert loader.load_config_from_string(self.CLEAN).base == "test-model"
+
+
+class TestTheDetectorSeesWhatTheValidatorSees:
+    """A spelling ``SoupConfig`` accepts must never be one the detector refuses.
+
+    ``SoupConfig`` has moved a root-level ``lora:`` block under ``training``
+    since v0.40.1 (LlamaFactory / Axolotl convention). The v0.74.0 detector
+    walked the RAW dict, so it flagged that spelling as unknown -- a warning
+    then, and under v0.75.0's refusal a config the schema was built to accept
+    would have failed to load (found in the release review of #879). Both
+    sides now call the same ``remap_root_level_misplaced_keys``.
+    """
+
+    TOPLEVEL_LORA = (
+        "base: test-model\n"
+        "task: sft\n"
+        "data:\n"
+        "  train: ./data.jsonl\n"
+        "training:\n"
+        "  epochs: 1\n"
+        "lora:\n"
+        "  r: 16\n"
+        "  alpha: 32\n"
+    )
+
+    def test_a_root_level_lora_block_is_not_an_unknown_key(self) -> None:
+        import yaml
+
+        assert find_unknown_config_keys(yaml.safe_load(self.TOPLEVEL_LORA)) == []
+
+    def test_a_root_level_lora_block_loads_under_the_shipped_refusal(self) -> None:
+        from soup_cli.config import loader
+
+        assert loader.UNKNOWN_KEY_SEVERITY == "error"
+        assert loader.load_config_from_string(self.TOPLEVEL_LORA).training.lora.r == 16
+
+    def test_a_typo_inside_a_root_level_lora_block_is_still_reported(self) -> None:
+        """Remapping must not hide what is under the remapped key."""
+        import yaml
+
+        unknown = find_unknown_config_keys(
+            yaml.safe_load(self.TOPLEVEL_LORA.replace("  alpha: 32\n", "  alpah: 32\n"))
+        )
+        assert [u.path for u in unknown] == ["training.lora.alpah"]
+        assert "alpha" in unknown[0].suggestions
+
+    def test_the_detector_reads_the_validator_key_list_not_a_copy(self) -> None:
+        """Derived, not duplicated: every remapped key is accepted at the root."""
+        from soup_cli.config.schema import ROOT_LEVEL_MISPLACED_KEYS
+
+        assert ROOT_LEVEL_MISPLACED_KEYS, "the shared tuple went empty"
+        for key in ROOT_LEVEL_MISPLACED_KEYS:
+            raw = {"base": "m", "data": {"train": "t.jsonl"}, "training": {}, key: {}}
+            assert find_unknown_config_keys(raw) == [], key
+
+    def test_a_key_at_both_levels_is_the_validator_error_not_a_detector_one(self) -> None:
+        """The detector steps aside; ``SoupConfig`` names the conflict precisely."""
+        from soup_cli.config import loader
+
+        both = self.TOPLEVEL_LORA.replace("  epochs: 1\n", "  epochs: 1\n  lora:\n    r: 8\n")
+        with pytest.raises(ValueError, match="both root and training level"):
+            loader.load_config_from_string(both)
+
+    def test_the_caller_dict_is_not_mutated_by_the_detector(self) -> None:
+        import yaml
+
+        raw = yaml.safe_load(self.TOPLEVEL_LORA)
+        before = repr(raw)
+        find_unknown_config_keys(raw)
+        assert repr(raw) == before
+
+
+class TestTheReportIsSafeForTheTerminal:
+    """Key names come from the config file; the report must not restyle the terminal.
+
+    ``rich.markup.escape`` neutralises ``[...]`` and nothing else, and Rich
+    passes a raw ESC byte straight through -- the class of bug every other
+    command module now guards against via the shared
+    ``soup_cli.utils.terminal.for_terminal``. The loader printed the warning
+    without either guard in v0.74.0, and v0.75.0's refusal printed the same
+    text through a second, newly-live call. Both now go through it.
+    """
+
+    HOSTILE = (
+        "base: test-model\n"
+        "data:\n"
+        "  train: ./data.jsonl\n"
+        "training:\n"
+        "  epochs: 1\n"
+        '  "[bold red on white]INJECTED[/]": 1\n'
+        '  "\\x1b]0;owned\\x07quantizaton": 4bit\n'
+    )
+
+    @staticmethod
+    def _real_console(monkeypatch):
+        from io import StringIO
+
+        from rich.console import Console
+
+        from soup_cli.config import loader
+
+        buffer = StringIO()
+        monkeypatch.setattr(loader, "console", Console(file=buffer, width=200, markup=True))
+        return buffer
+
+    @pytest.mark.parametrize("severity", ["error", "warn"])
+    def test_markup_and_control_bytes_in_a_key_are_neutralised(
+        self, monkeypatch, tmp_path, severity
+    ) -> None:
+        from soup_cli.config import loader
+
+        monkeypatch.setattr(loader, "UNKNOWN_KEY_SEVERITY", severity)
+        buffer = self._real_console(monkeypatch)
+        path = tmp_path / "soup.yaml"
+        path.write_text(self.HOSTILE, encoding="utf-8")
+        if severity == "error":
+            with pytest.raises(SystemExit):
+                loader.load_config(path)
+        else:
+            loader.load_config(path)
+        out = buffer.getvalue()
+        assert "INJECTED" in out and "quantizaton" in out, "the keys must still be named"
+        assert "\x1b" not in out, "a raw ESC byte reached the terminal"
+        assert "[bold red on white]" in out, "the markup was interpreted instead of shown"
+
+    def test_the_shared_helper_does_both_halves(self) -> None:
+        from soup_cli.utils.terminal import for_terminal
+
+        assert for_terminal("\x1b[31m[bold]x[/]\x7f") == "[31m\\[bold]x\\[/]"
+        assert for_terminal("tab\tnew\nline") == "tab\tnew\nline"
+
+    @pytest.mark.parametrize("byte", [*range(0x00, 0x20), 0x7F])
+    def test_every_control_byte_is_stripped_except_the_three_whitespace_ones(
+        self, byte: int
+    ) -> None:
+        """ESC and DEL were pinned; BEL, CR and the other 28 were not (TDD review)."""
+        from soup_cli.utils.terminal import for_terminal
+
+        out = for_terminal(f"a{chr(byte)}b")
+        if byte in (0x09, 0x0A, 0x0D):
+            assert out == f"a{chr(byte)}b", f"whitespace byte {byte:#04x} must survive"
+        else:
+            assert out == "ab", f"control byte {byte:#04x} reached the terminal"
+
+
+class TestTheWalkIsBounded:
+    """A config string reaches the detector from the Web UI and MCP too.
+
+    Every unknown key costs a difflib pass over ~240 declared names; 50,000
+    bogus keys under one section measured ~31 s of CPU with no cap (release
+    review of #879). The walk stops at ``_MAX_REPORTED_UNKNOWN_KEYS`` findings
+    and the report says so; an absurdly long key gets no suggestion and is
+    shown truncated.
+    """
+
+    def test_fifty_thousand_bogus_keys_are_capped_and_fast(self) -> None:
+        import time
+
+        from soup_cli.config.unknown_keys import _MAX_REPORTED_UNKNOWN_KEYS
+
+        raw = {
+            "base": "m",
+            "data": {"train": "t.jsonl"},
+            "training": {f"bogus_key_{i}": i for i in range(50_000)},
+        }
+        started = time.perf_counter()
+        unknown = find_unknown_config_keys(raw)
+        elapsed = time.perf_counter() - started
+        # cap + 1: the extra finding is the overflow marker the report reads.
+        assert len(unknown) == _MAX_REPORTED_UNKNOWN_KEYS + 1
+        assert elapsed < 5.0, f"the capped walk took {elapsed:.1f}s"
+        message = format_unknown_keys(unknown, include_deadline=False)
+        assert f"capped at {_MAX_REPORTED_UNKNOWN_KEYS}" in message
+        assert message.count("unknown config key") == _MAX_REPORTED_UNKNOWN_KEYS
+
+    def test_exactly_the_cap_is_reported_in_full_without_the_cap_sentence(self) -> None:
+        """A boundary the first version got wrong: 100 findings printed 'capped'."""
+        from soup_cli.config.unknown_keys import _MAX_REPORTED_UNKNOWN_KEYS
+
+        def raw(count: int) -> dict:
+            return {
+                "base": "m",
+                "data": {"train": "t.jsonl"},
+                "training": {f"bogus_key_{i}": i for i in range(count)},
+            }
+
+        at_cap = find_unknown_config_keys(raw(_MAX_REPORTED_UNKNOWN_KEYS))
+        assert len(at_cap) == _MAX_REPORTED_UNKNOWN_KEYS
+        at_cap_msg = format_unknown_keys(at_cap, include_deadline=False)
+        assert "capped" not in at_cap_msg
+        assert at_cap_msg.count("unknown config key") == _MAX_REPORTED_UNKNOWN_KEYS
+
+        one_over = find_unknown_config_keys(raw(_MAX_REPORTED_UNKNOWN_KEYS + 1))
+        assert len(one_over) == _MAX_REPORTED_UNKNOWN_KEYS + 1
+        assert "capped" in format_unknown_keys(one_over, include_deadline=False)
+
+    def test_a_report_below_the_cap_does_not_claim_to_be_capped(self) -> None:
+        unknown = find_unknown_config_keys(
+            {"base": "m", "data": {"train": "t.jsonl"}, "training": {"quantizaton": 1}}
+        )
+        assert "capped" not in format_unknown_keys(unknown)
+
+    def test_a_megabyte_key_name_is_not_echoed(self) -> None:
+        """The report names the key; it must not carry a megabyte of it."""
+        from soup_cli.config.unknown_keys import _MAX_KEY_LEN
+
+        huge = "q" * (1024 * 1024)
+        unknown = find_unknown_config_keys(
+            {"base": "m", "data": {"train": "t.jsonl"}, "training": {huge: 1}}
+        )
+        assert len(unknown) == 1
+        assert len(unknown[0].path) < _MAX_KEY_LEN + 32
+        assert unknown[0].path.endswith("...")
+        assert len(format_unknown_keys(unknown)) < _MAX_KEY_LEN + 256
+
+
+class TestTheWebUiKeepsTheHint:
+    """``/api/train/start`` is where a Web UI user meets the refusal.
+
+    Under v0.74.0's warning the loader never raised there, so the handler's
+    generic ``"Invalid training configuration"`` was unreachable for this
+    cause. Under the refusal it would have swallowed the one thing the
+    feature exists to say -- which key, and what was probably meant. The
+    SPA renders the detail through ``escapeHtml()`` (a code-review finding on
+    #879).
+    """
+
+    def test_the_400_names_the_key_and_the_suggestion(self, monkeypatch) -> None:
+        pytest.importorskip("fastapi")
+        from fastapi.testclient import TestClient
+
+        from soup_cli.ui.app import create_app, get_auth_token
+
+        client = TestClient(create_app())
+        response = client.post(
+            "/api/train/start",
+            json={"config_yaml": TestTheLoaderIsActuallyWiredUp.TYPOD},
+            headers={"Authorization": f"Bearer {get_auth_token()}"},
+        )
+        assert response.status_code == 400, response.text
+        detail = response.json()["detail"]
+        assert detail.startswith("Invalid training configuration")
+        assert "quantizaton" in detail and "quantization" in detail
+        assert "Refused." in detail
+
+
+class TestTheLoaderRefusesANonMappingFile:
+    """``load_config`` on a list-shaped YAML died with a TypeError traceback.
+
+    ``load_config_from_string`` has guarded this shape since v0.40.x (its
+    contract is ValueError-only); the file call site, touched in v0.75.0,
+    never did — found by the post-release TDD review.
+    """
+
+    @pytest.mark.parametrize("text, shape", [("- a\n- b\n", "list"), ("just a string\n", "str")])
+    def test_a_non_mapping_document_is_a_clean_exit_not_a_traceback(
+        self, monkeypatch, tmp_path, text, shape
+    ) -> None:
+        from soup_cli.config import loader
+
+        printed: list[str] = []
+        monkeypatch.setattr(loader.console, "print", lambda *a, **k: printed.append(str(a[0])))
+        path = tmp_path / "soup.yaml"
+        path.write_text(text, encoding="utf-8")
+        with pytest.raises(SystemExit) as excinfo:
+            loader.load_config(path)
+        assert excinfo.value.code == 1
+        assert any("YAML mapping" in line and shape in line for line in printed), printed
+
+
+class TestTheWebUiErrorBranchesAreDistinct:
+    """Both Web UI handlers split ValueError from everything else (TDD review).
+
+    The split is the point of the v0.75.0 change: the loader's ValueError
+    carries the key and the suggestion and is safe to show; anything else
+    (a YAML parser error, an unexpected TypeError) must stay generic.
+    """
+
+    @staticmethod
+    def _client():
+        pytest.importorskip("fastapi")
+        from fastapi.testclient import TestClient
+
+        from soup_cli.ui.app import create_app, get_auth_token
+
+        return TestClient(create_app()), {"Authorization": f"Bearer {get_auth_token()}"}
+
+    def test_from_form_names_the_field_on_a_validation_error(self) -> None:
+        client, headers = self._client()
+        response = client.post(
+            "/api/config/from-form",
+            json={"base": "m", "data": {"train": "./t.jsonl"}, "training": {"epochs": 0}},
+            headers=headers,
+        )
+        assert response.status_code == 200, response.text
+        error = response.json()["error"]
+        assert error.startswith("Invalid configuration:")
+        assert "epochs" in error, error
+
+    def test_train_start_keeps_a_parser_error_generic(self) -> None:
+        client, headers = self._client()
+        response = client.post(
+            "/api/train/start",
+            json={"config_yaml": "base: [unclosed\n  data: {"},
+            headers=headers,
+        )
+        assert response.status_code == 400, response.text
+        detail = response.json()["detail"]
+        assert detail == "Invalid training configuration", detail

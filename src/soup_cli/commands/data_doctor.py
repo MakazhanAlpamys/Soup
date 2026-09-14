@@ -26,27 +26,12 @@ from soup_cli.data.loader import load_raw_data
 from soup_cli.utils import data_doctor as engine
 from soup_cli.utils import data_lint as lint_engine
 from soup_cli.utils.paths import atomic_write_text
+from soup_cli.utils.terminal import for_terminal, strip_control
 from soup_cli.utils.trust_remote import model_requires_trust_remote_code, resolve_trust_remote_code
 
 console = Console()
 
 _PREFERENCE_FORMATS = ("dpo", "kto")
-
-# C0 control bytes (keep tab/newline/CR) + DEL, stripped before ANY
-# dataset-derived string reaches the terminal. rich.markup.escape() only
-# neutralises Rich's own [...] tag syntax — it does not strip raw escape
-# sequences, and dataset content (an unknown 'role' field, --show-mask's
-# decoded token text) is untrusted: a crafted training row can carry a
-# literal ESC byte that survives escape() and hits the terminal raw
-# (title-bar spoofing, OSC 8 link-text spoofing, or obscuring a MAJOR
-# verdict via cursor tricks). --output JSON is unaffected: json.dumps
-# already \\u00XX-escapes control characters per the JSON spec.
-_CONTROL_STRIP_TABLE = {i: None for i in range(0x20) if i not in (0x09, 0x0A, 0x0D)}
-_CONTROL_STRIP_TABLE[0x7F] = None
-
-
-def _for_terminal(text: str) -> str:
-    return text.translate(_CONTROL_STRIP_TABLE)
 
 
 def _verdict_style(verdict: str) -> str:
@@ -66,8 +51,8 @@ def _render_checks_table(title: str, checks: Sequence[_AnyCheck]) -> None:
         table.add_row(
             escape(check.name),
             f"[{_verdict_style(check.verdict)}]{check.verdict}[/]",
-            escape(_for_terminal(check.message)),
-            escape(_for_terminal(check.evidence)),
+            for_terminal(check.message),
+            for_terminal(check.evidence),
         )
     console.print(table)
 
@@ -102,7 +87,7 @@ def _render_mask_previews(previews: Sequence[engine.MaskPreviewRow]) -> None:
             # Byte-level BPE tokenizers round-trip arbitrary bytes exactly,
             # so a crafted training row can decode straight back to a raw
             # control sequence — strip before it ever reaches Text.append.
-            text.append(_for_terminal(token.text), style=style)
+            text.append(strip_control(token.text), style=style)
         console.print(Panel(text, title=f"row {preview.row_index} ({escape(preview.strategy)})"))
 
 

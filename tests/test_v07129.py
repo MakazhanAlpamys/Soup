@@ -838,11 +838,11 @@ class TestReviewFixes:
         assert "symlink" in r.output.lower()
 
     def test_for_terminal_strips_control_bytes(self):
-        from soup_cli.commands.shrink import _for_terminal
+        from soup_cli.utils.terminal import strip_control
 
-        assert _for_terminal("a\x1b]0;evilbc") == "a]0;evilbc"
+        assert strip_control("a\x1b]0;evilbc") == "a]0;evilbc"
         # tab / LF / CR preserved.
-        assert _for_terminal("a\tb\nc\rd") == "a\tb\nc\rd"
+        assert strip_control("a\tb\nc\rd") == "a\tb\nc\rd"
 
     def test_dont_ship_exit_code_2(self, tmp_path, monkeypatch):
         """A genuine perplexity regression past tolerance exits 2 (DON'T SHIP)."""

@@ -5,9 +5,9 @@ PR #471 fixes ``SFTTrainerWrapper``: a frozen (LoRA) base keeps the
 checkpoint's own dtype instead of the HF default of upcasting every load to
 float32. The other trainer wrappers build the identical
 ``model_kwargs`` shape (``trust_remote_code`` + ``device_map`` + optional
-``quantization_config``) with the same gap. Pretraining now has a LISA
-full-fine-tuning branch and therefore uses the full-FT-aware resolver; the
-remaining wrappers always load a frozen LoRA base.
+``quantization_config``) with the same gap. Pretraining and embedding
+now have full-fine-tuning branches and therefore use the full-FT-aware
+resolver; the remaining wrappers always load a frozen LoRA base.
 
 ``TestResolveFrozenBaseLoadDtype`` pins the shared helper in isolation.
 ``TestWrapperModelKwargsCarryDtype`` proves the wiring for real: each
@@ -165,7 +165,7 @@ class TestWrapperModelKwargsCarryDtype:
         sentinel = object()
         resolver_name = (
             "resolve_base_load_dtype"
-            if class_name == "PretrainTrainerWrapper"
+            if class_name in ("PretrainTrainerWrapper", "EmbeddingTrainerWrapper")
             else "resolve_frozen_base_load_dtype"
         )
         with patch("transformers.AutoTokenizer.from_pretrained", return_value=fake_tokenizer), \

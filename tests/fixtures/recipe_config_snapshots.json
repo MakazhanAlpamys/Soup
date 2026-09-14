@@ -799,6 +799,35 @@
       "training.lr": 5e-06,
       "training.verifiable_domain": "math"
     },
+    "kimi-k2.5-dpo": {
+      "base": "moonshotai/Kimi-K2.5",
+      "data.format": "dpo",
+      "data.max_length": 8192,
+      "data.train": "./data/preference_train.jsonl",
+      "task": "dpo",
+      "training.batch_size": 1,
+      "training.epochs": 1,
+      "training.gradient_accumulation_steps": 16,
+      "training.gradient_checkpointing": true,
+      "training.lora.alpha": 64,
+      "training.lora.r": 32,
+      "training.lr": 5e-06,
+      "training.moe_lora": true
+    },
+    "kimi-k2.5-grpo": {
+      "base": "moonshotai/Kimi-K2.5",
+      "data.format": "auto",
+      "data.max_length": 8192,
+      "data.train": "./data/reasoning_train.jsonl",
+      "task": "grpo",
+      "training.batch_size": 1,
+      "training.gradient_accumulation_steps": 16,
+      "training.gradient_checkpointing": true,
+      "training.lora.alpha": 32,
+      "training.lora.r": 16,
+      "training.lr": 1e-05,
+      "training.moe_lora": true
+    },
     "kimi-k2.5-sft": {
       "base": "moonshotai/Kimi-K2.5",
       "data.format": "auto",
@@ -1670,6 +1699,17 @@
       "training.lr": 1e-05,
       "training.moe_lora": true
     },
+    "qwen3.5-0.8b-grpo": {
+      "base": "Qwen/Qwen3.5-0.8B",
+      "data.format": "auto",
+      "data.max_length": 4096,
+      "data.train": "./data/reasoning_train.jsonl",
+      "task": "grpo",
+      "training.gradient_accumulation_steps": 8,
+      "training.lora.alpha": 32,
+      "training.lora.r": 16,
+      "training.lr": 1e-05
+    },
     "qwen3.5-0.8b-sft": {
       "base": "Qwen/Qwen3.5-0.8B",
       "data.format": "auto",
@@ -1696,6 +1736,17 @@
       "data.format": "auto",
       "data.max_length": 4096,
       "data.train": "./data/train.jsonl",
+      "training.gradient_accumulation_steps": 8,
+      "training.lora.alpha": 32,
+      "training.lora.r": 16,
+      "training.lr": 1e-05
+    },
+    "qwen3.5-2b-grpo": {
+      "base": "Qwen/Qwen3.5-2B",
+      "data.format": "auto",
+      "data.max_length": 4096,
+      "data.train": "./data/reasoning_train.jsonl",
+      "task": "grpo",
       "training.gradient_accumulation_steps": 8,
       "training.lora.alpha": 32,
       "training.lora.r": 16,

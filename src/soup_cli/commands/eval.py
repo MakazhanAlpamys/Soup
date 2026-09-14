@@ -695,10 +695,17 @@ def auto(
     if tasks_file:
         console.print("\n[bold]Custom Evaluation[/]")
         try:
+            # #752 — every typer parameter must be passed explicitly. Typer
+            # fills them only when typer invokes the command; called as a
+            # function, an unpassed parameter keeps its OptionInfo default,
+            # which is truthy, so the --output/--attach-to-registry block ran
+            # and died on write_eval_json(OptionInfo).
             custom(
                 tasks=tasks_file,
                 model=str(output_dir),
                 run_id=None,
+                attach_to_registry=None,
+                output=None,
             )
         except SystemExit:
             console.print("[yellow]Custom eval skipped (see above).[/]")

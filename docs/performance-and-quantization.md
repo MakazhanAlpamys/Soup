@@ -349,7 +349,7 @@ The 3B NF4-vs-bf16 rows differ by 1.85×, but attribute that to **pinning, not a
 The 3.32 GB 8B row above predates large-layer streaming: its untied, unquantised `embed_tokens` + `lm_head` both stayed resident and occupied 2.10 GB. Current code writes them as separate large-layer shards and reuses one device slot sized to the larger matrix, so an equally shaped untied pair should reclaim one matrix while a tied model keeps the same one-matrix requirement. CPU CI pins bit-exact logits for both controls. The updated CUDA peak remains to be measured on the reference RTX 3050; the historical 3.32 GB figure is not relabelled as a new measurement.
 
 **Honest scope:**
-- **RAM tier + disk overflow (v0.72.3).** `stream_source: auto` picks RAM when the store fits both dynamic free-RAM headroom and a physical-host ceiling, falls back to NVMe disk when not; SATA/HDD rejected. Correctness verified; disk performance unmeasured on the reference box. A paravirtual (virtio) disk reports `rotational=1` with no media hint, so a genuinely NVMe-backed cloud disk was misread as an HDD and refused (#365); detection now measures a bounded O_DIRECT sequential read when the rotational flag is unreliable and admits NVMe-class throughput (>= 1 GB/s), while a genuinely slow disk stays rejected. Set `training.stream_disk_kind: nvme` (or `ssd`/`hdd`) to override when detection is still wrong — the resolved value is printed beside what was detected.
+- **RAM tier + disk overflow (v0.72.3).** `stream_source: auto` picks RAM when the store fits both dynamic free-RAM headroom and a physical-host ceiling, falls back to NVMe disk when not; SATA/HDD rejected. Correctness verified. **Speed is measured, and the shipped tier is bound by its read path, not by the NVMe** (RTX 5070 Laptop, 2026-09-12, [record](../benchmarks/probe-rtx5070-what-bounds-streaming.md)): with a 4.1 GB Mistral-7B NF4 store entirely in the page cache the step is 2.3–2.8x the RAM tier's (1.05 s -> 2.5–2.9 s; 177–208 vs 486 tok/s at batch 1 x 512, flat from 16 to 512 tokens), because `DiskSource.get` is a synchronous memory-mapped read on the compute thread; cold, on a 36 GB 70B-shaped store larger than RAM, it delivers 0.7–4.1 tok/s at 22 MB/s–0.57 GB/s from a drive that reads 3.5+ GB/s sequentially. Use it for capacity, not speed, until the source is asynchronous. A paravirtual (virtio) disk reports `rotational=1` with no media hint, so a genuinely NVMe-backed cloud disk was misread as an HDD and refused (#365); detection now measures a bounded O_DIRECT sequential read when the rotational flag is unreliable and admits NVMe-class throughput (>= 1 GB/s), while a genuinely slow disk stays rejected. Set `training.stream_disk_kind: nvme` (or `ssd`/`hdd`) to override when detection is still wrong — the resolved value is printed beside what was detected.
 - **Apple APFS disk detection.** On macOS, an APFS volume may report `Apple Fabric`
   even when its physical store is Apple's internal NVMe. Soup resolves the target
   volume to its APFS physical store and admits it only when that exact device is
@@ -628,6 +628,21 @@ data:
 ```
 
 When the tokenizer ships a chat template with `{% generation %}` markers, the mask is exact. Without those markers, Soup falls back to an incremental tokenize-delta walk and documents the looseness.
+
+**On the MLX backend the masking differs, and the two backends are not comparable**
+([#683](https://github.com/MakazhanAlpamys/Soup/issues/683)). MLX supervises every
+assistant turn through a per-token mask and **excludes the assistant header**, where
+the transformers path above includes it. MLX also **refuses** a chat template whose
+partial renderings are not prefixes of the full one, rather than emitting a mask that
+looks plausible — the refusal happens at dataset construction, before the training
+loop, and names `data.train_on_responses_only: false` as the remedy.
+
+In practice this affects thinking-style templates: `Qwen3` injects its empty thinking
+block only for the *last* assistant message, so multi-turn Qwen3 rows are refused
+(single-turn rows are fine). Llama 3.1 and Gemma 3 mask correctly on both shapes.
+`data.train_on_messages_with_train_field` and `data.train_on_prompt` have no MLX
+equivalent and are reported in the `MLX backend ignores:` line rather than silently
+dropped.
 
 After tokenization and truncation, every response-only row must retain at least one shifted
 causal-loss target. Soup rejects the row by split and row number when
@@ -945,6 +960,12 @@ group_size: 32
 EOF
 soup export --model ./merged --format torchao --quant-config ./q.yaml --output ./out
 
+# AWQ/GPTQ export — an explicit local calibration set is required
+soup export --model ./merged --format awq \
+    --calibration-data ./calib.jsonl --output ./out-awq
+soup export --model ./merged --format gptq \
+    --calibration-data ./calib.jsonl --output ./out-gptq
+
 # Unsloth Dynamic 2.0 / IQ / Apple-ARM GGUF via llama.cpp imatrix
 soup export --model ./merged --format gguf-ud \
     --gguf-flavour UD-Q4_K_XL \
@@ -959,6 +980,8 @@ soup deploy autopilot --target rtx-4090-24gb \
 ```
 
 Autopilot also detects pre-quantized bases automatically — `TheBloke/Llama-2-7B-Chat-GPTQ` is recommended `gptq` instead of stacking 4-bit on top. Detection runs against the base-model name regex AND any local `config.json`'s `quantization_config.quant_method`. Out-of-cwd model paths are silently skipped (soft-probe semantics).
+
+Direct AWQ and GPTQ exports require `--calibration-data`. Soup refuses a missing or unusable JSONL before importing the quantizer or loading the model. This keeps calibration inputs explicit and prevents AutoAWQ from silently downloading its large default dataset. Use `--calibration-samples` to cap the number of usable JSONL rows (default: 128).
 
 The advanced GGUF pipeline uses POSIX `O_NOFOLLOW` to defeat the TOCTOU race between the dispatch-time symlink check and the actual open of the calibration data — a crafted environment cannot race-swap the calibration file between validate and read.
 

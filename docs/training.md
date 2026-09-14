@@ -425,6 +425,23 @@ Loss = student CE + (T**2) × KL(teacher_logits / T  ||  student_logits / T).
 Teacher is loaded once, frozen via `requires_grad_(False)` + `.eval()`, and its
 inputs / logits are auto-bridged across CPU / CUDA devices.
 
+The token-divergence kernel evaluates all three divergences in FP32 and deliberately
+returns an FP32 scalar, including for FP16/BF16 logits. Forward-KL values can therefore
+also differ slightly from the previous low-precision calculation. The log-space
+reverse-KL and Jensen-Shannon formulas prevent finite losses with non-finite
+gradients; the upcast also preserves small losses that would underflow to zero.
+Non-finite logits propagate into the loss/gradients, allowing AMP's GradScaler to
+skip overflowed steps rather than aborting training with a validation exception.
+
+FP32 intermediates cost time and memory. The [maintainer's PR #736 measurement](https://github.com/MakazhanAlpamys/Soup/pull/736)
+on an RTX 5070 (BF16, B=1/S=512/V=32000, forward plus backward) found the originally
+submitted kernel took 1.71 times as long and 1.24 times the peak memory of main.
+That measurement included finite-value guards removed here: without them it took
+9.40 ms versus 6.39 ms, with the same 376.5 MiB versus 303.6 MiB peak. These are
+hardware-specific measurements, not a benchmark of this revised implementation,
+which also avoids unused probability tensors. Two FP32 logits copies alone occupy
+about 7.8 GiB at B=4/S=2048/V=128256; budget for additional intermediates as well.
+
 Set `distill_mode: sequence` (default `token`) to train on the teacher's **generated
 continuations** instead of per-token logit matching — a hard-label, cross-tokenizer-friendly
 KD that works when student and teacher do not share a vocabulary. `sequence` mode is mutually
@@ -524,15 +541,15 @@ task: grpo
 training:
   reward_fn: accuracy
   num_generations: 4
-  grpo_variant: gspo         # group-stabilised importance ratio
+  grpo_variant: gspo         # sequence-level length-normalized ratio
   # or: dapo / dr_grpo / bnpo / rft / two_sided
-  # grpo_delta: 0.2          # required when grpo_variant=two_sided
+  # grpo_delta: 0.2          # required when grpo_variant=two_sided; optional for gspo
 ```
 
 Variants:
 
 - **standard** — DeepSeek-R1-style baseline (delegates to TRL's `compute_loss`).
-- **gspo** — group-stabilised importance ratio with per-batch control variate.
+- **gspo** — Group Sequence Policy Optimization (sequence-level length-normalized ratio with clipping).
 - **dapo** — decoupled asymmetric clipping (`eps_lo=0.2, eps_hi=0.28`).
 - **dr_grpo** — token-sum without per-sample length normalisation.
 - **bnpo** — length-normalised PPO surrogate.
@@ -839,7 +856,7 @@ training:
   num_generations: 8
   # New: GRPO objective variants
   grpo_variant: dapo                  # one of: gspo / dapo / dr_grpo / bnpo / two_sided / rft / standard
-  # grpo_delta: 0.2                   # required when grpo_variant: two_sided
+  # grpo_delta: 0.2                   # required when grpo_variant: two_sided (optional for gspo)
   grpo_fp16: true                     # FP16 RL (unsloth parity)
   # Long-context + memory-efficient RL
   long_context_grpo: true             # wires Tiled MLP when available
@@ -1198,6 +1215,7 @@ data:
   format: chatml
 training:
   reward_model: ./output_rm
+  epochs: 1
   ppo_epochs: 4
   ppo_clip_ratio: 0.2
   ppo_kl_penalty: 0.05
@@ -1207,6 +1225,11 @@ training:
   quantization: 4bit
 output: ./output_ppo
 ```
+
+`epochs` controls complete passes over the training dataset. `ppo_epochs`
+controls optimization passes within each PPO update. Soup forwards both values,
+plus `ppo_kl_penalty`, to the active TRL `PPOConfig` names and prints the
+effective schedule during setup.
 
 PPO supports two reward sources:
 - **Reward model** (`reward_model`): pre-trained reward model (from step 2)

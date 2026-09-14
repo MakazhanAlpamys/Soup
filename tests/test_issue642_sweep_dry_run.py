@@ -70,10 +70,67 @@ def _invoke(runner: CliRunner, cfg_text: str, tmp_path, *extra: str, input: str 
     )
 
 
-class TestTheWarningBranch:
-    """Criterion 1: the same block ``soup train --dry-run`` prints, same loader."""
+def _warn_mode(monkeypatch) -> None:
+    """Pin the pre-v0.75 loader branch for the tests that describe it.
 
-    def test_typo_config_warns_and_still_exits_zero(self, runner, tmp_path) -> None:
+    v0.74.0 shipped ``UNKNOWN_KEY_SEVERITY = "warn"`` and v0.75.0 flipped it
+    to ``"error"`` (#627, #879). The warning-branch tests below still hold
+    under the old switch and are kept that way, so the one-line switch stays
+    tested from both sides; ``TestTheRefusalBranch`` pins the shipped side.
+    """
+    from soup_cli.config import loader
+
+    monkeypatch.setattr(loader, "UNKNOWN_KEY_SEVERITY", "warn")
+
+
+class TestTheRefusalBranch:
+    """Criterion 1 under the shipped switch: the same refusal ``soup train`` prints."""
+
+    def test_typo_config_refuses_under_dry_run(self, runner, tmp_path) -> None:
+        from .conftest import strip_ansi
+
+        result = _invoke(runner, _TYPO, tmp_path)
+        out = strip_ansi(result.output)
+        assert result.exit_code == 1, result.output
+        assert "Config validation error" in out
+        assert "training.quantizaton" in out
+        assert "quantization" in out, "the suggestion must survive the trip through the command"
+        assert "Refused." in out
+        assert "Warning:" not in out
+        # A refusal that still promised a future rejection would be lying.
+        assert f"v{UNKNOWN_KEY_REJECTION_VERSION}" not in out
+
+    def test_no_grid_is_printed_for_a_refused_config(self, runner, tmp_path) -> None:
+        result = _invoke(runner, _TYPO, tmp_path)
+        assert "Sweep Plan" not in result.output
+        assert "Parameter Grid" not in result.output
+        assert "Dry run - no training will be executed." not in result.output
+
+    def test_the_refusal_comes_before_the_prompt_and_once(self, runner, tmp_path) -> None:
+        from .conftest import strip_ansi
+
+        config_file = tmp_path / "soup.yaml"
+        config_file.write_text(_TYPO, encoding="utf-8")
+        result = runner.invoke(
+            app,
+            ["sweep", "--config", str(config_file), "--param", "lr=1e-5,2e-5"],
+            input="n\n",
+        )
+        out = strip_ansi(result.output)
+        assert result.exit_code == 1, result.output
+        assert out.count("training.quantizaton") == 1
+        assert "Start 2 training run(s)?" not in out, "nothing to confirm once the load refused"
+        assert "Sweep Results" not in out
+
+
+class TestTheWarningBranch:
+    """Criterion 1: the same block ``soup train --dry-run`` prints, same loader.
+
+    Pinned under the pre-v0.75 switch (see ``_warn_mode``).
+    """
+
+    def test_typo_config_warns_and_still_exits_zero(self, runner, tmp_path, monkeypatch) -> None:
+        _warn_mode(monkeypatch)
         result = _invoke(runner, _TYPO, tmp_path)
         assert result.exit_code == 0, result.output
         assert "Warning:" in result.output
@@ -84,13 +141,14 @@ class TestTheWarningBranch:
         # Criterion 3: a config that merely warns keeps the dry-run exit at 0.
         assert "Dry run - no training will be executed." in result.output
 
-    def test_the_warning_carries_the_loaders_deadline(self, runner, tmp_path) -> None:
+    def test_the_warning_carries_the_loaders_deadline(self, runner, tmp_path, monkeypatch) -> None:
         # Same loader path means the deadline sentence and the follow-up
         # explanation come along; a hand-rolled second warning would not.
         # Stripped for colour: under FORCE_COLOR rich's number highlighter
         # puts escapes INSIDE "v0.75", splitting the token (#633's class).
         from .conftest import strip_ansi
 
+        _warn_mode(monkeypatch)
         result = _invoke(runner, _TYPO, tmp_path)
         out = strip_ansi(result.output)
         assert f"v{UNKNOWN_KEY_REJECTION_VERSION}" in out
@@ -99,7 +157,10 @@ class TestTheWarningBranch:
         # print the block twice.
         assert out.count("Warning:") == 1
 
-    def test_the_grid_still_prints_for_a_warn_only_config(self, runner, tmp_path) -> None:
+    def test_the_grid_still_prints_for_a_warn_only_config(
+        self, runner, tmp_path, monkeypatch
+    ) -> None:
+        _warn_mode(monkeypatch)
         result = _invoke(runner, _TYPO, tmp_path)
         assert "Sweep Plan" in result.output
         assert "Parameter Grid" in result.output
@@ -156,7 +217,10 @@ class TestTheExecutionPathStillMatches:
     warning keeps the historical cancelled exit.
     """
 
-    def test_warning_appears_before_the_prompt_and_once(self, runner, tmp_path) -> None:
+    def test_warning_appears_before_the_prompt_and_once(
+        self, runner, tmp_path, monkeypatch
+    ) -> None:
+        _warn_mode(monkeypatch)
         config_file = tmp_path / "soup.yaml"
         config_file.write_text(_TYPO, encoding="utf-8")
         result = runner.invoke(
@@ -181,6 +245,7 @@ class TestTheExecutionPathStillMatches:
         # training; the stub returns what the arm loop consumes.
         import soup_cli.commands.sweep as sweep_mod
 
+        _warn_mode(monkeypatch)
         monkeypatch.setattr(
             sweep_mod,
             "_run_single",

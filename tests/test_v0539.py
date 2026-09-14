@@ -138,6 +138,12 @@ def test_push_train_event_happy():
 
 # ---------------------------------------------------- #94 SSE FastAPI route
 
+def _auth_headers():
+    from soup_cli.ui.app import get_auth_token
+
+    return {"Authorization": f"Bearer {get_auth_token()}"}
+
+
 def test_api_train_stream_emits_pending_events():
     pytest.importorskip("fastapi")
     from fastapi.testclient import TestClient
@@ -155,7 +161,7 @@ def test_api_train_stream_emits_pending_events():
 
     app_inst = create_app()
     client = TestClient(app_inst)
-    response = client.get("/api/train/stream")
+    response = client.get("/api/train/stream", headers=_auth_headers())
     assert response.status_code == 200
     body = response.text
     # Frames are W3C SSE.
@@ -217,7 +223,7 @@ def test_api_tool_outputs_endpoint():
 
     app_inst = create_app()
     client = TestClient(app_inst)
-    response = client.get("/api/tool-outputs?limit=5")
+    response = client.get("/api/tool-outputs?limit=5", headers=_auth_headers())
     assert response.status_code == 200
     payload = response.json()
     assert payload["count"] == 2
@@ -234,8 +240,18 @@ def test_api_tool_outputs_rejects_out_of_bounds_limit():
 
     client = TestClient(create_app())
     # limit must be 1..1000
-    assert client.get("/api/tool-outputs?limit=0").status_code == 422
-    assert client.get("/api/tool-outputs?limit=1001").status_code == 422
+    assert (
+        client.get(
+            "/api/tool-outputs?limit=0", headers=_auth_headers()
+        ).status_code
+        == 422
+    )
+    assert (
+        client.get(
+            "/api/tool-outputs?limit=1001", headers=_auth_headers()
+        ).status_code
+        == 422
+    )
 
 
 # ---------------------------------------------------- #98 reasoning-parser

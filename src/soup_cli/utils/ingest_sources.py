@@ -12,13 +12,15 @@ once per ingest invocation, mirroring v0.26.0 Part C policy.
 
 Design notes:
 - All parsers are pure Iterable[dict] -> Iterator[TraceRecord]. No network
-  code. SaaS API pulls happen out-of-band; users hand us a JSONL export.
+  code here. Users hand us a JSONL export; the one live pull
+  (``soup ingest --source langfuse --pull``, #204) lives in
+  ``utils/ingest_pull.py`` and feeds ``parse_langfuse`` in memory.
 - File reads enforce cwd containment + null-byte rejection (TOCTOU policy
   mirroring v0.26.0 / v0.40.3 / v0.55.0).
 - `_MAX_INGEST_LINES` caps any single ingest to prevent OOM on tampered
   exports; default 1,000,000 (production-scale day of traces).
-- Auth env-var lookup is read-only — Soup never makes the network call,
-  it just tells the user which variable to set if they want SaaS pulls.
+- Auth env-var lookup is read-only — it tells the user which variables
+  authenticate the source.
 """
 
 from __future__ import annotations
@@ -41,15 +43,16 @@ SUPPORTED_INGEST_SOURCES: frozenset[str] = frozenset(
 _MAX_SOURCE_NAME_LEN = 32
 _MAX_INGEST_LINES = 1_000_000
 
-# Per-source env vars used for SaaS auth. Soup itself only echoes which
-# variable is set — never makes the network call.
-_AUTH_ENV: Mapping[str, str] = {
-    "langfuse": "LANGFUSE_KEY",
-    "langsmith": "LANGSMITH_API_KEY",
-    "helicone": "HELICONE_API_KEY",
-    "openpipe": "OPENPIPE_API_KEY",
-    "openai-stored": "OPENAI_API_KEY",
-    "otel": "OTEL_EXPORTER_OTLP_HEADERS",
+# Per-source env vars used for SaaS auth — every variable a source needs.
+# Langfuse authenticates with a key pair (HTTP Basic); the single
+# ``LANGFUSE_KEY`` this table used to name is not a variable Langfuse reads (#204).
+_AUTH_ENV: Mapping[str, tuple[str, ...]] = {
+    "langfuse": ("LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY"),
+    "langsmith": ("LANGSMITH_API_KEY",),
+    "helicone": ("HELICONE_API_KEY",),
+    "openpipe": ("OPENPIPE_API_KEY",),
+    "openai-stored": ("OPENAI_API_KEY",),
+    "otel": ("OTEL_EXPORTER_OTLP_HEADERS",),
 }
 
 
@@ -132,20 +135,20 @@ def validate_source_name(name: object) -> str:
 
 
 def resolve_auth_env(name: object) -> Optional[str]:
-    """Return the value of the env var that authenticates this source.
+    """Return the credential value for this source when all of its env vars are set.
 
-    Returns ``None`` when the var is not set. Soup never reads the actual
-    SaaS API; we surface only whether the operator has wired up creds.
+    For a source that needs several variables (Langfuse's key pair) this is
+    the last one, and only when every variable is set and non-empty; otherwise
+    ``None``. Used to surface whether the operator has wired up creds.
     Unknown sources raise.
     """
     import os
 
     canonical = validate_source_name(name)
-    env_key = _AUTH_ENV[canonical]
-    value = os.environ.get(env_key)
-    if value is None or value == "":
+    values = [os.environ.get(env_key) for env_key in _AUTH_ENV[canonical]]
+    if not all(values):
         return None
-    return value
+    return values[-1]
 
 
 # ---------------------------------------------------------------------------

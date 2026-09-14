@@ -851,9 +851,10 @@ class SFTTrainerWrapper(StreamingSetupMixin):
         if tcfg.neftune_alpha is not None:
             training_kwargs["neftune_noise_alpha"] = tcfg.neftune_alpha
 
-        # LoRA+ — different learning rates for A and B matrices
-        if tcfg.loraplus_lr_ratio is not None:
-            training_kwargs["loraplus_lr_ratio"] = tcfg.loraplus_lr_ratio
+        # LoRA+ — different learning rates for A and B matrices. Not a
+        # TrainingArguments field: the optimizer is built and attached after the
+        # trainer exists (attach_loraplus_optimizer), so it must NOT be forwarded
+        # here (#724).
 
         # GaLore — memory-efficient full-parameter training
         if tcfg.use_galore:
@@ -1893,9 +1894,12 @@ class SFTTrainerWrapper(StreamingSetupMixin):
         from soup_cli.utils.peft_wiring import (
             attach_curriculum_callback,
             attach_lisa_callback,
+            attach_loraplus_optimizer,
             attach_plugin_callback,
             attach_relora_callback,
         )
+        # LoRA+ optimizer (#724) — build and attach now that the trainer exists.
+        attach_loraplus_optimizer(self.trainer, self.config.training)
         attach_relora_callback(self.trainer, self.config.training)
         # LISA layerwise importance sampling (v0.71.34 #267).
         attach_lisa_callback(self.trainer, self.config.training)

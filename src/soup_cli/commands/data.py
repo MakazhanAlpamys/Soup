@@ -82,12 +82,29 @@ def validate(
         "auto", "--format", "-f",
         help="Expected format: auto, alpaca, sharegpt, chatml, dpo, kto, plaintext",
     ),
+    min_valid_fraction: float = typer.Option(
+        0.0,
+        "--min-valid-fraction",
+        min=0.0,
+        max=1.0,
+        help="Exit 2 when the fraction of valid rows is below this value",
+    ),
 ):
-    """Validate dataset format and report issues."""
+    """Validate a dataset, returning exit 1 for input errors and 2 for unusable data."""
     file_path = Path(path)
     if not file_path.exists():
         console.print(f"[red]File not found: {file_path}[/]")
         raise typer.Exit(1)
+
+    if fmt != "auto":
+        from soup_cli.data.formats import VALID_FORMATS
+
+        if fmt not in VALID_FORMATS:
+            console.print(
+                f"[red]Unknown --format: {fmt!r}[/]\n"
+                f"Accepted: auto, {', '.join(VALID_FORMATS)}"
+            )
+            raise typer.Exit(1)
 
     data = load_raw_data(file_path)
 
@@ -114,6 +131,17 @@ def validate(
     valid = result["valid_rows"]
     total = result["total"]
     console.print(f"\n[green]{valid}/{total} rows valid for {fmt} format[/]")
+
+    if total > 0 and valid == 0:
+        console.print("[red]Validation failed: no usable rows remain.[/]")
+        raise typer.Exit(2)
+
+    if total > 0 and valid / total < min_valid_fraction:
+        console.print(
+            f"[red]Validation failed: valid fraction {valid / total:.3f} is below "
+            f"--min-valid-fraction {min_valid_fraction:.3f}.[/]"
+        )
+        raise typer.Exit(2)
 
 
 @app.command()
@@ -625,11 +653,11 @@ def stats(
                 render_histogram(
                     plt,
                     lengths,
+                    console=console,
                     bins=30,
                     title="Text Length Distribution (chars)",
                     xlabel="Length",
                     ylabel="Count",
-                    theme="dark",
                 )
             finally:
                 sys.stdout = original_stdout
@@ -2470,15 +2498,32 @@ def preprocess_dataset(
                 truncation=True,
                 padding=False,
                 return_attention_mask=True,
+                # Tokenise exactly as ``main`` (add_special_tokens defaults to
+                # True). This keeps ``main``'s truncation reservation — a
+                # truncated row still ends on the post-processor's EOS — and the
+                # post-processor BOS/EOS, so the cache's EOS stays pinned to
+                # ``main``. #785's only defect on this path is the doubled BOS,
+                # removed below for the chat path.
             )
         except Exception:  # noqa: BLE001 — tokenizer errors vary
             continue
+        input_ids = tokens["input_ids"]
+        attention_mask = tokens.get("attention_mask", [1] * len(input_ids))
+        if not is_pretrain:
+            # #785/#788: the chat template already renders the BOS; ``main``'s
+            # add_special_tokens=True prepends a second one. Drop only that one
+            # duplicated leading BOS so the row is byte-identical to ``main``
+            # apart from the extra BOS (EOS and truncation untouched). Pretrain
+            # feeds raw document text with no template BOS, so nothing to drop.
+            from soup_cli.data.loss_mask import strip_doubled_leading_bos
+
+            input_ids, attention_mask = strip_doubled_leading_bos(
+                tokenizer, input_ids, attention_mask
+            )
         rendered_rows.append(
             {
-                "input_ids": tokens["input_ids"],
-                "attention_mask": tokens.get(
-                    "attention_mask", [1] * len(tokens["input_ids"])
-                ),
+                "input_ids": input_ids,
+                "attention_mask": attention_mask,
             }
         )
 

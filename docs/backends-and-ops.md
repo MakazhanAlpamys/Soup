@@ -115,6 +115,34 @@ training:
 
 MLX backend supports SFT. `backend: mlx` with `task: dpo` or `task: grpo` is refused when the config is loaded, with an error naming the task — upstream `mlx-lm` ships no DPO/GRPO training helper, so those wrappers exist only as a backstop for callers that bypass config validation. Requires `mlx-lm >= 0.31.3`. Use `soup recipes search --tag mlx` for ready-made Apple Silicon configs.
 
+#### Optimizers and schedules
+
+`training.optimizer`, `training.scheduler`, `training.warmup_ratio` and
+`training.weight_decay` are honoured on the MLX backend
+([#686](https://github.com/MakazhanAlpamys/Soup/issues/686)). Before that they
+were validated, accepted and dropped — every run built a bare AdamW at a
+constant learning rate, whatever the recipe said.
+
+Because they are honoured rather than ignored, a setting MLX cannot express is
+now **refused when the optimizer is built**, rather than silently substituted:
+
+| setting | MLX accepts | otherwise |
+|---|---|---|
+| `optimizer` | `adamw_torch`, `adamw_hf`, `adamw_torch_fused`, `sgd`, `adafactor`, `adagrad`, `rmsprop`, `muon` | refused by name, listing what is available |
+| `scheduler` | `cosine`, `linear`, `constant`, `constant_with_warmup` | refused, naming the old constant-rate behaviour |
+| `weight_decay` | any value on every optimizer above except `adagrad` and `rmsprop` | a non-zero value on `adagrad` / `rmsprop` is refused — those MLX constructors take no `weight_decay`, and dropping it silently is the defect above |
+
+Soup's optimizer allowlist (`utils.optimizer_zoo`) is far wider than anything
+MLX ships, so most valid values have no MLX equivalent. Run those recipes on
+the transformers backend.
+
+The schedule counts **optimizer updates**, not iterations: mlx-lm calls
+`optimizer.update()` once every `gradient_accumulation_steps`, so a warmup of
+`warmup_ratio × (iters // gradient_accumulation_steps)` is what actually runs.
+The effective plan is written to `adapter_config.json` (`optimizer`,
+`scheduler`, `warmup_updates`, `total_updates`, `weight_decay`, `peak_lr`), so
+what ran is recoverable from the output directory.
+
 `--resume auto` finds mlx-lm's step-numbered `NNNNNNN_adapters.safetensors` checkpoints and warm-starts the LoRA weights from them ([#634](https://github.com/MakazhanAlpamys/Soup/issues/634)). This restores adapter weights only, not training state: mlx-lm's LoRA trainer exposes no optimizer state or step count, so training restarts from step 0 regardless of how far the checkpoint got. See [Resume Training](#resume-training) below for the MLX-specific checkpoint shape.
 
 ### Transformers on MPS
@@ -446,9 +474,9 @@ soup sweep --config soup.yaml --param lr=1e-5,2e-5,5e-5 --param lora_r=8,16,32
 # Random search with max runs
 soup sweep --config soup.yaml --param lr=1e-5,2e-5,5e-5 --strategy random --max-runs 5
 
-# Preview without running — validates first (#642): unknown config keys emit
-# the same warning block `train --dry-run` does, and a --param naming no config
-# field exits non-zero before any grid is printed
+# Preview without running — validates first (#642): an unknown config key is
+# refused exactly as `train --dry-run` refuses it, and a --param naming no
+# config field exits non-zero before any grid is printed
 soup sweep --config soup.yaml --param lr=1e-5,2e-5 --param epochs=2,3 --dry-run
 
 # Early stopping: skip remaining runs if loss exceeds 1.5x best
@@ -543,32 +571,41 @@ never applied — `quantizaton: none` trained 4-bit quantized when full precisio
 what you asked for, `gradient_checkpoint: true` did no checkpointing, `max_len: 512`
 truncated at 2048.
 
-Loading a config now reports every key it cannot place, in **one** report per load, with
-the field you probably meant:
+Loading a config now refuses every key it cannot place, in **one** report per load,
+with the field you probably meant:
 
 ```
-Warning: unknown config key 'data.max_len' - did you mean 'max_length' or 'video_maxlen'? Not applied.
-unknown config key 'training.quantizaton' - did you mean 'quantization' or 'quantization_aware'? Not applied.
-Soup v0.75 will reject unknown config keys instead of warning.
+Config validation error:
+
+  unknown config key 'data.max_len' - did you mean 'max_length' or 'video_maxlen'? Refused.
+unknown config key 'training.quantizaton' - did you mean 'quantization' or 'quantization_aware'? Refused.
 ```
 
-**The deadline is real: v0.75 refuses to load a config with an unknown key.** The
-warning ships in v0.74 and the refusal one minor later, so there is exactly one release
-of notice — deliberately, because a config written against a newer Soup has to keep
-running on an older wheel for at least one release. Until v0.75 the key is ignored, not
-defaulted, and the run proceeds as if you had not written it. Treat the warning as work
-to do, not as a note.
+**Since v0.75 an unknown config key refuses the load.** v0.74 shipped the same report
+as a warning that named this deadline, so there was exactly one release of notice —
+deliberately, because a config written against a newer Soup has to keep running on an
+older wheel for at least one release. The refusal is the same everywhere a `SoupConfig`
+is built from a file or a string: `soup train` exits 1 before the training stack is
+imported, `soup sweep` / `soup doctor --config` / `soup ship --config` refuse the same
+way, and the Web UI / API loader raises `ValueError` with the same text (the Web UI shows
+it). `soup plan` and `soup apply` read the YAML as a plain mapping and do not run this
+check. Nothing is defaulted and nothing is guessed: the suggestion is a hint for you, not
+a substitution the loader makes. A root-level `lora:` block is not an unknown key — the
+schema has accepted that spelling and moved it under `training` since v0.40.1, and the
+detector applies the same remap before it looks.
 
 A config that names a key your installed Soup does not have usually means one of two
 things: a typo (take the suggestion), or a field added after your version shipped
-(`soup version` against the [changelog](../CHANGELOG.md) will say which).
+(`soup version` against the [changelog](../CHANGELOG.md) will say which). A config
+that must stay loadable on v0.74 as well needs the key removed, not renamed — v0.74
+warns and ignores it, v0.75 refuses it, and neither applies it.
 
-**`soup sweep` is stricter, and has no deadline.** A `--param` that matches no config
-field is a hard error from this release, not in v0.75:
+**`soup sweep` never had the warning period.** A `--param` that matches no config
+field has been a hard error since v0.74:
 
 ```bash
 soup sweep --config soup.yaml --param lora_rank=8,16   # the field is training.lora.r
-# sweep parameter does not match any config field: unknown config key 'lora_rank' - not applied.
+# sweep parameter does not match any config field: unknown config key 'lora_rank' - refused.
 echo $?   # 1
 ```
 
