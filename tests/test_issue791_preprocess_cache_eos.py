@@ -27,6 +27,7 @@ genuine ``tokenizers`` post-processor.
 """
 
 import hashlib
+import sys
 
 import pytest
 
@@ -133,6 +134,7 @@ def _run_preprocess(tmp_path, monkeypatch, tok, *, task="sft", rows, max_length=
 
     from soup_cli.cli import app
 
+    tmp_path.mkdir(parents=True, exist_ok=True)
     monkeypatch.chdir(tmp_path)
     (tmp_path / "soup.yaml").write_text(
         f"base: x/y\ntask: {task}\n"
@@ -236,6 +238,81 @@ class TestControls:
             tmp_path, monkeypatch, tok, rows=[{"messages": long_msgs}], max_length=64
         )
         assert len(ids) == 64, "a filled row stays within the truncation budget"
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="TRL's SFTTrainer._prepare_dataset runs its dataset prep inside "
+    "PartialState().main_process_first(); the full training path this stands in for "
+    "hangs on Windows via PartialState (the same obstacle #788 hit), so this runs on "
+    "the ubuntu and macOS cells, which is where the baseline needs pinning.",
+)
+class TestRealTRLPrepareDatasetBaseline:
+    """#791 acceptance criterion 1 asks for the live baseline through TRL's real
+    ``_prepare_dataset`` rather than a reproduction. The other tests use
+    :func:`_live_eos_count` (``build_full_sequence_labels``) and
+    :func:`_trl_main_text_eos_count` because a full ``SFTTrainer`` construction hangs
+    on Windows ``PartialState``. This class removes the ambiguity on the platforms
+    where it does not: it drives TRL 0.29.1's genuine ``SFTTrainer._prepare_dataset``
+    over the rendered ``{"text"}`` rows the legacy SFT path feeds it and asserts the
+    cache trains on the same EOS count TRL actually produces.
+
+    ``_prepare_dataset`` reads only ``self._is_vlm`` on the language-modeling text
+    path, so an unbound call runs TRL's real map/``add_eos``/tokenize pipeline without
+    constructing the trainer (which is what pulls in the accelerator init).
+    """
+
+    def _real_prepare_eos_counts(self, out_dir, tok, messages_rows, *, max_length=2048):
+        datasets = pytest.importorskip("datasets")
+        pytest.importorskip("trl")
+        from types import SimpleNamespace
+
+        from trl import SFTConfig
+        from trl.trainer.sft_trainer import SFTTrainer
+
+        # The legacy SFT text path renders the chat template to a {"text"} row and
+        # lets TRL tokenize it; that is the row shape whose EOS handling #785/#788
+        # concerned. Feed exactly that to the real _prepare_dataset.
+        texts = [
+            {"text": tok.apply_chat_template(m, tokenize=False, add_generation_prompt=False)}
+            for m in messages_rows
+        ]
+        ds = datasets.Dataset.from_list(texts)
+        args = SFTConfig(
+            output_dir=str(out_dir),
+            max_length=max_length,
+            packing=False,
+            shuffle_dataset=False,  # keep row order for the per-row comparison
+            dataset_num_proc=None,  # no multiprocessing (Windows spawn re-imports)
+            use_cpu=True,
+            report_to=[],
+        )
+        prepared = SFTTrainer._prepare_dataset(
+            SimpleNamespace(_is_vlm=False), ds, tok, args, False, None, "train"
+        )
+        return [list(prepared[i]["input_ids"]).count(_EOS_ID) for i in range(len(prepared))]
+
+    def test_cache_matches_trl_real_prepare_dataset_eos(self, tmp_path, monkeypatch):
+        """The #791 defect shape (no-EOS template, no-EOS post-processor), pinned
+        against TRL's real ``_prepare_dataset`` instead of a reproduction: TRL's
+        genuine pipeline trains on one EOS per row, and the cache now matches it
+        per row (and my :func:`_trl_main_text_eos_count` reproduction agrees, which
+        is what the reproduction was standing in for)."""
+        tok = _tokenizer(_BOS_TEMPLATE, post_processor=None)
+
+        real = self._real_prepare_eos_counts(tmp_path / "trl", tok, _ROWS)
+        cached = _run_preprocess(
+            tmp_path / "pre", monkeypatch, tok, rows=[{"messages": m} for m in _ROWS]
+        )
+        assert len(real) == len(cached) == len(_ROWS)
+        for real_eos, ids, messages in zip(real, cached, _ROWS):
+            assert real_eos == 1, "TRL's real prepare trains on exactly one EOS here"
+            assert real_eos == _trl_main_text_eos_count(tok, messages), (
+                "the hand reproduction must equal TRL's real _prepare_dataset"
+            )
+            assert real_eos == _live_eos_count(tok, messages)
+            assert ids.count(_EOS_ID) == real_eos, "cache matches the real TRL baseline"
+            assert ids[-1] == _EOS_ID
 
 
 class TestCacheKey:
