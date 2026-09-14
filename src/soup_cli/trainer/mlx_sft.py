@@ -205,6 +205,10 @@ class MLXSFTTrainerWrapper:
             unsupported.append("quantization=8bit (use mlx-community 4bit models)")
         if tcfg.use_galore:
             unsupported.append("GaLore")
+        if getattr(tcfg, "use_lorafa", False):
+            unsupported.append(
+                "training.use_lorafa (LoRA-FA has no MLX implementation)"
+            )
         if tcfg.use_ring_attention:
             unsupported.append("Ring Attention")
         if tcfg.use_flash_attn:

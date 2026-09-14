@@ -48,6 +48,8 @@ _UNFROZEN_REDOS_RE = re.compile(r"\([^)]*[+*][^)]*\)\s*[+*]")
 # ``attach_lisa_callback``. Adding a task to this tuple without that wiring
 # would accept a config the trainer silently ignores.
 _LISA_SUPPORTED_TASKS = ("sft", "pretrain")
+# #725 — tasks whose transformers trainer wires attach_lorafa_optimizer.
+_LORAFA_SUPPORTED_TASKS = ("sft", "pretrain", "embedding")
 
 
 class LoraConfig(BaseModel):
@@ -2721,6 +2723,14 @@ class TrainingConfig(BaseModel):
         gt=0,
         description="LoRA+ lr ratio: lr_B = lr × ratio. None = disabled (standard LoRA).",
     )
+    # LoRA-FA — freeze LoRA A matrices and train B matrices to reduce activation memory
+    use_lorafa: bool = Field(
+        default=False,
+        description=(
+            "Enable LoRA-FA (Frozen-A LoRA) optimizer: freezes LoRA A matrices "
+            "to reduce activation memory"
+        ),
+    )
     # GaLore — memory-efficient full-parameter training
     use_galore: bool = Field(
         default=False,
@@ -3758,6 +3768,34 @@ class TrainingConfig(BaseModel):
                 "expand_layers requires freeze_trainable_layers (LLaMA Pro "
                 "freezes the original layers and trains only the new blocks). "
                 "Set freeze_trainable_layers: <signed int>."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_lorafa_compat(self) -> "TrainingConfig":
+        """#725 — LoRA-FA mutual exclusion with LoRA+ and GaLore."""
+        if self.use_lorafa and self.loraplus_lr_ratio is not None:
+            raise ValueError(
+                "training.use_lorafa and training.loraplus_lr_ratio are mutually exclusive: "
+                "LoRA-FA freezes LoRA A matrices while LoRA+ tunes them with separate learning "
+                "rates. Enable one, not both."
+            )
+        if self.use_lorafa and self.use_galore:
+            raise ValueError(
+                "training.use_lorafa and training.use_galore are mutually exclusive: "
+                "LoRA-FA tunes LoRA B matrices while GaLore projects full-parameter gradients. "
+                "Enable one, not both."
+            )
+        if self.use_lorafa and self.optimizer is not None and self.optimizer not in (
+            "adamw_torch",
+            "adamw",
+            "adamw_hf",
+            "adamw_torch_fused",
+        ):
+            raise ValueError(
+                f"training.use_lorafa uses an AdamW-based gradient projection and is "
+                f"incompatible with training.optimizer={self.optimizer!r}. Leave optimizer "
+                f"unset (defaulting to adamw) or use 'adamw_torch'."
             )
         return self
 
@@ -4961,6 +4999,8 @@ class SoupConfig(BaseModel):
             lora_conflicts.append("relora_steps")
         if tcfg.loraplus_lr_ratio is not None:
             lora_conflicts.append("loraplus_lr_ratio")
+        if tcfg.use_lorafa:
+            lora_conflicts.append("use_lorafa")
         if lora_conflicts:
             raise ValueError(
                 f"training.unfrozen_parameters (Spectrum full fine-tuning, "
@@ -5060,11 +5100,30 @@ class SoupConfig(BaseModel):
             lora_conflicts.append("relora_steps")
         if tcfg.loraplus_lr_ratio is not None:
             lora_conflicts.append("loraplus_lr_ratio")
+        if tcfg.use_lorafa:
+            lora_conflicts.append("use_lorafa")
         if lora_conflicts:
             raise ValueError(
                 f"training.lisa_enabled (LISA full fine-tuning, LoRA off) is "
                 f"mutually exclusive with LoRA features: "
                 f"{', '.join(lora_conflicts)}"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_lorafa_task_and_backend(self) -> "SoupConfig":
+        """#725 — LoRA-FA task and backend gating."""
+        if not self.training.use_lorafa:
+            return self
+        if self.backend != "transformers":
+            raise ValueError(
+                f"training.use_lorafa requires backend='transformers'; "
+                f"got backend={self.backend!r}"
+            )
+        if self.task not in _LORAFA_SUPPORTED_TASKS:
+            raise ValueError(
+                f"training.use_lorafa (LoRA-FA optimizer) is currently only supported for tasks "
+                f"{', '.join(sorted(_LORAFA_SUPPORTED_TASKS))}; got task={self.task!r}"
             )
         return self
 
@@ -5152,6 +5211,8 @@ class SoupConfig(BaseModel):
             lora_conflicts.append("relora_steps")
         if tcfg.loraplus_lr_ratio is not None:
             lora_conflicts.append("loraplus_lr_ratio")
+        if tcfg.use_lorafa:
+            lora_conflicts.append("use_lorafa")
         if lora_conflicts:
             raise ValueError(
                 f"training.lora.r=0 means full fine-tuning (no adapter), so it "
