@@ -5,13 +5,15 @@ freezes LoRA A matrices and trains only B matrices. Freezing A avoids retaining
 the input activations needed for backpropagating through A, reducing
 adapter-rank activation memory retention substantially.
 
-The fix routes it through PEFT''s optimizer construction:
+The fix routes it through PEFT's optimizer construction:
 `attach_lorafa_optimizer` builds a `create_lorafa_optimizer` optimizer and assigns
 it to `trainer.optimizer` after the trainer exists.
 
 These tests use a real PEFT model and a real `transformers.Trainer` -- no mocks --
 because a mock would auto-create parameter groups and hide wiring defects.
 """
+
+import math
 
 import pytest
 
@@ -74,7 +76,7 @@ def _trainer_with_data(model, tmp_path, dataset, *, max_steps, save_steps):
         save_strategy="steps",
         per_device_train_batch_size=4,
         report_to=[],
-        logging_steps=1000,
+        logging_steps=1,
         disable_tqdm=True,
         seed=42,
         data_seed=42,
@@ -98,10 +100,19 @@ def _trainer(model, tmp_path, *, weight_decay=0.01, optim="adamw_torch"):
 class _TCfg:
     """A real config-shaped object (not a mock): missing attributes raise."""
 
-    def __init__(self, use_lorafa=False, loraplus_lr_ratio=None, use_galore=False):
+    def __init__(
+        self,
+        use_lorafa=False,
+        loraplus_lr_ratio=None,
+        use_galore=False,
+        optimizer=None,
+        lora=None,
+    ):
         self.use_lorafa = use_lorafa
         self.loraplus_lr_ratio = loraplus_lr_ratio
         self.use_galore = use_galore
+        self.optimizer = optimizer
+        self.lora = lora
 
 
 def test_lorafa_optimizer_is_attached_and_freezes_a_matrices(tmp_path):
@@ -197,8 +208,8 @@ class TestResumePreservesOptimizerAndSchedulerState:
         model = _tiny_peft_model(seed=7)
         trainer = _trainer_with_data(model, out_dir, dataset, max_steps=4, save_steps=2)
         attach_lorafa_optimizer(trainer, _TCfg(use_lorafa=True))
-        trainer.train(resume_from_checkpoint=resume_from)
-        return trainer
+        output = trainer.train(resume_from_checkpoint=resume_from)
+        return trainer, output
 
     def test_resumed_run_matches_the_uninterrupted_run(self, tmp_path):
         import torch
@@ -206,12 +217,35 @@ class TestResumePreservesOptimizerAndSchedulerState:
         dataset = _tiny_dataset()
         out_dir = tmp_path / "run"
 
-        reference = self._train_to_step_4(out_dir, dataset)
+        reference, ref_out = self._train_to_step_4(out_dir, dataset)
         checkpoint = out_dir / "checkpoint-2"
         assert checkpoint.is_dir()
 
-        resumed = self._train_to_step_4(out_dir, dataset, resume_from=str(checkpoint))
+        # Acceptance criterion 3: Finiteness of loss and presence of gradients
+        assert math.isfinite(ref_out.training_loss), "Expected finite reference training loss"
+        losses = [e["loss"] for e in reference.state.log_history if "loss" in e]
+        assert losses and all(math.isfinite(val) for val in losses), (
+            "All logged step losses must be finite"
+        )
 
+        # Assert LoRA-FA parameter gradient presence & freezing
+        a_params = [p for n, p in reference.model.named_parameters() if "lora_A" in n]
+        b_params = [p for n, p in reference.model.named_parameters() if "lora_B" in n]
+        assert all(not p.requires_grad for p in a_params)
+        assert all(p.requires_grad for p in b_params)
+
+        # Assert optimizer first and second moments on B are populated and non-zero
+        lora_states = [s for s in reference.optimizer.state.values() if "exp_avg_B" in s]
+        assert lora_states, "Expected LoRA-FA optimizer state to contain exp_avg_B"
+        assert all(s["exp_avg_B"].abs().sum().item() > 0 for s in lora_states), (
+            "Expected non-zero first moments on LoRA B"
+        )
+        assert all(s["exp_avg_sq_B"].abs().sum().item() > 0 for s in lora_states), (
+            "Expected non-zero second moments on LoRA B"
+        )
+
+        resumed, res_out = self._train_to_step_4(out_dir, dataset, resume_from=str(checkpoint))
+        assert math.isfinite(res_out.training_loss), "Expected finite resumed training loss"
         assert reference.lr_scheduler.get_last_lr() == resumed.lr_scheduler.get_last_lr()
 
         compared_any = False
@@ -225,3 +259,92 @@ class TestResumePreservesOptimizerAndSchedulerState:
                 f"final weight for {name} diverged after resume"
             )
         assert compared_any
+
+
+def test_incompatible_optimizer_raises(tmp_path):
+    trainer = _trainer(_tiny_peft_model(), tmp_path)
+    with pytest.raises(ValueError, match="AdamW-based"):
+        attach_lorafa_optimizer(trainer, _TCfg(use_lorafa=True, optimizer="lion_32bit"))
+
+
+def test_missing_lora_rank_or_alpha_raises(tmp_path):
+    model = _tiny_peft_model()
+    trainer = _trainer(model, tmp_path)
+    model.peft_config["default"].r = None
+    with pytest.raises(ValueError, match="requires explicit lora rank and alpha"):
+        attach_lorafa_optimizer(trainer, _TCfg(use_lorafa=True, lora=None))
+
+
+def test_lorafa_state_dict_device_fixup(tmp_path):
+    """Verify that load_state_dict casts string-keyed state tensors to the parameter device.
+
+    LoraFAOptimizer keys state by string ('...lora') rather than parameter ID.
+    PyTorch's default load_state_dict only casts tensors for keys in id_map
+    (which contains only parameter IDs). This test verifies our device fixup
+    ensures all state tensors match the device of their target parameter.
+    """
+    model = _tiny_peft_model()
+    trainer = _trainer(model, tmp_path)
+    attach_lorafa_optimizer(trainer, _TCfg(use_lorafa=True))
+
+    opt = trainer.optimizer
+    for p in model.parameters():
+        if p.requires_grad:
+            p.grad = torch.randn_like(p)
+    opt.step()
+
+    sd = opt.state_dict()
+    assert any("exp_avg_B" in s for s in sd["state"].values())
+
+    fresh_model = _tiny_peft_model()
+    fresh_trainer = _trainer(fresh_model, tmp_path)
+    attach_lorafa_optimizer(fresh_trainer, _TCfg(use_lorafa=True))
+    fresh_opt = fresh_trainer.optimizer
+
+    fresh_opt.load_state_dict(sd)
+
+    for group in fresh_opt.param_groups:
+        params = group["params"]
+        names = group["names"]
+        for p, n in zip(params, names):
+            if "lora" in n:
+                name = n[: n.find("lora")] + "lora"
+                if name in fresh_opt.state:
+                    for k, v in fresh_opt.state[name].items():
+                        if isinstance(v, torch.Tensor):
+                            assert v.device == p.device, (
+                                f"State tensor {k} on {v.device} != parameter {p.device}"
+                            )
+
+
+def test_soup_config_lorafa_task_and_backend_gating(tmp_path):
+    from pydantic import ValidationError
+
+    from soup_cli.config.schema import SoupConfig, TrainingConfig
+
+    # Incompatible optimizer
+    with pytest.raises(ValidationError, match="AdamW-based"):
+        TrainingConfig(use_lorafa=True, optimizer="lion_32bit")
+
+    data_file = tmp_path / "train.jsonl"
+    data_file.write_text('{"instruction": "a", "output": "b"}\n', encoding="utf-8")
+
+    # Incompatible backend (MLX)
+    with pytest.raises(ValidationError, match="requires backend='transformers'"):
+        SoupConfig(
+            base="some-model",
+            task="sft",
+            backend="mlx",
+            data={"train": str(data_file), "format": "alpaca"},
+            training=TrainingConfig(use_lorafa=True),
+        )
+
+    # Incompatible task (DPO)
+    with pytest.raises(ValidationError, match="only supported for tasks"):
+        SoupConfig(
+            base="some-model",
+            task="dpo",
+            backend="transformers",
+            data={"train": str(data_file), "format": "alpaca"},
+            training=TrainingConfig(use_lorafa=True),
+        )

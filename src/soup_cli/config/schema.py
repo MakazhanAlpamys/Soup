@@ -53,6 +53,8 @@ _MAX_UNFROZEN_PATTERN_LEN = 512
 # ``attach_lisa_callback``. Adding a task to this tuple without that wiring
 # would accept a config the trainer silently ignores.
 _LISA_SUPPORTED_TASKS = ("sft", "pretrain")
+# #725 — tasks whose transformers trainer wires attach_lorafa_optimizer.
+_LORAFA_SUPPORTED_TASKS = ("sft", "pretrain", "embedding")
 
 
 class LoraConfig(BaseModel):
@@ -3937,6 +3939,17 @@ class TrainingConfig(BaseModel):
                 "LoRA-FA tunes LoRA B matrices while GaLore projects full-parameter gradients. "
                 "Enable one, not both."
             )
+        if self.use_lorafa and self.optimizer is not None and self.optimizer not in (
+            "adamw_torch",
+            "adamw",
+            "adamw_hf",
+            "adamw_torch_fused",
+        ):
+            raise ValueError(
+                f"training.use_lorafa uses an AdamW-based gradient projection and is "
+                f"incompatible with training.optimizer={self.optimizer!r}. Leave optimizer "
+                f"unset (defaulting to adamw) or use 'adamw_torch'."
+            )
         return self
 
     # ---- v0.61.0 Part A — Unlearning ---------------------------------------
@@ -5430,6 +5443,23 @@ class SoupConfig(BaseModel):
                 f"training.lisa_enabled (LISA full fine-tuning, LoRA off) is "
                 f"mutually exclusive with LoRA features: "
                 f"{', '.join(lora_conflicts)}"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_lorafa_task_and_backend(self) -> "SoupConfig":
+        """#725 — LoRA-FA task and backend gating."""
+        if not self.training.use_lorafa:
+            return self
+        if self.backend != "transformers":
+            raise ValueError(
+                f"training.use_lorafa requires backend='transformers'; "
+                f"got backend={self.backend!r}"
+            )
+        if self.task not in _LORAFA_SUPPORTED_TASKS:
+            raise ValueError(
+                f"training.use_lorafa (LoRA-FA optimizer) is currently only supported for tasks "
+                f"{', '.join(sorted(_LORAFA_SUPPORTED_TASKS))}; got task={self.task!r}"
             )
         return self
 

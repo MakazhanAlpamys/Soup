@@ -381,6 +381,21 @@ def attach_lorafa_optimizer(trainer: Any, tcfg: Any) -> bool:
             "LoRA+ tunes them with separate learning rates. Enable one, not both."
         )
 
+    # LoRA-FA optimizes gradients using an AdamW projection in LoraFAOptimizer.
+    # An explicitly configured non-AdamW optimizer would be silently overridden.
+    opt_name = getattr(tcfg, "optimizer", None)
+    if opt_name is not None and opt_name not in (
+        "adamw_torch",
+        "adamw",
+        "adamw_hf",
+        "adamw_torch_fused",
+    ):
+        raise ValueError(
+            f"training.use_lorafa uses an AdamW-based gradient projection and is "
+            f"incompatible with training.optimizer={opt_name!r}. Leave optimizer unset "
+            f"(defaulting to adamw) or use 'adamw_torch'."
+        )
+
     from peft import PeftModel
     from peft.optimizers import create_lorafa_optimizer
     from transformers import Trainer
@@ -406,10 +421,12 @@ def attach_lorafa_optimizer(trainer: Any, tcfg: Any) -> bool:
     if r is None and hasattr(tcfg, "lora") and tcfg.lora is not None:
         r = getattr(tcfg.lora, "r", None)
         lora_alpha = getattr(tcfg.lora, "alpha", None)
-    if r is None:
-        r = 8
-    if lora_alpha is None:
-        lora_alpha = 16
+    if r is None or lora_alpha is None:
+        raise ValueError(
+            "training.use_lorafa requires explicit lora rank and alpha. "
+            "Configure training.lora.r and training.lora.alpha or ensure the "
+            "PEFT model provides them."
+        )
 
     _, optimizer_kwargs = Trainer.get_optimizer_cls_and_kwargs(trainer.args)
     optimizer = create_lorafa_optimizer(
@@ -426,8 +443,62 @@ def attach_lorafa_optimizer(trainer: Any, tcfg: Any) -> bool:
         for group in optimizer.param_groups:
             group["eps"] = optimizer_kwargs["eps"]
 
+    _fixup_lorafa_state_dict_devices(optimizer)
     trainer.optimizer = optimizer
     return True
+
+
+def _fixup_lorafa_state_dict_devices(optimizer: Any) -> Any:
+    """Ensure tensors in optimizer.state are cast to their parameter's device on load_state_dict.
+
+    `LoraFAOptimizer` keys adapter states by string names rather than parameter
+    references or integer IDs (e.g. 'base_model.model...lora'). When PyTorch's
+    `torch.optim.Optimizer.load_state_dict` executes during checkpoint resume, its
+    per-parameter device-casting loop checks `id_map` which only contains integer
+    parameter IDs. As a result, states indexed by string name (such as `exp_avg_B`
+    and `exp_avg_sq_B`) remain on the deserialized storage device (typically CPU),
+    causing a device mismatch runtime error on GPU when `opt.step()` runs.
+
+    This hook casts all string-keyed tensors in `optimizer.state` to the target
+    parameter device whenever `load_state_dict` is called.
+    """
+    import torch
+
+    def _cast_state_tensors(opt: Any) -> None:
+        for group in opt.param_groups:
+            params = group.get("params", [])
+            names = group.get("names", [])
+            param_list = []
+            for p, n in zip(params, names):
+                if "lora" in n:
+                    param_list.append(p)
+                    if len(param_list) == 2:
+                        name = n[: n.find("lora")] + "lora"
+                        target_device = param_list[1].device  # LoRA B parameter
+                        if name in opt.state:
+                            for k, v in list(opt.state[name].items()):
+                                if isinstance(v, torch.Tensor) and v.device != target_device:
+                                    opt.state[name][k] = v.to(target_device)
+                        param_list = []
+                else:
+                    if n in opt.state:
+                        for k, v in list(opt.state[n].items()):
+                            if isinstance(v, torch.Tensor) and v.device != p.device:
+                                opt.state[n][k] = v.to(p.device)
+
+    if hasattr(optimizer, "register_load_state_dict_post_hook"):
+        optimizer.register_load_state_dict_post_hook(
+            lambda opt, *args, **kwargs: _cast_state_tensors(opt)
+        )
+
+    orig_load_state_dict = optimizer.load_state_dict
+
+    def wrapped_load_state_dict(state_dict: dict[str, Any]) -> None:
+        orig_load_state_dict(state_dict)
+        _cast_state_tensors(optimizer)
+
+    optimizer.load_state_dict = wrapped_load_state_dict
+    return optimizer
 
 
 def apply_lisa_setup(model: Any, tcfg: Any, console: Any = None) -> bool:
