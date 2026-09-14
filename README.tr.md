@@ -93,15 +93,15 @@ sessizce.** Altı eğitim seçeneği doğrulanıyor, belgeleniyor, kabul ediliyo
 hiçbir şey tarafından okunmuyordu. **Bu sürümdeki 60 pull request'in tamamı bakımcı dışından
 geldi**, 22 kişiden.
 
-- **Geriye dönük uyumsuz: bilinmeyen bir yapılandırma anahtarı artık yüklemeyi reddediyor.**
-  v0.74 uyarı vermiş ve son tarih olarak bu sürümü adlandırmıştı. `quantizaton` gibi bir yazım
-  hatası ya da yalnızca daha yeni bir Soup'ta bulunan bir anahtar eskiden atılıyor ve
+- **Kırıcı değişiklik: bilinmeyen bir yapılandırma anahtarı artık yüklemeyi reddediyor.**
+  v0.74 uyarmış ve son tarih olarak bu sürümü belirlemişti. `quantizaton` gibi bir yazım
+  hatası ya da yalnızca daha yeni bir Soup sürümünde bulunan bir anahtar eskiden yoksayılıyor ve
   çalıştırma o ayar uygulanmadan devam ediyordu; artık CLI'da (çıkış kodu 1) ve API'de
-  (`ValueError`) başarısız oluyor ve muhtemelen kastettiğiniz alanı adlandırıyor. Dedektör,
-  şemanın v0.40.1'den beri tanıdığı üst düzey `lora:` yeniden eşlemesini uyguluyor; yani bu
-  yazım reddedilmiyor, kabul ediliyor. Onu kullanan iki `soup fetch examples` dosyası kanonik
-  `training.lora` biçimine taşındı. Her tarif ve şablon temiz yükleniyor, anahtar adları
-  terminale ulaşmadan önce kaçışlanıyor ve tarama sınırlı.
+  (`ValueError`) reddediliyor ve muhtemelen kastettiğiniz alanı belirtiyor. Tespit edici,
+  şemanın v0.40.1'den beri desteklediği kök düzeyindeki `lora:` yeniden eşlemesini uyguluyor;
+  yani bu yazım reddedilmiyor, kabul ediliyor. Bu yazımı kullanan iki `soup fetch examples`
+  dosyası standart `training.lora` biçimine taşındı. Tüm tarif ve şablonlar sorunsuz yükleniyor,
+  anahtar adları terminale ulaşmadan önce filtreleniyor ve tarama sınırlandırılmış durumda.
 - **MLX, kabul ettiği yapılandırmaya uyuyor.** `train_on_responses_only`, `warmup_ratio` /
   `scheduler` / `weight_decay` / `optimizer`, `max_grad_norm`, `gradient_accumulation_steps`
   ve `gradient_checkpointing`, `backend: mlx` üzerinde tek tek doğrulanıp sonra düşürülüyordu.
@@ -249,11 +249,11 @@ output: ./output
 [Belgeler](#belgeler) altında belgelenmiştir.
 
 > **Bilinmeyen yapılandırma anahtarları v0.75'ten beri reddediliyor.** Hiçbir modelin
-> bildirmediği bir anahtar — `quantizaton` gibi bir yazım hatası ya da yalnızca daha yeni bir
-> Soup'ta bulunan bir alan — eskiden temiz biçimde doğrulanıp atılıyordu; yani çalıştırma, o
-> ayar hiç uygulanmadan devam ediyordu. v0.74 bunu yükleme sırasında, muhtemelen kastettiğiniz
-> alanla birlikte raporluyordu; **v0.75**'ten itibaren aynı yapılandırma yüklenemiyor, bu
-> yüzden anahtarın yok sayılmasına güvenmek yerine onu düzeltin ya da kaldırın. Bkz.
+> tanımlamadığı bir anahtar — `quantizaton` gibi bir yazım hatası ya da yalnızca daha yeni bir
+> Soup sürümünde bulunan bir alan — eskiden şemadan geçip göz ardı ediliyordu; yani çalıştırma,
+> o ayar hiç uygulanmadan devam ediyordu. v0.74 bunu yükleme anında, muhtemelen kastettiğiniz
+> alanla birlikte raporluyordu; **v0.75**'ten itibaren aynı yapılandırma doğrudan reddediliyor;
+> bu yüzden anahtarın yoksayılmasına güvenmek yerine onu düzeltin ya da kaldırın. Bkz.
 > [Bilinmeyen yapılandırma anahtarları](docs/backends-and-ops.md#unknown-config-keys).
 
 ## Belgeler
