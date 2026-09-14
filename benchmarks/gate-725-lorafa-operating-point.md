@@ -1,4 +1,4 @@
-﻿# LoRA-FA Operating Point Measurement Record (#725)
+# LoRA-FA Operating Point Measurement Record (#725)
 
 Measured by [@webdevsamran](https://github.com/webdevsamran) on 2026-09-14 UTC.
 
