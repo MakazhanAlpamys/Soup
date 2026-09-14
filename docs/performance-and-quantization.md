@@ -809,6 +809,10 @@ and between 0 and `nodes - 1`. Use the same node count, coordinator address,
 and port on every machine. Soup uses static rendezvous; it does not provision
 machines, copy files, or run the command on other nodes.
 
+`--master-addr` takes an address only: an IPv4 or IPv6 literal, or a hostname.
+The port belongs in `--master-port`, so `--master-addr head:29500` is rejected
+rather than exported as an unreachable `MASTER_ADDR` on every node.
+
 Install the same Soup and training dependencies on all nodes, and make the
 model, configuration, and data available at the paths used by each command.
 All nodes need network access to rank 0's coordinator port and to the peer

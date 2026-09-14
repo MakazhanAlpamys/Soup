@@ -1045,3 +1045,66 @@ class TestTrainValidatorGating:
         )
         assert result.exit_code != 0, (result.output, repr(result.exception))
         assert "pipeline" in result.output.lower() or "cuda" in result.output.lower()
+
+
+class TestMasterAddrIsValidatedAsAnAddress:
+    """`--master-addr` must be as strict as its own error message.
+
+    The value is interpolated into the `accelerate launch` argv and exported
+    as MASTER_ADDR on every node, and the rejection says "must be a hostname
+    or IP address" -- so anything that is not one belongs on the error path.
+    A character blacklist cannot do this: IPv6 literals are full of colons,
+    while `head:29500` (the port glued onto the host) must still be refused.
+    """
+
+    @pytest.mark.parametrize(
+        "bad",
+        [
+            "head:29500",       # port glued onto the hostname
+            "$(whoami)",        # command substitution
+            "`id`",             # backtick substitution
+            "a|b",              # shell pipe
+            "a;b",              # command separator
+            "A" * 5000,         # no length ceiling (one oversized label)
+            # 299 chars of individually LEGAL 2-char labels: only the
+            # RFC 1035 total-length ceiling rejects this one.
+            ".".join(["ab"] * 100),
+            "host name",        # embedded space
+            "-oProxyCommand",   # leading dash
+            "-",                # bare dash
+            "..",               # empty labels
+            "node_01",          # underscore is not a hostname character
+        ],
+    )
+    def test_rejects_values_that_are_not_addresses(self, bad: str) -> None:
+        from soup_cli.utils.launcher import validate_multi_node_options
+
+        with pytest.raises(ValueError, match="hostname or IP address"):
+            validate_multi_node_options(2, 0, bad, 29500)
+
+    @pytest.mark.parametrize(
+        "good",
+        [
+            "10.0.0.5",
+            "192.168.1.1",
+            "::1",
+            "fe80::1",
+            "2001:db8::1",
+            "headnode",
+            "head.cluster.local",
+            "node-01.eu-west.example.com",
+            "head.cluster.local.",  # trailing root dot is legal
+        ],
+    )
+    def test_accepts_real_addresses(self, good: str) -> None:
+        from soup_cli.utils.launcher import validate_multi_node_options
+
+        validate_multi_node_options(2, 0, good, 29500)
+
+    def test_a_rejected_addr_never_reaches_argv(self) -> None:
+        from soup_cli.utils.launcher import build_accelerate_argv
+
+        with pytest.raises(ValueError, match="hostname or IP address"):
+            build_accelerate_argv(
+                2, ["soup", "train"], num_machines=2, main_process_ip="head:29500"
+            )

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import ipaddress
 import os
+import re
 import shlex
 import sys
 from typing import Sequence
@@ -10,6 +12,30 @@ from typing import Sequence
 VALID_MIXED_PRECISION = ("no", "fp16", "bf16", "fp8")
 MAX_NUM_MACHINES = 256  # sanity cap, consistent with --gpus MAX_GPU_COUNT=128
 DEFAULT_MAIN_PROCESS_PORT = 29500
+MAX_HOSTNAME_LEN = 253  # RFC 1035: 255 wire octets less the leading length and root bytes
+_HOSTNAME_LABEL = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?")
+
+
+def _is_hostname_or_ip(value: object) -> bool:
+    """True for an IPv4/IPv6 literal or an RFC 1123 hostname.
+
+    The value is interpolated into an ``accelerate launch`` argv and exported
+    as ``MASTER_ADDR``, so anything that is not actually addressable is a
+    typo at best. A character blacklist cannot do this job: IPv6 literals are
+    full of colons, while ``head:29500`` -- a host with the port glued on, the
+    most common way to get this flag wrong -- must be rejected.
+    """
+    if not isinstance(value, str) or not value:
+        return False
+    try:
+        ipaddress.ip_address(value)
+        return True
+    except ValueError:
+        pass
+    host = value[:-1] if value.endswith(".") else value  # trailing root dot
+    if not host or len(host) > MAX_HOSTNAME_LEN:
+        return False
+    return all(_HOSTNAME_LABEL.fullmatch(label) for label in host.split("."))
 
 
 def validate_multi_node_options(
@@ -38,12 +64,7 @@ def validate_multi_node_options(
         if any(value is not None for value in (machine_rank, main_process_ip, main_process_port)):
             raise ValueError("node rank and coordinator options require num_machines > 1")
         return
-    if (
-        not isinstance(main_process_ip, str) or not main_process_ip
-        or main_process_ip.startswith("-")
-        or any(char.isspace() or ord(char) < 32 or ord(char) == 127 for char in main_process_ip)
-        or "/" in main_process_ip or "\\" in main_process_ip
-    ):
+    if not _is_hostname_or_ip(main_process_ip):
         raise ValueError("main_process_ip is required and must be a hostname or IP address")
 
 
