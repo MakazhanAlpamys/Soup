@@ -152,7 +152,9 @@ _MLX_SFT: tuple[SupportEntry, ...] = (
     SupportEntry(
         "training.use_fsdp2_compile",
         IGNORED,
-        "torch.compile on FSDP2 requires CUDA and the transformers backend",
+        "torch.compile on FSDP2 requires CUDA and the transformers backend "
+        "(and validate_fsdp2_compile_config refuses backend=mlx at "
+        "commands/train.py:1235 before resolve_trainer)",
         trainer_reads=True,
     ),
 )
