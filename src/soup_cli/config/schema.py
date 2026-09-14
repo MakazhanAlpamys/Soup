@@ -4797,7 +4797,11 @@ class SoupConfig(BaseModel):
             )
         except ValueError as exc:
             raise ValueError(str(exc)) from exc
-        return self
+        raise ValueError(
+            "BitNet 1.58 training is not implemented yet; "
+            "the export path `soup export --format tq1_0` works on an "
+            "existing BitNet checkpoint."
+        )
 
     @model_validator(mode="after")
     def _validate_ebft_compat(self) -> "SoupConfig":

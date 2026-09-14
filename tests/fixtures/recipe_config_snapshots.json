@@ -550,15 +550,6 @@
       "training.embedding_loss": "cosine",
       "training.lora.r": 8
     },
-    "falcon-e-bitnet-sft": {
-      "base": "tiiuae/Falcon-E-1B-Instruct",
-      "data.format": "auto",
-      "data.train": "./data/train.jsonl",
-      "training.lora.alpha": 32,
-      "training.lora.r": 16,
-      "training.lr": 0.0001,
-      "training.quantization": "bitnet_1.58"
-    },
     "gemma2-2b-sft": {
       "base": "google/gemma-2-2b-it",
       "data.format": "auto",

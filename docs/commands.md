@@ -152,7 +152,7 @@ soup migrate --from llamafactory config.yaml  Import config from LLaMA-Factory
 soup migrate --from axolotl config.yml        Import config from Axolotl
 soup migrate --from unsloth notebook.ipynb    Import config from Unsloth notebook
 soup migrate --from llamafactory c.yaml --dry-run  Preview without writing
-soup recipes list                             List all 171 ready-made recipes
+soup recipes list                             List all 170 ready-made recipes
 soup recipes show llama3.1-8b-sft            Print recipe YAML
 soup recipes use llama3.1-8b-sft             Copy recipe to soup.yaml
 soup recipes search "reasoning"              Search by keyword/task/size
@@ -323,7 +323,7 @@ soup train  # use_mod | expand_layers | use_longlora  Mixture-of-Depths / LLaMA 
 soup train  # task='tts' + tts_family + modality='audio_out'  TTS fine-tune via SFT CE over pre-encoded codec tokens; emotion templating; live-codec hw-gated — LIVE (v0.71.20)
 soup train  # task in {sft,pretrain,dpo} + moe_expert_quant=nf4|int8_rowwise [+moe_lora]  bnb per-expert quant of fused-MoE experts (CUDA) — LIVE (v0.71.20)
 soup train  # train_router_only=true [+moe_lora]  Freeze MoE experts, train only the gating router — LIVE (v0.71.20)
-soup train  # quantization='bitnet_1.58' (sft/pretrain/dpo)  BitNet 1.58 SFT (requires onebitllms) — LIVE-gated (v0.71.20)
+soup train  # quantization='bitnet_1.58'  BitNet 1.58 training is not implemented; config load refuses it
 soup export --model ./output --format bitnet|tq1_0  BitNet 1.58 TQ1_0 ternary GGUF via llama.cpp — LIVE (v0.71.20)
 soup version [--full] [--json]                Show version (--full: system info, --json: JSON output)
 soup --verbose <command>                      Full traceback on errors
