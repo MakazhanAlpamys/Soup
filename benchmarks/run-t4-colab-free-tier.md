@@ -62,6 +62,11 @@ resident      2101 MB (embeddings + adapters)
 peak VRAM     ~3.02 GB at batch 1 x seq 256 (logits 0.46 GB)
 free VRAM     15.10 GB
 forecast      31-46 tok/s (from 2.20 TFLOPS measured on this card @ 1185 MHz)
+              STALE (#714): #648 changed the compute probe to measure the GEMM
+              ceiling in the card's resolved stream dtype (float16 here)
+              instead of bf16 through Turing's software emulation. Re-measured
+              in notebooks/proof-4gb.ipynb (the run behind #910): 288-423 tok/s
+              (from 20.39 TFLOPS measured on this card, float16 @ 525 MHz).
 ```
 
 LoRA applied: **3,407,872 trainable / 8,030,261,248 total (0.04%)**.
