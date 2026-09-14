@@ -176,7 +176,7 @@ def _load_node_output(
 
 
 def _redact_exc_message(exc: BaseException, limit: int = 256) -> str:
-    """v0.53.7 H-D: strip path-like tokens from exception messages.
+    """v0.53.7 H-D: strip path-like tokens and sanitize URLs.
 
     Mirrors v0.34.0 ``crash.py`` redaction policy — file-system paths
     embedded in ``FileNotFoundError`` / ``OSError`` strings can leak the
@@ -184,6 +184,16 @@ def _redact_exc_message(exc: BaseException, limit: int = 256) -> str:
     POSIX and Windows path runs with their basenames before persisting.
     """
     msg = f"{type(exc).__name__}: {exc}"
+    safe_origins: List[str] = []
+
+    def _protect_url(m: "re.Match[str]") -> str:
+        safe_origins.append(_provider_endpoint_label(None, m.group(0)))
+        return f"__SOUP_SAFE_ORIGIN_{len(safe_origins) - 1}__"
+
+    # A URL contains POSIX-looking ``//`` and would otherwise be mangled by
+    # the path redactor below. Protect only its credential-free origin; any
+    # userinfo, path, or query is deliberately discarded.
+    msg = re.sub(r"https?://[^\s'\"<>),;]+", _protect_url, msg)
     # POSIX absolute paths (anything starting with ``/``).
     msg = re.sub(
         r"/[^\s:'\"]+",
@@ -201,6 +211,8 @@ def _redact_exc_message(exc: BaseException, limit: int = 256) -> str:
         return parts[-1] if parts else raw
 
     msg = re.sub(r"[A-Za-z]:[\\/][^\s:'\"]+", _win_basename, msg)
+    for index, origin in enumerate(safe_origins):
+        msg = msg.replace(f"__SOUP_SAFE_ORIGIN_{index}__", origin)
     return msg[:limit]
 
 

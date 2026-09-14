@@ -974,6 +974,11 @@ for live generations. For deterministic tests only, `--offline` explicitly enabl
 `llm_text(offline): ...` placeholders and makes judge nodes accept every row; the
 command prints a warning whenever this mode is active.
 
+Live provider-call failures are counted: if every attempted call for an `llm_text`
+or `judge` node fails, the command names the endpoint and exits 1. Partial failures
+keep usable rows and report their count in the completion summary, while a provider
+that legitimately returns an empty completion still counts as a successful call.
+
 Six node kinds now run live: **seed** (JSONL load), **llm_text** (LLM generation via
 Ollama, Anthropic, or vLLM), **code** (execution via RLVR sandbox), **judge** (binary scoring),
 **validator** (regex or JSON schema), **sampler** (deterministic selection). Checkpoint

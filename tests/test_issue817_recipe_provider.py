@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import socket
 from pathlib import Path
 
@@ -10,6 +11,10 @@ import pytest
 from typer.testing import CliRunner
 
 from tests.conftest import strip_ansi
+
+
+def _terminal_text(result) -> str:
+    return re.sub(r"\s+", " ", strip_ansi(result.output))
 
 
 def _write_recipe(tmp_path: Path) -> Path:
@@ -59,7 +64,7 @@ def test_recipe_cli_refuses_llm_nodes_without_provider(tmp_path: Path, monkeypat
         ["data", "recipe", str(recipe_path), "--execute", "--output", "out"],
     )
 
-    output = strip_ansi(result.output)
+    output = _terminal_text(result)
     assert result.exit_code == 2, (output, repr(result.exception))
     assert "--provider" in output
     assert not (tmp_path / "out").exists()
@@ -137,7 +142,7 @@ def test_recipe_cli_offline_mode_is_explicit_and_loud(tmp_path: Path, monkeypatc
     )
 
     assert result.exit_code == 0, result.output
-    assert "Offline recipe mode" in strip_ansi(result.output)
+    assert "Offline recipe mode" in _terminal_text(result)
     rows = [
         json.loads(line)
         for line in (tmp_path / "out" / "samp1.jsonl").read_text(encoding="utf-8").splitlines()
@@ -181,7 +186,7 @@ def test_recipe_cli_rejects_unknown_provider_before_creating_output(
         ],
     )
 
-    output = strip_ansi(result.output)
+    output = _terminal_text(result)
     assert result.exit_code == 2, (output, repr(result.exception))
     assert "Unknown --provider 'openai'" in output
     assert not (tmp_path / "out").exists()
@@ -210,7 +215,7 @@ def test_recipe_cli_rejects_provider_with_offline_before_creating_output(
         ],
     )
 
-    output = strip_ansi(result.output)
+    output = _terminal_text(result)
     assert result.exit_code == 2, (output, repr(result.exception))
     assert "--provider and --offline cannot be used together" in output
     assert not (tmp_path / "out").exists()
@@ -235,7 +240,7 @@ def test_recipe_cli_requires_provider_for_provider_options(
         ["data", "recipe", str(recipe_path), "--execute", "--output", "out", option, value],
     )
 
-    output = strip_ansi(result.output)
+    output = _terminal_text(result)
     assert result.exit_code == 2, (output, repr(result.exception))
     assert "--model and --base-url require --provider" in output
     assert not (tmp_path / "out").exists()
@@ -302,7 +307,7 @@ def test_recipe_cli_closed_provider_fails_with_count_and_endpoint(
         ],
     )
 
-    output = strip_ansi(result.output)
+    output = _terminal_text(result)
     assert result.exit_code == 1, (output, repr(result.exception))
     assert "all 2 provider calls failed" in output
     assert endpoint in output
@@ -311,6 +316,7 @@ def test_recipe_cli_closed_provider_fails_with_count_and_endpoint(
     assert checkpoint["failed_node"] == "provider1"
     assert checkpoint["provider_call_counts"]["provider1"] == 2
     assert checkpoint["provider_failure_counts"]["provider1"] == 2
+    assert endpoint in checkpoint["failed_reason"]
     assert not (tmp_path / "out" / "samp1.jsonl").exists()
 
 
@@ -343,7 +349,7 @@ def test_recipe_cli_preserves_legitimate_empty_completion(
         ],
     )
 
-    output = strip_ansi(result.output)
+    output = _terminal_text(result)
     assert result.exit_code == 0, (output, repr(result.exception))
     rows = [
         json.loads(line)
@@ -388,7 +394,7 @@ def test_recipe_cli_reports_partial_failure_and_keeps_successful_empty_row(
         ],
     )
 
-    output = strip_ansi(result.output)
+    output = _terminal_text(result)
     assert result.exit_code == 0, (output, repr(result.exception))
     rows = [
         json.loads(line)
@@ -433,7 +439,7 @@ def test_recipe_cli_judge_node_fails_when_every_provider_call_fails(
         ],
     )
 
-    output = strip_ansi(result.output)
+    output = _terminal_text(result)
     assert result.exit_code == 1, (output, repr(result.exception))
     assert "judge node 'provider1': all 2 provider calls failed" in output
     assert "http://localhost:11434" in output
@@ -512,8 +518,27 @@ def test_provider_factory_strict_mode_covers_every_backend(
 def test_provider_factory_rejects_non_boolean_strict_mode() -> None:
     from soup_cli.utils.data_forge import make_judge_provider_fn
 
-    with pytest.raises(TypeError, match="raise_on_error"):
+    with pytest.raises(TypeError, match="^raise_on_error must be a bool$"):
         make_judge_provider_fn("ollama", raise_on_error="yes")  # type: ignore[arg-type]
+
+
+def test_vllm_strict_mode_classifies_missing_json_method_as_malformed(monkeypatch) -> None:
+    import httpx
+
+    from soup_cli.utils.data_forge import ProviderCallError, make_judge_provider_fn
+
+    class Response:
+        status_code = 200
+
+    monkeypatch.setattr(httpx, "post", lambda *_args, **_kwargs: Response())
+    provider = make_judge_provider_fn(
+        "vllm",
+        base_url="http://localhost:8000",
+        raise_on_error=True,
+    )
+
+    with pytest.raises(ProviderCallError, match="malformed response"):
+        provider("prompt")
 
 
 def test_provider_failure_endpoint_label_omits_credentials_path_and_query() -> None:

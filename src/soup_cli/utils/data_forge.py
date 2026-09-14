@@ -725,7 +725,7 @@ def make_judge_provider_fn(
         try:
             data = resp.json()
             text = data["choices"][0]["message"]["content"]
-        except (KeyError, IndexError, TypeError, ValueError) as exc:
+        except (AttributeError, KeyError, IndexError, TypeError, ValueError) as exc:
             _LOG.debug("vllm judge parse error: %s", exc)
             return _failed("vllm provider returned a malformed response", cause=exc)
         if not isinstance(text, str):
