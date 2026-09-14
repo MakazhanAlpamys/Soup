@@ -275,14 +275,61 @@ def test_missing_lora_rank_or_alpha_raises(tmp_path):
         attach_lorafa_optimizer(trainer, _TCfg(use_lorafa=True, lora=None))
 
 
-def test_lorafa_state_dict_device_fixup(tmp_path):
+def test_lorafa_state_dict_post_hook_is_installed(tmp_path):
+    model = _tiny_peft_model()
+    trainer = _trainer(model, tmp_path)
+    attach_lorafa_optimizer(trainer, _TCfg(use_lorafa=True))
+    assert hasattr(trainer.optimizer, "_optimizer_load_state_dict_post_hooks")
+    assert len(trainer.optimizer._optimizer_load_state_dict_post_hooks) >= 1
+
+
+def test_lorafa_state_dict_device_fixup_cross_device():
     """Verify that load_state_dict casts string-keyed state tensors to the parameter device.
 
     LoraFAOptimizer keys state by string ('...lora') rather than parameter ID.
     PyTorch's default load_state_dict only casts tensors for keys in id_map
-    (which contains only parameter IDs). This test verifies our device fixup
-    ensures all state tensors match the device of their target parameter.
+    (which contains only parameter IDs).
+
+    This test constructs parameters on device='meta' and loads state tensors
+    deserialized on device='cpu'. Without _fixup_lorafa_state_dict_devices,
+    PyTorch leaves the string-keyed state tensors on 'cpu' while parameters are on 'meta'.
+    With our post-hook, the state tensors are cast to the parameter's device ('meta').
+    This test runs and fails on CPU runners if the fixup is omitted or broken.
     """
+    from peft.optimizers.lorafa import LoraFAOptimizer
+
+    from soup_cli.utils.peft_wiring import _fixup_lorafa_state_dict_devices
+
+    p_a = torch.nn.Parameter(torch.empty(4, 4, device="meta"))
+    p_b = torch.nn.Parameter(torch.empty(4, 4, device="meta"))
+    opt = LoraFAOptimizer(
+        [
+            {
+                "params": [p_a, p_b],
+                "names": ["base.lora_A.weight", "base.lora_B.weight"],
+                "scaling_factors": [1.0, 1.0],
+            }
+        ]
+    )
+    _fixup_lorafa_state_dict_devices(opt)
+
+    sd = {
+        "state": {
+            "base.lora": {
+                "step": 1,
+                "exp_avg_B": torch.zeros(4, 4, device="cpu"),
+                "exp_avg_sq_B": torch.zeros(4, 4, device="cpu"),
+            }
+        },
+        "param_groups": opt.state_dict()["param_groups"],
+    }
+    opt.load_state_dict(sd)
+    assert opt.state["base.lora"]["exp_avg_B"].device == torch.device("meta")
+    assert opt.state["base.lora"]["exp_avg_sq_B"].device == torch.device("meta")
+
+
+def test_lorafa_state_dict_device_fixup(tmp_path):
+    """Verify that load_state_dict preserves device matching in trainer workflow."""
     model = _tiny_peft_model()
     trainer = _trainer(model, tmp_path)
     attach_lorafa_optimizer(trainer, _TCfg(use_lorafa=True))
