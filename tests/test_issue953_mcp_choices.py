@@ -49,10 +49,10 @@ def test_export_accepts_and_lists_new_format(
 def test_profile_accepts_and_lists_new_gpu(
     tool_args: dict, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setitem(profiler.GPU_MEMORY, "newgpu", 123)
-    result = registry.tool_profile({**tool_args, "gpu": "NEW-GPU"})
+    monkeypatch.setitem(profiler.GPU_MEMORY, "newcard", 123)
+    result = registry.tool_profile({**tool_args, "gpu": "NEW-CARD"})
     assert result["gpu_memory_gb"] == 123.0
-    with pytest.raises(registry.McpToolError, match="newgpu"):
+    with pytest.raises(registry.McpToolError, match="newcard"):
         registry.tool_profile({**tool_args, "gpu": "bogus"})
 
 
