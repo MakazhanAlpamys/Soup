@@ -100,6 +100,40 @@ class TestTheInstallCellIsPinnedToARelease:
             "the changelog entry was removed"
         )
 
+    def test_the_recorded_outputs_are_from_the_pinned_version(self):
+        """Recorded output can survive a pin bump if nothing re-runs the notebook.
+
+        `test_every_code_cell_has_recorded_output` only proves output exists,
+        not that it came from *this* pin -- bumping the version string without
+        re-running would leave every other check green. Every code cell's
+        printed output is checked for the pinned version string; at least one
+        must carry it (the install cell and the version-print cell both do
+        today), so a pin bump with stale outputs left in place fails here.
+        """
+        src = _install_cell_source()
+        match = PIN_RE.search(src)
+        assert match, "install cell has no version pin to check"
+        version = match.group("version")
+
+        nb = _load_notebook()
+        found_in = []
+        for i, cell in enumerate(nb["cells"]):
+            if cell.get("cell_type") != "code":
+                continue
+            for output in cell.get("outputs", []):
+                text = "".join(output.get("text", []))
+                if not text and "data" in output:
+                    text = "".join(output["data"].get("text/plain", []))
+                if version in text:
+                    found_in.append(i)
+                    break
+
+        assert found_in, (
+            f"no code cell's recorded output mentions {version} -- the pin was "
+            "bumped without re-running the notebook, so every output above is "
+            "from an older run"
+        )
+
 
 class TestEveryImportInTheNotebookStillResolves:
     """A rename on `main` should fail here, not on the next pin bump."""
