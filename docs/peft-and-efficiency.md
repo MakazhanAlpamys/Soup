@@ -322,6 +322,26 @@ training:
 ```
 
 
+## LoRA-FA (Frozen-A LoRA)
+
+Freeze random projection matrices in LoRA $A$ and update only LoRA $B$ matrices using PEFT's `create_lorafa_optimizer` ([arXiv:2308.03303](https://arxiv.org/abs/2308.03303)):
+
+```yaml
+training:
+  lr: 2e-4
+  use_lorafa: true
+  lora:
+    r: 64
+    alpha: 16
+```
+
+### Operating Point & Trade-offs
+- **Activation Memory:** Freezing $A$ avoids storing input activations $x \in \mathbb{R}^{B \times L \times d_{in}}$ for adapter backpropagation. Only $u = A x \in \mathbb{R}^{B \times L \times r}$ is retained, cutting adapter activation footprint by a factor of $\approx r / d_{in}$ (~256× reduction for rank 16 on hidden dim 4096).
+- **Optimizer Memory:** Trains 50% fewer parameters per adapted projection (only $B$), reducing AdamW optimizer states (`exp_avg_B`, `exp_avg_sq_B`) by half for square projections.
+- **Throughput:** Negligible overhead for $(A A^\top)^{-1}$ projection ($r \times r$ linear solve) while eliminating the backward gradient calculation for $A$.
+- **Compatibility:** Supported on the `transformers` backend for `sft`, `pretrain`, and `embedding` tasks. Mutually exclusive with `loraplus_lr_ratio` (which differentiates $A$ and $B$ rates), `use_galore`, non-AdamW optimizers, and the `mlx` backend. Requires explicit `lora.r` and `lora.alpha`.
+
+
 ## rsLoRA (Rank-Stabilized Scaling)
 
 Use rank-stabilized LoRA scaling for better performance at high ranks:
