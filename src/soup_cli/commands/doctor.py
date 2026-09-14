@@ -469,7 +469,7 @@ def _check_mlx():
 
 def _gpu_architecture_name(major: int, minor: int) -> str:
     """Return the NVIDIA architecture family for a compute capability."""
-    if major >= 12 or major == 10:
+    if major >= 12 or major in (10,):
         return "Blackwell"
     if major == 9:
         return "Hopper"
@@ -477,8 +477,12 @@ def _gpu_architecture_name(major: int, minor: int) -> str:
         return "Ada"
     if major == 8:
         return "Ampere"
-    if major == 7 and minor == 5:
+    if major == 7 and minor in (5,):
         return "Turing"
+    if major == 7 and minor in (0, 2):
+        return "Volta"
+    if major == 6 and minor in (0, 1):
+        return "Pascal"
     return "Unknown"
 
 
@@ -491,11 +495,13 @@ def _torch_gpu_arch_supported(torch, major: int, minor: int) -> bool:
 
     target = major * 10 + minor
     for arch in arch_list:
-        if arch == f"sm_{major}{minor}":
-            return True
+        if arch.startswith("sm_"):
+            sm_target = arch.removeprefix("sm_").rstrip("a")
+            if sm_target == f"{major}{minor}":
+                return True
         if arch.startswith("compute_"):
             try:
-                ptx_target = int(arch.removeprefix("compute_"))
+                ptx_target = int(arch.removeprefix("compute_").rstrip("a"))
             except ValueError:
                 continue
             if ptx_target <= target:
@@ -508,7 +514,7 @@ def _format_gpu_capability(torch, idx: int) -> tuple[str, bool]:
     """Return ``(capability_text, supported_by_torch)`` for one GPU."""
     try:
         major, minor = torch.cuda.get_device_capability(idx)
-    except (RuntimeError, AssertionError):
+    except (AttributeError, RuntimeError, AssertionError):
         return "unknown", False
 
     architecture = _gpu_architecture_name(major, minor)
@@ -522,17 +528,30 @@ def _get_precision_capabilities(torch) -> dict[str, tuple[bool, bool | None]]:
         _torchao_available,
         is_blackwell_gpu,
     )
-    from soup_cli.utils.fp8 import is_fp8_available, is_fp8_gpu_supported
+    from soup_cli.utils.fp8 import is_fp8_gpu_supported
 
     try:
         bf16_supported = bool(torch.cuda.is_bf16_supported())
     except (AttributeError, RuntimeError, AssertionError):
         bf16_supported = False
 
+    torchao_available = bool(_torchao_available())
+
+    nvfp4_software = False
+    if torchao_available:
+        try:
+            from torchao import quantization as ao_q
+
+            nvfp4_software = hasattr(ao_q, "NVFP4Config") and hasattr(
+                ao_q, "quantize_"
+            )
+        except ImportError:
+            nvfp4_software = False
+
     return {
         "BF16": (bf16_supported, None),
-        "FP8": (bool(is_fp8_gpu_supported()), bool(is_fp8_available())),
-        "NVFP4": (bool(is_blackwell_gpu()), bool(_torchao_available())),
+        "FP8": (bool(is_fp8_gpu_supported()), torchao_available),
+        "NVFP4": (bool(is_blackwell_gpu()), nvfp4_software),
     }
 
 
@@ -553,10 +572,13 @@ def _check_gpu():
                 capability, torch_arch_supported = _format_gpu_capability(torch, idx)
                 arch_warning = ""
                 if not torch_arch_supported:
+                    advisory = _detect_gpu_arch_mismatch_advisory()
                     arch_warning = (
                         " [bold red]Torch build does not include this GPU "
                         "architecture[/]"
                     )
+                    if advisory:
+                        arch_warning += f" [dim]{advisory}[/]"
 
                 gpus.append(
                     f"  GPU {idx}: [bold]{name}[/] "
@@ -692,6 +714,23 @@ def _nvidia_smi_cuda_version() -> tuple[int, int] | None:
     if completed.returncode != 0:
         return None
     return _parse_cuda_version((completed.stdout or "") + (completed.stderr or ""))
+
+
+def _detect_gpu_arch_mismatch_advisory() -> str:
+    """Return a CUDA wheel reinstall hint for an unsupported GPU architecture."""
+    driver_cuda = _nvidia_smi_cuda_version()
+    if driver_cuda is None:
+        return (
+            "Try reinstalling a CUDA-enabled PyTorch build that supports "
+            "your GPU architecture."
+        )
+
+    wheel = _torch_cuda_wheel_tag(driver_cuda)
+    index_url = f"https://download.pytorch.org/whl/{wheel}"
+    return (
+        "Reinstall a CUDA-enabled PyTorch build for your driver: "
+        f"`pip install torch --index-url {index_url}`"
+    )
 
 
 def _detect_gpu_hw_without_torch_cuda() -> str:
