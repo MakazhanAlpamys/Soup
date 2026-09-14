@@ -168,6 +168,12 @@ def doctor(
                     f'Downgrade {pkg_name}: pip install "{pkg_name}>={min_ver},<{max_excl}"'
                 )
                 fix_parts.append(f'"{pkg_name}>={min_ver},<{max_excl}"')
+                # Asymmetry, on purpose (#874): here only a *required* DEPS row
+                # past its ceiling blocks, whereas the extra-group check below
+                # blocks unconditionally. An optional DEPS row past a ceiling
+                # would exit 0 while the same package in an extra group exits 1.
+                # Unreachable today (_MAX_EXCLUSIVE and the optional DEPS rows
+                # do not intersect), but written down so it is not rediscovered.
                 if required:
                     core_broken = True
             elif _version_ok(version_str, min_ver):
