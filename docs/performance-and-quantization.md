@@ -681,6 +681,12 @@ data:
   chat_template: chatml   # or: llama3, qwen2.5, mistral, gemma3, phi4, deepseek-r1, or a raw Jinja string
 ```
 
+The override is installed before conversational SFT, preference, reward-model,
+GRPO, or Online DPO data is rendered. The saved tokenizer keeps the same template
+for inference. Tasks that do not render chat (`pretrain`, `embedding`, `classifier`,
+`reranker`, and `cross_encoder`) reject `data.chat_template` instead of silently
+ignoring it.
+
 Raw Jinja strings are validated: null bytes / >64KB / filesystem-touching directives (`{% include %}`, `{% import %}`, `{% from %}`, `{% macro %}`, `{% extends %}`) are rejected at config-load.
 
 ### OOM-probe auto batch size

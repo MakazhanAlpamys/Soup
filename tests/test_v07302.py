@@ -914,8 +914,8 @@ class TestAHostileEvidenceFloorIsBoundedAndLoud:
 class TestUntrustedNamesCannotDriveTheTerminal:
     """``rich.markup.escape`` neutralises Rich's ``[...]`` syntax and NOTHING
     else — a raw ESC byte survives it. Benchmark and axis names come out of an
-    untrusted evidence file, so both render paths strip C0/DEL first (the
-    ``_for_terminal`` pattern already used in six other command modules)."""
+    untrusted evidence file, so both render paths strip C0/DEL first (via
+    ``soup_cli.utils.terminal``, shared with every other command module)."""
 
     HOSTILE = "x\x1b]0;PWNED\x07\x1b[2Jy"
 

@@ -11,6 +11,7 @@ from typing import Any, Optional
 MAX_EVAL_TASKS = 10_000
 MAX_REGEX_PATTERN_LEN = 1_000
 MAX_REGEX_INPUT_LEN = 50_000
+TASK_NAME = "custom"
 
 VALID_SCORING = {
     "exact", "contains", "regex", "semantic",

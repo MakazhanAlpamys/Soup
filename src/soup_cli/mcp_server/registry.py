@@ -14,6 +14,7 @@ from __future__ import annotations
 import csv
 import json
 import os
+import re
 import shlex
 import sys
 from dataclasses import asdict, dataclass
@@ -27,6 +28,7 @@ from soup_cli.mcp_server.execution import (
     digest_file,
 )
 from soup_cli.utils.paths import enforce_under_cwd_and_no_symlink, is_under_cwd
+from soup_cli.utils.terminal import strip_control
 
 if TYPE_CHECKING:
     from soup_cli.config.schema import SoupConfig
@@ -37,14 +39,6 @@ _MAX_JSON_BYTES = 16 * 1024 * 1024
 # be able to point `data` at an arbitrarily large file and exhaust memory
 # (mirrors advise's own 1 GiB cap; security-review MEDIUM).
 _MAX_DATA_BYTES = 1024 * 1024 * 1024
-
-# C0 control bytes (keep tab / newline / CR) + DEL, stripped from every string
-# in a handler result before it reaches the MCP client. ``rich.markup.escape``
-# only neutralises ``[...]`` markup, not raw ESC/OSC sequences a malicious
-# dataset string could smuggle into a client's terminal. Mirrors
-# ``commands/data_doctor.py::_CONTROL_STRIP_TABLE``.
-_CONTROL_STRIP_TABLE = {i: None for i in range(0x20) if i not in (0x09, 0x0A, 0x0D)}
-_CONTROL_STRIP_TABLE[0x7F] = None
 
 
 class McpToolError(Exception):
@@ -81,7 +75,7 @@ def _sanitize(obj: Any) -> Any:
     dicts and lists. Applied to every handler result as defence-in-depth.
     """
     if isinstance(obj, str):
-        return obj.translate(_CONTROL_STRIP_TABLE)
+        return strip_control(obj)
     if isinstance(obj, Mapping):
         return {_sanitize(k): _sanitize(v) for k, v in obj.items()}
     if isinstance(obj, (list, tuple)):
@@ -546,84 +540,71 @@ def tool_diagnose_evidence(args: dict) -> dict:
     return report.to_dict()
 
 
+# The shared evidence decoder (#758) quotes the offending value with ``!r``/
+# ``repr()`` every time it echoes evidence-file content, and never quotes the
+# structural part of its message. So redacting every quoted run drops exactly
+# the untrusted half and keeps the schema path that says what was refused.
+# Each alternative tracks DELIMITERS, not merely balance. When a value holds
+# both quote characters ``repr()`` delimits with single quotes and
+# backslash-escapes the internal ones; a naive ``'[^']*'`` then pairs an escaped
+# quote with a real delimiter, the pairing slips by one, and the evidence text
+# between them survives. Consuming ``\\.`` inside each run keeps an escaped quote
+# from ending it.
+# The trailing alternative redacts from an UNTERMINATED quote to end-of-string:
+# ``repr()`` always balances its quotes, so that cannot happen today, but a
+# boundary that fails open on one malformed message is the wrong default.
+_EVIDENCE_ERROR_QUOTED = re.compile(
+    r"'(?:\\.|[^'\\])*'|\"(?:\\.|[^\"\\])*\"|['\"].*\Z", re.DOTALL
+)
+_EVIDENCE_ERROR_REDACTION = "<redacted>"
+
+
+def _evidence_error_message(exc: Exception) -> str:
+    """Strip evidence-file content out of a shared-decoder error message.
+
+    ``McpToolError`` is documented above as a path-free/user-input-free message,
+    and every other handler raises a fixed string. The evidence decoder is
+    shared with the CLI (#758), where naming the offending value on stderr is
+    the point, so the sanitising happens HERE at the MCP boundary rather than by
+    degrading the CLI diagnostic. Schema field names outside quotes are kept:
+    they are constants from ``EVIDENCE_SCHEMA_FIELDS`` rather than user input,
+    and the v0.73.2 contract test asserts the refusal names the block it refused.
+    """
+    redacted = _EVIDENCE_ERROR_QUOTED.sub(_EVIDENCE_ERROR_REDACTION, str(exc)).strip()
+    if not redacted:
+        return f"invalid evidence ({type(exc).__name__})"
+    return f"{redacted} ({type(exc).__name__})"
+
+
 def tool_ship_evidence(args: dict) -> dict:
     """`soup ship --evidence` — SHIP / DON'T-SHIP verdict from pre-computed scores."""
     from soup_cli.utils.ship_verdict import (
-        SUPPORTED_TASK_MODES,
-        build_task_win,
-        compute_benchmark_deltas,
-        decide_ship,
+        DEFAULT_FORGETTING_THRESHOLD,
         floor_exceeds_threshold,
-        noise_floor_from_evidence,
+        verdict_from_evidence,
         verdict_to_dict,
     )
 
     payload = _read_json_under_cwd(_require_str(args, "evidence"), "evidence")
-    threshold = args.get("forgetting_threshold", 0.05)
-    if isinstance(threshold, bool) or not isinstance(threshold, (int, float)):
-        raise McpToolError("'forgetting_threshold' must be a number")
-    threshold = float(threshold)
-    # Inclusive [0, 1] matches ship_verdict._validate_threshold + the CLI (a
-    # 0.0 zero-tolerance gate is legitimate) (code-review LOW).
-    if not 0.0 <= threshold <= 1.0:
-        raise McpToolError("'forgetting_threshold' must be in [0, 1]")
-
-    task = payload.get("task")
-    if not isinstance(task, dict):
-        raise McpToolError("evidence.task must be an object with mode/base/tuned")
-    mode = task.get("mode", "metric")
-    if mode not in SUPPORTED_TASK_MODES:
-        raise McpToolError("evidence.task.mode must be 'metric' or 'judge_score'")
-    if "base" not in task or "tuned" not in task:
-        raise McpToolError("evidence.task needs both 'base' and 'tuned'")
-    # v0.73.2 — the evidence schema gained an optional `noise_floor` block, and
-    # this reader must honour it exactly as `commands/ship.py` does. Dropping it
-    # here would make the SAME evidence file replay to a DIFFERENT verdict
-    # through the MCP tool than through the CLI.
+    threshold = args.get("forgetting_threshold", DEFAULT_FORGETTING_THRESHOLD)
     try:
-        stored_floor = noise_floor_from_evidence(payload.get("noise_floor"))
-    except (TypeError, ValueError) as exc:
-        raise McpToolError(f"invalid evidence.noise_floor ({type(exc).__name__})") from exc
-
-    try:
-        task_win = build_task_win(
-            mode, task["base"], task["tuned"], noise_floor=stored_floor
+        verdict = verdict_from_evidence(
+            payload, forgetting_threshold=threshold
         )
-    except (TypeError, ValueError) as exc:
-        raise McpToolError(f"invalid evidence.task ({type(exc).__name__})") from exc
-
-    raw_bench = payload.get("benchmarks", {})
-    if not isinstance(raw_bench, dict):
-        raise McpToolError("evidence.benchmarks must be an object of {name: {base, tuned}}")
-    base_scores: dict = {}
-    tuned_scores: dict = {}
-    for name, entry in raw_bench.items():
-        if not isinstance(entry, dict) or "base" not in entry or "tuned" not in entry:
-            raise McpToolError("each evidence.benchmarks entry needs 'base' and 'tuned'")
-        base_scores[str(name)] = entry["base"]
-        tuned_scores[str(name)] = entry["tuned"]
-    try:
-        deltas = compute_benchmark_deltas(
-            base_scores,
-            tuned_scores,
-            forgetting_threshold=threshold,
-            noise_floor=stored_floor,
-        )
-        verdict = decide_ship(
-            task_win, deltas, forgetting_threshold=threshold, noise_floor=stored_floor
-        )
-    except (TypeError, ValueError) as exc:
-        raise McpToolError(f"invalid evidence.benchmarks ({type(exc).__name__})") from exc
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise McpToolError(_evidence_error_message(exc)) from exc
     payload_out = verdict_to_dict(verdict)
     # An evidence-supplied floor WIDENS the gate, and the CLI announces that on
     # stderr. This transport cannot: stdout is the JSON-RPC channel and the
     # server redirects prints away from it. So the warning rides in the RESULT,
     # which is the MCP-native equivalent — the point is that neither reader is
     # the quiet one an attacker would pick.
-    widened = floor_exceeds_threshold(stored_floor, threshold)
+    widened = floor_exceeds_threshold(
+        verdict.noise_floor, verdict.forgetting_threshold
+    )
     payload_out["warnings"] = [
         f"noise floor {value:.4f} on {name!r} exceeds forgetting_threshold "
-        f"{threshold:.4f}; that axis is gated LOOSER than requested"
+        f"{verdict.forgetting_threshold:.4f}; that axis is gated LOOSER than requested"
         for name, value in widened
     ]
     return payload_out

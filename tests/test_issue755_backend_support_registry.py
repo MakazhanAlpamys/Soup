@@ -185,6 +185,20 @@ def test_a_setting_the_backend_ignores_is_reported(config_at):
     assert "training.seed" in reported
 
 
+def test_new_mlx_gaps_use_liger_and_neftune_alpha_are_reported(config_at):
+    """#903: accepted-but-dropped fields must be reported, not all-cleared."""
+    from soup_cli.config.backend_support import check_config
+    from soup_cli.config.loader import load_config
+
+    cfg = load_config(
+        config_at(
+            "sft", "mlx", "  use_liger: true\n              neftune_alpha: 5"
+        )
+    )
+    reported = {e.field for e in check_config(cfg)}
+    assert {"training.use_liger", "training.neftune_alpha"} <= reported
+
+
 def test_only_fields_the_user_actually_set_are_reported(config_at):
     """Not all 275 — and not the other MLX gaps the user never touched."""
     from soup_cli.config.backend_support import check_config
@@ -290,6 +304,23 @@ def test_doctor_exits_non_zero_when_the_config_cannot_be_read(
     # 2 specifically, not merely non-zero: docs/commands.md:218 documents it,
     # and all three unreadable shapes must agree.
     assert excinfo.value.exit_code == 2
+
+
+def test_all_clear_states_what_was_checked(config_at, capsys, monkeypatch):
+    """#903: the all-clear must name its evidence, not claim a universal."""
+    from rich.console import Console
+
+    import soup_cli.commands.doctor as doctor_module
+    from soup_cli.commands.doctor import doctor
+    from soup_cli.config.backend_support import unsupported_for
+
+    monkeypatch.setattr(doctor_module, "console", Console(width=200))
+    path = config_at("sft", "mlx")
+    doctor(nccl=False, disk=False, config=path)
+
+    out = strip_ansi(capsys.readouterr().out)
+    n = len(unsupported_for("sft", "mlx"))
+    assert f"None of the {n} setting(s) known to be unread" in out
 
 
 @pytest.mark.parametrize("width", [35, 60, 200])

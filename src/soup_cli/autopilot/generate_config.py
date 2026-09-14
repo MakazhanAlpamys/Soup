@@ -107,9 +107,6 @@ def build_soup_config(
             use_flash_attn=perf_flags["use_flash_attn"],
             use_liger=perf_flags["use_liger"],
             gradient_checkpointing=perf_flags["gradient_checkpointing"],
-            forgetting_detection=True,
-            checkpoint_intelligence=True,
-            early_stop_on_regression=True,
         ),
         output="./output",
     )

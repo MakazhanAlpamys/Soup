@@ -209,6 +209,15 @@ class MLXSFTTrainerWrapper:
             unsupported.append("Ring Attention")
         if tcfg.use_flash_attn:
             unsupported.append("FlashAttention (MLX has its own attention kernels)")
+        if tcfg.use_liger:
+            unsupported.append(
+                "training.use_liger (Liger fused kernels have no MLX implementation)"
+            )
+        if tcfg.neftune_alpha is not None:
+            unsupported.append(
+                "training.neftune_alpha (NEFT noise is applied on the "
+                "transformers training path, not MLX)"
+            )
         # #353's fourth criterion. #381 threaded training.seed through every
         # transformers task wrapper; MLX has its own RNG (mx.random) and reads
         # neither field, so a seeded MLX run is silently unseeded. `is not None`

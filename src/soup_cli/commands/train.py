@@ -33,6 +33,39 @@ _HW_FIT_OPTIMIZERS = frozenset({
     "lomo", "adalomo", "schedule_free_adamw",
 })
 
+_UNWIRED_TRAINING_TUNABLES = (
+    "forgetting_eval_steps",
+    "forgetting_threshold",
+    "forgetting_benchmark",
+    "forgetting_stop",
+    "checkpoint_eval_steps",
+    "checkpoint_eval_metric",
+    "checkpoint_eval_tasks",
+    "checkpoint_keep_top",
+    "early_stop_patience",
+)
+
+
+def _nondefault_unwired_training_settings(training_config) -> list[str]:
+    """Return staged training settings whose value differs from the schema default."""
+    fields = type(training_config).model_fields
+    enabled_flags = [
+        name
+        for name, enabled in (
+            ("forgetting_detection", training_config.forgetting_detection),
+            ("checkpoint_intelligence", training_config.checkpoint_intelligence),
+            ("early_stop_on_regression", training_config.early_stop_on_regression),
+            ("convergence_detection", training_config.convergence_detection),
+        )
+        if enabled
+    ]
+    changed_tunables = [
+        name
+        for name in _UNWIRED_TRAINING_TUNABLES
+        if getattr(training_config, name) != fields[name].default
+    ]
+    return enabled_flags + changed_tunables
+
 
 def _format_training_complete_loss(result: dict) -> str:
     """Render only a loss comparison that the trainer actually measured."""
@@ -752,20 +785,10 @@ def train(
         cfg.training.eval_gate = EvalGateConfig(enabled=True, suite=gate)
         console.print(f"[green]Eval gate enabled[/] with suite: {gate}")
 
-    # Honesty guard: these knobs are accepted (and `soup autopilot` turns them
-    # on by default) but are not enforced mid-training in this build — the eval
-    # gate wired above is the live safety net. Warn instead of silently no-op'ing
-    # so a "zero-config" run does not advertise protection it does not have.
-    _unwired_gates = [
-        name
-        for name, on in (
-            ("forgetting_detection", cfg.training.forgetting_detection),
-            ("checkpoint_intelligence", cfg.training.checkpoint_intelligence),
-            ("early_stop_on_regression", cfg.training.early_stop_on_regression),
-            ("convergence_detection", cfg.training.convergence_detection),
-        )
-        if on
-    ]
+    # Honesty guard: these staged knobs are accepted but are not enforced
+    # mid-training in this build. Warn for every non-default member of the
+    # families, not only their enable flags, so a tuned no-op is never silent.
+    _unwired_gates = _nondefault_unwired_training_settings(cfg.training)
     if _unwired_gates:
         console.print(
             "[yellow]Note:[/] "

@@ -3314,52 +3314,69 @@ class TrainingConfig(BaseModel):
     # Forgetting detection
     forgetting_detection: bool = Field(
         default=False,
-        description="Enable periodic general-knowledge eval to detect catastrophic forgetting",
+        description=(
+            "Staged, not enforced during training: enable periodic general-knowledge "
+            "eval to detect catastrophic forgetting"
+        ),
     )
     forgetting_eval_steps: int = Field(
         default=100, ge=10, le=10000,
-        description="Run forgetting eval every N steps",
+        description="Staged, not enforced during training: run forgetting eval every N steps",
     )
     forgetting_threshold: float = Field(
         default=0.10, ge=0.01, le=0.50,
-        description="Warn if accuracy drops > threshold from baseline (0.01-0.50)",
+        description=(
+            "Staged, not enforced during training: warn if accuracy drops beyond "
+            "this threshold (0.01-0.50)"
+        ),
     )
     forgetting_benchmark: Literal["mini_mmlu", "mini_common_sense", "mini_instruction"] = Field(
         default="mini_mmlu",
-        description="Built-in mini benchmark used for forgetting detection",
+        description=(
+            "Staged, not enforced during training: built-in mini benchmark for "
+            "forgetting detection"
+        ),
     )
     forgetting_stop: bool = Field(
         default=False,
-        description="Auto-stop training on severe forgetting (red-level alert)",
+        description="Staged, not enforced during training: stop on severe forgetting",
     )
     # Checkpoint intelligence
     checkpoint_intelligence: bool = Field(
         default=False,
-        description="Enable auto-best-checkpoint tracking by quality (not just loss)",
+        description=(
+            "Staged, not enforced during training: track best checkpoints by quality"
+        ),
     )
     checkpoint_eval_steps: int = Field(
         default=200, ge=50, le=10000,
-        description="Run checkpoint quality eval every N steps",
+        description="Staged, not enforced during training: evaluate checkpoint quality",
     )
     checkpoint_eval_metric: Literal["judge", "mmlu", "custom", "composite"] = Field(
         default="composite",
-        description="Metric used for checkpoint quality selection",
+        description="Staged, not enforced during training: checkpoint quality metric",
     )
     checkpoint_eval_tasks: Optional[str] = Field(
         default=None,
-        description="Optional JSONL file with custom eval tasks for checkpoint scoring",
+        description=(
+            "Staged, not enforced during training: JSONL tasks for checkpoint scoring"
+        ),
     )
     checkpoint_keep_top: int = Field(
         default=3, ge=1, le=20,
-        description="Keep top-N checkpoints by quality, delete the rest",
+        description="Staged, not enforced during training: keep top-N quality checkpoints",
     )
     early_stop_on_regression: bool = Field(
         default=False,
-        description="Stop training when quality regresses across consecutive evals",
+        description=(
+            "Staged, not enforced during training: stop after consecutive regressions"
+        ),
     )
     early_stop_patience: int = Field(
         default=2, ge=1, le=10,
-        description="Consecutive regressions before early stopping (1-10)",
+        description=(
+            "Staged, not enforced during training: regressions before stopping (1-10)"
+        ),
     )
     # Eval-Gated Training — Part B of v0.26.0
     eval_gate: Optional["EvalGateConfig"] = Field(
@@ -4283,6 +4300,23 @@ class SoupConfig(BaseModel):
                 "experiment_name must not contain path separators (/ \\ :) or null bytes"
             )
         return value
+
+    @model_validator(mode="after")
+    def _validate_chat_template_supported_tasks(self) -> "SoupConfig":
+        """Reject chat-template overrides on trainers that never render chat."""
+        unsupported = {"pretrain", "embedding", "classifier", "reranker", "cross_encoder"}
+        if (
+            self.data.chat_template is not None
+            and self.task in unsupported
+            # Streaming supports only SFT/pretrain and has its own task-specific
+            # rejection below; keep that more actionable error when enabled.
+            and not self.training.stream_layers
+        ):
+            raise ValueError(
+                "data.chat_template is not used by "
+                f"task={self.task!r}; remove it or choose a conversational training task"
+            )
+        return self
 
     @model_validator(mode="before")
     @classmethod

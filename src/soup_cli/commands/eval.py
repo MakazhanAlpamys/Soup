@@ -1076,12 +1076,13 @@ def _save_custom_results(
     run_id: Optional[str],
 ) -> None:
     """Save custom eval results to the experiment tracker."""
+    from soup_cli.eval.custom import TASK_NAME
     from soup_cli.experiment.tracker import ExperimentTracker
 
     tracker = ExperimentTracker()
     tracker.save_eval_result(
         model_path=model_path,
-        benchmark="custom",
+        benchmark=TASK_NAME,
         score=eval_results.accuracy,
         details={
             "total": eval_results.total,

@@ -596,33 +596,31 @@ Records peak memory each step. When pressure crosses the threshold, recommends a
 
 ## Training Intelligence (Forgetting + Checkpoint Quality)
 
-Two optional in-training evaluators that run alongside your main loss curve.
+The `forgetting_*`, `checkpoint_*`, and `early_stop_on_regression` settings are
+reserved for planned in-training callbacks. They are accepted by the schema but
+are not enforced during training in this build. `soup train` warns when one is
+set away from its default, and Autopilot does not enable or advertise them.
 
-**Forgetting detection** — runs a small benchmark during training to detect catastrophic forgetting (quality regression on abilities the base model had). Can auto-stop if forgetting exceeds a threshold.
-
-```yaml
-training:
-  forgetting_detection: true
-  forgetting_eval_steps: 500       # How often to evaluate (10-10,000)
-  forgetting_benchmark: mmlu        # Baseline benchmark to track
-  forgetting_threshold: 0.10        # Regression threshold (0.01-0.50)
-  forgetting_stop: true             # Halt training on breach (default: warn only)
-```
-
-**Checkpoint intelligence** — tracks a quality metric across checkpoints and keeps only the top-N by eval score (not by loss). Pairs nicely with `early_stop_on_regression`.
+Use the live eval gate for regression detection and automatic stopping today:
 
 ```yaml
+base: meta-llama/Llama-3.1-8B-Instruct
+task: sft
+data:
+  train: ./data/chat.jsonl
 training:
-  checkpoint_intelligence: true
-  checkpoint_eval_steps: 500
-  checkpoint_eval_metric: accuracy   # or: bleu, rouge, exact_match, custom
-  checkpoint_eval_tasks: ./evals/sanity.jsonl
-  checkpoint_keep_top: 3             # Keep the 3 best (1-20)
-  early_stop_on_regression: true
-  early_stop_patience: 3             # Stop after N regressions (1-10)
+  epochs: 5
+  eval_gate:
+    enabled: true
+    suite: ./evals/gate.yaml
+    every_n_epochs: 1
+    regression_threshold: 0.05
+    baseline: registry://llama31-chat-v1
+    on_regression: stop
 ```
 
-Checkpoint pruning refuses to delete symlinks or paths outside the output directory — safe to run on any `output:` path.
+The gate runs at epoch boundaries. See [Eval-Gated Training](evaluation.md#eval-gated-training)
+for the suite format and post-training invocation.
 
 
 ## GaLore (Memory-Efficient Full-Parameter Training)

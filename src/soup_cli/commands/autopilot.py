@@ -145,9 +145,7 @@ def autopilot_cmd(
             f"Epochs: {cfg.training.epochs}\n"
             f"Max length: {cfg.data.max_length}\n"
             f"Flash Attention: {cfg.training.use_flash_attn}\n"
-            f"Liger Kernel: {cfg.training.use_liger}\n"
-            f"Forgetting detection: {cfg.training.forgetting_detection}\n"
-            f"Checkpoint intelligence: {cfg.training.checkpoint_intelligence}",
+            f"Liger Kernel: {cfg.training.use_liger}",
             title="Autopilot Decisions",
         )
     )
