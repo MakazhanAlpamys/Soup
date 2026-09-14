@@ -95,6 +95,13 @@ _MLX_SFT: tuple[SupportEntry, ...] = (
         trainer_reads=True,
     ),
     SupportEntry(
+        "training.use_lorafa",
+        IGNORED,
+        "LoRA-FA has no MLX implementation",
+        issue=725,
+        trainer_reads=True,
+    ),
+    SupportEntry(
         "training.use_ring_attention",
         IGNORED,
         "Ring Attention has no MLX path",
