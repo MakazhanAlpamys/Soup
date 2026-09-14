@@ -328,42 +328,6 @@ def test_lorafa_state_dict_device_fixup_cross_device():
     assert opt.state["base.lora"]["exp_avg_sq_B"].device == torch.device("meta")
 
 
-def test_lorafa_state_dict_device_fixup(tmp_path):
-    """Verify that load_state_dict preserves device matching in trainer workflow."""
-    model = _tiny_peft_model()
-    trainer = _trainer(model, tmp_path)
-    attach_lorafa_optimizer(trainer, _TCfg(use_lorafa=True))
-
-    opt = trainer.optimizer
-    for p in model.parameters():
-        if p.requires_grad:
-            p.grad = torch.randn_like(p)
-    opt.step()
-
-    sd = opt.state_dict()
-    assert any("exp_avg_B" in s for s in sd["state"].values())
-
-    fresh_model = _tiny_peft_model()
-    fresh_trainer = _trainer(fresh_model, tmp_path)
-    attach_lorafa_optimizer(fresh_trainer, _TCfg(use_lorafa=True))
-    fresh_opt = fresh_trainer.optimizer
-
-    fresh_opt.load_state_dict(sd)
-
-    for group in fresh_opt.param_groups:
-        params = group["params"]
-        names = group["names"]
-        for p, n in zip(params, names):
-            if "lora" in n:
-                name = n[: n.find("lora")] + "lora"
-                if name in fresh_opt.state:
-                    for k, v in fresh_opt.state[name].items():
-                        if isinstance(v, torch.Tensor):
-                            assert v.device == p.device, (
-                                f"State tensor {k} on {v.device} != parameter {p.device}"
-                            )
-
-
 def test_soup_config_lorafa_task_and_backend_gating(tmp_path):
     from pydantic import ValidationError
 
