@@ -24,6 +24,7 @@ from soup_cli.autopilot.decisions import (
     detect_prequantized_format_from_path,
 )
 from soup_cli.config.schema import (
+    SFT_KERNEL_AWARE_TASKS,
     DataConfig,
     LoraConfig,
     SoupConfig,
@@ -104,8 +105,12 @@ def build_soup_config(
                 target_modules="auto",
                 use_dora=peft["use_dora"],
             ),
-            use_flash_attn=perf_flags["use_flash_attn"],
-            use_liger=perf_flags["use_liger"],
+            # Only the SFT-family trainers read either flag; every other
+            # task would silently ignore them, so don't auto-enable there.
+            use_flash_attn=(
+                perf_flags["use_flash_attn"] and task in SFT_KERNEL_AWARE_TASKS
+            ),
+            use_liger=perf_flags["use_liger"] and task in SFT_KERNEL_AWARE_TASKS,
             gradient_checkpointing=perf_flags["gradient_checkpointing"],
         ),
         output="./output",

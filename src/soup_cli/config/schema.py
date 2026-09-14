@@ -4229,6 +4229,12 @@ def remap_root_level_misplaced_keys(values):
     return new_values
 
 
+# task values whose trainer wrapper subclasses SFTTrainerWrapper and so reads
+# training.use_flash_attn / training.use_liger (sft.py:_setup_transformers,
+# inherited by tts.py via super()). Every other task ignores both fields.
+SFT_KERNEL_AWARE_TASKS: frozenset[str] = frozenset({"sft", "tts"})
+
+
 class SoupConfig(BaseModel):
     """Root config for soup.yaml."""
 
@@ -4861,6 +4867,25 @@ class SoupConfig(BaseModel):
             raise ValueError(
                 f"training.train_on_eot=true requires task in "
                 f"{sorted(sft_family_tasks)}; got task={self.task!r}"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_kernel_flags_task_gate(self) -> "SoupConfig":
+        """#806: use_flash_attn / use_liger are read only by the SFT-family
+        trainer (sft.py, inherited by tts.py's ``TTSTrainerWrapper``); every
+        other task ignores both, so reject rather than silently no-op.
+        """
+        tcfg = self.training
+        if tcfg.use_liger and self.task not in SFT_KERNEL_AWARE_TASKS:
+            raise ValueError(
+                f"training.use_liger=true requires task in "
+                f"{sorted(SFT_KERNEL_AWARE_TASKS)}; got task={self.task!r}"
+            )
+        if tcfg.use_flash_attn and self.task not in SFT_KERNEL_AWARE_TASKS:
+            raise ValueError(
+                f"training.use_flash_attn=true requires task in "
+                f"{sorted(SFT_KERNEL_AWARE_TASKS)}; got task={self.task!r}"
             )
         return self
 
