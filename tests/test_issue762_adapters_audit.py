@@ -123,7 +123,17 @@ def _pin_console(monkeypatch):
 
     import soup_cli.commands.adapters as adapters_module
 
-    monkeypatch.setattr(adapters_module, "console", Console(width=200))
+    monkeypatch.setattr(
+        adapters_module,
+        "console",
+        # force_terminal=False as well as a fixed width (#886). Width alone
+        # leaves colour to the environment: under FORCE_COLOR Rich colourises
+        # and splits every asserted substring with SGR codes, so
+        # `"2 divergence(s)" in res.output` fails for a reason that has
+        # nothing to do with the count. Pinning both makes the fixture answer
+        # the same way in every shell.
+        Console(width=200, force_terminal=False),
+    )
 
 
 class TestAgreementAndDivergence:
