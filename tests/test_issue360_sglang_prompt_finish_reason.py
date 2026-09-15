@@ -131,7 +131,7 @@ class TestSglangUsesSharedPromptBuilder:
         )
         posted = MagicMock()
         posted.json.return_value = {"text": "hi there", "meta_info": {}}
-        with mock.patch("requests.post", return_value=posted) as post:
+        with mock.patch("httpx.post", return_value=posted) as post:
             self._post(app, {"messages": [{"role": "user", "content": "hello"}]})
         runtime.generate.assert_not_called()
         sent_prompt = "".join(chr(i) for i in post.call_args.kwargs["json"]["input_ids"])
