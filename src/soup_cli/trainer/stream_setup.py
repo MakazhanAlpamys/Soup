@@ -57,11 +57,16 @@ def _stream_source_line(stats: dict) -> str:
         if stats["pinned"] and stats.get("pinned_bytes"):
             line += f" ({stats['pinned_bytes'] / 1e9:.2f} GB page-locked)"
         return line
-    return (
+    line = (
         f"streamed from DISK ({stats['disk_bytes'] / 1e9:.2f} GB on an NVMe volume) "
         f"by an async reader, read_ahead={stats['read_ahead']}, "
         f"{stats['store_bytes'] / 1e6:.0f} MB {pinned} host staging"
     )
+    # Since #974 the staging lives in the same power-of-two arenas as the RAM
+    # store, so the disk tier can say what was page-locked too.
+    if stats["pinned"] and stats.get("pinned_bytes"):
+        line += f" ({stats['pinned_bytes'] / 1e9:.2f} GB page-locked)"
+    return line
 
 
 def _validate_qwen4_streaming_mode(*, arch: str, task: str, quant: str) -> None:

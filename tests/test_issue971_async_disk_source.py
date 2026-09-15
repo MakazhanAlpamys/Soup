@@ -338,13 +338,13 @@ class TestFailuresAreLoudAndNeverHang:
         import soup_cli.utils.async_disk_source as mod
 
         gate = threading.Event()
-        real = mod.read_into
+        real = mod.read_range_into
 
-        def held(handle, entry, dst):
+        def held(handle, start, view, expected):
             assert gate.wait(timeout=10.0), "the test never released the reader"
-            real(handle, entry, dst)
+            real(handle, start, view, expected)
 
-        monkeypatch.setattr(mod, "read_into", held)
+        monkeypatch.setattr(mod, "read_range_into", held)
         shard_dir = _shards(tmp_path)
         source = AsyncDiskSource(
             shard_dir, N_LAYERS, _spec(shard_dir), read_ahead=1, pin=False
@@ -473,17 +473,18 @@ class TestTheLivenessChecksCanActuallyFire:
     def test_a_read_that_never_returns_is_refused_by_the_limit(
         self, tmp_path, monkeypatch
     ):
-        """The reachable wedge. A reader blocked inside ``read_into`` keeps the
-        layer legitimately in flight, so no amount of state-inspection can tell
-        it from a slow read — only elapsed time can."""
+        """The reachable wedge. A range worker blocked inside ``read_range_into``
+        keeps the layer legitimately in flight (the reader thread is waiting on
+        it), so no amount of state-inspection can tell it from a slow read —
+        only elapsed time can."""
         import soup_cli.utils.async_disk_source as mod
 
         blocked = threading.Event()
 
-        def never_returns(handle, entry, dst):
+        def never_returns(handle, start, view, expected):
             blocked.wait(timeout=30.0)
 
-        monkeypatch.setattr(mod, "read_into", never_returns)
+        monkeypatch.setattr(mod, "read_range_into", never_returns)
         monkeypatch.setattr(mod, "_MAX_READ_SECONDS", 0.25)
 
         shard_dir = _shards(tmp_path)
@@ -505,13 +506,13 @@ class TestTheLivenessChecksCanActuallyFire:
         timeout: a read that is slow but finishes must still be served."""
         import soup_cli.utils.async_disk_source as mod
 
-        real = mod.read_into
+        real = mod.read_range_into
 
-        def slow(handle, entry, dst):
+        def slow(handle, start, view, expected):
             time.sleep(0.2)
-            real(handle, entry, dst)
+            real(handle, start, view, expected)
 
-        monkeypatch.setattr(mod, "read_into", slow)
+        monkeypatch.setattr(mod, "read_range_into", slow)
         monkeypatch.setattr(mod, "_MAX_READ_SECONDS", 5.0)
 
         shard_dir = _shards(tmp_path)
@@ -879,13 +880,13 @@ class TestTheReadHappensAhead:
         shard_dir = _shards(tmp_path)
         spec = _spec(shard_dir)
         threads = []
-        real = module.read_into
+        real = module.read_range_into
 
-        def recording(handle, entry, tensor):
+        def recording(handle, start, view, expected):
             threads.append(threading.current_thread())
-            return real(handle, entry, tensor)
+            return real(handle, start, view, expected)
 
-        monkeypatch.setattr(module, "read_into", recording)
+        monkeypatch.setattr(module, "read_range_into", recording)
         source = AsyncDiskSource(shard_dir, N_LAYERS, spec, read_ahead=2, pin=False)
         try:
             source.get(0, "input_layernorm.weight")
@@ -896,7 +897,10 @@ class TestTheReadHappensAhead:
                 f"the read ran on the calling thread ({offenders}) — this source "
                 f"exists to keep it off the compute thread"
             )
-            assert {t.name for t in threads} == {"soup-layer-reader"}
+            # Since #974 the bytes move on the source's range workers, which the
+            # reader thread dispatches and waits for; either way it is the
+            # source's own threads, never the consumer's.
+            assert {t.name.rsplit("-", 1)[0] for t in threads} == {"soup-layer-range"}
         finally:
             source.close()
 
@@ -1021,8 +1025,14 @@ def _settle(source, timeout: float = 10.0) -> None:
     """
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        if not source._queue and source._in_flight is None:
-            return
+        # Under the reader's own lock: ``_run`` pops the queue and sets
+        # ``_in_flight`` as two statements inside one critical section, so an
+        # unlocked observer can land between them, see "nothing queued, nothing
+        # in flight", and measure the depth BEFORE the read it just missed —
+        # a flake that read as "sustains 2 of 3" (#974).
+        with source._ready:
+            if not source._queue and source._in_flight is None:
+                return
         time.sleep(0.002)
     raise AssertionError("the reader never went idle")
 
