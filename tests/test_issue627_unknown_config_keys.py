@@ -815,6 +815,8 @@ class TestATypodSweepFailsTheCommandAndNotJustTheArm:
 
         from soup_cli.cli import app
 
+        from .conftest import strip_ansi
+
         result = CliRunner().invoke(app, [
             "sweep",
             "--config", self._config(tmp_path),
@@ -826,8 +828,6 @@ class TestATypodSweepFailsTheCommandAndNotJustTheArm:
         # while the rendered line really is `--- Run 1/1: sweep_1 ---`. A
         # different failure from the ESC-absence one above, and a different
         # repair -- this one is the substring class `strip_ansi` exists for.
-        from .conftest import strip_ansi
-
         plain = strip_ansi(result.output)
         assert "does not match any config field" not in plain, (
             "the precheck refused a real config field"

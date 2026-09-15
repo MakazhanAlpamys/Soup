@@ -518,5 +518,5 @@ def test_doctor_nccl_mocked_success():
     ):
         result = runner.invoke(app, ["doctor", "--nccl"])
         assert result.exit_code == 0
-        assert "Measuring NCCL bandwidth" in result.output
+        assert "Measuring NCCL bandwidth" in _strip_ansi(result.output)
         assert "Result (H100 over NVLINK)" in _strip_ansi(result.output)
