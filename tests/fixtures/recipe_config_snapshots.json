@@ -249,6 +249,7 @@
     "training.reward_hack_smoothing_window": 8,
     "training.reward_hack_trip_band": 0.3,
     "training.reward_model": null,
+    "training.rewind_log": true,
     "training.rl_checkpoint_include_optimizer": true,
     "training.rl_checkpoint_include_ref_model": false,
     "training.rl_checkpoint_include_rollout_buffer": false,
