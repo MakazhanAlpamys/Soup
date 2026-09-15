@@ -25,6 +25,7 @@ from __future__ import annotations
 import ast
 import builtins
 import pathlib
+import sys
 from typing import Any
 
 import pytest
@@ -177,29 +178,36 @@ def _compute_loss_free_names(fn: ast.AST) -> set[str]:
     return free
 
 
-def _eval_factory_expr(node: ast.AST, env: dict[str, object]) -> object:
+def _eval_factory_expr(
+    node: ast.AST,
+    env: dict[str, object],
+    sentinels: set[str] | frozenset[str] | None = None,
+) -> object:
+    if sentinels is None:
+        sentinels = set()
     if isinstance(node, ast.Constant):
         return node.value
     if isinstance(node, ast.Name):
-        if node.id in env:
-            return env[node.id]
-        # Factory locals with no harness object (teacher, tokenizers, …).
-        return None
+        if node.id in sentinels or node.id not in env:
+            raise _UnresolvableFactoryError(node.id)
+        return env[node.id]
     if isinstance(node, ast.Attribute):
         if isinstance(node.value, ast.Name) and node.value.id == "tcfg":
             if node.attr not in TrainingConfig.model_fields:
                 raise _UnresolvableFactoryError(node.attr)
             return _training_config_default(node.attr)
         if isinstance(node.value, ast.Name) and node.value.id == "self":
-            return None
-        base = _eval_factory_expr(node.value, env)
+            raise _UnresolvableFactoryError(f"self.{node.attr}")
+        base = _eval_factory_expr(node.value, env, sentinels)
         if base is None:
-            return None
+            raise _UnresolvableFactoryError(ast.dump(node))
         return getattr(base, node.attr)
     if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
-        return not _eval_factory_expr(node.operand, env)
+        return not _eval_factory_expr(node.operand, env, sentinels)
     if isinstance(node, ast.BoolOp):
-        values = [_eval_factory_expr(value, env) for value in node.values]
+        values = [
+            _eval_factory_expr(value, env, sentinels) for value in node.values
+        ]
         result: object = isinstance(node.op, ast.And)
         for value in values:
             if isinstance(node.op, ast.And):
@@ -208,8 +216,8 @@ def _eval_factory_expr(node: ast.AST, env: dict[str, object]) -> object:
                 result = result or value
         return result
     if isinstance(node, ast.Compare) and len(node.ops) == 1:
-        left = _eval_factory_expr(node.left, env)
-        right = _eval_factory_expr(node.comparators[0], env)
+        left = _eval_factory_expr(node.left, env, sentinels)
+        right = _eval_factory_expr(node.comparators[0], env, sentinels)
         operator = node.ops[0]
         if isinstance(operator, ast.Eq):
             return left == right
@@ -228,16 +236,16 @@ def _eval_factory_expr(node: ast.AST, env: dict[str, object]) -> object:
             and len(node.args) == 1
         ):
             caster = {"bool": bool, "float": float, "int": int}[func.id]
-            return caster(_eval_factory_expr(node.args[0], env))
+            try:
+                return caster(_eval_factory_expr(node.args[0], env, sentinels))
+            except (TypeError, ValueError) as exc:
+                raise _UnresolvableFactoryError(str(exc)) from exc
         if (
             isinstance(func, ast.Name)
             and func.id == "getattr"
             and 2 <= len(node.args) <= 3
         ):
-            name = _eval_factory_expr(node.args[1], env)
-            default = (
-                _eval_factory_expr(node.args[2], env) if len(node.args) == 3 else None
-            )
+            name = _eval_factory_expr(node.args[1], env, sentinels)
             if (
                 isinstance(node.args[0], ast.Name)
                 and node.args[0].id == "tcfg"
@@ -245,23 +253,38 @@ def _eval_factory_expr(node: ast.AST, env: dict[str, object]) -> object:
                 and name in TrainingConfig.model_fields
             ):
                 return _training_config_default(name)
-            return default
+            raise _UnresolvableFactoryError(ast.dump(node))
         if node.args:
             # Validators wrap a value; bind the wrapped expression.
-            return _eval_factory_expr(node.args[0], env)
+            return _eval_factory_expr(node.args[0], env, sentinels)
         raise _UnresolvableFactoryError(ast.dump(node))
     raise _UnresolvableFactoryError(ast.dump(node))
+
+
+def _is_identity_runtime_ref(node: ast.AST, env: dict[str, object]) -> bool:
+    """``self.attr`` or an unbound factory local, assigned as-is."""
+    if isinstance(node, ast.Attribute):
+        return isinstance(node.value, ast.Name) and node.value.id == "self"
+    if isinstance(node, ast.Name):
+        return node.id not in env and node.id not in _BUILTIN_NAMES
+    return False
 
 
 def _factory_derived_bindings() -> dict[str, object]:
     """Evaluate ``setup()`` assignments that precede ``_DistillTrainer``."""
     tree = ast.parse(_DISTILL_SOURCE)
-    setup = next(
+    setups = [
         node
         for node in ast.walk(tree)
         if isinstance(node, ast.FunctionDef) and node.name == "setup"
+    ]
+    assert len(setups) == 1, (
+        f"distill.py has {len(setups)} setup() functions; "
+        "the harness needs exactly one to derive closure bindings"
     )
+    setup = setups[0]
     env: dict[str, object] = {}
+    sentinels: set[str] = set()
     for stmt in setup.body:
         if isinstance(stmt, ast.ClassDef) and stmt.name == "_DistillTrainer":
             break
@@ -270,8 +293,12 @@ def _factory_derived_bindings() -> dict[str, object]:
         target = stmt.targets[0]
         if not isinstance(target, ast.Name):
             continue
+        if _is_identity_runtime_ref(stmt.value, env):
+            env[target.id] = None
+            sentinels.add(target.id)
+            continue
         try:
-            env[target.id] = _eval_factory_expr(stmt.value, env)
+            env[target.id] = _eval_factory_expr(stmt.value, env, sentinels)
         except _UnresolvableFactoryError:
             continue
     return env
@@ -667,3 +694,75 @@ def test_recompiled_compute_loss_filename_is_not_the_real_module() -> None:
         node, trainer_base=type("Trainer", (), {})
     )
     assert trainer_cls.compute_loss.__code__.co_filename == _COMPILE_FILENAME
+
+
+def test_distill_module_has_exactly_one_setup_function() -> None:
+    setups = [
+        node
+        for node in ast.walk(ast.parse(_DISTILL_SOURCE))
+        if isinstance(node, ast.FunctionDef) and node.name == "setup"
+    ]
+    assert len(setups) == 1
+
+
+def test_runtime_identity_bindings_stay_none_sentinels() -> None:
+    compiled_globals = _closure_namespace(
+        _compute_loss_node(_distill_trainer_class_node())
+    )
+    assert compiled_globals["teacher_ref"] is None
+    assert compiled_globals["_student_tokenizer"] is None
+
+
+def test_comparison_over_a_runtime_sentinel_is_unresolvable() -> None:
+    node = ast.parse("teacher_ref is not None", mode="eval").body
+    with pytest.raises(_UnresolvableFactoryError):
+        _eval_factory_expr(node, {"teacher_ref": None}, {"teacher_ref"})
+
+
+def test_float_of_runtime_attribute_is_named_not_typeerror() -> None:
+    node = ast.parse("float(teacher_ref.scale)", mode="eval").body
+    with pytest.raises(_UnresolvableFactoryError):
+        _eval_factory_expr(node, {"teacher_ref": None}, {"teacher_ref"})
+
+
+def test_derived_runtime_flag_fails_with_the_missing_binding(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#743 shape: a flag derived from a runtime object must not bind False."""
+    tree = ast.parse(_DISTILL_SOURCE)
+    setup = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "setup"
+    )
+    insert_at = next(
+        index
+        for index, stmt in enumerate(setup.body)
+        if isinstance(stmt, ast.Assign)
+        and isinstance(stmt.targets[0], ast.Name)
+        and stmt.targets[0].id == "_distill_checkpoint"
+    )
+    setup.body.insert(
+        insert_at + 1,
+        ast.Assign(
+            targets=[ast.Name(id="_brand_new_runtime_flag", ctx=ast.Store())],
+            value=ast.Compare(
+                left=ast.Name(id="teacher_ref", ctx=ast.Load()),
+                ops=[ast.IsNot()],
+                comparators=[ast.Constant(value=None)],
+            ),
+        ),
+    )
+    compute_loss = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "compute_loss"
+    )
+    compute_loss.body.insert(
+        0,
+        ast.Expr(value=ast.Name(id="_brand_new_runtime_flag", ctx=ast.Load())),
+    )
+    ast.fix_missing_locations(tree)
+    monkeypatch.setattr(sys.modules[__name__], "_DISTILL_SOURCE", ast.unparse(tree))
+    with pytest.raises(AssertionError, match="_brand_new_runtime_flag"):
+        _closure_namespace(_compute_loss_node(_distill_trainer_class_node()))
