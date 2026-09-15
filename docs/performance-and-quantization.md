@@ -807,11 +807,15 @@ Config validation ships in v0.27.0; live execution ships in v0.27.1. See
 
 Optimize training throughput and extend context windows:
 
+`use_liger` and `use_flash_attn` are read only by the SFT-family trainer
+(`task: sft` or `task: tts`); setting either on any other task is rejected
+at config load.
+
 ```yaml
 # soup.yaml — performance options
 training:
-  use_liger: true            # Liger Kernel fused ops (measured 12.9% memory, 5.1% throughput)
-  use_flash_attn: true       # FlashAttention v2/v3 auto-detection
+  use_liger: true            # Liger Kernel fused ops (measured 12.9% memory, 5.1% throughput); sft/tts only
+  use_flash_attn: true       # FlashAttention v2/v3 auto-detection; sft/tts only
   gradient_checkpointing: true  # Required for long sequences
 
   # Long-context (128k+ tokens)
