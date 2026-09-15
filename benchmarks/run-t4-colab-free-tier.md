@@ -128,12 +128,35 @@ the gap has been seen rather than reasoned about.
   produced a healthy loss curve, a bit-exact forward and silently wrong gradients
   on every layer but the last `stream_buffers`, and it was NF4-only and
   size-dependent. Nothing in this run would have caught it.
-- **The notebook's section 4 — streamed-vs-resident bit-exactness on the T4 —
-  produced no captured output.** It is recorded here as **unrun**, not as a pass.
-  A T4 with 15.6 GB can in principle hold a resident NF4 8B reference, so this is
-  the obvious next measurement and it has not been taken.
-- **Forward exactness on sm_75 is not shown either.** The fp16 exactness results
-  in the v0.73.0 notes were measured on an Ampere card using fp16.
+- **Section 4 — streamed-vs-resident forward bit-exactness on the T4 — has since
+  been run and recorded.** `notebooks/proof-4gb.ipynb` (#844) was executed end to
+  end on a free Colab T4 (Tesla T4, driver-reported 15.6 GB). The date does not
+  appear anywhere in the notebook's own output, so it is provenance rather than
+  a printed result: the commit that carries the run (`e06864c`) was made at
+  **2026-09-12T19:50:14Z** (UTC; the author's local +05:30 clock reads
+  2026-09-13, which is why an earlier version of this line said that instead).
+  Run against **soup-cli 0.75.0**, `torch 2.11.0+cu128`, `transformers 5.16.1`,
+  `peft 0.20.0`, `bitsandbytes 0.50.2` (printed by the notebook's own version
+  cell — the library-version gap the rest of this document notes does not apply
+  to this second run): `max |streamed - resident| = 0.0`, `torch.equal = True`.
+  That is `HuggingFaceTB/SmolLM2-135M-Instruct` in fp16, unquantized
+  (`shard_checkpoint` called without `quant`, defaulting to `QUANT_NONE`), not the
+  8B NF4 configuration this document measures — a resident NF4 8B reference on
+  Turing is still the obvious next measurement and has not been taken.
+
+  **The same notebook run also re-measured section 5** (the 8B NF4 run this
+  document's "What was measured" table above reports) and got substantially
+  different numbers on the same card: base store 5.70 GB (was 3.60 GB), an
+  extra 1051 MB large-layer VRAM slot alongside the original 2 × 113 MB buffers,
+  0 MB resident beyond adapters (was 2101 MB), and a **measured peak of 1.83 GB**
+  (was 2.91 GB). This is self-consistent, not a contradiction: the embeddings and
+  head moved out of the resident allocation into a streamed large-layer slot
+  between the two runs, which explains both the larger pinned store and the
+  smaller peak. The original run's numbers above are left as originally
+  captured, per this document's own working-record convention; this second
+  measurement is recorded here rather than silently overwriting them.
+- **Forward exactness on sm_75 in fp16 is now shown** (see above); the v0.73.0
+  notes' fp16 exactness results were measured on an Ampere card, not Turing.
 - **One run, one seed, one configuration, no repeats**, on a session that cannot
   be returned to. Nothing about variance is claimed.
 - Library versions (torch / bitsandbytes / transformers / peft) were **not

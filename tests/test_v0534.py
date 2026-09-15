@@ -286,7 +286,7 @@ class TestApplyLongContextLlama3Autodetect:
             model_name="meta-llama/Llama-3.1-8B",
         )
         assert result is not None
-        assert result["type"] == "llama3"
+        assert result["rope_type"] == "llama3"
         assert model_config.max_position_embeddings == 32768
 
     def test_autodetect_falls_back_to_dynamic(self):
@@ -301,7 +301,7 @@ class TestApplyLongContextLlama3Autodetect:
             model_name="mistralai/Mistral-7B-v0.1",
         )
         assert result is not None
-        assert result["type"] == "dynamic"
+        assert result["rope_type"] == "dynamic"
 
     def test_explicit_caller_pick_wins_over_autodetect(self):
         from soup_cli.utils.long_context import apply_long_context_config
@@ -319,7 +319,7 @@ class TestApplyLongContextLlama3Autodetect:
             model_name="meta-llama/Llama-3.1-8B",
         )
         assert result is not None
-        assert result["type"] == "linear"
+        assert result["rope_type"] == "linear"
 
     def test_rope_scaling_with_rope_type_alias(self):
         """v0.49.0 detect helper also accepts the newer ``rope_type`` key."""
@@ -341,7 +341,7 @@ class TestApplyLongContextLlama3Autodetect:
             model_name="meta-llama/Llama-3.1-8B",
         )
         assert result is not None
-        assert result["type"] == "llama3"
+        assert result["rope_type"] == "llama3"
 
 
 # ---------------------------------------------------------------------------

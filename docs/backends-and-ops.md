@@ -395,7 +395,8 @@ soup train --config soup.yaml
 
 The endpoint validator follows the same SSRF rules as `HF_ENDPOINT`: only `http`/`https` schemes; plain HTTP allowed only for `localhost` / `127.0.0.1` / `::1`; private and link-local IPs (RFC1918, 169.254/16, etc.) rejected on plain HTTP. `backend: mlx` is incompatible with non-HF hubs (`mlx-lm` only downloads from HF Hub).
 
-The hub adapter is schema-only in this release; the live downloader and uploader land in v0.51.1.
+ModelScope and Modelers downloads and uploads route through live, lazy-imported SDK adapters. The
+HF path remains the default, and MLX remains HF-only.
 
 
 ## TensorBoard Integration
@@ -586,13 +587,12 @@ as a warning that named this deadline, so there was exactly one release of notic
 deliberately, because a config written against a newer Soup has to keep running on an
 older wheel for at least one release. The refusal is the same everywhere a `SoupConfig`
 is built from a file or a string: `soup train` exits 1 before the training stack is
-imported, `soup sweep` / `soup doctor --config` / `soup ship --config` refuse the same
-way, and the Web UI / API loader raises `ValueError` with the same text (the Web UI shows
-it). `soup plan` and `soup apply` read the YAML as a plain mapping and do not run this
-check. Nothing is defaulted and nothing is guessed: the suggestion is a hint for you, not
-a substitution the loader makes. A root-level `lora:` block is not an unknown key — the
-schema has accepted that spelling and moved it under `training` since v0.40.1, and the
-detector applies the same remap before it looks.
+imported, `soup sweep` / `soup doctor --config` / `soup ship --config` / `soup plan` /
+`soup apply` refuse the same way, and the Web UI / API loader raises `ValueError` with
+the same text (the Web UI shows it). Nothing is defaulted and nothing is guessed: the
+suggestion is a hint for you, not a substitution the loader makes. A root-level `lora:`
+block is not an unknown key — the schema has accepted that spelling and moved it under
+`training` since v0.40.1, and the detector applies the same remap before it looks.
 
 A config that names a key your installed Soup does not have usually means one of two
 things: a typo (take the suggestion), or a field added after your version shipped

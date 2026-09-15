@@ -430,21 +430,21 @@ class TestLongContextUtils:
         from soup_cli.utils.long_context import get_rope_scaling_config
 
         config = get_rope_scaling_config("linear", 131072, 8192)
-        assert config["type"] == "linear"
+        assert config["rope_type"] == "linear"
         assert config["factor"] == pytest.approx(16.0)
 
     def test_get_rope_scaling_config_dynamic(self):
         from soup_cli.utils.long_context import get_rope_scaling_config
 
         config = get_rope_scaling_config("dynamic", 65536, 8192)
-        assert config["type"] == "dynamic"
+        assert config["rope_type"] == "dynamic"
         assert config["factor"] == pytest.approx(8.0)
 
     def test_get_rope_scaling_config_yarn(self):
         from soup_cli.utils.long_context import get_rope_scaling_config
 
         config = get_rope_scaling_config("yarn", 32768, 8192)
-        assert config["type"] == "yarn"
+        assert config["rope_type"] == "yarn"
         assert config["factor"] == pytest.approx(4.0)
         assert config["original_max_position_embeddings"] == 8192
 
@@ -452,7 +452,7 @@ class TestLongContextUtils:
         from soup_cli.utils.long_context import get_rope_scaling_config
 
         config = get_rope_scaling_config("longrope", 32768, 8192)
-        assert config["type"] == "longrope"
+        assert config["rope_type"] == "longrope"
 
     def test_get_rope_scaling_config_no_scaling_needed(self):
         from soup_cli.utils.long_context import get_rope_scaling_config
@@ -465,7 +465,7 @@ class TestLongContextUtils:
         from soup_cli.utils.long_context import get_rope_scaling_config
 
         config = get_rope_scaling_config("linear", 4.0, 4096)
-        assert config["type"] == "linear"
+        assert config["rope_type"] == "linear"
         assert config["factor"] == pytest.approx(4.0)
 
     def test_get_rope_scaling_config_dynamic_factor(self):
@@ -473,7 +473,7 @@ class TestLongContextUtils:
         from soup_cli.utils.long_context import get_rope_scaling_config
 
         config = get_rope_scaling_config("dynamic", 2.0, 8192)
-        assert config["type"] == "dynamic"
+        assert config["rope_type"] == "dynamic"
         assert config["factor"] == pytest.approx(2.0)
 
     def test_get_rope_scaling_config_invalid_type(self):
@@ -487,14 +487,14 @@ class TestLongContextUtils:
 
         model_config = MagicMock()
         model_config.max_position_embeddings = 8192
-        model_config.rope_scaling = None
+        model_config.rope_parameters = None
 
         rope_config = apply_long_context_config(
             model_config, target_length=131072, rope_scaling_type="dynamic",
             model_name="meta-llama/Llama-3.1-8B",
         )
         assert rope_config is not None
-        assert rope_config["type"] == "dynamic"
+        assert rope_config["rope_type"] == "dynamic"
         assert model_config.max_position_embeddings == 131072
 
     def test_apply_long_context_config_no_scaling_needed(self):

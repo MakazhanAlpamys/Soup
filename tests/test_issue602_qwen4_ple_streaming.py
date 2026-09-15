@@ -725,6 +725,7 @@ def _drive_qwen4_streaming_setup(tmp_path, monkeypatch, resolve_weights=None):
         stream_source="auto",
         stream_ngram_source="auto",
         stream_buffers=2,
+        stream_read_ahead=2,
         stream_disk_kind=None,
         stream_pin=None,
         seed=7,

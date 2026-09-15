@@ -193,7 +193,7 @@ class TestYarnMath:
             yarn_beta_fast=32,
             yarn_beta_slow=1,
         )
-        assert cfg["type"] == "yarn"
+        assert cfg["rope_type"] == "yarn"
         assert cfg["factor"] == 4.0
         assert cfg["original_max_position_embeddings"] == 8192
         assert cfg["beta_fast"] == 32
@@ -211,7 +211,7 @@ class TestDynamicNTK:
         from soup_cli.utils.long_context import get_rope_scaling_config
 
         cfg = get_rope_scaling_config("dynamic", target_length=32768, original_length=8192)
-        assert cfg == {"type": "dynamic", "factor": 4.0}
+        assert cfg == {"rope_type": "dynamic", "factor": 4.0}
 
     def test_dynamic_no_scaling_when_target_le_original(self):
         from soup_cli.utils.long_context import get_rope_scaling_config
@@ -424,7 +424,7 @@ training:
             target_length=131072,
             original_length=8192,
         )
-        assert cfg["type"] == "llama3"
+        assert cfg["rope_type"] == "llama3"
         assert cfg["factor"] == 16.0
         assert cfg["original_max_position_embeddings"] == 8192
         assert cfg["low_freq_factor"] == 1.0
@@ -673,13 +673,13 @@ class TestCoverageGapFixes:
         from soup_cli.utils.long_context import get_rope_scaling_config
 
         cfg = get_rope_scaling_config("linear", target_length=32768, original_length=8192)
-        assert cfg == {"type": "linear", "factor": 4.0}
+        assert cfg == {"rope_type": "linear", "factor": 4.0}
 
     def test_longrope_config(self):
         from soup_cli.utils.long_context import get_rope_scaling_config
 
         cfg = get_rope_scaling_config("longrope", target_length=131072, original_length=8192)
-        assert cfg["type"] == "longrope"
+        assert cfg["rope_type"] == "longrope"
         assert cfg["original_max_position_embeddings"] == 8192
 
     def test_is_llama_model_oversize_returns_false(self):

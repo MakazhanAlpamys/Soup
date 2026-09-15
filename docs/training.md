@@ -284,8 +284,10 @@ soup train --config soup.yaml --uld-strategy wasserstein
 #   training:
 #     uld_strategy: wasserstein_aligned
 
-# MiniLLM reverse-KL on-policy distillation — bundles 3 stability tricks
-# (Gu et al. 2024 arXiv:2306.08543)
+# MiniLLM reverse-KL distillation (Gu et al. 2024 arXiv:2306.08543).
+# Offline blend: mix ratio is the teacher weight in the reverse-KL target and
+# must be > 0 (ratio 0 is KL(student || stopgrad(student)) and is rejected).
+# On-policy: mix 0 is legal — student-only sampling, loss still KL(student || teacher).
 soup train --config soup.yaml --minillm-enabled \
     --minillm-teacher-mix-ratio 0.3 \
     --minillm-pretrain-anchor-weight 0.1 \
@@ -294,7 +296,7 @@ soup train --config soup.yaml --minillm-enabled \
 # MiniLLM TRUE on-policy rollout (v0.71.18, Gu et al. §3.1) — sample a fresh
 # autoregressive rollout from the per-token teacher/student mixture each step,
 # then length-normalised reverse-KL. training.minillm_rollout_length tunes the
-# rollout (auto min(max_length, 32)).
+# rollout (auto min(max_length, 32)). Mix 0 here means student-only sampling.
 soup train --config soup.yaml --minillm-enabled --minillm-on-policy
 
 # Mid-epoch checkpoint for PPO/GRPO — TorchTune punts this; Soup ships it

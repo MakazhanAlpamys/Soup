@@ -871,13 +871,13 @@ class TestKernelPickerConfig:
         cfg = SoupConfig(base="test/model", data={"train": "./data.jsonl"})
         assert cfg.training.kernel_auto_compose is False
 
-    def test_kernel_auto_compose_enabled(self):
-        cfg = SoupConfig(
-            base="test/model",
-            data={"train": "./data.jsonl"},
-            training={"kernel_auto_compose": True},
-        )
-        assert cfg.training.kernel_auto_compose is True
+    def test_kernel_auto_compose_enabled_is_rejected(self):
+        with pytest.raises(ValidationError, match="does not apply the selected flags"):
+            SoupConfig(
+                base="test/model",
+                data={"train": "./data.jsonl"},
+                training={"kernel_auto_compose": True},
+            )
 
 
 class TestKernelPickerEnumerate:
@@ -1247,15 +1247,14 @@ class TestV028SFTOnlyValidator:
         )
         assert cfg.training.activation_offloading == "cpu"
 
-    def test_kernel_auto_compose_now_accepted_on_kto(self):
-        # v0.35.0 #60 — KTO accepts kernel_auto_compose.
-        cfg = SoupConfig(
-            base="m",
-            task="kto",
-            data={"train": "./d.jsonl", "format": "kto"},
-            training={"kernel_auto_compose": True},
-        )
-        assert cfg.training.kernel_auto_compose is True
+    def test_kernel_auto_compose_rejected_on_kto(self):
+        with pytest.raises(ValidationError, match="use_liger"):
+            SoupConfig(
+                base="m",
+                task="kto",
+                data={"train": "./d.jsonl", "format": "kto"},
+                training={"kernel_auto_compose": True},
+            )
 
     def test_v028_features_still_rejected_on_mlx_backend(self):
         # MLX backend has no equivalent kernels — gate must still fire.
@@ -1269,8 +1268,8 @@ class TestV028SFTOnlyValidator:
             )
         assert "mlx" in str(exc.value).lower()
 
-    def test_sft_accepts_all_features(self):
-        """SFT task should accept every v0.28.0 flag (happy path)."""
+    def test_sft_accepts_supported_features(self):
+        """SFT still accepts the supported v0.28.0 flags."""
         cfg = SoupConfig(
             base="m",
             task="sft",
@@ -1279,7 +1278,6 @@ class TestV028SFTOnlyValidator:
                 "use_cut_ce": True,
                 "quantization_aware": "fp8",
                 "activation_offloading": "cpu",
-                "kernel_auto_compose": True,
             },
         )
         assert cfg.training.use_cut_ce is True
@@ -1325,7 +1323,6 @@ class TestV028Integration:
                 "use_cut_ce": True,
                 "quantization_aware": "fp8",
                 "gradient_checkpointing": "auto",
-                "kernel_auto_compose": True,
                 "packing": True,
                 "activation_offloading": "cpu",
             },
@@ -1334,6 +1331,6 @@ class TestV028Integration:
         assert tcfg.use_cut_ce is True
         assert tcfg.quantization_aware == "fp8"
         assert tcfg.gradient_checkpointing == "auto"
-        assert tcfg.kernel_auto_compose is True
+        assert tcfg.kernel_auto_compose is False
         assert tcfg.packing is True
         assert tcfg.activation_offloading == "cpu"

@@ -265,6 +265,7 @@
     "training.stream_layers": false,
     "training.stream_ngram_source": "auto",
     "training.stream_pin": null,
+    "training.stream_read_ahead": 2,
     "training.stream_source": "auto",
     "training.stream_vram_override": null,
     "training.stream_vram_probe": false,

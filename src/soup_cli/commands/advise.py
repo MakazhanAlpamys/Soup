@@ -242,7 +242,7 @@ def advise_run(
         "--record",
         help=(
             "Append this verdict to advise_history.jsonl with accepted=True. "
-            "Use `--no-record` to skip. Stored under ~/.soup/."
+            "Omit --record to skip. Stored under ~/.soup/."
         ),
     ),
     notes: str = typer.Option(

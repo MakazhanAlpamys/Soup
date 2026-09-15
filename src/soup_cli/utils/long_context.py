@@ -24,6 +24,11 @@ from typing import Any
 # Supported RoPE scaling methods (v0.49.0 adds "llama3").
 ROPE_SCALING_TYPES = ("linear", "dynamic", "yarn", "longrope", "llama3")
 
+# Values that remain meaningful when switching from one RoPE algorithm to
+# another. Algorithm-specific keys (for example Llama 3 frequency bands) must
+# not leak into the replacement block.
+_ROPE_TYPE_AGNOSTIC_KEYS = ("rope_theta", "partial_rotary_factor")
+
 # Default context lengths for known model families.
 MODEL_DEFAULT_CONTEXT: dict[str, int] = {
     "llama-3": 8192,
@@ -292,7 +297,7 @@ def get_rope_scaling_config(
     llama3_high_freq_factor: float = LLAMA3_DEFAULT_HIGH_FREQ_FACTOR,
     llama3_old_context_len: int | None = None,
 ) -> dict[str, Any]:
-    """Build the ``rope_scaling`` dict consumed by HF model configs.
+    """Build the Transformers 5 ``rope_parameters`` mapping.
 
     The YaRN tunables are emitted only when ``scaling_type='yarn'``; the Llama
     3.1 tunables are emitted only when ``scaling_type='llama3'``.
@@ -327,12 +332,12 @@ def get_rope_scaling_config(
 
     factor = float(factor)
     if scaling_type == "linear":
-        return {"type": "linear", "factor": factor}
+        return {"rope_type": "linear", "factor": factor}
     if scaling_type == "dynamic":
-        return {"type": "dynamic", "factor": factor}
+        return {"rope_type": "dynamic", "factor": factor}
     if scaling_type == "yarn":
         cfg: dict[str, Any] = {
-            "type": "yarn",
+            "rope_type": "yarn",
             "factor": yarn_factor if yarn_factor is not None else factor,
             "original_max_position_embeddings": original_length,
         }
@@ -345,14 +350,14 @@ def get_rope_scaling_config(
         return cfg
     if scaling_type == "longrope":
         return {
-            "type": "longrope",
+            "rope_type": "longrope",
             "factor": factor,
             "original_max_position_embeddings": original_length,
         }
     # scaling_type == "llama3" — defer to the caller-supplied original_length
     # unless an explicit Llama 3.1-specific override is provided.
     return {
-        "type": "llama3",
+        "rope_type": "llama3",
         "factor": factor,
         "original_max_position_embeddings": (
             llama3_old_context_len if llama3_old_context_len is not None else original_length
@@ -367,6 +372,11 @@ def apply_long_context_config(
     target_length: int,
     rope_scaling_type: str | None = "dynamic",
     model_name: str = "",
+    *,
+    yarn_factor: float | None = None,
+    yarn_attn_factor: float | None = None,
+    yarn_beta_fast: int | None = None,
+    yarn_beta_slow: int | None = None,
 ) -> dict | None:
     """Apply long-context configuration to a model config object.
 
@@ -378,9 +388,14 @@ def apply_long_context_config(
             preserved for back-compat — pass ``None`` explicitly to enable
             the new auto-detect path. When auto-detecting, the function
             picks ``"llama3"`` if the model config already carries a
-            Llama 3.1 ``rope_scaling`` block, otherwise falls back to
+            Llama 3.1 RoPE block, otherwise falls back to
             ``"dynamic"``.
         model_name: Used only for the default-context fallback.
+
+    The mapping is assigned to ``config.rope_parameters`` before the model is
+    constructed.  Transformers 5 derives ``inv_freq`` in the rotary embedding
+    constructor, so mutating the config after ``from_pretrained`` is a no-op.
+    Existing model-native values such as ``rope_theta`` are retained.
     """
     original_length = getattr(
         model_config,
@@ -389,8 +404,20 @@ def apply_long_context_config(
     )
     if target_length <= original_length:
         return None
-    if rope_scaling_type is None:
+    existing = getattr(model_config, "rope_parameters", None)
+    if not isinstance(existing, Mapping):
         existing = getattr(model_config, "rope_scaling", None)
+    existing = dict(existing) if isinstance(existing, Mapping) else {}
+    nested_sections = sorted(
+        str(name) for name, value in existing.items() if isinstance(value, Mapping)
+    )
+    if nested_sections:
+        raise ValueError(
+            "nested rope_parameters are not supported safely; model-specific "
+            f"sections found: {', '.join(nested_sections)}. Soup refuses to "
+            "change max_position_embeddings without scaling every RoPE section"
+        )
+    if rope_scaling_type is None:
         if isinstance(existing, Mapping) and detect_llama3_rope_in_config(
             {"rope_scaling": existing}
         ):
@@ -401,12 +428,32 @@ def apply_long_context_config(
         scaling_type=rope_scaling_type,
         target_length=target_length,
         original_length=original_length,
+        yarn_factor=yarn_factor,
+        yarn_attn_factor=yarn_attn_factor,
+        yarn_beta_fast=yarn_beta_fast,
+        yarn_beta_slow=yarn_beta_slow,
     )
     if not rope_config:
         return None
-    model_config.rope_scaling = rope_config
+    if rope_scaling_type == "longrope":
+        missing = [name for name in ("short_factor", "long_factor") if name not in existing]
+        if missing:
+            raise ValueError(
+                "rope_scaling_type='longrope' requires model-native "
+                f"{', '.join(missing)} vectors; choose a checkpoint that ships "
+                "LongRoPE factors or use linear, dynamic, yarn, or llama3"
+            )
+        rope_config["short_factor"] = existing["short_factor"]
+        rope_config["long_factor"] = existing["long_factor"]
+    merged = {
+        name: existing[name]
+        for name in _ROPE_TYPE_AGNOSTIC_KEYS
+        if name in existing and existing[name] is not None
+    }
+    merged.update(rope_config)
+    model_config.rope_parameters = merged
     model_config.max_position_embeddings = target_length
-    return rope_config
+    return merged
 
 
 def validate_long_context_config(

@@ -54,6 +54,7 @@ requests page-locked memory.
 from __future__ import annotations
 
 import io
+import re
 from unittest.mock import MagicMock
 
 import pytest
@@ -62,6 +63,32 @@ import pytest
 #: spare — the point is the pin wiring, not the budgets.
 _FREE_BYTES = 10_000_000_000
 _PANEL_WIDTH = 200
+
+#: Same helper as test_v07302.py / test_auto_tuning.py. Rich WRAPS as well as
+#: colours, so a figure like `read_ahead=2` can arrive split across a line
+#: break at any width — collapsing whitespace is what makes a substring match
+#: mean what it looks like it means.
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _plain(text: str) -> str:
+    """ANSI-stripped, whitespace-collapsed console output, safe to match."""
+    return " ".join(_ANSI_RE.sub("", text).split())
+
+
+#: The runtime's own summary, as distinct from the pre-flight panel printed
+#: above it. They are different statements: the panel describes the PLAN,
+#: before any source exists, so it can only name the SHAPE of the staging;
+#: the ready line describes the source that actually got built and carries
+#: the depth and the byte count. Both are asserted, separately, below.
+_READY_MARKER = "Layer streaming ready:"
+
+
+def _ready_line(text: str) -> str:
+    """Just the `Layer streaming ready:` summary, ANSI-stripped and unwrapped."""
+    plain = _plain(text)
+    assert _READY_MARKER in plain, f"no ready line was printed at all: {plain}"
+    return plain.split(_READY_MARKER, 1)[1]
 
 
 def _cuda() -> bool:
@@ -130,19 +157,33 @@ def _tiny_checkpoint(tmp_path) -> str:
     return str(weights)
 
 
-def _cfg_yaml(weights: str, stream_pin_yaml: str) -> str:
+def _cfg_yaml(
+    weights: str,
+    stream_pin_yaml: str,
+    *,
+    stream_source: str = "ram",
+    extra_training_yaml: str = "",
+) -> str:
     return (
         f"base: {weights}\ntask: sft\nbackend: transformers\nmodality: text\n"
         "data:\n  train: data.jsonl\n  format: alpaca\n"
         "training:\n  batch_size: 1\n  gradient_accumulation_steps: 1\n"
         "  quantization: none\n  stream_layers: true\n"
-        "  stream_source: ram\n"
+        f"  stream_source: {stream_source}\n"
         f"{stream_pin_yaml}"
+        f"{extra_training_yaml}"
         "  lora:\n    r: 4\n    target_modules: [q_proj, v_proj]\n"
     )
 
 
-def _drive_wiring(tmp_path, monkeypatch, *, stream_pin_yaml: str):
+def _drive_wiring(
+    tmp_path,
+    monkeypatch,
+    *,
+    stream_pin_yaml: str,
+    stream_source: str = "ram",
+    extra_training_yaml: str = "",
+):
     """Real pre-flight, simulated CUDA, spied runtime boundary.
 
     Returns ``(captured_kwargs, panel_text)``. ``build_streamed_model`` is a
@@ -186,6 +227,10 @@ def _drive_wiring(tmp_path, monkeypatch, *, stream_pin_yaml: str):
             "store_bytes": 1_000_000,
             "disk_bytes": 1_000_000,
             "pinned": bool(kwargs.get("pin")),
+            # Derived from the captured kwargs, exactly as `pinned` is: what
+            # the ready line prints must trace back to what the trainer PASSED,
+            # not to a constant this spy chose (#971).
+            "read_ahead": kwargs.get("read_ahead"),
             "buffers": 2,
             "buffer_bytes": 4_000,
             "n_layers": 3,
@@ -197,7 +242,14 @@ def _drive_wiring(tmp_path, monkeypatch, *, stream_pin_yaml: str):
     buffer = io.StringIO()
     monkeypatch.setattr(ss, "console", Console(file=buffer, width=_PANEL_WIDTH))
 
-    cfg = load_config_from_string(_cfg_yaml(weights, stream_pin_yaml))
+    cfg = load_config_from_string(
+        _cfg_yaml(
+            weights,
+            stream_pin_yaml,
+            stream_source=stream_source,
+            extra_training_yaml=extra_training_yaml,
+        )
+    )
     wrapper = SFTTrainerWrapper(cfg)
     wrapper.device = "cuda"  # the on_cuda branch is a string check
     wrapper._setup_streaming_transformers(cfg, cfg.training)
@@ -345,3 +397,124 @@ class TestTheAllocationItself:
         finally:
             w_default._close_stream_runtime()
             del w_default
+
+
+class TestTheReadAheadDepthIsWiredAndVisible:
+    """#971 / #748: `training.stream_read_ahead` must reach the runtime AND be
+    seen where it takes effect.
+
+    Same harness as the pin tests above — real config, real pre-flight, spied
+    runtime boundary — because the value has two chances to be dropped: the
+    `build_streamed_model(` call, and the ready line the operator reads. The
+    spy derives `read_ahead` in its fake `stats()` from the kwargs it was
+    given, so the printed figure can only come from what was actually passed.
+    """
+
+    def _drive_disk(self, tmp_path, monkeypatch, *, extra_training_yaml=""):
+        return _drive_wiring(
+            tmp_path,
+            monkeypatch,
+            stream_pin_yaml="",
+            stream_source="disk",
+            extra_training_yaml=extra_training_yaml,
+        )
+
+    def test_a_configured_depth_reaches_the_runtime_and_the_ready_line(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        captured, panel = self._drive_disk(
+            tmp_path, monkeypatch, extra_training_yaml="  stream_read_ahead: 3\n"
+        )
+        assert captured["read_ahead"] == 3, (
+            "stream_read_ahead never became read_ahead= at the runtime "
+            "boundary — a hop dropped it, which is the #748 defect"
+        )
+        assert "read_ahead=3" in _ready_line(panel), (
+            "the depth is applied but never shown, so an operator cannot tell "
+            f"which depth the run is using: {_ready_line(panel)}"
+        )
+
+    def test_the_default_is_what_an_unset_config_gets(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """The control. Without it a mutant hardcoding 3 at the boundary — or
+        printing the literal the case above looks for — would pass."""
+        from soup_cli.utils.async_disk_source import DEFAULT_STREAM_READ_AHEAD
+
+        captured, panel = self._drive_disk(tmp_path, monkeypatch)
+        assert captured["read_ahead"] == DEFAULT_STREAM_READ_AHEAD
+        assert f"read_ahead={DEFAULT_STREAM_READ_AHEAD}" in _ready_line(panel), _ready_line(panel)
+        assert "read_ahead=3" not in _ready_line(panel), _ready_line(panel)
+
+    def test_the_ready_line_reports_its_staging_not_nothing(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """The ready line used to say "nothing held resident". The async reader
+        stages `read_ahead` layers in host memory, so that claim is now false
+        and the honest figure has to be there instead.
+
+        Scoped to the ready line on purpose: the pre-flight PANEL is rendered
+        from `plan`, before any source exists, so it cannot carry the byte
+        count. The test below pins what the panel says instead, so neither
+        line can quietly go back to claiming nothing is held.
+        """
+        _captured, panel = self._drive_disk(tmp_path, monkeypatch)
+        ready = _ready_line(panel)
+        assert "nothing held resident" not in ready, ready
+        assert "host staging" in ready, ready
+
+    def test_the_preflight_panel_no_longer_claims_nothing_is_resident(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """The panel was left saying "nothing held resident" when the ready
+        line was fixed, because the planner has no staging figure to print.
+        It still has none — but the CLAIM was wrong either way once a reader
+        began holding layers, so the panel now states the shape and leaves the
+        number to the line that has it.
+
+        Asserted over the whole captured buffer rather than the ready line,
+        because this is the one statement that is NOT on the ready line.
+        """
+        _captured, panel = self._drive_disk(tmp_path, monkeypatch)
+        plain = _plain(panel)
+        assert "nothing held resident" not in plain, plain
+        assert "staged by an async reader" in plain, plain
+
+    def test_the_forced_disk_note_says_why_and_does_not_over_promise_pinning(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """The forced-tier note was the one rewritten string with NO test: a
+        repo-wide grep for "not because RAM was short" found nothing, while its
+        two siblings are pinned by `test_v07203.py::
+        test_the_fallback_says_what_it_costs` and by the case above.
+
+        It also asserted the staging is "in pinned host RAM" unconditionally,
+        where `pin = plan.pinned and on_cuda` can be False and `_build_source`
+        falls back to pageable — the ready line then reports the truth, one
+        line under a note that has already claimed otherwise.
+        """
+        _captured, panel = self._drive_disk(tmp_path, monkeypatch)
+        plain = _plain(panel)
+        # WHY this tier: reached by the flag, not by RAM pressure. Without it
+        # the panel reads identically to a genuine fallback.
+        assert "not because RAM was short" in plain, plain
+        assert "stream_source='disk'" in plain, plain
+        # What it costs, with a source — the same contract as the auto note.
+        assert "slower than the RAM tier" in plain, plain
+        assert "gate-971-async-nvme-source.md" in plain, plain
+        # And the honest pinning wording.
+        assert "page-locked where the box allows" in plain, plain
+        assert "in pinned host RAM" not in plain, plain
+
+    def test_a_forced_disk_run_still_pins_its_staging(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """`stream_source: disk` used to zero `plan.pinned`, which since #971
+        also decides whether the STAGING is page-locked. Left alone, the same
+        tier reached by `disk` staged pageable and by `auto` staged pinned —
+        one tier, two behaviours, chosen by the spelling."""
+        captured, _panel = self._drive_disk(tmp_path, monkeypatch)
+        assert captured["tier"] == "disk"
+        assert captured["pin"] is True, (
+            "a forced-disk run on CUDA must still request pinned staging"
+        )
