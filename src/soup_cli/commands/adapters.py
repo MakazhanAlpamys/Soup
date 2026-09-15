@@ -1731,6 +1731,7 @@ def audit(
     # "No adapter_config.json in: C:/Windows" -- a missing-file message for a
     # path that is refused outright.
     from soup_cli.utils.paths import enforce_under_cwd_and_no_symlink
+    from soup_cli.utils.terminal import for_terminal
 
     for _path, _label in ((adapter, "adapter directory"), (config, "--config")):
         try:
@@ -1811,11 +1812,15 @@ def audit(
     for row in result.rows:
         table.add_row(
             row.setting,
-            # _for_terminal as well as escape: escape() neutralises Rich
-            # markup, not control bytes, and an adapter_config.json can be
-            # downloaded. A recorded "AdamW\x1b[2J" would clear the screen.
-            escape(_for_terminal(str(row.asked))),
-            escape(_for_terminal("—" if row.ran is None else str(row.ran))),
+            # utils/terminal.for_terminal, not escape() alone: escape()
+            # neutralises Rich markup but not control bytes, and an
+            # adapter_config.json can be downloaded. A recorded
+            # "AdamW\x1b[2J" would clear the screen. #907 moved this helper
+            # out of the six private copies and into one module; the shared
+            # one strips control bytes THEN escapes markup, so it is a strict
+            # superset of the escape(_for_terminal(...)) pair it replaces.
+            for_terminal(row.asked),
+            for_terminal("—" if row.ran is None else row.ran),
             marks.get(row.status, row.status),
         )
     console.print(table)
@@ -1823,13 +1828,13 @@ def audit(
     for row in result.rows:
         if row.status == "diverged" and row.detail:
             console.print(
-                f"  [red]{escape(_for_terminal(row.setting))}[/]: "
-                f"{escape(_for_terminal(row.detail))}"
+                f"  [red]{for_terminal(row.setting)}[/]: "
+                f"{for_terminal(row.detail)}"
             )
 
     reason = unknown_reason(result.record_kind)
     if reason and result.unknown_count:
-        console.print(f"\n[yellow]{escape(_for_terminal(reason))}[/]")
+        console.print(f"\n[yellow]{for_terminal(reason)}[/]")
 
     if result.diverged_count:
         console.print(
