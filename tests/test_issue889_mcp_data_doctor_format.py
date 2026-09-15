@@ -73,6 +73,9 @@ class TestInvalidFormatIsRefused:
 
         message = str(doctor_exc.value)
         assert message == str(validate_exc.value)
+        # The CLI's `soup data validate` prints auto first, then the declared
+        # VALID_FORMATS order. Both MCP tools should use that same live order.
+        assert message.endswith("accepted: auto, " + ", ".join(VALID_FORMATS))
         assert "auto" in message
         assert all(fmt in message for fmt in VALID_FORMATS)
         assert str(dataset) not in message
