@@ -1,4 +1,4 @@
-"""Issues #720/#932 — distillation gradient-accumulation loss scaling.
+"""Issues #720/#932/#990 — distillation gradient-accumulation loss scaling.
 
 The trainer must consume Transformers' full-window ``num_items_in_batch`` and
 weight each microbatch mean by its share of trained causal targets. A fixed
@@ -11,14 +11,25 @@ real ``Trainer.training_step`` on a one-layer ``LlamaForCausalLM``. With
 ``_sequence_mode`` set, the real ``compute_loss`` is plain mean-reduced CE and
 needs no teacher. Nothing about the fix is restated in the test, so a
 respelled opt-out still passes and a removed one fails.
+
+The class is nested in a factory, so there is no importable symbol. The
+harness walks ``compute_loss`` for free names and binds them from the factory
+and schema defaults. A new unresolvable name fails with that name listed —
+not as a ``NameError`` stamped ``distill.py``. The compile filename is
+``<compiled _DistillTrainer>`` so a traceback cannot be mistaken for the
+real module (#990).
 """
 
 from __future__ import annotations
 
 import ast
+import builtins
 import pathlib
+from typing import Any
 
 import pytest
+
+from soup_cli.config.schema import TrainingConfig
 
 torch = pytest.importorskip("torch")
 transformers = pytest.importorskip("transformers")
@@ -32,6 +43,13 @@ _DISTILL_SOURCE = (
     / "distill.py"
 ).read_text(encoding="utf-8")
 
+_COMPILE_FILENAME = "<compiled _DistillTrainer>"
+_BUILTIN_NAMES = frozenset(dir(builtins))
+
+
+class _UnresolvableFactoryError(Exception):
+    """Raised when a factory assignment cannot be evaluated for the harness."""
+
 
 def _distill_trainer_class_node() -> ast.ClassDef:
     classes = [
@@ -41,6 +59,269 @@ def _distill_trainer_class_node() -> ast.ClassDef:
     ]
     assert classes, "_DistillTrainer is gone; this test needs rewriting"
     return classes[0]
+
+
+def _compute_loss_node(class_node: ast.ClassDef) -> ast.FunctionDef:
+    return next(
+        stmt
+        for stmt in class_node.body
+        if isinstance(stmt, ast.FunctionDef) and stmt.name == "compute_loss"
+    )
+
+
+def _training_config_default(field: str) -> object:
+    info = TrainingConfig.model_fields[field]
+    factory = info.default_factory
+    if callable(factory):
+        return factory()
+    return info.default
+
+
+def _scope_parameters(fn: ast.AST) -> set[str]:
+    bound: set[str] = set()
+    args = fn.args
+    for arg in (*args.posonlyargs, *args.args, *args.kwonlyargs):
+        bound.add(arg.arg)
+    if args.vararg is not None:
+        bound.add(args.vararg.arg)
+    if args.kwarg is not None:
+        bound.add(args.kwarg.arg)
+    return bound
+
+
+class _ScopeBindingVisitor(ast.NodeVisitor):
+    """Collect names this function binds without entering nested scopes."""
+
+    def __init__(self) -> None:
+        self.bound: set[str] = set()
+        self.nested: list[ast.AST] = []
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        self.bound.add(node.name)
+        self.nested.append(node)
+
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+        self.bound.add(node.name)
+        self.nested.append(node)
+
+    def visit_Lambda(self, node: ast.Lambda) -> None:
+        self.nested.append(node)
+
+    def visit_ClassDef(self, node: ast.ClassDef) -> None:
+        self.bound.add(node.name)
+
+    def visit_Import(self, node: ast.Import) -> None:
+        for alias in node.names:
+            self.bound.add((alias.asname or alias.name).split(".")[0])
+
+    def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
+        for alias in node.names:
+            if alias.name != "*":
+                self.bound.add(alias.asname or alias.name)
+
+    def visit_ExceptHandler(self, node: ast.ExceptHandler) -> None:
+        if node.name:
+            self.bound.add(node.name)
+        self.generic_visit(node)
+
+    def visit_Name(self, node: ast.Name) -> None:
+        if isinstance(node.ctx, (ast.Store, ast.Del)):
+            self.bound.add(node.id)
+
+
+class _ScopeLoadVisitor(ast.NodeVisitor):
+    """Collect Load names in this function, leaving nested scopes alone."""
+
+    def __init__(self) -> None:
+        self.loads: set[str] = set()
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        return
+
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+        return
+
+    def visit_Lambda(self, node: ast.Lambda) -> None:
+        return
+
+    def visit_ClassDef(self, node: ast.ClassDef) -> None:
+        return
+
+    def visit_Name(self, node: ast.Name) -> None:
+        if isinstance(node.ctx, ast.Load):
+            self.loads.add(node.id)
+
+
+def _compute_loss_free_names(fn: ast.AST) -> set[str]:
+    """Names ``fn`` loads but does not bind, including uses inside nested defs.
+
+    Nested ``FunctionDef`` names are bound here, so
+    ``_token_weighted_accumulation`` is not reported as missing. A store
+    inside a nested function does not bind the outer function — that is the
+    naive-walk bug in the other direction.
+    """
+    bound = _scope_parameters(fn)
+    binder = _ScopeBindingVisitor()
+    loads = _ScopeLoadVisitor()
+    body = fn.body if not isinstance(fn, ast.Lambda) else [fn.body]
+    for default in (*fn.args.defaults, *fn.args.kw_defaults):
+        if default is not None:
+            loads.visit(default)
+    for stmt in body:
+        binder.visit(stmt)
+        loads.visit(stmt)
+    bound |= binder.bound
+    free = {name for name in loads.loads if name not in bound}
+    for nested in binder.nested:
+        free |= _compute_loss_free_names(nested) - bound
+    return free
+
+
+def _eval_factory_expr(node: ast.AST, env: dict[str, object]) -> object:
+    if isinstance(node, ast.Constant):
+        return node.value
+    if isinstance(node, ast.Name):
+        if node.id in env:
+            return env[node.id]
+        # Factory locals with no harness object (teacher, tokenizers, …).
+        return None
+    if isinstance(node, ast.Attribute):
+        if isinstance(node.value, ast.Name) and node.value.id == "tcfg":
+            if node.attr not in TrainingConfig.model_fields:
+                raise _UnresolvableFactoryError(node.attr)
+            return _training_config_default(node.attr)
+        if isinstance(node.value, ast.Name) and node.value.id == "self":
+            return None
+        base = _eval_factory_expr(node.value, env)
+        if base is None:
+            return None
+        return getattr(base, node.attr)
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
+        return not _eval_factory_expr(node.operand, env)
+    if isinstance(node, ast.BoolOp):
+        values = [_eval_factory_expr(value, env) for value in node.values]
+        result: object = isinstance(node.op, ast.And)
+        for value in values:
+            if isinstance(node.op, ast.And):
+                result = result and value
+            else:
+                result = result or value
+        return result
+    if isinstance(node, ast.Compare) and len(node.ops) == 1:
+        left = _eval_factory_expr(node.left, env)
+        right = _eval_factory_expr(node.comparators[0], env)
+        operator = node.ops[0]
+        if isinstance(operator, ast.Eq):
+            return left == right
+        if isinstance(operator, ast.NotEq):
+            return left != right
+        if isinstance(operator, ast.Is):
+            return left is right
+        if isinstance(operator, ast.IsNot):
+            return left is not right
+        raise _UnresolvableFactoryError(ast.dump(node))
+    if isinstance(node, ast.Call):
+        func = node.func
+        if (
+            isinstance(func, ast.Name)
+            and func.id in {"bool", "float", "int"}
+            and len(node.args) == 1
+        ):
+            caster = {"bool": bool, "float": float, "int": int}[func.id]
+            return caster(_eval_factory_expr(node.args[0], env))
+        if (
+            isinstance(func, ast.Name)
+            and func.id == "getattr"
+            and 2 <= len(node.args) <= 3
+        ):
+            name = _eval_factory_expr(node.args[1], env)
+            default = (
+                _eval_factory_expr(node.args[2], env) if len(node.args) == 3 else None
+            )
+            if (
+                isinstance(node.args[0], ast.Name)
+                and node.args[0].id == "tcfg"
+                and isinstance(name, str)
+                and name in TrainingConfig.model_fields
+            ):
+                return _training_config_default(name)
+            return default
+        if node.args:
+            # Validators wrap a value; bind the wrapped expression.
+            return _eval_factory_expr(node.args[0], env)
+        raise _UnresolvableFactoryError(ast.dump(node))
+    raise _UnresolvableFactoryError(ast.dump(node))
+
+
+def _factory_derived_bindings() -> dict[str, object]:
+    """Evaluate ``setup()`` assignments that precede ``_DistillTrainer``."""
+    tree = ast.parse(_DISTILL_SOURCE)
+    setup = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "setup"
+    )
+    env: dict[str, object] = {}
+    for stmt in setup.body:
+        if isinstance(stmt, ast.ClassDef) and stmt.name == "_DistillTrainer":
+            break
+        if not (isinstance(stmt, ast.Assign) and len(stmt.targets) == 1):
+            continue
+        target = stmt.targets[0]
+        if not isinstance(target, ast.Name):
+            continue
+        try:
+            env[target.id] = _eval_factory_expr(stmt.value, env)
+        except _UnresolvableFactoryError:
+            continue
+    return env
+
+
+def _closure_namespace(compute_loss: ast.FunctionDef) -> dict[str, Any]:
+    """Bind every free name ``compute_loss`` needs, or fail naming the rest.
+
+    Schema fields come from ``TrainingConfig`` defaults, not literals, so the
+    #720 tests keep the unchunked path when ``distill_chunk_size``'s default
+    is ``None``. Harness overrides keep ``_sequence_mode`` on so CE-only
+    measurements still skip the teacher. A name the walker cannot resolve
+    fails here instead of as a ``NameError`` inside the recompiled body.
+    """
+    from soup_cli.trainer import distill as distill_mod
+
+    namespace: dict[str, Any] = {}
+    namespace.update(_factory_derived_bindings())
+    namespace.update({
+        "_sequence_mode": True,
+        "_minillm_on_policy": False,
+    })
+    free = _compute_loss_free_names(compute_loss)
+    for name in free:
+        if name not in namespace and hasattr(distill_mod, name):
+            namespace[name] = getattr(distill_mod, name)
+    missing = sorted(
+        name
+        for name in free
+        if name not in namespace and name not in _BUILTIN_NAMES
+    )
+    assert not missing, (
+        "_compile_distill_trainer() must bind "
+        f"{missing} — the factory gained them and this harness was not updated."
+    )
+    return namespace
+
+
+def _exec_distill_trainer_class(
+    node: ast.ClassDef,
+    *,
+    trainer_base: type | None = None,
+) -> type:
+    namespace = _closure_namespace(_compute_loss_node(node))
+    namespace["Trainer"] = (
+        transformers.Trainer if trainer_base is None else trainer_base
+    )
+    compiled = compile(ast.Module([node], []), _COMPILE_FILENAME, "exec")
+    exec(compiled, namespace)
+    return namespace["_DistillTrainer"]
 
 
 def _compile_distill_trainer(*, without_token_weighting: bool = False) -> type:
@@ -53,11 +334,7 @@ def _compile_distill_trainer(*, without_token_weighting: bool = False) -> type:
     """
     node = ast.parse(ast.unparse(_distill_trainer_class_node())).body[0]
     if without_token_weighting:
-        compute_loss = next(
-            stmt
-            for stmt in node.body
-            if isinstance(stmt, ast.FunctionDef) and stmt.name == "compute_loss"
-        )
+        compute_loss = _compute_loss_node(node)
         normalizer = next(
             stmt
             for stmt in compute_loss.body
@@ -66,13 +343,7 @@ def _compile_distill_trainer(*, without_token_weighting: bool = False) -> type:
         )
         normalizer.body = [ast.Return(value=ast.Name(id="loss", ctx=ast.Load()))]
         ast.fix_missing_locations(node)
-    namespace = {
-        "Trainer": transformers.Trainer,
-        "_sequence_mode": True,
-        "_minillm_on_policy": False,
-    }
-    exec(compile(ast.Module([node], []), "distill.py", "exec"), namespace)
-    return namespace["_DistillTrainer"]
+    return _exec_distill_trainer_class(node)
 
 
 def _accumulated_gradient(trainer_cls: type, steps: int, tmp_path):
@@ -170,8 +441,10 @@ def _unequal_length_gradient(
             "_compute_distill_term": _compute_distill_term,
             "divergence": "forward_kl",
             "temperature": 2.0,
-            "_distill_chunk_size": None,
-            "_distill_checkpoint": False,
+            "_distill_chunk_size": _training_config_default("distill_chunk_size"),
+            "_distill_checkpoint": bool(
+                _training_config_default("distill_checkpoint")
+            ),
         })
     args = transformers.TrainingArguments(
         output_dir=str(tmp_path / f"unequal-ga{steps}"),
@@ -331,3 +604,66 @@ def test_distill_trainer_sets_loss_kwargs_contract_after_trainer_init(tmp_path):
         ),
     )
     assert trainer.model_accepts_loss_kwargs is True
+
+
+def test_nested_function_definitions_are_not_missing_bindings() -> None:
+    """``_token_weighted_accumulation`` is defined inside ``compute_loss``."""
+    compute_loss = _compute_loss_node(_distill_trainer_class_node())
+    free = _compute_loss_free_names(compute_loss)
+    assert "_token_weighted_accumulation" not in free
+    assert "_sequence_mode" in free
+    assert "_distill_chunk_size" in free
+
+
+def test_nested_store_does_not_bind_an_outer_free_name() -> None:
+    """A naive whole-tree Store walk would hide ``_factory_only``."""
+    fn = ast.parse(
+        "def compute_loss(self):\n"
+        "    def _inner():\n"
+        "        _factory_only = 1\n"
+        "        return _factory_only\n"
+        "    return _factory_only\n"
+    ).body[0]
+    free = _compute_loss_free_names(fn)
+    assert "_factory_only" in free
+    assert "_inner" not in free
+
+
+def test_unresolved_free_name_fails_with_the_missing_binding() -> None:
+    """Adding a closure variable without a resolvable binding is a named fail."""
+    node = ast.parse(ast.unparse(_distill_trainer_class_node())).body[0]
+    compute_loss = _compute_loss_node(node)
+    compute_loss.body.insert(
+        0,
+        ast.Expr(value=ast.Name(id="_missing_harness_binding", ctx=ast.Load())),
+    )
+    ast.fix_missing_locations(node)
+    with pytest.raises(AssertionError, match="_missing_harness_binding"):
+        _exec_distill_trainer_class(node)
+
+
+def test_compiled_trainer_binds_schema_defaults_for_chunked_distill() -> None:
+    compiled_globals = _closure_namespace(
+        _compute_loss_node(_distill_trainer_class_node())
+    )
+    assert compiled_globals["_distill_chunk_size"] == _training_config_default(
+        "distill_chunk_size"
+    )
+    assert compiled_globals["_distill_checkpoint"] == _training_config_default(
+        "distill_checkpoint"
+    )
+
+
+def test_tcfg_attribute_binds_the_schema_default() -> None:
+    node = ast.parse("tcfg.distill_chunk_size", mode="eval").body
+    assert _eval_factory_expr(node, {}) == _training_config_default(
+        "distill_chunk_size"
+    )
+
+
+def test_recompiled_compute_loss_filename_is_not_the_real_module() -> None:
+    node = ast.parse(ast.unparse(_distill_trainer_class_node())).body[0]
+    trainer_cls = _exec_distill_trainer_class(
+        node, trainer_base=type("Trainer", (), {})
+    )
+    assert trainer_cls.compute_loss.__code__.co_filename == _COMPILE_FILENAME
