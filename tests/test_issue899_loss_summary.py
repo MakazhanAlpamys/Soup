@@ -15,6 +15,7 @@ _MIGRATED_TRAINERS = (
     "grpo.py",
     "ipo.py",
     "kto.py",
+    "mlx_sft.py",
     "mole_routing.py",
     "online_dpo.py",
     "orpo.py",
@@ -24,6 +25,7 @@ _MIGRATED_TRAINERS = (
     "reward_model.py",
     "sft.py",
     "simpo.py",
+    "unlearn.py",
 )
 
 
@@ -99,7 +101,9 @@ def test_nan_tail_is_not_replaced_by_the_last_finite_loss():
     assert math.isnan(summary["final_loss"])
     assert not summary["final_loss"] < float("inf")
     assert summary["loss_summary_kind"] == "delta"
-    assert _format_training_complete_loss(summary) == "Loss: [bold]2.1000 -> nan[/]"
+    assert (
+        _format_training_complete_loss(summary) == "Loss: [bold]2.1000 -> nan[/]"
+    )
 
 
 def test_infinite_tail_is_not_replaced_by_the_last_finite_loss():
@@ -108,7 +112,9 @@ def test_infinite_tail_is_not_replaced_by_the_last_finite_loss():
     assert summary["initial_loss"] == 2.1
     assert math.isinf(summary["final_loss"])
     assert summary["loss_summary_kind"] == "delta"
-    assert _format_training_complete_loss(summary) == "Loss: [bold]2.1000 -> inf[/]"
+    assert (
+        _format_training_complete_loss(summary) == "Loss: [bold]2.1000 -> inf[/]"
+    )
 
 
 def test_all_nan_per_step_losses_are_not_reported_as_unavailable():
