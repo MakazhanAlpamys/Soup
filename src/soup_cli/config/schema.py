@@ -4461,8 +4461,6 @@ class SoupConfig(BaseModel):
             offenders.append('quantization_aware="fp8"')
         if tcfg.activation_offloading is not None:
             offenders.append("activation_offloading")
-        if tcfg.kernel_auto_compose:
-            offenders.append("kernel_auto_compose")
         if not offenders:
             return self
         # Distinct reasons get distinct messages so users don't waste time
