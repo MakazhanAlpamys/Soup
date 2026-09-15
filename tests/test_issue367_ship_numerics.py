@@ -353,7 +353,7 @@ class TestNumericsStalenessGate:
             assert emitted["numerics"] == "4bit"
             assert emitted["provenance"]["config_sha"] == sha
 
-    def test_malformed_stamp_without_config_exits_1(self):
+    def test_malformed_stamp_without_config_exits_3(self):
         from soup_cli.commands import ship as ship_cmd
 
         ev = _ship_evidence()
@@ -361,6 +361,6 @@ class TestNumericsStalenessGate:
         with runner.isolated_filesystem():
             _write_json(Path("ev.json"), ev)
             res = runner.invoke(ship_cmd.app, ["--evidence", "ev.json"])
-            assert res.exit_code == 1, (res.output, repr(res.exception))
+            assert res.exit_code == 3, (res.output, repr(res.exception))
             assert "numerics" in res.output.lower()
             assert "nf4" not in res.output
