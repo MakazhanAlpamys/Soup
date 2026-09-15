@@ -45,6 +45,50 @@ def decode_sglang_response(response: Any) -> dict:
     )
 
 
+def generate_with_runtime(
+    runtime: Any,
+    prompt: str,
+    prompt_token_ids: Optional[list[int]],
+    sampling_params: dict,
+) -> dict:
+    """Run one generation on an SGLang ``Runtime`` and return the response dict (#785).
+
+    ``Runtime.generate`` only ever posts ``{"text": prompt}``, and the server
+    then tokenizes that string with its tokenizer's default
+    ``add_special_tokens=True`` (``TokenizerManager._tokenize_texts``; there
+    is no request or server flag to turn that off). A template that rendered
+    ``{{ bos_token }}`` therefore reached the model with two of them:
+    measured on a running SGLang 0.5.19 with ``unsloth/Llama-3.2-1B-Instruct``
+    (``bos_token_id`` 128000), the engine ran on ``[128000, 128000, ...]``
+    over 37 ids for the string Soup sent, against the 36 ids
+    ``apply_chat_template(tokenize=True)`` returns; posting those 36 ids
+    reproduced them exactly (``[128000, 128006, ...]``, ``prompt_tokens`` 36).
+
+    So a prompt the template rendered is sent as the ids
+    :func:`~soup_cli.utils.vllm.build_engine_prompt` encoded for it, through
+    the same ``/generate`` endpoint ``Runtime.generate`` posts to, which uses
+    ``input_ids`` verbatim (``TokenizerManager._tokenize_one_request``). A
+    prompt no template rendered (``prompt_token_ids`` is None) still goes
+    through ``Runtime.generate`` as the string it always was.
+
+    Both routes return the same ``{"text": ..., "meta_info": {...}}`` dict:
+    ``Runtime.generate`` re-encodes the server's JSON as a string (#76), the
+    direct post has the dict already, and :func:`decode_sglang_response`
+    accepts both.
+    """
+    if prompt_token_ids is None:
+        return decode_sglang_response(runtime.generate(prompt, sampling_params=sampling_params))
+
+    import requests  # a dependency of sglang, which any live Runtime already imported
+
+    response = requests.post(
+        runtime.url + "/generate",
+        json={"input_ids": prompt_token_ids, "sampling_params": sampling_params},
+    )
+    response.raise_for_status()
+    return decode_sglang_response(response.json())
+
+
 def resolve_sglang_finish_reason(meta_info: Any, max_tokens: Optional[int]) -> str:
     """Map SGLang ``meta_info`` to an OpenAI ``finish_reason`` (#360).
 
@@ -173,8 +217,10 @@ def create_sglang_app(
         model_name: Display model name for API responses.
         max_tokens_default: Default max tokens for generation.
         tokenizer: HF tokenizer for the served model — its chat template is
-            applied by the shared ``build_chat_prompt`` (#360). None degrades to
-            the legacy role-prefixed format, same as the vLLM backend.
+            applied by the shared ``build_engine_prompt`` (#360), which also
+            encodes the rendered prompt so the server does not add a second
+            BOS to it (#785). None degrades to the legacy role-prefixed
+            format, same as the vLLM backend.
 
     Returns:
         FastAPI application.
@@ -191,7 +237,7 @@ def create_sglang_app(
 
     # THE single prompt builder shared with the transformers and vLLM backends
     # (#332), so the three cannot drift again. Was a hand-rolled third copy.
-    from soup_cli.utils.vllm import build_chat_prompt
+    from soup_cli.utils.vllm import build_engine_prompt
 
     app = FastAPI(title="Soup Inference Server (SGLang)", version="1.0.0")
 
@@ -241,7 +287,10 @@ def create_sglang_app(
 
         # Apply the model's own chat template (legacy fallback when there is no
         # tokenizer / template), shared with the transformers + vLLM backends.
-        prompt = build_chat_prompt(request.messages, tokenizer)
+        # #785: and send the ids, not the string, whenever that template
+        # rendered the prompt; the string route lets the server add a second
+        # BOS on top of the one the template rendered (generate_with_runtime).
+        prompt, prompt_token_ids = build_engine_prompt(request.messages, tokenizer)
 
         sampling_params = {
             "temperature": request.temperature,
@@ -254,6 +303,7 @@ def create_sglang_app(
                 _stream_sglang_response(
                     runtime=runtime,
                     prompt=prompt,
+                    prompt_token_ids=prompt_token_ids,
                     sampling_params=sampling_params,
                     request_id=request_id,
                     model_name=model_name,
@@ -263,8 +313,8 @@ def create_sglang_app(
 
         # Non-streaming
         try:
-            response = decode_sglang_response(
-                runtime.generate(prompt, sampling_params=sampling_params)
+            response = generate_with_runtime(
+                runtime, prompt, prompt_token_ids, sampling_params
             )
             response_text = response["text"]
             prompt_tokens = response.get("meta_info", {}).get("prompt_tokens", 0)
@@ -303,6 +353,7 @@ def create_sglang_app(
     async def _stream_sglang_response(
         runtime,
         prompt: str,
+        prompt_token_ids: Optional[list[int]],
         sampling_params: dict,
         request_id: str,
         model_name: str,
@@ -311,8 +362,8 @@ def create_sglang_app(
         created = int(time.time())
 
         try:
-            response = decode_sglang_response(
-                runtime.generate(prompt, sampling_params=sampling_params)
+            response = generate_with_runtime(
+                runtime, prompt, prompt_token_ids, sampling_params
             )
             response_text = response["text"]
             meta_info = response.get("meta_info")
