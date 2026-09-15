@@ -2136,12 +2136,16 @@ class TestDataCanaryCli:
         """
         from pathlib import Path
 
+        from rich.console import Console
         from typer.testing import CliRunner
 
         from soup_cli.cli import app
         from soup_cli.commands import data_canary as cmd
 
         monkeypatch.chdir(tmp_path)
+        # Pin tty detection so the assertion tests the manifest sanitisation,
+        # not the ambient shell's colour forcing.
+        monkeypatch.setattr(cmd, "console", Console(force_terminal=False))
         evil = "7c3f\x1b]52;c;ZXZpbA==\x07-9a21"
         Path("m.json").write_text(
             json.dumps({"canaries": [{"carrier": "c", "secret": evil}]}),

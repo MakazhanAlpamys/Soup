@@ -804,9 +804,15 @@ class TestCiInitV2:
 
 
 class TestSecurityHardening:
-    def test_malformed_config_sha_not_echoed_to_terminal(self):
+    def test_malformed_config_sha_not_echoed_to_terminal(self, monkeypatch):
         """An ESC-laden provenance.config_sha must be rejected without echoing it."""
+        from rich.console import Console
+
         from soup_cli.commands import ship as ship_cmd
+
+        # Pin tty detection so the assertion tests the config_sha rejection,
+        # not the ambient shell's colour forcing.
+        monkeypatch.setattr(ship_cmd, "console", Console(force_terminal=False))
 
         with runner.isolated_filesystem():
             Path("soup.yaml").write_text(_CONFIG_MIN, encoding="utf-8")

@@ -1715,7 +1715,14 @@ class TestDoctorCli:
 
         _patch_tokenizer(monkeypatch)
 
+        from rich.console import Console
+
         from soup_cli.cli import app
+        from soup_cli.commands import data_doctor
+
+        # Pin tty detection so the assertion tests sanitisation of the role
+        # field, not the ambient shell's colour forcing.
+        monkeypatch.setattr(data_doctor, "console", Console(force_terminal=False))
 
         result = runner.invoke(app, ["data", "doctor", str(data_path), "--model", "fake/model"])
         assert "\x1b" not in result.output

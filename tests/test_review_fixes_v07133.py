@@ -493,10 +493,16 @@ class TestAsrInferMetricGuard:
 
 class TestAsrSkipControlStrip:
     def test_hostile_filename_is_stripped(self, tmp_path, monkeypatch):
+        from rich.console import Console
+
         import soup_cli.commands.infer as infer
         from soup_cli.cli import app as cli_app
 
         monkeypatch.chdir(tmp_path)
+        # Pin tty detection: the assertion below is about the filename, not
+        # about whether the ambient shell forces colour on the surrounding
+        # markup. no_color=True alone does not pin detection.
+        monkeypatch.setattr(infer, "console", Console(force_terminal=False))
         # A filename carrying a raw ESC byte; transcriber raises so the skip
         # warning path (which prints the name) runs.
         (tmp_path / "clip.wav").write_bytes(b"x")
