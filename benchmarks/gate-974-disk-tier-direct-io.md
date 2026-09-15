@@ -34,7 +34,7 @@ the request shape, where unbuffered I/O reads the same layers at 3.5-5.65
 GB/s.** The change this record gates therefore reads each layer's data section
 as sector-aligned byte ranges through direct I/O (`FILE_FLAG_NO_BUFFERING` /
 `O_DIRECT`), K ranges in parallel, into one staging region per slot packed
-into the #901 pinned arenas. Its own numbers are in §6 onward.
+into the #901 pinned arenas. Its own numbers are in §6 onward: **cold, position-matched, the 70B step is 16.2-17.3 s at both run positions against 110.5 s for the shipped synchronous path in the same slot (6.4x) and 34.8-45.6 s for the reader it replaces (2.0-2.8x), read share 62-64% at 6.0-7.0 GB/s; the ~20 s target is met** (§8).
 
 Unit convention: decimal GB and GB/s unless a figure is a power of two, which
 is written in GiB. Every block states the host baseline it ran under (free
@@ -151,6 +151,14 @@ block of §1 is not reproduced by the only mechanism proposed for it; what
 made it slow for 55 s is not established, and this record does not guess.
 The finding that survives is the one that matters for the design: cold-start
 of a store that fits the cache is NOT a 2.4x tax on the async source.
+
+**Correction 2026-09-15 19:55 (§8a):** the slow flat block DID come back, under an
+ordering this test did not try — the old reader running SECOND after an eviction,
+behind a direct-I/O block that warms nothing: 4.024 s flat over sixteen timed steps
+and three warm-ups (§8a, A/2), against 2.091 s for the same reader warm. Finding 4
+stands as written for the ordering it tested (the async arm first after the
+eviction); what kept the old reader from warming the cache in §8a's ordering is not
+established there either.
 
 ## 3. What the warm micro-benchmark said the fix should be
 
@@ -451,39 +459,184 @@ block got as far as its plain point: **52.966 s** (49.55-55.69), 9.67 tok/s,
 at the early position — gate-971's 48.09 s for the same position. Both are
 kept as readings; the series that stands is §8.
 
-## 8. After the change: cold, both orders — series 2, RUNNING when this section was committed
+## 8. After the change: cold, both orders — series 2 (16:20-19:37; completed by the successor session)
 
 Take-2 driver (`cold_series2.sh`, kept under
-`.claude/probes/2026-09-15-stream-901-974/session-soup-3d/`): every block's
-stdout+stderr to its own file under `.claude/probes/.../cold2/`, nothing
-filtered; gate-971 §2's protocol (batch 1 x seq 512, 6 timed after 2
-warm-up, `read_ahead 2`, `--step` = the plain point then the instrumented
-one); three arms — the NEW reader, the OLD reader (origin/main a08ae74f's
-`src`, `git archive`d into the scratchpad so no other checkout can move
-under the run; `meta.soup_cli_file` in every JSON is the proof of which tree
-ran), the shipped synchronous `DiskSource`; order A new/old/control, order B
-control/old/new; no eviction between blocks. The box otherwise quiet: soup-f5
-reading only, no reviewers running. Baseline at 16:20:10: free physical
-17.51 GB, commit 23.82 of 47.35 GB, 2 Python processes (both VS Code's LSP
-servers). JSON `i974_cold2_<order>_slot<n>_<arm>.json`.
+`.claude/probes/2026-09-15-stream-901-974/session-soup-3d/` with its live log
+— note for whoever reads the copies: the driver's stdout went to the previous
+session's scratchpad, and the copy under that directory was a 16:37 snapshot
+until the successor replaced it at 19:37; the per-block logs under
+`.claude/probes/.../cold2/` and the JSONs were live throughout). Every block's
+stdout+stderr to its own file, nothing filtered; gate-971 §2's protocol (batch
+1 x seq 512, 6 timed after 2 warm-up, `read_ahead 2`, `--step` = the plain
+point then the instrumented one); three arms — the NEW reader (this tree), the
+OLD reader (origin/main a08ae74f's `src`, `git archive`d into the scratchpad so
+no other checkout can move under the run; `meta.soup_cli_file` in every JSON
+is the proof of which tree ran, and the successor verified that export
+file-by-file against `git show a08ae74f:` — 507 files, differing only by CRLF),
+the shipped synchronous `DiskSource`; order A new/old/control, order B
+control/old/new; no eviction between blocks. Baseline stamps from the driver:
+16:20:10 free physical 17.51 GB, commit 23.82 of 47.35 GB, 2 Python processes
+(VS Code's LSP servers); after A1 18.01 / 23.17 / 2; after A2 17.37 / 24.26 /
+2; after A3 23.08 / 24.28 of a limit grown to 52.59 / 4; after B1 22.34 /
+23.25 of 53.46 / 2; after B2 21.32 / 22.12 / 4; after B3 19.0 / 25.81 / 3 —
+the 4 and 3 are peers' processes, transient. JSON
+`i974_cold2_<order>_slot<n>_<arm>.json`; every number below is from them
+(`session-soup-8c/cold2_table.py` prints the table).
 
-| order / slot | arm | plain step, mean (min-max) | tok/s | instrumented step | copy brackets | SM clock start->end (plain / events) |
+| order / slot | arm | plain step, mean (min-max) | tok/s | instrumented step | copy brackets (share, copy-stream rate) | SM clock start->end (plain / events) |
 |---|---|---|---|---|---|---|
-| A / 1 | NEW async | **16.175 s** | 31.7 | 16.413 s | 10.101 s = 62%, copy stream 6.97 GB/s | 180->1552 / 1552->1725 MHz |
-| A / 2 | OLD async (origin/main) | **45.566 s** | 11.2 | 33.728 s | 28.927 s = 86%, 2.43 GB/s | 180->1357 / 1357->817 MHz |
-| A / 3 | control (sync DiskSource) | running from 16:36:44 | | | | |
-| B / 1-3 | control, OLD, NEW | queued behind it | | | | |
+| A / 1 | NEW async | **16.175 s** (15.77-17.06) | 31.7 | 16.413 s (16.27-16.63) | 10.101 s = 62%, 6.97 GB/s | 180->1552 / 1552->1725 MHz |
+| A / 2 | OLD async (origin/main) | **45.566 s** (37.87-58.45) | 11.2 | 33.728 s (32.29-35.19) | 28.927 s = 86%, 2.43 GB/s | 180->1357 / 1357->817 MHz |
+| A / 3 | control (sync DiskSource) | **110.517 s** (88.82-128.73) | 4.6 | 108.637 s (91.88-150.95) | 100.842 s = 93%, 0.70 GB/s | 180->225 / 1785->187 MHz |
+| B / 1 | control (sync DiskSource) | **163.542 s** (131.80-205.77) — see below | 3.1 | 145.704 s (118.04-181.15) | 135.960 s = 93%, 0.52 GB/s | 180->180 / 1492->202 MHz |
+| B / 2 | OLD async (origin/main) | **34.819 s** (33.29-36.31) | 14.7 | 35.217 s (34.44-36.70) | 32.390 s = 92%, 2.17 GB/s | 180->337 / 337->937 MHz |
+| B / 3 | NEW async | **17.311 s** (16.28-20.42) | 29.6 | 18.315 s (15.99-20.84) | 11.692 s = 64%, 6.02 GB/s | 1432->1320 / 1320->1005 MHz |
 
-**Finding 10 (provisional — order B decides the position-matched pairs).**
-At the early position the new reader's cold 70B step is **16.2 s** against
-the old reader's **45.6 s** two slots later and gate-971's 48.09 s for the
-same slot (2.8x); its read share fell from 86% to 62% at a copy-stream rate
-of 6.97 against 2.43 GB/s. The old arm's instrumented point (33.7 s) is
-FASTER than its plain one (45.6 s) — the page cache warming across the
-block's sixteen steps, gate-971 §3's effect — where the new arm's two points
-agree within 1.5%, because it does not use the cache. Peak VRAM 4.378 GB in
-every block, unchanged from gate-971. The user's target for this step was
-~30 s -> ~20 s.
+Peak VRAM 4.378 GB allocated / 4.798 GB reserved in every block, unchanged
+from gate-971; 70.38 GB moved per step (157 decoder loads + 2 large) in every
+block; stall (the compute stream waiting on a copy) 0.5-26 ms per step, at most
+0.07%.
+
+**The order-B control ran under its own memory pressure, and that row is
+published as what it is, not as a clean control.** It started 17:06:43 and
+wrote its plain point at 19:01:39 — 115 minutes for 8 steps of which the six
+timed ones took 16 — and its instrumented point at 19:21:47. Sampled while it
+ran (18:42-19:16): available physical memory 0.09-0.46 GB; commit 64-68 GB of
+a limit Windows grew from 47.35 to 75.15 GB; the block's working set 19.6-23.2
+GB; its `ReadTransferCount` flat at 0.67 GB (memory-mapped faults are not
+counted there — the successor's first reading of "0 MB/s" as a stall was
+wrong); `PageFaults` 21.0M at 18:44 -> 56.6M at ~18:55 -> 67.6M at 18:57 ->
+131.9M at 19:16, i.e. 49k-122k faults/s, with C: delivering 272-502 MB/s of
+page-ins and the pagefile at 6.2% (2.76 of 44.5 GB) — a memory-starved mmap
+reader, not a pagefile thrash. The per-process commit table taken by the other
+session at 18:58 (kept in its notes) names the cause: python 27624, the
+control block, committed **42.24 GB** of the box's 62.3 GB, the next process
+1.21 GB, and no test suite was running by then — the pre-#971 synchronous
+`DiskSource` holds every shard handle open for the whole run, and a private
+mapping of a 36.39 GB store charges commit for the whole file (#926's
+property, the one #971 replaced), so on a 31.7 GB box a **cold** sync control
+starves itself. A3 did not, because it ran third, behind the old arm whose
+buffered reads had pulled ~20 GB of the store through the page cache; B1 ran
+first and cold. That is gate-971 §3's run-order effect landing on the control
+arm, and it makes the control's own two rows incomparable to each other: the
+slot-1 pair below (A1 NEW against B1 CONTROL) is therefore reported and not
+built on. Nothing was stopped: the successor's request to end the block by
+PID was refused by its permission layer and the user had not answered, and
+the block was progressing; a peer's pytest ran on the box for part of the
+first hour (4 Python processes at 17:06, 2 by 19:21). The A3 control (110.5 s)
+and gate-971's own controls (100.35 s early, 92.25 s late) are the numbers to
+read the sync path from.
+
+**Finding 10 — position-matched, the new reader's cold 70B step is 6.4x
+faster than the shipped synchronous path and 2.0-2.8x faster than the reader
+it replaces, and it no longer depends on the run's position.** Same slot,
+the two orders: slot 3, A3 CONTROL 110.517 s against B3 NEW **17.311 s**
+(6.38x); slot 1, A1 NEW **16.175 s** against B1 CONTROL 163.542 s (10.1x,
+reported only — see above). Old against new in adjacent slots: 45.566 vs
+16.175 s in order A (2.82x) and 34.819 vs 17.311 s in order B (2.01x); over
+both orders the means are 40.19 s against 16.74 s (2.40x). The old arm's two
+slot-2 readings differ by 1.31x (45.6 s behind the new arm, which warms no
+cache; 34.8 s behind a control whose mapping had faulted the whole store in)
+and the control's two by 1.48x, while the new arm's two positions differ by
+**1.07x** (16.18 / 17.31 s): a reader that does not use the page cache gives
+the same number wherever it runs, which is the property the two-order design
+exists to test. Against gate-971 §10, whose pairs were 100.35 -> 48.09 s early
+and 92.25 -> 30.28 s late: the early position is now 16.18 s (2.97x on
+gate-971's 48.09), the late one 17.31 s (1.75x on its 30.28), and against its
+synchronous rows 5.3-6.2x. **The user's target for this step was ~30 s ->
+~20 s; it reads 16.2-17.3 s at both positions.** The read share fell from
+84.7% (gate-971 §10) to 62-64% at a copy-stream rate of 6.0-7.0 GB/s (against
+2.2-2.4 for the old arm and 0.5-0.7 for the control); what bounds the step
+now is no longer only the read, which is the question #841/#842 start from.
+
+Two things the instrumented points say. The NEW arm's two points agree within
+1.5% at A1 (16.18 / 16.41 s) and 5.8% at B3 (17.31 / 18.32 s, a peer process
+on the box), because it does not use the cache and the CUDA-event brackets
+cost it nothing measurable. The OLD arm's instrumented point is FASTER than
+its plain one at A2 (33.7 against 45.6 s) — the page cache warming across the
+block's sixteen steps, gate-971 §3's effect — and flat at B2 (35.2 against
+34.8 s), where the control before it had already faulted the store in. The
+SM-clock columns are two instantaneous samples per block and support nothing
+beyond gate-971 §2b's weaker statement; they are printed, not interpreted.
+
+## 8a. Warm re-check, old against new in ONE session (19:37-19:49)
+
+Driver `session-soup-8c/warm_recheck2.sh` (soup-3d's `warm_recheck.sh` with
+every block's stdout+stderr to its own file under `.claude/probes/.../recheck/`
+— the original piped each block through `grep | head -12`, the hazard §7
+names — and the OLD arm imported from this session's own `git archive
+a08ae74f` export, verified as in §8). Instrument: `stream_probe.py --step` for
+every arm, which is NOT the stage-timer instrument of §1/§6
+(`issue974_warm_stages.py`; the old source has no `_read_layer` seam for it to
+bracket), so the control's absolute numbers here are not compared with §1/§6's
+— the ratios inside this session are the claim. Mistral-7B NF4 shard cache
+(4.14 GB, fits the page cache), batch 1 x seq 512, 8 timed steps after 3
+warm-up, plain point then instrumented point; two orders, each after a
+two-stage eviction (`issue974_evict.py`: 17 GB pressure, avail phys down to
+2.4-3.3 GB, then 8 GB displaced from the 14B shard cache; avail phys 19.9 /
+20.6 GB after), the palindrome new/old/control/RAM then RAM/control/old/new so
+each arm runs once early and once late. Baselines: 19:37:57 free physical
+19.42 GB, commit 24.55 of 53.45 GB, 3 Python processes; between blocks
+17.4-19.6 GB free, 3-4 Python processes (a peer's process came and went).
+JSON `i974_recheck_<order>_slot<n>_<arm>.json`.
+
+| order / slot | arm | plain step, mean (min-max) | tok/s | instrumented | copy brackets | per-step plain | SM clock (plain / events) |
+|---|---|---|---|---|---|---|---|
+| A / 1 (after eviction) | NEW async | **1.788 s** (1.56-2.14) | 286 | 1.786 s | 0.655 s = 37%, 11.31 GB/s | 1.56 2.14 1.73 1.76 1.92 1.76 1.72 1.73 | 1470->1935 / 1777->2055 |
+| A / 2 | OLD async (origin/main) | **4.024 s** (3.74-4.22), FLAT | 127 | 3.760 s | 2.324 s = 62%, 3.19 GB/s | 4.05 4.02 4.22 4.06 4.22 4.09 3.78 3.74 | 375->1192 / 1192->1185 |
+| A / 3 | control (sync DiskSource) | 3.413 s (3.19-3.64) | 150 | 3.406 s | 2.017 s = 59%, 3.67 GB/s | 3.19 3.31 3.21 3.50 3.48 3.51 3.64 3.48 | 360->1417 / 1417->1485 |
+| A / 4 | RAM tier | 1.203 s (1.11-1.60) | 426 | 1.318 s | 0.322 s = 24%, 23.0 GB/s | 1.13 1.12 1.11 1.12 1.16 1.60 1.20 1.18 | 1417->1695 / 1695->1522 |
+| B / 1 (after eviction) | RAM tier | 1.132 s (1.10-1.23) | 452 | 1.190 s | 0.291 s = 24%, 25.5 GB/s | 1.10 1.11 1.12 1.17 1.23 1.10 1.11 1.11 | 180->1395 / 1395->1492 |
+| B / 2 | control (sync DiskSource) | 3.175 s (3.00-3.43) | 161 | 3.239 s | 1.731 s = 53%, 4.27 GB/s | 3.43 3.42 3.19 3.17 3.07 3.04 3.00 3.08 | 982->1507 / 1507->1552 |
+| B / 3 | OLD async (origin/main) | **2.091 s** (1.85-2.35) | 245 | **1.690 s** | 1.012 s = 60%, 7.31 GB/s | 2.35 2.31 2.24 2.35 1.90 1.85 1.86 1.87 | 420->2565 / 2565->1770 |
+| B / 4 | NEW async | **1.582 s** (1.46-1.69) | 324 | **1.591 s** | 0.811 s = 51%, 9.12 GB/s | 1.55 1.46 1.69 1.61 1.66 1.53 1.58 1.58 | 1627->1447 / 1447->1935 |
+
+Peak VRAM 1.342 GB allocated in every block; 61 decoder loads + 2 large per
+step; stall 0.3-4.3 ms per step (at most 0.30%). Every block's
+`meta.soup_cli_file` names the tree it imported: six from this worktree, the
+two OLD blocks from the a08ae74f export.
+
+**Finding 11 — warm, in one session, the new reader is at parity or better
+with the reader it replaces: no regression.** With the store in the page cache
+(order B, behind the RAM tier's load and the control's mapping), OLD reads
+**2.091 s** on the plain point and **1.690 s** instrumented, NEW **1.582 s** and
+**1.591 s** in the next slot — 0.76x on the plain means, 0.94x on the
+instrumented points, where the old arm's plain point was still moving
+(2.35 -> 1.85 s across its eight steps; its clock samples 420 -> 2565 MHz say
+the GPU was ramping too) and the new arm's was flat (1.46-1.69 s). Against the
+synchronous control in the same order the new arm is 0.50x (1.582 vs
+3.175 s). #974's acceptance criterion — a same-session, position-matched pair
+in both orders at 1.0x within noise, or a documented decision — is met on the
+before-the-change measurement (§1, 0.91-0.97x) and on this one; the decision
+in §5 stands on the cold number, not on this parity.
+
+**Finding 12 — right after an eviction, the new reader is 2.25x faster than
+the old one, and §1's slow flat block reproduced.** Order A, slot 1: NEW
+1.788 s (its worst step 2.14 s, no warm-up needed — it never uses the cache;
+1.13x its own warm reading in slot B/4, which is box and clock state, not the
+cache). Slot 2: OLD **4.024 s, flat over all sixteen timed steps and three
+warm-ups** (3.74-4.22 s) at 1.0 GB/s of per-tensor `readinto` — the 4.817 s
+FLAT block of §1 (A/1) and the pilot's 2.4x-slow block, which §2 could not
+bring back by evicting and running the async arm first, came back here with
+the old arm SECOND, behind a direct-I/O block that warms nothing. What did
+not happen is the warm-up §2 measured: twenty-two buffered passes over the
+store did not lift its rate, and §2's "did not reproduce; cause not claimed"
+becomes "reproduces under this ordering; the mechanism that keeps the old
+reader from warming the cache behind an eviction is NOT established" — a
+peer's Python process was on the box during A/2 (4 processes at 19:41:05),
+which is recorded and not blamed. The control behind it read 3.413 s (A/3)
+against 3.175 s warm (B/2), 1.07x. The RAM tier is the floor at both
+positions, 1.13-1.20 s: the new async arm is 1.32-1.58x it, the old arm
+1.85-3.5x, the control 2.8-3.0x — a store that fits RAM belongs on the RAM
+tier, which `stream_source: auto` picks.
+
+The instrumented points cost nothing measurable on the new arm (1.786 /
+1.591 s against 1.788 / 1.582 s plain); on the old arm they read FASTER than
+the plain point in both slots (3.760 vs 4.024 s; 1.690 vs 2.091 s), which is
+the cache and the clock moving across the block rather than the instrument.
+The SM-clock columns are two instantaneous samples per block and are printed,
+not interpreted.
 
 ## 9. What was NOT measured
 
@@ -503,9 +656,13 @@ every block, unchanged from gate-971. The user's target for this step was
 - **Pageable staging (`stream_pin: false`) through direct I/O**, cold or warm.
   The sector slack is tested; its speed is not.
 - **The warm case's cause for the control's 1.4x drift** (§6, Finding 8) —
-  two candidates named, neither tested. §8's re-check runs old and new in one
+  two candidates named, neither tested. §8a's re-check runs old and new in one
   session after an eviction, which is the comparison that matters; it does
   not explain the drift.
+- **The order-B control as a clean position-matched control.** It ran cold
+  and first, under its own 42 GB commit charge (§8); the slot-1 pair is
+  reported, not built on. Re-running it under load would have measured the
+  load, so it was not re-run.
 - **Whether the first cold series' dead blocks would have completed** had a
   second session not killed them (§7). The take-2 series is the record.
 - **Read share of the step at other shapes**, and any sequence sweep; batch 1
