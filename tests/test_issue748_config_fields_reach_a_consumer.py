@@ -70,7 +70,8 @@ transitive here. And the match is global by spelling, so an unrelated
 
 The opposite hole is the one to watch: a function whose name is never loaded
 is not referenced at all, so its reads are dropped and a live field could be
-reported unconsumed. Typer command bodies are its largest instance.
+reported unconsumed. Typer command bodies are its largest decorated class
+among the modules the gate scans; undecorated functions are a larger share.
 `@app.command()` loads `app` and `command`, never the decorated function's own
 name, so on this tree 115 of the 150 `*.command`-decorated functions are absent
 from `referenced_names`, and the other 35 are present only through the global
