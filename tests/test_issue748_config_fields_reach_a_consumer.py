@@ -67,13 +67,16 @@ follow. A function called only from ANOTHER dead function counts as
 referenced, because the dead caller's body loads its name: deadness is not
 transitive here. And the match is global by spelling, so an unrelated
 `obj.name` anywhere under ``src/`` rescues a dead function of the same name.
-`@app.command()` bodies are safe only because their decorator loads the name
--- by accident rather than by design.
 
-The opposite hole is narrower. A function reached only through a string --
-`getattr(module, "name")`, or an entry point declared outside ``src/`` -- is
-not referenced at all, so its reads are dropped and a live field could be
-reported unconsumed. On this tree that drops nothing beyond the four above.
+The opposite hole is the one to watch: a function whose name is never loaded
+is not referenced at all, so its reads are dropped and a live field could be
+reported unconsumed. Typer command bodies are its largest instance.
+`@app.command()` loads `app` and `command`, never the decorated function's own
+name, so on this tree 115 of the 150 `*.command`-decorated functions are absent
+from `referenced_names`, and the other 35 are present only through the global
+spelling match above. A function reached only through a string --
+`getattr(module, "name")`, or an entry point declared outside ``src/`` -- is the
+same case. On this tree that drops nothing beyond the four above.
 
 **Two rules this file learned the hard way, kept because they generalise.**
 A check can only be pinned by testing its REFUSALS: loosening a predicate
