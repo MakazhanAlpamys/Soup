@@ -133,6 +133,14 @@ def create_mii_tokenizer(tokenizer: Any) -> Any:
     ``pad_token``, ...) is the real tokenizer's. Subclassing ``HFTokenizer``
     is what satisfies the config's type check, and keeps the object a working
     wrapper should a later MII stop re-wrapping it.
+
+    Deliberate side effect: when the handed-in tokenizer has no ``pad_token``,
+    the wrapper sets one on it in place (``eos_token``). This mutates the
+    caller's object — the same tokenizer ``build_mii_app`` renders chat
+    templates with — and so runs against the repo's "never mutate" style rule
+    on purpose: it is exactly what MII's own ``HFTokenizer`` does to a tokenizer
+    it loads from a path, so matching it keeps the wrapped and unwrapped paths
+    encoding identically.
     """
     from mii.modeling.tokenizers import HFTokenizer
 

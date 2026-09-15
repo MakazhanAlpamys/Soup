@@ -185,6 +185,61 @@ class TestEncodeMiiPrompt:
         assert encode_mii_prompt(tok, _LEGACY) == tok.encode(_LEGACY)
 
 
+class TestTokenizedPromptCopyHazard:
+    """The fix rides a ``str`` subclass that carries ``token_ids`` in
+    ``__slots__``; any str operation that builds a NEW str drops them and the
+    prompt silently reverts to the doubled BOS with no exception. These pin the
+    sharp edge and the ``_check_prompt_length`` guard that catches its one
+    observable symptom at runtime (#891 review)."""
+
+    @pytest.mark.parametrize(
+        "copy",
+        [
+            lambda p: p.strip(),
+            lambda p: f"{p}",
+            lambda p: p + "",
+            lambda p: p[:],
+            lambda p: "".join([p]),
+        ],
+        ids=["strip", "f-string", "concat", "slice", "join"],
+    )
+    def test_a_copied_prompt_is_a_plain_str_that_lost_its_ids(self, copy):
+        from soup_cli.utils.mii import TokenizedPrompt
+
+        copied = copy(TokenizedPrompt("rendered", [7, 8, 9]))
+
+        assert not isinstance(copied, TokenizedPrompt)
+        assert not hasattr(copied, "token_ids")
+
+    def test_encoding_a_copied_prompt_reverts_to_the_doubled_bos(self):
+        """The consequence a copy causes: with its ids gone, the prompt is
+        re-encoded by the tokenizer, which adds its own BOS again — the exact
+        defect this PR removes, back in silence."""
+        from soup_cli.utils.mii import encode_mii_prompt
+
+        tok = _tokenizer(_BOS_TEMPLATE)
+        copied = f"{_tokenized(tok)}"  # content-identical, but a plain str
+
+        assert encode_mii_prompt(tok, copied)[:2] == [_BOS_ID, _BOS_ID]
+
+    def test_check_prompt_length_is_the_runtime_guard_for_that_reversion(self, caplog):
+        """So the reversion cannot pass unseen: the engine reports how many ids
+        it ran on, and ``_check_prompt_length`` warns when that is not the count
+        Soup encoded (one more == the engine re-added its BOS)."""
+        from soup_cli.utils.mii import _check_prompt_length
+
+        soup_ids = [1, 2, 3]
+
+        with caplog.at_level(logging.WARNING, logger="soup_cli.utils.mii"):
+            _check_prompt_length(MagicMock(prompt_length=len(soup_ids) + 1), soup_ids)
+        assert any("#785" in r.message for r in caplog.records)
+
+        caplog.clear()
+        with caplog.at_level(logging.WARNING, logger="soup_cli.utils.mii"):
+            _check_prompt_length(MagicMock(prompt_length=len(soup_ids)), soup_ids)
+        assert not [r for r in caplog.records if r.name == "soup_cli.utils.mii"]
+
+
 # ============================================================
 # The wrapper, through the double wrap MII 0.3.3 performs
 # ============================================================
