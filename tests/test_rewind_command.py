@@ -60,11 +60,27 @@ def _run_entries(*, n=60, spike_step=41, nan_step=None, unmeasured=()):
 
 @pytest.fixture
 def plain_console(monkeypatch):
-    """Wide, un-forced console so Rich neither wraps nor injects colour."""
+    """Wide, un-forced console so Rich neither wraps nor injects colour.
+
+    The environment variables alone are not enough: ``commands/rewind.py``
+    builds its module-level ``Console`` at import, so whichever test imports it
+    first fixes its width. In a full-suite run that was a default-width
+    console, and a long tmp path wrapped mid-assertion. The console itself is
+    replaced for the duration of the test.
+    """
+    from rich.console import Console
+
+    import soup_cli.commands.rewind as rewind_cmd
+
     monkeypatch.delenv("FORCE_COLOR", raising=False)
     monkeypatch.delenv("CLICOLOR_FORCE", raising=False)
     monkeypatch.setenv("COLUMNS", "200")
     monkeypatch.setenv("NO_COLOR", "1")
+    monkeypatch.setattr(
+        rewind_cmd,
+        "console",
+        Console(force_terminal=False, no_color=True, width=10_000, soft_wrap=True),
+    )
 
 
 def _patch_tracker(monkeypatch, target):
