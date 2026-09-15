@@ -20,6 +20,7 @@ run.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
@@ -54,7 +55,13 @@ def _is_number(value: Any) -> bool:
     ``_cmp`` and ``_audit_masking`` both guard against, so it is excluded here
     too rather than in three separate places.
     """
-    return isinstance(value, (int, float)) and not isinstance(value, bool)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    # NaN and inf are floats, so they passed this guard and reached `int()`,
+    # which refuses both -- ValueError for NaN, OverflowError for inf, raised
+    # out of the command (#763 review). A number the arithmetic cannot use is
+    # not a number for this purpose.
+    return math.isfinite(value)
 
 
 @dataclass(frozen=True)
@@ -243,6 +250,26 @@ def _audit_warmup(training: Dict[str, Any], record: Dict[str, Any]) -> AuditRow:
     )
 
 
+def _lora_params(record: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """The record's ``lora_parameters``, or ``None`` when it is not a mapping.
+
+    Read with ``.get`` directly, a record carrying ``"lora_parameters": "x"``
+    raised ``AttributeError: 'str' object has no attribute 'get'`` out of the
+    command (#763 review). ``adapter_config.json`` is downloadable, so its
+    shape is untrusted in exactly the way its strings are.
+
+    ``None`` distinguishes "malformed" from ``{}`` "absent": absent is an
+    older adapter and reports ``unknown``, malformed is a finding about the
+    record and reports ``diverged``.
+    """
+    params = record.get("lora_parameters")
+    if params is None:
+        return {}
+    if not isinstance(params, dict):
+        return None
+    return params
+
+
 def _ran_alpha(record: Dict[str, Any]) -> Optional[float]:
     """The alpha a run used, from whichever shape its writer chose.
 
@@ -255,7 +282,7 @@ def _ran_alpha(record: Dict[str, Any]) -> Optional[float]:
     direct = record.get("lora_alpha")
     if direct is not None:
         return direct
-    params = record.get("lora_parameters") or {}
+    params = _lora_params(record) or {}
     if "alpha" in params:
         return params["alpha"]
     scale, rank = params.get("scale"), params.get("rank")
@@ -407,10 +434,25 @@ def audit_adapter(config: Dict[str, Any], record: Dict[str, Any]) -> AuditResult
     rows.append(_audit_masking(data, record))
 
     lora = _lora_asked(training)
+    params = _lora_params(record)
+    if params is None:
+        # Malformed, not absent: say so once per row rather than reporting
+        # `unknown`, which would read as "an older adapter" and is a different
+        # fact about the run.
+        junk = record.get("lora_parameters")
+        detail = (
+            f"the record's lora_parameters is {type(junk).__name__}, not a "
+            "mapping, so no LoRA shape can be read from it"
+        )
+        for name in ("lora.r", "lora.alpha"):
+            if name.split(".", 1)[1] in lora:
+                rows.append(AuditRow(name, lora[name.split(".", 1)[1]], junk, DIVERGED, detail))
+        return AuditResult(rows=rows, record_kind=kind)
+
     if "r" in lora:
         ran_r = record.get("r")
         if ran_r is None:
-            ran_r = (record.get("lora_parameters") or {}).get("rank")
+            ran_r = params.get("rank")
         rows.append(_cmp("lora.r", lora["r"], ran_r))
     if "alpha" in lora:
         rows.append(_cmp("lora.alpha", lora["alpha"], _ran_alpha(record)))
