@@ -48,7 +48,7 @@ def search_recipes(
 
 
 # ---------------------------------------------------------------------------
-# Recipe catalog (170 recipes)
+# Recipe catalog (171 recipes)
 # ---------------------------------------------------------------------------
 
 RECIPES: Dict[str, RecipeMeta] = {
@@ -3736,6 +3736,34 @@ training:
 output: ./output
 """,
     ),
+    "falcon-e-bitnet-sft": RecipeMeta(
+        model="tiiuae/Falcon-E-1B-Instruct",
+        task="sft",
+        size="1B",
+        tags=("bitnet", "1.58bit", "falcon-e", "ternary", "v0.52.0"),
+        description="Falcon-E BitNet 1.58-bit SFT — live (v0.71.20)",
+        yaml_str="""\
+base: tiiuae/Falcon-E-1B-Instruct
+task: sft
+
+data:
+  train: ./data/train.jsonl
+  format: auto
+  max_length: 2048
+
+training:
+  epochs: 3
+  lr: 1e-4
+  batch_size: auto
+  quantization: bitnet_1.58
+  lora:
+    r: 16
+    alpha: 32
+    target_modules: auto
+
+output: ./output
+""",
+    ),
     # ------------------------------------------------------------------
     # v0.71.24 — 2026 model-family expansion (catalog 116 -> 133)
     # 17 SFT recipes for the open-weight models released Feb-Jun 2026.
@@ -4107,6 +4135,49 @@ training:
   dpo_beta: 0.1
   moe_lora: true
   moe_aux_loss_coeff: 0.01
+
+output: ./output
+""",
+    ),
+    "qwen3.5-35b-a3b-grpo": RecipeMeta(
+        model="Qwen/Qwen3.5-35B-A3B",
+        task="grpo",
+        size="35B",
+        tags=(
+            "qwen",
+            "qwen3.5",
+            "grpo",
+            "reasoning",
+            "moe",
+            "mixture-of-experts",
+        ),
+        description="Qwen 3.5 35B-A3B MoE GRPO reasoning (Apache-2.0, 3B active)",
+        yaml_str="""\
+base: Qwen/Qwen3.5-35B-A3B
+task: grpo
+modality: text
+
+data:
+  train: ./data/reasoning_train.jsonl
+  format: auto
+  max_length: 4096
+
+training:
+  epochs: 3
+  lr: 1e-5
+  batch_size: 1
+  gradient_accumulation_steps: 16
+  lora:
+    r: 16
+    alpha: 32
+    target_modules: auto
+  quantization: 4bit
+  grpo_beta: 0.1
+  num_generations: 4
+  reward_fn: accuracy
+  moe_lora: true
+  moe_aux_loss_coeff: 0.01
+  gradient_checkpointing: true
 
 output: ./output
 """,

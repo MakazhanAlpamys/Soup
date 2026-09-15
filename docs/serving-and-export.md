@@ -548,7 +548,7 @@ soup ui
 
 **Pages:**
 - **Dashboard** — view all experiment runs, loss charts, system info, multi-run comparison
-- **New Training** — create configs from templates or 170 ready-made recipes, validate, start training with live SSE log streaming and progress bar
+- **New Training** — create configs from templates or 171 ready-made recipes, validate, start training with live SSE log streaming and progress bar
 - **Data Explorer** — browse and inspect datasets (JSONL, JSON, CSV, Parquet)
 - **Model Chat** — chat with streaming responses, configurable temperature/top_p/max_tokens, system prompt, adapter selection, markdown rendering, chat export
 
@@ -557,9 +557,15 @@ soup ui
 - **Enhanced Metrics** — 2x2 chart grid (loss, LR, grad_norm, throughput) + GPU memory chart, eval results table
 - **Multi-Run Compare** — overlay loss curves from up to 5 runs side-by-side
 - **Chat Upgrade** — SSE streaming via proxy, typing indicator, cancel button, markdown renderer (bold, italic, code blocks), chat export as JSON
-- **Config Builder** — recipe dropdown (170 recipes), config schema API for dynamic form generation
+- **Config Builder** — recipe dropdown (171 recipes), config schema API for dynamic form generation
 
 **Security:** The Web UI generates a random auth token at startup (printed to console). Every private endpoint — mutating (start/stop training, delete runs, inspect data, validate config) and reading (runs, metrics, system, recipes, SSE streams) — requires an `Authorization: Bearer <token>` header. `/` and `/api/health` stay open so the dashboard can load. CORS is restricted to the served origin. Data inspection is sandboxed to the working directory.
+
+YAML-entry request bodies are capped at 1 MiB on `/api/config/validate`,
+`/api/train/start`, and `/api/config/from-form`. Larger bodies return HTTP 413
+before JSON/YAML validation. The server checks both `Content-Length` and the
+bytes actually received, so chunked requests and understated headers cannot
+bypass the limit.
 
 **Interactive API docs are loopback-only.** `/openapi.json`, `/docs`, `/docs/oauth2-redirect` and `/redoc` serve on a loopback bind and are **absent** (404) on any other, including `soup ui --public`. This is deliberate rather than incidental: the schema exposes no run data, configuration or logs, but it does describe every route, parameter and request/response shape, and on a LAN bind that is free reconnaissance. Gating them behind the token instead was rejected — `/docs` is a browser navigation and Swagger cannot attach a Bearer header to it, so gating would break the page for a developer while leaving `/openapi.json` readable by any HTTP client. If you need the schema while bound publicly, read it from a loopback instance of the same version.
 
@@ -768,4 +774,3 @@ Three POST routes are now available on `soup serve`:
   process's read access to world-readable system files. The endpoint fails closed with
   HTTP 501 when strict OS isolation is unavailable (including on Windows or restricted
   Linux containers).
-

@@ -152,7 +152,7 @@ soup migrate --from llamafactory config.yaml  Import config from LLaMA-Factory
 soup migrate --from axolotl config.yml        Import config from Axolotl
 soup migrate --from unsloth notebook.ipynb    Import config from Unsloth notebook
 soup migrate --from llamafactory c.yaml --dry-run  Preview without writing
-soup recipes list                             List all 170 ready-made recipes
+soup recipes list                             List all 171 ready-made recipes
 soup recipes show llama3.1-8b-sft            Print recipe YAML
 soup recipes use llama3.1-8b-sft             Copy recipe to soup.yaml
 soup recipes search "reasoning"              Search by keyword/task/size
@@ -206,9 +206,9 @@ soup reward synth refs.jsonl -o reward.py     Synthesize a deterministic reward 
 soup reward synth ... --kind numeric|json_schema|regex|tool_call  Force a verifier family (default: auto-detect)
 soup reward synth ... --plan-only             Report the induced spec + calibration plan; write nothing
 soup reward synth ... --output-report r.json --min-discrimination 0.5  Save the calibration JSON / set the refusal threshold (exit 0 emit / 2 refuse / 1 error)
-soup reward stress reward.py --references golds.jsonl  Adversarially probe a verifier for gameability — empty/length/repetition/sentinel junk (v0.71.41)
+soup reward stress reward.py --references golds.jsonl  Adversarially probe a verifier for gameability — classic and structure-preserving attacks (v0.71.41)
 soup reward stress verifiable --verifiable-domain math --references golds.jsonl  Probe a builtin verifier instead of a .py file
-soup reward stress ... --attacks empty,length,repetition,sentinel --sentinel GOLD --threshold 0.5 --max-gameable 0.0  Tune the attack set / accept threshold / tolerance
+soup reward stress ... --attacks empty,length,repetition,sentinel,wrapped_junk,answer_spray --sentinel GOLD --threshold 0.5 --max-gameable 0.0  Tune the attack set / accept threshold / tolerance
 soup reward stress ... --output-report r.json  Save the per-attack report JSON (exit 0 robust / 2 gameable / 1 error)
 soup tui                                      Full-screen Textual dashboard (requires [tui] extra)
 soup train --config soup.yaml --profile       Record torch.profiler trace to <output>/profiles/
@@ -327,7 +327,7 @@ soup train  # use_mod | expand_layers | use_longlora  Mixture-of-Depths / LLaMA 
 soup train  # task='tts' + tts_family + modality='audio_out'  TTS fine-tune via SFT CE over pre-encoded codec tokens; emotion templating; live-codec hw-gated — LIVE (v0.71.20)
 soup train  # task in {sft,pretrain,dpo} + moe_expert_quant=nf4|int8_rowwise [+moe_lora]  bnb per-expert quant of fused-MoE experts (CUDA) — LIVE (v0.71.20)
 soup train  # train_router_only=true [+moe_lora]  Freeze MoE experts, train only the gating router — LIVE (v0.71.20)
-soup train  # quantization='bitnet_1.58'  BitNet 1.58 training is not implemented; config load refuses it
+soup train  # quantization='bitnet_1.58' (sft/pretrain/dpo)  BitNet 1.58 SFT (requires onebitllms) — LIVE-gated (v0.71.20)
 soup export --model ./output --format bitnet|tq1_0  BitNet 1.58 TQ1_0 ternary GGUF via llama.cpp — LIVE (v0.71.20)
 soup version [--full] [--json]                Show version (--full: system info, --json: JSON output)
 soup --verbose <command>                      Full traceback on errors

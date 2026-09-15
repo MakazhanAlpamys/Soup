@@ -880,6 +880,86 @@ class TestIssue276Qwen35A3bDpoRecipe:
         )
 
 
+class TestIssue847Qwen35A3bGrpoRecipe:
+    """Regression coverage for the qwen3.5-35b-a3b-grpo recipe (#847)."""
+
+    RECIPE = "qwen3.5-35b-a3b-grpo"
+    MODEL = "Qwen/Qwen3.5-35B-A3B"
+
+    def test_recipe_meta_pins_the_model_id(self) -> None:
+        """Surface 1: pin the model identity in ``RecipeMeta``."""
+        from soup_cli.recipes.catalog import get_recipe
+
+        recipe = get_recipe(self.RECIPE)
+        assert recipe is not None, f"{self.RECIPE} is missing from the catalog"
+        assert recipe.model == self.MODEL
+        assert recipe.task == "grpo"
+
+    def test_yaml_base_pins_the_model_id(self) -> None:
+        """Surface 2: pin the independently parsed YAML ``base``."""
+        import yaml
+
+        from soup_cli.recipes.catalog import get_recipe
+
+        recipe = get_recipe(self.RECIPE)
+        assert recipe is not None
+        parsed = yaml.safe_load(recipe.yaml_str)
+        assert parsed["base"] == self.MODEL
+        assert parsed["task"] == "grpo"
+
+    def test_recipe_loads_with_expected_grpo_moe_shape(self) -> None:
+        from soup_cli.config.loader import load_config_from_string
+        from soup_cli.recipes.catalog import get_recipe
+
+        recipe = get_recipe(self.RECIPE)
+        assert recipe is not None
+        config = load_config_from_string(recipe.yaml_str)
+
+        assert config.base == self.MODEL
+        assert config.task == "grpo"
+        assert config.modality == "text"
+        assert config.data.format == "auto"
+        assert config.data.max_length == 4096
+        assert config.training.lr == 1e-5
+        assert config.training.batch_size == 1
+        assert config.training.gradient_accumulation_steps == 16
+        assert config.training.lora.r == 16
+        assert config.training.lora.alpha == 32
+        assert config.training.quantization == "4bit"
+        assert config.training.moe_lora is True
+        assert config.training.gradient_checkpointing is True
+
+    def test_show_and_use_recipe(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        show_result = runner.invoke(app, ["recipes", "show", self.RECIPE])
+        assert show_result.exit_code == 0
+        assert self.MODEL in strip_ansi(show_result.output)
+
+        monkeypatch.chdir(tmp_path)
+        use_result = runner.invoke(app, ["recipes", "use", self.RECIPE, "--yes"])
+        assert use_result.exit_code == 0
+        written = (tmp_path / "soup.yaml").read_text(encoding="utf-8")
+        assert self.MODEL in written
+        assert "task: grpo" in written
+
+    def test_qwen35_a3b_task_variants_are_complete(self) -> None:
+        from soup_cli.recipes.catalog import RECIPES
+
+        variants = {
+            "qwen3.5-35b-a3b-sft": "sft",
+            "qwen3.5-35b-a3b-dpo": "dpo",
+            self.RECIPE: "grpo",
+        }
+        for name, task in variants.items():
+            assert name in RECIPES, f"{name} is missing from the catalog"
+            assert RECIPES[name].model == self.MODEL
+            assert RECIPES[name].task == task
+            assert RECIPES[name].size == "35B"
+
+
 class TestIssue281KimiK26GrpoRecipe:
     """Regression coverage for the kimi-k2.6-grpo recipe (#281)."""
 
@@ -1309,7 +1389,7 @@ class TestV025NewRecipes:
             assert cfg.base == recipe.model
             assert cfg.task == recipe.task
 
-    def test_catalog_size_is_170(self):
+    def test_catalog_size_is_171(self):
         """Total catalog size — grew with each release.
 
         v0.25.0 shipped 43 recipes (29 + 9 Part A + 2 Part B tools + 3 Part E MLX).
@@ -1341,11 +1421,12 @@ class TestV025NewRecipes:
         Task-variant for #275 added 2 (qwen3.5-0.8b-grpo, qwen3.5-2b-grpo) -> 167.
         Task-variant for #275 / #851 added 2 (kimi-k2.5-dpo, kimi-k2.5-grpo) -> 169.
         Issue #849 added 2 (minimax-m3-dpo, mistral-large-3-dpo) -> 171.
-        Issue #825 retires the unusable Falcon-E BitNet training recipe -> 170.
+        Issue #847 added 1 (qwen3.5-35b-a3b-grpo) -> 172.
+        Issue #825 retires the unusable Falcon-E BitNet training recipe -> 171.
         """
         from soup_cli.recipes.catalog import RECIPES
 
-        assert len(RECIPES) == 170
+        assert len(RECIPES) == 171
 
     def test_new_recipes_searchable(self):
         """Search returns the new recipes via keyword/task filter."""

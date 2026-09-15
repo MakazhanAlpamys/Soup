@@ -1,0 +1,100 @@
+before: synthetic
+after: 5.17.0
+=== e2e run start 13:03:34 ===
+Loading config from soup_14b.yaml...
+┌────────────────────────────── Training Setup ───────────────────────────────┐
+│ Device:  NVIDIA GeForce RTX 5070 Laptop GPU                                 │
+│ Memory:  7.9 GB                                                             │
+│ Model:   D:/synth/qwen2.5-14b-shape                                         │
+│ Task:    sft                                                                │
+│ Backend: transformers                                                       │
+│ LoRA:    r=16, alpha=16                                                     │
+│ Quant:   4bit                                                               │
+│ Seed:    42 (unset default)                                                 │
+└─────────────────────────────────────────────────────────────────────────────┘
+Loading dataset...
+Loaded: 72 train samples
+Run ID: run_20260915_130339_14981265
+Setting up model + trainer...
+Loading tokenizer: D:/synth/qwen2.5-14b-shape
+┌────────────────────── Layer streaming disk pre-flight ──────────────────────┐
+│ HF/local source: 29.54 GB                                                   │
+│ Soup materialized copy: 0.00 GB (no write required)                         │
+│ Layer-shard cache: 7.62 GB (reusable)                                       │
+│ Projected total on disk: 37.16 GB                                           │
+│ Additional writes before training: 0.00 GB                                  │
+└─────────────────────────────────────────────────────────────────────────────┘
+Preparing layer shards ->
+C:\Users\user\.soup\layer-stream\D___synth__qwen2.5-14b-shape
+┌────────────────────────── training.stream_layers ───────────────────────────┐
+│ Layer streaming BETA — arch qwen2, tier ram                                 │
+│   base store   9.93 GB across 48 layers (pinned)                            │
+│   VRAM buffers 2 x 142 MB + 1 x 1557 MB large-layer slot = 1841 MB          │
+│   resident     0 MB extras + adapters                                       │
+│   peak VRAM    ~3.39 GB at batch 1 x seq 384 (logits 0.82 GB)               │
+│   free VRAM    7.32 GB                                                      │
+│   forecast     256-376 tok/s — a compute-bound bound, not a promise         │
+│                (from 33.35 TFLOPS measured on this card now using bfloat16  │
+│ @ 1455 MHz)                                                                 │
+│   ! accumulating 4x at batch 1: the base is re-read once per micro-batch.   │
+│ Per token that is free, but reaching effective batch 4 by raising           │
+│ training.batch_size instead measured ~2.5x faster. Accumulation holds peak  │
+│ VRAM flat, so raise batch_size while the budget above allows, then          │
+│ accumulate for the rest.                                                    │
+└─────────────────────────────────────────────────────────────────────────────┘
+Layer streaming is BETA: slower than resident training, but this model may not
+run resident on this card at all.
+expandable_segments allocator hint not enabled: Windows ignores it — torch
+warns and carries on
+measured peak 2.94 GB (3.24 GB reserved) in 4.61 s at batch 1 x seq 384;
+predicted 3.39 GB
+Layer streaming ready: 48 layers, 9.93 GB pinned RAM store (10.74 GB
+page-locked), 2 x 142 MB decoder buffers + 1 x 1557 MB large-layer slot
+LoRA applied: 12,582,912 trainable / 14,770,033,664 total (0.09%)
+Map:   0%|          | 0/72 [00:00<?, ? examples/s][transformers] return_assistant_tokens_mask==True but chat template does not contain `{% generation %}` keyword.
+Map:  50%|█████     | 36/72 [00:00<00:00, 355.75 examples/s]Map: 100%|██████████| 72/72 [00:00<00:00, 372.36 examples/s]
+Map:   0%|          | 0/8 [00:00<?, ? examples/s]Map: 100%|██████████| 8/8 [00:00<00:00, 444.46 examples/s]
+Truncating train dataset:   0%|          | 0/72 [00:00<?, ? examples/s]Truncating train dataset: 100%|██████████| 72/72 [00:00<00:00, 10912.80 examples/s]
+Truncating eval dataset:   0%|          | 0/8 [00:00<?, ? examples/s]Truncating eval dataset: 100%|██████████| 8/8 [00:00<00:00, 2666.44 examples/s]
+Training started!
+[transformers] The tokenizer has new PAD/BOS/EOS tokens that differ from the model config and generation config. The model config and generation config were aligned accordingly, being updated with the tokenizer's values. Updated tokens: {'bos_token_id': None, 'pad_token_id': 151643}.
+{'loss': '13.19', 'grad_norm': '2.062', 'learning_rate': '2e-05', 'entropy': '10.91', 'num_tokens': '604', 'mean_token_accuracy': '0', 'epoch': '0.05556'}
+{'loss': '13.16', 'grad_norm': '1.992', 'learning_rate': '1.985e-05', 'entropy': '10.91', 'num_tokens': '1231', 'mean_token_accuracy': '0', 'epoch': '0.1111'}
+{'loss': '13.05', 'grad_norm': '2.016', 'learning_rate': '1.94e-05', 'entropy': '10.91', 'num_tokens': '1847', 'mean_token_accuracy': '0', 'epoch': '0.1667'}
+{'loss': '13.04', 'grad_norm': '2.078', 'learning_rate': '1.866e-05', 'entropy': '10.91', 'num_tokens': '2455', 'mean_token_accuracy': '0', 'epoch': '0.2222'}
+{'loss': '12.93', 'grad_norm': '2.031', 'learning_rate': '1.766e-05', 'entropy': '10.91', 'num_tokens': '3082', 'mean_token_accuracy': '0', 'epoch': '0.2778'}
+{'loss': '13.17', 'grad_norm': '2.047', 'learning_rate': '1.643e-05', 'entropy': '10.91', 'num_tokens': '3710', 'mean_token_accuracy': '0', 'epoch': '0.3333'}
+{'loss': '13.09', 'grad_norm': '2.031', 'learning_rate': '1.5e-05', 'entropy': '10.91', 'num_tokens': '4335', 'mean_token_accuracy': '0', 'epoch': '0.3889'}
+{'loss': '12.99', 'grad_norm': '2.031', 'learning_rate': '1.342e-05', 'entropy': '10.91', 'num_tokens': '4960', 'mean_token_accuracy': '0', 'epoch': '0.4444'}
+{'loss': '13.15', 'grad_norm': '2.062', 'learning_rate': '1.174e-05', 'entropy': '10.91', 'num_tokens': '5590', 'mean_token_accuracy': '0', 'epoch': '0.5'}
+{'loss': '13.1', 'grad_norm': '2.078', 'learning_rate': '1e-05', 'entropy': '10.91', 'num_tokens': '6200', 'mean_token_accuracy': '0', 'epoch': '0.5556'}
+{'loss': '13.05', 'grad_norm': '2.078', 'learning_rate': '8.264e-06', 'entropy': '10.91', 'num_tokens': '6815', 'mean_token_accuracy': '0', 'epoch': '0.6111'}
+{'loss': '13.06', 'grad_norm': '2.078', 'learning_rate': '6.58e-06', 'entropy': '10.91', 'num_tokens': '7442', 'mean_token_accuracy': '0', 'epoch': '0.6667'}
+{'loss': '13.09', 'grad_norm': '2.062', 'learning_rate': '5e-06', 'entropy': '10.91', 'num_tokens': '8058', 'mean_token_accuracy': '0', 'epoch': '0.7222'}
+{'loss': '12.96', 'grad_norm': '2.062', 'learning_rate': '3.572e-06', 'entropy': '10.91', 'num_tokens': '8683', 'mean_token_accuracy': '0', 'epoch': '0.7778'}
+{'loss': '13.14', 'grad_norm': '2.094', 'learning_rate': '2.34e-06', 'entropy': '10.91', 'num_tokens': '9301', 'mean_token_accuracy': '0', 'epoch': '0.8333'}
+{'loss': '13', 'grad_norm': '2.078', 'learning_rate': '1.34e-06', 'entropy': '10.91', 'num_tokens': '9935', 'mean_token_accuracy': '0', 'epoch': '0.8889'}
+{'loss': '13.11', 'grad_norm': '2.109', 'learning_rate': '6.031e-07', 'entropy': '10.91', 'num_tokens': '1.055e+04', 'mean_token_accuracy': '0', 'epoch': '0.9444'}
+{'loss': '13.14', 'grad_norm': '2.062', 'learning_rate': '1.519e-07', 'entropy': '10.91', 'num_tokens': '1.116e+04', 'mean_token_accuracy': '0', 'epoch': '1'}
+{'train_runtime': '116.8', 'train_samples_per_second': '0.616', 'train_steps_per_second': '0.154', 'train_loss': '13.08', 'epoch': '1'}
+┌───────────────── Soup Training: D:/synth/qwen2.5-14b-shape ─────────────────┐
+│ Epoch 1.0/1   100%                                                          │
+│ Step:  18/18                                                                │
+│ Loss:  13.1371    LR: 1.52e-07                                              │
+│ Speed: 0.15 it/s                                                            │
+│ GPU peak: 2.7/7.9 GB                                                        │
+│ Grad:  2.0625                                                               │
+└──────────────────── NVIDIA GeForce RTX 5070 Laptop GPU ─────────────────────┘┌──────────────────────────── Training Complete! ─────────────────────────────┐
+│ Loss: 13.1940 -> 13.1371                                                    │
+│ Duration: 1m                                                                │
+│ Output: output_qwen14b_streamed                                             │
+│ Run ID: run_20260915_130339_14981265                                        │
+│                                                                             │
+│ Quick test:  soup chat --model output_qwen14b_streamed                      │
+│ Push to HF:  soup push --model output_qwen14b_streamed                      │
+│ Merge LoRA:  soup merge --adapter output_qwen14b_streamed                   │
+│ Export GGUF: soup export --model output_qwen14b_streamed                    │
+│ Run details: soup runs show run_20260915_130339_14981265                    │
+└─────────────────────────────────────────────────────────────────────────────┘
+=== e2e run end 13:06:16 exit=0 ===
+[exited with code 0]

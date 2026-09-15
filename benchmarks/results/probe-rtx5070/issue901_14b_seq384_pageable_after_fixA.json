@@ -1,0 +1,378 @@
+{
+ "outcome": "ok",
+ "error": "",
+ "free_vram_start": 7353663488,
+ "total_vram": 8518041600,
+ "peak_allocated": 2943784960,
+ "peak_reserved": 3244294144,
+ "num_alloc_retries": 0,
+ "num_ooms": 0,
+ "store": {
+  "n_layers": 48,
+  "buffers": 2,
+  "buffer_bytes": 1841192248,
+  "large_buffer_bytes": 1557135360,
+  "store_bytes": 9931636032,
+  "pinned": false,
+  "tier": "ram",
+  "read_ahead": null,
+  "disk_bytes": 0,
+  "layer_loads": 0,
+  "large_loads": 0,
+  "device": "cuda",
+  "total_params": 14770033664
+ },
+ "large_keys": [
+  "lm_head.weight",
+  "model.embed_tokens.weight"
+ ],
+ "resident_top": [
+  [
+   "base_model.model.model.layers.0.inner.self_attn.q_proj.lora_A.default.weight",
+   327680
+  ],
+  [
+   "base_model.model.model.layers.0.inner.self_attn.q_proj.lora_B.default.weight",
+   327680
+  ],
+  [
+   "base_model.model.model.layers.0.inner.self_attn.v_proj.lora_A.default.weight",
+   327680
+  ],
+  [
+   "base_model.model.model.layers.1.inner.self_attn.q_proj.lora_A.default.weight",
+   327680
+  ],
+  [
+   "base_model.model.model.layers.1.inner.self_attn.q_proj.lora_B.default.weight",
+   327680
+  ],
+  [
+   "base_model.model.model.layers.1.inner.self_attn.v_proj.lora_A.default.weight",
+   327680
+  ],
+  [
+   "base_model.model.model.layers.2.inner.self_attn.q_proj.lora_A.default.weight",
+   327680
+  ],
+  [
+   "base_model.model.model.layers.2.inner.self_attn.q_proj.lora_B.default.weight",
+   327680
+  ],
+  [
+   "base_model.model.model.layers.2.inner.self_attn.v_proj.lora_A.default.weight",
+   327680
+  ],
+  [
+   "base_model.model.model.layers.3.inner.self_attn.q_proj.lora_A.default.weight",
+   327680
+  ],
+  [
+   "base_model.model.model.layers.3.inner.self_attn.q_proj.lora_B.default.weight",
+   327680
+  ],
+  [
+   "base_model.model.model.layers.3.inner.self_attn.v_proj.lora_A.default.weight",
+   327680
+  ]
+ ],
+ "resident_total": 50342400,
+ "log": [
+  {
+   "tag": "before step",
+   "allocated": 1895924224,
+   "max_allocated": 1895924224,
+   "reserved": 1897922560,
+   "t": 43.590586800011806
+  },
+  {
+   "tag": "embed fwd out",
+   "allocated": 1899856384,
+   "max_allocated": 1899856384,
+   "reserved": 1918894080,
+   "t": 44.301028200017754
+  },
+  {
+   "tag": "L0 fwd out",
+   "allocated": 1937542656,
+   "max_allocated": 2105314816,
+   "reserved": 2204106752,
+   "t": 48.79763630000525
+  },
+  {
+   "tag": "L12 fwd out",
+   "allocated": 1984728576,
+   "max_allocated": 2152500736,
+   "reserved": 2204106752,
+   "t": 51.32465310001862
+  },
+  {
+   "tag": "L24 fwd out",
+   "allocated": 2031914496,
+   "max_allocated": 2199686656,
+   "reserved": 2346713088,
+   "t": 54.107303700002376
+  },
+  {
+   "tag": "L36 fwd out",
+   "allocated": 2079100416,
+   "max_allocated": 2246872576,
+   "reserved": 2346713088,
+   "t": 56.38289910001913
+  },
+  {
+   "tag": "L47 fwd out",
+   "allocated": 2122354176,
+   "max_allocated": 2290126336,
+   "reserved": 2346713088,
+   "t": 60.358239799999865
+  },
+  {
+   "tag": "lm_head fwd out",
+   "allocated": 2247005184,
+   "max_allocated": 2290126336,
+   "reserved": 2346713088,
+   "t": 60.44178039999679
+  },
+  {
+   "tag": "after forward (loss)",
+   "allocated": 2476647936,
+   "max_allocated": 2714150400,
+   "reserved": 2816475136,
+   "t": 60.6597071000142
+  },
+  {
+   "tag": "lm_head bwd start",
+   "allocated": 2359859200,
+   "max_allocated": 2943784960,
+   "reserved": 3051356160,
+   "t": 60.86455920001026
+  },
+  {
+   "tag": "L47 bwd start",
+   "allocated": 2272694784,
+   "max_allocated": 2943784960,
+   "reserved": 3051356160,
+   "t": 61.023583200003486
+  },
+  {
+   "tag": "L36 bwd start",
+   "allocated": 2240975360,
+   "max_allocated": 2943784960,
+   "reserved": 3204448256,
+   "t": 61.780549100018106
+  },
+  {
+   "tag": "L24 bwd start",
+   "allocated": 2206372352,
+   "max_allocated": 2943784960,
+   "reserved": 3217031168,
+   "t": 62.40522490002331
+  },
+  {
+   "tag": "L12 bwd start",
+   "allocated": 2171769344,
+   "max_allocated": 2943784960,
+   "reserved": 3229614080,
+   "t": 63.02287950000027
+  },
+  {
+   "tag": "L0 bwd start",
+   "allocated": 2137166336,
+   "max_allocated": 2943784960,
+   "reserved": 3242196992,
+   "t": 63.6421753000177
+  },
+  {
+   "tag": "after backward",
+   "allocated": 2130150400,
+   "max_allocated": 2943784960,
+   "reserved": 3244294144,
+   "t": 63.659613399999216
+  }
+ ],
+ "args": {
+  "weights": "D:/synth/qwen2.5-14b-shape",
+  "repo": "C:\\Users\\user\\projects\\Soup-stream",
+  "quant": "nf4",
+  "tier": "ram",
+  "buffers": 2,
+  "read_ahead": 2,
+  "no_pin": false,
+  "seed": 3,
+  "lora_r": 16,
+  "lora_targets": "q_proj,v_proj",
+  "seq": 384,
+  "batch": 1,
+  "out": "C:/Users/user/AppData/Local/Temp/claude/c--Users-user-projects-Soup/1331a00f-69d4-4427-8c7f-68a2ab79082b/scratchpad/probe901_run2_fixA.json",
+  "no_history": false,
+  "layers": "0,12,24,36,47"
+ },
+ "live_top": [
+  [
+   1558183936,
+   []
+  ],
+  [
+   35651584,
+   []
+  ],
+  [
+   35651584,
+   []
+  ],
+  [
+   35651584,
+   []
+  ],
+  [
+   35651584,
+   []
+  ],
+  [
+   35651584,
+   []
+  ],
+  [
+   35651584,
+   []
+  ],
+  [
+   33554432,
+   [
+    "modeling_qwen2.py:97 forward",
+    "modeling_rope_utils.py:128 wrapper",
+    "modeling_qwen2.py:385 forward",
+    "output_capturing.py:286 wrapper"
+   ]
+  ],
+  [
+   33554432,
+   []
+  ],
+  [
+   13107200,
+   []
+  ],
+  [
+   13107200,
+   []
+  ],
+  [
+   13107200,
+   []
+  ],
+  [
+   13107200,
+   []
+  ],
+  [
+   2621440,
+   []
+  ],
+  [
+   2621440,
+   []
+  ],
+  [
+   2621440,
+   []
+  ],
+  [
+   2621440,
+   []
+  ],
+  [
+   1572864,
+   []
+  ],
+  [
+   1572864,
+   []
+  ],
+  [
+   1515520,
+   []
+  ],
+  [
+   1515520,
+   []
+  ],
+  [
+   1105920,
+   []
+  ],
+  [
+   1105920,
+   []
+  ],
+  [
+   409600,
+   []
+  ],
+  [
+   409600,
+   []
+  ],
+  [
+   409600,
+   []
+  ],
+  [
+   409600,
+   []
+  ],
+  [
+   327680,
+   []
+  ],
+  [
+   327680,
+   []
+  ],
+  [
+   327680,
+   []
+  ],
+  [
+   327680,
+   []
+  ],
+  [
+   327680,
+   []
+  ],
+  [
+   327680,
+   []
+  ],
+  [
+   327680,
+   []
+  ],
+  [
+   327680,
+   []
+  ],
+  [
+   327680,
+   []
+  ],
+  [
+   327680,
+   []
+  ],
+  [
+   327680,
+   []
+  ],
+  [
+   327680,
+   []
+  ],
+  [
+   327680,
+   []
+  ]
+ ]
+}
