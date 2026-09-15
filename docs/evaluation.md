@@ -9,6 +9,7 @@
 - [Post-train X-rays (`soup probe`, `soup adapters blame --live`)](#post-train-x-rays-soup-probe-soup-adapters-blame---live)
 - [Pre-flight Decision (`soup advise`)](#pre-flight-decision-soup-advise)
 - [Eval Design Pipeline (`soup eval design / discover / lock / coverage`)](#eval-design-pipeline-soup-eval-design--discover--lock--coverage)
+- [Run-vs-run Regression (`soup eval against`)](#run-vs-run-regression-soup-eval-against)
 - [Pre-Push Regression Gate (`soup eval gate-install`)](#pre-push-regression-gate-soup-eval-gate-install)
 - [Eval-Gated Training](#eval-gated-training)
 - [Sequential A/B Harness (`soup ab`)](#sequential-ab-harness-soup-ab)
@@ -146,6 +147,25 @@ iff their semantic content matches.
 from both `regex` and `rlvr`, etc. Missing scorers surface as named
 recommendations so operators can spot gaps before shipping the gate.
 
+
+
+
+## Run-vs-run Regression (`soup eval against`)
+
+Compare a candidate run to a baseline with a paired-bootstrap confidence interval
+on a chosen metric. Exit `0` when no regression is detected, `1` otherwise — the
+same check the pre-push hook from `soup eval gate-install` invokes.
+
+```bash
+soup eval against run-baseline-123 --candidate run-candidate-456
+soup eval against run-baseline-123 --candidate run-candidate-456 \
+  --metric task_accuracy --suite evals/locked.json --json-only
+```
+
+Reads per-row metric series from the experiment tracker for both runs, runs the
+paired-bootstrap decision on the delta, and optionally validates a locked suite
+from `soup eval lock` as a hard precondition (`--suite`). Supported metrics:
+`task_accuracy`, `refusal_rate`, `format_validity`, `p95_latency_ms`.
 
 ## Pre-Push Regression Gate (`soup eval gate-install`)
 
