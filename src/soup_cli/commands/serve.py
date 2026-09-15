@@ -526,25 +526,30 @@ def serve(
             )
             raise typer.Exit(1)
 
-        # v0.33.0 #38 — live MII pipeline + OpenAI-compatible HTTP.
-        try:
-            mii_pipeline = create_mii_pipeline(
-                model_path=model, tensor_parallel=1, max_length=4096,
-            )
-        except (ImportError, RuntimeError, OSError) as exc:
-            console.print(f"[red]Failed to create MII pipeline:[/] {exc}")
-            raise typer.Exit(1) from exc
-
         mii_model_name = Path(model).name
 
         # #332 — the served model's own chat template, same as the vLLM path.
         # Without this the MII backend feeds a chat-tuned model a prompt format
         # it never trained on, which is what made Llama-3.1-8B run on.
+        # Loaded before the pipeline because the pipeline tokenizes prompts
+        # through this same object (#785): MII's own tokenizer re-added the
+        # special tokens the template had already rendered.
         mii_tokenizer = _load_serve_tokenizer(
             model_path=Path(model),
             base_model=None,
             trust_remote_code=trust_remote_code,
         )
+
+        # v0.33.0 #38 — live MII pipeline + OpenAI-compatible HTTP.
+        try:
+            mii_pipeline = create_mii_pipeline(
+                model_path=model, tensor_parallel=1, max_length=4096,
+                tokenizer=mii_tokenizer,
+            )
+        except (ImportError, RuntimeError, OSError) as exc:
+            console.print(f"[red]Failed to create MII pipeline:[/] {exc}")
+            raise typer.Exit(1) from exc
+
         if mii_tokenizer is None:
             console.print(
                 "[yellow]Warning:[/] no tokenizer could be loaded for this model — "
