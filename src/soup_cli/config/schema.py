@@ -4934,16 +4934,6 @@ class SoupConfig(BaseModel):
         """v0.52.0 Part D — ``quantization='bitnet_1.58'`` gate."""
         if self.training.quantization != "bitnet_1.58":
             return self
-        from soup_cli.utils.bitnet import validate_bitnet_compat
-
-        try:
-            validate_bitnet_compat(
-                task=self.task,
-                backend=self.backend,
-                modality=self.modality,
-            )
-        except ValueError as exc:
-            raise ValueError(str(exc)) from exc
         raise ValueError(
             "BitNet 1.58 training is not implemented yet; "
             "the export path `soup export --format tq1_0` works on an "
