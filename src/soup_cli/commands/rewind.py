@@ -88,12 +88,12 @@ def rewind(
             console.print(f"[red]Run not found:[/] {escape(run_id)}")
             raise typer.Exit(1)
 
-    output_dir = target.get("output_dir")
-    if not output_dir:
+    candidates = _log_candidates(target, RewindLog.FILENAME)
+    if not candidates:
         console.print("[red]Run has no output_dir recorded[/]")
         raise typer.Exit(1)
 
-    path = Path(output_dir) / RewindLog.FILENAME
+    path = next((c for c in candidates if c.exists()), candidates[0])
     if not path.exists():
         console.print(
             f"[red]No rewind log at[/] {escape(str(path))}\n"
@@ -193,6 +193,36 @@ def rewind(
         }
         json_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
         console.print(f"[dim]Wrote {escape(str(json_path))}[/]")
+
+
+def _log_candidates(target: dict, filename: str) -> list[Path]:
+    """Where this run's rewind log can be, most specific first.
+
+    The tracker records ``output_dir`` only when a run FINISHES, and a crashed run
+    is exactly the one ``soup rewind`` exists for. So the recorded directory comes
+    first, then the run's own config: ``output/experiment_name`` (the transformers
+    layout) and ``output`` (MLX). A relative ``output`` resolves against the current
+    directory, as it did for ``soup train``.
+    """
+    dirs: list[Path] = []
+    if target.get("output_dir"):
+        dirs.append(Path(target["output_dir"]))
+    try:
+        config = json.loads(target.get("config_json") or "{}")
+    except (json.JSONDecodeError, TypeError):
+        config = {}
+    output = config.get("output") if isinstance(config, dict) else None
+    if isinstance(output, str) and output:
+        experiment = config.get("experiment_name")
+        if isinstance(experiment, str) and experiment:
+            dirs.append(Path(output) / experiment)
+        dirs.append(Path(output))
+    seen: list[Path] = []
+    for d in dirs:
+        candidate = d / filename
+        if candidate not in seen:
+            seen.append(candidate)
+    return seen
 
 
 def _row_previews(target, run, rows, rewind_utils) -> dict[int, str] | None:

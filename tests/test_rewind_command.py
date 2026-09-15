@@ -448,3 +448,45 @@ def test_previews_reach_the_table(tmp_path, plain_console, monkeypatch):
 def test_help_exits_zero():
     result = _invoke(["rewind", "--help"])
     assert result.exit_code == 0, result.output
+
+
+def test_a_crashed_run_without_output_dir_is_found_through_its_config(
+    tmp_path, plain_console, monkeypatch
+):
+    """The tracker writes output_dir only in finish_run; a failed run has none."""
+    monkeypatch.chdir(tmp_path)
+    _build(tmp_path / "out_run" / RewindLog.FILENAME, _run_entries())
+    _patch_tracker(
+        monkeypatch,
+        {
+            "run_id": "r1",
+            "output_dir": None,
+            "status": "failed",
+            "config_json": json.dumps({"output": "./out_run"}),
+        },
+    )
+    out = tmp_path / "out.json"
+    result = _invoke(["rewind", "--no-preview", "--json", str(out)])
+    assert result.exit_code == 0, result.output
+    assert json.loads(out.read_text())["step"] == 41
+
+
+def test_experiment_name_layout_is_tried_before_the_bare_output(
+    tmp_path, plain_console, monkeypatch
+):
+    monkeypatch.chdir(tmp_path)
+    _build(tmp_path / "out" / "exp1" / RewindLog.FILENAME, _run_entries(spike_step=41))
+    _build(tmp_path / "out" / RewindLog.FILENAME, _run_entries(spike_step=30))
+    _patch_tracker(
+        monkeypatch,
+        {
+            "run_id": "r1",
+            "output_dir": "",
+            "status": "failed",
+            "config_json": json.dumps({"output": "out", "experiment_name": "exp1"}),
+        },
+    )
+    out = tmp_path / "out.json"
+    result = _invoke(["rewind", "--no-preview", "--json", str(out)])
+    assert result.exit_code == 0, result.output
+    assert json.loads(out.read_text())["step"] == 41
