@@ -324,6 +324,7 @@ jobs:
           models = [
               ("sshleifer/tiny-gpt2", LEGACY_BIN),
               ("hf-internal-testing/tiny-random-gpt2", SAFETENSORS),
+              ("hf-internal-testing/tiny-random-LlamaForCausalLM", SAFETENSORS),
               ("hf-internal-testing/tiny-random-WhisperForConditionalGeneration", LEGACY_BIN),
               # Weights are never loaded for these two — only the config the
               # 429 above was raised on.
