@@ -175,6 +175,7 @@ soup runs show <run_id>                       Run details + loss graph + cost (s
 soup runs compare <run_1> <run_2>             Compare two runs
 soup runs replay <run_id>                     Replay summary + loss curve from history (also plots a benchmark-score curve when the metric lives in eval_results)
 soup why [run_id]                             Explain training anomalies (heuristic)
+soup rewind [run_id] [--step N]               Name the dataset rows behind a loss spike
 soup ship --base <m> --adapter <lora> --task-eval t.jsonl  SHIP / DON'T-SHIP verdict: task win AND no regression on the bundled suite (exit 0=SHIP / 2=DON'T / 3=usage / 1=runtime) (v0.71.25; leg-2 real + usage-off-2 v0.71.38)
 soup ship --evidence ev.json [--output v.json]  Decide offline from pre-computed scores (no model load)
 soup ship ... --task-mode judge_score --judge-model ollama://llama3.1  Leg-1 via LLM-as-a-judge

@@ -48,6 +48,7 @@
 - [EBFT + GDPO (BETA, v0.52.0)](#ebft--gdpo-beta-v0520)
 - [gpt-oss `reasoning_effort` + `train_on_eot` (v0.52.0)](#gpt-oss-reasoning_effort--train_on_eot-v0520)
 - [Seeds & reproducibility (`training.seed`)](#seeds--reproducibility-trainingseed)
+- [Rewind — which row spiked the loss (`soup rewind`)](#rewind--which-row-spiked-the-loss-soup-rewind)
 - [Full fine-tuning (`lora.r: 0`)](#full-fine-tuning-lorar-0)
 
 ---
@@ -130,6 +131,47 @@ reproducible. It does not make CUDA kernels bit-reproducible — non-determinist
 atomics, autotuned algorithms and a different GPU or library version can still
 move the last digits. For bit-exact reruns you also need
 `torch.use_deterministic_algorithms(True)`, which Soup does not set for you.
+
+---
+
+## Rewind — which row spiked the loss (`soup rewind`)
+
+While an SFT run trains, Soup writes `<output>/rewind.jsonl`: one line per micro-batch
+with the dataset rows in it, each row's mean supervised-token loss, and its
+supervised-token count. When the loss jumps, `soup rewind` reads that file and names
+the rows that carried the step. It needs no model or GPU, and runs in seconds.
+
+```yaml
+training:
+  rewind_log: true   # default; set false to write nothing
+```
+
+```bash
+soup rewind                      # most recent run: list spikes, detail the worst
+soup rewind <run_id> --step 340  # rank the rows of one step
+soup rewind <run_id> --json r.json --no-preview
+```
+
+A spike is a step whose loss is non-finite, or more than 2x the median of the previous
+20 measured steps. Rows are ranked by their share of the step's summed token loss, so
+one long, badly-formed row stands out even when its per-token mean is ordinary. Example
+output (illustrative numbers):
+
+```text
+                Step 340 rows
+ Row    Loss   Tokens   Share  Preview
+  91  6.8120    3,900   94.1%  iVBORw0KGgoAAAANSUhEUgAAAyAAAAJYCAYAAAC…
+  12  1.1034      212    0.8%  Sure — here is a summary of the article…
+row 91: 94% of step 340's loss, 3,900 tokens
+Inspect or drop this row, then retrain.
+```
+
+Scope: task `sft` on the transformers and MLX backends, single process. The recorder
+turns itself off, with one warning, for resumed runs, `packing` / `padding_free`, and
+anything it cannot attribute row by row. Previews are shown only when the dataset on
+disk still matches the one the run trained on.
+
+---
 
 ## Full fine-tuning (`lora.r: 0`)
 
