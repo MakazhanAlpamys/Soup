@@ -560,6 +560,70 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             requires_remote_code=requires,
         )
 
+    def _build_rewind_trainer(
+        self,
+        base_cls: Any,
+        trainer_kwargs: dict,
+        *,
+        rows: list,
+        output_dir: Path,
+        batch_size: int,
+        grad_accum: int,
+    ) -> Any:
+        """Build the plain SFT trainer with the rewind flight recorder attached.
+
+        ``rows`` is the ``load_dataset`` train list the text path maps 1:1 into
+        ``train_ds``, so a recorded row id indexes it -- and its fingerprint is
+        what ``soup rewind`` checks before previewing. Under a distributed launch
+        each rank samples a shard, so the recorder is left off with one line.
+        """
+        from soup_cli.trainer.stream_setup import _distributed_launch
+
+        if _distributed_launch():
+            console.print(
+                "[yellow]Rewind log off:[/] the recorder is single-process; "
+                "this is a distributed launch"
+            )
+            return base_cls(**trainer_kwargs)
+
+        from soup_cli.monitoring.rewind_log import RewindLog, dataset_fingerprint
+        from soup_cli.trainer.rewind_hf import (
+            attach_rewind_state,
+            make_rewind_trainer_class,
+        )
+
+        trainer = make_rewind_trainer_class(base_cls)(**trainer_kwargs)
+        log = RewindLog(
+            output_dir / RewindLog.FILENAME,
+            backend="transformers",
+            task="sft",
+            n_rows=len(rows),
+            batch_size=batch_size,
+            grad_accum=grad_accum,
+            dataset_fingerprint=dataset_fingerprint(rows),
+        )
+        state = attach_rewind_state(trainer, log)
+        self._rewind_log = log
+        self._rewind_state = state
+        if not state.failed and not log.disabled:
+            console.print(f"[green]Rewind log:[/] {log.path}")
+        return trainer
+
+    def _report_rewind(self) -> None:
+        """One line after training when the flight recorder lost records."""
+        state = getattr(self, "_rewind_state", None)
+        log = getattr(self, "_rewind_log", None)
+        if state is None or log is None:
+            return
+        log.close()
+        notes = []
+        if state.summary() is not None:
+            notes.append(state.summary())
+        if log.dropped:
+            notes.append(f"rewind: {log.dropped} malformed record(s) not written")
+        for note in notes:
+            console.print(f"[yellow]{note}[/]")
+
     def setup(self, dataset: dict):
         """Load model, tokenizer, apply LoRA, create trainer."""
         from transformers import TrainingArguments
@@ -1015,6 +1079,21 @@ class SFTTrainerWrapper(StreamingSetupMixin):
                 trainer_kwargs,
                 processor=self.processor,
                 max_length=cfg.data.max_length,
+            )
+        elif (
+            tcfg.rewind_log
+            and cfg.task == "sft"
+            and pretok is None
+            and not use_vision
+            and not use_audio
+        ):
+            self.trainer = self._build_rewind_trainer(
+                SFTTrainer,
+                trainer_kwargs,
+                rows=dataset["train"],
+                output_dir=output_dir,
+                batch_size=batch_size,
+                grad_accum=int(tcfg.gradient_accumulation_steps),
             )
         else:
             self.trainer = SFTTrainer(**trainer_kwargs)
@@ -1972,6 +2051,7 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             )
             self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)
         duration = time.time() - start
+        self._report_rewind()
 
         _assert_finite_training_state(
             self.trainer.state.log_history, model=self.trainer.model

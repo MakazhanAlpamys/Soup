@@ -2994,6 +2994,16 @@ class TrainingConfig(BaseModel):
         le=1000,
         description="Consecutive high-loss steps before stopping",
     )
+    # Flight recorder read by `soup rewind`
+    rewind_log: bool = Field(
+        default=True,
+        description=(
+            "Write <output>/rewind.jsonl: the dataset rows in every training "
+            "micro-batch with each row's loss, read by `soup rewind` to name the "
+            "rows behind a loss spike. SFT only (transformers and MLX, single "
+            "process); resumed runs and packing turn it off with one warning."
+        ),
+    )
     # Loss spike auto-recovery (v0.32.0 Part E) — extends watchdog
     loss_spike_recovery: bool = Field(
         default=False,
