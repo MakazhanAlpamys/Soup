@@ -15,6 +15,7 @@ _MIGRATED_TRAINERS = (
     "grpo.py",
     "ipo.py",
     "kto.py",
+    "mlx_sft.py",
     "mole_routing.py",
     "online_dpo.py",
     "orpo.py",
@@ -24,6 +25,7 @@ _MIGRATED_TRAINERS = (
     "reward_model.py",
     "sft.py",
     "simpo.py",
+    "unlearn.py",
 )
 
 
