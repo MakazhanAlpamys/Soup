@@ -180,6 +180,24 @@ def _make_grpo_trainer_variant_cached(base_cls: type, variant: str) -> type:
                 return loss
             return super().compute_loss(model, inputs, return_outputs=return_outputs, **kwargs)
 
+        def training_step(self, model, inputs, num_items_in_batch=None):
+            import torch
+            old = _read_attr(inputs, "old_per_token_logps")
+            if old is not None:
+                # Fix 5: Clamp old_per_token_logps to prevent ExpBackward underflows/overflows
+                clamped_old = torch.clamp(old, min=-20.0, max=20.0)
+                if isinstance(inputs, dict):
+                    inputs = {**inputs, "old_per_token_logps": clamped_old}
+                else:
+                    inputs.old_per_token_logps = clamped_old
+
+            # Fix 1: Pre-step gradient watchdog check
+            loss = super().training_step(model, inputs, num_items_in_batch)
+            if loss is not None and (torch.isnan(loss) or torch.isinf(loss)):
+                logger.warning("Detected non-finite loss in training_step; zeroing gradients.")
+                model.zero_grad()
+            return loss
+
     _GRPOTrainerVariant.__name__ = f"_GRPOTrainerVariant_{variant}"
     return _GRPOTrainerVariant
 
