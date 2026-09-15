@@ -333,7 +333,8 @@ def diff_edit(
     probe_file: Optional[str] = typer.Option(
         None, "--probes",
         help=(
-            "Optional JSONL file with probe prompts. Each row should "
+            "JSONL file with probe prompts; required when both "
+            "--before-model and --after-model are given. Each row should "
             "have a 'prompt' field. Capped at 1000 rows."
         ),
     ),
@@ -347,11 +348,17 @@ def diff_edit(
     ),
     before_model: Optional[str] = typer.Option(
         None, "--before-model",
-        help="Model path / HF id of the BEFORE model (enables live generation).",
+        help=(
+            "Model path / HF id of the BEFORE model "
+            "(live generation with --after-model and --probes)."
+        ),
     ),
     after_model: Optional[str] = typer.Option(
         None, "--after-model",
-        help="Model path / HF id of the AFTER model (enables live generation).",
+        help=(
+            "Model path / HF id of the AFTER model "
+            "(live generation with --before-model and --probes)."
+        ),
     ),
     device: Optional[str] = typer.Option(
         None, "--device",

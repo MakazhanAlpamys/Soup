@@ -220,7 +220,8 @@ def build_diff_report(
     When ``before_model`` AND ``after_model`` (model paths or HF ids) are both
     supplied alongside probes, the report is generated LIVE (v0.71.9 #194):
     each probe prompt is run through both models and the report lists the
-    prompts whose greedy generation changed. Probes require both models.
+    prompts whose greedy generation changed. Probes require both models, and
+    both models require probes.
     """
     before = _validate_run_id(before_run_id, "before_run_id")
     after = _validate_run_id(after_run_id, "after_run_id")
@@ -251,9 +252,9 @@ def build_diff_report(
     # `--probes` reads that as "the edit changed nothing" rather than
     # "nothing was measured".
     #
-    # Placed AFTER the pairing check above so that supplying one model and no
-    # probes still names the missing model rather than the missing probes --
-    # the more specific complaint wins.
+    # Must follow `load_probes` above, because it reads `probes`. Its order
+    # relative to the pairing check does not matter: that check fires only
+    # when exactly one model is given, this one only when both are.
     if before_model is not None and after_model is not None and not probes:
         raise ValueError(
             "--probes is required when both --before-model and --after-model "
