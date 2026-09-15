@@ -245,6 +245,22 @@ def build_diff_report(
     if probe_file is not None:
         probes = load_probes(probe_file)
 
+    # #880, the fourth combination. #863 closed probes-without-models and
+    # either-model-without-the-other; both models with no probes still ran,
+    # reporting `total_probes: 0` and exiting 0. A caller that forgot
+    # `--probes` reads that as "the edit changed nothing" rather than
+    # "nothing was measured".
+    #
+    # Placed AFTER the pairing check above so that supplying one model and no
+    # probes still names the missing model rather than the missing probes --
+    # the more specific complaint wins.
+    if before_model is not None and after_model is not None and not probes:
+        raise ValueError(
+            "--probes is required when both --before-model and --after-model "
+            "are given; without probes there is nothing to generate and the "
+            "report would be an empty diff rather than a measured one"
+        )
+
     if probes and (before_model is None or after_model is None):
         raise ValueError(
             "both --before-model and --after-model are required when --probes is provided"
