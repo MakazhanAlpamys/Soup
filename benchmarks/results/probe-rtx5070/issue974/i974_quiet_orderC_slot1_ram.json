@@ -1,0 +1,194 @@
+{
+ "arm": "ram",
+ "label": "orderC-slot1",
+ "source_class": "RamSource",
+ "read_ahead": null,
+ "pinned": true,
+ "store_gb": 4.137812864,
+ "disk_gb": 0.0,
+ "tokens_per_step": 512,
+ "steps": 8,
+ "warmup": 3,
+ "step_s_mean": 1.0976568375008355,
+ "step_s_min": 1.082080699998187,
+ "step_s_max": 1.1477858999860473,
+ "tok_per_s": 466.44814891850046,
+ "copy_s_mean": 0.2881981961131096,
+ "stall_s_mean": 0.0018081120403658133,
+ "stage_s_mean": {
+  "consumer_load_async": 0.03741449998415192,
+  "consumer_load_large": 0.0004547750031633768
+ },
+ "stage_count_mean": {
+  "consumer_load_async": 61.0,
+  "consumer_load_large": 2.0
+ },
+ "peak_alloc_gb": 1.34248192,
+ "records": [
+  {
+   "step_s": 1.1477858999860473,
+   "copy_s": 0.29114566326141356,
+   "stall_s": 0.013072992328437977,
+   "copy_events": 63,
+   "stages": {
+    "seconds": {
+     "consumer_load_large": 0.0005669000092893839,
+     "consumer_load_async": 0.06314799984102137
+    },
+    "counts": {
+     "consumer_load_large": 2,
+     "consumer_load_async": 61
+    }
+   },
+   "loss": 11.137685775756836
+  },
+  {
+   "step_s": 1.0957015000167303,
+   "copy_s": 0.28771104097366335,
+   "stall_s": 0.0002230399972759187,
+   "copy_events": 63,
+   "stages": {
+    "seconds": {
+     "consumer_load_large": 0.0005157999985385686,
+     "consumer_load_async": 0.04682649997994304
+    },
+    "counts": {
+     "consumer_load_large": 2,
+     "consumer_load_async": 61
+    }
+   },
+   "loss": 10.82686710357666
+  },
+  {
+   "step_s": 1.082080699998187,
+   "copy_s": 0.2908875217437744,
+   "stall_s": 0.00018060800048988313,
+   "copy_events": 63,
+   "stages": {
+    "seconds": {
+     "consumer_load_large": 0.00039950001519173384,
+     "consumer_load_async": 0.03383210007450543
+    },
+    "counts": {
+     "consumer_load_large": 2,
+     "consumer_load_async": 61
+    }
+   },
+   "loss": 10.568626403808594
+  },
+  {
+   "step_s": 1.0933169999916572,
+   "copy_s": 0.29097311878204346,
+   "stall_s": 0.00017632000148296357,
+   "copy_events": 63,
+   "stages": {
+    "seconds": {
+     "consumer_load_large": 0.00044380000326782465,
+     "consumer_load_async": 0.030653700057882816
+    },
+    "counts": {
+     "consumer_load_large": 2,
+     "consumer_load_async": 61
+    }
+   },
+   "loss": 10.410285949707031
+  },
+  {
+   "step_s": 1.0907705000136048,
+   "copy_s": 0.28927638339996337,
+   "stall_s": 0.00023395199934020638,
+   "copy_events": 63,
+   "stages": {
+    "seconds": {
+     "consumer_load_large": 0.00041280000004917383,
+     "consumer_load_async": 0.03017409986932762
+    },
+    "counts": {
+     "consumer_load_large": 2,
+     "consumer_load_async": 61
+    }
+   },
+   "loss": 10.29387092590332
+  },
+  {
+   "step_s": 1.0887221999873873,
+   "copy_s": 0.2837850232124329,
+   "stall_s": 0.0002040959994774312,
+   "copy_events": 63,
+   "stages": {
+    "seconds": {
+     "consumer_load_large": 0.00041640002746134996,
+     "consumer_load_async": 0.03281300002709031
+    },
+    "counts": {
+     "consumer_load_large": 2,
+     "consumer_load_async": 61
+    }
+   },
+   "loss": 10.212564468383789
+  },
+  {
+   "step_s": 1.0863283000071533,
+   "copy_s": 0.28433868932724,
+   "stall_s": 0.00018067199876531959,
+   "copy_events": 63,
+   "stages": {
+    "seconds": {
+     "consumer_load_large": 0.0004110999871045351,
+     "consumer_load_async": 0.029757200012682006
+    },
+    "counts": {
+     "consumer_load_large": 2,
+     "consumer_load_async": 61
+    }
+   },
+   "loss": 10.082796096801758
+  },
+  {
+   "step_s": 1.0965486000059173,
+   "copy_s": 0.2874681282043457,
+   "stall_s": 0.0001932159976568073,
+   "copy_events": 63,
+   "stages": {
+    "seconds": {
+     "consumer_load_large": 0.0004718999844044447,
+     "consumer_load_async": 0.032111400010762736
+    },
+    "counts": {
+     "consumer_load_large": 2,
+     "consumer_load_async": 61
+    }
+   },
+   "loss": 9.946309089660645
+  }
+ ],
+ "facts": {
+  "gpu": "NVIDIA GeForce RTX 5070 Laptop GPU",
+  "torch": "2.14.0+cu130",
+  "vram_total_gb": 8.518,
+  "driver": "616.92",
+  "pcie_gen": "5",
+  "pcie_width": "8"
+ },
+ "shard_dir": "C:\\Users\\user\\.soup\\layer-stream\\unsloth__mistral-7b-instruct-v0.3",
+ "driver": "benchmarks/harness/issue974_warm_stages.py",
+ "started": "2026-09-15T13:55:45",
+ "args": {
+  "weights": "unsloth/mistral-7b-instruct-v0.3",
+  "arm": "ram",
+  "quant": "nf4",
+  "read_ahead": 2,
+  "buffers": 2,
+  "no_pin": false,
+  "seq": 512,
+  "batch": 1,
+  "steps": 8,
+  "warmup": 3,
+  "lora_r": 8,
+  "lora_targets": "q_proj,k_proj,v_proj,o_proj",
+  "seed": 3,
+  "input_seed": 17,
+  "label": "orderC-slot1",
+  "out": "C:/Users/user/AppData/Local/Temp/claude/c--Users-user-projects-Soup/1331a00f-69d4-4427-8c7f-68a2ab79082b/scratchpad/i974_quiet_orderC_slot1_ram.json"
+ }
+}

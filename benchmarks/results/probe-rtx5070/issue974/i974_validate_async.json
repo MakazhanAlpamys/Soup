@@ -1,0 +1,136 @@
+{
+ "arm": "async",
+ "label": "",
+ "source_class": "AsyncDiskSource",
+ "read_ahead": 2,
+ "pinned": true,
+ "store_gb": 0.761929784,
+ "disk_gb": 4.137812864,
+ "tokens_per_step": 512,
+ "steps": 4,
+ "warmup": 2,
+ "step_s_mean": 1.9207994750104262,
+ "step_s_min": 1.8685672999999952,
+ "step_s_max": 2.0636042000260204,
+ "tok_per_s": 266.5556746870835,
+ "copy_s_mean": 1.0183514746427536,
+ "stall_s_mean": 0.0038356639998964963,
+ "stage_s_mean": {
+  "consumer_wait": 1.1970361749117728,
+  "reader_drain": 0.0017264749549212866,
+  "reader_read": 1.7818333502073074
+ },
+ "stage_count_mean": {
+  "consumer_wait": 1832.0,
+  "reader_drain": 60.0,
+  "reader_read": 1800.0
+ },
+ "peak_alloc_gb": 1.34248192,
+ "records": [
+  {
+   "step_s": 2.0636042000260204,
+   "copy_s": 1.1331225290298461,
+   "stall_s": 0.014919583998969756,
+   "copy_events": 63,
+   "stages": {
+    "seconds": {
+     "consumer_wait": 1.3025366007932462,
+     "reader_drain": 0.0013809000665787607,
+     "reader_read": 1.9233505006704945
+    },
+    "counts": {
+     "consumer_wait": 1832,
+     "reader_drain": 60,
+     "reader_read": 1800
+    }
+   },
+   "loss": 11.495795249938965
+  },
+  {
+   "step_s": 1.8750309000024572,
+   "copy_s": 0.9590943741798401,
+   "stall_s": 0.000130784000037238,
+   "copy_events": 63,
+   "stages": {
+    "seconds": {
+     "consumer_wait": 1.137228900071932,
+     "reader_drain": 0.0013178999652154744,
+     "reader_read": 1.737870100158034
+    },
+    "counts": {
+     "consumer_wait": 1832,
+     "reader_drain": 60,
+     "reader_read": 1800
+    }
+   },
+   "loss": 11.137505531311035
+  },
+  {
+   "step_s": 1.8685672999999952,
+   "copy_s": 0.9924299230575562,
+   "stall_s": 0.00017475200083572417,
+   "copy_events": 63,
+   "stages": {
+    "seconds": {
+     "consumer_wait": 1.1749466996698175,
+     "reader_drain": 0.00164589993073605,
+     "reader_read": 1.732150999829173
+    },
+    "counts": {
+     "consumer_wait": 1832,
+     "reader_drain": 60,
+     "reader_read": 1800
+    }
+   },
+   "loss": 10.825361251831055
+  },
+  {
+   "step_s": 1.8759955000132322,
+   "copy_s": 0.988759072303772,
+   "stall_s": 0.0001175359997432679,
+   "copy_events": 63,
+   "stages": {
+    "seconds": {
+     "consumer_wait": 1.1734324991120957,
+     "reader_drain": 0.002561199857154861,
+     "reader_read": 1.733961800171528
+    },
+    "counts": {
+     "consumer_wait": 1832,
+     "reader_drain": 60,
+     "reader_read": 1800
+    }
+   },
+   "loss": 10.567923545837402
+  }
+ ],
+ "facts": {
+  "gpu": "NVIDIA GeForce RTX 5070 Laptop GPU",
+  "torch": "2.14.0+cu130",
+  "vram_total_gb": 8.518,
+  "driver": "616.92",
+  "pcie_gen": "5",
+  "pcie_width": "8"
+ },
+ "shard_dir": "C:\\Users\\user\\.soup\\layer-stream\\unsloth__mistral-7b-instruct-v0.3",
+ "driver": "benchmarks/harness/issue974_warm_stages.py",
+ "started": "2026-09-15T13:19:20",
+ "args": {
+  "weights": "unsloth/mistral-7b-instruct-v0.3",
+  "arm": "async",
+  "quant": "nf4",
+  "read_ahead": 2,
+  "buffers": 2,
+  "no_pin": false,
+  "seq": 512,
+  "batch": 1,
+  "steps": 4,
+  "warmup": 2,
+  "lora_r": 8,
+  "lora_targets": "q_proj,k_proj,v_proj,o_proj",
+  "seed": 3,
+  "input_seed": 17,
+  "label": "",
+  "out": "C:/Users/user/AppData/Local/Temp/claude/c--Users-user-projects-Soup/1331a00f-69d4-4427-8c7f-68a2ab79082b/scratchpad/i974_validate_async.json"
+ }
+}
