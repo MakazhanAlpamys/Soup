@@ -6,7 +6,7 @@ rendered string. SGLang's ``Runtime.generate`` posts ``{"text": prompt}`` to
 tokenizer's default ``add_special_tokens=True`` (``TokenizerManager``, no
 request or server flag turns it off). For a template that renders
 ``{{ bos_token }}`` the model received ``[BOS, BOS, ...]``: measured on
-SGLang 0.5.19 with ``unsloth/Llama-3.2-1B-Instruct`` as
+SGLang 0.5.9 with ``unsloth/Llama-3.2-1B-Instruct`` as
 ``meta_info.prompt_tokens`` 37 against the 36 ids
 ``apply_chat_template(tokenize=True)`` returns.
 
@@ -20,7 +20,7 @@ app already parses.
 
 The tokenizer fixtures are the real ``transformers`` fast tokenizers from
 ``test_issue785_engine_bos``; the runtime is a stand-in that records what it
-was handed, and ``requests.post`` is intercepted so the ids payload is asserted
+was handed, and ``httpx.post`` is intercepted so the ids payload is asserted
 on without an engine or a GPU.
 """
 
@@ -58,9 +58,9 @@ def _runtime(shape="json_string"):
 
 
 def _http_response(payload=None, status=200):
-    """What ``requests.post`` returns from ``/generate`` for an ids prompt."""
-    pytest.importorskip("requests")
-    import requests
+    """What ``httpx.post`` returns from ``/generate`` for an ids prompt."""
+    pytest.importorskip("httpx")
+    import httpx
 
     response = MagicMock()
     response.status_code = status
@@ -68,7 +68,9 @@ def _http_response(payload=None, status=200):
         payload if payload is not None else {"text": "Paris.", "meta_info": dict(_META)}
     )
     if status >= 400:
-        response.raise_for_status.side_effect = requests.HTTPError(f"{status} from /generate")
+        response.raise_for_status.side_effect = httpx.HTTPStatusError(
+            f"{status} from /generate", request=MagicMock(), response=response
+        )
     return response
 
 
@@ -90,19 +92,44 @@ class TestGenerateWithRuntime:
         from soup_cli.utils.sglang import generate_with_runtime
 
         runtime = _runtime()
-        with patch("requests.post", return_value=_http_response()) as post:
+        with patch("httpx.post", return_value=_http_response()) as post:
             generate_with_runtime(runtime, "ignored", [1, 2, 3], {"max_new_tokens": 4})
 
         post.assert_called_once_with(
             "http://127.0.0.1:30000/generate",
             json={"input_ids": [1, 2, 3], "sampling_params": {"max_new_tokens": 4}},
+            timeout=300.0,
         )
         runtime.generate.assert_not_called()
+
+    def test_the_ids_route_bounds_the_engine_with_a_timeout(self):
+        """The post runs inside the app's event loop, so an unresponsive engine
+        must be bounded: ``httpx``'s own 5s default would break long
+        generations, so the call passes an explicit finite timeout."""
+        from soup_cli.utils.sglang import generate_with_runtime
+
+        with patch("httpx.post", return_value=_http_response()) as post:
+            generate_with_runtime(_runtime(), "ignored", [1, 2, 3], {})
+
+        timeout = post.call_args.kwargs["timeout"]
+        assert isinstance(timeout, (int, float)) and 0 < timeout < float("inf")
+
+    def test_a_trailing_slash_on_the_runtime_url_does_not_double(self):
+        """``runtime.url`` may or may not carry a trailing slash; either way the
+        endpoint is ``.../generate``, never ``...//generate``."""
+        from soup_cli.utils.sglang import generate_with_runtime
+
+        runtime = _runtime()
+        runtime.url = "http://127.0.0.1:30000/"
+        with patch("httpx.post", return_value=_http_response()) as post:
+            generate_with_runtime(runtime, "ignored", [1, 2, 3], {})
+
+        assert post.call_args.args[0] == "http://127.0.0.1:30000/generate"
 
     def test_the_ids_route_returns_the_dict_the_string_route_returns(self):
         from soup_cli.utils.sglang import generate_with_runtime
 
-        with patch("requests.post", return_value=_http_response()):
+        with patch("httpx.post", return_value=_http_response()):
             from_ids = generate_with_runtime(_runtime(), "ignored", [1, 2], {})
         from_text = generate_with_runtime(_runtime(), "text", None, {})
 
@@ -111,13 +138,13 @@ class TestGenerateWithRuntime:
     def test_a_server_error_on_the_ids_route_raises(self):
         """``Runtime.generate`` returns the server's error body as if it were
         a result; the ids route must not do worse than that, so it raises."""
-        pytest.importorskip("requests")
-        import requests
+        pytest.importorskip("httpx")
+        import httpx
 
         from soup_cli.utils.sglang import generate_with_runtime
 
-        with patch("requests.post", return_value=_http_response(status=500)):
-            with pytest.raises(requests.HTTPError):
+        with patch("httpx.post", return_value=_http_response(status=500)):
+            with pytest.raises(httpx.HTTPStatusError):
                 generate_with_runtime(_runtime(), "ignored", [1, 2], {})
 
     @pytest.mark.parametrize("shape", ["dict", "json_string"])
@@ -127,7 +154,7 @@ class TestGenerateWithRuntime:
         from soup_cli.utils.sglang import generate_with_runtime
 
         runtime = _runtime(shape)
-        with patch("requests.post") as post:
+        with patch("httpx.post") as post:
             response = generate_with_runtime(runtime, _LEGACY, None, {"max_new_tokens": 4})
 
         runtime.generate.assert_called_once_with(_LEGACY, sampling_params={"max_new_tokens": 4})
@@ -179,7 +206,7 @@ class TestSglangBackend:
         tok = _tokenizer(_BOS_TEMPLATE)
         runtime = _runtime()
 
-        with patch("requests.post", return_value=_http_response()) as post:
+        with patch("httpx.post", return_value=_http_response()) as post:
             _post(_client(tok, runtime), stream=stream)
 
         assert post.call_args.args == ("http://127.0.0.1:30000/generate",)
@@ -190,7 +217,7 @@ class TestSglangBackend:
     def test_what_the_engine_receives_carries_exactly_one_bos(self, stream):
         tok = _tokenizer(_BOS_TEMPLATE)
 
-        with patch("requests.post", return_value=_http_response()) as post:
+        with patch("httpx.post", return_value=_http_response()) as post:
             _post(_client(tok, _runtime()), stream=stream)
 
         ids = _posted_ids(post)
@@ -223,7 +250,7 @@ class TestSglangBackend:
         }[tokenizer_kind]
         runtime = _runtime()
 
-        with patch("requests.post") as post:
+        with patch("httpx.post") as post:
             _post(_client(tok, runtime), stream=stream)
 
         assert runtime.generate.call_args.args == (_LEGACY,)
@@ -232,7 +259,7 @@ class TestSglangBackend:
     def test_the_sampling_params_travel_with_the_ids(self):
         tok = _tokenizer(_BOS_TEMPLATE)
 
-        with patch("requests.post", return_value=_http_response()) as post:
+        with patch("httpx.post", return_value=_http_response()) as post:
             _post(_client(tok, _runtime()))
 
         assert post.call_args.kwargs["json"]["sampling_params"] == {
@@ -249,7 +276,7 @@ class TestSglangBackend:
         meta = {"prompt_tokens": 36, "completion_tokens": 16, "finish_reason": {"type": "length"}}
 
         with patch(
-            "requests.post",
+            "httpx.post",
             return_value=_http_response({"text": "Paris, and more", "meta_info": meta}),
         ):
             body = _post(_client(tok, _runtime())).json()
@@ -261,7 +288,7 @@ class TestSglangBackend:
     def test_the_streamed_chunks_are_built_from_the_ids_route_response(self):
         tok = _tokenizer(_BOS_TEMPLATE)
 
-        with patch("requests.post", return_value=_http_response()):
+        with patch("httpx.post", return_value=_http_response()):
             text = _post(_client(tok, _runtime()), stream=True).text
 
         chunks = [json.loads(line[6:]) for line in text.splitlines() if line.startswith("data: {")]
@@ -273,7 +300,7 @@ class TestSglangBackend:
         tok = _tokenizer(_BOS_TEMPLATE)
         client = _client(tok, _runtime())
 
-        with patch("requests.post", return_value=_http_response(status=503)):
+        with patch("httpx.post", return_value=_http_response(status=503)):
             response = client.post(
                 "/v1/chat/completions",
                 json={"model": "test-model", "messages": _MESSAGES, "max_tokens": 16},

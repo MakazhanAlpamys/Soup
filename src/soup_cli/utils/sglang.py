@@ -58,7 +58,7 @@ def generate_with_runtime(
     ``add_special_tokens=True`` (``TokenizerManager._tokenize_texts``; there
     is no request or server flag to turn that off). A template that rendered
     ``{{ bos_token }}`` therefore reached the model with two of them:
-    measured on a running SGLang 0.5.19 with ``unsloth/Llama-3.2-1B-Instruct``
+    measured on a running SGLang 0.5.9 with ``unsloth/Llama-3.2-1B-Instruct``
     (``bos_token_id`` 128000), the engine ran on ``[128000, 128000, ...]``
     over 37 ids for the string Soup sent, against the 36 ids
     ``apply_chat_template(tokenize=True)`` returns; posting those 36 ids
@@ -79,11 +79,20 @@ def generate_with_runtime(
     if prompt_token_ids is None:
         return decode_sglang_response(runtime.generate(prompt, sampling_params=sampling_params))
 
-    import requests  # a dependency of sglang, which any live Runtime already imported
+    try:
+        import httpx  # the repo's HTTP client (utils/webhooks.py, commands/generate.py)
+    except ImportError as exc:
+        raise ImportError("httpx is required to post token ids to the SGLang engine") from exc
 
-    response = requests.post(
-        runtime.url + "/generate",
+    # ``timeout`` is mandatory: this is a blocking call on the app's event loop
+    # (``chat_completions`` awaits it), so an unresponsive engine must be bounded
+    # rather than wedging the whole server. 300s mirrors the server-generation
+    # path in ``commands/generate.py``. ``rstrip`` guards a trailing slash on
+    # ``runtime.url`` from producing ``//generate``.
+    response = httpx.post(
+        runtime.url.rstrip("/") + "/generate",
         json={"input_ids": prompt_token_ids, "sampling_params": sampling_params},
+        timeout=300.0,
     )
     response.raise_for_status()
     return decode_sglang_response(response.json())
