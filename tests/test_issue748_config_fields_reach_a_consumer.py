@@ -872,6 +872,26 @@ def drop_dead_function_reads(consumed: set, scoped: dict, referenced: set) -> se
     same reason: a gate can only be pinned by driving it directly. Testing it
     through the real tree cannot distinguish the gate from its absence for any
     field that is genuinely live.
+
+    **What keeps the impact small is the one-live-read rule below, not any
+    property of the call graph.** A field is dropped only when *every* read is
+    inside an unreferenced function; a single live read anywhere rescues it.
+    Most fields with a dead read have a live one too, so they survive.
+
+    Measured on the tree at the time of writing, by declared leaf name: 44
+    declared fields have at least one read inside an unreferenced function, 40
+    of those are rescued by the one-live-read rule, and 4 are dropped --
+    `init_strategy`, `use_olora`, `use_vera` and `warmup_auto`, all already in
+    `KNOWN_UNCONSUMED`. Counted by fully-qualified dotted path the totals
+    differ; the four names are the part that is stable and checkable, which is
+    why they are named here and the ratio is not load-bearing.
+
+    Note what this gate does **not** know: whether a function is reachable at
+    runtime. `referenced_names` is a syntactic check for the name appearing
+    somewhere other than its own definition. A `@app.command()`-decorated
+    function is referenced by its decorator, so Typer entry points are safe by
+    accident rather than by design -- if that decorator form ever changed,
+    every command body would look dead to this gate at once.
     """
     out = set(consumed)
     for name, sites in scoped.items():
