@@ -593,7 +593,7 @@ class TestBitNetSchema:
             f"base: x\ntask: {task}\ndata: {{train: ./d.jsonl}}\n"
             "training: {quantization: bitnet_1.58}\n"
         )
-        with pytest.raises(Exception, match="training is not implemented yet"):
+        with pytest.raises(ValueError, match="training is not implemented yet"):
             load_config_from_string(yaml)
 
     def test_bitnet_grpo_rejected(self):
@@ -601,7 +601,7 @@ class TestBitNetSchema:
             "base: x\ntask: grpo\ndata: {train: ./d.jsonl}\n"
             "training: {quantization: bitnet_1.58, reward_fn: accuracy, num_generations: 4}\n"
         )
-        with pytest.raises(Exception, match="task"):
+        with pytest.raises(ValueError, match="training is not implemented yet"):
             load_config_from_string(yaml)
 
     def test_bitnet_mlx_rejected(self):
@@ -609,7 +609,7 @@ class TestBitNetSchema:
             "base: x\ntask: sft\nbackend: mlx\ndata: {train: ./d.jsonl}\n"
             "training: {quantization: bitnet_1.58}\n"
         )
-        with pytest.raises(Exception, match="mlx"):
+        with pytest.raises(ValueError, match="training is not implemented yet"):
             load_config_from_string(yaml)
 
 
