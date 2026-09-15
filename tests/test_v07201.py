@@ -293,19 +293,21 @@ class TestFixIsNumericsNeutral:
 # the known limitation, pinned so it cannot silently half-work
 # --------------------------------------------------------------------------
 class TestLoadingIntoAStreamedModelStaysUnsupported:
-    def test_named_parameters_still_carry_the_wrapper_segment(self, tmp_path):
-        """Fix A is serialisation-only, by design.
-
-        In memory the wrapper is still a real module, so ``named_parameters()``
-        and ``state_dict()`` disagree. v0.72.1 handled that by refusing to load
-        INTO a streamed model at all; v0.72.3 instead redirects canonical keys at
-        load time, which closes ``--resume`` while leaving this asymmetry — and
-        therefore v0.72.0's bit-exactness gates — untouched.
+    def test_named_parameters_no_longer_carry_the_wrapper_segment(self, tmp_path):
+        """Fix A was serialisation-only, by design: in memory the wrapper stayed
+        a real module, so ``named_parameters()`` and ``state_dict()`` disagreed
+        (v0.72.1 refused to load INTO a streamed model; v0.72.3 redirected
+        canonical keys at load time instead). #1005 closed the asymmetry
+        itself — peft 0.21 selects adapter entries by module-name prefix, so
+        two spellings of one tensor saved an adapter as ZERO tensors — and the
+        names now match the keys. The load-side redirection stays, because
+        ``load_state_dict`` still recurses over ``_modules``.
         """
         model, _, _ = _build_streamed_cpu(tmp_path)
         live = [n for n, _ in model.named_parameters() if "lora_" in n]
         assert live
-        assert any(".inner." in n for n in live)
+        assert not any(".inner." in n for n in live)
+        assert set(live) <= set(model.state_dict().keys())
 
     def test_hf_resume_with_streaming_is_no_longer_refused(self, tmp_path, monkeypatch):
         """v0.72.1 refused BOTH resume flags; v0.72.3 lifts both.

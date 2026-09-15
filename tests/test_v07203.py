@@ -2943,12 +2943,18 @@ class TestResumeLoadsIntoAStreamedModel:
         if resolved is not None:
             assert os.path.isabs(resolved)
 
-    def test_named_parameters_still_carries_inner(self, tmp_path):
-        """The fix is load-side only, by design: it redirects keys at load time
-        rather than re-parenting the module tree, so v0.72.0's bit-exactness
-        gates stay valid without being re-run."""
+    def test_named_parameters_no_longer_carry_inner(self, tmp_path):
+        """The v0.72.3 fix was load-side only (it redirected keys at load time
+        rather than re-parenting the module tree). #1005 made the wrapper's
+        NAMES canonical as well — without re-parenting: the inner layer is
+        still the wrapper's ``_modules['inner']``, so the load-side redirection
+        is still needed and still exercised by this class — because peft 0.21
+        joins module names to state-dict keys and saved a streamed adapter as
+        ZERO tensors while they differed."""
         model, _, _ = _tiny_stream(tmp_path)
-        assert any(".inner." in n for n, _ in model.named_parameters())
+        names = {n for n, _ in model.named_parameters()}
+        assert names and not any(".inner." in n for n in names)
+        assert names <= set(model.state_dict().keys())
 
 
 @requires_cuda

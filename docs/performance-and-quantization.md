@@ -538,6 +538,15 @@ output: ./output
 >
 > If that prints anything, the adapter is affected. From v0.72.1 a streamed adapter is byte-for-byte in the same layout as an ordinary LoRA run.
 
+> **peft 0.21.0 (released 2026-09-15) saved a streamed adapter EMPTY on every Soup before the #1005 fix — re-run those trainings.** peft 0.21 selects the adapter tensors to save by the prefixes it reads off `model.named_modules()`; the streaming wrapper's module names carried an `.inner.` segment its saved keys did not, so `trainer.save_model()`, every `save_steps` checkpoint and `PeftModel.save_pretrained()` wrote a 40-byte `adapter_model.safetensors` holding **zero** tensors, training reported success, and `--resume` loaded nothing. The training itself was correct — only the file is empty, and nothing in it can be recovered. Check with:
+>
+> ```bash
+> python -c "from safetensors.torch import load_file; \
+> print(len(load_file('adapter_model.safetensors')))"
+> ```
+>
+> `0` means the adapter is lost. Fixed on `main` by PR #1010 (the wrapper now reports canonical names, so peft 0.20 and 0.21 both save every tensor; no `peft<0.21` pin); the next release carries it. Until you run a Soup with that fix, `pip install "peft<0.21"` is the workaround.
+
 **Troubleshooting:**
 - **"trainable LoRA parameters remain on the meta device"** — PEFT attached an
   adapter without real storage and Soup refused the run before installing the
