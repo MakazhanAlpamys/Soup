@@ -133,13 +133,16 @@ def _read_json_under_cwd(path: str, field: str, *, max_bytes: int = _MAX_JSON_BY
 _MAX_STR_LEN = 4096
 
 
-def _unknown_choice(field: str, value: str, choices: Iterable[str]) -> McpToolError:
+def _unknown_choice(
+    field: str, value: str, choices: Iterable[str], *, preserve_order: bool = False
+) -> McpToolError:
     """Describe a rejected choice using the live allowlist and an escaped value.
 
     Callers apply the string length guard first. Only the choice is echoed,
     never related model/config paths or an underlying exception's message.
     """
-    return McpToolError(f"unknown {field} {value!r}; accepted: " + ", ".join(sorted(choices)))
+    accepted = choices if preserve_order else sorted(choices)
+    return McpToolError(f"unknown {field} {value!r}; accepted: " + ", ".join(accepted))
 
 
 def _require_str(args: dict, key: str) -> str:
@@ -260,7 +263,9 @@ def tool_data_validate(args: dict) -> dict:
     fmt = _opt_str(args, "format")
     fmt = "auto" if fmt is None else fmt
     if fmt != "auto" and fmt not in _formats.VALID_FORMATS:
-        raise _unknown_choice("format", fmt, {"auto", *_formats.VALID_FORMATS})
+        raise _unknown_choice(
+            "format", fmt, ("auto", *_formats.VALID_FORMATS), preserve_order=True
+        )
     if fmt == "auto":
         try:
             fmt = _formats.detect_format(rows)
@@ -301,9 +306,8 @@ def tool_data_doctor(args: dict) -> dict:
     fmt = _opt_str(args, "format")
     fmt = "auto" if fmt is None else fmt
     if fmt != "auto" and fmt not in _formats.VALID_FORMATS:
-        raise McpToolError(
-            f"unknown format {fmt!r}; accepted: auto, "
-            + ", ".join(sorted(_formats.VALID_FORMATS))
+        raise _unknown_choice(
+            "format", fmt, ("auto", *_formats.VALID_FORMATS), preserve_order=True
         )
     max_length = _opt_int(args, "max_length", 2048, lo=64, hi=1_048_576)
     sample_size = _opt_int(args, "sample_size", 200, lo=1, hi=2000)
