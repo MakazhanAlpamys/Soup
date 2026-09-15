@@ -81,8 +81,12 @@ def _shards(
     #971 suite, with two optional per-layer variations that a range reader must
     survive and a per-tensor reader never saw:
 
-    * ``long_header_on``: that layer's header carries metadata, so its data section
-      starts at a different offset (a different sector pad) than its siblings';
+    * ``long_header_on``: that layer's header carries 5000 bytes of metadata, so its
+      data section starts PAST the first 4 KiB sector — the only fixture in which
+      the aligned read start is not 0 and the ``entry.start - aligned_start`` term
+      of every view offset is actually exercised (a parallel session's mutation
+      run found the absolute offset survived every other fixture, including the
+      real 70B store, whose data section starts at byte 2976);
     * ``extra_tensor_on``: that layer's shard holds a tensor the spec does not ask
       for, sorted INTO the middle of the wanted ones, so the wanted span is not the
       whole data section and the wanted tensors sit at different offsets.
@@ -113,7 +117,7 @@ def _shards(
             )
         if empty_tensor:
             blob["self_attn.q_proj.weight::empty"] = torch.empty(0, dtype=torch.float32)
-        metadata = {"note": "x" * 1000} if long_header_on == idx else None
+        metadata = {"note": "x" * 5000} if long_header_on == idx else None
         save_file(blob, layer_shard_path(str(out), idx), metadata=metadata)
     return str(out)
 
@@ -233,6 +237,21 @@ class TestReadRangeInto:
         with open(path, "rb") as handle:
             with pytest.raises(ValueError, match="holds"):
                 read_range_into(handle, 0, torch.zeros(10, dtype=torch.uint8), 100)
+
+    def test_a_zero_return_before_expected_is_a_short_read(self):
+        """The one signal that ends the loop, driven directly: a handle that has
+        nothing at all must not let the read return as if it had filled the view."""
+        from soup_cli.utils.safetensors_reader import read_range_into
+
+        class Empty:
+            def seek(self, pos: int) -> None:
+                pass
+
+            def readinto(self, buffer) -> int:
+                return 0
+
+        with pytest.raises(OSError, match="short read, 0 of 4096"):
+            read_range_into(Empty(), 0, torch.zeros(SECTOR, dtype=torch.uint8), SECTOR)
 
     def test_a_negative_expected_is_refused(self, tmp_path):
         """A negative count would return without reading and leave the view
@@ -437,6 +456,11 @@ class TestByteIdentityThroughTheRangeReader:
         spec = _spec(shard_dir)
         source = AsyncDiskSource(shard_dir, N_LAYERS, spec, read_ahead=2, pin=False)
         try:
+            starts = [plan.start for plan in source._plans]
+            assert starts[2] >= SECTOR and all(s == 0 for i, s in enumerate(starts) if i != 2), (
+                f"the fixture no longer moves layer 2's data section past the first "
+                f"sector (aligned starts {starts}); the offset term is not exercised"
+            )
             _assert_identical_to_disk_source(source, shard_dir, spec)
         finally:
             source.close()
@@ -591,6 +615,18 @@ class TestTheReadIsSplitAcrossWorkers:
         # No join here: ``close()`` returning is the promise that the workers are
         # gone, the same promise it makes for the reader thread.
         assert not any(t.is_alive() for t in workers)
+
+    def test_close_releases_the_staging_buffers(self, tmp_path):
+        """The regions and their arenas are gigabytes of page-locked memory on a
+        real run; a ``close()`` that dropped the slots but kept them referenced
+        would hold that for the process's lifetime with nothing to say so (a
+        parallel session's mutation run: no test looked)."""
+        shard_dir = _shards(tmp_path)
+        source = AsyncDiskSource(shard_dir, N_LAYERS, _spec(shard_dir), read_ahead=2, pin=False)
+        source.get(0, "input_layernorm.weight")
+        assert source._regions and source._arenas
+        source.close()
+        assert source._slots == [] and source._regions == [] and source._arenas == []
 
     def test_the_reader_reads_each_layer_through_read_layer(self, tmp_path, monkeypatch):
         """The one seam the harness times (``reader_read`` in
