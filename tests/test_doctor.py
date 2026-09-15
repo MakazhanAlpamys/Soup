@@ -491,7 +491,11 @@ def test_doctor_nccl_no_gpu():
     ):
         result = runner.invoke(app, ["doctor", "--nccl"])
         assert result.exit_code == 0
-        assert "NCCL bandwidth requires >=2 GPUs" in result.output
+        # _strip_ansi, like the newer tests in this file: under colour Rich
+        # splits the message with SGR codes and the substring match fails
+        # for a reason unrelated to NCCL (#886). These two simply predate
+        # the helper defined at the top of this module.
+        assert "NCCL bandwidth requires >=2 GPUs" in _strip_ansi(result.output)
 
 
 def test_doctor_nccl_mocked_success():
@@ -515,4 +519,4 @@ def test_doctor_nccl_mocked_success():
         result = runner.invoke(app, ["doctor", "--nccl"])
         assert result.exit_code == 0
         assert "Measuring NCCL bandwidth" in result.output
-        assert "Result (H100 over NVLINK)" in result.output
+        assert "Result (H100 over NVLINK)" in _strip_ansi(result.output)
