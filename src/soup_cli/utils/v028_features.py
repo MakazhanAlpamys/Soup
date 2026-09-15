@@ -123,37 +123,6 @@ def apply_v028_speed_memory(
     return applied
 
 
-def _bench_and_pick_kernel(
-    *, model: Any, device: str, backend: str,
-) -> Optional[str]:
-    """v0.35.0 #45 — benchmark candidate kernel combos and return the
-    picked combo's name. Returns ``None`` on any benchmark / pick failure
-    so the caller can degrade gracefully (no kernel_auto_compose flag set).
-    """
-    try:
-        from soup_cli.utils.kernel_picker import (
-            benchmark_kernel_combos,
-            enumerate_kernel_combos,
-            pick_best_kernel,
-        )
-        candidates = enumerate_kernel_combos(backend=backend, device=device)
-        # On CPU / unsloth / mlx the candidate list is just [baseline]; no
-        # benchmark needed — picker would raise on all-None times. Skip.
-        if len(candidates) <= 1:
-            return None
-        timed = benchmark_kernel_combos(
-            model=model, candidates=candidates, device=device,
-        )
-        picked = pick_best_kernel(timed)
-        # Picker returns either a dict (current shape) or an object with
-        # ``.name`` (legacy / namespace shape) — handle both defensively.
-        if isinstance(picked, dict):
-            return str(picked.get("name", "unknown"))
-        return str(getattr(picked, "name", "unknown"))
-    except Exception:  # noqa: BLE001 — picker is best-effort
-        return None
-
-
 @contextlib.contextmanager
 def activation_offloading_context(
     tcfg: "TrainingConfig", output_dir: str,
@@ -231,8 +200,6 @@ def warn_unsupported_features(
         issues.append("use_cut_ce")
     if getattr(tcfg, "quantization_aware", None) == "fp8":
         issues.append('quantization_aware="fp8"')
-    if getattr(tcfg, "kernel_auto_compose", False):
-        issues.append("kernel_auto_compose")
     if getattr(tcfg, "activation_offloading", None) is not None:
         issues.append("activation_offloading")
     if not issues:
