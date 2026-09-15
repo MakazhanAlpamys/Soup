@@ -53,6 +53,28 @@ mode returns one level up, with a field "read" by code that never runs.
 Validators are excluded on principle -- a validator checks a value, a property
 resolves one for a consumer.
 
+*A read inside a function nothing references is not consumption* (#807), and
+the gate that enforces it has limits in both directions. A field is dropped
+only when EVERY read sits in such a function; one live read anywhere rescues
+it, which is what keeps the impact small -- on this tree it drops exactly four
+declared fields, `init_strategy`, `use_olora`, `use_vera` and `warmup_auto`,
+all allowlisted and pinned by
+`test_the_real_tree_has_exactly_the_four_known_escapes`.
+
+"Referenced" is a syntactic question, not a reachability one, and it errs
+toward *referenced* -- so distrust a pass more than a failure. Two leaks
+follow. A function called only from ANOTHER dead function counts as
+referenced, because the dead caller's body loads its name: deadness is not
+transitive here. And the match is global by spelling, so an unrelated
+`obj.name` anywhere under ``src/`` rescues a dead function of the same name.
+`@app.command()` bodies are safe only because their decorator loads the name
+-- by accident rather than by design.
+
+The opposite hole is narrower. A function reached only through a string --
+`getattr(module, "name")`, or an entry point declared outside ``src/`` -- is
+not referenced at all, so its reads are dropped and a live field could be
+reported unconsumed. On this tree that drops nothing beyond the four above.
+
 **Two rules this file learned the hard way, kept because they generalise.**
 A check can only be pinned by testing its REFUSALS: loosening a predicate
 makes a suite pass rather than fail, so `_reason_is_accountable` is asserted
@@ -871,27 +893,8 @@ def drop_dead_function_reads(consumed: set, scoped: dict, referenced: set) -> se
     The function-level twin of `fold_property_reads`, and extracted for the
     same reason: a gate can only be pinned by driving it directly. Testing it
     through the real tree cannot distinguish the gate from its absence for any
-    field that is genuinely live.
-
-    **What keeps the impact small is the one-live-read rule below, not any
-    property of the call graph.** A field is dropped only when *every* read is
-    inside an unreferenced function; a single live read anywhere rescues it.
-    Most fields with a dead read have a live one too, so they survive.
-
-    Measured on the tree at the time of writing, by declared leaf name: 44
-    declared fields have at least one read inside an unreferenced function, 40
-    of those are rescued by the one-live-read rule, and 4 are dropped --
-    `init_strategy`, `use_olora`, `use_vera` and `warmup_auto`, all already in
-    `KNOWN_UNCONSUMED`. Counted by fully-qualified dotted path the totals
-    differ; the four names are the part that is stable and checkable, which is
-    why they are named here and the ratio is not load-bearing.
-
-    Note what this gate does **not** know: whether a function is reachable at
-    runtime. `referenced_names` is a syntactic check for the name appearing
-    somewhere other than its own definition. A `@app.command()`-decorated
-    function is referenced by its decorator, so Typer entry points are safe by
-    accident rather than by design -- if that decorator form ever changed,
-    every command body would look dead to this gate at once.
+    field that is genuinely live. Its limits are stated in the module
+    docstring's "What this cannot see" list.
     """
     out = set(consumed)
     for name, sites in scoped.items():
@@ -965,4 +968,31 @@ class TestTheDeadFunctionGate:
             assert expected in dropped, (
                 f"{expected} is read only inside a function nothing references, "
                 "so the gate should drop it"
+            )
+        # The name says EXACTLY four, and membership alone would pass a gate that
+        # dropped more (#906 review). `dropped` spans every consumed identifier,
+        # not just config fields, so the exact claim is over declared leaves.
+        declared_leaves = set(_declared().values())
+        dropped_fields = sorted(set(dropped) & declared_leaves)
+        assert dropped_fields == ["init_strategy", "use_olora", "use_vera", "warmup_auto"], (
+            f"expected exactly the four known escapes, got {dropped_fields}"
+        )
+
+    def test_consumed_in_src_applies_the_gate_independently_of_the_allowlist(self):
+        """#906 review: the only thing that caught the gate being removed from
+        `_consumed_in_src()` was `test_the_allowlist_does_not_cover_fields_that_
+        are_consumed` -- the pin scheduled for deletion once #794/#808 retire
+        those entries. This pins the composition directly: each escape is read
+        in the ungated set, and must be absent from what the scan returns."""
+        modules = _consumer_modules()
+        ungated = fold_property_reads(
+            set(_consumed_cached(tuple(sorted(str(m) for m in modules)))),
+            schema_property_reads(SCHEMA_PATH),
+        )
+        consumed = _consumed_in_src()
+        for name in ("warmup_auto", "use_vera", "use_olora", "init_strategy"):
+            assert name in ungated, f"{name} is not read at all, so this check is vacuous"
+            assert name not in consumed, (
+                f"{name} is read only inside a dead function, yet _consumed_in_src() "
+                "counts it: the gate is not composed into the scan"
             )
