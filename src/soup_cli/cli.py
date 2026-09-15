@@ -172,7 +172,7 @@ from soup_cli.commands import plugins as plugins_cmd  # noqa: E402
 app.add_typer(
     plugins_cmd.app,
     name="plugins",
-    help="List, enable, disable Soup plugins (v0.45.0).",
+    help="Discover, list, enable, and disable Soup plugins.",
 )
 
 # v0.46.0 Part B — Agent Forge.
@@ -445,7 +445,7 @@ from soup_cli.commands import lock as _lock_cmd  # noqa: E402
 app.add_typer(
     _lock_cmd.app,
     name="lock",
-    help="Shared run lockfile (write / show / check) - v0.67.0 Part E.",
+    help="Shared run lockfile (write / show / check).",
 )
 
 # v0.68.0 — Anti-trend insurance (compile / distill-prompt / compile-tools /
@@ -487,7 +487,7 @@ from soup_cli.commands import build as _build_cmd  # noqa: E402
 
 app.command(
     name="build",
-    help="dbt-for-SFT DAG: validate + plan dataset transforms (v0.69.0 Part A).",
+    help="dbt-for-SFT DAG: validate, plan, and materialise dataset transforms.",
 )(_build_cmd.build_cmd)
 
 # v0.69.0 Part B — `soup expect` (expectations suite).
@@ -495,7 +495,7 @@ from soup_cli.commands import expect as _expect_cmd  # noqa: E402
 
 app.command(
     name="expect",
-    help="Run an expectations suite against a JSONL dataset (v0.69.0 Part B).",
+    help="Run an expectations suite against a JSONL dataset.",
 )(_expect_cmd.expect_cmd)
 
 # v0.70.0 Part E — `soup iterative-dpo` (iterative DPO loop driver).
@@ -504,7 +504,7 @@ from soup_cli.commands import iterative_dpo as _iterative_dpo_cmd  # noqa: E402
 app.add_typer(
     _iterative_dpo_cmd.app,
     name="iterative-dpo",
-    help="Iterative DPO loop driver (v0.70.0 Part E).",
+    help="Iterative DPO sample, score, pair, and train loop.",
 )
 
 # v0.71.10 #200 — `soup ra-dit` (two-stage RA-DIT orchestrator).

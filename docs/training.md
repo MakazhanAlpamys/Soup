@@ -284,8 +284,10 @@ soup train --config soup.yaml --uld-strategy wasserstein
 #   training:
 #     uld_strategy: wasserstein_aligned
 
-# MiniLLM reverse-KL on-policy distillation — bundles 3 stability tricks
-# (Gu et al. 2024 arXiv:2306.08543)
+# MiniLLM reverse-KL distillation (Gu et al. 2024 arXiv:2306.08543).
+# Offline blend: mix ratio is the teacher weight in the reverse-KL target and
+# must be > 0 (ratio 0 is KL(student || stopgrad(student)) and is rejected).
+# On-policy: mix 0 is legal — student-only sampling, loss still KL(student || teacher).
 soup train --config soup.yaml --minillm-enabled \
     --minillm-teacher-mix-ratio 0.3 \
     --minillm-pretrain-anchor-weight 0.1 \
@@ -294,7 +296,7 @@ soup train --config soup.yaml --minillm-enabled \
 # MiniLLM TRUE on-policy rollout (v0.71.18, Gu et al. §3.1) — sample a fresh
 # autoregressive rollout from the per-token teacher/student mixture each step,
 # then length-normalised reverse-KL. training.minillm_rollout_length tunes the
-# rollout (auto min(max_length, 32)).
+# rollout (auto min(max_length, 32)). Mix 0 here means student-only sampling.
 soup train --config soup.yaml --minillm-enabled --minillm-on-policy
 
 # Mid-epoch checkpoint for PPO/GRPO — TorchTune punts this; Soup ships it
@@ -426,6 +428,9 @@ training:
 Loss = student CE + (T**2) × KL(teacher_logits / T  ||  student_logits / T).
 Teacher is loaded once, frozen via `requires_grad_(False)` + `.eval()`, and its
 inputs / logits are auto-bridged across CPU / CUDA devices.
+Gradient accumulation uses the number of shifted, non-masked training targets across the complete
+optimizer window. Splitting the same rows into unequal-length microbatches therefore preserves the
+full-batch token mean instead of weighting every microbatch equally.
 
 The token-divergence kernel evaluates all three divergences in FP32 and deliberately
 returns an FP32 scalar, including for FP16/BF16 logits. Forward-KL values can therefore
@@ -1132,6 +1137,10 @@ soup reward stress reward.py --references golds.jsonl --output-report stress.jso
 # probe a builtin verifier instead of a .py file
 soup reward stress verifiable --verifiable-domain math --references golds.jsonl
 
+# JSON-schema references may be stored as objects in a `schema` field
+soup reward stress verifiable --verifiable-domain json_schema \
+    --references schemas.jsonl --field schema
+
 # tune the attack set / accept threshold / gameability tolerance
 soup reward stress reward.py --references golds.jsonl \
     --attacks empty,length,repetition,sentinel --sentinel GOLD \
@@ -1141,6 +1150,15 @@ soup reward stress reward.py --references golds.jsonl \
 The report shows a per-attack accept-rate and an overall verdict. A gold-requiring verifier probed
 with **no** `--references` is a hard error (it can't be measured), never a false "robust". Probing a
 `.py` executes its module code, like any custom reward — only stress files you trust.
+For the builtin `json_schema` domain, references are forwarded as `schema=` metadata; JSON objects
+selected by `--field` are decoded before the verifier scores them.
+
+Current limitation: the four built-in attack families emit plain text that is not valid JSON, so
+`json_schema` rejects them during parsing before schema-specific constraints are evaluated. The
+result therefore does not yet distinguish a strict schema from a permissive one; structure-
+preserving JSON attacks are tracked in #918. Its `reference_accept` value is also not a meaningful
+self-acceptance control for this domain because it scores the schema document as though it were an
+instance of itself (and is normally `0%`).
 
 ### Verifiable Rewards (RLVR)
 

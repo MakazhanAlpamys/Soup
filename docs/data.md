@@ -608,7 +608,7 @@ Use with `data.format: pre_tokenized` and `data.tokenized_path: ./.soup-tokenize
 
 Soup speaks the same dataset surface as Axolotl + LlamaFactory + Unsloth — remote URIs, streaming, sharding, multi-dataset interleaving, vocab expansion, and document ingestion all live in one schema.
 
-**Remote datasets** (schema gate live; fsspec backend wiring lands in v0.42.1):
+**Remote datasets** are loaded through the matching fsspec backend:
 
 ```yaml
 data:
@@ -871,7 +871,7 @@ soup data educational  --input training.jsonl --output scored.jsonl
 soup data decontaminate --input training.jsonl --benchmarks mmlu,gsm8k,humaneval --output clean.jsonl
 ```
 
-The scorecard reports PII flagged, toxic flagged, language distribution, mean educational value, and decontamination removed. PII detection uses a narrow ReDoS-hardened regex set (email / phone / SSN / credit-card) with a 50 KB pre-cap on every input. Language detection is a stopword heuristic across six languages. Toxicity is a keyword baseline; the Llama-Guard-3-1B variant + FineWeb-Edu classifier ship behind `[data-pro]` extras. Decontamination uses n-gram containment against benchmark corpora: use `--benchmarks mmlu,gsm8k` for built-in allowlist, or `--benchmark-file custom_benchmark.jsonl` for your own corpus.
+The scorecard reports PII matches, abuse-keyword matches, language distribution, mean heuristic educational value, and decontamination removals. PII detection uses a narrow ReDoS-hardened regex set (email / phone / SSN / credit-card) with a 50 KB pre-cap on every input. Language detection is a stopword heuristic across six languages. `soup data toxicity` is retained as a compatible command name, but its output is explicitly an abuse-keyword heuristic, not a toxicity classifier. Ambiguous technical and medical terms such as process `kill`, thread `die`, and heart `attack` are not treated as standalone safety signals. This trades one known failure mode for explicit limitations: in maintainer review, 9 of 10 held-out abusive examples scored zero and 10 of 12 benign technical or editorial examples were flagged at the default threshold. Use it only for keyword triage, never as a safety decision. The default Magpie quality filter therefore applies only non-empty and educational heuristics; provide an explicit model-backed policy outside Soup when safety classification is required. The `[data-pro]` extra currently adds `langdetect` and Presidio only; it does not install Llama Guard or FineWeb-Edu. Decontamination uses n-gram containment against benchmark corpora: use `--benchmarks mmlu,gsm8k` for built-in allowlist, or `--benchmark-file custom_benchmark.jsonl` for your own corpus.
 
 
 ## Remote Datasets (S3 / GCS / Azure / OCI)
@@ -908,6 +908,7 @@ nodes:
     config: {path: prompts.jsonl}
   - name: llm1
     kind: llm_text
+    config: {prompt: "Answer the request: {text}"}
   - name: judge1
     kind: judge
   - name: samp1
@@ -918,7 +919,7 @@ edges:
   - [judge1, samp1]
 ```
 
-Closed node-kind allowlist (`seed` / `llm_text` / `code` / `judge` / `validator` / `sampler`); Kahn's topological sort via `collections.deque` (deterministic, O(N+E)); cycle / self-loop / duplicate-edge / dangling-edge / unknown-kind rejection. `_MAX_NODES=256`, `_MAX_EDGES=1024`, `_MAX_FILE_BYTES=1MiB`. The recipe file must stay under cwd and **must not be a symlink** (`os.lstat + S_ISLNK` TOCTOU defence). Live offline runner against a local model lands in v0.45.1.
+Closed node-kind allowlist (`seed` / `llm_text` / `code` / `judge` / `validator` / `sampler`); Kahn's topological sort via `collections.deque` (deterministic, O(N+E)); cycle / self-loop / duplicate-edge / dangling-edge / unknown-kind rejection. `_MAX_NODES=256`, `_MAX_EDGES=1024`, `_MAX_FILE_BYTES=1MiB`. The recipe file must stay under cwd and **must not be a symlink** (`os.lstat + S_ISLNK` TOCTOU defence).
 
 
 ## Data Mixing Optimizer (BETA)
@@ -939,7 +940,7 @@ Re-apply a previously written recipe:
 soup data mix --apply mix_recipe.yaml
 ```
 
-Live wiring of the proxy training loop into a short `soup train` run is the v0.48.1 deliverable; v0.48.0 ships a synthetic offline proxy (quadratic penalty around the uniform simplex) so the budget tracker, optimiser surface, and recipe writer can be exercised without GPUs. `scikit-optimize` is opt-in via `OptimizerProtocol`; the default fallback is a deterministic Dirichlet sampler.
+Pass `--live --base-yaml soup.yaml` to score each candidate with a short `soup train` proxy run. Without `--live`, Soup uses a synthetic offline proxy (quadratic penalty around the uniform simplex) so the budget tracker, optimiser surface, and recipe writer can be exercised without GPUs. `scikit-optimize` is opt-in via `OptimizerProtocol`; the default fallback is a deterministic Dirichlet sampler.
 
 
 ## AOT Tokenization with `soup data preprocess`
@@ -962,11 +963,24 @@ up from the last completed shard.
 Execute a Data Recipe DAG end-to-end:
 
 ```bash
-soup data recipe path/to/recipe.yaml --execute --output ./out
+soup data recipe path/to/recipe.yaml --execute --output ./out \
+    --provider ollama --model llama3.1
 ```
 
+`llm_text` and `judge` nodes support `ollama`, `anthropic`, and `vllm`; use
+`--base-url` to override the loopback endpoint for Ollama or vLLM. Running either
+node kind without `--provider` is refused so placeholder data cannot be mistaken
+for live generations. For deterministic tests only, `--offline` explicitly enables
+`llm_text(offline): ...` placeholders and makes judge nodes accept every row; the
+command prints a warning whenever this mode is active.
+
+Live provider-call failures are counted: if every attempted call for an `llm_text`
+or `judge` node fails, the command names the endpoint and exits 1. Partial failures
+keep usable rows and report their count in the completion summary, while a provider
+that legitimately returns an empty completion still counts as a successful call.
+
 Six node kinds now run live: **seed** (JSONL load), **llm_text** (LLM generation via
-any provider), **code** (execution via RLVR sandbox), **judge** (binary scoring),
+Ollama, Anthropic, or vLLM), **code** (execution via RLVR sandbox), **judge** (binary scoring),
 **validator** (regex or JSON schema), **sampler** (deterministic selection). Checkpoint
 written per node; resume rehydrates from per-node sidecars. Failed rows logged with
 redacted reasons (paths stripped, capped at 256 chars).

@@ -115,6 +115,9 @@ def doctor(
     # GPU check
     _check_gpu()
 
+    # MLX (Apple Silicon) check
+    _check_mlx()
+
     # Resources check
     _check_resources(probe_disk=disk)
 
@@ -133,8 +136,10 @@ def doctor(
     fix_parts: list[str] = []
     fix_pre: list[str] = []
     # A missing or incompatible core dependency turns doctor into a gate:
-    # exit non-zero at the end. Advisory issues (optional packages, the
-    # [train] group, torchvision skew) never touch the exit code.
+    # exit non-zero at the end. An installed package beyond its declared
+    # ceiling is blocking wherever it is found, extra groups included (#874).
+    # Advisory issues (optional packages, a missing or outdated [train]
+    # member, torchvision skew) never touch the exit code.
     core_broken = False
 
     for import_name, pkg_name, min_ver, required in DEPS:
@@ -166,6 +171,12 @@ def doctor(
                     f'Downgrade {pkg_name}: pip install "{pkg_name}>={min_ver},<{max_excl}"'
                 )
                 fix_parts.append(f'"{pkg_name}>={min_ver},<{max_excl}"')
+                # Asymmetry, on purpose (#874): here only a *required* DEPS row
+                # past its ceiling blocks, whereas the extra-group check below
+                # blocks unconditionally. An optional DEPS row past a ceiling
+                # would exit 0 while the same package in an extra group exits 1.
+                # Unreachable today (_MAX_EXCLUSIVE and the optional DEPS rows
+                # do not intersect), but written down so it is not rediscovered.
                 if required:
                     core_broken = True
             elif _version_ok(version_str, min_ver):
@@ -225,6 +236,7 @@ def doctor(
                     f'Downgrade {pkg_name}: pip install "{pkg_name}>={min_ver},<{max_excl}"'
                 )
                 fix_parts.append(f'"{pkg_name}>={min_ver},<{max_excl}"')
+                core_broken = True
             elif _version_ok(version_str, min_ver):
                 status = "[green]OK[/]"
             else:
@@ -351,7 +363,11 @@ def _check_config_support(config_path: str) -> None:
     pre-flight check, and the fields sitting at their schema default are not
     what anyone came here to ask about.
     """
-    from soup_cli.config.backend_support import DEFAULT_BACKEND, check_config
+    from soup_cli.config.backend_support import (
+        DEFAULT_BACKEND,
+        check_config,
+        unsupported_for,
+    )
 
     try:
         from soup_cli.config.loader import load_config
@@ -383,8 +399,10 @@ def _check_config_support(config_path: str) -> None:
         f"backend=[bold]{backend}[/]"
     )
     if not gaps:
+        known = unsupported_for(cfg.task, backend)
         console.print(
-            "  [green]Every setting this config writes is read on this backend.[/]"
+            f"  [green]None of the {len(known)} setting(s) known to be unread "
+            f"on task={cfg.task} backend={backend} is set in this config.[/]"
         )
         return
 
@@ -415,6 +433,37 @@ def _get_mlx_info() -> dict:
         return get_mlx_info()
     except Exception:  # noqa: BLE001
         return {"available": False}
+
+
+def _check_mlx():
+    """Report the MLX (Apple Silicon) backend in ``soup doctor``.
+
+    MLX is an Apple Silicon-only stack, so the panel is informational rather
+    than a pass/fail dependency: it shows the installed version and hardware
+    when present, and says so plainly when MLX is missing. It must never crash
+    the report (the info helper degrades to ``available=False`` on any error).
+    """
+    info = _get_mlx_info()
+    if info.get("available"):
+        mem_bytes = info.get("unified_memory_bytes")
+        mem_str = f"{mem_bytes / (1024**3):.0f} GB" if mem_bytes else "unknown"
+        chip = (info.get("chip") or {}).get("chip")
+        console.print(
+            Panel(
+                f"Version:  [bold green]{info.get('version') or 'unknown'}[/]\n"
+                f"Chip:     [bold]{chip or 'Apple Silicon'}[/]\n"
+                f"Memory:   [bold]{mem_str}[/] unified",
+                title="MLX",
+            )
+        )
+    elif info.get("apple_silicon"):
+        console.print(
+            Panel(
+                "Status:   [yellow]not installed[/]\n"
+                "Install:  [dim]pip install \"soup-cli\\[mlx]\"[/]",
+                title="MLX",
+            )
+        )
 
 
 def _check_gpu():
@@ -483,30 +532,35 @@ _TORCH_CUDA_WHEELS: tuple[tuple[int, int, str], ...] = (
     (11, 8, "cu118"),
 )
 
+# PyTorch CUDA indexes that carry a torch release satisfying Soup's
+# ``[train]`` floor (torch>=2.6.0). Keep this table explicit: not every
+# CUDA version reported by a driver has a corresponding PyTorch index.
+_SUPPORTED_TORCH_CUDA_WHEELS = frozenset(
+    {"cu132", "cu130", "cu128", "cu126", "cu124", "cu118"}
+)
+
 
 def _parse_cuda_version(text: str) -> tuple[int, int] | None:
-    """Extract ``(major, minor)`` from nvidia-smi ``CUDA Version: X.Y`` text."""
-    match = re.search(r"CUDA Version:\s*(\d+)\.(\d+)", text or "")
+    """Extract ``(major, minor)`` from an nvidia-smi CUDA version header."""
+    match = re.search(r"CUDA(?:\s+UMD)?\s+Version:\s*(\d+)\.(\d+)", text or "")
     if match is None:
         return None
     return int(match.group(1)), int(match.group(2))
 
 
-def _torch_cuda_wheel_tag(driver: tuple[int, int] | None) -> str:
-    """Pick the newest PyTorch CUDA wheel the driver can run.
+def _torch_cuda_wheel_tag(driver: tuple[int, int] | None) -> str | None:
+    """Pick the newest supported PyTorch CUDA wheel for a driver version.
 
-    ``None`` (unreadable nvidia-smi header) falls back to ``cu121``, not
-    ``cu130``: a parse failure is treated as an old driver. A too-new wheel
-    is the failure mode that looks like success (pip ok, CUDA init dies).
-    A known 13.2 header still maps to ``cu132``. Drivers older than every
-    table row get ``cu118``, the oldest published tag.
+    A missing driver version is not safe to guess from, so it returns ``None``.
     """
     if driver is None:
-        return "cu121"
+        return None
+
     for major, minor, tag in _TORCH_CUDA_WHEELS:
-        if driver >= (major, minor):
+        if driver >= (major, minor) and tag in _SUPPORTED_TORCH_CUDA_WHEELS:
             return tag
-    return "cu118"
+
+    return None
 
 
 def _nvidia_smi_executable() -> str | None:
@@ -575,15 +629,42 @@ def _detect_gpu_hw_without_torch_cuda() -> str:
         torch_version = _pkgver("torch")
     except Exception:  # noqa: BLE001
         torch_version = "?"
+
+    try:
+        import torch
+
+        torch_cuda_version = getattr(torch.version, "cuda", None)
+    except Exception:  # noqa: BLE001
+        torch_cuda_version = None
+
     wheel = _torch_cuda_wheel_tag(_nvidia_smi_cuda_version())
-    index_url = f"https://download.pytorch.org/whl/{wheel}"
     windows_note = ""
     if platform.system() == "Windows":
         windows_note = " On Windows, PyPI's torch wheel is CPU-only."
+
+    if wheel is None:
+        return (
+            f"GPU hardware present ({gpu_label}) but torch CUDA could not "
+            f"be confirmed. The installed torch is {torch_version}. "
+            "Run `nvidia-smi` and install a PyTorch CUDA wheel compatible "
+            "with the reported driver."
+            f"{windows_note}"
+        )
+
+    index_url = f"https://download.pytorch.org/whl/{wheel}"
+
+    if torch_cuda_version:
+        build_status = (
+            f"torch CUDA build ({torch_cuda_version}) could not initialise"
+        )
+    else:
+        build_status = "torch is the CPU build"
+
     return (
-        f"GPU hardware present ({gpu_label}) but torch is the CPU build "
+        f"GPU hardware present ({gpu_label}) but {build_status} "
         f"(torch {torch_version}). To enable your GPU: "
-        f"`pip install torch --index-url {index_url}`"
+        f"`pip install --force-reinstall \"torch>=2.6.0\" "
+        f"--index-url {index_url}`"
         f"{windows_note}"
     )
 

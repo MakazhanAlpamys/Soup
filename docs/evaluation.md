@@ -157,14 +157,34 @@ so a single outlier row doesn't flip the gate.
 soup eval gate-install --baseline run-abc-123 --suite evals/locked.json
 ```
 
-The generated `.git/hooks/pre-push` script:
+The generated `.git/hooks/pre-push` script compares the candidate named by
+`SOUP_CANDIDATE_RUN_ID` against the baseline. Its default `task_accuracy` lookup also
+falls back to the `custom` result written by `soup eval custom --run-id`, so the hook
+works with Soup-produced evaluation data without hand-written database rows.
 
-- Compares against a baseline run id from the Soup registry.
-- Watches four metrics: `task_accuracy`, `refusal_rate`, `format_validity`,
-  `p95_latency_ms`.
-- Treats `task_accuracy` / `refusal_rate` / `format_validity` as higher-is-better
-  and `p95_latency_ms` as lower-is-better; regression is decided per metric on the
-  paired-bootstrap CI bound (upper bound for higher-better, lower for lower-better).
+You can also compare a specific result directly:
+
+```bash
+# Names written by Soup are accepted directly.
+soup eval against run-base --candidate run-candidate --metric custom
+soup eval against run-base --candidate run-candidate --metric aider_polyglot
+soup eval against run-base --candidate run-candidate --metric judge:openai/judge-model
+
+# Arbitrary lm-eval tasks use an explicit namespace so typos remain usage errors.
+soup eval against run-base --candidate run-candidate --metric benchmark:mmlu
+```
+
+- `task_accuracy`, `refusal_rate`, `format_validity`, `custom`, `aider_polyglot`,
+  `judge:<model>`, and `benchmark:<task>` are higher-is-better. `p95_latency_ms` is
+  lower-is-better. Eval benchmark scores use the `task_accuracy` tolerance.
+- Unknown names are rejected before the experiment database is opened.
+- Exit status `0` means no regression; every regression, unavailable comparison, or
+  invalid comparison blocks with a non-zero status. A future exit-status taxonomy is
+  tracked separately in #813.
+- Regression is decided on the paired-bootstrap CI bound (upper bound for higher-better,
+  lower for lower-better). A single aggregate result is still compared by its point
+  delta, but Soup labels the confidence interval unavailable instead of displaying the
+  repeated point as an interval.
 - Uses `shlex.quote` on every embedded value — no shell-injection surface from a
   crafted run id or suite path.
 - Refuses to overwrite an existing hook without `--force`; rejects pre-placed
@@ -462,7 +482,7 @@ carrying a field this release does not recognise is **refused, not ignored**:
 
 ```bash
 $ soup ship --evidence evidence.json
-Error: evidence has unsupported field(s): 'numerics'
+Error: evidence has unsupported field(s): 'future_optional'
 $ echo $?
 1
 ```
@@ -475,7 +495,8 @@ SHIP on one side and a DON'T-SHIP on the other. Both surfaces now decode through
 and refusing an unrecognised field is what keeps that guarantee honest: a field is either supported
 by both surfaces or accepted by neither. A refusal is recoverable and visible; a divergent verdict
 is neither. When a newer Soup writes an evidence file that an older one refuses, upgrade the reader
-rather than stripping the field.
+rather than stripping the field. `numerics` is a supported stamp as of #746 — both surfaces
+read it — so a file that carries it is no longer refused for that key.
 
 ### Closing the evidence loop (v0.71.39)
 
@@ -494,8 +515,12 @@ every PR instead of relying on a hand-edited JSON file.
 - **Provenance + staleness.** With `--emit-evidence`, `--config` STAMPS a `provenance` block
   (`config_sha` — a semantic, order-insensitive recipe hash that EXCLUDES the `eval.ship` gate
   policy, so tuning the threshold never invalidates evidence — plus `base_model` and a
-  best-effort `data_sha`). With `--evidence` alone, `--config` GATES: it refuses (exit 3)
-  evidence whose `config_sha` drifted from the committed config.
+  best-effort `data_sha`). A live run also stamps top-level `numerics` (`4bit` / `8bit` /
+  `bfloat16` / `float32`) — the actual load, not the training field — so a GPTQ recipe that
+  the judge loaded as bf16 says so. With `--evidence` alone, `--config` GATES: it refuses
+  (exit 3) evidence whose `config_sha` drifted from the committed config, or whose numerics
+  *family* (`4bit` / `8bit` / `full`) does not match. Pre-#367 evidence without a stamp
+  warns rather than failing closed.
 - **`--push owner/repo#N`** posts the verdict as a GitHub PR comment (best-effort — a missing
   token or `gh` failure warns but never flips the SHIP / DON'T-SHIP exit code).
 
@@ -688,13 +713,13 @@ Soup deliberately does not offer a host-execution fallback.
 
 ### Quant-Lobotomy Checker
 
-Before you ship a quantized model, verify it didn't lose skills. The checker runs the same task list against the `--before` and `--after` models and renders a per-task OK / MINOR / MAJOR verdict.
+Before you ship a quantized model, verify it didn't lose skills. The checker runs the same task list against the `--before` and `--after` models and renders an aggregate suite OK / MINOR / MAJOR verdict.
 
 ```bash
 # Compare a pre-quant model with its post-quant version
 soup eval quant-check \
-  --before ./output \
-  --after  ./output/quantized.q4_k_m.gguf \
+  --before ./output/base \
+  --after  ./output/quantized \
   --tasks  ./evals/sanity.jsonl
 
 # Both sides may be registry refs
@@ -703,16 +728,19 @@ soup eval quant-check \
   --after  registry://llama31-chat-v1-q4 \
   --tasks  ./evals/sanity.jsonl
 
-# Render as JSON for CI integration
+# Render as JSON for CI integration (exits 2 on MAJOR, 0 on OK/MINOR)
 soup eval quant-check --before X --after Y --tasks t.jsonl --format json
+
+# Use deterministic stubs in CI when weights are unavailable
+soup eval quant-check --before X --after Y --tasks t.jsonl --allow-stub
 ```
 
-**Verdict thresholds (per task):**
-- `OK` — score delta ≤ 2%
-- `MINOR` — delta 2-10% (investigate)
-- `MAJOR` — delta > 10% (do NOT ship)
+**Verdict thresholds (aggregate suite verdict):**
+- `OK` — score drop < 2% (or score improved)
+- `MINOR` — score drop 2–5% (investigate)
+- `MAJOR` — score drop ≥ 5% (do NOT ship, exits code 2)
 
-Paths are containment-checked, and `registry://` refs are resolved with an optional `kinds` filter so you never pick the wrong artifact.
+Paths are containment-checked, and `registry://` refs are resolved with an optional `kinds` filter so you never pick the wrong artifact. Standalone `.gguf` file paths are refused up front; pass directory paths containing safetensors/HuggingFace weights or `registry://` references.
 
 ### Custom Eval Format
 

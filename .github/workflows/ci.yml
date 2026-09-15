@@ -6,6 +6,33 @@ on:
   pull_request:
     branches: [main]
 
+# Supersede, do not queue.
+#
+# Measured 2026-09-14: 49 of 83 queued runs were already obsolete -- a newer run
+# existed on the same branch -- because no workflow declared a concurrency group,
+# so every push left its predecessor queued forever. Arrival was 8.3 runs/hour
+# against a service rate of 4.6, i.e. the queue diverged rather than backed up.
+#
+# Cancellation is deliberately PULL-REQUEST ONLY, and the GROUP KEY is what
+# enforces that -- not `cancel-in-progress`. Measured 2026-09-14, after the
+# first version of this block shipped: `cancel-in-progress: false` protects a
+# run that is already RUNNING and does nothing for one still PENDING on the
+# group. Four consecutive pushes to `main` lost their runs that way, each
+# cancelled within two seconds of the next one starting (b0a63382 cancelled at
+# 14:17:33, 52641e99 started 14:17:31), which is the exact opposite of what the
+# comment here used to claim. So a push keys the group on the COMMIT and is
+# therefore alone in it; a pull request keys on the ref and supersedes itself.
+# The release checklist requires a green matrix on the exact commit being
+# tagged, and that now survives a later push instead of depending on a freeze.
+#
+# What this costs: per-commit CI history WITHIN a pull request. Three pushes in
+# a row now leave results for the third only. That is a signal the review rule
+# already discards -- merge requires green on the CURRENT head -- which is why
+# it is the right thing to trade.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   lint:
     runs-on: ubuntu-latest

@@ -9,7 +9,7 @@ prompts.
 
 This module ships the schema + validators + dry-run planner. Live generation
 (invoking v0.20.0 Ollama / Anthropic / vLLM providers + running the quality
-filter from v0.47.0 educational + toxicity scorers) is deferred to v0.69.1
+filter from the v0.47.0 educational heuristic) is deferred to v0.69.1
 under the project-wide stub-then-live cadence (mirrors v0.50.0 / v0.61.0 /
 v0.62.0 / v0.68.0).
 """
@@ -255,28 +255,26 @@ def harvest_response(
 
 
 # -----------------------------------------------------------------------------
-# Quality filter (reuses v0.47.0 educational + toxicity scorers)
+# Quality filter (non-empty + v0.47.0 educational heuristic)
 # -----------------------------------------------------------------------------
 
-_QUALITY_MAX_TOXICITY = 0.5
 _QUALITY_MIN_EDUCATIONAL = 0.1
 
 
 def default_quality_fn(instruction: str, response: str) -> bool:
-    """Keep a row if it is non-empty, low-toxicity and minimally educational.
+    """Keep a row if it is non-empty and minimally educational.
 
-    Reuses the v0.47.0 keyword-baseline scorers. A real Llama-Guard / FineWeb
-    classifier ships behind ``[data-pro]`` (tracked separately).
+    The default filter deliberately does not treat the abuse-keyword
+    heuristic as a toxicity classifier. Callers that need a safety policy can
+    inject an explicit ``quality_fn`` backed by their chosen classifier.
     """
     if not isinstance(instruction, str) or not instruction.strip():
         return False
     if not isinstance(response, str) or not response.strip():
         return False
-    from soup_cli.utils.data_score import score_educational_value, score_toxicity
+    from soup_cli.utils.data_score import score_educational_value
 
     combined = f"{instruction}\n{response}"
-    if score_toxicity(combined) > _QUALITY_MAX_TOXICITY:
-        return False
     if score_educational_value(combined) < _QUALITY_MIN_EDUCATIONAL:
         return False
     return True

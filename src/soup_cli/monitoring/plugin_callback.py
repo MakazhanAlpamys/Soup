@@ -24,8 +24,9 @@ def _collect_active_hooks() -> list[tuple[str, dict[str, Any]]]:
     Lazy-imports :mod:`soup_cli.plugins` so the callback module stays
     cheap to import in CI / non-training contexts.
     """
-    from soup_cli.plugins import discover_hooks, list_plugins
+    from soup_cli.plugins import discover_hooks, list_plugins, load_plugins
 
+    load_plugins()
     out: list[tuple[str, dict[str, Any]]] = []
     for name, spec in list_plugins().items():
         if not spec.enabled:

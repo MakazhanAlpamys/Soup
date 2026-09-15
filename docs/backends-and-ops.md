@@ -395,7 +395,8 @@ soup train --config soup.yaml
 
 The endpoint validator follows the same SSRF rules as `HF_ENDPOINT`: only `http`/`https` schemes; plain HTTP allowed only for `localhost` / `127.0.0.1` / `::1`; private and link-local IPs (RFC1918, 169.254/16, etc.) rejected on plain HTTP. `backend: mlx` is incompatible with non-HF hubs (`mlx-lm` only downloads from HF Hub).
 
-The hub adapter is schema-only in this release; the live downloader and uploader land in v0.51.1.
+ModelScope and Modelers downloads and uploads route through live, lazy-imported SDK adapters. The
+HF path remains the default, and MLX remains HF-only.
 
 
 ## TensorBoard Integration
@@ -586,13 +587,12 @@ as a warning that named this deadline, so there was exactly one release of notic
 deliberately, because a config written against a newer Soup has to keep running on an
 older wheel for at least one release. The refusal is the same everywhere a `SoupConfig`
 is built from a file or a string: `soup train` exits 1 before the training stack is
-imported, `soup sweep` / `soup doctor --config` / `soup ship --config` refuse the same
-way, and the Web UI / API loader raises `ValueError` with the same text (the Web UI shows
-it). `soup plan` and `soup apply` read the YAML as a plain mapping and do not run this
-check. Nothing is defaulted and nothing is guessed: the suggestion is a hint for you, not
-a substitution the loader makes. A root-level `lora:` block is not an unknown key — the
-schema has accepted that spelling and moved it under `training` since v0.40.1, and the
-detector applies the same remap before it looks.
+imported, `soup sweep` / `soup doctor --config` / `soup ship --config` / `soup plan` /
+`soup apply` refuse the same way, and the Web UI / API loader raises `ValueError` with
+the same text (the Web UI shows it). Nothing is defaulted and nothing is guessed: the
+suggestion is a hint for you, not a substitution the loader makes. A root-level `lora:`
+block is not an unknown key — the schema has accepted that spelling and moved it under
+`training` since v0.40.1, and the detector applies the same remap before it looks.
 
 A config that names a key your installed Soup does not have usually means one of two
 things: a typo (take the suggestion), or a field added after your version shipped
@@ -950,7 +950,9 @@ All uploads use HTTPS, a 1-second connect and read timeout (DNS resolution exclu
 
 ## Plugin System
 
-Drop a Python module under `src/soup_cli/plugins/` (or any package importable by Soup) and register at import time:
+Soup discovers bundled modules under `soup_cli.plugins` and installed Python
+distributions that publish the `soup_cli.plugins` entry-point group. An external
+plugin exposes a zero-argument registration function:
 
 ```python
 from soup_cli.plugins import register_plugin
@@ -961,23 +963,47 @@ class MyPlugin:
     def post_train(self, ctx):
         ...
 
-register_plugin(
-    name="my-plugin",
-    version="1.0.0",
-    plugin=MyPlugin(),
-    description="Hooks into pre/post-train",
-    templates=["my-template"],         # optional
-    model_groups=["my-arch-family"],   # optional
-)
+def register():
+    register_plugin(
+        name="my-plugin",
+        version="1.0.0",
+        plugin=MyPlugin(),
+        description="Hooks into pre/post-train",
+        templates=["my-template"],         # optional metadata
+        model_groups=["my-arch-family"],   # optional metadata
+    )
 ```
+
+Declare it in the plugin distribution's `pyproject.toml`:
+
+```toml
+[project.entry-points."soup_cli.plugins"]
+my-plugin = "my_package.soup_plugin:register"
+```
+
+Bundled Soup plugin modules are enabled by default. Installed third-party entry points
+are **disabled by default**: discovery reads their names and versions from package
+metadata without importing or executing their modules. `soup plugins enable <name>` is
+the explicit boundary that loads the selected entry point; its entry-point name must
+match the plugin name it registers. The choice is stored atomically in
+`~/.soup/plugins.json` and is reused by later Soup processes.
+
+Set `SOUP_PLUGIN_STATE_PATH` to use a different trusted local state file, for example in
+an isolated test environment. This explicit path is not confined to the current
+workspace; Soup rejects NULs, oversized paths, symlink state files, oversized content,
+and malformed JSON.
 
 ```bash
-soup plugins              # list registered plugins
-soup plugins enable foo
-soup plugins disable foo
+soup plugins                       # discover and list plugins
+soup plugins enable my-plugin      # opt in persistently
+soup plugins disable my-plugin
 ```
 
-Plugin names are kebab-case (`^[a-z0-9][a-z0-9-]{0,39}$`); versions are semver-ish (`MAJOR.MINOR.PATCH`); registry caps `_MAX_PLUGINS=64`, `_MAX_TEMPLATES_PER_PLUGIN=32`, `_MAX_MODEL_GROUPS_PER_PLUGIN=32`. Re-registering the same `(name, version, plugin, templates, model_groups, description)` is idempotent; any field mismatch is rejected with a clear error. Trainer-callback wiring of `pre_train` / `post_train` / `pre_step` / `post_step` lands in v0.45.1.
+`soup plugins install` deliberately exits with status 2: Soup does not run a package
+installer on the user's behalf. Install the distribution with your trusted Python
+package workflow, then enable it explicitly.
+
+Plugin names are kebab-case (`^[a-z0-9][a-z0-9-]{0,39}$`); versions are semver-ish (`MAJOR.MINOR.PATCH`); registry caps `_MAX_PLUGINS=64`, `_MAX_TEMPLATES_PER_PLUGIN=32`, `_MAX_MODEL_GROUPS_PER_PLUGIN=32`. Re-registering the same `(name, version, plugin, templates, model_groups, description)` is idempotent; any field mismatch is rejected with a clear error. `templates` and `model_groups` are descriptive metadata surfaced by `soup plugins`; Soup does not apply them to model configuration automatically.
 
 
 ## External Integrations Catalog
@@ -1010,7 +1036,7 @@ Register a plugin once via the v0.45.0 registry API; v0.53.6 wires it into every
 transformer-backend trainer as a real HF `TrainerCallback`:
 
 ```python
-# src/soup_cli/plugins/my_plugin.py — auto-discovered at `soup` startup
+# my_package/soup_plugin.py — discovered only by plugin-aware commands/training
 from soup_cli.plugins import register_plugin
 
 class MyPlugin:
@@ -1021,12 +1047,15 @@ class MyPlugin:
         if ctx["state"].global_step % 100 == 0:
             print(f"step {ctx['state'].global_step}")
 
-register_plugin(name="my-plugin", version="0.1.0", plugin=MyPlugin())
+def register():
+    register_plugin(name="my-plugin", version="0.1.0", plugin=MyPlugin())
 ```
 
 A misbehaving plugin hook is swallowed at WARNING — one bad plugin must never crash
 a multi-hour training run. The hook snapshot is taken at callback-construction time,
-so a plugin registered MID-run does not retroactively receive events.
+so a plugin registered MID-run does not retroactively receive events. Discovery is
+lazy, so importing the CLI or running an unrelated light command does not load plugin
+entry points.
 
 
 ## Terraform-Style Plan & Apply (`soup plan` / `soup apply`)

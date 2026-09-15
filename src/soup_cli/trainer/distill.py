@@ -30,6 +30,7 @@ from typing import TYPE_CHECKING, Any
 from rich.console import Console
 
 from soup_cli.config.schema import SoupConfig
+from soup_cli.trainer.loss_summary import summarize_training_loss
 from soup_cli.utils.gpu import bf16_fp16_flags, resolve_device_map
 from soup_cli.utils.seeding import apply_training_seed, training_seed_kwargs
 
@@ -276,7 +277,7 @@ class DistillTrainerWrapper:
     def setup(self, dataset: dict) -> None:
         """Load student + teacher, build distillation Trainer."""
         from datasets import Dataset
-        from peft import LoraConfig, TaskType, get_peft_model
+        from peft import TaskType, get_peft_model
         from transformers import (
             AutoModelForCausalLM,
             AutoTokenizer,
@@ -328,18 +329,16 @@ class DistillTrainerWrapper:
         )
 
         # LoRA on the student — bracket with v0.40.6 #67 surgical PEFT patches.
-        from soup_cli.utils.peft_wiring import resolve_lora_target_modules
+        from soup_cli.utils.peft_wiring import (
+            build_lora_config,
+            resolve_lora_target_modules,
+        )
 
         target_modules = resolve_lora_target_modules(self.model, tcfg.lora.target_modules)
-        lora_config = LoraConfig(
-            r=tcfg.lora.r,
-            lora_alpha=tcfg.lora.alpha,
-            lora_dropout=tcfg.lora.dropout,
+        lora_config = build_lora_config(
+            tcfg.lora,
             target_modules=target_modules,
             task_type=TaskType.CAUSAL_LM,
-            bias="none",
-            use_dora=tcfg.lora.use_dora,
-            use_rslora=tcfg.lora.use_rslora,
         )
         from soup_cli.utils.peft_wiring import (
             apply_post_lora_patches,
@@ -592,15 +591,11 @@ class DistillTrainerWrapper:
         class _DistillTrainer(Trainer):
             def __init__(self, *args, **kwargs):
                 super().__init__(*args, **kwargs)
-                # compute_loss below returns a mean over its own microbatch and
-                # never divides by num_items_in_batch, which it accepts and
-                # ignores. Transformers skips its own gradient-accumulation
-                # compensation for a model it classifies as consuming loss
-                # kwargs, so leaving this True makes the accumulated gradient
-                # scale with gradient_accumulation_steps: the same effective
-                # batch split four ways gives four times the gradient. Opting
-                # out restores the division Transformers would otherwise do.
-                self.model_accepts_loss_kwargs = False
+                # compute_loss consumes Trainer's full accumulation-window
+                # target count. Keeping this True makes Trainer collect that
+                # count and skip its fixed 1 / gradient_accumulation_steps
+                # fallback, which would weight unequal microbatches equally.
+                self.model_accepts_loss_kwargs = True
 
             def compute_loss(
                 self,
@@ -614,6 +609,32 @@ class DistillTrainerWrapper:
                 labels = inputs.get("labels")
                 outputs = model(**{k: v for k, v in inputs.items() if k != "labels"})
                 student_logits = outputs.logits
+
+                def _token_weighted_accumulation(loss):
+                    """Turn this microbatch mean into its share of the window mean."""
+                    if num_items_in_batch is None or labels is None:
+                        return loss
+                    local_items = labels[..., 1:].ne(-100).sum().to(
+                        device=loss.device, dtype=loss.dtype
+                    )
+                    if torch.is_tensor(num_items_in_batch):
+                        window_items = num_items_in_batch.to(
+                            device=loss.device, dtype=loss.dtype
+                        )
+                    else:
+                        window_items = loss.new_tensor(num_items_in_batch)
+                    weighted = loss * local_items / window_items.clamp(min=1)
+
+                    # Match Trainer.compute_loss when it gathers one global
+                    # token count: DDP averages gradients, so compensate for
+                    # that average after normalising by the global denominator.
+                    if self.args.average_tokens_across_devices:
+                        loss_scale = self.accelerator.num_processes
+                        parallelism = getattr(self.accelerator, "parallelism_config", None)
+                        if parallelism is not None:
+                            loss_scale //= parallelism.tp_size
+                        weighted *= loss_scale if self.args.n_gpu <= 1 else self.args.n_gpu
+                    return weighted
 
                 ce_loss = torch.tensor(0.0, device=student_logits.device)
                 if labels is not None:
@@ -630,6 +651,7 @@ class DistillTrainerWrapper:
                 # been used (and freed) during dataset construction, so there
                 # is no teacher forward / logit term here.
                 if _sequence_mode:
+                    ce_loss = _token_weighted_accumulation(ce_loss)
                     return (ce_loss, outputs) if return_outputs else ce_loss
 
                 # v0.71.18 #257 — true on-policy MiniLLM rollout. Samples a
@@ -646,6 +668,7 @@ class DistillTrainerWrapper:
                     total = _CE_WEIGHT * ce_loss + _DISTILL_WEIGHT * rollout_loss
                     if anchor is not None:
                         total = total + anchor
+                    total = _token_weighted_accumulation(total)
                     return (total, outputs) if return_outputs else total
 
                 # v0.71.18 #258 — aligned ULD. Decode the student ids to text,
@@ -711,6 +734,7 @@ class DistillTrainerWrapper:
                         labels=labels,
                     )
                     total = _CE_WEIGHT * ce_loss + _DISTILL_WEIGHT * distill_loss
+                    total = _token_weighted_accumulation(total)
                     return (total, outputs) if return_outputs else total
 
                 # Bridge devices: HF Trainer may auto-move the student to
@@ -762,6 +786,7 @@ class DistillTrainerWrapper:
                 total = _CE_WEIGHT * ce_loss + _DISTILL_WEIGHT * distill_loss
                 if anchor is not None:
                     total = total + anchor
+                total = _token_weighted_accumulation(total)
                 return (total, outputs) if return_outputs else total
 
         # ``DataCollatorForSeq2Seq`` pads ``input_ids`` and ``attention_mask``
@@ -850,14 +875,13 @@ class DistillTrainerWrapper:
         self.tokenizer.save_pretrained(self._output_dir)
 
         logs = self.trainer.state.log_history
-        train_losses = [entry["loss"] for entry in logs if "loss" in entry]
+        loss_summary = summarize_training_loss(logs)
 
         hours = int(duration // 3600)
         minutes = int((duration % 3600) // 60)
         duration_str = f"{hours}h {minutes}m" if hours > 0 else f"{minutes}m"
         return {
-            "initial_loss": train_losses[0] if train_losses else 0,
-            "final_loss": train_losses[-1] if train_losses else 0,
+            **loss_summary,
             "duration": duration_str,
             "duration_secs": duration,
             "output_dir": self._output_dir,

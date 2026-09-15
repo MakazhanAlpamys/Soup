@@ -336,9 +336,14 @@ def stress(
         _fail(f"could not load reward target: {exc}")
 
     try:
+        reference_key = (
+            "schema"
+            if reward_target == "verifiable" and verifiable_domain == "json_schema"
+            else "answer"
+        )
         report = reward_stress.run_stress(
             reward_fn, golds, sentinel=sentinel, threshold=threshold,
-            max_gameable=max_gameable, attacks=kinds,
+            max_gameable=max_gameable, attacks=kinds, reference_key=reference_key,
         )
     except Exception as exc:  # noqa: BLE001 — a broken reward fn is a usage error
         _fail(f"stress run failed: {exc}")

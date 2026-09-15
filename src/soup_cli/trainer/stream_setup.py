@@ -173,6 +173,60 @@ def _validate_qwen4_ngram_ram_fit(
         )
 
 
+def _validate_stream_staging_ram_fit(
+    *,
+    staging_bytes: int,
+    read_ahead: int,
+    free_ram: int,
+    resident_ram: int = 0,
+) -> None:
+    """Refuse a disk-tier run whose host staging will not fit free RAM.
+
+    The disk tier had no host-RAM check at all: it predicted zero residency,
+    which was true of the synchronous source it replaced and false of the async
+    one, which holds ``min(read_ahead, members) x group_bytes`` of host RAM per
+    distinct layer shape for the whole run — page-locked where the box allows,
+    pageable otherwise, and the check is the same either way because the RAM is
+    held in both cases. On the 70B NF4 shape at the default depth that is
+    ~5 GB — on a box that reached this tier BECAUSE its RAM could not hold the
+    model. The RAM tier has had this check since v0.72.0
+    (``free_ram_bytes`` against ``choose_tier``'s 0.7 headroom, strict ``<``);
+    this is the same rule applied to the same resource.
+
+    Refusing beats clamping ``read_ahead``: a depth the operator set is a
+    decision, and silently lowering it would hand back a slower run than the
+    one they configured with no line saying why.
+    """
+    from soup_cli.utils.layer_stream import (
+        MIN_STREAM_READ_AHEAD,
+        RAM_TIER_HEADROOM,
+    )
+
+    required = int(staging_bytes) + int(resident_ram)
+    budget = free_ram * RAM_TIER_HEADROOM
+    if required < budget:
+        return
+    # At the floor there is no lower depth to suggest, and an impossible remedy
+    # is worse than none: it reads as "you did not try hard enough".
+    lower = (
+        ""
+        if read_ahead <= MIN_STREAM_READ_AHEAD
+        else f"Lower training.stream_read_ahead (currently {read_ahead}), "
+    )
+    raise ValueError(
+        f"layer streaming's disk tier would hold "
+        f"{staging_bytes / 1e9:.2f} GB of host staging (page-locked when the "
+        f"box allows) at training.stream_read_ahead={read_ahead}, and with "
+        f"{resident_ram / 1e9:.2f} GB of resident extras that needs "
+        f"{required / 1e9:.2f} GB — more than the "
+        f"{budget / 1e9:.2f} GB safety headroom on "
+        f"{free_ram / 1e9:.1f} GB of free RAM. The reader stages whole layers, "
+        f"and the embedding and lm_head take one slot each at ANY depth "
+        f"because they are one layer each. "
+        f"{lower}free RAM, or use a smaller base."
+    )
+
+
 def _warn_if_ngram_source_unused(
     *, arch: str, requested: str, ngram_bytes: int, notify
 ) -> None:
@@ -423,7 +477,7 @@ class StreamingSetupMixin:
         """
         from dataclasses import replace
 
-        from peft import LoraConfig, TaskType
+        from peft import TaskType
         from transformers import AutoConfig, AutoTokenizer
 
         # BEFORE the tokenizer load, the weight resolve and the shard write:
@@ -453,6 +507,7 @@ class StreamingSetupMixin:
             render_stream_panel,
             resolve_disk_kind,
             resolve_stream_dtype,
+            staging_bytes_for,
             stream_arch_of,
             total_ram_bytes,
         )
@@ -749,6 +804,10 @@ class StreamingSetupMixin:
             # #366: training.stream_pin (None/False/True) overrides the automatic
             # pinning choice so the pageable escape hatch is reachable from config.
             stream_pin=tcfg.stream_pin,
+            # #971: the depth decides how much host memory the async reader
+            # page-locks, so the plan has to carry it or the pre-flight is
+            # predicting zero residency for a tier that holds GBs of it.
+            read_ahead=tcfg.stream_read_ahead,
         )
         # v0.72.3 — the disk overflow tier is live, so a base that does not fit
         # in RAM is no longer fatal. `stream_source` decides: 'ram' insists,
@@ -762,19 +821,53 @@ class StreamingSetupMixin:
             # before the runtime announces it is streaming from disk. Every
             # field that describes the RAM store is corrected with it, so no
             # consumer can read a stale value.
+            # `pinned` is deliberately NOT zeroed with them. It described the
+            # RAM store, but `pin=plan.pinned and on_cuda` below now also
+            # decides whether the disk tier's host STAGING is page-locked
+            # (#971). Zeroing it here would stage pageable for a run that
+            # reached the disk tier via `stream_source: disk` and pinned for one
+            # that reached the same tier via `auto` — one tier, two behaviours,
+            # chosen by the spelling.
             plan = replace(
                 plan,
                 tier=tier,
                 store_bytes=0,
                 large_store_bytes=0,
-                pinned=False,
+                # Computed here for the same reason `pinned` is not zeroed
+                # above: `build_stream_plan` leaves it 0 on a RAM-tier plan, so
+                # carrying that through would report no host staging for a run
+                # that reached disk by spelling rather than by RAM pressure —
+                # one tier, two numbers, chosen by the spelling. `large_store
+                # _bytes` is read off the PRE-replace plan, since the line above
+                # has just zeroed it.
+                staging_bytes=staging_bytes_for(
+                    read_ahead=tcfg.stream_read_ahead,
+                    n_layers=plan.n_layers,
+                    layer_bytes=plan.layer_bytes,
+                    large_store_bytes=plan.large_store_bytes,
+                ),
                 notes=plan.notes
                 + (
                     "streaming from disk because stream_source='disk' was set, "
-                    "not because RAM was short. Nothing is held resident, and "
-                    "the slowdown versus the RAM tier is unmeasured on this "
-                    "hardware.",
+                    "not because RAM was short. An async reader stages "
+                    "training.stream_read_ahead layers in host RAM (page-locked "
+                    "where the box allows) rather than holding the base "
+                    "resident, and is slower than the RAM "
+                    "tier it is being used instead of — measured 1.9-2.3x its step "
+                    "time with the store fully cached, on one box "
+                    "(benchmarks/gate-971-async-nvme-source.md).",
                 ),
+            )
+        # #971 — HOST pre-flight, and it has to come after the tier is settled
+        # above: the async reader's staging is page-locked for the whole run and
+        # nothing was charging it. Before the panel, because a refusal an
+        # operator has to scroll past a summary to find reads as an afterthought.
+        if plan.tier == TIER_DISK:
+            _validate_stream_staging_ram_fit(
+                staging_bytes=plan.staging_bytes,
+                read_ahead=tcfg.stream_read_ahead,
+                free_ram=free_ram,
+                resident_ram=embed_bytes,
             )
         # v0.72.3 — VRAM pre-flight. Streaming bounds the WEIGHTS; activations
         # and the logits tensor are untouched by it and both scale with batch x
@@ -803,7 +896,10 @@ class StreamingSetupMixin:
                     f"[dim]expandable_segments allocator hint not enabled: {why_not}[/]"
                 )
 
-        from soup_cli.utils.peft_wiring import resolve_lora_target_modules
+        from soup_cli.utils.peft_wiring import (
+            build_lora_config,
+            resolve_lora_target_modules,
+        )
 
         target_modules = resolve_lora_target_modules(model_config, tcfg.lora.target_modules)
         if tcfg.moe_lora and is_moe and moe_targets:
@@ -811,15 +907,10 @@ class StreamingSetupMixin:
             console.print(
                 f"[green]ScatterMoE LoRA:[/] targeting {len(moe_targets)} module patterns"
             )
-        lora_config = LoraConfig(
-            r=tcfg.lora.r,
-            lora_alpha=tcfg.lora.alpha,
-            lora_dropout=tcfg.lora.dropout,
+        lora_config = build_lora_config(
+            tcfg.lora,
             target_modules=target_modules,
             task_type=TaskType.CAUSAL_LM,
-            bias="none",
-            use_dora=tcfg.lora.use_dora,
-            use_rslora=tcfg.lora.use_rslora,
         )
 
         # #366 / #434 — CUDA host pinning is inapplicable on every non-CUDA
@@ -841,12 +932,16 @@ class StreamingSetupMixin:
             device=self.device,
             dtype=dtype,
             buffers=tcfg.stream_buffers,
+            # #971: the depth the async reader stages to on the disk tier.
+            # Ignored on the RAM tier, which holds every layer and reads
+            # nothing ahead.
+            read_ahead=tcfg.stream_read_ahead,
             pin=plan.pinned and on_cuda,
-            # #366: on the RAM tier stream_pin=true refuses rather than silently
-            # falling back to a pageable store; on the disk tier the runtime
-            # announces that pinning is inapplicable (no RAM store to lock); on
-            # non-CUDA targets the notice above covers it. require_pin only carries
-            # the CUDA RAM-tier refusal, so it is gated on a real CUDA device.
+            # #366: stream_pin=true refuses rather than silently falling back to
+            # pageable memory — on the RAM tier that is the store, and since
+            # #971 on the disk tier it is the reader's host staging. On
+            # non-CUDA targets the notice above covers it, so require_pin is
+            # gated on a real CUDA device.
             require_pin=(tcfg.stream_pin is True) and on_cuda,
             seed=tcfg.seed if getattr(tcfg, "seed", None) is not None else 0,
             trust_remote_code=self._trust_remote_code,
@@ -868,9 +963,14 @@ class StreamingSetupMixin:
                 f"{'pinned' if stats['pinned'] else 'pageable'} RAM store"
             )
         else:
+            # Not "nothing held resident": the async reader stages `read_ahead`
+            # layers in host memory, so say how deep and how much (#971).
             source_line = (
                 f"streamed from DISK ({stats['disk_bytes'] / 1e9:.2f} GB on an "
-                f"NVMe volume, nothing held resident)"
+                f"NVMe volume) by an async reader, "
+                f"read_ahead={stats['read_ahead']}, "
+                f"{stats['store_bytes'] / 1e6:.0f} MB "
+                f"{'pinned' if stats['pinned'] else 'pageable'} host staging"
             )
         large_runtime_buffer = stats.get("large_buffer_bytes", 0)
         decoder_buffers = stats["buffer_bytes"] - large_runtime_buffer

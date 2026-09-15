@@ -112,6 +112,17 @@ def validate_fragments(root: Path | str = ".") -> list[Fragment]:
         content = _read_utf8(path)
         if not content:
             raise ChangelogError(f"{path}: fragment must not be empty")
+        if content.startswith("﻿"):
+            # Diagnosed separately because the generic message is actively
+            # misleading here: the file opens with `- ` on screen and in every
+            # editor, while `startswith` sees U+FEFF. Still rejected rather
+            # than stripped -- fragments are copied verbatim into CHANGELOG.md,
+            # so a byte order mark would land in the middle of the file.
+            raise ChangelogError(
+                f"{path}: fragment starts with a UTF-8 byte order mark (U+FEFF). "
+                "The `- ` is there; the BOM is in front of it. Re-save the file "
+                "as UTF-8 without BOM."
+            )
         if not content.startswith("- "):
             raise ChangelogError(f"{path}: fragment must start with a Markdown list item (`- `)")
         if re.search(rf"(?<!\d)#{number}(?!\d)", content) is None:

@@ -55,11 +55,7 @@ def _tracked_python_files() -> list[Path]:
         text=True,
         check=True,
     )
-    return [
-        REPO_ROOT / line
-        for line in out.stdout.splitlines()
-        if line.endswith(".py")
-    ]
+    return [REPO_ROOT / line for line in out.stdout.splitlines() if line.endswith(".py")]
 
 
 def _module_level_assigned_names(text: str) -> set[str]:
@@ -122,8 +118,16 @@ def _offenders() -> list[str]:
         try:
             banned_names = _module_level_assigned_names(text) & BANNED_NAMES
             shape_lines = _control_strip_shape_lines(text)
-        except SyntaxError:  # pragma: no cover - not expected in this tree
-            continue
+        except SyntaxError as exc:
+            # An unparseable file under ``src/soup_cli`` is a worse problem
+            # than the duplicate this ratchet looks for, and nothing else in
+            # the suite reports it as such. Skipping it would make "zero
+            # offenders" mean "zero among the files I could read" (#949).
+            pytest.fail(
+                f"{path.relative_to(REPO_ROOT).as_posix()} does not parse "
+                f"({exc.msg} at line {exc.lineno}), so this scan cannot tell "
+                "whether it defines the control-strip table"
+            )
         if not banned_names and not shape_lines:
             continue
         rel = path.relative_to(REPO_ROOT).as_posix()
@@ -152,8 +156,7 @@ class TestNoDuplicateTerminalSanitizer:
         """A scanner that silently stopped reading files would pass vacuously."""
         scanned = _tracked_python_files()
         assert len(scanned) > 300, (
-            f"only {len(scanned)} files matched the scan; the tracked-file "
-            "listing has broken"
+            f"only {len(scanned)} files matched the scan; the tracked-file listing has broken"
         )
         names = {p.name for p in scanned}
         assert "terminal.py" in names
@@ -177,6 +180,43 @@ class TestTheScannerCanActuallyFail:
         text = offending.read_text(encoding="utf-8")
         assert _module_level_assigned_names(text) & BANNED_NAMES == BANNED_NAMES
         assert _control_strip_shape_lines(text)
+
+    def test_an_unparseable_file_in_the_tree_fails_the_guard(self):
+        """A file under ``src/soup_cli`` that does not parse must fail this
+        guard, not be skipped: the walk is over ``git ls-files``, so the
+        probe is registered with ``git add -N`` to be part of the real walk,
+        and removed afterwards. No monkeypatching of ``ast.parse``.
+        """
+        probe = SRC_ROOT / "zz_unparseable_guard_probe.py"
+        relpath = probe.relative_to(REPO_ROOT).as_posix()
+        try:
+            # Both the write and the registration live inside the try: if
+            # ``git add -N`` fails, the probe is already on disk and the
+            # cleanup below must still run.
+            probe.write_text("def broken(:\n", encoding="utf-8")
+            subprocess.run(
+                ["git", "add", "-N", "--", relpath],
+                cwd=REPO_ROOT,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            assert relpath in {
+                p.relative_to(REPO_ROOT).as_posix() for p in _tracked_python_files()
+            }, "the probe must really be part of the scanned tree"
+            with pytest.raises(pytest.fail.Exception) as failure:
+                _offenders()
+        finally:
+            subprocess.run(
+                ["git", "rm", "--cached", "--force", "-q", "--", relpath],
+                cwd=REPO_ROOT,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            probe.unlink(missing_ok=True)
+        assert "zz_unparseable_guard_probe.py" in str(failure.value)
+        assert "does not parse" in str(failure.value)
 
     def test_it_flags_a_function_local_copy_under_a_different_name(self, tmp_path):
         """The exact shape the real ninth copy (``commands/serve.py``) took,

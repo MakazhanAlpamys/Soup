@@ -642,6 +642,12 @@ def json_schema_reward(
     schemas = kwargs.get("schema", [])
     rewards: list[float] = []
     for completion, schema in zip(completions, schemas):
+        if isinstance(schema, str):
+            try:
+                schema = json.loads(schema)
+            except (json.JSONDecodeError, ValueError):
+                rewards.append(0.0)
+                continue
         content = completion[-1]["content"] if completion else ""
         # Strip markdown fences first
         fenced = re.search(r"```(?:json)?\s*(.*?)```", content, re.DOTALL)

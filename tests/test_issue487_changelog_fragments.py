@@ -261,3 +261,56 @@ def test_repository_fragments_match_the_newest_release() -> None:
     fragments = validate_fragments(root)
 
     assert all(fragment.path.is_file() for fragment in fragments)
+
+
+class TestAByteOrderMarkIsDiagnosedByName:
+    """A BOM'd fragment must say so, not blame the `- ` the file visibly has.
+
+    Five pull requests hit the list-item rule in a single day, and at least
+    two of them had a UTF-8 BOM: the file opens with `- ` on screen and in
+    every editor, while `startswith("- ")` sees U+FEFF. The old message sent
+    the author looking for a character that was already there, and the round
+    trip to find out costs a full CI matrix.
+
+    Rejecting is still correct -- fragments are concatenated verbatim into
+    CHANGELOG.md, so a BOM would land mid-file. Only the diagnosis changes.
+    """
+
+    def test_a_bom_is_named_rather_than_blamed_on_the_list_marker(
+        self, tmp_path: Path
+    ) -> None:
+        _write_repo(tmp_path)
+        path = tmp_path / "changelog.d" / "0.73.3" / "487.fixed.md"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"\xef\xbb\xbf- Entry (#487).\n")
+
+        with pytest.raises(ChangelogError, match="byte order mark"):
+            validate_fragments(tmp_path)
+
+    def test_the_bom_message_does_not_send_the_author_after_the_dash(
+        self, tmp_path: Path
+    ) -> None:
+        _write_repo(tmp_path)
+        path = tmp_path / "changelog.d" / "0.73.3" / "487.fixed.md"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"\xef\xbb\xbf- Entry (#487).\n")
+
+        with pytest.raises(ChangelogError) as excinfo:
+            validate_fragments(tmp_path)
+        assert "must start with a Markdown list item" not in str(excinfo.value)
+
+    def test_a_genuinely_missing_marker_still_says_so(self, tmp_path: Path) -> None:
+        """The BOM branch must not swallow the plain case."""
+        _write_repo(tmp_path)
+        _write_fragment(tmp_path, "487.fixed.md", "No list marker (#487).\n")
+
+        with pytest.raises(
+            ChangelogError, match="must start with a Markdown list item"
+        ):
+            validate_fragments(tmp_path)
+
+    def test_a_bom_free_fragment_is_still_accepted(self, tmp_path: Path) -> None:
+        _write_repo(tmp_path)
+        _write_fragment(tmp_path, "487.fixed.md", "- Entry (#487).\n")
+
+        assert validate_fragments(tmp_path)

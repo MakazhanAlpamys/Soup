@@ -32,6 +32,7 @@ from typing import Any, List, Union
 from rich.console import Console
 
 from soup_cli.config.schema import SoupConfig
+from soup_cli.trainer.loss_summary import summarize_training_loss
 from soup_cli.utils.gpu import bf16_fp16_flags
 from soup_cli.utils.mixed_precision import align_trainable_dtype_for_fp16
 from soup_cli.utils.seeding import apply_training_seed, training_seed_kwargs
@@ -262,26 +263,22 @@ class ClassifierTrainerWrapper:
             tcfg.lora.r > 0
         )
         if self._lora_active:
-            from peft import LoraConfig, TaskType, get_peft_model
+            from peft import TaskType, get_peft_model
 
             from soup_cli.utils.peft_wiring import (
                 apply_post_lora_patches,
                 apply_pre_lora_patches,
+                build_lora_config,
                 resolve_lora_target_modules,
             )
 
             target_modules = resolve_lora_target_modules(
                 self.model, tcfg.lora.target_modules
             )
-            lora_config = LoraConfig(
-                r=tcfg.lora.r,
-                lora_alpha=tcfg.lora.alpha,
-                lora_dropout=tcfg.lora.dropout,
+            lora_config = build_lora_config(
+                tcfg.lora,
                 target_modules=target_modules,
                 task_type=TaskType.SEQ_CLS,
-                bias="none",
-                use_dora=tcfg.lora.use_dora,
-                use_rslora=tcfg.lora.use_rslora,
             )
             apply_pre_lora_patches(self.model, cfg.base)
             self.model = get_peft_model(self.model, lora_config)
@@ -419,14 +416,13 @@ class ClassifierTrainerWrapper:
         self.tokenizer.save_pretrained(self._output_dir)
 
         logs = self.trainer.state.log_history
-        train_losses = [entry["loss"] for entry in logs if "loss" in entry]
+        loss_summary = summarize_training_loss(logs)
 
         hours = int(duration // 3600)
         minutes = int((duration % 3600) // 60)
         duration_str = f"{hours}h {minutes}m" if hours > 0 else f"{minutes}m"
         return {
-            "initial_loss": train_losses[0] if train_losses else 0,
-            "final_loss": train_losses[-1] if train_losses else 0,
+            **loss_summary,
             "duration": duration_str,
             "duration_secs": duration,
             "output_dir": self._output_dir,

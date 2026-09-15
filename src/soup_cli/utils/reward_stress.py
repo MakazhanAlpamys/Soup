@@ -99,9 +99,11 @@ def generate_attacks(
 def _score_batch(
     reward_fn: Callable[..., Sequence[Any]],
     texts: Sequence[str],
-    answers: Optional[Sequence[str]],
+    references: Optional[Sequence[Any]],
+    *,
+    reference_key: str = "answer",
 ) -> list[float]:
-    """Score completions built from ``texts``; supply ``answer=`` only when given.
+    """Score completions and supply references under the verifier's metadata key.
 
     Validates the reward fn returned exactly one finite numeric score per
     completion. A short return (the classic case: a gold-requiring builtin like
@@ -112,9 +114,16 @@ def _score_batch(
     if not texts:
         return []
     completions = [[{"role": "assistant", "content": t}] for t in texts]
-    kwargs = {"answer": list(answers)} if answers is not None else {}
+    kwargs = {reference_key: list(references)} if references is not None else {}
     scores = list(reward_fn(completions, **kwargs))
     if len(scores) != len(texts):
+        if references is not None:
+            raise ValueError(
+                f"reward target returned {len(scores)} score(s) for {len(texts)} "
+                f"completion(s) despite receiving {len(references)} reference(s) via "
+                f"{reference_key!r}; verify the target's metadata key and one-score-per-"
+                "completion contract"
+            )
         raise ValueError(
             f"reward target returned {len(scores)} score(s) for {len(texts)} "
             "completion(s) — this verifier likely needs --references to be probed "
@@ -140,21 +149,32 @@ def run_stress(
     threshold: float = DEFAULT_THRESHOLD,
     max_gameable: float = DEFAULT_MAX_GAMEABLE,
     attacks: Sequence[str] = ATTACKS,
+    reference_key: Optional[str] = None,
 ) -> StressReport:
     """Score adversarial junk completions and flag a gameable verifier.
 
-    For each attack kind, one junk completion is scored per sampled gold against
-    the REAL gold (so numeric/tool_call/json_schema verifiers get a valid
-    ``answer=`` and still must reject the junk). ``gameability`` is the overall
-    junk accept-rate; ``gameable`` iff it strictly exceeds ``max_gameable``.
+    For each attack kind, one junk completion is scored per sampled reference,
+    with that reference supplied under ``reference_key``. For answer-based
+    verifiers the reference is also a valid completion; for metadata-based
+    verifiers such as ``json_schema`` it configures the check instead.
+    ``gameability`` is the overall junk accept-rate; ``gameable`` iff it strictly
+    exceeds ``max_gameable``.
 
-    ``reference_accept`` (the golds scored as their own correct completions) is
-    reported for context — a verifier that rejects everything is broken, a
-    different problem — but does NOT set the verdict.
+    ``reference_accept`` scores each reference as its own completion and is
+    reported for context, but does NOT set the verdict. It is a useful
+    self-acceptance control only when references are valid completions; a schema
+    document, for example, need not satisfy itself as an output instance.
 
     No-gold fallback: with an empty ``golds`` each attack is scored once with no
     ``answer`` kwarg and ``reference_accept`` is ``None``.
     """
+    if reference_key is None:
+        reference_key = (
+            "schema" if getattr(reward_fn, "__name__", "") == "json_schema_reward" else "answer"
+        )
+    if not reference_key:
+        raise ValueError("reference_key must not be empty")
+
     sampled = list(golds)[:_MAX_STRESS_GOLDS]
     have_golds = bool(sampled)
 
@@ -164,7 +184,9 @@ def run_stress(
 
     reference_accept: Optional[float] = None
     if have_golds:
-        ref_scores = _score_batch(reward_fn, sampled, sampled)
+        ref_scores = _score_batch(
+            reward_fn, sampled, sampled, reference_key=reference_key
+        )
         reference_accept = _accepted(ref_scores) / len(sampled)
 
     results: list[AttackResult] = []
@@ -176,7 +198,9 @@ def run_stress(
         else:
             texts = [junk]
             answers = None
-        scores = _score_batch(reward_fn, texts, answers)
+        scores = _score_batch(
+            reward_fn, texts, answers, reference_key=reference_key
+        )
         accepted = _accepted(scores)
         n = len(texts)
         results.append(AttackResult(kind, n, accepted, accepted / n if n else 0.0))

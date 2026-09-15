@@ -8,6 +8,7 @@ import inspect
 import json
 import os
 import sys
+import venv
 from pathlib import Path
 
 import pytest
@@ -306,6 +307,50 @@ def test_real_child_process_captures_full_trajectory_and_exits(monkeypatch, tmp_
     assert events[-1] == "clear_cache"
 
 
+def test_worker_verification_survives_a_real_venv_launcher(monkeypatch, tmp_path):
+    """#898's positive acceptance criterion -- the six real-child tests above
+    pass when the worker is spawned through a Windows venv -- had no
+    CI-visible guard: every call site here uses python_executable=sys.executable,
+    and CI's own interpreter is never a venv launcher, so a revert to the old
+    PID check would still pass every test in this file on CI. Spawn through an
+    actual venv's launcher instead (a real redirector on Windows; bin/python
+    is usually a symlink on POSIX, so this degenerates to exercising the same
+    interpreter there rather than reproducing the mismatch -- still a valid
+    run, just not a discriminating one on that platform)."""
+    venv_dir = tmp_path / "worker-venv"
+    venv.create(venv_dir, with_pip=False, system_site_packages=True)
+    venv_python = venv_dir / ("Scripts/python.exe" if sys.platform == "win32" else "bin/python")
+    assert venv_python.is_file()
+
+    plan, teacher_root, tokenizer_root, dataset_root = _local_plan(tmp_path)
+    fake_root = _write_fake_mlx_runtime(tmp_path)
+    _runtime_environment(monkeypatch, tmp_path, fake_root)
+    publication_root = tmp_path / "publication"
+
+    result = run_mlx_teacher_capture_process(
+        plan=plan,
+        teacher_root=teacher_root,
+        tokenizer_root=tokenizer_root,
+        dataset_root=dataset_root,
+        publication_root=publication_root,
+        shard_id="shard-0001",
+        transaction_id="transaction-0001",
+        python_executable=venv_python,
+        timeout_seconds=30,
+    )
+
+    assert result.worker_exit_confirmed is True
+    assert result.row_count == result.token_count == 3
+    if sys.platform == "win32":
+        # Confirm the launcher mismatch was actually exercised here, not just
+        # assumed -- otherwise a future CPython dropping the redirector would
+        # make this test quietly stop discriminating, with no signal.
+        receipt = json.loads(
+            (publication_root / ".workers/transaction-0001/worker-receipt.json").read_bytes()
+        )
+        assert receipt["worker_pid"] != result.worker_pid
+
+
 def test_controller_rejects_available_manifest_not_bound_to_worker_receipt(
     monkeypatch,
     tmp_path,
@@ -333,6 +378,47 @@ def test_controller_rejects_available_manifest_not_bound_to_worker_receipt(
     monkeypatch.setattr(worker_module, "_read_control", tamper_after_receipt)
 
     with pytest.raises(ValueError, match="receipt does not match the available shard"):
+        run_mlx_teacher_capture_process(
+            plan=plan,
+            teacher_root=teacher_root,
+            tokenizer_root=tokenizer_root,
+            dataset_root=dataset_root,
+            publication_root=publication_root,
+            shard_id="shard-0001",
+            transaction_id="transaction-0001",
+            python_executable=sys.executable,
+            timeout_seconds=30,
+        )
+
+
+def test_controller_rejects_a_receipt_whose_nonce_does_not_match_the_request(
+    monkeypatch,
+    tmp_path,
+):
+    """#898: a venv's Scripts/python.exe launcher spawns the real interpreter
+    as a grandchild, so Popen.pid never equals the child's own os.getpid()
+    there. Verification switched from PID equality to a nonce the parent
+    generates and the child echoes back into the receipt. A receipt with
+    the wrong nonce -- e.g. left over from an unrelated worker directory --
+    must still be rejected, not waved through because PID is no longer
+    checked."""
+    import soup_cli.autodistill.mlx_worker as worker_module
+
+    plan, teacher_root, tokenizer_root, dataset_root = _local_plan(tmp_path)
+    fake_root = _write_fake_mlx_runtime(tmp_path)
+    _runtime_environment(monkeypatch, tmp_path, fake_root)
+    publication_root = tmp_path / "publication"
+    original_read_control = worker_module._read_control
+
+    def tamper_nonce(path, model_type):
+        receipt = original_read_control(path, model_type)
+        if model_type is worker_module.MlxTeacherWorkerReceipt:
+            receipt = receipt.model_copy(update={"worker_nonce": "0" * 32})
+        return receipt
+
+    monkeypatch.setattr(worker_module, "_read_control", tamper_nonce)
+
+    with pytest.raises(ValueError, match="receipt nonce does not match the dispatched request"):
         run_mlx_teacher_capture_process(
             plan=plan,
             teacher_root=teacher_root,

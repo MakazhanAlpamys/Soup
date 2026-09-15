@@ -1954,7 +1954,7 @@ def from_traces_cmd(
         help="Drop pairs with judge-confidence below this threshold (0.0 - 1.0).",
     ),
 ) -> None:
-    """Harvest preference pairs from production traces (v0.26.0 Part C).
+    """Harvest preference pairs from production traces.
 
     Prominent reminder: traces may contain sensitive user data; review
     before sharing or uploading to external systems.
@@ -2786,8 +2786,28 @@ def recipe(
         "-o",
         help="Output dir for sampler node (required with --execute).",
     ),
+    provider: Optional[str] = typer.Option(
+        None,
+        "--provider",
+        help="LLM provider for llm_text/judge nodes: ollama, anthropic, or vllm.",
+    ),
+    model: Optional[str] = typer.Option(
+        None,
+        "--model",
+        help="Provider model name (defaults to llama3.1).",
+    ),
+    base_url: Optional[str] = typer.Option(
+        None,
+        "--base-url",
+        help="Provider base URL (Ollama/vLLM; defaults to loopback).",
+    ),
+    offline: bool = typer.Option(
+        False,
+        "--offline",
+        help="Explicitly allow placeholder generation and accept-all judging.",
+    ),
 ) -> None:
-    """v0.45.0 Part E — Validate a Data Recipe DAG (live runner deferred)."""
+    """Validate a Data Recipe DAG and optionally execute every node."""
     from rich.markup import escape as _escape
 
     from soup_cli.utils.recipe_dag import load_recipe_yaml
@@ -2834,21 +2854,69 @@ def recipe(
             )
             raise typer.Exit(2)
 
+        if provider is not None and offline:
+            console.print("[red]--provider and --offline cannot be used together.[/]")
+            raise typer.Exit(2)
+        if provider is None and (model is not None or base_url is not None):
+            console.print("[red]--model and --base-url require --provider.[/]")
+            raise typer.Exit(2)
+        if provider is not None:
+            from soup_cli.utils.data_forge import JUDGE_PROVIDERS
+
+            provider = provider.strip().lower()
+            if provider not in JUDGE_PROVIDERS:
+                options = ", ".join(sorted(JUDGE_PROVIDERS))
+                console.print(
+                    f"[red]Unknown --provider '{_escape(provider)}'; choose: {options}.[/]"
+                )
+                raise typer.Exit(2)
+        has_llm_nodes = any(node.kind in {"llm_text", "judge"} for node in dag.nodes)
+        if has_llm_nodes and provider is None and not offline:
+            console.print(
+                "[red]This recipe contains llm_text or judge nodes. Pass --provider "
+                "<ollama|anthropic|vllm>, or explicitly opt in to placeholder output "
+                "with --offline.[/]"
+            )
+            raise typer.Exit(2)
+        if offline and has_llm_nodes:
+            console.print(
+                "[yellow]Offline recipe mode: llm_text writes placeholder text and judge "
+                "accepts every row.[/]"
+            )
+
         # v0.53.7 #106: live runner. Per-node handlers + checkpoint + resume
         # land here; ``NotImplementedError`` is no longer raised on the live
         # surface but we keep the catch for defence-in-depth (a future schema
         # change might re-introduce a stub for an unknown node kind).
         try:
-            result = run_recipe(dag, output_dir=output)
+            result = run_recipe(
+                dag,
+                output_dir=output,
+                judge_provider=provider,
+                judge_model=model,
+                judge_base_url=base_url,
+                offline=offline,
+            )
         except NotImplementedError as exc:
             console.print(f"[yellow]{_escape(str(exc))}[/]")
             raise typer.Exit(2) from exc
         except (TypeError, ValueError) as exc:
             console.print(f"[red]Recipe failed: {_escape(str(exc))}[/]")
             raise typer.Exit(1) from exc
+        provider_calls = result.get("provider_call_count", 0)
+        provider_failures = result.get("provider_failure_count", 0)
+        provider_summary = ""
+        if isinstance(provider_calls, int) and provider_calls:
+            call_label = "call" if provider_calls == 1 else "calls"
+            failure_label = "failure" if provider_failures == 1 else "failures"
+            provider_summary = (
+                f" {provider_calls} provider {call_label}, "
+                f"{provider_failures} {failure_label}."
+            )
         console.print(
             f"[green]Recipe executed.[/] "
             f"{len(result.get('completed_nodes', ()))} node(s) completed."
+            f"{provider_summary}"
         )
         return
 
@@ -2873,13 +2941,15 @@ def gen_magpie(
         512, "--max-tokens", help="Max tokens per generation [1, 16384]"
     ),
     quality_filter: bool = typer.Option(
-        True, "--quality-filter/--no-quality-filter", help="Apply v0.47 quality filter"
+        True,
+        "--quality-filter/--no-quality-filter",
+        help="Apply non-empty + educational heuristics (not a toxicity classifier)",
     ),
     plan_only: bool = typer.Option(
         False, "--plan-only", help="Validate + print plan; do not generate."
     ),
 ) -> None:
-    """Magpie synthetic data generator (v0.69.0 Part C; live in v0.71.6 #232).
+    """Generate synthetic data from a chat-template prefix.
 
     Feeds the chat-template prefix only to ``--base`` and harvests user-side
     turns via ``--provider`` (ollama / vllm raw completion). With ``--plan-only``
@@ -3810,7 +3880,7 @@ def persona_mix(
     ),
     seed: int = typer.Option(0, "--seed", help="Deterministic seed"),
 ) -> None:
-    """Sample a prompt × persona × style matrix (v0.69.0 Part D).
+    """Sample a prompt × persona × style matrix.
 
     Reads ``--prompts`` (JSONL with ``prompt`` field per row); writes
     ``--output`` JSONL with ``{prompt, persona, style}`` rows. When
@@ -3938,7 +4008,7 @@ def brain_rot_cmd(
         ),
     ),
 ) -> None:
-    """Score a dataset for brain-rot per arXiv 2510.13928 (v0.69.0 Part E).
+    """Score a dataset for brain-rot per arXiv 2510.13928.
 
     Reports a per-row OK/MINOR/MAJOR verdict + an aggregate verdict. With
     ``--strict`` the command exits 3 when the MAJOR fraction exceeds

@@ -162,7 +162,7 @@ class UnlearnTrainerWrapper:
     def setup(self, dataset: Any = None) -> None:
         """Load policy + (optional) frozen reference, LoRA, and datasets."""
         import torch
-        from peft import LoraConfig, get_peft_model
+        from peft import get_peft_model
 
         from soup_cli.utils.live_eval import load_model_and_tokenizer
         from soup_cli.utils.seeding import apply_training_seed
@@ -181,11 +181,15 @@ class UnlearnTrainerWrapper:
         self.model, self.tokenizer, self._dev = load_model_and_tokenizer(
             cfg.base, device=self.device, trust_remote_code=self.trust_remote_code,
         )
-        lora_cfg = LoraConfig(
-            r=cfg.training.lora.r,
-            lora_alpha=cfg.training.lora.alpha,
-            lora_dropout=cfg.training.lora.dropout,
-            bias="none",
+        from soup_cli.utils.peft_wiring import (
+            build_lora_config,
+            resolve_lora_target_modules,
+        )
+
+        target_modules = resolve_lora_target_modules(self.model, tcfg.lora.target_modules)
+        lora_cfg = build_lora_config(
+            tcfg.lora,
+            target_modules=target_modules,
             task_type="CAUSAL_LM",
         )
         self.model = get_peft_model(self.model, lora_cfg)

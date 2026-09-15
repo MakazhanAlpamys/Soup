@@ -11,7 +11,7 @@ import tempfile
 import threading
 import time
 from pathlib import Path
-from typing import Optional
+from typing import Mapping, Optional
 
 from pydantic import BaseModel as PydanticBaseModel
 from pydantic import Field
@@ -22,6 +22,89 @@ STATIC_DIR = Path(__file__).parent / "static"
 
 # Max file read size to prevent memory exhaustion
 _MAX_INSPECT_LIMIT = 500
+
+# #939: cap the body before FastAPI parses it, sized per route (chat/send
+# forwards upstream; inspect only ever needs a path and an int). #897 extends
+# the same mechanism to every YAML-bearing Web UI route.
+_MAX_CHAT_SEND_BODY_BYTES = 1024 * 1024
+_MAX_DATA_INSPECT_BODY_BYTES = 8 * 1024
+_MAX_YAML_REQUEST_BYTES = 1024 * 1024
+_BODY_SIZE_LIMITS = {
+    "/api/chat/send": _MAX_CHAT_SEND_BODY_BYTES,
+    "/api/data/inspect": _MAX_DATA_INSPECT_BODY_BYTES,
+    "/api/config/validate": _MAX_YAML_REQUEST_BYTES,
+    "/api/train/start": _MAX_YAML_REQUEST_BYTES,
+    "/api/config/from-form": _MAX_YAML_REQUEST_BYTES,
+}
+
+
+class _RequestBodySizeLimitMiddleware:
+    """Reject an oversized POST body before route/model parsing runs.
+
+    Checks ``Content-Length`` first, then streams and counts the actual body
+    bytes so a missing or understated header cannot bypass the cap. Per-route
+    limits keep the mechanism shared while allowing small JSON requests and
+    YAML-bearing configuration requests to use different ceilings.
+    """
+
+    def __init__(self, app, limits: Mapping[str, int] = _BODY_SIZE_LIMITS) -> None:
+        self._app = app
+        self._limits = limits
+
+    async def _reject(self, scope, receive, send) -> None:
+        from starlette.responses import JSONResponse
+
+        response = JSONResponse(
+            status_code=413,
+            content={"detail": "Request body too large"},
+        )
+        await response(scope, receive, send)
+
+    async def __call__(self, scope, receive, send) -> None:
+        max_body_size = None
+        if scope.get("type") == "http" and scope.get("method") == "POST":
+            max_body_size = self._limits.get(scope.get("path"))
+        if max_body_size is None:
+            await self._app(scope, receive, send)
+            return
+
+        for key, value in scope.get("headers", ()):
+            if key.lower() != b"content-length":
+                continue
+            try:
+                if int(value) > max_body_size:
+                    await self._reject(scope, receive, send)
+                    return
+            except ValueError:
+                # Do not trust a malformed header; the receive wrapper below
+                # still enforces the actual byte count.
+                pass
+
+        received = 0
+        buffered_messages = []
+        while True:
+            message = await receive()
+            buffered_messages.append(message)
+            if message.get("type") == "http.request":
+                received += len(message.get("body", b""))
+                if received > max_body_size:
+                    await self._reject(scope, receive, send)
+                    return
+                if message.get("more_body", False):
+                    continue
+            break
+
+        message_index = 0
+
+        async def receive_buffered():
+            nonlocal message_index
+            if message_index < len(buffered_messages):
+                message = buffered_messages[message_index]
+                message_index += 1
+                return message
+            return await receive()
+
+        await self._app(scope, receive_buffered, send)
 
 
 class TrainRequest(PydanticBaseModel):
@@ -247,6 +330,10 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
             "/docs/oauth2-redirect" if _docs_enabled else None
         ),
     )
+
+    # Install before CORS so a 413 from the size cap still carries the same
+    # CORS headers as a normal endpoint response.
+    app.add_middleware(_RequestBodySizeLimitMiddleware)
 
     # Restrict CORS to the origin we actually serve. When `host == "0.0.0.0"`
     # the literal `http://0.0.0.0:<port>` is never a browser origin, so we
@@ -544,6 +631,9 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
     def inspect_data(req: DataInspectRequest):
         from soup_cli.data.loader import load_raw_data
         from soup_cli.utils.paths import is_under_cwd
+
+        # The path lives inside the body, so it can't be checked before the
+        # body is parsed. _BODY_SIZE_LIMITS caps that read at 8 KiB instead.
 
         # Path traversal protection. Use realpath + commonpath containment
         # (is_under_cwd) — the old str.startswith check let a sibling like

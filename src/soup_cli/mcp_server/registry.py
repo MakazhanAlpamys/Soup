@@ -247,9 +247,7 @@ def tool_data_validate(args: dict) -> dict:
     # Absent means auto; an empty or blank string is a value the caller
     # supplied and it is not a format, so it is refused -- `soup data
     # validate --format ""` exits 1 rather than auto-detecting, and this
-    # surface has to answer the same way. (`tool_data_doctor` below still
-    # spells this `or "auto"`, so it reads a blank string as omitted; noted
-    # in #878 rather than changed here.)
+    # surface has to answer the same way.
     fmt = _opt_str(args, "format")
     fmt = "auto" if fmt is None else fmt
     if fmt != "auto" and fmt not in _formats.VALID_FORMATS:
@@ -271,7 +269,7 @@ def tool_data_validate(args: dict) -> dict:
 
 
 def tool_data_score(args: dict) -> dict:
-    """`soup data score` — PII / toxicity / language / educational scorecard."""
+    """`soup data score` — PII / keyword triage / language / educational scorecard."""
     from soup_cli.utils.data_score import compute_scorecard
 
     rows = _load_data_rows(_require_str(args, "data"))
@@ -280,6 +278,7 @@ def tool_data_score(args: dict) -> dict:
         "total": rep.total,
         "pii_flagged": rep.pii_flagged,
         "toxic_flagged": rep.toxic_flagged,
+        "abuse_keyword_flagged": rep.toxic_flagged,
         "decontaminated_removed": rep.decontaminated_removed,
         "languages": dict(rep.languages),
         "educational_mean": rep.educational_mean,
@@ -293,7 +292,13 @@ def tool_data_doctor(args: dict) -> dict:
 
     rows = _load_data_rows(_require_str(args, "data"))
     model = _require_str(args, "model")
-    fmt = _opt_str(args, "format") or "auto"
+    fmt = _opt_str(args, "format")
+    fmt = "auto" if fmt is None else fmt
+    if fmt != "auto" and fmt not in _formats.VALID_FORMATS:
+        raise McpToolError(
+            f"unknown format {fmt!r}; accepted: auto, "
+            + ", ".join(sorted(_formats.VALID_FORMATS))
+        )
     max_length = _opt_int(args, "max_length", 2048, lo=64, hi=1_048_576)
     sample_size = _opt_int(args, "sample_size", 200, lo=1, hi=2000)
     if fmt == "auto":
@@ -417,26 +422,26 @@ def tool_registry_show(args: dict) -> dict:
     return entry
 
 
-def _resolve_gpu_memory_mcp(gpu: str | None) -> float:
-    """GPU memory in GB from a flag or auto-detection (non-Typer mirror of
-    ``commands/profile.py::_resolve_gpu_memory``)."""
-    from soup_cli.utils.profiler import GPU_MEMORY
+def _resolve_gpu_memory_mcp(gpu: str | None) -> tuple[float, str]:
+    """GPU memory in GB and its source, from a flag or auto-detection (non-Typer
+    mirror of ``commands/profile.py::_resolve_gpu_memory``)."""
+    from soup_cli.utils.profiler import ASSUMED_GPU_MEMORY_GB, GPU_MEMORY, normalize_gpu_key
 
     if gpu is not None:
-        gpu_key = gpu.lower().replace(" ", "").replace("-", "")
+        gpu_key = normalize_gpu_key(gpu)
         if gpu_key not in GPU_MEMORY:
             raise McpToolError("unknown gpu (see 'soup profile --help' for valid options)")
-        return float(GPU_MEMORY[gpu_key])
+        return float(GPU_MEMORY[gpu_key]), "flag"
     try:
         from soup_cli.utils.gpu import get_gpu_info
 
         info = get_gpu_info()
         mem_bytes = info.get("memory_total_bytes", 0)
         if mem_bytes > 0:
-            return mem_bytes / (1024**3)
+            return mem_bytes / (1024**3), "detected"
     except (ImportError, RuntimeError, OSError):
         pass
-    return 24.0
+    return ASSUMED_GPU_MEMORY_GB, "assumed"
 
 
 def _load_config_under_cwd(config: str) -> SoupConfig:
@@ -470,7 +475,7 @@ def tool_profile(args: dict) -> dict:
     model_params_b = model_size_from_name(cfg.base)
     batch_size = cfg.training.batch_size
     batch_size = 4 if batch_size == "auto" else int(batch_size)
-    gpu_memory_gb = _resolve_gpu_memory_mcp(gpu)
+    gpu_memory_gb, gpu_memory_source = _resolve_gpu_memory_mcp(gpu)
 
     result = estimate_total(
         model_name=cfg.base,
@@ -491,6 +496,7 @@ def tool_profile(args: dict) -> dict:
     )
     result["compatible_gpus"] = recommend_gpu(result["total_memory_gb"])
     result["gpu_memory_gb"] = gpu_memory_gb
+    result["gpu_memory_source"] = gpu_memory_source
     return result
 
 
@@ -841,7 +847,10 @@ def _readonly_specs() -> list[ToolSpec]:
         ToolSpec(
             name="data_score",
             title="Score dataset",
-            description="Data-quality scorecard: PII, toxicity, language mix, educational value.",
+            description=(
+                "Data-quality scorecard: PII, abuse-keyword triage, "
+                "language mix, educational value."
+            ),
             input_schema={
                 "type": "object",
                 "properties": {"data": _DATA_ARG},

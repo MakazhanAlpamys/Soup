@@ -34,27 +34,26 @@ def list_cmd() -> None:
 
 @app.command("install")
 def install_cmd(name: str = typer.Argument(..., help="Plugin name")) -> None:
-    """Install advisory — actual installation lives in v0.45.1."""
+    """Explain how to install plugins without pretending an install occurred."""
     safe = escape(name)
     console.print(
-        f"[yellow]Plugin install for [bold]{safe}[/] is advisory in v0.45.0; "
-        "live install lands in v0.45.1.[/]"
+        f"[red]Soup does not install plugin [bold]{safe}[/].[/] Install a trusted "
+        "Python distribution that exposes the [bold]soup_cli.plugins[/] entry-point "
+        "group, then opt in with [bold]soup plugins enable <name>[/]."
     )
-    console.print(
-        "Drop your plugin module under [bold]soup_cli/plugins/[/] and call "
-        "[bold]register_plugin(...)[/] at import time."
-    )
+    raise typer.Exit(code=2)
 
 
 @app.command("enable")
 def enable_cmd(name: str = typer.Argument(..., help="Plugin name")) -> None:
     safe = escape(name)
     try:
+        plugins_pkg.load_plugins()
         changed = plugins_pkg.enable_plugin(name)
     except KeyError:
         console.print(f"[red]Unknown plugin: {safe}[/]")
         raise typer.Exit(code=1)
-    except (TypeError, ValueError) as exc:
+    except (OSError, TypeError, ValueError) as exc:
         console.print(f"[red]{escape(str(exc))}[/]")
         raise typer.Exit(code=2)
     state = "enabled" if changed else "already enabled"
@@ -65,11 +64,12 @@ def enable_cmd(name: str = typer.Argument(..., help="Plugin name")) -> None:
 def disable_cmd(name: str = typer.Argument(..., help="Plugin name")) -> None:
     safe = escape(name)
     try:
+        plugins_pkg.load_plugins()
         changed = plugins_pkg.disable_plugin(name)
     except KeyError:
         console.print(f"[red]Unknown plugin: {safe}[/]")
         raise typer.Exit(code=1)
-    except (TypeError, ValueError) as exc:
+    except (OSError, TypeError, ValueError) as exc:
         console.print(f"[red]{escape(str(exc))}[/]")
         raise typer.Exit(code=2)
     state = "disabled" if changed else "already disabled"
@@ -77,6 +77,7 @@ def disable_cmd(name: str = typer.Argument(..., help="Plugin name")) -> None:
 
 
 def _show_table() -> None:
+    plugins_pkg.load_plugins()
     plugins_view = plugins_pkg.list_plugins()
     if not plugins_view:
         console.print("[dim]No plugins registered.[/]")
@@ -86,16 +87,23 @@ def _show_table() -> None:
     table.add_column("version")
     table.add_column("state")
     table.add_column("hooks")
+    table.add_column("resources", overflow="fold")
     table.add_column("description")
     for name in sorted(plugins_view):
         spec = plugins_view[name]
         hooks = sorted(plugins_pkg.discover_hooks(spec.plugin).keys())
         state = "[green]enabled[/]" if spec.enabled else "[yellow]disabled[/]"
+        resources = []
+        if spec.templates:
+            resources.append(f"templates: {', '.join(spec.templates)}")
+        if spec.model_groups:
+            resources.append(f"model groups: {', '.join(spec.model_groups)}")
         table.add_row(
             escape(spec.name),
             escape(spec.version),
             state,
             ", ".join(hooks) if hooks else "[dim]none[/]",
+            escape("\n".join(resources)) if resources else "[dim]none[/]",
             escape(spec.description),
         )
     console.print(table)
