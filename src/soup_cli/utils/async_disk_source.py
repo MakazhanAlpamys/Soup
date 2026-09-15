@@ -124,16 +124,15 @@ class _LayerPlan:
     """One layer's wanted tensors, relative to the sector-aligned start of its read.
 
     ``start``/``end`` bound the aligned superset of the wanted tensors' byte
-    range; ``expected`` is how much of it the file actually holds (the last
-    sector runs past EOF); ``tensors`` is ``(name, offset from start, bytes,
-    shape, dtype)``. Per LAYER rather than per spec group: a sibling whose
-    header is longer, or which carries a tensor the spec does not want, keeps
-    the same tensors at different offsets.
+    range (the last sector runs past EOF; each range reads what the file holds
+    of it); ``tensors`` is ``(name, offset from start, bytes, shape, dtype)``.
+    Per LAYER rather than per spec group: a sibling whose header is longer, or
+    which carries a tensor the spec does not want, keeps the same tensors at
+    different offsets.
     """
 
     start: int
     end: int
-    expected: int
     tensors: Tuple[Tuple[str, int, int, Tuple[int, ...], str], ...]
 
     @property
@@ -198,9 +197,15 @@ class _RangeReaders:
             if outcome.error is not None:
                 raise outcome.error
 
-    def close(self) -> None:
+    def close(self, timeout: float = 10.0) -> None:
+        """Send every worker its sentinel and wait for them, up to ``timeout`` in
+        total — a worker still inside a read outlives it, as the reader thread
+        outlives its own bounded join."""
         for _ in self._threads:
             self._jobs.put(None)
+        deadline = time.monotonic() + timeout
+        for thread in self._threads:
+            thread.join(timeout=max(0.0, deadline - time.monotonic()))
 
 
 class AsyncDiskSource:
@@ -302,9 +307,29 @@ class AsyncDiskSource:
         for idx in range(self.n_layers):
             header = self._ranges[idx]
             wanted = [header[name] for name in self._layer_specs[idx]]
+            if not wanted:
+                raise ValueError(f"{self._paths[idx]}: layer {idx} wants no tensors")
             lo = min(entry.start for entry in wanted)
             hi = max(entry.end for entry in wanted)
+            if hi <= lo:
+                raise ValueError(
+                    f"{self._paths[idx]}: layer {idx}'s wanted tensors hold no bytes"
+                )
             start, end = aligned_span(lo, hi)
+            # Staging reads the whole span, foreign tensors between the wanted
+            # ones included. A small one is the cost of the design; a large one
+            # is host memory — page-locked when the box allows — that the spec
+            # never asked for, and a hand-built shard can make the gap anything
+            # (security review of #974: two 16-byte tensors 8 MiB apart).
+            wanted_bytes = sum(entry.nbytes for entry in wanted)
+            if end - start > 2 * wanted_bytes + 2 * SECTOR_BYTES:
+                raise ValueError(
+                    f"{self._paths[idx]}: layer {idx}'s {wanted_bytes} wanted bytes are "
+                    f"spread over a {end - start}-byte span of the shard, and staging "
+                    f"reads the whole span. Refusing to hold that gap in host memory; "
+                    f"re-shard the base with Soup's sharder, which writes a layer's "
+                    f"tensors contiguously."
+                )
             tensors = []
             for name, (shape, dtype) in self._layer_specs[idx].items():
                 entry = header[name]
@@ -319,14 +344,7 @@ class AsyncDiskSource:
                         f"sharder writes every tensor aligned — re-shard the base."
                     )
                 tensors.append((name, offset, entry.nbytes, tuple(shape), dtype))
-            self._plans.append(
-                _LayerPlan(
-                    start=start,
-                    end=end,
-                    expected=min(end, self._identities[idx].size) - start,
-                    tensors=tuple(tensors),
-                )
-            )
+            self._plans.append(_LayerPlan(start=start, end=end, tensors=tuple(tensors)))
 
         # Staging is allocated per DISTINCT layer spec, NOT from layer 0's.
         # `_build_source` hands this source the decoder layers followed by the
@@ -525,7 +543,7 @@ class AsyncDiskSource:
         }
 
     @staticmethod
-    def _open_buffered(path: str):
+    def _open_buffered(path: str) -> Any:
         return open(path, "rb")
 
     # -- the reader ------------------------------------------------------

@@ -53,20 +53,28 @@ def _stream_source_line(stats: dict) -> str:
 
     pinned = "pinned" if stats["pinned"] else "pageable"
     if stats["tier"] == TIER_RAM:
-        line = f"{stats['store_bytes'] / 1e9:.2f} GB {pinned} RAM store"
-        if stats["pinned"] and stats.get("pinned_bytes"):
-            line += f" ({stats['pinned_bytes'] / 1e9:.2f} GB page-locked)"
-        return line
-    line = (
+        return f"{stats['store_bytes'] / 1e9:.2f} GB {pinned} RAM store" + _page_locked_note(
+            stats
+        )
+    # Since #974 the staging lives in the same power-of-two arenas as the RAM
+    # store, so the disk tier can say what was page-locked too.
+    return (
         f"streamed from DISK ({stats['disk_bytes'] / 1e9:.2f} GB on an NVMe volume) "
         f"by an async reader, read_ahead={stats['read_ahead']}, "
         f"{stats['store_bytes'] / 1e6:.0f} MB {pinned} host staging"
-    )
-    # Since #974 the staging lives in the same power-of-two arenas as the RAM
-    # store, so the disk tier can say what was page-locked too.
+    ) + _page_locked_note(stats)
+
+
+def _page_locked_note(stats: dict) -> str:
+    """The ``(X GB page-locked)`` suffix, when the source accounts for it (#901).
+
+    Pinned host memory is handed out in power-of-two blocks, so the figure
+    differs from the store's own bytes; a pageable store, and a source that
+    does not account for it (``pinned_bytes`` None), print nothing.
+    """
     if stats["pinned"] and stats.get("pinned_bytes"):
-        line += f" ({stats['pinned_bytes'] / 1e9:.2f} GB page-locked)"
-    return line
+        return f" ({stats['pinned_bytes'] / 1e9:.2f} GB page-locked)"
+    return ""
 
 
 def _validate_qwen4_streaming_mode(*, arch: str, task: str, quant: str) -> None:

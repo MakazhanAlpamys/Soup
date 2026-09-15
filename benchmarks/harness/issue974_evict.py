@@ -58,7 +58,11 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--pressure-gb", type=float, default=17.0)
     parser.add_argument(
-        "--displace-dir", default=r"C:\Users\user\.soup\layer-stream\D___synth__qwen2.5-14b-shape"
+        "--displace-dir",
+        required=True,
+        help="a directory of large files UNRELATED to the store under test (the dev box used "
+        "the 14B NF4 shard cache); they are read through the page cache to displace the "
+        "survivors of the pressure stage",
     )
     parser.add_argument("--displace-gb", type=float, default=8.0)
     parser.add_argument("--keep-free-gb", type=float, default=1.5)

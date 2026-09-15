@@ -73,6 +73,8 @@ def _shards(
     *,
     long_header_on: int | None = None,
     extra_tensor_on: int | None = None,
+    extra_elements: int = 33,
+    empty_tensor: bool = False,
     big: bool = False,
 ) -> str:
     """NF4-shaped shards (mixed uint8 / float32 / bf16 plus a 0-dim scalar), as in the
@@ -84,6 +86,9 @@ def _shards(
     * ``extra_tensor_on``: that layer's shard holds a tensor the spec does not ask
       for, sorted INTO the middle of the wanted ones, so the wanted span is not the
       whole data section and the wanted tensors sit at different offsets.
+    * ``extra_elements``: how large that foreign float32 tensor is — small by default,
+      large to make the wanted span mostly gap;
+    * ``empty_tensor``: every layer also carries a zero-element float32 tensor;
     * ``big``: a 256 KiB packed weight, so a layer spans many sectors and can be
       split across several ranges.
     """
@@ -103,7 +108,11 @@ def _shards(
             "input_layernorm.weight": torch.rand(64, dtype=torch.bfloat16),
         }
         if extra_tensor_on == idx:
-            blob["self_attn.q_proj.weight::absmax_extra"] = torch.rand(33, dtype=torch.float32)
+            blob["self_attn.q_proj.weight::absmax_extra"] = torch.rand(
+                extra_elements, dtype=torch.float32
+            )
+        if empty_tensor:
+            blob["self_attn.q_proj.weight::empty"] = torch.empty(0, dtype=torch.float32)
         metadata = {"note": "x" * 1000} if long_header_on == idx else None
         save_file(blob, layer_shard_path(str(out), idx), metadata=metadata)
     return str(out)
@@ -224,6 +233,48 @@ class TestReadRangeInto:
         with open(path, "rb") as handle:
             with pytest.raises(ValueError, match="holds"):
                 read_range_into(handle, 0, torch.zeros(10, dtype=torch.uint8), 100)
+
+    def test_a_negative_expected_is_refused(self, tmp_path):
+        """A negative count would return without reading and leave the view
+        undefined while claiming success (security review of #974)."""
+        from soup_cli.utils.safetensors_reader import read_range_into
+
+        path, _ = self._file(tmp_path, SECTOR)
+        with open(path, "rb") as handle:
+            with pytest.raises(ValueError, match="expected"):
+                read_range_into(handle, 0, torch.zeros(SECTOR, dtype=torch.uint8), -1)
+
+    def test_a_partial_read_that_is_not_the_end_of_the_file_is_retried(self):
+        """``io.FileIO.readinto`` is one syscall, and POSIX lets it return fewer
+        bytes than asked with more still to come (Linux documents exactly that for
+        O_DIRECT). Only a ZERO return is the end of the data; a short one means
+        ask again (python review of #974)."""
+        from soup_cli.utils.safetensors_reader import read_range_into
+
+        data = bytes(i % 251 for i in range(3 * SECTOR))
+
+        class Dribbling:
+            """Hands back half of every request, never zero until the data is gone."""
+
+            def __init__(self) -> None:
+                self.pos = 0
+                self.calls = 0
+
+            def seek(self, pos: int) -> None:
+                self.pos = pos
+
+            def readinto(self, buffer) -> int:
+                self.calls += 1
+                chunk = data[self.pos : self.pos + max(1, len(buffer) // 2)]
+                buffer[: len(chunk)] = chunk
+                self.pos += len(chunk)
+                return len(chunk)
+
+        view = torch.zeros(2 * SECTOR, dtype=torch.uint8)
+        handle = Dribbling()
+        read_range_into(handle, SECTOR, view, 2 * SECTOR)
+        assert bytes(view.numpy()) == data[SECTOR : 3 * SECTOR]
+        assert handle.calls >= 2, "the short return was accepted without asking again"
 
 
 # ==========================================================================
@@ -403,6 +454,47 @@ class TestByteIdentityThroughTheRangeReader:
         finally:
             source.close()
 
+    def test_a_shard_spreading_the_wanted_tensors_over_a_far_larger_span_is_refused(
+        self, tmp_path
+    ):
+        """Staging is sized to the span between the first and last wanted tensor,
+        so a foreign tensor BETWEEN them is staged with them. A small one is the
+        cost of the design; a large one is a page-locked allocation the spec never
+        asked for (the security review of #974 built a shard whose two 16-byte
+        tensors cost an 8 MiB region). Refused at construction, by name."""
+        shard_dir = _shards(tmp_path, extra_tensor_on=1, extra_elements=2_000_000)
+        with pytest.raises(ValueError, match="span"):
+            AsyncDiskSource(shard_dir, N_LAYERS, _spec(shard_dir), read_ahead=2, pin=False)
+
+    def test_a_layer_that_wants_no_tensors_is_refused_by_name(self, tmp_path):
+        shard_dir = _shards(tmp_path)
+        spec = [dict(layer) for layer in _spec(shard_dir)]
+        spec[1] = {}
+        with pytest.raises(ValueError, match="no tensors"):
+            AsyncDiskSource(shard_dir, N_LAYERS, spec, read_ahead=2, pin=False)
+
+    def test_a_layer_whose_wanted_tensors_hold_no_bytes_is_refused_by_name(self, tmp_path):
+        """Otherwise the empty span is refused by ``plan_ranges`` at the first
+        read, i.e. at the ``get`` that wanted it, instead of at construction."""
+        shard_dir = _shards(tmp_path, empty_tensor=True)
+        spec = [{"self_attn.q_proj.weight::empty": ((0,), "float32")}] * N_LAYERS
+        with pytest.raises(ValueError, match="no bytes"):
+            AsyncDiskSource(shard_dir, N_LAYERS, spec, read_ahead=2, pin=False)
+
+    def test_a_zero_element_tensor_rides_along_intact(self, tmp_path):
+        """An empty tensor has no bytes to read and no alignment to check; it must
+        still come back as an empty tensor of the right dtype from every layer."""
+        shard_dir = _shards(tmp_path, empty_tensor=True)
+        spec = _spec(shard_dir)
+        assert spec[0]["self_attn.q_proj.weight::empty"] == ((0,), "float32")
+        source = AsyncDiskSource(shard_dir, N_LAYERS, spec, read_ahead=2, pin=False)
+        try:
+            _assert_identical_to_disk_source(source, shard_dir, spec)
+            empty = source.get(0, "self_attn.q_proj.weight::empty")
+            assert empty.numel() == 0 and empty.dtype == torch.float32
+        finally:
+            source.close()
+
     def test_a_tensor_offset_not_aligned_to_its_dtype_is_refused_at_construction(
         self, tmp_path
     ):
@@ -496,8 +588,8 @@ class TestTheReadIsSplitAcrossWorkers:
         assert workers and all(t.is_alive() for t in workers), "no range workers were started"
         assert all(t.name.startswith("soup-layer-range") for t in workers)
         source.close()
-        for worker in workers:
-            worker.join(timeout=10.0)
+        # No join here: ``close()`` returning is the promise that the workers are
+        # gone, the same promise it makes for the reader thread.
         assert not any(t.is_alive() for t in workers)
 
     def test_the_reader_reads_each_layer_through_read_layer(self, tmp_path, monkeypatch):

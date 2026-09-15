@@ -21,7 +21,10 @@ import os
 import struct
 import sys
 from dataclasses import dataclass
-from typing import Dict, List, Tuple
+from typing import IO, TYPE_CHECKING, Dict, List, Tuple
+
+if TYPE_CHECKING:  # pragma: no cover — annotations only; the module stays torch-free
+    import torch
 
 logger = logging.getLogger(__name__)
 
@@ -296,22 +299,31 @@ def plan_ranges(
     ]
 
 
-def read_range_into(handle: "object", start: int, view: "object", expected: int) -> None:
+def read_range_into(
+    handle: IO[bytes], start: int, view: "torch.Tensor", expected: int
+) -> None:
     """Read ``expected`` bytes at ``start`` into the FRONT of ``view``.
 
     ``view`` is a contiguous CPU ``uint8`` tensor at least ``expected`` long —
     usually longer: it is the sector-aligned slice of a staging region, and the
     last range of a layer runs past the end of the file, where the request
     returns short and the loop stops at ``expected`` rather than demanding the
-    padding. Every request therefore keeps the aligned length ``view`` has,
-    which a direct-I/O handle requires; a return shorter than the request that
-    still leaves ``expected`` unmet is the end of a file that is shorter than
-    its header said, and is refused as a short read.
+    padding. A ``readinto`` that returns FEWER bytes than asked is asked again:
+    ``io.FileIO`` is one syscall, and POSIX lets it return short with more still
+    to come (Linux documents exactly that for ``O_DIRECT``). Only a ZERO return
+    is the end of the data, and one that comes before ``expected`` is a file
+    shorter than its header said, refused as a short read. Every request keeps
+    the aligned length ``view`` has from ``done`` on, which a direct-I/O handle
+    requires; a short return that leaves ``done`` off a sector boundary makes
+    the next request one the handle refuses — an ``OSError`` either way, never
+    a silent partial fill.
 
     If this raises, ``view`` holds undefined contents.
     """
     import torch
 
+    if expected < 0:
+        raise ValueError(f"expected byte count must not be negative; got {expected}")
     if view.dtype != torch.uint8 or view.device.type != "cpu" or not view.is_contiguous():
         raise ValueError("destination must be a contiguous CPU uint8 tensor")
     if view.numel() < expected:
@@ -323,13 +335,19 @@ def read_range_into(handle: "object", start: int, view: "object", expected: int)
     buffer = memoryview(view.numpy())
     done = 0
     while done < expected:
-        request = buffer[done:]
-        got = handle.readinto(request)
+        got = handle.readinto(buffer[done:])
         if not got:
             raise OSError(f"short read, {done} of {expected} bytes at offset {start}")
         done += got
-        if got < len(request) and done < expected:
-            raise OSError(f"short read, {done} of {expected} bytes at offset {start}")
+
+
+def _owning_fileio(fd: int) -> io.FileIO:
+    """Wrap ``fd`` so the descriptor is closed if the wrapper itself cannot be built."""
+    try:
+        return io.FileIO(fd, "rb", closefd=True)
+    except BaseException:
+        os.close(fd)
+        raise
 
 
 def open_direct(path: str) -> io.FileIO:
@@ -371,11 +389,11 @@ def open_direct(path: str) -> io.FileIO:
         except OSError:
             _winapi.CloseHandle(handle)
             raise
-        return io.FileIO(fd, "rb", closefd=True)
+        return _owning_fileio(fd)
     cloexec = getattr(os, "O_CLOEXEC", 0)
     direct = getattr(os, "O_DIRECT", None)
     if direct is not None:
-        return io.FileIO(os.open(path, os.O_RDONLY | direct | cloexec), "rb", closefd=True)
+        return _owning_fileio(os.open(path, os.O_RDONLY | direct | cloexec))
     if sys.platform == "darwin":
         import fcntl
 
@@ -387,5 +405,5 @@ def open_direct(path: str) -> io.FileIO:
             except OSError:
                 os.close(fd)
                 raise
-            return io.FileIO(fd, "rb", closefd=True)
+            return _owning_fileio(fd)
     raise DirectIOUnavailableError(f"no direct I/O mode on {sys.platform}")
