@@ -1288,7 +1288,7 @@ class TestTheMaskingKeysMustBeRealBooleans:
     `ok` — a false clean bill on the headline row, arrived at through a type
     rather than through a missing key. `mlx_sft.py` always writes real bools,
     so this needs a foreign or hand-edited record: the same threat model the
-    `_for_terminal` hardening rests on.
+    `for_terminal` hardening rests on.
     """
 
     ASKED = {"data": {"train_on_responses_only": True}}
@@ -1621,13 +1621,17 @@ class TestAdapterSuppliedTextCannotDriveTheTerminal:
 
     `adapter_config.json` is downloadable, so its strings are untrusted input
     that this command prints. `rich.markup.escape` neutralises Rich's `[...]`
-    tags but not raw ANSI/OSC bytes, hence `_for_terminal` beside it — a
-    recorded `"AdamW\\x1b[2J"` would clear the screen, and `\\x1b]0;...\\x07`
-    would rewrite the title bar, which is how a refusal gets hidden.
+    tags but not raw ANSI/OSC bytes, hence `utils/terminal.for_terminal`, which
+    strips control bytes then escapes markup — a recorded `"AdamW\\x1b[2J"`
+    would clear the screen, and `\\x1b]0;...\\x07` would rewrite the title
+    bar, which is how a refusal gets hidden.
 
-    Asserted as the *absence of specific dangerous sequences* rather than as
-    "no \\x1b anywhere", because Rich legitimately emits its own colour codes
-    under `FORCE_COLOR=1` and the suite is run that way.
+    Asserted as "no escape survived" rather than as hand-picked sequences.
+    That broad form is the stronger check, and it only works because
+    `_pin_console` sets `force_terminal=False`: with colour pinned off, the
+    only ESC that could reach the output is the payload's. Narrow-under-colour
+    and broad-with-colour-pinned are alternatives, not complements, and this
+    file picks the second once, in the fixture.
     """
 
     # Erase-display, then an OSC title-set terminated by BEL.
@@ -1650,8 +1654,14 @@ class TestAdapterSuppliedTextCannotDriveTheTerminal:
     def test_no_escape_sequence_from_the_record_reaches_the_terminal(self, tmp_path):
         res = self._run(tmp_path, _mlx_record(optimizer=self.PAYLOAD))
 
-        assert "\x1b[2J" not in res.output, "erase-display survived to the terminal"
-        assert "\x1b]0;" not in res.output, "OSC title-set survived to the terminal"
+        # The broad assertion, not three hand-picked sequences (#763 review).
+        # It is the strictly stronger check and `_pin_console` makes it
+        # possible: with `force_terminal=False` the only ESC that could
+        # appear is the payload's, so "any escape survived" is exactly the
+        # question worth asking. Narrow-under-colour and broad-with-colour-
+        # pinned are alternatives; this file picks the second, once, in the
+        # fixture, for all seven classes that assert on output.
+        assert "\x1b" not in res.output, "an escape sequence survived to the terminal"
         assert "\x07" not in res.output, "BEL survived to the terminal"
 
     def test_the_value_is_neutralised_rather_than_dropped(self, tmp_path):
@@ -1692,7 +1702,7 @@ class TestAdapterSuppliedTextCannotDriveTheTerminal:
         )
 
     def test_no_explanation_can_carry_a_control_byte_in_the_first_place(self):
-        """The invariant the detail line's `_for_terminal` insures against.
+        """The invariant the detail line's `for_terminal` insures against.
 
         Every ``detail`` that interpolates a record value does so through
         ``repr()``, which renders ``\x1b`` as four printable characters -- so
@@ -1722,7 +1732,7 @@ class TestAdapterSuppliedTextCannotDriveTheTerminal:
             assert "\x07" not in row.detail, f"{row.setting}: {row.detail!r}"
 
     def test_the_unknown_reason_text_is_a_fixed_string_not_record_derived(self):
-        """The third `_for_terminal` call site, and the same honesty problem.
+        """The third `for_terminal` call site, and the same honesty problem.
 
         `unknown_reason` is a lookup over `classify_record`'s three literal
         results, so nothing an adapter can write reaches it -- also an
@@ -1742,8 +1752,30 @@ class TestAdapterSuppliedTextCannotDriveTheTerminal:
                 continue
             assert not any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in reason), reason
 
+    def test_a_control_byte_in_the_config_is_stripped_from_the_asked_column(
+        self, tmp_path
+    ):
+        """The `asked` column is the operator's own `soup.yaml` rather than the
+        downloaded record, but a config can be generated or shared too, and
+        the loader accepts `scheduler: "cosine\\x1b[2J"` as a plain `str`.
+        Without this, reverting `for_terminal(row.asked)` to `str(row.asked)`
+        passed every test: the sibling of the hardened column was unpinned."""
+        import yaml
+
+        from soup_cli.commands.adapters import app
+
+        cfg = _config(training={"scheduler": "cosine\x1b[2J"})
+        (tmp_path / "adapter_config.json").write_text(json.dumps(_mlx_record()))
+        (tmp_path / "soup.yaml").write_text(yaml.safe_dump(cfg))
+
+        res = _runner().invoke(app, ["audit", ".", "--config", "soup.yaml"])
+
+        assert "\x1b" not in res.output, "an escape from the config reached the terminal"
+        assert "[2J" in res.output, "the value must still be shown, inertly"
+        assert res.exit_code == 2, res.output
+
     def test_the_json_path_is_unaffected_by_the_stripping(self, tmp_path):
-        """`--json` must carry the record's bytes faithfully; `_for_terminal`
+        """`--json` must carry the record's bytes faithfully; `for_terminal`
         is a terminal concern, and a machine consumer wants the real value."""
         res = self._run(tmp_path, _mlx_record(optimizer=self.PAYLOAD), "--json")
         payload = json.loads(res.stdout)
@@ -1872,3 +1904,115 @@ class TestAMalformedRecordIsReportedNotCrashedOn:
         result = audit_adapter(_config(), _mlx_record())
         assert result.diverged_count == 0
         assert result.unknown_count == 0
+
+
+class TestAMalformedLoraBlockIsAVerdictNotAPathError:
+    """#763 review: five malformed records crashed out of the command on exit 1.
+
+    ``lora_parameters`` was read with ``.get`` without checking it is a
+    mapping, and ``_is_number`` admitted NaN and inf, which ``int()`` then
+    refused:
+
+        lora_parameters is a str / int / list -> AttributeError
+        rank is NaN                           -> ValueError
+        rank is inf                           -> OverflowError
+
+    All five exited ``1``. `docs/adapters-and-governance.md` says ``1`` is a
+    *usage or read error*, "so a CI gate can tell 'the run did not do what the
+    config asked' from 'the path was wrong'" — so a downloaded adapter with a
+    junk record was reported to CI as a mistyped path. The documentation is
+    what makes this a defect rather than a rough edge.
+
+    Same threat model as the control-byte hardening: the record is untrusted.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _run_from_tmp(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        _pin_console(monkeypatch)
+
+    @pytest.mark.parametrize(
+        "params",
+        ["a string", 7, ["a", "list"], True],
+        ids=["str", "int", "list", "bool"],
+    )
+    def test_a_non_mapping_lora_block_does_not_crash(self, params):
+        from soup_cli.utils.adapter_audit import audit_adapter
+
+        result = audit_adapter(_config(), _mlx_record(lora_parameters=params))
+        row = next(r for r in result.rows if r.setting == "lora.r")
+        assert row.status != "ok", "a junk record is not agreement"
+        assert row.detail, "a refusal has to say why"
+
+    @pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf")])
+    def test_a_non_finite_rank_does_not_crash(self, bad):
+        from soup_cli.utils.adapter_audit import audit_adapter
+
+        result = audit_adapter(
+            _config(), _mlx_record(lora_parameters={"rank": bad, "scale": 2.0})
+        )
+        assert result.rows, "the audit produced nothing at all"
+
+    @pytest.mark.parametrize("bad", [float("nan"), float("inf")])
+    def test_non_finite_warmup_numbers_do_not_crash(self, bad):
+        """`int(total)` is the line that raised — NaN and inf are `float`, so
+        `_is_number` waved them through."""
+        from soup_cli.utils.adapter_audit import audit_adapter
+
+        result = audit_adapter(_config(), _mlx_record(total_updates=bad))
+        row = next(r for r in result.rows if r.setting == "warmup_ratio")
+        assert row.status != "ok"
+
+    @pytest.mark.parametrize(
+        "record_over",
+        [
+            {"lora_parameters": "a string"},
+            {"lora_parameters": 7},
+            {"lora_parameters": ["a", "list"]},
+            {"lora_parameters": {"rank": float("nan"), "scale": 2.0}},
+            {"lora_parameters": {"rank": float("inf"), "scale": 2.0}},
+        ],
+        ids=["str", "int", "list", "nan", "inf"],
+    )
+    def test_the_command_reports_a_verdict_not_a_usage_error(self, tmp_path, record_over):
+        """The five cases from the review, through the real command.
+
+        Exit 1 is reserved for "the path was wrong". A record the audit cannot
+        read is a finding about the run, so it must not borrow the code that
+        tells CI to go check its own arguments.
+        """
+        import yaml
+
+        from soup_cli.commands.adapters import app
+
+        (tmp_path / "adapter_config.json").write_text(
+            json.dumps(_mlx_record(**record_over))
+        )
+        (tmp_path / "soup.yaml").write_text(yaml.safe_dump(_config()))
+
+        res = _runner().invoke(app, ["audit", ".", "--config", "soup.yaml"])
+
+        assert res.exit_code != 1, (
+            f"a malformed record exited 1, which the docs reserve for a path "
+            f"error:\n{res.output}"
+        )
+        assert res.exit_code in (0, 2), res.output
+        assert "Traceback" not in res.output
+        assert res.exception is None or isinstance(res.exception, SystemExit), (
+            f"raised out of the command: {res.exception!r}"
+        )
+
+    def test_the_well_formed_control_is_unchanged(self, tmp_path):
+        """The review's sixth case: a good record still reports normally."""
+        import yaml
+
+        from soup_cli.commands.adapters import app
+
+        (tmp_path / "adapter_config.json").write_text(
+            json.dumps(_mlx_record(optimizer="SGD"))
+        )
+        (tmp_path / "soup.yaml").write_text(yaml.safe_dump(_config()))
+
+        res = _runner().invoke(app, ["audit", ".", "--config", "soup.yaml"])
+        assert res.exit_code == 2, res.output
+        assert "1 divergence(s)" in res.output
