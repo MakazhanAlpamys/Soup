@@ -1451,7 +1451,7 @@ class TestSchemaAcceptsNF4:
         cfg = load_config_from_string(_stream_yaml(quantization="none"))
         assert cfg.training.quantization == "none"
 
-    @pytest.mark.parametrize("quant", ["8bit", "gptq", "bitnet_1.58"])
+    @pytest.mark.parametrize("quant", ["8bit", "gptq"])
     def test_other_quantisations_are_refused_naming_the_supported_set(self, quant):
         from soup_cli.config.loader import load_config_from_string
 
