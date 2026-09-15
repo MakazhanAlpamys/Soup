@@ -1451,12 +1451,18 @@ class TestSchemaAcceptsNF4:
         cfg = load_config_from_string(_stream_yaml(quantization="none"))
         assert cfg.training.quantization == "none"
 
-    @pytest.mark.parametrize("quant", ["8bit", "gptq", "bitnet_1.58"])
+    @pytest.mark.parametrize("quant", ["8bit", "gptq"])
     def test_other_quantisations_are_refused_naming_the_supported_set(self, quant):
         from soup_cli.config.loader import load_config_from_string
 
         with pytest.raises(Exception, match="4bit"):
             load_config_from_string(_stream_yaml(quantization=quant))
+
+    def test_bitnet_streaming_is_refused_by_the_global_training_gate(self):
+        from soup_cli.config.loader import load_config_from_string
+
+        with pytest.raises(ValueError, match="training is not implemented yet"):
+            load_config_from_string(_stream_yaml(quantization="bitnet_1.58"))
 
     def test_refusal_names_stream_layers_not_something_else(self):
         """A pre-existing validator could reject 8bit for an unrelated reason
