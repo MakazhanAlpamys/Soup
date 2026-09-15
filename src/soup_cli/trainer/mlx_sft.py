@@ -24,6 +24,7 @@ from pathlib import Path
 from rich.console import Console
 
 from soup_cli.config.schema import SoupConfig
+from soup_cli.trainer.loss_summary import summarize_training_loss
 
 console = Console()
 
@@ -767,10 +768,11 @@ class MLXSFTTrainerWrapper:
             )
         )
 
-        losses = captured.get("losses") or [0.0]
+        loss_summary = summarize_training_loss(
+            [{"loss": loss} for loss in captured.get("losses", [])]
+        )
         result = {
-            "initial_loss": losses[0],
-            "final_loss": losses[-1],
+            **loss_summary,
             "total_steps": iters,
             "duration_secs": duration,
             "duration": f"{duration:.0f}s",
