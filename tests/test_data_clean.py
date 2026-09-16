@@ -357,6 +357,31 @@ def test_byte_identity_clean_rows_and_arithmetic_closure():
     assert report.rule_counts["Invisible & Control Chars"] == 1
 
 
+def test_silently_altered_row_is_reported_modified_not_clean(monkeypatch: pytest.MonkeyPatch):
+    """A row changed without any rule firing must never be reported as clean (S1)."""
+    row = {
+        "messages": [
+            {"role": "user", "content": "What is 2+2?"},
+            {"role": "assistant", "content": "2+2 is 4."},
+        ],
+        "train_meta": "keep",
+    }
+
+    def _drop_a_key_and_report_nothing(row_in, fmt, **kwargs):
+        return {k: v for k, v in row_in.items() if k != "train_meta"}, []
+
+    monkeypatch.setattr("soup_cli.utils.data_clean.clean_row", _drop_a_key_and_report_nothing)
+
+    cleaned_data, report = clean_dataset([row], "chatml")
+
+    assert "train_meta" not in cleaned_data[0], "fixture must actually alter the row"
+    assert report.total_clean == 0, "an altered row was reported as clean (silent data loss)"
+    assert report.total_modified == 1, "an altered row must be counted as modified"
+    assert report.rule_counts == {"Format Normalization": 1}, (
+        "a change no rule explains must still be attributed to Format Normalization"
+    )
+
+
 def test_input_file_never_modified_under_any_flags(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
@@ -608,4 +633,3 @@ def test_cli_clean_command_json_output(tmp_path: Path, monkeypatch: pytest.Monke
     assert payload["total_clean"] == 1
     assert payload["total_modified"] == 1
     assert payload["dry_run"] is True
-
