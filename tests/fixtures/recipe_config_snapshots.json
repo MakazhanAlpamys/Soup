@@ -1894,6 +1894,28 @@
       "training.lora.r": 16,
       "training.lr": 0.0002
     },
+    "qwen3.6-27b-dpo": {
+      "base": "Qwen/Qwen3.6-27B",
+      "data.format": "dpo",
+      "data.max_length": 4096,
+      "data.train": "./data/preference_train.jsonl",
+      "task": "dpo",
+      "training.gradient_accumulation_steps": 8,
+      "training.lora.alpha": 32,
+      "training.lora.r": 16,
+      "training.lr": 5e-06
+    },
+    "qwen3.6-27b-grpo": {
+      "base": "Qwen/Qwen3.6-27B",
+      "data.format": "auto",
+      "data.max_length": 4096,
+      "data.train": "./data/reasoning_train.jsonl",
+      "task": "grpo",
+      "training.gradient_accumulation_steps": 8,
+      "training.lora.alpha": 32,
+      "training.lora.r": 16,
+      "training.lr": 1e-05
+    },
     "qwen3.6-27b-sft": {
       "base": "Qwen/Qwen3.6-27B",
       "data.format": "auto",

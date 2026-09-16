@@ -953,4 +953,4 @@ class TestAsrRecipes:
     def test_catalog_size_is_174(self):
         from soup_cli.recipes.catalog import RECIPES
 
-        assert len(RECIPES) == 174
+        assert len(RECIPES) == 176
