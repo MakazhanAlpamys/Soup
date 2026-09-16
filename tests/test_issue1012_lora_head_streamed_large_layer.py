@@ -172,8 +172,13 @@ class TestUntiedLoraOnStreamedLargeLayerNowWorks:
 
             streamed_out = streamed(**inputs)
             resident_out = resident(**inputs)
-            assert torch.allclose(streamed_out.logits, resident_out.logits, atol=1e-5)
-            assert torch.allclose(streamed_out.loss, resident_out.loss, atol=1e-5)
+            # torch.equal, not allclose: the substitution puts the SAME tensor on
+            # the same computation, so the two runs must match bit for bit. An
+            # allclose(atol=1e-5) tolerance would still pass under a real
+            # numerical error (measured: a +1e-6 perturbation of the pooled
+            # weight lands within 2.5x of this tolerance on the embedding case).
+            assert torch.equal(streamed_out.logits, resident_out.logits)
+            assert torch.equal(streamed_out.loss, resident_out.loss)
 
             streamed_out.loss.backward()
             resident_out.loss.backward()
@@ -187,7 +192,7 @@ class TestUntiedLoraOnStreamedLargeLayerNowWorks:
             for name, grad in streamed_grads.items():
                 other = resident_params[name].grad
                 assert other is not None, f"resident model produced no grad for {name!r}"
-                assert torch.allclose(grad, other, atol=1e-5), f"gradient mismatch at {name!r}"
+                assert torch.equal(grad, other), f"gradient mismatch at {name!r}"
         finally:
             runtime.close()
 
