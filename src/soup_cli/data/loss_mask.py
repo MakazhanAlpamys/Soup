@@ -375,13 +375,15 @@ def append_training_eos(tokenizer: Any, input_ids: list[int]) -> list[int]:
     template so TRL never runs ``add_eos``; this puts the stop token back in token
     space so the pre-tokenised row trains on the same EOS ``main`` did.
 
-    Used by the live-training path (:func:`build_full_sequence_labels`). The
-    ``soup data preprocess`` cache path deliberately does NOT use this -- it
-    tokenises exactly as ``main`` (``add_special_tokens=True``, so the
-    post-processor supplies the EOS) and only drops #785's duplicated leading
-    BOS via :func:`strip_doubled_leading_bos`. Its EOS is therefore whatever the
-    post-processor added, not TRL's ``add_eos`` rule, and the resulting
-    cache-vs-live mismatch is tracked separately in #791.
+    Used by the live-training path (:func:`build_full_sequence_labels`) and, since
+    #791, by the ``soup data preprocess`` cache path. The cache path tokenises as
+    ``main`` (``add_special_tokens=True``) and drops #785's duplicated leading BOS
+    via :func:`strip_doubled_leading_bos`; before #791 its EOS was then only
+    whatever the post-processor supplied, so a template rendering no EOS on a
+    tokenizer whose post-processor appends none (Qwen shape) cached zero stop
+    tokens while the live path trained on one. The cache now applies this same rule
+    so the two agree on the trained EOS count. (The leading BOS still differs
+    between the two paths by design — that divergence is tracked in #876.)
     """
     eos_id = _resolve_eos_token_id(tokenizer)
     if eos_id is not None and (not input_ids or input_ids[-1] != eos_id):

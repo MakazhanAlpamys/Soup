@@ -284,8 +284,10 @@ soup train --config soup.yaml --uld-strategy wasserstein
 #   training:
 #     uld_strategy: wasserstein_aligned
 
-# MiniLLM reverse-KL on-policy distillation — bundles 3 stability tricks
-# (Gu et al. 2024 arXiv:2306.08543)
+# MiniLLM reverse-KL distillation (Gu et al. 2024 arXiv:2306.08543).
+# Offline blend: mix ratio is the teacher weight in the reverse-KL target and
+# must be > 0 (ratio 0 is KL(student || stopgrad(student)) and is rejected).
+# On-policy: mix 0 is legal — student-only sampling, loss still KL(student || teacher).
 soup train --config soup.yaml --minillm-enabled \
     --minillm-teacher-mix-ratio 0.3 \
     --minillm-pretrain-anchor-weight 0.1 \
@@ -294,7 +296,7 @@ soup train --config soup.yaml --minillm-enabled \
 # MiniLLM TRUE on-policy rollout (v0.71.18, Gu et al. §3.1) — sample a fresh
 # autoregressive rollout from the per-token teacher/student mixture each step,
 # then length-normalised reverse-KL. training.minillm_rollout_length tunes the
-# rollout (auto min(max_length, 32)).
+# rollout (auto min(max_length, 32)). Mix 0 here means student-only sampling.
 soup train --config soup.yaml --minillm-enabled --minillm-on-policy
 
 # Mid-epoch checkpoint for PPO/GRPO — TorchTune punts this; Soup ships it
@@ -416,6 +418,8 @@ training:
   teacher_model: meta-llama/Llama-3.1-8B
   distill_divergence: forward_kl   # kl | forward_kl | reverse_kl | js
   distill_temperature: 2.0
+  distill_chunk_size: 256          # token chunk size for divergence evaluation
+  distill_checkpoint: true         # non-reentrant activation checkpointing
   epochs: 3
   lr: 5e-5
   quantization: 4bit               # quantizes student only
@@ -444,6 +448,27 @@ That measurement included finite-value guards removed here: without them it took
 hardware-specific measurements, not a benchmark of this revised implementation,
 which also avoids unused probability tensors. Two FP32 logits copies alone occupy
 about 7.8 GiB at B=4/S=2048/V=128256; budget for additional intermediates as well.
+
+### Chunking and Activation Checkpointing
+
+Distillation with large vocabularies (e.g. 150k for Qwen 2.5) and long sequences
+can exhaust GPU memory due to massive intermediate logit and probability tensors.
+Soup provides two controls to bound activation memory:
+
+- `distill_chunk_size`: Evaluates divergence in chunks of active response tokens
+  (`labels != -100`). Pre-filtering immediately sheds unmasked prompt and padding
+  tokens from retained autograd memory, while chunking bounds transient peak
+  activation tensors during divergence evaluation. Moderate chunk sizes (e.g. 64
+  to 256 tokens) balance peak memory reduction with kernel launch overhead.
+- `distill_checkpoint`: Wraps chunk evaluation in non-reentrant activation
+  checkpointing (`torch.utils.checkpoint.checkpoint(..., use_reentrant=False)`).
+  Discards intermediate `log_softmax` and probability tensors during the forward
+  pass and recomputes them during backward, substantially reducing retained autograd
+  tensor bytes at the cost of recomputation time in the backward pass. Note that
+  enabling `distill_checkpoint: true` without setting `distill_chunk_size` processes
+  all active tokens in a single chunk, which reduces retained bytes via checkpointing
+  but leaves transient peak activations unbounded.
+
 
 Set `distill_mode: sequence` (default `token`) to train on the teacher's **generated
 continuations** instead of per-token logit matching — a hard-label, cross-tokenizer-friendly
@@ -1118,22 +1143,24 @@ soup reward stress verifiable --verifiable-domain json_schema \
 
 # tune the attack set / accept threshold / gameability tolerance
 soup reward stress reward.py --references golds.jsonl \
-    --attacks empty,length,repetition,sentinel --sentinel GOLD \
-    --threshold 0.5 --max-gameable 0.0
+    --attacks empty,length,repetition,sentinel,wrapped_junk,answer_spray \
+    --sentinel GOLD --threshold 0.5 --max-gameable 0.0
 ```
 
 The report shows a per-attack accept-rate and an overall verdict. A gold-requiring verifier probed
-with **no** `--references` is a hard error (it can't be measured), never a false "robust". Probing a
-`.py` executes its module code, like any custom reward — only stress files you trust.
+with **no** `--references` is a hard error (it can't be measured), never a false "robust". Because
+each attack family evaluates multiple distinct variants across sampled references (up to 23 batched
+verifier invocations, or 4,600 scored completions at the 200-gold cap), slow or model-based verifiers
+will take proportionally longer than simple string checks. Probing a `.py` executes its module code,
+like any custom reward — only stress files you trust.
 For the builtin `json_schema` domain, references are forwarded as `schema=` metadata; JSON objects
 selected by `--field` are decoded before the verifier scores them.
 
-Current limitation: the four built-in attack families emit plain text that is not valid JSON, so
+Current limitation: the built-in attack families emit plain text that is not valid JSON, so
 `json_schema` rejects them during parsing before schema-specific constraints are evaluated. The
-result therefore does not yet distinguish a strict schema from a permissive one; structure-
-preserving JSON attacks are tracked in #918. Its `reference_accept` value is also not a meaningful
-self-acceptance control for this domain because it scores the schema document as though it were an
-instance of itself (and is normally `0%`).
+result therefore does not yet distinguish a strict schema from a permissive one. Its `reference_accept`
+value is also not a meaningful self-acceptance control for this domain because it scores the schema
+document as though it were an instance of itself (and is normally `0%`).
 
 ### Verifiable Rewards (RLVR)
 

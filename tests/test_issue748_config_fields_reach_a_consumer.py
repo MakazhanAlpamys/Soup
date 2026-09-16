@@ -306,9 +306,6 @@ KNOWN_UNCONSUMED = {
                                   "-- and sft.py:788 / pretrain.py:174 / "
                                   "embedding.py:175 / grpo.py:468 each hardcode "
                                   "False, so the setting never reaches HF",
-    "training.yarn_factor": "no issue yet -- long_context.py:316 uses a local of the same name "
-                            "and the string only as an error label; the config "
-                            "field reaches nothing",
     "training.grace_codebook": "no issue yet -- the string appears as an artifact-kind name in "
                                "store.py:52 / edit.py:312, unrelated to this field",
     # -- declared and deliberately REFUSED, so having no consumer is correct.
@@ -328,9 +325,6 @@ KNOWN_UNCONSUMED = {
     "training.unsloth_bnb_4bit": "no issue yet -- unsloth quantisation staging",
     "training.llm_int8": "no issue yet -- bitsandbytes int8 staging",
     "training.quantize_ref_model": "no issue yet -- reference-model quantisation staging",
-    "training.yarn_attn_factor": "no issue yet -- YaRN staging",
-    "training.yarn_beta_fast": "no issue yet -- YaRN staging",
-    "training.yarn_beta_slow": "no issue yet -- YaRN staging",
     "training.convergence_window": "no issue yet -- convergence-detector staging",
     "training.convergence_rel_tol": "no issue yet -- convergence-detector staging",
     "training.forgetting_eval_steps": "#799 -- catastrophic-forgetting probe staging",
@@ -578,8 +572,8 @@ def test_the_allowlist_size_is_pinned_exactly():
     half: it names WHICH entry went stale, where this one only says the count
     moved.
     """
-    assert len(KNOWN_UNCONSUMED) == 40, (
-        f"KNOWN_UNCONSUMED is {len(KNOWN_UNCONSUMED)}, pinned at 40. Going UP "
+    assert len(KNOWN_UNCONSUMED) == 36, (
+        f"KNOWN_UNCONSUMED is {len(KNOWN_UNCONSUMED)}, pinned at 36. Going UP "
         "means a field was allowlisted rather than wired; going DOWN means an "
         "entry was retired, which is the good direction -- lower this number "
         "in the same commit."

@@ -24,12 +24,17 @@ STATIC_DIR = Path(__file__).parent / "static"
 _MAX_INSPECT_LIMIT = 500
 
 # #939: cap the body before FastAPI parses it, sized per route (chat/send
-# forwards upstream; inspect only ever needs a path and an int).
+# forwards upstream; inspect only ever needs a path and an int). #897 extends
+# the same mechanism to every YAML-bearing Web UI route.
 _MAX_CHAT_SEND_BODY_BYTES = 1024 * 1024
 _MAX_DATA_INSPECT_BODY_BYTES = 8 * 1024
+_MAX_YAML_REQUEST_BYTES = 1024 * 1024
 _BODY_SIZE_LIMITS = {
     "/api/chat/send": _MAX_CHAT_SEND_BODY_BYTES,
     "/api/data/inspect": _MAX_DATA_INSPECT_BODY_BYTES,
+    "/api/config/validate": _MAX_YAML_REQUEST_BYTES,
+    "/api/train/start": _MAX_YAML_REQUEST_BYTES,
+    "/api/config/from-form": _MAX_YAML_REQUEST_BYTES,
 }
 
 
@@ -37,10 +42,9 @@ class _RequestBodySizeLimitMiddleware:
     """Reject an oversized POST body before route/model parsing runs.
 
     Checks ``Content-Length`` first, then streams and counts the actual body
-    bytes so a missing or understated header cannot bypass the cap. Same
-    check-then-stream shape as #915's ``_YamlRequestBodyLimitMiddleware``, on
-    a path -> limit table since that middleware still targets only the three
-    YAML-entry routes.
+    bytes so a missing or understated header cannot bypass the cap. Per-route
+    limits keep the mechanism shared while allowing small JSON requests and
+    YAML-bearing configuration requests to use different ceilings.
     """
 
     def __init__(self, app, limits: Mapping[str, int] = _BODY_SIZE_LIMITS) -> None:

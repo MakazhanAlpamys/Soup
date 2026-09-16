@@ -84,6 +84,7 @@ def _check_unit_float(value: object, field: str) -> float:
 def validate_teacher_mix_ratio(value: object) -> float:
     """Validate the teacher-mix sampling ratio. Range [0.0, 1.0].
 
+    Offline: weight of the teacher in the reverse-KL target. On-policy:
     0.0 = student-only rollouts; 1.0 = teacher-only rollouts. Typical
     MiniLLM recipes use 0.2-0.5 to balance exploration against
     proximity to the teacher's distribution.

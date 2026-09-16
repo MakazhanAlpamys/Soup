@@ -395,7 +395,8 @@ soup train --config soup.yaml
 
 The endpoint validator follows the same SSRF rules as `HF_ENDPOINT`: only `http`/`https` schemes; plain HTTP allowed only for `localhost` / `127.0.0.1` / `::1`; private and link-local IPs (RFC1918, 169.254/16, etc.) rejected on plain HTTP. `backend: mlx` is incompatible with non-HF hubs (`mlx-lm` only downloads from HF Hub).
 
-The hub adapter is schema-only in this release; the live downloader and uploader land in v0.51.1.
+ModelScope and Modelers downloads and uploads route through live, lazy-imported SDK adapters. The
+HF path remains the default, and MLX remains HF-only.
 
 
 ## TensorBoard Integration

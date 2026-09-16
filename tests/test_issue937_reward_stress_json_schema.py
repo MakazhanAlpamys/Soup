@@ -34,7 +34,11 @@ def test_real_json_schema_reward_receives_schema_references() -> None:
     assert report.reference_accept == 0.0
     assert report.gameable is False
     assert {attack.kind for attack in report.attacks} == set(reward_stress.ATTACKS)
-    assert all(attack.n == 1 and attack.accepted == 0 for attack in report.attacks)
+    assert all(
+        attack.n == len(reward_stress.generate_attack_variants(attack.kind))
+        and attack.accepted == 0
+        for attack in report.attacks
+    )
 
 
 def test_schema_reference_routing_can_distinguish_gameable_and_strict() -> None:
@@ -58,9 +62,11 @@ def test_schema_reference_routing_can_distinguish_gameable_and_strict() -> None:
         attacks=("empty",),
     )
 
-    assert gameable.attacks[0].accepted == 1
+    assert gameable.attacks[0].accepted == gameable.attacks[0].n
+    assert gameable.attacks[0].accept_rate == 1.0
     assert gameable.gameable is True
     assert strict.attacks[0].accepted == 0
+    assert strict.attacks[0].accept_rate == 0.0
     assert strict.gameable is False
 
 

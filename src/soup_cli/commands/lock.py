@@ -21,7 +21,7 @@ from rich.panel import Panel
 
 console = Console()
 
-app = typer.Typer(no_args_is_help=True, help="Shared run lockfile (v0.67.0 Part E)")
+app = typer.Typer(no_args_is_help=True, help="Shared run lockfile")
 
 
 @app.command(name="write")

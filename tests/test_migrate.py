@@ -173,6 +173,7 @@ optimizer: adamw_torch
 lr_scheduler: cosine
 warmup_ratio: 0.03
 output_dir: ./output
+flash_attention: true
 """
 
 AXOLOTL_DPO = """\
@@ -733,6 +734,7 @@ class TestAxolotlMigration:
         assert result["data"]["format"] == "alpaca"
         assert result["data"]["max_length"] == 2048
         assert result["output"] == "./output"
+        assert result["training"]["use_flash_attn"] is True
 
     def test_dpo_with_qlora(self, tmp_path):
         """rl: dpo → task: dpo, adapter: qlora → quantization: 4bit."""
@@ -745,15 +747,32 @@ class TestAxolotlMigration:
         assert result["training"]["quantization"] == "4bit"
         assert result["data"]["format"] == "dpo"
 
-    def test_grpo_with_flash_attn(self, tmp_path):
-        """rl: grpo → task: grpo, flash_attention → use_flash_attn."""
+    def test_grpo_drops_flash_attn(self, tmp_path):
+        """#806 follow-up: grpo does not read use_flash_attn, so flash_attention
+        is dropped (not silently mapped to a value the loader then refuses)
+        and the drop is surfaced through _warnings."""
         from soup_cli.migrate.axolotl import migrate_axolotl
 
         cfg_file = tmp_path / "config.yaml"
         cfg_file.write_text(AXOLOTL_GRPO, encoding="utf-8")
         result = migrate_axolotl(cfg_file)
         assert result["task"] == "grpo"
-        assert result["training"]["use_flash_attn"] is True
+        assert "use_flash_attn" not in result["training"]
+        assert any("flash_attention" in w and "grpo" in w for w in result.get("_warnings", []))
+
+    def test_grpo_flash_attn_migration_loads(self, tmp_path):
+        """The regression #806 found: the migrated config must itself load,
+        not just build without raising."""
+        from soup_cli.config.loader import load_config_from_string
+        from soup_cli.migrate.axolotl import migrate_axolotl
+        from soup_cli.migrate.common import config_to_yaml
+
+        cfg_file = tmp_path / "config.yaml"
+        cfg_file.write_text(AXOLOTL_GRPO, encoding="utf-8")
+        result = migrate_axolotl(cfg_file)
+        yaml_str = config_to_yaml(result)
+        soup_config = load_config_from_string(yaml_str)
+        assert soup_config.task == "grpo"
 
     def test_multi_dataset_warning(self, tmp_path):
         """Multiple datasets triggers a warning (Soup uses single dataset)."""

@@ -1,0 +1,248 @@
+{
+ "arm": "async",
+ "label": "evictB slot1",
+ "source_class": "AsyncDiskSource",
+ "read_ahead": 2,
+ "pinned": true,
+ "store_gb": 0.761929784,
+ "disk_gb": 4.137812864,
+ "tokens_per_step": 512,
+ "steps": 8,
+ "warmup": 3,
+ "step_s_mean": 1.8865486875001807,
+ "step_s_min": 1.8505563999933656,
+ "step_s_max": 1.9603859000199009,
+ "tok_per_s": 271.39506305476726,
+ "copy_s_mean": 0.9888501125574112,
+ "stall_s_mean": 0.0017057800455513644,
+ "stage_s_mean": {
+  "consumer_load_async": 1.2263879499732866,
+  "consumer_load_large": 0.0005176250015210826,
+  "consumer_wait": 1.179204375075642,
+  "reader_drain": 0.0011850125629280228,
+  "reader_read": 1.7451702375728928
+ },
+ "stage_count_mean": {
+  "consumer_load_async": 61.0,
+  "consumer_load_large": 2.0,
+  "consumer_wait": 1832.0,
+  "reader_drain": 60.0,
+  "reader_read": 1800.0
+ },
+ "peak_alloc_gb": 1.34248192,
+ "records": [
+  {
+   "step_s": 1.9603859000199009,
+   "copy_s": 1.0626935987472534,
+   "stall_s": 0.012440672370605171,
+   "copy_events": 63,
+   "stages": {
+    "seconds": {
+     "consumer_wait": 1.2358282998902723,
+     "consumer_load_large": 0.0010726999898906797,
+     "consumer_load_async": 1.2848476001236122,
+     "reader_drain": 0.0014796000614296645,
+     "reader_read": 1.813459099677857
+    },
+    "counts": {
+     "consumer_wait": 1832,
+     "consumer_load_large": 2,
+     "consumer_load_async": 61,
+     "reader_drain": 60,
+     "reader_read": 1800
+    }
+   },
+   "loss": 11.136892318725586
+  },
+  {
+   "step_s": 1.8654661999898963,
+   "copy_s": 0.9728382425308227,
+   "stall_s": 0.00016828799864742906,
+   "copy_events": 63,
+   "stages": {
+    "seconds": {
+     "consumer_wait": 1.1534074001538102,
+     "consumer_load_large": 0.00040099999750964344,
+     "consumer_load_async": 1.1999356999294832,
+     "reader_drain": 0.0012238000927027315,
+     "reader_read": 1.726175301009789
+    },
+    "counts": {
+     "consumer_wait": 1832,
+     "consumer_load_large": 2,
+     "consumer_load_async": 61,
+     "reader_drain": 60,
+     "reader_read": 1800
+    }
+   },
+   "loss": 10.825593948364258
+  },
+  {
+   "step_s": 1.8821099000051618,
+   "copy_s": 0.9671958756446838,
+   "stall_s": 0.00011561600025743246,
+   "copy_events": 63,
+   "stages": {
+    "seconds": {
+     "consumer_wait": 1.15419560027658,
+     "consumer_load_large": 0.0004869000113103539,
+     "consumer_load_async": 1.202838500001235,
+     "reader_drain": 0.00126550009008497,
+     "reader_read": 1.7397115999483503
+    },
+    "counts": {
+     "consumer_wait": 1832,
+     "consumer_load_large": 2,
+     "consumer_load_async": 61,
+     "reader_drain": 60,
+     "reader_read": 1800
+    }
+   },
+   "loss": 10.56761360168457
+  },
+  {
+   "step_s": 1.9336409000097774,
+   "copy_s": 1.0039028787612916,
+   "stall_s": 0.00035395199479535224,
+   "copy_events": 63,
+   "stages": {
+    "seconds": {
+     "consumer_wait": 1.185779499646742,
+     "consumer_load_large": 0.0004047999973408878,
+     "consumer_load_async": 1.2340360000962391,
+     "reader_drain": 0.0011002000828739256,
+     "reader_read": 1.7854501006950159
+    },
+    "counts": {
+     "consumer_wait": 1832,
+     "consumer_load_large": 2,
+     "consumer_load_async": 61,
+     "reader_drain": 60,
+     "reader_read": 1800
+    }
+   },
+   "loss": 10.40921688079834
+  },
+  {
+   "step_s": 1.8505563999933656,
+   "copy_s": 0.9823514590263367,
+   "stall_s": 0.00011615999974310399,
+   "copy_events": 63,
+   "stages": {
+    "seconds": {
+     "consumer_wait": 1.1797275005374104,
+     "consumer_load_large": 0.0003935999993700534,
+     "consumer_load_async": 1.2256325999624096,
+     "reader_drain": 0.001145700050983578,
+     "reader_read": 1.7143139995168895
+    },
+    "counts": {
+     "consumer_wait": 1832,
+     "consumer_load_large": 2,
+     "consumer_load_async": 61,
+     "reader_drain": 60,
+     "reader_read": 1800
+    }
+   },
+   "loss": 10.292838096618652
+  },
+  {
+   "step_s": 1.8808825000014622,
+   "copy_s": 0.9955998063087463,
+   "stall_s": 0.00016019199893344194,
+   "copy_events": 63,
+   "stages": {
+    "seconds": {
+     "consumer_wait": 1.184577900217846,
+     "consumer_load_large": 0.0003884000179823488,
+     "consumer_load_async": 1.230178699886892,
+     "reader_drain": 0.0010060000349767506,
+     "reader_read": 1.7442548995895777
+    },
+    "counts": {
+     "consumer_wait": 1832,
+     "consumer_load_large": 2,
+     "consumer_load_async": 61,
+     "reader_drain": 60,
+     "reader_read": 1800
+    }
+   },
+   "loss": 10.213133811950684
+  },
+  {
+   "step_s": 1.8593693999864627,
+   "copy_s": 0.9691190357208253,
+   "stall_s": 0.00011568000016268343,
+   "copy_events": 63,
+   "stages": {
+    "seconds": {
+     "consumer_wait": 1.173148700298043,
+     "consumer_load_large": 0.0005024999845772982,
+     "consumer_load_async": 1.2207777998410165,
+     "reader_drain": 0.001046800083713606,
+     "reader_read": 1.7164720008440781
+    },
+    "counts": {
+     "consumer_wait": 1832,
+     "consumer_load_large": 2,
+     "consumer_load_async": 61,
+     "reader_drain": 60,
+     "reader_read": 1800
+    }
+   },
+   "loss": 10.082476615905762
+  },
+  {
+   "step_s": 1.8599782999954186,
+   "copy_s": 0.9571000037193298,
+   "stall_s": 0.00017568000126630068,
+   "copy_events": 63,
+   "stages": {
+    "seconds": {
+     "consumer_wait": 1.1669700995844323,
+     "consumer_load_large": 0.0004911000141873956,
+     "consumer_load_async": 1.2128566999454051,
+     "reader_drain": 0.0012125000066589564,
+     "reader_read": 1.7215248993015848
+    },
+    "counts": {
+     "consumer_wait": 1832,
+     "consumer_load_large": 2,
+     "consumer_load_async": 61,
+     "reader_drain": 60,
+     "reader_read": 1800
+    }
+   },
+   "loss": 9.944987297058105
+  }
+ ],
+ "facts": {
+  "gpu": "NVIDIA GeForce RTX 5070 Laptop GPU",
+  "torch": "2.14.0+cu130",
+  "vram_total_gb": 8.518,
+  "driver": "616.92",
+  "pcie_gen": "5",
+  "pcie_width": "8"
+ },
+ "shard_dir": "C:\\Users\\user\\.soup\\layer-stream\\unsloth__mistral-7b-instruct-v0.3",
+ "driver": "benchmarks/harness/issue974_warm_stages.py",
+ "started": "2026-09-15T14:13:23",
+ "args": {
+  "weights": "unsloth/mistral-7b-instruct-v0.3",
+  "arm": "async",
+  "quant": "nf4",
+  "read_ahead": 2,
+  "buffers": 2,
+  "no_pin": false,
+  "seq": 512,
+  "batch": 1,
+  "steps": 8,
+  "warmup": 3,
+  "lora_r": 8,
+  "lora_targets": "q_proj,k_proj,v_proj,o_proj",
+  "seed": 3,
+  "input_seed": 17,
+  "label": "evictB slot1",
+  "out": "benchmarks/results/probe-rtx5070/issue974-pilot/i974_evictB_slot1_async.json"
+ }
+}

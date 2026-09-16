@@ -1446,7 +1446,7 @@ def adapter_pr(
         ),
     ),
 ):
-    """Render a GitHub-style PR for an adapter (v0.67.0 Part D).
+    """Render a GitHub-style PR for an adapter.
 
     The PR = ``{base SHA, dataset diff, adapter file, eval report}``
     rendered as a Markdown document with eval-delta tables and sample
@@ -1586,9 +1586,8 @@ def adapter_bisect(
 ):
     """Binary-search a training history to find the first failing checkpoint.
 
-    Composes with v0.66 Part B influence-blame: once the boundary is
-    found, ``soup adapters blame`` can attribute the regression to
-    specific dataset rows.
+    Once the boundary is found, ``soup adapters blame`` can attribute the
+    regression to specific dataset rows.
     """
     from soup_cli.utils.adapter_bisect import build_bisect_plan, run_bisect
 

@@ -170,6 +170,8 @@ def _unequal_length_gradient(
             "_compute_distill_term": _compute_distill_term,
             "divergence": "forward_kl",
             "temperature": 2.0,
+            "_distill_chunk_size": None,
+            "_distill_checkpoint": False,
         })
     args = transformers.TrainingArguments(
         output_dir=str(tmp_path / f"unequal-ga{steps}"),

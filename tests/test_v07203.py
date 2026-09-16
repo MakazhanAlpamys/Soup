@@ -1882,15 +1882,47 @@ class TestDiskTier:
         ]
         assert grads and sum(grads) > 0.0
 
-    def test_nothing_is_held_resident(self, tmp_path):
-        """The point of the tier. ``store_bytes`` is what the RAM tier would
-        have pinned; on disk it must be zero, with the size reported separately
-        so the operator still sees what the model costs."""
+    def test_only_the_readers_staging_is_held_resident(self, tmp_path):
+        """The point of the tier, restated honestly for #971.
+
+        ``store_bytes`` was zero while the tier allocated a fresh tensor per
+        call. The async reader stages ``read_ahead`` layers in host memory, so
+        zero is now a lie — the number an operator needs is that staging, and
+        what makes it the disk tier rather than the RAM tier is that it is a
+        few layers rather than the whole model.
+        """
         disk, runtime, _ = _tiny_stream(tmp_path, name="d1", tier="disk")
         stats = runtime.stats()
         assert stats["tier"] == "disk"
-        assert stats["store_bytes"] == 0
         assert stats["disk_bytes"] > 0
+        assert stats["store_bytes"] == runtime.source.nbytes
+        assert 0 < stats["store_bytes"] < stats["disk_bytes"], (
+            "the staging must be real and must be a fraction of the model — "
+            f"{stats['store_bytes']} of {stats['disk_bytes']} bytes"
+        )
+
+    def test_stats_reports_the_readers_real_depth_not_a_constant(self, tmp_path):
+        """#971 / #748: the depth must be OBSERVABLE, and observed from the
+        source rather than restated.
+
+        A non-default depth is what makes this discriminating — a `stats()`
+        that hardcoded the default would satisfy any assertion taken at the
+        default, and that exact mutant survived the first round of tests here.
+        The RAM-tier control is the other half: `RamSource` reads nothing
+        ahead, so a number there would be invented.
+        """
+        _, runtime, _ = _tiny_stream(
+            tmp_path, name="d1", tier="disk", read_ahead=3
+        )
+        stats = runtime.stats()
+        assert stats["read_ahead"] == 3
+        assert stats["read_ahead"] == runtime.source.read_ahead
+
+        _, ram_rt, _ = _tiny_stream(tmp_path, name="r1", tier="ram")
+        assert ram_rt.stats()["read_ahead"] is None, (
+            "the RAM tier has no reader, so its depth must be absent rather "
+            "than a plausible-looking default"
+        )
 
     def test_disk_and_ram_accounting_agree(self, tmp_path):
         """A disk tier that reported a different model size than the RAM tier
@@ -1935,17 +1967,28 @@ class TestDiskTier:
             DiskSource(shards, 3, spec)
         assert "layer_002" in str(excinfo.value) or "No such" in str(excinfo.value)
 
-    def test_runtime_close_releases_the_shard_handles(self, tmp_path):
-        """The disk tier holds ONE open handle per decoder layer — 80+ on a large
-        model. Without an explicit release they live until the process exits and
-        leak across back-to-back runs in one process (`soup sweep`, the web UI)."""
-        from soup_cli.utils.layer_stream_runtime import DiskSource
+    def test_runtime_close_stops_the_reader_thread_and_frees_the_staging(
+        self, tmp_path
+    ):
+        """What close() releases on this tier changed with #971.
+
+        There are no shard handles to leak any more — ``AsyncDiskSource`` opens
+        each shard per read precisely because a mapping charges Windows commit
+        for the whole file (#926). What it now owns is a background THREAD and
+        its host staging buffers, which on a pinned run are page-locked. A run
+        that finishes without closing leaves both alive for the life of the
+        process, which is what back-to-back runs in one process (`soup sweep`,
+        the web UI) do.
+        """
+        from soup_cli.utils.async_disk_source import AsyncDiskSource
 
         _, runtime, _ = _tiny_stream(tmp_path, name="d1", tier="disk")
-        assert isinstance(runtime.source, DiskSource)
-        assert runtime.source._handles, "no shard handles were opened at all"
+        assert isinstance(runtime.source, AsyncDiskSource)
+        assert runtime.source._thread.is_alive(), "the reader never started"
+        assert runtime.source._slots, "no staging was allocated at all"
         runtime.close()
-        assert runtime.source._handles == []
+        assert not runtime.source._thread.is_alive()
+        assert runtime.source._slots == []
         assert runtime.hook is None, "the prefetch hook was left attached"
         runtime.close()  # idempotent
 
@@ -1959,6 +2002,17 @@ class TestDiskTier:
 
 #: Free RAM to report so the tiny base comfortably takes the RAM tier.
 _RAM_TIER_FREE_BYTES = 10_000_000_000
+#: Free RAM to report so the tiny base takes the DISK tier and the async
+#: reader's staging still fits. Two constraints now, not one: the store plus
+#: resident extras must EXCEED the 0.7 headroom (or `choose_tier` keeps RAM),
+#: and the staging plus those extras must fall UNDER it (or #971's host
+#: pre-flight refuses the run). Measured on this fixture at the default
+#: read_ahead 2 — staging 197,632 B, resident extras 16,640 B, store 296,448 B —
+#: which puts the window at (306,103, 447,268]. The old value here was 1000,
+#: which forced the tier by describing a box with a kilobyte of free RAM;
+#: nothing read that as a description until the staging check did, and on such
+#: a box the staging genuinely does not fit.
+_DISK_TIER_FREE_BYTES = 380_000
 #: Render width for the captured pre-flight. The plan notes arrive inside a
 #: `rich.panel.Panel`; too narrow a console wraps the measured figures across a
 #: line break and the assertions below miss text that IS on screen.
@@ -2190,9 +2244,46 @@ class TestAutoTierFallback:
         assert wrapper._stream_runtime.tier == "ram"
 
     def test_auto_falls_back_to_disk_when_it_does_not(self, tmp_path, monkeypatch):
-        wrapper = self._run(tmp_path, monkeypatch, free_ram=1000, stream_source="auto")
-        assert wrapper._stream_runtime.tier == "disk"
-        assert wrapper._stream_runtime.stats()["store_bytes"] == 0
+        """``store_bytes`` was zero here for the same reason it was zero in
+        ``TestDiskTier``: the tier held nothing. Since #971 it holds the async
+        reader's host staging, so the claim that distinguishes the tiers is no
+        longer "nothing" but "a few layers rather than the whole model"."""
+        wrapper = self._run(
+            tmp_path, monkeypatch,
+            free_ram=_DISK_TIER_FREE_BYTES, stream_source="auto",
+        )
+        runtime = wrapper._stream_runtime
+        stats = runtime.stats()
+        assert runtime.tier == "disk"
+        assert stats["store_bytes"] == runtime.source.nbytes
+        assert 0 < stats["store_bytes"] < stats["disk_bytes"], (
+            "the staging must be real and a fraction of the model — "
+            f"{stats['store_bytes']} of {stats['disk_bytes']} bytes"
+        )
+
+    def test_a_box_too_small_for_the_readers_staging_is_refused(
+        self, tmp_path, monkeypatch
+    ):
+        """#971: the disk tier predicted ZERO host residency while the async
+        reader page-locks whole layers for the run. Driven through the REAL
+        pre-flight, not the validator alone — a check nothing calls is the #748
+        class this branch keeps finding.
+
+        1000 bytes of free RAM is the value `test_auto_falls_back_to_disk`
+        used to force the tier with; it forces it here too, and now also
+        describes a box on which the staging cannot possibly fit.
+        """
+        with pytest.raises(ValueError, match="training.stream_read_ahead") as excinfo:
+            self._run(tmp_path, monkeypatch, free_ram=1000, stream_source="auto")
+        message = str(excinfo.value)
+        assert "host staging" in message, message
+        # #971 re-review: the refusal must not promise a page-lock it may not
+        # get. `pin = plan.pinned and on_cuda`, so the staging is pageable on
+        # CPU/MPS, under `stream_pin: false`, and after a failed pin — the same
+        # over-promise that was removed from the disk-tier notes one commit
+        # earlier. The check is about host RAM either way, which is why the
+        # refusal is still correct there.
+        assert "page-locked when the box allows" in message, message
 
     def test_ram_refuses_instead_of_falling_back(self, tmp_path, monkeypatch):
         """`auto` trades speed to complete the run; `ram` is how an operator says
@@ -2349,9 +2440,17 @@ class TestAutoTierFallback:
                 extra_training_yaml="  stream_vram_probe: true\n",
             )
 
-    def test_the_fallback_says_the_cost_is_unmeasured(self, tmp_path, monkeypatch):
+    def test_the_fallback_says_what_it_costs(self, tmp_path, monkeypatch):
         """A silent fallback to a slower path is the failure mode this project
-        keeps calling out; the note must not overstate what was measured."""
+        keeps calling out, so the note has to say what the fallback costs AND
+        how to refuse it.
+
+        Renamed from `..._says_the_cost_is_unmeasured`: it used to assert the
+        word "unmeasured", which was honest until #971 measured the gap
+        (benchmarks/gate-971-async-nvme-source.md). A test that pins the
+        ABSENCE of a number keeps the number out once someone goes and gets
+        it, so it now pins the presence of one instead.
+        """
         from soup_cli.utils.layer_stream import build_stream_plan
 
         plan = build_stream_plan(
@@ -2359,7 +2458,25 @@ class TestAutoTierFallback:
             available_ram_bytes=10, pinned_limit_bytes=None, disk_kind="nvme",
         )
         joined = " ".join(plan.notes)
-        assert "unmeasured" in joined and "stream_source='ram'" in joined
+        assert "stream_source='ram'" in joined, joined
+        assert "slower than the RAM tier" in joined, joined
+        # A bare claim of "slower" is what this test exists to prevent: the
+        # note must carry a figure and say where it came from. The figure is a
+        # RANGE since the record's revision pass: the warm gap is 1.03-1.20x
+        # against the source this replaces and 1.90-2.26x against the RAM tier
+        # this note compares to, depending on run order — a single "2.2x"
+        # published one order's number as if it were the measurement.
+        assert "1.9-2.3x" in joined, joined
+        assert "gate-971-async-nvme-source.md" in joined, joined
+        # ...and it must NOT go back to promising nothing is held: the reader
+        # stages read_ahead layers in host RAM.
+        assert "unmeasured" not in joined, joined
+        assert "Nothing is held resident" not in joined, joined
+        # Nor over-promise the other way: `pin=plan.pinned and on_cuda` can be
+        # False and the staging then falls back to pageable, so the note says
+        # "where the box allows" rather than asserting it is page-locked.
+        assert "page-locked where the box allows" in joined, joined
+        assert "in pinned host RAM" not in joined, joined
 
 
 def _write_tiny_tokenizer(weights_dir):
@@ -2573,7 +2690,7 @@ def _advice(**kw):
 # ==========================================================================
 def _tiny_stream(
     tmp_path, name="shards", seed=3, n_layers=3, device="cpu", tier="ram",
-    quant="none", pin=False, require_pin=False,
+    quant="none", pin=False, require_pin=False, read_ahead=None,
 ):
     """A streamed model over a real (tiny) on-disk Llama checkpoint."""
     import torch
@@ -2625,10 +2742,13 @@ def _tiny_stream(
         str(weights), shards, dtype="float32", arch="llama", quant=quant,
         quant_suffixes=suffixes, quant_device="cpu",
     )
+    # Omitted rather than defaulted, so the harness exercises the production
+    # default unless a test deliberately asks for another depth (#971).
+    depth = {} if read_ahead is None else {"read_ahead": read_ahead}
     model, runtime = build_streamed_model(
         model_id=str(weights), shard_dir=shards, index=index, lora_config=lora,
         device=device, dtype="float32", buffers=2, pin=pin, seed=seed,
-        tier=tier, quant=quant, require_pin=require_pin,
+        tier=tier, quant=quant, require_pin=require_pin, **depth,
     )
     return model, runtime, str(weights)
 
@@ -2823,12 +2943,18 @@ class TestResumeLoadsIntoAStreamedModel:
         if resolved is not None:
             assert os.path.isabs(resolved)
 
-    def test_named_parameters_still_carries_inner(self, tmp_path):
-        """The fix is load-side only, by design: it redirects keys at load time
-        rather than re-parenting the module tree, so v0.72.0's bit-exactness
-        gates stay valid without being re-run."""
+    def test_named_parameters_no_longer_carry_inner(self, tmp_path):
+        """The v0.72.3 fix was load-side only (it redirected keys at load time
+        rather than re-parenting the module tree). #1005 made the wrapper's
+        NAMES canonical as well — without re-parenting: the inner layer is
+        still the wrapper's ``_modules['inner']``, so the load-side redirection
+        is still needed and still exercised by this class — because peft 0.21
+        joins module names to state-dict keys and saved a streamed adapter as
+        ZERO tensors while they differed."""
         model, _, _ = _tiny_stream(tmp_path)
-        assert any(".inner." in n for n, _ in model.named_parameters())
+        names = {n for n, _ in model.named_parameters()}
+        assert names and not any(".inner." in n for n in names)
+        assert names <= set(model.state_dict().keys())
 
 
 @requires_cuda

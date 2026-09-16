@@ -891,8 +891,23 @@ class TestDeployStage:
             loop_env(), {"gate_verdict": "OK", "adapter_path": "adapters/run-1"}
         )
         assert out["deployed"] is True
-        assert out["canary_verdict"] == "OK"
         assert seen["name"] == "run-1"
+
+    def test_successful_activation_reports_no_canary_verdict(
+        self, loop_env, monkeypatch
+    ):
+        """#815: activate_adapter is a full hot-swap, not a canary split, so
+        a successful POST must not be reported as a canary verdict of OK,
+        since canary_router.route()/BucketStats never ran to produce one."""
+        import soup_cli.utils.loop_stages as ls
+
+        monkeypatch.setattr(ls, "_DEPLOY_POSTER", lambda endpoint, name: True)
+        monkeypatch.setenv("SOUP_LOOP_SERVE_ENDPOINT", "http://localhost:8000")
+        out = ls.deploy_to_canary(
+            loop_env(), {"gate_verdict": "OK", "adapter_path": "adapters/run-1"}
+        )
+        assert out["deployed"] is True
+        assert out["canary_verdict"] is None
 
 
 class TestPrewiredConfig:
@@ -1618,7 +1633,7 @@ class TestDeploySsrfGuard:
             {"gate_verdict": "OK", "adapter_path": ".soup-loops/adapters/win"},
         )
         assert out["deployed"] is True
-        assert out["canary_verdict"] == "OK"
+        assert out["canary_verdict"] is None
 
     def test_private_lan_endpoint_allowed(self, loop_env, monkeypatch):
         import soup_cli.utils.loop_stages as ls

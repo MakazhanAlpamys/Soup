@@ -1174,8 +1174,8 @@ class TestNF4StreamedModel:
         assert meta, "no decoder weights left on meta"
         assert all(
             ".layers." in name
-            or name.endswith("embed_tokens.inner.weight")
-            or name.endswith("lm_head.inner.weight")
+            or name.endswith("embed_tokens.weight")
+            or name.endswith("lm_head.weight")
             for name in meta
         )
 

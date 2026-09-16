@@ -167,14 +167,50 @@ def test_registry_covers_every_field_the_mlx_trainer_warns_about():
         ):
             for arg in ast.walk(node):
                 if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
-                    warned.update(re.findall(r"\b(?:training|data)\.[a-z_]+", arg.value))
+                    warned.update(re.findall(r"\b(?:training|data)\.[a-z0-9_]+\b", arg.value))
 
     assert warned, "found no dotted field names in mlx_sft.py's warning list"
+    known = {
+        f"{namespace}.{name}"
+        for namespace, model in (("training", TrainingConfig), ("data", DataConfig))
+        for name in model.model_fields
+    }
+    unknown = sorted(warned - known)
+    assert unknown == [], f"warning list names fields that do not exist: {unknown}"
     registered = {e.field for e in unsupported_for("sft", "mlx")}
     missing = sorted(warned - registered)
     assert missing == [], (
         f"mlx_sft.py warns about {missing} but the registry does not list them"
     )
+
+
+@pytest.mark.parametrize(
+    "field", ["training.use_fsdp2_compile", "training.bnb_4bit_use_double_quant"]
+)
+def test_warning_guard_preserves_digits_and_catches_missing_entries(tmp_path, monkeypatch, field):
+    from soup_cli.config import backend_support
+    from soup_cli.config.backend_support import IGNORED, SupportEntry
+
+    entry = SupportEntry(field, IGNORED, "unsupported on MLX")
+    assert _unknown_registry_fields({("sft", "mlx"): (entry,)}) == []
+    trainer = tmp_path / "mlx_sft.py"
+    trainer.write_text(f'ignored.append("{field} is unsupported")\n', encoding="utf-8")
+    monkeypatch.setitem(globals(), "MLX_SFT", trainer)
+    monkeypatch.setattr(backend_support, "unsupported_for", lambda task, backend: (entry,))
+    test_registry_covers_every_field_the_mlx_trainer_warns_about()
+
+    monkeypatch.setattr(backend_support, "unsupported_for", lambda task, backend: ())
+    with pytest.raises(AssertionError, match=re.escape(field)):
+        test_registry_covers_every_field_the_mlx_trainer_warns_about()
+
+
+@pytest.mark.parametrize("field", ["training.use_fsdp2_compile2", "data.val_split2"])
+def test_warning_guard_rejects_unknown_digit_suffixes(tmp_path, monkeypatch, field):
+    trainer = tmp_path / "mlx_sft.py"
+    trainer.write_text(f'ignored.append("{field} is unsupported")\n', encoding="utf-8")
+    monkeypatch.setitem(globals(), "MLX_SFT", trainer)
+    with pytest.raises(AssertionError, match="warning list names fields that do not exist"):
+        test_registry_covers_every_field_the_mlx_trainer_warns_about()
 
 
 def test_an_unregistered_task_backend_pair_reports_nothing():
@@ -214,6 +250,29 @@ def test_new_mlx_gaps_use_liger_and_neftune_alpha_are_reported(config_at):
     )
     reported = {e.field for e in check_config(cfg)}
     assert {"training.use_liger", "training.neftune_alpha"} <= reported
+
+
+def test_961_four_reachable_fields_reported_together(config_at):
+    """#961 box 4: several new fields at once -> rows+count."""
+    from soup_cli.config.backend_support import check_config
+    from soup_cli.config.loader import load_config
+
+    cfg = load_config(
+        config_at(
+            "sft",
+            "mlx",
+            "  use_mod: true\n  moe_lora: true\n"
+            "  quantization_aware: true\n  use_fsdp2_compile: true",
+        )
+    )
+    rows = check_config(cfg)
+    assert {e.field for e in rows} == {
+        "training.use_mod",
+        "training.moe_lora",
+        "training.quantization_aware",
+        "training.use_fsdp2_compile",
+    }
+    assert len(rows) == 4
 
 
 def test_only_fields_the_user_actually_set_are_reported(config_at):

@@ -278,7 +278,7 @@ def stress(
     ),
     attacks: str = typer.Option(
         ",".join(reward_stress.ATTACKS), "--attacks",
-        help="Comma list: empty,length,repetition,sentinel.",
+        help=f"Comma list: {','.join(reward_stress.ATTACKS)}.",
     ),
     output_report: Optional[str] = typer.Option(
         None, "--output-report", help="Also write the stress report as JSON."

@@ -80,6 +80,8 @@
     "training.curriculum_metric": "length",
     "training.data_seed": null,
     "training.defer_rerolling": false,
+    "training.distill_checkpoint": false,
+    "training.distill_chunk_size": null,
     "training.distill_divergence": null,
     "training.distill_mode": "token",
     "training.distill_temperature": null,
@@ -265,6 +267,7 @@
     "training.stream_layers": false,
     "training.stream_ngram_source": "auto",
     "training.stream_pin": null,
+    "training.stream_read_ahead": 2,
     "training.stream_source": "auto",
     "training.stream_vram_override": null,
     "training.stream_vram_probe": false,
@@ -1801,6 +1804,20 @@
       "training.lr": 5e-06,
       "training.moe_lora": true
     },
+    "qwen3.5-35b-a3b-grpo": {
+      "base": "Qwen/Qwen3.5-35B-A3B",
+      "data.format": "auto",
+      "data.max_length": 4096,
+      "data.train": "./data/reasoning_train.jsonl",
+      "task": "grpo",
+      "training.batch_size": 1,
+      "training.gradient_accumulation_steps": 16,
+      "training.gradient_checkpointing": true,
+      "training.lora.alpha": 32,
+      "training.lora.r": 16,
+      "training.lr": 1e-05,
+      "training.moe_lora": true
+    },
     "qwen3.5-35b-a3b-sft": {
       "base": "Qwen/Qwen3.5-35B-A3B",
       "data.format": "auto",
@@ -1886,6 +1903,32 @@
       "training.lora.alpha": 32,
       "training.lora.r": 16,
       "training.lr": 1e-05
+    },
+    "qwen3.6-35b-a3b-dpo": {
+      "base": "Qwen/Qwen3.6-35B-A3B",
+      "data.format": "dpo",
+      "data.max_length": 4096,
+      "data.train": "./data/preference_train.jsonl",
+      "task": "dpo",
+      "training.gradient_accumulation_steps": 8,
+      "training.lora.alpha": 32,
+      "training.lora.r": 16,
+      "training.lr": 5e-06,
+      "training.moe_lora": true
+    },
+    "qwen3.6-35b-a3b-grpo": {
+      "base": "Qwen/Qwen3.6-35B-A3B",
+      "data.format": "auto",
+      "data.max_length": 8192,
+      "data.train": "./data/reasoning_train.jsonl",
+      "task": "grpo",
+      "training.batch_size": 1,
+      "training.gradient_accumulation_steps": 16,
+      "training.gradient_checkpointing": true,
+      "training.lora.alpha": 32,
+      "training.lora.r": 16,
+      "training.lr": 1e-05,
+      "training.moe_lora": true
     },
     "qwen3.6-35b-a3b-sft": {
       "base": "Qwen/Qwen3.6-35B-A3B",

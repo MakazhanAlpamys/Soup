@@ -39,6 +39,44 @@ console = Console()
 _PROBE_DEFERRAL_CEILING = 4.0
 
 
+def _stream_source_line(stats: dict) -> str:
+    """The source half of the ``Layer streaming ready:`` line, from ``runtime.stats()``.
+
+    On the RAM tier the store's bytes are stated, and — since #901 — the bytes
+    the box actually page-locked for it when the source knows them: pinned host
+    memory is handed out in power-of-two blocks, so the two differ. A pageable
+    store, and a source that does not account for it (``pinned_bytes`` None),
+    print no second figure. The disk tier names its reader depth and staging
+    instead: not "nothing held resident" (#971).
+    """
+    from soup_cli.utils.layer_stream import TIER_RAM
+
+    pinned = "pinned" if stats["pinned"] else "pageable"
+    if stats["tier"] == TIER_RAM:
+        return f"{stats['store_bytes'] / 1e9:.2f} GB {pinned} RAM store" + _page_locked_note(
+            stats
+        )
+    # Since #974 the staging lives in the same power-of-two arenas as the RAM
+    # store, so the disk tier can say what was page-locked too.
+    return (
+        f"streamed from DISK ({stats['disk_bytes'] / 1e9:.2f} GB on an NVMe volume) "
+        f"by an async reader, read_ahead={stats['read_ahead']}, "
+        f"{stats['store_bytes'] / 1e6:.0f} MB {pinned} host staging"
+    ) + _page_locked_note(stats)
+
+
+def _page_locked_note(stats: dict) -> str:
+    """The ``(X GB page-locked)`` suffix, when the source accounts for it (#901).
+
+    Pinned host memory is handed out in power-of-two blocks, so the figure
+    differs from the store's own bytes; a pageable store, and a source that
+    does not account for it (``pinned_bytes`` None), print nothing.
+    """
+    if stats["pinned"] and stats.get("pinned_bytes"):
+        return f" ({stats['pinned_bytes'] / 1e9:.2f} GB page-locked)"
+    return ""
+
+
 def _validate_qwen4_streaming_mode(*, arch: str, task: str, quant: str) -> None:
     """Keep unvalidated Qwen4 training modes outside the streamed path."""
     if arch != "qwen4_exp":
@@ -95,21 +133,12 @@ def _resolve_qwen4_ngram_source(
         return requested
     ram_budget = free_ram * RAM_TIER_HEADROOM
     base_in_ram = (
-        store_total
-        if stream_source != "disk" and store_total + resident_ram < ram_budget
-        else 0
+        store_total if stream_source != "disk" and store_total + resident_ram < ram_budget else 0
     )
     ram_bytes = base_in_ram + ngram_bytes
     fits_available_ram = ram_bytes + resident_ram < ram_budget
-    physical_limit = (
-        None
-        if total_ram is None
-        else total_ram * PHYSICAL_RAM_TIER_HEADROOM
-    )
-    fits_physical_ram = (
-        physical_limit is None
-        or ram_bytes + resident_ram < physical_limit
-    )
+    physical_limit = None if total_ram is None else total_ram * PHYSICAL_RAM_TIER_HEADROOM
+    fits_physical_ram = physical_limit is None or ram_bytes + resident_ram < physical_limit
     return "ram" if fits_available_ram and fits_physical_ram else "disk"
 
 
@@ -173,9 +202,61 @@ def _validate_qwen4_ngram_ram_fit(
         )
 
 
-def _warn_if_ngram_source_unused(
-    *, arch: str, requested: str, ngram_bytes: int, notify
+def _validate_stream_staging_ram_fit(
+    *,
+    staging_bytes: int,
+    read_ahead: int,
+    free_ram: int,
+    resident_ram: int = 0,
 ) -> None:
+    """Refuse a disk-tier run whose host staging will not fit free RAM.
+
+    The disk tier had no host-RAM check at all: it predicted zero residency,
+    which was true of the synchronous source it replaced and false of the async
+    one, which holds ``min(read_ahead, members) x group_bytes`` of host RAM per
+    distinct layer shape for the whole run — page-locked where the box allows,
+    pageable otherwise, and the check is the same either way because the RAM is
+    held in both cases. On the 70B NF4 shape at the default depth that is
+    ~5 GB — on a box that reached this tier BECAUSE its RAM could not hold the
+    model. The RAM tier has had this check since v0.72.0
+    (``free_ram_bytes`` against ``choose_tier``'s 0.7 headroom, strict ``<``);
+    this is the same rule applied to the same resource.
+
+    Refusing beats clamping ``read_ahead``: a depth the operator set is a
+    decision, and silently lowering it would hand back a slower run than the
+    one they configured with no line saying why.
+    """
+    from soup_cli.utils.layer_stream import (
+        MIN_STREAM_READ_AHEAD,
+        RAM_TIER_HEADROOM,
+    )
+
+    required = int(staging_bytes) + int(resident_ram)
+    budget = free_ram * RAM_TIER_HEADROOM
+    if required < budget:
+        return
+    # At the floor there is no lower depth to suggest, and an impossible remedy
+    # is worse than none: it reads as "you did not try hard enough".
+    lower = (
+        ""
+        if read_ahead <= MIN_STREAM_READ_AHEAD
+        else f"Lower training.stream_read_ahead (currently {read_ahead}), "
+    )
+    raise ValueError(
+        f"layer streaming's disk tier would hold "
+        f"{staging_bytes / 1e9:.2f} GB of host staging (page-locked when the "
+        f"box allows) at training.stream_read_ahead={read_ahead}, and with "
+        f"{resident_ram / 1e9:.2f} GB of resident extras that needs "
+        f"{required / 1e9:.2f} GB — more than the "
+        f"{budget / 1e9:.2f} GB safety headroom on "
+        f"{free_ram / 1e9:.1f} GB of free RAM. The reader stages whole layers, "
+        f"and the embedding and lm_head take one slot each at ANY depth "
+        f"because they are one layer each. "
+        f"{lower}free RAM, or use a smaller base."
+    )
+
+
+def _warn_if_ngram_source_unused(*, arch: str, requested: str, ngram_bytes: int, notify) -> None:
     """Make a user-supplied PLE policy visible when the checkpoint has no PLE."""
     if arch == "qwen4_exp" and requested != "auto" and not ngram_bytes:
         notify(
@@ -264,13 +345,9 @@ def _render_stream_disk_preflight(
         required = required_by_device[device]
         free = free_by_device[device]
         labels = " + ".join(labels_by_device[device])
-        lines.append(
-            f"Free on target volume ({labels}): {free / 1e9:.2f} GB"
-        )
+        lines.append(f"Free on target volume ({labels}): {free / 1e9:.2f} GB")
         if required > free:
-            console.print(
-                Panel("\n".join(lines), title="Layer streaming disk pre-flight")
-            )
+            console.print(Panel("\n".join(lines), title="Layer streaming disk pre-flight"))
             raise ValueError(
                 f"layer streaming needs {required / 1e9:.2f} GB of additional "
                 f"disk space for {labels}, but only {free / 1e9:.2f} GB is free. "
@@ -389,9 +466,7 @@ class StreamingSetupMixin:
         from soup_cli.utils.layer_stream_runtime import RamSource
 
         merged = RamSource.merge_layer_specs(layer_specs)
-        return sum(
-            math.prod(shape) * dtype_bytes(stored) for shape, stored in merged.values()
-        )
+        return sum(math.prod(shape) * dtype_bytes(stored) for shape, stored in merged.values())
 
     @contextlib.contextmanager
     def _training_context(self, *contexts):
@@ -445,7 +520,6 @@ class StreamingSetupMixin:
         from soup_cli.utils.layer_stream import (
             RAM_TIER_HEADROOM,
             TIER_DISK,
-            TIER_RAM,
             build_stream_plan,
             dtype_bytes,
             estimate_stream_store_bytes,
@@ -453,6 +527,7 @@ class StreamingSetupMixin:
             render_stream_panel,
             resolve_disk_kind,
             resolve_stream_dtype,
+            staging_bytes_for,
             stream_arch_of,
             total_ram_bytes,
         )
@@ -496,9 +571,7 @@ class StreamingSetupMixin:
         # an untied head stay at `dtype`, exactly as replace_with_bnb_linear
         # leaves them.
         quant = QUANT_NF4 if tcfg.quantization == "4bit" else QUANT_NONE
-        _validate_qwen4_streaming_mode(
-            arch=arch, task=getattr(cfg, "task", "sft"), quant=quant
-        )
+        _validate_qwen4_streaming_mode(arch=arch, task=getattr(cfg, "task", "sft"), quant=quant)
         # #321 — the streamed skeleton and the shards must quantise with the
         # SAME double-quant setting or the streamed-vs-resident bit-exactness
         # claim breaks. Read the flag once here (resolving the tri-state unset to
@@ -652,9 +725,7 @@ class StreamingSetupMixin:
         embed_bytes = extras_resident_bytes(shard_dir)
         large_store_bytes = large_layer_store_bytes(shard_dir, index)
         large_buffer_bytes = large_layer_buffer_bytes(shard_dir, index)
-        ngram_bytes = external_tensor_bytes(
-            getattr(index, "external_tensors", None) or {}
-        )
+        ngram_bytes = external_tensor_bytes(getattr(index, "external_tensors", None) or {})
 
         free_ram = free_ram_bytes()
         total_ram = total_ram_bytes()
@@ -663,17 +734,13 @@ class StreamingSetupMixin:
                 "[yellow]psutil unavailable — cannot size the RAM tier; "
                 "proceeding and letting the allocation fail loudly if it must[/]"
             )
-            free_ram = (
-                layer_bytes * index.n_layers + large_store_bytes + embed_bytes
-            ) * 10
+            free_ram = (layer_bytes * index.n_layers + large_store_bytes + embed_bytes) * 10
 
         store_total = layer_store_bytes + large_store_bytes
         ngram_source = "disk"
         if ngram_bytes:
             requested_ngram = tcfg.stream_ngram_source
-            oq_ngram = any(
-                hasattr(spec, "bits") for spec in index.external_tensors.values()
-            )
+            oq_ngram = any(hasattr(spec, "bits") for spec in index.external_tensors.values())
             ngram_source = _resolve_qwen4_ngram_source(
                 oq_ngram=oq_ngram,
                 requested=requested_ngram,
@@ -690,9 +757,7 @@ class StreamingSetupMixin:
                     weights_dir, tcfg.stream_disk_kind, notify=console.print
                 )
                 ngram_disk_kind = ngram_disk.kind
-                _validate_qwen4_ngram_disk(
-                    disk_kind=ngram_disk_kind, weights_dir=weights_dir
-                )
+                _validate_qwen4_ngram_disk(disk_kind=ngram_disk_kind, weights_dir=weights_dir)
                 storage = f"read-only {ngram_disk_kind.upper()} mmap"
             console.print(
                 f"[cyan]Qwen4 PLE:[/] {ngram_bytes / 1e9:.2f} GB via {storage} "
@@ -749,6 +814,10 @@ class StreamingSetupMixin:
             # #366: training.stream_pin (None/False/True) overrides the automatic
             # pinning choice so the pageable escape hatch is reachable from config.
             stream_pin=tcfg.stream_pin,
+            # #971: the depth decides how much host memory the async reader
+            # page-locks, so the plan has to carry it or the pre-flight is
+            # predicting zero residency for a tier that holds GBs of it.
+            read_ahead=tcfg.stream_read_ahead,
         )
         # v0.72.3 — the disk overflow tier is live, so a base that does not fit
         # in RAM is no longer fatal. `stream_source` decides: 'ram' insists,
@@ -762,19 +831,53 @@ class StreamingSetupMixin:
             # before the runtime announces it is streaming from disk. Every
             # field that describes the RAM store is corrected with it, so no
             # consumer can read a stale value.
+            # `pinned` is deliberately NOT zeroed with them. It described the
+            # RAM store, but `pin=plan.pinned and on_cuda` below now also
+            # decides whether the disk tier's host STAGING is page-locked
+            # (#971). Zeroing it here would stage pageable for a run that
+            # reached the disk tier via `stream_source: disk` and pinned for one
+            # that reached the same tier via `auto` — one tier, two behaviours,
+            # chosen by the spelling.
             plan = replace(
                 plan,
                 tier=tier,
                 store_bytes=0,
                 large_store_bytes=0,
-                pinned=False,
+                # Computed here for the same reason `pinned` is not zeroed
+                # above: `build_stream_plan` leaves it 0 on a RAM-tier plan, so
+                # carrying that through would report no host staging for a run
+                # that reached disk by spelling rather than by RAM pressure —
+                # one tier, two numbers, chosen by the spelling. `large_store
+                # _bytes` is read off the PRE-replace plan, since the line above
+                # has just zeroed it.
+                staging_bytes=staging_bytes_for(
+                    read_ahead=tcfg.stream_read_ahead,
+                    n_layers=plan.n_layers,
+                    layer_bytes=plan.layer_bytes,
+                    large_store_bytes=plan.large_store_bytes,
+                ),
                 notes=plan.notes
                 + (
                     "streaming from disk because stream_source='disk' was set, "
-                    "not because RAM was short. Nothing is held resident, and "
-                    "the slowdown versus the RAM tier is unmeasured on this "
-                    "hardware.",
+                    "not because RAM was short. An async reader stages "
+                    "training.stream_read_ahead layers in host RAM (page-locked "
+                    "where the box allows) rather than holding the base "
+                    "resident, and is slower than the RAM "
+                    "tier it is being used instead of — measured 1.9-2.3x its step "
+                    "time with the store fully cached, on one box "
+                    "(benchmarks/gate-971-async-nvme-source.md).",
                 ),
+            )
+        # #971 — HOST pre-flight, and it has to come after the tier is settled
+        # above: the async reader's staging is page-locked for the whole run and
+        # nothing was charging it. Before the panel, because a refusal an
+        # operator has to scroll past a summary to find reads as an afterthought.
+        if plan.tier == TIER_DISK:
+            _validate_stream_staging_ram_fit(
+                staging_bytes=plan.staging_bytes,
+                read_ahead=tcfg.stream_read_ahead,
+                free_ram=free_ram,
+                resident_ram=embed_bytes,
             )
         # v0.72.3 — VRAM pre-flight. Streaming bounds the WEIGHTS; activations
         # and the logits tensor are untouched by it and both scale with batch x
@@ -799,9 +902,7 @@ class StreamingSetupMixin:
         if on_cuda:
             enabled, why_not = expandable_segments_status()
             if not enabled:
-                console.print(
-                    f"[dim]expandable_segments allocator hint not enabled: {why_not}[/]"
-                )
+                console.print(f"[dim]expandable_segments allocator hint not enabled: {why_not}[/]")
 
         from soup_cli.utils.peft_wiring import (
             build_lora_config,
@@ -839,12 +940,16 @@ class StreamingSetupMixin:
             device=self.device,
             dtype=dtype,
             buffers=tcfg.stream_buffers,
+            # #971: the depth the async reader stages to on the disk tier.
+            # Ignored on the RAM tier, which holds every layer and reads
+            # nothing ahead.
+            read_ahead=tcfg.stream_read_ahead,
             pin=plan.pinned and on_cuda,
-            # #366: on the RAM tier stream_pin=true refuses rather than silently
-            # falling back to a pageable store; on the disk tier the runtime
-            # announces that pinning is inapplicable (no RAM store to lock); on
-            # non-CUDA targets the notice above covers it. require_pin only carries
-            # the CUDA RAM-tier refusal, so it is gated on a real CUDA device.
+            # #366: stream_pin=true refuses rather than silently falling back to
+            # pageable memory — on the RAM tier that is the store, and since
+            # #971 on the disk tier it is the reader's host staging. On
+            # non-CUDA targets the notice above covers it, so require_pin is
+            # gated on a real CUDA device.
             require_pin=(tcfg.stream_pin is True) and on_cuda,
             seed=tcfg.seed if getattr(tcfg, "seed", None) is not None else 0,
             trust_remote_code=self._trust_remote_code,
@@ -860,16 +965,7 @@ class StreamingSetupMixin:
         if probe_plan is not None:
             self._run_stream_vram_probe(model, probe_plan)
         stats = runtime.stats()
-        if stats["tier"] == TIER_RAM:
-            source_line = (
-                f"{stats['store_bytes'] / 1e9:.2f} GB "
-                f"{'pinned' if stats['pinned'] else 'pageable'} RAM store"
-            )
-        else:
-            source_line = (
-                f"streamed from DISK ({stats['disk_bytes'] / 1e9:.2f} GB on an "
-                f"NVMe volume, nothing held resident)"
-            )
+        source_line = _stream_source_line(stats)
         large_runtime_buffer = stats.get("large_buffer_bytes", 0)
         decoder_buffers = stats["buffer_bytes"] - large_runtime_buffer
         buffer_line = (

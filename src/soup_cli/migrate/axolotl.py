@@ -5,6 +5,7 @@ from typing import Any, Dict, List
 
 import yaml
 
+from soup_cli.config.schema import SFT_KERNEL_AWARE_TASKS
 from soup_cli.migrate.common import to_number
 
 # Axolotl rl → Soup task mapping
@@ -129,9 +130,18 @@ def migrate_axolotl(config_path: Path) -> Dict[str, Any]:
     elif raw.get("load_in_8bit"):
         training["quantization"] = "8bit"
 
-    # Flash attention
+    # Flash attention. use_flash_attn is only read by the SFT-family trainer
+    # (#806), so mapping it for any other task produces a config the loader
+    # then refuses; drop it and say why instead of handing back a file the
+    # next `soup train` rejects.
     if raw.get("flash_attention"):
-        training["use_flash_attn"] = True
+        if task in SFT_KERNEL_AWARE_TASKS:
+            training["use_flash_attn"] = True
+        else:
+            warnings.append(
+                f"flash_attention was set but task '{task}' does not use it "
+                f"(only {sorted(SFT_KERNEL_AWARE_TASKS)} read use_flash_attn). Dropped."
+            )
 
     # Add lora section
     if include_lora and lora_section:

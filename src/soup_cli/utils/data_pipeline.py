@@ -192,10 +192,12 @@ def validate_shards(value: Optional[int]) -> Optional[int]:
 # Bump whenever the on-disk tokenization of a preprocessed row changes, so a
 # dataset cached under an older encoding is never silently reused. v2 (#785):
 # the chat path still tokenizes with the tokenizer's default add_special_tokens=True
-# (so the cache stays byte-identical to older behaviour on EOS and truncation) but
-# now strips the one doubled leading BOS the chat template already rendered, so a
-# row that used to bake in [bos, bos, ...] no longer does.
-_PREPROCESS_TOKENIZE_SCHEMA = "v2"
+# but now strips the one doubled leading BOS the chat template already rendered, so a
+# row that used to bake in [bos, bos, ...] no longer does. v3 (#791): the chat path
+# now also applies TRL's ``add_eos`` rule — a chat row that does not already end on
+# the EOS gets one appended — so a cache built before this no longer trains without a
+# stop token on templates that render none (the Qwen shape). A v2 cache is rejected.
+_PREPROCESS_TOKENIZE_SCHEMA = "v3"
 
 
 def make_preprocess_cache_key(
