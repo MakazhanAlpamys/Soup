@@ -340,11 +340,6 @@ KNOWN_UNCONSUMED = {
     # -- found by the read/write fix, and the reason that fix exists. Both
     #    are user settings that are OVERRIDDEN rather than merely unread, so
     #    they are the strongest members of this list.
-    "data.remove_unused_columns": "#759 -- schema default True, documented 'set False "
-                                  "when feeding extra cols to a custom collator' "
-                                  "-- and sft.py:788 / pretrain.py:174 / "
-                                  "embedding.py:175 / grpo.py:468 each hardcode "
-                                  "False, so the setting never reaches HF",
     "training.grace_codebook": "no issue yet -- the string appears as an artifact-kind name in "
                                "store.py:52 / edit.py:312, unrelated to this field",
     # -- #807: read ONLY inside a function nothing in src/ references, so the
@@ -367,6 +362,10 @@ KNOWN_UNCONSUMED = {
     # -- declared and deliberately REFUSED, so having no consumer is correct.
     #    A distinct category from the two below: the user is told, loudly, at
     #    config load. Found by this guard rather than by hand.
+    "data.remove_unused_columns": "#759 -- rejected at config load when true, because "
+                                  "every trainer hardcodes False so a custom collator "
+                                  "still sees the extra columns; the declared default "
+                                  "is now False, which is what those trainers pass",
     "training.packing_cross_doc_attn_mask": "no issue needed: rejected at config load "
                                             "(schema.py:3495) because it never "
                                             "mapped to a valid TRL packing_strategy; "

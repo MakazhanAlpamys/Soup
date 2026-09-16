@@ -641,10 +641,12 @@ class DataConfig(BaseModel):
         ),
     )
     remove_unused_columns: bool = Field(
-        default=True,
+        default=False,
         description=(
-            "HF Trainer remove_unused_columns. Set False when feeding "
-            "extra cols to a custom collator. (v0.42.0 Part E)"
+            "HF Trainer remove_unused_columns. Only False is supported: all "
+            "fifteen trainers pass False so a custom collator can still see "
+            "the extra columns, so `true` is refused at load rather than "
+            "silently ignored. (v0.42.0 Part E; #759)"
         ),
     )
     prompt_strategy: Optional[str] = Field(
@@ -935,6 +937,32 @@ class DataConfig(BaseModel):
             )
         return self
 
+    @model_validator(mode="after")
+    def _reject_remove_unused_columns_true(self) -> "DataConfig":
+        """`true` never took effect, and the declared default said otherwise.
+
+        Every trainer hardcodes ``remove_unused_columns=False`` so a custom
+        collator still receives the columns the model's ``forward()`` does not
+        name, so this was a setting with one outcome and a wrong label: the
+        documented default said ``True``, and a user who wrote ``true``
+        deliberately got ``False`` with no warning. Refusing at load says so
+        immediately rather than three hours into a run.
+
+        Not deleted, because an unknown key is now a hard error and this
+        field's own documentation told people to write it: deleting it would
+        refuse the configs of exactly the users who followed the docs. The
+        deadline release is named once, in ``config/unknown_keys.py``.
+        """
+        if self.remove_unused_columns:
+            raise ValueError(
+                "data.remove_unused_columns: true is not supported. Every "
+                "trainer passes remove_unused_columns=False so a custom "
+                "collator still receives columns the model's forward() does "
+                "not name; true never took effect. Remove the line, or set it "
+                "to false."
+            )
+        return self
+
 
 class AdviseConfig(BaseModel):
     """Pre-flight decision config (v0.54.0 — schema-only).
@@ -1020,6 +1048,7 @@ class EvalGateConfig(BaseModel):
                 "eval_gate.suite is required when eval_gate.enabled=true"
             )
         return self
+
 
 
 class TrainingConfig(BaseModel):

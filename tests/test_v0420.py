@@ -23,6 +23,7 @@ import json
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 from typer.testing import CliRunner
 
 from soup_cli.cli import app
@@ -564,9 +565,38 @@ class TestPartEVocabExpansion:
         cfg = DataConfig(train="d.jsonl")
         assert cfg.skip_prepare_dataset is False
 
-    def test_remove_unused_columns_default_true(self):
+    def test_remove_unused_columns_default_false(self):
+        """#759: the declared default said True while every trainer passed
+        False, so the default was a false statement about what happens."""
         cfg = DataConfig(train="d.jsonl")
-        assert cfg.remove_unused_columns is True
+        assert cfg.remove_unused_columns is False
+
+    def test_remove_unused_columns_true_is_refused(self):
+        """`true` never took effect. Refusing says so at load rather than three
+        hours into a run that ignored it."""
+        with pytest.raises(
+            ValidationError, match=r"remove_unused_columns: true is not supported"
+        ):
+            DataConfig(train="d.jsonl", remove_unused_columns=True)
+
+    def test_remove_unused_columns_false_still_loads(self):
+        """The control: the refusal must reject only `true`. Without this, a
+        validator that rejected every value would pass the test above."""
+        cfg = DataConfig(train="d.jsonl", remove_unused_columns=False)
+        assert cfg.remove_unused_columns is False
+
+    def test_remove_unused_columns_true_is_refused_through_the_yaml_path(self):
+        """The user-facing path: `soup train` loads YAML, so the refusal has to
+        fire there and not only on direct construction."""
+        yaml_str = (
+            "base: sshleifer/tiny-gpt2\n"
+            "task: sft\n"
+            "data:\n"
+            "  train: d.jsonl\n"
+            "  remove_unused_columns: true\n"
+        )
+        with pytest.raises(ValueError, match=r"remove_unused_columns: true is not supported"):
+            load_config_from_string(yaml_str)
 
     def test_prompt_strategy_happy(self):
         cfg = DataConfig(
