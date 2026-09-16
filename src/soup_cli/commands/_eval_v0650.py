@@ -21,6 +21,7 @@ from soup_cli.utils.exit_codes import (
     EXIT_GATE_FAILED,
     EXIT_RUNTIME_ERROR,
     EXIT_USAGE_ERROR,
+    GateCommand,
 )
 
 # v0.56.0 evidence-loader policy (review M6 fix).
@@ -111,7 +112,7 @@ def _write_json_output(
 def register(app: typer.Typer, console: Console) -> None:
     """Attach v0.65.0 subcommands to the existing ``soup eval`` app."""
 
-    @app.command(name="behavior")
+    @app.command(name="behavior", cls=GateCommand)
     def behavior_cmd(
         run_id: str = typer.Argument(..., help="Run identifier."),
         battery: str = typer.Option(
@@ -373,7 +374,7 @@ def register(app: typer.Typer, console: Console) -> None:
         if output:
             _write_json_output(payload, output, console=console)
 
-    @app.command(name="checklist")
+    @app.command(name="checklist", cls=GateCommand)
     def checklist_cmd(
         spec_path: str = typer.Argument(
             ..., help="Path to CheckList DSL YAML.",

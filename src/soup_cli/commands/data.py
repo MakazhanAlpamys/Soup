@@ -16,7 +16,7 @@ from rich.table import Table
 from soup_cli.data.loader import load_raw_data
 from soup_cli.data.validator import validate_and_stats
 from soup_cli.utils.embed import DEFAULT_EMBED_MODEL, embed_texts
-from soup_cli.utils.exit_codes import EXIT_GATE_FAILED, EXIT_USAGE_ERROR
+from soup_cli.utils.exit_codes import EXIT_GATE_FAILED, EXIT_USAGE_ERROR, GateCommand
 from soup_cli.utils.paths import is_under_cwd
 from soup_cli.utils.semdedup import DedupReport, greedy_semdedup
 
@@ -76,7 +76,7 @@ def inspect(
         console.print(sample_table)
 
 
-@app.command()
+@app.command(cls=GateCommand)
 def validate(
     path: str = typer.Argument(..., help="Path to dataset file"),
     fmt: str = typer.Option(

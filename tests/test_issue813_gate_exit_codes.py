@@ -550,9 +550,14 @@ def test_eval_gate_hook_exit_code_dispatch(
     "cmd",
     [
         ["eval", "gate", "--bogus"],
+        ["eval", "quant-check", "--bogus"],
+        ["eval", "against", "--bogus"],
+        ["eval", "behavior", "--bogus"],
+        ["eval", "checklist", "--bogus"],
         ["lock", "check", "--bogus"],
         ["expect", "--bogus"],
         ["data", "validate", "--bogus"],
+        ["data", "lint", "--bogus"],
         ["ship", "--bogus"],
     ],
 )
@@ -561,3 +566,19 @@ def test_gate_command_invalid_flag_exits_3(cmd: list[str]) -> None:
     runner = CliRunner()
     result = runner.invoke(app, cmd)
     assert result.exit_code == EXIT_USAGE_ERROR
+
+
+@pytest.mark.parametrize(
+    "cmd",
+    [
+        ["drift-alarm", "--bogus"],
+        ["data", "forge", "--bogus"],
+        ["recipes", "list", "--bogus"],
+    ],
+)
+def test_non_gate_command_invalid_flag_exits_2(cmd: list[str]) -> None:
+    """Non-gate commands preserve Click's standard exit 2 on invalid flags."""
+    runner = CliRunner()
+    result = runner.invoke(app, cmd)
+    assert result.exit_code == 2
+
