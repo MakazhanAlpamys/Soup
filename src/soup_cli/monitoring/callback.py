@@ -21,6 +21,7 @@ def soup_callback_kwargs(
     *,
     batch_size: Optional[int] = None,
     output_dir: Optional[str] = None,
+    include_eval_gate: bool = True,
 ) -> dict[str, Any]:
     """Shared kwargs for :class:`SoupTrainerCallback` across all trainers (#802).
 
@@ -59,8 +60,9 @@ def soup_callback_kwargs(
             tcfg, "gradient_accumulation_steps", 1
         ),
         "grad_accum_current_batch": resolved_batch,
-        "eval_gate_config": getattr(tcfg, "eval_gate", None),
     }
+    if include_eval_gate:
+        kwargs["eval_gate_config"] = getattr(tcfg, "eval_gate", None)
     if output_dir is not None:
         kwargs["output_dir"] = output_dir
     return kwargs

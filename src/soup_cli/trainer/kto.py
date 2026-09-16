@@ -357,6 +357,7 @@ class KTOTrainerWrapper(StreamingSetupMixin):
                     display,
                     tracker=tracker,
                     run_id=run_id,
+                    eval_gate_config=self.config.training.eval_gate,
                     **soup_callback_kwargs(
                         self.config.training,
                         batch_size=getattr(
@@ -373,6 +374,7 @@ class KTOTrainerWrapper(StreamingSetupMixin):
                             or 1,
                         ),
                         output_dir=self._output_dir,
+                        include_eval_gate=False,
                     ),
                 )
             )

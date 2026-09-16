@@ -1877,10 +1877,12 @@ class SFTTrainerWrapper(StreamingSetupMixin):
                     display,
                     tracker=tracker,
                     run_id=run_id,
+                    eval_gate_config=tcfg_local.eval_gate,
                     **soup_callback_kwargs(
                         tcfg_local,
                         batch_size=self._batch_size,
                         output_dir=self._output_dir,
+                        include_eval_gate=False,
                     ),
                 )
             )

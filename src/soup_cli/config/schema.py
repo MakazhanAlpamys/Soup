@@ -6777,7 +6777,7 @@ class SoupConfig(BaseModel):
 
     @model_validator(mode="after")
     def _validate_callback_monitoring_task_compat(self) -> "SoupConfig":
-        """v0.75.0 #802 — prm, moe_lora_routing, and unlearn attach no
+        """#802 — prm, moe_lora_routing, and unlearn attach no
         SoupTrainerCallback, so reject loss_watchdog, loss_spike_recovery,
         and grad_accum_auto_tune when set to True on these tasks.
         """
