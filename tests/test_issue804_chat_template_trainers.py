@@ -333,8 +333,18 @@ class TestNonChatTasksRejectTheField:
     def test_task_is_named_in_error(self, task):
         from soup_cli.config.schema import SoupConfig
 
-        training = {"num_labels": 2} if task in {"classifier", "reranker", "cross_encoder"} else {}
-        with pytest.raises(ValidationError, match=rf"task='{task}'"):
+        training = {}
+        if task in {"classifier", "reranker", "cross_encoder"}:
+            training["num_labels"] = 2
+        elif task == "moe_lora_routing":
+            training["mole_task_adapters"] = ["task_a", "task_b"]
+        elif task == "unlearn":
+            training["unlearn_method"] = "npo"
+
+        with pytest.raises(
+            ValidationError,
+            match=rf"data\.chat_template is not used by task='{task}'",
+        ):
             SoupConfig(
                 base="model",
                 task=task,

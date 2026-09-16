@@ -245,6 +245,22 @@ class TestPreparePPODataset:
         assert "You are helpful." in result[0]["prompt_text"]
         assert "Hello" in result[0]["prompt_text"]
 
+    def test_from_messages_preserves_answer(self):
+        from soup_cli.trainer.ppo import _prepare_ppo_dataset
+
+        data = [
+            {
+                "messages": [
+                    {"role": "user", "content": "What is 2+2?"},
+                ],
+                "answer": "4",
+            }
+        ]
+        result = _prepare_ppo_dataset(data)
+        assert len(result) == 1
+        assert result[0]["prompt_text"] == "What is 2+2?"
+        assert result[0]["answer"] == "4"
+
     def test_from_messages_with_chat_template(self):
         from types import SimpleNamespace
 

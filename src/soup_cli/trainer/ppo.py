@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, Mapping, Optional
 
 from rich.console import Console
+from rich.markup import escape
 
 from soup_cli.config.schema import SoupConfig
 from soup_cli.data.chat_templates import apply_chat_template_override
@@ -932,7 +933,11 @@ def _prepare_ppo_dataset(data: list[dict], tokenizer: Any | None = None) -> list
                     prompt_text = tokenizer.apply_chat_template(
                         prompt_messages, tokenize=False, add_generation_prompt=True
                     )
-                except Exception:
+                except Exception as exc:
+                    console.print(
+                        f"[yellow]Warning:[/] apply_chat_template failed: {escape(str(exc))}; "
+                        "falling back to joined text"
+                    )
                     prompt_text = None
             if prompt_text is None:
                 # Use user messages as prompt text
@@ -958,7 +963,11 @@ def _prepare_ppo_dataset(data: list[dict], tokenizer: Any | None = None) -> list
                     prompt_text = tokenizer.apply_chat_template(
                         prompt_list, tokenize=False, add_generation_prompt=True
                     )
-                except Exception:
+                except Exception as exc:
+                    console.print(
+                        f"[yellow]Warning:[/] apply_chat_template failed: {escape(str(exc))}; "
+                        "falling back to joined text"
+                    )
                     prompt_text = None
             if prompt_text is None:
                 # Message list → join content
