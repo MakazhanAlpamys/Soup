@@ -278,7 +278,9 @@ class TestCatalogCount:
         `test_recipe_count_is_synced.py`; this row is
         the milestone file's own copy and does not need the number twice.
         """
-        assert len(RECIPES) == 176
+        from tests.recipe_count import EXPECTED_RECIPE_COUNT, recipe_count_hint
+
+        assert len(RECIPES) == EXPECTED_RECIPE_COUNT, recipe_count_hint(len(RECIPES))
 
     def test_list_recipes_matches_dict(self) -> None:
         assert len(list_recipes()) == len(RECIPES)

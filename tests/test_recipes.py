@@ -1692,8 +1692,12 @@ class TestV025NewRecipes:
             assert cfg.base == recipe.model
             assert cfg.task == recipe.task
 
-    def test_catalog_size_is_176(self):
+    def test_catalog_size_matches_the_pinned_count(self):
         """Total catalog size — grew with each release.
+
+        The pinned number is ``EXPECTED_RECIPE_COUNT`` in ``tests/recipe_count.py``
+        (#1016); the history below is context, not something a new recipe has to
+        extend.
 
         v0.25.0 shipped 43 recipes (29 + 9 Part A + 2 Part B tools + 3 Part E MLX).
         v0.27.0 added 3 multi-GPU recipes -> 46.
@@ -1729,8 +1733,9 @@ class TestV025NewRecipes:
         Issue #845 added 2 (qwen3.6-27b-dpo, qwen3.6-27b-grpo) -> 176.
         """
         from soup_cli.recipes.catalog import RECIPES
+        from tests.recipe_count import EXPECTED_RECIPE_COUNT, recipe_count_hint
 
-        assert len(RECIPES) == 176
+        assert len(RECIPES) == EXPECTED_RECIPE_COUNT, recipe_count_hint(len(RECIPES))
 
     def test_new_recipes_searchable(self):
         """Search returns the new recipes via keyword/task filter."""
