@@ -713,10 +713,10 @@ data:
 ```
 
 The override is installed before conversational SFT, preference, reward-model,
-GRPO, or Online DPO data is rendered. The saved tokenizer keeps the same template
+PPO, GRPO, or Online DPO data is rendered. The saved tokenizer keeps the same template
 for inference. Tasks that do not render chat (`pretrain`, `embedding`, `classifier`,
-`reranker`, and `cross_encoder`) reject `data.chat_template` instead of silently
-ignoring it.
+`reranker`, `cross_encoder`, `prm`, `asr`, `moe_lora_routing`, and `unlearn`) reject
+`data.chat_template` instead of silently ignoring it.
 
 Raw Jinja strings are validated: null bytes / >64KB / filesystem-touching directives (`{% include %}`, `{% import %}`, `{% from %}`, `{% macro %}`, `{% extends %}`) are rejected at config-load.
 

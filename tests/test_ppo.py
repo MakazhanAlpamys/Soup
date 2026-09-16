@@ -245,6 +245,84 @@ class TestPreparePPODataset:
         assert "You are helpful." in result[0]["prompt_text"]
         assert "Hello" in result[0]["prompt_text"]
 
+    def test_from_messages_with_chat_template(self):
+        from types import SimpleNamespace
+
+        from soup_cli.trainer.ppo import _prepare_ppo_dataset
+
+        def fake_apply_chat_template(messages, tokenize=False, add_generation_prompt=True):
+            parts = [f"<{m['role']}>{m['content']}</{m['role']}>" for m in messages]
+            rendered = "".join(parts)
+            if add_generation_prompt:
+                rendered += "<assistant>"
+            return rendered
+
+        tokenizer = SimpleNamespace(
+            chat_template="custom",
+            apply_chat_template=fake_apply_chat_template,
+        )
+        data = [
+            {
+                "messages": [
+                    {"role": "system", "content": "Be concise."},
+                    {"role": "user", "content": "Explain gravity."},
+                    {"role": "assistant", "content": "It pulls."},
+                ]
+            }
+        ]
+        result = _prepare_ppo_dataset(data, tokenizer=tokenizer)
+        assert len(result) == 1
+        assert (
+            result[0]["prompt_text"]
+            == "<system>Be concise.</system><user>Explain gravity.</user><assistant>"
+        )
+
+    def test_from_prompt_message_list_with_chat_template(self):
+        from types import SimpleNamespace
+
+        from soup_cli.trainer.ppo import _prepare_ppo_dataset
+
+        def fake_apply_chat_template(messages, tokenize=False, add_generation_prompt=True):
+            return "".join(f"[{m['role']}:{m['content']}]" for m in messages)
+
+        tokenizer = SimpleNamespace(
+            chat_template="custom",
+            apply_chat_template=fake_apply_chat_template,
+        )
+        data = [
+            {
+                "prompt": [{"role": "user", "content": "What is 2+2?"}],
+                "answer": "4",
+            }
+        ]
+        result = _prepare_ppo_dataset(data, tokenizer=tokenizer)
+        assert len(result) == 1
+        assert result[0]["prompt_text"] == "[user:What is 2+2?]"
+        assert result[0]["answer"] == "4"
+
+    def test_from_messages_fallback_when_template_fails(self):
+        from types import SimpleNamespace
+
+        from soup_cli.trainer.ppo import _prepare_ppo_dataset
+
+        def broken_apply(*_args, **_kwargs):
+            raise RuntimeError("broken template")
+
+        tokenizer = SimpleNamespace(
+            chat_template="custom",
+            apply_chat_template=broken_apply,
+        )
+        data = [
+            {
+                "messages": [
+                    {"role": "user", "content": "Hello world"},
+                ]
+            }
+        ]
+        result = _prepare_ppo_dataset(data, tokenizer=tokenizer)
+        assert len(result) == 1
+        assert result[0]["prompt_text"] == "Hello world"
+
     def test_from_prompt_message_list(self):
         from soup_cli.trainer.ppo import _prepare_ppo_dataset
 
