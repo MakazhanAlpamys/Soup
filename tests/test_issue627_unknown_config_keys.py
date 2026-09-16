@@ -815,16 +815,24 @@ class TestATypodSweepFailsTheCommandAndNotJustTheArm:
 
         from soup_cli.cli import app
 
+        from .conftest import strip_ansi
+
         result = CliRunner().invoke(app, [
             "sweep",
             "--config", self._config(tmp_path),
             "--param", "training.lr=1e-5",
             "--yes",
         ])
-        assert "does not match any config field" not in result.output, (
+        # Normalised before matching (#886): with colour on, Rich splits the
+        # banner with SGR codes, so `"--- Run 1/1" in result.output` is False
+        # while the rendered line really is `--- Run 1/1: sweep_1 ---`. A
+        # different failure from the ESC-absence one above, and a different
+        # repair -- this one is the substring class `strip_ansi` exists for.
+        plain = strip_ansi(result.output)
+        assert "does not match any config field" not in plain, (
             "the precheck refused a real config field"
         )
-        assert "--- Run 1/1" in result.output, (
+        assert "--- Run 1/1" in plain, (
             "the sweep never reached its first arm, so the precheck blocked it"
         )
 
@@ -1080,7 +1088,17 @@ class TestTheReportIsSafeForTheTerminal:
         from soup_cli.config import loader
 
         buffer = StringIO()
-        monkeypatch.setattr(loader, "console", Console(file=buffer, width=200, markup=True))
+        # force_terminal=False, not left to the environment (#886). Unset,
+        # Rich reads FORCE_COLOR from the shell and colourises into the
+        # buffer, which makes this fixture's output depend on who is running
+        # it: three assertions below flip on that alone. The subject here is
+        # the sanitiser, so the console is pinned and the colouring is not
+        # part of what is being measured.
+        monkeypatch.setattr(
+            loader,
+            "console",
+            Console(file=buffer, width=200, markup=True, force_terminal=False),
+        )
         return buffer
 
     @pytest.mark.parametrize("severity", ["error", "warn"])
@@ -1100,8 +1118,19 @@ class TestTheReportIsSafeForTheTerminal:
             loader.load_config(path)
         out = buffer.getvalue()
         assert "INJECTED" in out and "quantizaton" in out, "the keys must still be named"
+        # Broad, not three hand-picked sequences. The console above is pinned
+        # to force_terminal=False, so the only ESC that could appear is the
+        # payload's -- which makes "no escape at all" the strictly stronger
+        # question and the right one to ask here (#886). Narrow-under-colour
+        # is the alternative, not the complement: one or the other per test,
+        # so the next reader is not tempted to "helpfully" broaden a narrow
+        # assertion that was load-bearing.
         assert "\x1b" not in out, "a raw ESC byte reached the terminal"
+        assert "\x07" not in out, "a BEL byte reached the terminal"
         assert "[bold red on white]" in out, "the markup was interpreted instead of shown"
+        # Neutralised, not dropped: a "fix" that swallowed the key entirely
+        # would satisfy every absence assertion above.
+        assert "]0;owned" in out, "the stripped payload must still be visible as inert text"
 
     def test_the_shared_helper_does_both_halves(self) -> None:
         from soup_cli.utils.terminal import for_terminal
@@ -1287,3 +1316,79 @@ class TestTheWebUiErrorBranchesAreDistinct:
         assert response.status_code == 400, response.text
         detail = response.json()["detail"]
         assert detail == "Invalid training configuration", detail
+
+
+class TestPlanAndApplyRefuseUnknownKeys:
+    """`soup plan` / `soup apply` must refuse what `soup train` refuses (#894).
+
+    `_load_yaml_config` handed the raw mapping to `build_plan` without ever
+    checking for unknown keys, so a typo'd key planned cleanly and was only
+    refused one command later by `soup train`. Both commands now run the same
+    unknown-key check the loader runs and exit 1 with the same message.
+    """
+
+    TYPOD = (
+        "base: hf/model\n"
+        "task: sft\n"
+        "data:\n"
+        "  train: ./t.jsonl\n"
+        "  format: auto\n"
+        "output: ./o\n"
+        "training:\n"
+        "  epochs: 1\n"
+        "  quantizaton: none\n"
+    )
+    CLEAN = (
+        "base: hf/model\n"
+        "task: sft\n"
+        "data:\n"
+        "  train: ./t.jsonl\n"
+        "  format: auto\n"
+        "output: ./o\n"
+        "training:\n"
+        "  epochs: 1\n"
+    )
+
+    def test_plan_refuses_a_typod_key(self, tmp_path, monkeypatch) -> None:
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        monkeypatch.chdir(tmp_path)
+        cfg = tmp_path / "soup.yaml"
+        cfg.write_text(self.TYPOD, encoding="utf-8")
+        result = CliRunner().invoke(app, ["plan", "--config", str(cfg)])
+        assert result.exit_code == 1, result.output
+        assert "unknown config key" in result.output
+        assert "training.quantizaton" in result.output
+        assert "quantization" in result.output
+
+    def test_apply_dry_run_refuses_a_typod_key(self, tmp_path, monkeypatch) -> None:
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        monkeypatch.chdir(tmp_path)
+        cfg = tmp_path / "soup.yaml"
+        cfg.write_text(self.TYPOD, encoding="utf-8")
+        result = CliRunner().invoke(
+            app, ["apply", "--config", str(cfg), "--dry-run"]
+        )
+        assert result.exit_code == 1, result.output
+        assert "unknown config key" in result.output
+        assert "training.quantizaton" in result.output
+        assert "quantization" in result.output
+
+    def test_clean_config_still_plans_and_applies(self, tmp_path, monkeypatch) -> None:
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        monkeypatch.chdir(tmp_path)
+        cfg = tmp_path / "soup.yaml"
+        cfg.write_text(self.CLEAN, encoding="utf-8")
+        runner = CliRunner()
+        planned = runner.invoke(app, ["plan", "--config", str(cfg)])
+        assert planned.exit_code == 0, planned.output
+        applied = runner.invoke(app, ["apply", "--config", str(cfg), "--dry-run"])
+        assert applied.exit_code == 0, applied.output

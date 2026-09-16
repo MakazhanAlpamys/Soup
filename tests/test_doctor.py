@@ -213,6 +213,32 @@ def test_doctor_missing_train_extra_message_unchanged_when_none_installed(monkey
     assert "All checks passed!" not in out
 
 
+def test_doctor_missing_train_extra_with_unsupported_driver_falls_back_to_extra(monkeypatch):
+    """Do not construct a whl/None URL when the driver has no supported wheel."""
+    for name in (
+        "torch",
+        "transformers",
+        "peft",
+        "trl",
+        "datasets",
+        "bitsandbytes",
+        "accelerate",
+    ):
+        monkeypatch.setitem(sys.modules, name, None)
+
+    monkeypatch.setattr(
+        "soup_cli.commands.doctor._nvidia_smi_cuda_version",
+        lambda: (11, 7),
+    )
+    result = runner.invoke(app, ["doctor"])
+
+    assert result.exit_code == 0
+    out = _strip_ansi(result.output)
+    assert 'pip install "soup-cli[train]"' in out
+    assert "download.pytorch.org/whl/" not in out
+    assert "whl/None" not in out
+
+
 def test_doctor_suggestion_is_colour_safe(monkeypatch):
     """The [train] suggestion survives Rich highlighting (#828 review)."""
     from rich.console import Console
@@ -298,6 +324,68 @@ def test_doctor_out_of_range_train_member_is_reported(monkeypatch):
     out = _strip_ansi(result.output)
     assert "outdated" in out
     assert "All checks passed!" not in out
+
+
+def test_doctor_incompatible_train_member_exits_nonzero(monkeypatch):
+    """A [train] member past its ceiling makes `soup doctor` exit non-zero (#874)."""
+    monkeypatch.setattr(
+        "soup_cli.commands.doctor.EXTRA_GROUPS",
+        [("train", [("transformers", "transformers", "5.16.1")])],
+    )
+    monkeypatch.setattr(
+        "soup_cli.commands.doctor._installed_version_str", lambda import_name, pkg_name: "6.1.0"
+    )
+    result = runner.invoke(app, ["doctor"])
+    assert result.exit_code == 1
+    assert "INCOMPATIBLE" in _strip_ansi(result.output)
+
+
+def test_doctor_incompatible_core_dependency_exits_nonzero(monkeypatch):
+    """A core dependency past its ceiling makes `soup doctor` exit non-zero (#874)."""
+    monkeypatch.setattr("soup_cli.commands.doctor.DEPS", [("typer", "typer", "0.1.0", True)])
+    monkeypatch.setattr("soup_cli.commands.doctor._MAX_EXCLUSIVE", {"typer": "0.2.0"})
+    result = runner.invoke(app, ["doctor"])
+    assert result.exit_code == 1
+    assert "INCOMPATIBLE" in _strip_ansi(result.output)
+
+
+def test_doctor_outdated_train_member_exits_zero(monkeypatch):
+    """An outdated [train] member stays advisory: only beyond-ceiling blocks (#874)."""
+    monkeypatch.setattr(
+        "soup_cli.commands.doctor.EXTRA_GROUPS",
+        [("train", [("transformers", "transformers", "5.16.1")])],
+    )
+    monkeypatch.setattr(
+        "soup_cli.commands.doctor._installed_version_str", lambda import_name, pkg_name: "4.0.0"
+    )
+    result = runner.invoke(app, ["doctor"])
+    assert result.exit_code == 0
+    assert "outdated" in _strip_ansi(result.output)
+
+
+def test_doctor_partial_train_group_in_range_exits_zero(monkeypatch):
+    """A partially installed [train] group with in-range members stays exit 0 (#874)."""
+    monkeypatch.setattr(
+        "soup_cli.commands.doctor.EXTRA_GROUPS",
+        [
+            (
+                "train",
+                [
+                    ("transformers", "transformers", "5.16.1"),
+                    ("bitsandbytes", "bitsandbytes", "0.41.0"),
+                ],
+            )
+        ],
+    )
+    monkeypatch.setattr(
+        "soup_cli.commands.doctor._installed_version_str",
+        lambda import_name, pkg_name: "5.16.1" if pkg_name == "transformers" else None,
+    )
+    result = runner.invoke(app, ["doctor"])
+    assert result.exit_code == 0
+    out = _strip_ansi(result.output)
+    assert "OK" in out
+    assert "not installed" in out
 
 
 def test_doctor_nvidia_train_suggestion_is_two_step(monkeypatch):
@@ -429,7 +517,11 @@ def test_doctor_nccl_no_gpu():
     ):
         result = runner.invoke(app, ["doctor", "--nccl"])
         assert result.exit_code == 0
-        assert "NCCL bandwidth requires >=2 GPUs" in result.output
+        # _strip_ansi, like the newer tests in this file: under colour Rich
+        # splits the message with SGR codes and the substring match fails
+        # for a reason unrelated to NCCL (#886). These two simply predate
+        # the helper defined at the top of this module.
+        assert "NCCL bandwidth requires >=2 GPUs" in _strip_ansi(result.output)
 
 
 def test_doctor_nccl_mocked_success():
@@ -452,5 +544,5 @@ def test_doctor_nccl_mocked_success():
     ):
         result = runner.invoke(app, ["doctor", "--nccl"])
         assert result.exit_code == 0
-        assert "Measuring NCCL bandwidth" in result.output
-        assert "Result (H100 over NVLINK)" in result.output
+        assert "Measuring NCCL bandwidth" in _strip_ansi(result.output)
+        assert "Result (H100 over NVLINK)" in _strip_ansi(result.output)

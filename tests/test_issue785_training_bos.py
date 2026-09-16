@@ -261,15 +261,14 @@ class TestTemplatedOnly:
 
 
 class TestPreprocessCachePathEOS:
-    """`soup data preprocess` EOS behaviour is pinned to ``main`` (post-processor
-    only), deliberately NOT to the live path.
+    """`soup data preprocess` EOS behaviour.
 
-    #788 de-duplicates the BOS on the preprocess cache path just as on the live
-    path, but it must NOT change what EOS the cache trains on: ``main``'s
-    preprocess never went through TRL's ``add_eos``, so its EOS is whatever the
-    post-processor added. The live path now reproduces ``add_eos`` and so trains
-    on an EOS the cache does not (Qwen shape). That cache-vs-live mismatch is
-    pre-existing on ``main`` and tracked in #791 — not resolved here.
+    #788 de-duplicated the BOS on the preprocess cache path. It deliberately left
+    the EOS as ``main`` had it (post-processor only), which diverged from the live
+    path's TRL ``add_eos`` rule on the Qwen shape — tracked as #791. #791 closes
+    that: the cache now applies the same ``add_eos`` rule, so both paths train on
+    the same EOS count. The BOS still differs between the two paths by design
+    (#876); these tests pin that the EOS agrees while the BOS stays as ``main``.
     """
 
     def _run_preprocess(
@@ -328,20 +327,25 @@ class TestPreprocessCachePathEOS:
         assert ids.count(_EOS_ID) == main_pp.count(_EOS_ID) == 1, "EOS unchanged vs main"
         assert main_pp.count(_BOS_ID) == 2 and ids.count(_BOS_ID) == 1, "BOS de-duplicated"
 
-    def test_cache_keeps_mains_zero_eos_for_no_eos_post_processor(self, tmp_path, monkeypatch):
+    def test_cache_matches_live_eos_for_no_eos_post_processor(self, tmp_path, monkeypatch):
         """Qwen/BOS-only shape: ``main``'s preprocess added no EOS, so the cache
-        keeps zero rather than adopting the live path's one. Documents that the
-        cache and live path diverge here — the #791 mismatch."""
+        trained on zero stop tokens while the live path trained on one. #791: the
+        cache now applies TRL's ``add_eos`` rule and trains on the same single EOS
+        as the live path. Fails on pre-#791 ``main`` (which cached zero)."""
         from soup_cli.data.loss_mask import build_full_sequence_labels
 
         tok = _tokenizer(_BOS_TEMPLATE, post_processor="bos")
         ids = self._run_preprocess(tmp_path, monkeypatch, tok)
         main_pp = self._main_preprocess_ids(tok)
 
-        assert ids.count(_EOS_ID) == main_pp.count(_EOS_ID) == 0, "EOS unchanged vs main"
-        assert ids.count(_BOS_ID) == 1, "BOS de-duplicated"
         live = build_full_sequence_labels(_MESSAGES, tok, max_length=2048)["input_ids"]
-        assert live.count(_EOS_ID) == 1, "live trains on an EOS the cache does not (#791)"
+        assert main_pp.count(_EOS_ID) == 0, "sanity: main's cache trained on no EOS"
+        assert live.count(_EOS_ID) == 1, "sanity: the live path trains on one EOS"
+        assert ids.count(_EOS_ID) == live.count(_EOS_ID) == 1, (
+            "cache now trains on the same EOS as the live path (#791)"
+        )
+        assert ids[-1] == _EOS_ID, "the stop token is the trailing token"
+        assert ids.count(_BOS_ID) == 1, "BOS still de-duplicated (unchanged by #791)"
 
     def test_pretrain_cache_is_byte_identical_to_main(self, tmp_path, monkeypatch):
         """Pretrain rows never went through a template, so #788 must leave them

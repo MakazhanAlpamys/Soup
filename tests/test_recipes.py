@@ -676,6 +676,115 @@ class TestDeepSeekV4FlashDpoRecipe:
         assert len({RECIPES[n].size for n in variants}) == 1
 
 
+class TestIssue849LargeMoeDpoRecipes:
+    """Regression coverage for the MiniMax M3 and Mistral Large 3 DPO recipes."""
+
+    RECIPES = {
+        "minimax-m3-dpo": {
+            "model": "MiniMaxAI/MiniMax-M3",
+            "sft": "minimax-m3-sft",
+            "gradient_accumulation_steps": 16,
+            "size": "428B",
+            "license": "MiniMax Community License",
+        },
+        "mistral-large-3-dpo": {
+            "model": "mistralai/Mistral-Large-3-675B-Instruct-2512",
+            "sft": "mistral-large-3-sft",
+            "gradient_accumulation_steps": 32,
+            "size": "675B",
+            "license": "Apache-2.0",
+        },
+    }
+
+    @pytest.mark.parametrize("name,expected", list(RECIPES.items()))
+    def test_recipe_meta_pins_the_model_id(self, name: str, expected: dict) -> None:
+        """Surface 1: pin the catalog metadata without reading the YAML."""
+        from soup_cli.recipes.catalog import get_recipe
+
+        recipe = get_recipe(name)
+        assert recipe is not None, f"{name} is missing from the catalog"
+        assert recipe.model == expected["model"]
+        assert recipe.task == "dpo"
+        assert recipe.size == expected["size"]
+        assert expected["license"] in recipe.description
+
+    @pytest.mark.parametrize("name,expected", list(RECIPES.items()))
+    def test_yaml_base_pins_the_model_id(self, name: str, expected: dict) -> None:
+        """Surface 2: pin the YAML base independently of ``RecipeMeta.model``."""
+        import yaml
+
+        from soup_cli.recipes.catalog import get_recipe
+
+        recipe = get_recipe(name)
+        assert recipe is not None
+        parsed = yaml.safe_load(recipe.yaml_str)
+        assert parsed["base"] == expected["model"]
+        assert parsed["task"] == "dpo"
+
+    @pytest.mark.parametrize("name,expected", list(RECIPES.items()))
+    def test_recipe_loads_with_expected_dpo_moe_shape(
+        self, name: str, expected: dict
+    ) -> None:
+        from soup_cli.config.loader import load_config_from_string
+        from soup_cli.recipes.catalog import get_recipe
+
+        recipe = get_recipe(name)
+        assert recipe is not None
+        config = load_config_from_string(recipe.yaml_str)
+
+        assert config.base == expected["model"]
+        assert config.task == "dpo"
+        assert config.data.train == "./data/preference_train.jsonl"
+        assert config.data.format == "dpo"
+        assert config.data.max_length == 4096
+        assert config.training.epochs == 1
+        assert config.training.lr == 5e-6
+        assert config.training.batch_size == 1
+        assert (
+            config.training.gradient_accumulation_steps
+            == expected["gradient_accumulation_steps"]
+        )
+        assert config.training.lora.r == 32
+        assert config.training.lora.alpha == 64
+        assert config.training.quantization == "4bit"
+        assert config.training.moe_lora is True
+        assert config.training.gradient_checkpointing is True
+        # These equal schema defaults, so deleting either is an equivalent mutation.
+        assert config.training.dpo_beta == 0.1
+        assert config.training.moe_aux_loss_coeff == 0.01
+
+    @pytest.mark.parametrize("name,expected", list(RECIPES.items()))
+    def test_dpo_recipe_matches_its_sft_sibling(self, name: str, expected: dict) -> None:
+        from soup_cli.recipes.catalog import get_recipe
+
+        dpo = get_recipe(name)
+        sft = get_recipe(expected["sft"])
+        assert dpo is not None and sft is not None
+        assert dpo.model == sft.model
+        assert dpo.size == sft.size
+        assert dpo.task == "dpo"
+        assert sft.task == "sft"
+
+    @pytest.mark.parametrize("name,expected", list(RECIPES.items()))
+    def test_show_and_use_recipe(
+        self,
+        name: str,
+        expected: dict,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        show_result = runner.invoke(app, ["recipes", "show", name])
+        assert show_result.exit_code == 0
+        assert expected["model"] in strip_ansi(show_result.output)
+
+        monkeypatch.chdir(tmp_path)
+        use_result = runner.invoke(app, ["recipes", "use", name, "--yes"])
+        assert use_result.exit_code == 0
+        written = (tmp_path / "soup.yaml").read_text(encoding="utf-8")
+        assert expected["model"] in written
+        assert "task: dpo" in written
+
+
 class TestIssue271SmolLM3Recipe:
     """Regression coverage for the smollm3-3b-sft recipe (#271)."""
 
@@ -769,6 +878,86 @@ class TestIssue276Qwen35A3bDpoRecipe:
         assert "Qwen/Qwen3.5-35B-A3B" in (tmp_path / "soup.yaml").read_text(
             encoding="utf-8"
         )
+
+
+class TestIssue847Qwen35A3bGrpoRecipe:
+    """Regression coverage for the qwen3.5-35b-a3b-grpo recipe (#847)."""
+
+    RECIPE = "qwen3.5-35b-a3b-grpo"
+    MODEL = "Qwen/Qwen3.5-35B-A3B"
+
+    def test_recipe_meta_pins_the_model_id(self) -> None:
+        """Surface 1: pin the model identity in ``RecipeMeta``."""
+        from soup_cli.recipes.catalog import get_recipe
+
+        recipe = get_recipe(self.RECIPE)
+        assert recipe is not None, f"{self.RECIPE} is missing from the catalog"
+        assert recipe.model == self.MODEL
+        assert recipe.task == "grpo"
+
+    def test_yaml_base_pins_the_model_id(self) -> None:
+        """Surface 2: pin the independently parsed YAML ``base``."""
+        import yaml
+
+        from soup_cli.recipes.catalog import get_recipe
+
+        recipe = get_recipe(self.RECIPE)
+        assert recipe is not None
+        parsed = yaml.safe_load(recipe.yaml_str)
+        assert parsed["base"] == self.MODEL
+        assert parsed["task"] == "grpo"
+
+    def test_recipe_loads_with_expected_grpo_moe_shape(self) -> None:
+        from soup_cli.config.loader import load_config_from_string
+        from soup_cli.recipes.catalog import get_recipe
+
+        recipe = get_recipe(self.RECIPE)
+        assert recipe is not None
+        config = load_config_from_string(recipe.yaml_str)
+
+        assert config.base == self.MODEL
+        assert config.task == "grpo"
+        assert config.modality == "text"
+        assert config.data.format == "auto"
+        assert config.data.max_length == 4096
+        assert config.training.lr == 1e-5
+        assert config.training.batch_size == 1
+        assert config.training.gradient_accumulation_steps == 16
+        assert config.training.lora.r == 16
+        assert config.training.lora.alpha == 32
+        assert config.training.quantization == "4bit"
+        assert config.training.moe_lora is True
+        assert config.training.gradient_checkpointing is True
+
+    def test_show_and_use_recipe(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        show_result = runner.invoke(app, ["recipes", "show", self.RECIPE])
+        assert show_result.exit_code == 0
+        assert self.MODEL in strip_ansi(show_result.output)
+
+        monkeypatch.chdir(tmp_path)
+        use_result = runner.invoke(app, ["recipes", "use", self.RECIPE, "--yes"])
+        assert use_result.exit_code == 0
+        written = (tmp_path / "soup.yaml").read_text(encoding="utf-8")
+        assert self.MODEL in written
+        assert "task: grpo" in written
+
+    def test_qwen35_a3b_task_variants_are_complete(self) -> None:
+        from soup_cli.recipes.catalog import RECIPES
+
+        variants = {
+            "qwen3.5-35b-a3b-sft": "sft",
+            "qwen3.5-35b-a3b-dpo": "dpo",
+            self.RECIPE: "grpo",
+        }
+        for name, task in variants.items():
+            assert name in RECIPES, f"{name} is missing from the catalog"
+            assert RECIPES[name].model == self.MODEL
+            assert RECIPES[name].task == task
+            assert RECIPES[name].size == "35B"
 
 
 class TestIssue281KimiK26GrpoRecipe:
@@ -1153,6 +1342,198 @@ class TestQwen35NineBDpoRecipe:
         assert "Qwen/Qwen3.5-9B" in (tmp_path / "soup.yaml").read_text(encoding="utf-8")
 
 
+class TestQwen36A3bDpoRecipe:
+    """Coverage for the qwen3.6-35b-a3b-dpo recipe (#275 / #846 task-variant).
+
+    Qwen3.6-35B-A3B shipped SFT (v0.71.24); this adds the direct preference
+    optimization (DPO) shape. The model id is pinned on two independent
+    surfaces — ``RecipeMeta.model`` and the YAML ``base:`` — in two
+    separate tests.
+    """
+
+    RECIPE = "qwen3.6-35b-a3b-dpo"
+    MODEL = "Qwen/Qwen3.6-35B-A3B"
+
+    def test_recipe_meta_pins_the_model_id(self) -> None:
+        """Surface 1: the catalog metadata, read without touching the YAML."""
+        from soup_cli.recipes.catalog import get_recipe
+
+        recipe = get_recipe(self.RECIPE)
+        assert recipe is not None, f"{self.RECIPE} is missing from the catalog"
+        assert recipe.model == self.MODEL
+        assert recipe.task == "dpo"
+        assert recipe.size == "35B"
+        assert "dpo" in recipe.tags
+        assert "Apache-2.0" in recipe.description
+        assert "3B active" in recipe.description
+
+    def test_yaml_base_pins_the_model_id(self) -> None:
+        """Surface 2: the YAML body, parsed directly rather than via ``.model``."""
+        import yaml
+
+        from soup_cli.recipes.catalog import get_recipe
+
+        recipe = get_recipe(self.RECIPE)
+        assert recipe is not None
+        parsed = yaml.safe_load(recipe.yaml_str)
+        assert parsed["base"] == self.MODEL
+        assert parsed["task"] == "dpo"
+
+    def test_recipe_loads_with_expected_dpo_moe_shape(self) -> None:
+        """The loaded config, verified through schema validation."""
+        from soup_cli.config.loader import load_config_from_string
+        from soup_cli.recipes.catalog import get_recipe
+
+        recipe = get_recipe(self.RECIPE)
+        assert recipe is not None
+        config = load_config_from_string(recipe.yaml_str)
+
+        assert config.base == self.MODEL
+        assert config.task == "dpo"
+        assert config.modality == "text"
+        assert config.data.train == "./data/preference_train.jsonl"
+        assert config.data.format == "dpo"
+        assert config.data.max_length == 4096
+        assert config.training.epochs == 3
+        assert config.training.dpo_beta == 0.1
+        assert config.training.lr == 5e-6
+        assert config.training.batch_size == "auto"
+        assert config.training.gradient_accumulation_steps == 8
+        assert config.training.lora.r == 16
+        assert config.training.lora.alpha == 32
+        assert config.training.quantization == "4bit"
+        assert config.training.moe_lora is True
+        assert config.training.moe_aux_loss_coeff == 0.01
+
+    def test_completes_the_task_trio_for_this_base(self) -> None:
+        """#275 is about DPO/GRPO/pretrain variants of the shipped SFT recipes."""
+        from soup_cli.recipes.catalog import RECIPES
+
+        tasks = {r.task for r in RECIPES.values() if r.model == self.MODEL}
+        assert {"sft", "grpo", "dpo"} <= tasks
+
+    def test_shares_base_and_size_with_its_sft_sibling(self) -> None:
+        from soup_cli.recipes.catalog import get_recipe
+
+        dpo, sft = get_recipe(self.RECIPE), get_recipe("qwen3.6-35b-a3b-sft")
+        assert dpo is not None and sft is not None
+        assert dpo.model == sft.model
+        assert dpo.size == sft.size
+        assert dpo.task != sft.task
+
+    def test_show_and_use_recipe(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        show_result = runner.invoke(app, ["recipes", "show", self.RECIPE])
+        assert show_result.exit_code == 0
+        assert self.MODEL in strip_ansi(show_result.output)
+
+        monkeypatch.chdir(tmp_path)
+        use_result = runner.invoke(app, ["recipes", "use", self.RECIPE, "--yes"])
+        assert use_result.exit_code == 0
+        assert self.MODEL in (tmp_path / "soup.yaml").read_text(encoding="utf-8")
+
+
+
+class TestQwen36A3bGrpoRecipe:
+    """Coverage for the qwen3.6-35b-a3b-grpo recipe (#275 / #846 task-variant).
+
+    Qwen3.6-35B-A3B shipped SFT (v0.71.24); this adds the Group Relative Policy
+    Optimization (GRPO) reasoning shape. The model id is pinned on two independent
+    surfaces — ``RecipeMeta.model`` and the YAML ``base:`` — in two separate tests.
+    """
+
+    RECIPE = "qwen3.6-35b-a3b-grpo"
+    MODEL = "Qwen/Qwen3.6-35B-A3B"
+
+    def test_recipe_meta_pins_the_model_id(self) -> None:
+        """Surface 1: the catalog metadata, read without touching the YAML."""
+        from soup_cli.recipes.catalog import get_recipe
+
+        recipe = get_recipe(self.RECIPE)
+        assert recipe is not None, f"{self.RECIPE} is missing from the catalog"
+        assert recipe.model == self.MODEL
+        assert recipe.task == "grpo"
+        assert recipe.size == "35B"
+        assert "grpo" in recipe.tags
+        assert "Apache-2.0" in recipe.description
+        assert "3B active" in recipe.description
+
+    def test_yaml_base_pins_the_model_id(self) -> None:
+        """Surface 2: the YAML body, parsed directly rather than via ``.model``."""
+        import yaml
+
+        from soup_cli.recipes.catalog import get_recipe
+
+        recipe = get_recipe(self.RECIPE)
+        assert recipe is not None
+        parsed = yaml.safe_load(recipe.yaml_str)
+        assert parsed["base"] == self.MODEL
+        assert parsed["task"] == "grpo"
+
+    def test_recipe_loads_with_expected_grpo_moe_shape(self) -> None:
+        """The loaded config, verified through schema validation."""
+        from soup_cli.config.loader import load_config_from_string
+        from soup_cli.recipes.catalog import get_recipe
+
+        recipe = get_recipe(self.RECIPE)
+        assert recipe is not None
+        config = load_config_from_string(recipe.yaml_str)
+
+        assert config.base == self.MODEL
+        assert config.task == "grpo"
+        assert config.modality == "text"
+        assert config.data.train == "./data/reasoning_train.jsonl"
+        assert config.data.format == "auto"
+        assert config.data.max_length == 8192
+        assert config.training.epochs == 3
+        assert config.training.lr == 1e-5
+        assert config.training.batch_size == 1
+        assert config.training.gradient_accumulation_steps == 16
+        assert config.training.lora.r == 16
+        assert config.training.lora.alpha == 32
+        assert config.training.quantization == "4bit"
+        assert config.training.grpo_beta == 0.1
+        assert config.training.num_generations == 4
+        assert config.training.reward_fn == "accuracy"
+        assert config.training.moe_lora is True
+        assert config.training.moe_aux_loss_coeff == 0.01
+        assert config.training.gradient_checkpointing is True
+
+    def test_completes_the_task_trio_for_this_base(self) -> None:
+        """#275 is about DPO/GRPO/pretrain variants of the shipped SFT recipes."""
+        from soup_cli.recipes.catalog import RECIPES
+
+        tasks = {r.task for r in RECIPES.values() if r.model == self.MODEL}
+        assert {"sft", "grpo", "dpo"} <= tasks
+
+    def test_shares_base_and_size_with_its_sft_sibling(self) -> None:
+        from soup_cli.recipes.catalog import get_recipe
+
+        grpo, sft = get_recipe(self.RECIPE), get_recipe("qwen3.6-35b-a3b-sft")
+        assert grpo is not None and sft is not None
+        assert grpo.model == sft.model
+        assert grpo.size == sft.size
+        assert grpo.task != sft.task
+
+    def test_show_and_use_recipe(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        show_result = runner.invoke(app, ["recipes", "show", self.RECIPE])
+        assert show_result.exit_code == 0
+        assert self.MODEL in strip_ansi(show_result.output)
+
+        monkeypatch.chdir(tmp_path)
+        use_result = runner.invoke(app, ["recipes", "use", self.RECIPE, "--yes"])
+        assert use_result.exit_code == 0
+        assert self.MODEL in (tmp_path / "soup.yaml").read_text(encoding="utf-8")
+
+
+
 # ---------------------------------------------------------------------------
 # Part A: v0.25.0 new model recipes (Llama 4, Qwen 3, Gemma 3, DeepSeek V3)
 # ---------------------------------------------------------------------------
@@ -1200,7 +1581,7 @@ class TestV025NewRecipes:
             assert cfg.base == recipe.model
             assert cfg.task == recipe.task
 
-    def test_catalog_size_is_169(self):
+    def test_catalog_size_is_174(self):
         """Total catalog size — grew with each release.
 
         v0.25.0 shipped 43 recipes (29 + 9 Part A + 2 Part B tools + 3 Part E MLX).
@@ -1231,10 +1612,13 @@ class TestV025NewRecipes:
         Task-variant for #275 added 1 (kimi-k2.6-dpo) -> 165.
         Task-variant for #275 added 2 (qwen3.5-0.8b-grpo, qwen3.5-2b-grpo) -> 167.
         Task-variant for #275 / #851 added 2 (kimi-k2.5-dpo, kimi-k2.5-grpo) -> 169.
+        Issue #849 added 2 (minimax-m3-dpo, mistral-large-3-dpo) -> 171.
+        Issue #847 added 1 (qwen3.5-35b-a3b-grpo) -> 172.
+        Task-variant for #275 / #846 added 2 (qwen3.6-35b-a3b-dpo, qwen3.6-35b-a3b-grpo) -> 174.
         """
         from soup_cli.recipes.catalog import RECIPES
 
-        assert len(RECIPES) == 169
+        assert len(RECIPES) == 174
 
     def test_new_recipes_searchable(self):
         """Search returns the new recipes via keyword/task filter."""

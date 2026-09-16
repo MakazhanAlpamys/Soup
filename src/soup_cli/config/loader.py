@@ -59,8 +59,17 @@ def _report_unknown_keys(raw: dict) -> "str | None":
     return None
 
 
-def load_config(path: "Path | str") -> SoupConfig:
-    """Load a soup.yaml file and return validated SoupConfig."""
+def load_config(
+    path: "Path | str",
+    *,
+    training_overrides: dict | None = None,
+) -> SoupConfig:
+    """Load a soup.yaml file and return validated SoupConfig.
+
+    ``training_overrides`` are merged into the YAML ``training:`` mapping
+    *before* ``SoupConfig`` is constructed, so CLI flags that map onto
+    training fields participate in the same cross-validators as YAML.
+    """
     path = Path(path)
     raw = yaml.safe_load(path.read_text(encoding="utf-8"))
 
@@ -73,6 +82,13 @@ def load_config(path: "Path | str") -> SoupConfig:
         # this shape, and the CLI contract here is SystemExit(1).
         console.print(f"[red]Config must be a YAML mapping, got {type(raw).__name__}[/]")
         raise SystemExit(1)
+
+    if training_overrides:
+        training = raw.get("training")
+        if not isinstance(training, dict):
+            training = {}
+            raw["training"] = training
+        training.update(training_overrides)
 
     unknown_error = _report_unknown_keys(raw)
     if unknown_error is not None:

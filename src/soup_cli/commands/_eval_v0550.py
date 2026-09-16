@@ -419,7 +419,7 @@ def register(app: typer.Typer, console: Console) -> None:
             False, "--force", help="Overwrite an existing hook.",
         ),
     ) -> None:
-        """Install a pre-push regression gate (v0.55.0 Part D)."""
+        """Install a pre-push regression gate for the selected baseline."""
         from soup_cli.utils.eval_gate_hook import write_pre_push_hook
 
         try:

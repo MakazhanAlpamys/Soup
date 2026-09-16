@@ -34,7 +34,7 @@ soup merge-sharded-fsdp-weights ./shards -o merged.safetensors  Consolidate FSDP
 soup delinearize-llama4 ./src --target ./out [--num-experts N] [--plan-only]  Live Llama-4 fused-expert reshape [E*din,dout] -> [E,din,dout] + sidecar copy (v0.71.21)
 soup spectrum scan --model <id|path> --top-percent 50 [--modules mlp,attn] [-o patch.yaml]  Spectrum SNR scan (no model load) -> training.unfrozen_parameters YAML patch (v0.71.23)
 soup train --config sft.yaml  # training.lisa_enabled: true [lisa_num_layers lisa_interval_steps lisa_train_embeddings]  LISA layerwise importance sampling — full-FT quality at LoRA-like memory; lisa_train_embeddings: false freezes embeddings+head+norm for the memory saving (sft or pretrain/transformers/text/quantization=none) (v0.71.34, pretrain #307, #377)
-soup train --config sft.yaml  # training.stream_layers: true [stream_source stream_ngram_source stream_buffers]  BETA layer streaming — the frozen base streams from CPU RAM/NVMe one decoder layer at a time; Qwen4-Exp PLE rows can stream read-only from original safetensors; embed_tokens + untied lm_head reuse one large-layer device slot; quantization: 4bit streams validated decoder families as NF4, ~4x smaller (sft/dpo/orpo/simpo/kto on transformers+text, 10 archs; grpo/ppo permanently excluded) (v0.72.0; NF4 v0.72.2; disk+batch+accum v0.72.3; preference losses v0.72.4; Qwen4 PLE #602)
+soup train --config sft.yaml  # training.stream_layers: true [stream_source stream_ngram_source stream_buffers stream_read_ahead]  BETA layer streaming — the frozen base streams from CPU RAM/NVMe one decoder layer at a time; Qwen4-Exp PLE rows can stream read-only from original safetensors; embed_tokens + untied lm_head reuse one large-layer device slot; quantization: 4bit streams validated decoder families as NF4, ~4x smaller (sft/dpo/orpo/simpo/kto on transformers+text, 10 archs; grpo/ppo permanently excluded) (v0.72.0; NF4 v0.72.2; disk+batch+accum v0.72.3; preference losses v0.72.4; Qwen4 PLE #602)
 soup export --model ./output --format gguf    Export to GGUF (Ollama)
 soup export --model ./output --deploy ollama  Export GGUF + auto-deploy to Ollama
 soup export --model ./output --format onnx    Export to ONNX
@@ -152,22 +152,26 @@ soup migrate --from llamafactory config.yaml  Import config from LLaMA-Factory
 soup migrate --from axolotl config.yml        Import config from Axolotl
 soup migrate --from unsloth notebook.ipynb    Import config from Unsloth notebook
 soup migrate --from llamafactory c.yaml --dry-run  Preview without writing
-soup recipes list                             List all 169 ready-made recipes
+soup recipes list                             List all 174 ready-made recipes
 soup recipes show llama3.1-8b-sft            Print recipe YAML
 soup recipes use llama3.1-8b-sft             Copy recipe to soup.yaml
 soup recipes search "reasoning"              Search by keyword/task/size
-soup registry push --run-id <id> --name n --tag v1  Register runsoup registry list [--name n] [--tag v1]     List registry entriessoup registry show <ref>                      Entry details + artifacts + ancestors
+soup registry push --run-id <id> --name n --tag v1  Register run
+soup registry list [--name n] [--tag v1]     List registry entries
+soup registry show <ref>                      Entry details + artifacts + ancestors
 soup registry diff <a> <b>                    Side-by-side config + eval delta
 soup registry search "medical"                Search name/base/task/notes
 soup registry promote <ref> --tag prod        Tag an entry (e.g. promote to prod)
 soup registry delete <ref> --yes              Remove entry (cascades)
-soup history <name>                           Lineage DAG tree for a namesoup can pack --entry-id <id> --out r.can     Pack registry entry as .cansoup can inspect r.can                        Preview manifest without extracting
+soup history <name>                           Lineage DAG tree for a name
+soup can pack --entry-id <id> --out r.can     Pack registry entry as .can
+soup can inspect r.can                        Preview manifest without extracting
 soup can verify r.can                         Verify schema + config parseability
 soup can fork r.can --out fork.can --modify training.lr=5e-5  Fork + re-pack
 soup can run r.can --yes [--deploy] [--env-capture env.txt]  Run a .can end-to-end
 soup can publish r.can --hf-hub user/name    Publish .can to HF Hub as dataset
 soup runs                                     List training runs
-soup runs show <run_id>                       Run details + loss graph + cost
+soup runs show <run_id>                       Run details + loss graph + cost (shows an Error: line for failed runs, and distinguishes terminated/launching from running; #767)
 soup runs compare <run_1> <run_2>             Compare two runs
 soup runs replay <run_id>                     Replay summary + loss curve from history (also plots a benchmark-score curve when the metric lives in eval_results)
 soup why [run_id]                             Explain training anomalies (heuristic)
@@ -202,9 +206,9 @@ soup reward synth refs.jsonl -o reward.py     Synthesize a deterministic reward 
 soup reward synth ... --kind numeric|json_schema|regex|tool_call  Force a verifier family (default: auto-detect)
 soup reward synth ... --plan-only             Report the induced spec + calibration plan; write nothing
 soup reward synth ... --output-report r.json --min-discrimination 0.5  Save the calibration JSON / set the refusal threshold (exit 0 emit / 2 refuse / 1 error)
-soup reward stress reward.py --references golds.jsonl  Adversarially probe a verifier for gameability — empty/length/repetition/sentinel junk (v0.71.41)
+soup reward stress reward.py --references golds.jsonl  Adversarially probe a verifier for gameability — classic and structure-preserving attacks (v0.71.41)
 soup reward stress verifiable --verifiable-domain math --references golds.jsonl  Probe a builtin verifier instead of a .py file
-soup reward stress ... --attacks empty,length,repetition,sentinel --sentinel GOLD --threshold 0.5 --max-gameable 0.0  Tune the attack set / accept threshold / tolerance
+soup reward stress ... --attacks empty,length,repetition,sentinel,wrapped_junk,answer_spray --sentinel GOLD --threshold 0.5 --max-gameable 0.0  Tune the attack set / accept threshold / tolerance
 soup reward stress ... --output-report r.json  Save the per-attack report JSON (exit 0 robust / 2 gameable / 1 error)
 soup tui                                      Full-screen Textual dashboard (requires [tui] extra)
 soup train --config soup.yaml --profile       Record torch.profiler trace to <output>/profiles/
@@ -216,7 +220,7 @@ soup bench <model> --p50 --p95                Bench with tail-latency percentile
 soup bench <model> --backend auto             Auto-detect transformers/mlx backend (v0.53.9)
 soup serve --reasoning-parser deepseek-r1     Strip <think> blocks from responses (v0.53.9)
 soup doctor [--nccl] [--disk] [--config F]    Check environment (optionally check NCCL bandwidth, media type; --disk ~9s cold / ~2.4s warm).
-                                              --config also reports which settings that config writes are not read on its task/backend (#755); exits 2 if it cannot be read, and exits 1 when a required core dependency is missing or incompatible (#828).
+                                              --config also reports which settings that config writes are not read on its task/backend (#755); exits 2 if it cannot be read, and exits 1 when a required core dependency is missing, or when any installed package is beyond its declared ceiling — core or [train] (#828, #874).
 soup monitor                                  NVIDIA / Apple Silicon GPU monitor: util / temp / VRAM / power
 soup quickstart [--dry-run]                   Full demo
 soup plugins list|install|enable|disable      Manage Soup plugins
@@ -313,7 +317,7 @@ soup iterative-dpo --base-model <m> --reward-model <rm> --prompts <p.jsonl> --ou
 soup train --reward-hack-detector info_rm|rm_ensemble [--reward-hack-halt]  Reward-hacking detector for GRPO — LIVE callback (v0.70.0; live v0.71.11)
 soup train --reward-hack-mitigation off|log_only|kl_control|pid_lagrangian  Closed-loop reward-hacking auto-mitigation (detect → raise KL/β → rollback → early-stop); GRPO/PPO, requires --reward-hack-detector; PPO BETA (v0.71.26)
 soup train --uld-strategy wasserstein_aligned  Cross-tokenizer ULD on task='distill' (different tokenizers) — LIVE (v0.71.18)
-soup train --minillm-enabled [--minillm-teacher-mix-ratio 0.3]  MiniLLM reverse-KL distillation — LIVE (v0.70.0; live v0.71.11)
+soup train --minillm-enabled --minillm-teacher-mix-ratio 0.3  MiniLLM reverse-KL distillation — LIVE; offline mix 0 rejected (#692)
 soup train --rl-checkpoint-save-every-steps N [--rl-checkpoint-keep-last N]  Mid-epoch checkpoint for GRPO/PPO — LIVE (v0.70.0; live v0.71.11)
 soup train --echo-trap-enabled [--echo-trap-threshold 0.6 --echo-trap-halt]  RAGEN echo-trap detector for GRPO — LIVE callback (v0.70.0; live v0.71.11)
 soup train  # task='moe_lora_routing' + mole_task_adapters  MoLE per-token gate over N frozen task LoRAs (gate-only train) — LIVE (v0.71.12)

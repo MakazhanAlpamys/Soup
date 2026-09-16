@@ -56,6 +56,7 @@ class TestMiniLLMOnPolicySchema:
             "training:\n"
             "  teacher_model: hf-internal-testing/tiny-random-gpt2\n"
             "  minillm_enabled: true\n"
+            "  minillm_teacher_mix_ratio: 0.3\n"
             f"{extra}"
             "output: ./out\n"
         )
@@ -135,6 +136,7 @@ class TestMiniLLMRolloutLengthSchema:
             "training:\n"
             "  teacher_model: hf-internal-testing/tiny-random-gpt2\n"
             "  minillm_enabled: true\n"
+            "  minillm_teacher_mix_ratio: 0.3\n"
             f"{extra}"
             "output: ./out\n"
         )

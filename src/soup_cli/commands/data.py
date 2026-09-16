@@ -1954,7 +1954,7 @@ def from_traces_cmd(
         help="Drop pairs with judge-confidence below this threshold (0.0 - 1.0).",
     ),
 ) -> None:
-    """Harvest preference pairs from production traces (v0.26.0 Part C).
+    """Harvest preference pairs from production traces.
 
     Prominent reminder: traces may contain sensitive user data; review
     before sharing or uploading to external systems.
@@ -2501,9 +2501,9 @@ def preprocess_dataset(
                 # Tokenise exactly as ``main`` (add_special_tokens defaults to
                 # True). This keeps ``main``'s truncation reservation — a
                 # truncated row still ends on the post-processor's EOS — and the
-                # post-processor BOS/EOS, so the cache's EOS stays pinned to
-                # ``main``. #785's only defect on this path is the doubled BOS,
-                # removed below for the chat path.
+                # post-processor BOS/EOS. #785 removed the one doubled leading BOS
+                # here; #791 then applies TRL's training EOS rule below, both only
+                # for the chat path.
             )
         except Exception:  # noqa: BLE001 — tokenizer errors vary
             continue
@@ -2512,14 +2512,34 @@ def preprocess_dataset(
         if not is_pretrain:
             # #785/#788: the chat template already renders the BOS; ``main``'s
             # add_special_tokens=True prepends a second one. Drop only that one
-            # duplicated leading BOS so the row is byte-identical to ``main``
-            # apart from the extra BOS (EOS and truncation untouched). Pretrain
-            # feeds raw document text with no template BOS, so nothing to drop.
-            from soup_cli.data.loss_mask import strip_doubled_leading_bos
+            # duplicated leading BOS. Pretrain feeds raw document text with no
+            # template BOS, so nothing to drop.
+            from soup_cli.data.loss_mask import (
+                append_training_eos,
+                strip_doubled_leading_bos,
+            )
 
             input_ids, attention_mask = strip_doubled_leading_bos(
                 tokenizer, input_ids, attention_mask
             )
+            # #791: the live training path appends ``eos_token`` (TRL 0.29.1's
+            # ``add_eos``, ``sft_trainer.py:1026-1038``) to every chat row that
+            # does not already end on it, before tokenizing. This cache path
+            # tokenizes directly, so on a template that renders no EOS and a
+            # tokenizer whose post-processor appends none (Qwen-shaped) the cached
+            # row carried zero stop tokens while the live path trained on one —
+            # run-on generation, and silent (the loss curve looks normal and
+            # ``soup data doctor`` renders the live path, not the cache). Reproduce
+            # the rule in token space so the cache trains on the same EOS count.
+            # Only when the row is under the length budget: a row that filled
+            # ``max_length`` was truncated, and the live path (append-then-truncate)
+            # keeps no trailing EOS there either, so matching it means not pushing
+            # the row past the budget.
+            if len(input_ids) < max_length:
+                with_eos = append_training_eos(tokenizer, input_ids)
+                if len(with_eos) != len(input_ids):
+                    input_ids = with_eos
+                    attention_mask = attention_mask + [1]
         rendered_rows.append(
             {
                 "input_ids": input_ids,
@@ -2807,7 +2827,7 @@ def recipe(
         help="Explicitly allow placeholder generation and accept-all judging.",
     ),
 ) -> None:
-    """v0.45.0 Part E — Validate a Data Recipe DAG (live runner deferred)."""
+    """Validate a Data Recipe DAG and optionally execute every node."""
     from rich.markup import escape as _escape
 
     from soup_cli.utils.recipe_dag import load_recipe_yaml
@@ -2903,9 +2923,20 @@ def recipe(
         except (TypeError, ValueError) as exc:
             console.print(f"[red]Recipe failed: {_escape(str(exc))}[/]")
             raise typer.Exit(1) from exc
+        provider_calls = result.get("provider_call_count", 0)
+        provider_failures = result.get("provider_failure_count", 0)
+        provider_summary = ""
+        if isinstance(provider_calls, int) and provider_calls:
+            call_label = "call" if provider_calls == 1 else "calls"
+            failure_label = "failure" if provider_failures == 1 else "failures"
+            provider_summary = (
+                f" {provider_calls} provider {call_label}, "
+                f"{provider_failures} {failure_label}."
+            )
         console.print(
             f"[green]Recipe executed.[/] "
             f"{len(result.get('completed_nodes', ()))} node(s) completed."
+            f"{provider_summary}"
         )
         return
 
@@ -2938,7 +2969,7 @@ def gen_magpie(
         False, "--plan-only", help="Validate + print plan; do not generate."
     ),
 ) -> None:
-    """Magpie synthetic data generator (v0.69.0 Part C; live in v0.71.6 #232).
+    """Generate synthetic data from a chat-template prefix.
 
     Feeds the chat-template prefix only to ``--base`` and harvests user-side
     turns via ``--provider`` (ollama / vllm raw completion). With ``--plan-only``
@@ -3869,7 +3900,7 @@ def persona_mix(
     ),
     seed: int = typer.Option(0, "--seed", help="Deterministic seed"),
 ) -> None:
-    """Sample a prompt × persona × style matrix (v0.69.0 Part D).
+    """Sample a prompt × persona × style matrix.
 
     Reads ``--prompts`` (JSONL with ``prompt`` field per row); writes
     ``--output`` JSONL with ``{prompt, persona, style}`` rows. When
@@ -3997,7 +4028,7 @@ def brain_rot_cmd(
         ),
     ),
 ) -> None:
-    """Score a dataset for brain-rot per arXiv 2510.13928 (v0.69.0 Part E).
+    """Score a dataset for brain-rot per arXiv 2510.13928.
 
     Reports a per-row OK/MINOR/MAJOR verdict + an aggregate verdict. With
     ``--strict`` the command exits 3 when the MAJOR fraction exceeds

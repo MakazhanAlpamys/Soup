@@ -89,7 +89,8 @@ soup adapters bisect \
 
 CMA-ES is pure-Python (no `cma` dependency); the eval is operator-supplied via a closure so any scoring code works. PR rendering escapes Markdown table cells, so crafted metric names cannot inject table rows or links. The lockfile composes with v0.64 `soup env lock` — drift in any of `{base_model, base_model_sha, dataset_sha, env_hash, closure_sha}` exits 3 (`soup_version` and `created_at` are advisory-only). Bisect uses `shlex.split` + `shlex.quote(ckpt)` in argv-list mode (no `shell=True`), so checkpoint ids cannot inject shell metacharacters.
 
-VeRA / VB-LoRA bank storage (`soup_cli.utils.vector_bank`) and MoLE per-token routing (`task='moe_lora_routing'`) ship as schema-only in v0.67.0 — live multi-tenant serving and gating-kernel training land in v0.67.1.
+VeRA / VB-LoRA bank storage (`soup_cli.utils.vector_bank`) supports live multi-tenant serving,
+and `task='moe_lora_routing'` trains the live sparse per-token MoLE gating kernel.
 
 
 ## Data Flywheel (`soup loop`)

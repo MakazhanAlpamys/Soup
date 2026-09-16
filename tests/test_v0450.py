@@ -68,7 +68,9 @@ class _NoopPlugin:
 
 
 @pytest.fixture(autouse=True)
-def _reset_plugins():
+def _reset_plugins(monkeypatch, tmp_path):
+    monkeypatch.setenv("SOUP_PLUGIN_STATE_PATH", str(tmp_path / "plugins.json"))
+    monkeypatch.setattr(plugins_pkg, "_iter_plugin_entry_points", lambda: ())
     plugins_pkg.clear_plugins()
     yield
     plugins_pkg.clear_plugins()
@@ -288,13 +290,13 @@ def test_plugins_cli_lists_registered():
     assert "1.2.3" in result.output
 
 
-def test_plugins_cli_install_advisory():
+def test_plugins_cli_install_fails_honestly():
     from soup_cli.commands import plugins as plugins_cli
 
     runner = CliRunner()
     result = runner.invoke(plugins_cli.app, ["install", "anything"])
-    assert result.exit_code == 0
-    assert "advisory" in result.output
+    assert result.exit_code == 2
+    assert "does not install" in result.output
 
 
 def test_plugins_cli_enable_unknown():

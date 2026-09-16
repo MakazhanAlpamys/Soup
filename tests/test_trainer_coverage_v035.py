@@ -136,18 +136,19 @@ def test_apply_v028_speed_memory_invokes_fp8(task: str) -> None:
 
 
 @pytest.mark.parametrize("task", ALL_TRAINER_TASKS)
-def test_apply_v028_speed_memory_invokes_kernel_picker(task: str) -> None:
-    """The kernel_auto_compose path delegates to _bench_and_pick_kernel."""
+def test_apply_v028_speed_memory_refuses_kernel_picker(task: str) -> None:
+    """Bypassing validation cannot revive the misleading picker path."""
     from soup_cli.utils import v028_features as vf
 
     tcfg = _make_tcfg("kernel_auto_compose")
-    with patch.object(vf, "_bench_and_pick_kernel", return_value="liger+flash"):
+    with patch.object(vf, "_bench_and_pick_kernel") as picker:
         result = vf.apply_v028_speed_memory(
             model=MagicMock(), tcfg=tcfg,
             base_model="meta-llama/Llama-3.2-1B", console=None,
             device="cuda", backend="transformers",
         )
-    assert result["kernel_auto_compose"] is True
+    picker.assert_not_called()
+    assert result["kernel_auto_compose"] is False
 
 
 # ---------------------------------------------------------------------------
@@ -297,15 +298,15 @@ def test_unknown_task_v028_features_rejected_with_distinct_message() -> None:
     "task",
     ("grpo", "kto", "orpo", "simpo", "ipo", "ppo", "reward_model", "embedding"),
 )
-def test_schema_gate_lifted_for_kernel_auto_compose(task: str) -> None:
-    """v0.35.0 #60 — kernel_auto_compose must now be accepted on every trainer."""
+def test_schema_rejects_kernel_auto_compose(task: str) -> None:
+    """#801 — the non-functional selector is rejected on every trainer."""
     import yaml
 
     from soup_cli.config.loader import load_config_from_string
 
     body = _build_yaml_config(task, kernel_auto_compose=True)
-    cfg = load_config_from_string(yaml.safe_dump(body))
-    assert cfg.training.kernel_auto_compose is True
+    with pytest.raises(ValueError, match="use_flash_attn"):
+        load_config_from_string(yaml.safe_dump(body))
 
 
 @pytest.mark.parametrize(
@@ -753,25 +754,26 @@ def test_bench_and_pick_kernel_returns_none_on_unsloth() -> None:
     assert result is None
 
 
-def test_apply_v028_kernel_auto_compose_invokes_bench_and_pick() -> None:
-    """When kernel_auto_compose=True, the apply helper consults the bench."""
+def test_apply_v028_kernel_auto_compose_never_claims_application() -> None:
+    """A caller bypassing config validation still cannot report a false pick."""
     from soup_cli.utils import v028_features as vf
 
     tcfg = SimpleNamespace(
         use_cut_ce=False, quantization_aware=False,
         kernel_auto_compose=True, activation_offloading=None,
     )
-    with patch.object(vf, "_bench_and_pick_kernel", return_value="liger+flash"):
+    with patch.object(vf, "_bench_and_pick_kernel") as picker:
         result = vf.apply_v028_speed_memory(
             model=MagicMock(), tcfg=tcfg,
             base_model="meta-llama/Llama-3.2-1B", console=None,
             device="cuda", backend="transformers",
         )
-    assert result["kernel_auto_compose"] is True
+    picker.assert_not_called()
+    assert result["kernel_auto_compose"] is False
 
 
-def test_apply_v028_kernel_auto_compose_degrades_on_bench_failure() -> None:
-    """When _bench_and_pick_kernel returns None, applied flag stays False."""
+def test_apply_v028_kernel_auto_compose_stays_false_when_validation_is_bypassed() -> None:
+    """The defensive runtime guard never reports the unsupported feature."""
     from soup_cli.utils import v028_features as vf
 
     tcfg = SimpleNamespace(

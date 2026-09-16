@@ -240,8 +240,8 @@ def serve(
         help=(
             "Apply a stored activation-steering vector at decode time "
             "(CAA / ITI / RepE). Pass the name registered via "
-            "`soup steer train`. Schema-only in v0.62.0; live decode hook "
-            "ships in v0.62.1."
+            "`soup steer train`; the transformers backend installs the "
+            "decode hook after loading the model."
         ),
     ),
     steer_strength: float = typer.Option(
@@ -249,7 +249,7 @@ def serve(
         "--steer-strength",
         help=(
             "Steering strength multiplier (|s| <= 10.0). Ignored when "
-            "--steer is unset. v0.62.0 Part C."
+            "--steer is unset."
         ),
     ),
     hub: str = typer.Option(

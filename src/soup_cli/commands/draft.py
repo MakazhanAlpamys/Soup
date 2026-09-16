@@ -386,7 +386,11 @@ def _run_distill(
         data_rows=data_rows,
         uld_strategy=uld_strategy,
     )
-    load_config_from_string(yaml_text)  # validate before spending a subprocess
+    try:
+        load_config_from_string(yaml_text)  # validate before spending a subprocess
+    except ValueError as exc:
+        console.print(f"[red]Invalid rendered distill config:[/] {for_terminal(exc)}")
+        raise typer.Exit(code=1) from exc
 
     # #364 — surface the resolved optimiser-step budget before the run. Epoch
     # granularity can only land NEAR ``--steps``; printing it makes any mismatch

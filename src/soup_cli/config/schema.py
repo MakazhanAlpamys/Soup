@@ -9,8 +9,11 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 # runtime validator's message can never disagree (layer_stream has no torch).
 from soup_cli.utils.layer_stream import (
     DEFAULT_STREAM_BUFFERS,
+    DEFAULT_STREAM_READ_AHEAD,
     MAX_STREAM_BUFFERS,
+    MAX_STREAM_READ_AHEAD,
     MIN_STREAM_BUFFERS,
+    MIN_STREAM_READ_AHEAD,
 )
 from soup_cli.utils.layer_stream import (
     ROLLOUT_STREAM_TASKS as _STREAM_ROLLOUT_TASKS,
@@ -647,9 +650,8 @@ class DataConfig(BaseModel):
     prompt_strategy: Optional[str] = Field(
         default=None,
         description=(
-            "Axolotl-style 'module.path:function_name' Python transform. "
-            "Schema-only in v0.42.0 — runtime invocation lands in v0.42.1. "
-            "(v0.42.0 Part E)"
+            "Axolotl-style 'module.path:function_name' Python transform, "
+            "resolved lazily and applied to each row during SFT formatting."
         ),
     )
     # ---- v0.61.0 Part A — Unlearning data sources --------------------------
@@ -1126,7 +1128,7 @@ class TrainingConfig(BaseModel):
             "aqlm (extreme 2-bit), eetq (8-bit fast), "
             "mxfp4 (BNB 4-bit MXFP4 quant_type), "
             "fp8 (load FP8 checkpoint with dequantize-on-load), "
-            "bitnet_1.58 (BitNet ternary, v0.52.0 schema-only)."
+            "bitnet_1.58 (reserved until BitNet trainer routing is available)."
         ),
     )
     gptq_disable_exllama: bool = Field(
@@ -1185,8 +1187,7 @@ class TrainingConfig(BaseModel):
         default=None, ge=1, le=64,
         description=(
             "LLaMA Pro: append N zero-init transformer blocks and freeze "
-            "the original ones. Schema lands in v0.41.0 — full live wiring "
-            "deferred to v0.41.1."
+            "the original ones before SFT or pre-training."
         ),
     )
     freeze_trainable_layers: Optional[int] = Field(
@@ -1491,8 +1492,8 @@ class TrainingConfig(BaseModel):
         description=(
             "GRPO objective variant: standard | gspo | dapo | dr_grpo | "
             "bnpo | two_sided | rft. Defaults to None (legacy GRPO). "
-            "Requires task='grpo'. Live wiring for v0.50.0 additions is "
-            "deferred to v0.50.1 (schema gate only)."
+            "Requires task='grpo'; the selected loss is installed by the "
+            "GRPO trainer."
         ),
     )
     grpo_delta: Optional[float] = Field(
@@ -1508,10 +1509,9 @@ class TrainingConfig(BaseModel):
     grpo_fp16: bool = Field(
         default=False,
         description=(
-            "Force FP16 mixed precision for GRPO/RL. Soup currently has "
-            "FP8 RL support; this flag is the explicit FP16 opt-in (unsloth "
-            "parity). v0.50.0: schema-only; live mixed-precision routing "
-            "deferred to v0.50.1."
+            "Force FP16 mixed precision for GRPO/RL (unsloth parity). "
+            "On CUDA, the GRPO trainer forwards fp16=True and bf16=False; "
+            "on non-CUDA devices this flag does not enable FP16."
         ),
     )
     # v0.50.0 Part B — Long-context + memory-efficient RL
@@ -1519,9 +1519,9 @@ class TrainingConfig(BaseModel):
         default=False,
         description=(
             "Enable long-context GRPO (unsloth: 380K B200 / 110K H100). "
-            "Wires Tiled MLP from v0.56.0 Part A; schema-only in v0.50.0. "
-            "Requires task='grpo' on a non-mlx backend and "
-            "use_ring_attention=False (both rewrite attention)."
+            "Compatibility validation only: no trainer consumes this flag "
+            "yet. Requires task='grpo' on a non-mlx backend and "
+            "use_ring_attention=False."
         ),
     )
     vllm_sleep_mode: bool = Field(
@@ -1529,8 +1529,8 @@ class TrainingConfig(BaseModel):
         description=(
             "Enable vLLM sleep/standby between rollouts (memory savings "
             "during the optimisation step). Requires backend in "
-            "{transformers, unsloth}. Schema-only in v0.50.0; live wiring "
-            "in v0.50.1."
+            "{transformers, unsloth}; forwarded to compatible TRL and vLLM "
+            "runtimes by the GRPO trainer."
         ),
     )
     # v0.50.0 Part C — Multi-turn agent rollout backend (live v0.71.21 #125)
@@ -1640,18 +1640,18 @@ class TrainingConfig(BaseModel):
             "Enable Vision RL / VLM RL — extends GRPO/PPO to vision "
             "modality (Qwen2-VL / Pixtral / InternVL). Requires "
             "modality='vision', task in {grpo, ppo}, backend in "
-            "{transformers, unsloth}. Schema-only in v0.50.0; live VLM-RL "
-            "rollout wiring deferred to v0.50.1."
+            "{transformers, unsloth}. Compatibility validation is available, "
+            "but no trainer consumes this flag yet."
         ),
     )
     # v0.51.0 Part E — alternative model hubs (ModelScope / Modelers)
     hub: Literal["hf", "modelscope", "modelers"] = Field(
         default="hf",
         description=(
-            "Model hub for downloads + pushes. 'hf' (default), 'modelscope' "
+            "Training-time model-download hub. 'hf' (default), 'modelscope' "
             "(China-hosted; mirrors most Llama/Qwen/etc.), 'modelers' "
-            "(Openmind hub). Schema-only in v0.51.0; live downloader / "
-            "uploader wiring deferred to v0.51.1."
+            "(Openmind hub). `soup push --hub` selects its upload destination "
+            "independently of this field."
         ),
     )
 
@@ -1663,8 +1663,8 @@ class TrainingConfig(BaseModel):
         default=None,
         description=(
             "TTS model family — required when task='tts'. One of: orpheus, "
-            "sesame_csm, llasa, spark, oute. Schema-only in v0.52.0; live "
-            "trainer wrapper deferred to v0.52.1."
+            "sesame_csm, llasa, spark, oute. Selects the family-specific "
+            "codec and trainer preparation path."
         ),
     )
     tts_emotion: Optional[str] = Field(
@@ -1727,8 +1727,8 @@ class TrainingConfig(BaseModel):
         default=None,
         description=(
             "Teacher model HF id or local path — required when task='distill'. "
-            "Null-byte rejected, capped at 512 chars. Schema-only in v0.52.0; "
-            "live distill trainer deferred to v0.52.1."
+            "Loaded frozen by the distillation trainer. Null-byte rejected, "
+            "capped at 512 chars."
         ),
     )
     distill_divergence: Optional[Literal[
@@ -1759,6 +1759,22 @@ class TrainingConfig(BaseModel):
             "teacher)."
         ),
     )
+    distill_chunk_size: Optional[int] = Field(
+        default=None,
+        description=(
+            "Token chunk size for evaluating the distillation divergence kernel. "
+            "Chunks the active supervised tokens to reduce peak memory retention. "
+            "Unset (None) processes all tokens in a single chunk. (#722)"
+        ),
+    )
+    distill_checkpoint: bool = Field(
+        default=False,
+        description=(
+            "Enable non-reentrant activation checkpointing per token chunk during "
+            "distillation divergence computation to minimize autograd retained "
+            "memory. (#722)"
+        ),
+    )
     # v0.71.12 #146 — opt-in LoRA / PEFT path for classifier-family tasks.
     classifier_lora: bool = Field(
         default=False,
@@ -1775,8 +1791,8 @@ class TrainingConfig(BaseModel):
     ebft_variant: Optional[Literal["structured", "strided"]] = Field(
         default=None,
         description=(
-            "Energy-Based FT variant. SFT-task-only; live loss kernel "
-            "deferred to v0.52.1. (v0.52.0)"
+            "Energy-Based FT variant. SFT-task-only; replaces the trainer's "
+            "loss with the selected energy-based objective."
         ),
     )
     ebft_temperature: Optional[float] = Field(
@@ -1791,8 +1807,8 @@ class TrainingConfig(BaseModel):
     ]] = Field(
         default=None,
         description=(
-            "Generalized DPO variant. DPO-family-task-only; live loss kernel "
-            "deferred to v0.52.1. (v0.52.0)"
+            "Generalized DPO variant. DPO-family-task-only; replaces the "
+            "trainer's preference loss with the selected objective."
         ),
     )
     # Part F — MoE expert quantization + router-only training
@@ -1814,9 +1830,8 @@ class TrainingConfig(BaseModel):
     reasoning_effort: Optional[Literal["low", "medium", "high"]] = Field(
         default=None,
         description=(
-            "gpt-oss train-time reasoning effort level. Routes through a "
-            "prompt prefix at training time; live formatter wiring deferred "
-            "to v0.52.1. (v0.52.0)"
+            "gpt-oss train-time reasoning effort level. Injected as a prompt "
+            "prefix by the SFT-family data formatter."
         ),
     )
     train_on_eot: bool = Field(
@@ -1833,7 +1848,8 @@ class TrainingConfig(BaseModel):
         default=None,
         description=(
             "KV-cache element type for inference (q8_0 / bf16 / f16 / fp8). "
-            "Schema-only in v0.53.0; live wiring deferred to v0.53.1."
+            "Applied by soup serve on the transformers backend; backend and "
+            "hardware compatibility are validated before model loading."
         ),
     )
     # Part D — Train-time advanced precision.
@@ -1842,14 +1858,18 @@ class TrainingConfig(BaseModel):
         description=(
             "Extend the v0.28.0 FP8 menu to FP8 attention "
             "(axolotl-parity flag). Requires quantization_aware='fp8'. "
-            "Schema-only in v0.53.0; live wiring deferred to v0.53.1."
+            "DPO-family, GRPO/PPO, pre-training, reward-model, and embedding "
+            "wrappers route it through the shared advanced-precision setup; "
+            "the default SFT path does not consume it."
         ),
     )
     nvfp4: bool = Field(
         default=False,
         description=(
-            "Blackwell-only NVFP4 training (unsloth + axolotl). "
-            "Schema-only in v0.53.0; live wiring deferred to v0.53.1."
+            "Blackwell-only NVFP4 training (unsloth + axolotl). DPO-family, "
+            "GRPO/PPO, pre-training, reward-model, and embedding wrappers "
+            "route it through torchao conversion; the default SFT path does "
+            "not consume it."
         ),
     )
     unsloth_bnb_4bit: bool = Field(
@@ -1914,7 +1934,7 @@ class TrainingConfig(BaseModel):
         description=(
             "Enable RAGEN-style echo-trap detection during multi-turn "
             "agent RL. Requires task in {'grpo', 'ppo'} on a non-mlx "
-            "backend. Schema-only in v0.70.0; live callback in v0.70.1."
+            "backend; installs the shared RL signal callback."
         ),
     )
     echo_trap_threshold: float = Field(
@@ -1951,8 +1971,8 @@ class TrainingConfig(BaseModel):
         description=(
             "Save an RL-aware mid-epoch checkpoint every N steps. None "
             "= use HF Trainer's per-epoch checkpoint only. Requires "
-            "task in {'grpo', 'ppo'}. Schema-only in v0.70.0; live "
-            "save_state / load_state in v0.70.1."
+            "task in {'grpo', 'ppo'}; the callback persists the policy "
+            "adapter, optional optimizer state, and a manifest."
         ),
     )
     rl_checkpoint_keep_last: int = Field(
@@ -1994,8 +2014,8 @@ class TrainingConfig(BaseModel):
         default=False,
         description=(
             "Enable MiniLLM-style on-policy distillation (Gu et al. 2024). "
-            "Requires task='distill' on a non-mlx backend. v0.70.0 "
-            "schema-only; live callback in v0.70.1."
+            "Requires task='distill' on a non-mlx backend; installs the "
+            "teacher-mixed sampling and reverse-KL loss path."
         ),
     )
     minillm_teacher_mix_ratio: float = Field(
@@ -2003,9 +2023,15 @@ class TrainingConfig(BaseModel):
         ge=0.0,
         le=1.0,
         description=(
-            "Probability of sampling from the teacher distribution at "
-            "rollout time. 0.0 = student-only; 1.0 = teacher-only. "
-            "Typical range 0.2-0.5. (v0.70.0)"
+            "Teacher mixture used by MiniLLM. Offline "
+            "(minillm_on_policy=false): weight of the teacher distribution "
+            "in the reverse-KL target "
+            "(ratio * teacher + (1 - ratio) * stopgrad(student)). 0.0 is "
+            "rejected when MiniLLM is enabled because the teacher then has "
+            "zero weight. On-policy: probability of sampling from the "
+            "teacher at rollout time; 0.0 = student-only sampling, and the "
+            "loss is still KL(student || teacher). Typical range 0.2-0.5. "
+            "(v0.70.0; offline zero rejected in #692)"
         ),
     )
     minillm_length_normalize: bool = Field(
@@ -2091,8 +2117,8 @@ class TrainingConfig(BaseModel):
             "Reward-hacking detector for GRPO/PPO. 'info_rm' tracks "
             "InfoRM cluster-separation across training; 'rm_ensemble' "
             "tracks pairwise variance across an RM ensemble. Requires "
-            "task in {'grpo', 'ppo'} on a non-mlx backend. Schema-only "
-            "in v0.70.0; live HF Trainer callback wired in v0.70.1."
+            "task in {'grpo', 'ppo'} on a non-mlx backend; installs the "
+            "shared reward-signal callback."
         ),
     )
     reward_hack_halt: bool = Field(
@@ -2538,6 +2564,36 @@ class TrainingConfig(BaseModel):
 
         return validate_distill_mode(v)
 
+    @field_validator("distill_chunk_size", mode="before")
+    @classmethod
+    def _validate_distill_chunk_size(cls, v):
+        """v0.74.0 #722 — positive integer token chunk size, rejecting bool."""
+        if v is None:
+            return None
+        if isinstance(v, bool):
+            raise ValueError("training.distill_chunk_size must not be bool")
+        if not isinstance(v, int):
+            raise ValueError(
+                f"training.distill_chunk_size must be int, got {type(v).__name__}"
+            )
+        if v < 1:
+            raise ValueError(
+                f"training.distill_chunk_size must be >= 1, got {v}"
+            )
+        return v
+
+    @field_validator("distill_checkpoint", mode="before")
+    @classmethod
+    def _validate_distill_checkpoint(cls, v):
+        """v0.74.0 #722 — boolean activation checkpointing flag."""
+        if v is None:
+            return False
+        if not isinstance(v, bool):
+            raise ValueError(
+                f"training.distill_checkpoint must be bool, got {type(v).__name__}"
+            )
+        return v
+
     @field_validator("mod_capacity_factor", mode="before")
     @classmethod
     def _validate_mod_capacity_factor(cls, v):
@@ -2804,9 +2860,9 @@ class TrainingConfig(BaseModel):
     use_longlora: bool = Field(
         default=False,
         description=(
-            "Enable LongLoRA S² shifted-sparse attention (v0.49.0, schema-only). "
-            "Requires task=sft, backend=transformers, Llama-family base. "
-            "Mutually exclusive with use_ring_attention."
+            "Enable the LongLoRA S² shifted-sparse attention override. "
+            "Requires task=sft, backend=transformers, a supported decoder "
+            "architecture, and use_ring_attention=false."
         ),
     )
     gradient_checkpointing: Union[
@@ -2829,12 +2885,13 @@ class TrainingConfig(BaseModel):
             "Mutually exclusive with Unsloth/MLX backends."
         ),
     )
-    # v0.28.0 — Kernel auto-composition (Liger + Unsloth + FlashAttn per-layer)
+    # v0.28.0 — reserved compatibility field; the implementation never applied
+    # the selected kernel combination (#801).
     kernel_auto_compose: bool = Field(
         default=False,
         description=(
-            "Benchmark and auto-select the fastest kernel combination "
-            "(Liger / FlashAttn / baseline) on the first few steps. (v0.28.0)."
+            "Unsupported compatibility field. Set use_liger and/or "
+            "use_flash_attn explicitly instead."
         ),
     )
     # v0.28.0 — Cross-document attention masking for sample packing
@@ -3013,8 +3070,8 @@ class TrainingConfig(BaseModel):
         default=False,
         description=(
             "Monitor VRAM each step; warn (and recommend new batch/accum) "
-            "when memory pressure is high. Advisory in v0.32.0; live "
-            "DataLoader rebuild deferred to v0.32.1."
+            "when memory pressure is high. Advisory only: it does not rebuild "
+            "the DataLoader or change accumulation during a run."
         ),
     )
     grad_accum_pressure_threshold: float = Field(
@@ -3203,24 +3260,61 @@ class TrainingConfig(BaseModel):
             raise ValueError("training.stream_buffers must be an int, not bool")
         return v
 
+    # #971 — depth of the async disk-tier reader's background lookahead. NOT
+    # the same quantity as stream_buffers (VRAM buffers): this is HOST-side
+    # pinned-memory staging ahead of the disk read. One staging slot is always
+    # held by the layer currently being consumed, so a setting of N stages
+    # N-1 layers ahead of it, not N — measured across settings 1/2/4/8 giving
+    # 0/1/3/7 layers staged ahead, on both forward and backward passes. A
+    # description that promised N layers of lookahead from a setting of N
+    # would repeat the exact defect #748 exists to catch: a documented number
+    # that does not do what it says.
+    stream_read_ahead: int = Field(
+        default=DEFAULT_STREAM_READ_AHEAD,
+        ge=MIN_STREAM_READ_AHEAD,
+        le=MAX_STREAM_READ_AHEAD,
+        description=(
+            "Layers the async disk tier stages ahead on its background "
+            "thread. One staging slot is always held by the layer currently "
+            "being consumed, so a setting of N stages N-1 layers ahead, not "
+            "N: 1 = the read merely leaves the compute thread (nothing "
+            "staged ahead of the one in use), 2 = one layer in flight while "
+            "one is consumed, up to "
+            f"{MAX_STREAM_READ_AHEAD - 1} staged ahead at the maximum "
+            f"setting of {MAX_STREAM_READ_AHEAD}. Each level costs one layer "
+            "of pinned host memory, which is 441 MB on a 70B."
+        ),
+    )
+
+    @field_validator("stream_read_ahead", mode="before")
+    @classmethod
+    def _validate_stream_read_ahead_int(cls, v: Any) -> Any:
+        """Reject bool-as-int (bool subclasses int), mirrors stream_buffers."""
+        if isinstance(v, bool):
+            raise ValueError("training.stream_read_ahead must be an int, not bool")
+        return v
+
     stream_pin: Optional[bool] = Field(
         default=None,
         description=(
-            "Force the page-locked (pinned) RAM store on or off. None (the "
-            "default) lets the box decide: it attempts a pinned store and falls "
-            "back to a pageable one — announcing the cost — when the host cannot "
-            "page-lock it. 'false' forces the pageable store, the only known "
-            "escape hatch when a pinning path is suspect (it was the sole "
-            "mitigation while #331 was live). 'true' forces the pinned store and "
-            "REFUSES the run on the RAM tier, naming the store size, if the box "
-            "cannot page-lock it, rather than silently degrading — page-locking "
-            "is worth up to 6.56x measured throughput, so a silent fallback "
-            "spends the whole margin the feature exists to provide. On the disk "
-            "tier (the base does not fit in RAM, so there is no RAM store to "
-            "page-lock) and on non-CUDA targets (CPU or MPS) pinning is "
-            "INAPPLICABLE rather than unsatisfiable: 'true' is announced and the "
-            "run proceeds with a pageable CPU source, so the key stays committable "
-            "to a config shared between CUDA and non-CUDA boxes."
+            "Force the page-locked (pinned) host memory on or off — the RAM "
+            "tier's base store, or the disk tier's async-reader host staging "
+            "(#971). None (the default) lets the box decide: it attempts to "
+            "page-lock that memory and falls back to pageable — announcing "
+            "the cost — when the host cannot page-lock it. 'false' forces "
+            "the pageable store, the only known escape hatch when a pinning "
+            "path is suspect (it was the sole mitigation while #331 was "
+            "live). 'true' forces pinning and REFUSES the run rather than "
+            "silently degrading if the box cannot page-lock it: on the RAM "
+            "tier naming the store size, on the disk tier naming "
+            "training.stream_read_ahead as the depth that decides how much "
+            "staging gets locked — page-locking is worth up to 6.56x "
+            "measured throughput, so a silent fallback spends the whole "
+            "margin the feature exists to provide. Non-CUDA targets (CPU or "
+            "MPS) are the one case pinning stays INAPPLICABLE: 'true' is "
+            "announced there and the run proceeds with a pageable CPU "
+            "source, so the key stays committable to a config shared "
+            "between CUDA and non-CUDA boxes."
         ),
     )
 
@@ -3519,6 +3613,18 @@ class TrainingConfig(BaseModel):
         return self
 
     @model_validator(mode="after")
+    def _reject_kernel_auto_compose(self) -> "TrainingConfig":
+        """Reject a selector that never applied the combination it reported."""
+        if self.kernel_auto_compose:
+            raise ValueError(
+                "kernel_auto_compose is not supported: it benchmarks the same "
+                "already-loaded model for every candidate and does not apply "
+                "the selected flags. Set kernel_auto_compose: false and enable "
+                "supported kernels explicitly with use_liger and/or use_flash_attn"
+            )
+        return self
+
+    @model_validator(mode="after")
     def _validate_multipack_packing_exclusive(self) -> "TrainingConfig":
         """Multipack and packing are mutually exclusive — pick one (v0.37.0).
 
@@ -3770,8 +3876,7 @@ class TrainingConfig(BaseModel):
             "Unlearning method backend — required when task='unlearn'. "
             "npo (Negative Preference Optimization, DPO-shaped negative-only "
             "loss); simnpo (length-normalised NPO without ref model); rmu "
-            "(Representation Misdirection Unlearning, residual-stream noise). "
-            "Schema-only in v0.61.0; live trainer deferred to v0.61.1."
+            "(Representation Misdirection Unlearning, residual-stream noise)."
         ),
     )
     unlearn_alpha: Optional[float] = Field(
@@ -3861,16 +3966,16 @@ class TrainingConfig(BaseModel):
         description=(
             "Opt INTO citation-precision / recall scoring + a loss-mask "
             "rule that emphasises citation spans. Requires "
-            "`data.format='raft'`. Schema-only in v0.62.0; live span-mask "
-            "ships in v0.62.1. (v0.62.0 Part D)"
+            "`data.format='raft'`; SFT and RAFT trainers apply the weighted "
+            "citation-span mask."
         ),
     )
     citation_style: Optional[Literal["bracket", "inline", "footnote"]] = Field(
         default=None,
         description=(
             "Citation rendering style. 'bracket' = `[doc-1]` inline tag "
-            "(canonical RAFT default); 'inline' / 'footnote' are stub "
-            "placeholders for v0.62.1. (v0.62.0 Part D)"
+            "(canonical RAFT default), 'inline' = `(doc-1)`, and 'footnote' "
+            "= `[^doc-1]`. Used by citation scoring and span masking."
         ),
     )
     citation_recall_threshold: Optional[float] = Field(
@@ -3906,24 +4011,25 @@ class TrainingConfig(BaseModel):
     grace_codebook: bool = Field(
         default=False,
         description=(
-            "Opt INTO the GRACE codebook — discrete latent-space (key, "
-            "value) store for thousands of sequential knowledge edits "
-            "without norm-blowup. Schema-only in v0.62.0; live lookup / "
-            "write ships in v0.62.1. (v0.62.0 Part E)"
+            "Reserve GRACE codebook configuration for training. Compatibility "
+            "validation only: no trainer or knowledge-edit command consumes "
+            "this field yet."
         ),
     )
     grace_codebook_size: Optional[int] = Field(
         default=None,
         description=(
-            "Codebook entry count. Required when grace_codebook=True. "
-            "Bounded [1, 100_000]. (v0.62.0 Part E)"
+            "Reserved GRACE codebook entry count. Required when "
+            "grace_codebook=True and bounded [1, 100_000], but not consumed "
+            "at runtime yet."
         ),
     )
     grace_codebook_dim: Optional[int] = Field(
         default=None,
         description=(
-            "Codebook entry dim (residual-stream width). Required when "
-            "grace_codebook=True. Bounded [1, 16_384]. (v0.62.0 Part E)"
+            "Reserved GRACE codebook entry dimension. Required when "
+            "grace_codebook=True and bounded [1, 16_384], but not consumed "
+            "at runtime yet."
         ),
     )
 
@@ -4229,6 +4335,12 @@ def remap_root_level_misplaced_keys(values):
     return new_values
 
 
+# task values whose trainer wrapper subclasses SFTTrainerWrapper and so reads
+# training.use_flash_attn / training.use_liger (sft.py:_setup_transformers,
+# inherited by tts.py via super()). Every other task ignores both fields.
+SFT_KERNEL_AWARE_TASKS: frozenset[str] = frozenset({"sft", "tts"})
+
+
 class SoupConfig(BaseModel):
     """Root config for soup.yaml."""
 
@@ -4283,10 +4395,7 @@ class SoupConfig(BaseModel):
     )
     advise: Optional[AdviseConfig] = Field(
         default=None,
-        description=(
-            "Pre-flight decision settings consumed by `soup advise` "
-            "(v0.54.0 — schema-only on SoupConfig)."
-        ),
+        description="Pre-flight decision settings consumed by `soup advise`.",
     )
 
     @field_validator("experiment_name")
@@ -4754,6 +4863,8 @@ class SoupConfig(BaseModel):
             or tcfg.distill_divergence is not None
             or tcfg.distill_temperature is not None
             or distill_mode_set
+            or tcfg.distill_chunk_size is not None
+            or bool(tcfg.distill_checkpoint)
         )
         if self.task == "distill":
             from soup_cli.utils.distill import validate_distill_compat
@@ -4766,6 +4877,37 @@ class SoupConfig(BaseModel):
                 )
             except ValueError as exc:
                 raise ValueError(str(exc)) from exc
+
+            chunk_offenders = [
+                name
+                for name, val in (
+                    ("distill_chunk_size", tcfg.distill_chunk_size),
+                    (
+                        "distill_checkpoint",
+                        tcfg.distill_checkpoint if tcfg.distill_checkpoint else None,
+                    ),
+                )
+                if val is not None
+            ]
+            if chunk_offenders:
+                if tcfg.uld_strategy is not None:
+                    raise ValueError(
+                        f"Distillation fields {chunk_offenders} are incompatible with "
+                        f"training.uld_strategy={tcfg.uld_strategy!r}; "
+                        "chunked evaluation applies only to standard token-level distillation"
+                    )
+                if tcfg.minillm_enabled:
+                    raise ValueError(
+                        f"Distillation fields {chunk_offenders} are incompatible with "
+                        "training.minillm_enabled=True; "
+                        "chunked evaluation applies only to standard token-level distillation"
+                    )
+                if tcfg.distill_mode == "sequence":
+                    raise ValueError(
+                        f"Distillation fields {chunk_offenders} are incompatible with "
+                        "training.distill_mode='sequence'; "
+                        "chunked evaluation applies only to token-level distillation"
+                    )
             return self
         if distill_fields_set:
             offenders = [
@@ -4774,6 +4916,11 @@ class SoupConfig(BaseModel):
                     ("distill_divergence", tcfg.distill_divergence),
                     ("distill_temperature", tcfg.distill_temperature),
                     ("distill_mode", tcfg.distill_mode if distill_mode_set else None),
+                    ("distill_chunk_size", tcfg.distill_chunk_size),
+                    (
+                        "distill_checkpoint",
+                        tcfg.distill_checkpoint if tcfg.distill_checkpoint else None,
+                    ),
                 ) if value is not None
             ]
             raise ValueError(
@@ -4861,6 +5008,25 @@ class SoupConfig(BaseModel):
             raise ValueError(
                 f"training.train_on_eot=true requires task in "
                 f"{sorted(sft_family_tasks)}; got task={self.task!r}"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_kernel_flags_task_gate(self) -> "SoupConfig":
+        """#806: use_flash_attn / use_liger are read only by the SFT-family
+        trainer (sft.py, inherited by tts.py's ``TTSTrainerWrapper``); every
+        other task ignores both, so reject rather than silently no-op.
+        """
+        tcfg = self.training
+        if tcfg.use_liger and self.task not in SFT_KERNEL_AWARE_TASKS:
+            raise ValueError(
+                f"training.use_liger=true requires task in "
+                f"{sorted(SFT_KERNEL_AWARE_TASKS)}; got task={self.task!r}"
+            )
+        if tcfg.use_flash_attn and self.task not in SFT_KERNEL_AWARE_TASKS:
+            raise ValueError(
+                f"training.use_flash_attn=true requires task in "
+                f"{sorted(SFT_KERNEL_AWARE_TASKS)}; got task={self.task!r}"
             )
         return self
 
@@ -5205,6 +5371,7 @@ class SoupConfig(BaseModel):
                 tcfg.stream_source != "auto"
                 or tcfg.stream_ngram_source != "auto"
                 or tcfg.stream_buffers != 2
+                or tcfg.stream_read_ahead != DEFAULT_STREAM_READ_AHEAD
                 or tcfg.stream_vram_override is not None
                 or tcfg.stream_vram_probe
                 or tcfg.stream_disk_kind is not None
@@ -5212,13 +5379,32 @@ class SoupConfig(BaseModel):
             ):
                 raise ValueError(
                     "training.stream_source / training.stream_ngram_source / "
-                    "training.stream_buffers / "
+                    "training.stream_buffers / training.stream_read_ahead / "
                     "training.stream_vram_override / training.stream_vram_probe "
                     "/ training.stream_disk_kind / training.stream_pin set but "
                     "stream_layers is false; set stream_layers=true to stream the "
                     "base layer-by-layer."
                 )
             return self
+        # #971 — `stream_source: 'ram'` INSISTS on the RAM tier: 'ram' insists,
+        # 'disk' forces, 'auto' falls back (trainer/stream_setup.py). The
+        # read-ahead reader belongs to the NVMe disk tier, so a non-default
+        # depth beside 'ram' is a setting that validates, is documented, and
+        # reaches nothing — the class of defect #748 exists to catch, and the
+        # one this very field was caught by. The DEFAULT is accepted, because a
+        # default is not a decision: refusing it would make `stream_source: ram`
+        # unusable with every config that never mentions the depth.
+        if (
+            tcfg.stream_source == "ram"
+            and tcfg.stream_read_ahead != DEFAULT_STREAM_READ_AHEAD
+        ):
+            raise ValueError(
+                f"training.stream_read_ahead={tcfg.stream_read_ahead} has no "
+                "effect with training.stream_source='ram': the read-ahead reader "
+                "belongs to the NVMe disk tier, and 'ram' never falls back to "
+                "it. Set stream_source='auto' or 'disk', or drop "
+                "stream_read_ahead."
+            )
         # v0.72.4 — the four preference losses join SFT. DPO and KTO take their
         # reference from the SAME streamed base with adapters disabled (TRL's
         # `null_ref_context`), so the reference costs no extra weights: measured
@@ -6450,6 +6636,12 @@ class SoupConfig(BaseModel):
         backend. Setting any minillm_* tunable without
         ``minillm_enabled=True`` is rejected (silent no-op footgun
         mirroring v0.52 distill / v0.62 grace_codebook policy).
+
+        #692 — ``minillm_enabled`` + offline blend + mix ratio 0
+        is the inverse footgun: the teacher is loaded and forwarded, then
+        given zero weight. Rejected at parse. Ratio 0 stays legal on the
+        on-policy path (student-only sampling, loss still KL(student ||
+        teacher)).
         """
         tcfg = self.training
         any_field_set = (
@@ -6510,6 +6702,19 @@ class SoupConfig(BaseModel):
             raise ValueError(
                 "minillm_rollout_length requires minillm_on_policy=True "
                 "(unused by the offline distribution blend)"
+            )
+        # #692 — offline blend at mix 0 is KL(student || stopgrad(student)).
+        if (
+            not tcfg.minillm_on_policy
+            and tcfg.minillm_teacher_mix_ratio == 0.0
+        ):
+            raise ValueError(
+                "minillm_enabled with minillm_on_policy=false requires "
+                "minillm_teacher_mix_ratio > 0; ratio 0 makes the offline "
+                "reverse-KL target the detached student (no teacher signal). "
+                "Set minillm_teacher_mix_ratio in (0, 1], or set "
+                "minillm_on_policy=true (ratio 0 then means student-only "
+                "sampling while the loss stays KL(student || teacher))"
             )
         return self
 

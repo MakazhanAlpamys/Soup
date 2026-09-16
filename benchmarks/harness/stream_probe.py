@@ -75,8 +75,30 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--quant", choices=("none", "nf4"), default="nf4")
     parser.add_argument("--tier", choices=("ram", "disk"), default="ram")
-    parser.add_argument("--no-pin", action="store_true", help="pageable RAM store")
+    parser.add_argument(
+        "--no-pin",
+        action="store_true",
+        help=(
+            "pageable host memory on EITHER tier: the RAM tier's store, or the disk "
+            "tier's read-ahead staging"
+        ),
+    )
     parser.add_argument("--buffers", type=int, default=2)
+    parser.add_argument(
+        "--read-ahead",
+        type=int,
+        default=2,
+        help="layers the async disk source reads ahead (disk tier only)",
+    )
+    parser.add_argument(
+        "--control-sync-source",
+        action="store_true",
+        help=(
+            "CONTROL (disk tier only): measure the SHIPPED synchronous "
+            "DiskSource instead of the async reader, in the same session as "
+            "the async block. --read-ahead then has no effect"
+        ),
+    )
     parser.add_argument("--seq", type=int, default=512)
     parser.add_argument("--batch", type=int, default=1)
     parser.add_argument("--steps", type=int, default=8, help="timed steps per point")
@@ -112,16 +134,66 @@ def parse_args() -> argparse.Namespace:
         "--lazy-shard-handles",
         action="store_true",
         help=(
-            "MEASUREMENT WORKAROUND for the shipped sharder, which holds every source "
-            "shard's mmap open at once and dies with an access violation on Windows past "
-            "~100 GB of live mappings: during sharding ONLY, safe_open is replaced by a "
-            "wrapper that opens at most two files at a time and returns copies. The "
-            "runtime and every timed number still come from the shipped code"
+            "OBSOLETE since #926: the shipped sharder now keeps at most two source "
+            "handles alive and every read owns its memory. Kept so the 2026-09-12 record "
+            "can be re-run as it was: before #926 the sharder held every source shard's "
+            "mmap open at once and died with an access violation on Windows past ~100 GB "
+            "of live mappings, and this flag replaced safe_open during sharding ONLY with "
+            "a wrapper of the same shape, so the runtime and every timed number still "
+            "came from the shipped code"
         ),
     )
     parser.add_argument("--out", required=True, help="JSON results file, rewritten per point")
     parser.add_argument("--label", default="", help="free text stored beside the results")
     return parser.parse_args()
+
+
+# ==========================================================================
+# the same-day control (see --control-sync-source)
+# ==========================================================================
+#: The shim's class name. Every run prints the source class it actually
+#: built and refuses when that disagrees with the flag, so a control block
+#: and a measured block can never be confused in the results file.
+CONTROL_SOURCE_NAME = "SyncDiskSourceControl"
+
+
+def install_sync_source_control() -> str:
+    """Point ``_build_source``'s lazy import at the SHIPPED synchronous source.
+
+    The pre-#971 "before" for the disk tier was measured on 2026-09-12, in a
+    different session on a card whose boost clock varies ~13% between
+    sessions. The runtime no longer constructs ``DiskSource`` for
+    ``tier='disk'``, and a measurement task must not change ``src/``, so the
+    same-day control is made here instead: the ONE name ``_build_source``
+    imports is replaced by a subclass of the shipped ``DiskSource`` that
+    accepts and ignores the two keyword arguments the async source added.
+
+    Nothing else moves. The buffer pool, the prefetcher and the layer wrapper
+    stay the shipped ones — exactly as they were before the release contract
+    landed — and ``_release_source`` is duck-typed, so it is a no-op against a
+    source that defines no ``release``. The control therefore isolates the
+    READ PATH and not a different scheduler.
+
+    ``pinned`` and ``read_ahead`` are set to what the shipped source honestly
+    has: no page-locked staging and no reader depth. ``runtime.stats()`` reads
+    both off the source, and ``nbytes`` is already 0 by ``DiskSource``'s own
+    design, so the preamble labels the block without being told to.
+    """
+    from soup_cli.utils import async_disk_source
+    from soup_cli.utils.layer_stream_runtime import DiskSource
+
+    class SyncDiskSourceControl(DiskSource):  # type: ignore[misc]
+        def __init__(
+            self, *args: Any, read_ahead: Any = None, pin: Any = False, **kwargs: Any
+        ):
+            del read_ahead, pin  # the async source's two additions, ignored
+            super().__init__(*args, **kwargs)
+            self.pinned = False
+            self.read_ahead = None
+
+    assert SyncDiskSourceControl.__name__ == CONTROL_SOURCE_NAME
+    async_disk_source.AsyncDiskSource = SyncDiskSourceControl
+    return CONTROL_SOURCE_NAME
 
 
 # ==========================================================================
@@ -323,6 +395,12 @@ def build(args: argparse.Namespace, device: str, dtype: str) -> Tuple[Any, ...]:
         )
     shard_seconds = time.perf_counter() - started
 
+    if args.control_sync_source:
+        print(
+            f"source        CONTROL: {install_sync_source_control()} — the shipped "
+            "synchronous DiskSource replaces the async reader for this block"
+        )
+
     started = time.perf_counter()
     model, runtime = build_streamed_model(
         model_id=weights_dir,
@@ -332,7 +410,11 @@ def build(args: argparse.Namespace, device: str, dtype: str) -> Tuple[Any, ...]:
         device=device,
         dtype=dtype,
         buffers=args.buffers,
-        pin=(args.tier == "ram" and not args.no_pin),
+        read_ahead=args.read_ahead,
+        # Both tiers stage through host memory now: the RAM tier's store, the
+        # disk tier's read-ahead staging (#971). Forcing pageable on disk here
+        # would have measured the fallback path, not the shipped one.
+        pin=not args.no_pin,
         seed=args.seed,
         quant=args.quant,
         double_quant=True,
@@ -381,6 +463,11 @@ class Instruments:
     def _install_pool(self) -> None:
         import torch
 
+        # The shipped body tells the source its staging slot is free; a replica
+        # that skipped it would be refused by AsyncDiskSource at the second
+        # layer (#971) and would measure a different contract on the RAM tier.
+        from soup_cli.utils.layer_stream_runtime import _release_source
+
         pool = self.pool
         self._guard(
             type(pool),
@@ -389,6 +476,8 @@ class Instruments:
                 "stream.wait_stream(torch.cuda.current_stream())",
                 "dst.copy_(source.get(idx, name), non_blocking=True)",
                 "self.events[slot].record(stream)",
+                "_release_source(source, idx, self.events[slot])",
+                "_release_source(source, idx, None)",
             ),
         )
         inst = self
@@ -416,9 +505,11 @@ class Instruments:
                         end.record(stream)
                         inst._copy_pairs.append((start, end))
                     pool.events[slot].record(stream)
+                _release_source(source, idx, pool.events[slot])
             else:
                 for name in keys:
                     pool.buffers[slot][name].copy_(source.get(idx, name))
+                _release_source(source, idx, None)
             pool.owner[slot] = idx
             pool.loads += 1
             return slot
@@ -442,6 +533,8 @@ class Instruments:
     def _install_large_pool(self) -> None:
         import torch
 
+        from soup_cli.utils.layer_stream_runtime import _release_source
+
         large = self.large_pool
         if large is None:
             return
@@ -453,6 +546,8 @@ class Instruments:
                 "stream.wait_stream(torch.cuda.current_stream())",
                 "dst.copy_(source.get(source_idx, key), non_blocking=True)",
                 "self.event.record(stream)",
+                "_release_source(source, source_idx, self.event)",
+                "_release_source(source, source_idx, None)",
             ),
         )
         inst = self
@@ -478,8 +573,10 @@ class Instruments:
                         end.record(stream)
                         inst._copy_pairs.append((start, end))
                     large.event.record(stream)
+                _release_source(source, source_idx, large.event)
             else:
                 dst.copy_(source.get(source_idx, key))
+                _release_source(source, source_idx, None)
             large.owner = key
             large.loads += 1
 
@@ -791,6 +888,12 @@ def main() -> int:
     if not (args.ceiling or args.step or args.sweep or args.ablate):
         print("ERROR: choose at least one of --ceiling --step --sweep --ablate")
         return 2
+    if args.control_sync_source and args.tier != "disk":
+        print(
+            "ERROR: --control-sync-source is a DISK-tier control; the RAM tier "
+            "has no disk source to swap"
+        )
+        return 2
 
     import torch
 
@@ -818,6 +921,25 @@ def main() -> int:
         f"{'pinned' if stats['pinned'] else 'pageable'} on tier {stats['tier']} "
         f"(disk {stats['disk_bytes'] / 1e9:.3f} GB); build {build_s:.1f} s"
     )
+    # Guard: the class the runtime ACTUALLY built, every block, control or
+    # not. A shim left installed by accident would otherwise publish the
+    # pre-#971 read path as the measured one, which is the single worst
+    # mistake this record could make.
+    source_class = type(runtime.source).__name__
+    is_control = source_class == CONTROL_SOURCE_NAME
+    if is_control != bool(args.control_sync_source):
+        print(
+            f"ERROR: source guard — the runtime built a {source_class} while "
+            f"--control-sync-source was "
+            f"{'set' if args.control_sync_source else 'not set'}"
+        )
+        return 2
+    print(
+        f"{'source':<16}{source_class}  read_ahead {stats['read_ahead']}  "
+        f"staging {stats['store_bytes'] / 1e6:.0f} MB "
+        f"{'pinned' if stats['pinned'] else 'pageable'}"
+        + ("  [CONTROL: the pre-#971 synchronous read path]" if is_control else "")
+    )
     per_buffer_mb = stats["buffer_bytes"] / stats["buffers"] / 1e6
     print(f"{'buffers':<16}{stats['buffers']} x {per_buffer_mb:.1f} MB")
 
@@ -839,6 +961,9 @@ def main() -> int:
         "dtype": dtype,
         "tier": stats["tier"],
         "pinned": stats["pinned"],
+        "source_class": source_class,
+        "control_sync_source": bool(args.control_sync_source),
+        "read_ahead": stats["read_ahead"],
         "store_gb": stats["store_bytes"] / 1e9,
         "disk_gb": stats["disk_bytes"] / 1e9,
         "buffers": stats["buffers"],
