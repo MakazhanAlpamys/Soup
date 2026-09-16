@@ -21,6 +21,8 @@ import tempfile
 from dataclasses import dataclass, replace
 from typing import Optional, Tuple
 
+from soup_cli.utils.paths import open_no_follow
+
 _LOG = logging.getLogger(__name__)
 
 # Mirrors v0.40.3 #33 TraceLogWriter._SECRET_RE policy.
@@ -271,13 +273,8 @@ def append_audit_event(
     rotate_if_needed(target, cap_bytes=cap_bytes)
     line = json.dumps((redact_event(ev) if redact else ev).to_dict()) + "\n"
     flags = os.O_WRONLY | os.O_CREAT | os.O_APPEND
-    # O_NOFOLLOW: refuse to follow a symlink at the target path.
-    # Not available on Windows.
-    nofollow = getattr(os, "O_NOFOLLOW", 0)
-    if nofollow:
-        flags |= nofollow
     mode = 0o600
-    fd = os.open(target, flags, mode)
+    fd = open_no_follow(target, flags, mode)
     try:
         os.write(fd, line.encode("utf-8"))
     finally:

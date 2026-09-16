@@ -39,6 +39,7 @@ from typing import TYPE_CHECKING, Optional, Sequence
 from rich.panel import Panel
 from rich.table import Table
 
+from soup_cli.utils.paths import open_no_follow
 from soup_cli.utils.terminal import for_terminal
 
 if TYPE_CHECKING:  # pragma: no cover — typing only; torch stays lazy at runtime
@@ -353,10 +354,10 @@ def _registry_lock():
             os.makedirs(
                 os.path.dirname(os.path.abspath(lock_path)) or ".", exist_ok=True
             )
-            # O_NOFOLLOW so a pre-planted symlink at <registry>.lock can't
-            # redirect the lock (defence-in-depth — nothing is written to it).
-            flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
-            fd = os.open(lock_path, flags, 0o600)
+            # O_NOFOLLOW via open_no_follow so a pre-planted symlink at <registry>.lock
+            # can't redirect the lock or create a victim file (#820).
+            flags = os.O_RDWR | os.O_CREAT
+            fd = open_no_follow(lock_path, flags, 0o600)
             handle = os.fdopen(fd, "a+")
         except OSError:
             handle = None
@@ -433,10 +434,9 @@ def _read_registry() -> list[dict]:
     try:
         if not os.path.isfile(path):
             return []
-        # O_NOFOLLOW: this runs on every `soup serve` startup, so a symlink
-        # planted at ~/.soup/drafts.json must not be transparently followed.
-        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
-        fd = os.open(path, flags)
+        # O_NOFOLLOW via open_no_follow: this runs on every `soup serve` startup,
+        # so a symlink planted at ~/.soup/drafts.json must not be followed (#820).
+        fd = open_no_follow(path, os.O_RDONLY)
         with os.fdopen(fd, "r", encoding="utf-8") as handle:
             if os.fstat(handle.fileno()).st_size > _MAX_REGISTRY_BYTES:
                 return []
