@@ -149,6 +149,7 @@ training:
 ```bash
 soup rewind                      # most recent run: list spikes, detail the worst
 soup rewind <run_id> --step 340  # rank the rows of one step
+soup rewind <run_id> --top 25    # how many rows to list (default 10)
 soup rewind <run_id> --json r.json --no-preview
 ```
 
@@ -166,10 +167,23 @@ row 91: 94% of step 340's loss, 3,900 tokens
 Inspect or drop this row, then retrain.
 ```
 
-Scope: task `sft` on the transformers and MLX backends, single process. The recorder
-turns itself off, with one warning, for resumed runs, `packing` / `padding_free`, and
-anything it cannot attribute row by row. Previews are shown only when the dataset on
-disk still matches the one the run trained on.
+Scope: task `sft` on the transformers and MLX backends, single process, on the plain
+text path. The recorder turns itself off, with one warning naming the reason, for
+resumed runs, `packing` / `padding_free`, multipack, vision, audio, a pre-tokenised
+dataset, and anything else it cannot attribute row by row. Previews are shown only when
+the dataset on disk still matches the one the run trained on.
+
+**What it costs.** Writing one line per micro-batch measured under 0.1 ms per
+micro-batch, which is negligible against any real step, and a run's peak memory was
+unchanged with the recorder on and off. The file grows without a cap: roughly 14 MB per
+50,000 micro-batches at batch 8, or about 100 MB for a million rows over three epochs.
+Delete it, or set `rewind_log: false`, if that matters to you.
+
+**What it contains.** Integer row indices, one loss and one token count per row — never
+any text from your dataset. Previews in `soup rewind` are rebuilt at read time from your
+own data file, and only while its fingerprint still matches. The indices and token counts
+are still weak metadata about a private dataset, so treat the file as you would the
+`output` directory it sits in.
 
 ---
 

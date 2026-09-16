@@ -502,3 +502,45 @@ def test_dataset_fingerprint_key_order_independent_and_value_sensitive(tmp_path)
     assert fp_a != fp_c
     assert isinstance(fp_a, str)
     assert len(fp_a) == 64  # sha256 hex digest length
+
+
+class _CountingBatches(tuple):
+    """A ``batches`` tuple that counts how many times it is iterated."""
+
+    def __new__(cls, items):
+        self = super().__new__(cls, items)
+        self.iterations = 0
+        return self
+
+    def __iter__(self):
+        self.iterations += 1
+        return super().__iter__()
+
+
+def test_reading_a_run_indexes_the_batches_once_not_once_per_step():
+    """`find_spikes` asks for every step's batches, and `batches_for` used to
+    scan the whole log each time: 0.08 s at 2,000 steps, 87 s at 50,000. The
+    index is built once at construction, so the scan count must not grow with
+    the number of steps."""
+    from soup_cli.monitoring.rewind_log import BatchRecord, RewindRun
+    from soup_cli.utils.rewind import find_spikes
+
+    records = [
+        BatchRecord(step=step, micro=0, rows=(step,), row_loss=(1.0,), row_tokens=(10,))
+        for step in range(1, 201)
+    ]
+    batches = _CountingBatches(records)
+    run = RewindRun(header={"kind": "header", "version": 1}, batches=batches)
+    after_construction = batches.iterations
+
+    find_spikes(run)
+    for step in run.steps():
+        run.batches_for(step)
+        run.step_loss(step)
+
+    assert after_construction == 1, "the index must be built in one pass"
+    assert batches.iterations == 1, (
+        f"the log was re-scanned {batches.iterations - 1} times after construction; "
+        "reading is quadratic in the number of steps again"
+    )
+

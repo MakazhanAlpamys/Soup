@@ -152,3 +152,78 @@ def test_mlx_start_rewind_builds_log_state_and_loss(tmp_path, masked):
     optimizer.init(nn.Linear(2, 2).trainable_parameters())
     assert ROW_LOSS_KEY in optimizer.state and ROW_TOKENS_KEY in optimizer.state
     rewind.finish()
+
+
+# ------------------------------------------------- the field's blast radius --
+
+
+def _cfg(**training):
+    from soup_cli.config.schema import SoupConfig
+
+    body = {"lr": 1e-4}
+    body.update(training)
+    return SoupConfig.model_validate(
+        {
+            "base": "HuggingFaceTB/SmolLM2-135M",
+            "task": "sft",
+            "data": {"train": "train.jsonl"},
+            "training": body,
+        }
+    )
+
+
+def test_toggling_rewind_log_does_not_invalidate_ship_evidence():
+    """`ship` refuses evidence whose config sha moved. rewind_log decides what a
+    run writes beside the model, not what the model becomes -- measured on CUDA,
+    toggling it left train_loss bit-identical -- so it must not count."""
+    from soup_cli.commands.ship import _config_sha_of
+
+    on = _config_sha_of(_cfg(rewind_log=True))
+    off = _config_sha_of(_cfg(rewind_log=False))
+    assert on == off
+
+    # Control: a change that does alter the model must still move the sha.
+    assert _config_sha_of(_cfg(rewind_log=True, lr=2e-4)) != on
+
+
+@pytest.mark.parametrize(
+    "override, expected",
+    [
+        ("pretokenized", "pre-tokenised"),
+        ("is_raft", "RAFT"),
+        ("multipack", "multipack"),
+        ("vision", "vision"),
+        ("audio", "audio"),
+    ],
+)
+def test_every_skipping_path_names_its_own_reason(override, expected):
+    """The recorder is the last branch of the trainer chain, so these paths skip
+    it. Doing so silently was the bug: `soup rewind` then offers "it was not an
+    SFT run" as a reason, which is false for multipack."""
+    from soup_cli.trainer.sft import rewind_skip_reason
+
+    kwargs = {
+        "task": "sft",
+        "pretokenized": False,
+        "is_raft": False,
+        "multipack": False,
+        "vision": False,
+        "audio": False,
+    }
+    kwargs[override] = True
+    assert expected in rewind_skip_reason(**kwargs)
+
+
+def test_a_non_sft_task_is_named_as_such():
+    from soup_cli.trainer.sft import rewind_skip_reason
+
+    reason = rewind_skip_reason(
+        task="dpo",
+        pretokenized=False,
+        is_raft=False,
+        multipack=False,
+        vision=False,
+        audio=False,
+    )
+    assert "SFT-only" in reason
+    assert "dpo" in reason

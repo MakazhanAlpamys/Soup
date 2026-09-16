@@ -506,3 +506,31 @@ def test_experiment_name_layout_is_tried_before_the_bare_output(
     result = _invoke(["rewind", "--no-preview", "--json", str(out)])
     assert result.exit_code == 0, result.output
     assert json.loads(out.read_text())["step"] == 41
+
+
+def test_a_header_only_log_refuses_rather_than_reporting_clean(
+    tmp_path, plain_console, monkeypatch
+):
+    """A recorder switched off mid-run leaves its header behind. Running the
+    detector over nothing and printing "No loss spikes recorded" in green reads
+    as "your run was clean" when nothing was measured at all."""
+    log = RewindLog(
+        tmp_path / RewindLog.FILENAME,
+        backend="transformers",
+        task="sft",
+        n_rows=8,
+        batch_size=4,
+        grad_accum=1,
+        dataset_fingerprint="fp0",
+    )
+    log.close()
+    _patch_tracker(
+        monkeypatch, {"run_id": "r1", "output_dir": str(tmp_path), "status": "completed"}
+    )
+
+    result = _invoke(["rewind"])
+
+    assert result.exit_code == 1, result.output
+    assert "No micro-batches were recorded" in result.output
+    assert "No loss spikes recorded" not in result.output
+

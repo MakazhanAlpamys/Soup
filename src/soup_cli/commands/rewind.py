@@ -120,6 +120,21 @@ def rewind(
         )
     )
 
+    if not run.batches:
+        # A header with no batches means the recorder was switched off after it
+        # opened the file (packing / padding-free, a resumed run, or a failure
+        # it reported at the time). Running the spike detector over nothing and
+        # printing "No loss spikes recorded" in green reads as "your run was
+        # clean" -- a confident answer from an empty file is worse than none.
+        console.print(
+            f"[yellow]No micro-batches were recorded[/] in {escape(str(path))} — "
+            "the file holds only its header.\n"
+            "The recorder was switched off during the run; look for a "
+            "[bold]Rewind log off[/] or [bold]Rewind recorder disabled[/] line in "
+            "its output. This says nothing about whether the run was clean."
+        )
+        raise typer.Exit(1)
+
     spikes = rewind_utils.find_spikes(run)
 
     if step is None:

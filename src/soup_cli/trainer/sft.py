@@ -103,6 +103,37 @@ def _assert_finite_training_state(
         )
 
 
+def rewind_skip_reason(
+    *,
+    task: str,
+    pretokenized: bool,
+    is_raft: bool,
+    multipack: bool,
+    vision: bool,
+    audio: bool,
+) -> str:
+    """Why this run takes no rewind recorder, in words a user can act on.
+
+    The recording trainer is the last branch of the trainer chain, so every
+    earlier one skips it. Extracted so each reason can be asserted directly:
+    the failure this guards against is silence, and a test that only checks
+    "something was printed" would not notice the wrong reason.
+    """
+    if pretokenized:
+        return "the dataset is pre-tokenised, so row ids are not the config's rows"
+    if is_raft:
+        return "RAFT builds its own trainer and collator"
+    if multipack:
+        return "multipack owns the dataloader the recorder wraps"
+    if vision:
+        return "vision runs a custom collator"
+    if audio:
+        return "audio runs a custom collator"
+    if task != "sft":
+        return f"the recorder is SFT-only and this is task {task!r}"
+    return "this run does not take the recording trainer path"
+
+
 def _map_text_sft_rows(
     rows: list[dict],
     *,
@@ -584,6 +615,7 @@ class SFTTrainerWrapper(StreamingSetupMixin):
                 "[yellow]Rewind log off:[/] the recorder is single-process; "
                 "this is a distributed launch"
             )
+            self._rewind_notice = True
             return base_cls(**trainer_kwargs)
 
         from soup_cli.monitoring.rewind_log import RewindLog, dataset_fingerprint
@@ -1097,6 +1129,26 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             )
         else:
             self.trainer = SFTTrainer(**trainer_kwargs)
+
+        # The recording trainer is the last branch above, so RAFT, multipack,
+        # vision, audio and a pre-tokenised dataset all skip it -- silently,
+        # until now. Silence is the failure this repo keeps filing: the run
+        # writes no log, and `soup rewind` then offers "it was not an SFT run"
+        # among its reasons, which is false. Name the reason once, here, where
+        # every skipping path lands.
+        if tcfg.rewind_log and getattr(self, "_rewind_state", None) is None:
+            if not getattr(self, "_rewind_notice", False):
+                console.print(
+                    "[yellow]Rewind log off:[/] "
+                    + rewind_skip_reason(
+                        task=cfg.task,
+                        pretokenized=pretok is not None,
+                        is_raft=self._is_raft,
+                        multipack=use_multipack,
+                        vision=use_vision,
+                        audio=use_audio,
+                    )
+                )
 
         # #336 — DeepSpeed + LoRA died on every stage before the first step.
         # HF builds two optimizer parameter groups (decay / no-decay) and with
