@@ -443,11 +443,14 @@ def strip_doubled_leading_bos(
     inference's one BOS.
 
     A single post-processor BOS (no template BOS, e.g. Zephyr/TinyLlama) or none
-    at all (Qwen) is not a duplicate and is left as ``main`` had it -- the cache
-    is deliberately pinned to ``main`` here, not to the live path's
-    template-only rule, and that difference (the live path now yields zero
-    leading BOS for a ``data.chat_template`` preset while the cache keeps
-    ``main``'s one) is tracked in #876.
+    at all (Qwen) is not a duplicate and is left as ``main`` had it.
+
+    #876 settled that divergence: the cache path now calls
+    :func:`strip_post_processor_leading_bos`, which removes whatever the
+    post-processor prepended and so matches the live path for a
+    ``data.chat_template`` preset too. This function remains the fallback for a
+    tokenizer the probe cannot measure, where a lone BOS still cannot be
+    attributed and is left alone.
     """
     bos_id = _resolve_bos_token_id(tokenizer)
     if (
@@ -457,6 +460,59 @@ def strip_doubled_leading_bos(
         and input_ids[1] == bos_id
     ):
         return input_ids[1:], attention_mask[1:]
+    return input_ids, attention_mask
+
+
+def post_processor_leading_bos_count(tokenizer: Any) -> Optional[int]:
+    """How many leading BOS the tokenizer's post-processor prepends, or None.
+
+    Measured once per tokenizer by encoding a plain probe string with
+    ``add_special_tokens=True``: the text holds no BOS of its own, so every leading
+    BOS is the post-processor's, independent of anything a chat template renders.
+    ``None`` means it could not be measured, and the caller falls back to
+    :func:`strip_doubled_leading_bos`.
+    """
+    bos_id = _resolve_bos_token_id(tokenizer)
+    if bos_id is None:
+        return 0
+    try:
+        ids = coerce_token_ids(tokenizer("a", add_special_tokens=True)["input_ids"])
+    except Exception:  # noqa: BLE001 — tokenizer call shapes vary
+        return None
+    count = 0
+    while count < len(ids) and ids[count] == bos_id:
+        count += 1
+    return count
+
+
+def strip_post_processor_leading_bos(
+    tokenizer: Any,
+    input_ids: list[int],
+    attention_mask: list[int],
+    count: Optional[int],
+) -> tuple[list[int], list[int]]:
+    """Drop the leading BOS the post-processor added, keeping the template's own.
+
+    #876. The live path renders with ``add_special_tokens=False``, so its leading
+    BOS is whatever the chat template renders: one for a ``{{ bos_token }}``
+    template, zero for a ``data.chat_template`` preset (#781 established zero is
+    right there). The cache tokenises with ``add_special_tokens=True`` to keep
+    ``main``'s truncation reservation for the post-processor EOS, which also
+    prepends ``count`` BOS. Removing exactly those makes the two paths agree for
+    every template, and subsumes :func:`strip_doubled_leading_bos` -- the doubled
+    case is a template BOS plus one post-processor BOS.
+
+    ``count`` comes from :func:`post_processor_leading_bos_count`; ``None`` (not
+    measurable) falls back to removing only a doubled BOS, as before #876.
+    """
+    if count is None:
+        return strip_doubled_leading_bos(tokenizer, input_ids, attention_mask)
+    bos_id = _resolve_bos_token_id(tokenizer)
+    drop = 0
+    while drop < count and drop < len(input_ids) and input_ids[drop] == bos_id:
+        drop += 1
+    if drop:
+        return input_ids[drop:], attention_mask[drop:]
     return input_ids, attention_mask
 
 

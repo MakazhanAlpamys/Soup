@@ -201,7 +201,11 @@ def validate_shards(value: Optional[int]) -> Optional[int]:
 # v4 (#1067): the chat path now renders with ``data.chat_template`` (it used the
 # tokenizer's shipped template whatever the config said) and the template is part
 # of the key. A v3 cache recorded no template, so it is rejected, not guessed at.
-_PREPROCESS_TOKENIZE_SCHEMA = "v4"
+# v5 (#876): the chat path keeps only the template's own leading BOS, so a
+# ``data.chat_template`` preset on a BOS-adding tokenizer no longer caches the
+# post-processor's BOS, and a truncated row no longer gains an EOS. A v4 cache is
+# rejected.
+_PREPROCESS_TOKENIZE_SCHEMA = "v5"
 
 
 def preprocess_dataset_key_input(data_cfg: Any) -> str:
