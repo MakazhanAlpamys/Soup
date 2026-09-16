@@ -2998,8 +2998,9 @@ class TrainingConfig(BaseModel):
     loss_spike_recovery: bool = Field(
         default=False,
         description=(
-            "On watchdog trigger: rollback to last checkpoint, decay LR, "
-            "and resume (instead of stopping). Requires loss_watchdog=true."
+            "On watchdog trigger: write <output>/spike_recovery.json with "
+            "decayed LR and attempt count for re-launch (instead of bare stop). "
+            "Requires loss_watchdog=true."
         ),
     )
     loss_spike_recovery_max_attempts: int = Field(
@@ -6772,6 +6773,32 @@ class SoupConfig(BaseModel):
         # mutual exclusion) only when a mode is active.
         if mitigation != "off":
             _validate_reward_hack_controller(tcfg)
+        return self
+
+    @model_validator(mode="after")
+    def _validate_callback_monitoring_task_compat(self) -> "SoupConfig":
+        """v0.75.0 #802 — prm, moe_lora_routing, and unlearn attach no
+        SoupTrainerCallback, so reject loss_watchdog, loss_spike_recovery,
+        and grad_accum_auto_tune when set to True on these tasks.
+        """
+        unsupported = ("prm", "moe_lora_routing", "unlearn")
+        if self.task in unsupported:
+            tcfg = self.training
+            if getattr(tcfg, "loss_spike_recovery", False):
+                raise ValueError(
+                    f"training.loss_spike_recovery is not supported for task={self.task!r} "
+                    f"because {self.task!r} does not attach a live training callback"
+                )
+            if getattr(tcfg, "loss_watchdog", False):
+                raise ValueError(
+                    f"training.loss_watchdog is not supported for task={self.task!r} "
+                    f"because {self.task!r} does not attach a live training callback"
+                )
+            if getattr(tcfg, "grad_accum_auto_tune", False):
+                raise ValueError(
+                    f"training.grad_accum_auto_tune is not supported for task={self.task!r} "
+                    f"because {self.task!r} does not attach a live training callback"
+                )
         return self
 
 

@@ -259,6 +259,7 @@ class BCOTrainerWrapper:
         attach_plugin_callback(self.trainer, console)
 
         self._output_dir = str(output_dir)
+        self._batch_size = batch_size
 
     def _setup_transformers(self, cfg: SoupConfig, tcfg: "TrainingConfig") -> None:
         """Load model via standard transformers + peft pipeline."""
@@ -366,15 +367,33 @@ class BCOTrainerWrapper:
         start = time.time()
 
         if display:
-            from soup_cli.monitoring.callback import SoupTrainerCallback
+            from soup_cli.monitoring.callback import (
+                SoupTrainerCallback,
+                soup_callback_kwargs,
+            )
 
             self.trainer.add_callback(
                 SoupTrainerCallback(
-                    display, tracker=tracker, run_id=run_id,
-                    loss_watchdog=self.config.training.loss_watchdog,
-                    loss_watchdog_threshold=self.config.training.loss_watchdog_threshold,
-                    loss_watchdog_patience=self.config.training.loss_watchdog_patience,
-                    eval_gate_config=self.config.training.eval_gate,
+                    display,
+                    tracker=tracker,
+                    run_id=run_id,
+                    **soup_callback_kwargs(
+                        self.config.training,
+                        batch_size=getattr(
+                            self,
+                            "_batch_size",
+                            getattr(
+                                getattr(self, "trainer", None), "args", None
+                            )
+                            and getattr(
+                                self.trainer.args,
+                                "per_device_train_batch_size",
+                                1,
+                            )
+                            or 1,
+                        ),
+                        output_dir=self._output_dir,
+                    ),
                 )
             )
 
