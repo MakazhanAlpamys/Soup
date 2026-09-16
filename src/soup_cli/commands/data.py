@@ -2460,6 +2460,14 @@ def preprocess_dataset(
     max_length = int(cfg.data.max_length)
     is_pretrain = cfg.task == "pretrain"
 
+    # #876: measured once, not per row -- how many leading BOS the tokenizer's
+    # post-processor prepends, so the chat path can keep only the template's own.
+    bos_added_by_post_processor = None
+    if not is_pretrain:
+        from soup_cli.data.loss_mask import post_processor_leading_bos_count
+
+        bos_added_by_post_processor = post_processor_leading_bos_count(tokenizer)
+
     rendered_rows: list[dict] = []
     for idx, row in enumerate(raw_rows):
         if idx >= max_preprocess_rows:
@@ -2507,17 +2515,31 @@ def preprocess_dataset(
         input_ids = tokens["input_ids"]
         attention_mask = tokens.get("attention_mask", [1] * len(input_ids))
         if not is_pretrain:
-            # #785/#788: the chat template already renders the BOS; ``main``'s
-            # add_special_tokens=True prepends a second one. Drop only that one
-            # duplicated leading BOS. Pretrain feeds raw document text with no
-            # template BOS, so nothing to drop.
+            # #785/#788/#876: add_special_tokens=True prepends the post-processor's
+            # BOS, which the live path (add_special_tokens=False) never trains on.
+            # Keep only the BOS the template itself renders: one for a
+            # ``{{ bos_token }}`` template (#785's doubled case), zero for a
+            # ``data.chat_template`` preset (#876). Pretrain feeds raw document
+            # text with no template, so it keeps ``main``'s encoding untouched.
             from soup_cli.data.loss_mask import (
                 append_training_eos,
-                strip_doubled_leading_bos,
+                strip_post_processor_leading_bos,
             )
 
-            input_ids, attention_mask = strip_doubled_leading_bos(
-                tokenizer, input_ids, attention_mask
+            # Decide "was this row truncated" BEFORE removing a BOS. Afterwards a
+            # row cut to the budget reads as one token short of it, and the EOS
+            # check below would hand it a stop token the live path (append, then
+            # truncate) does not have. Only the exact-fit length is ambiguous, so
+            # only that row is re-measured without truncation.
+            truncated = False
+            if len(input_ids) >= max_length:
+                try:
+                    full = tokenizer(text, truncation=False, verbose=False)
+                    truncated = len(full["input_ids"]) > max_length
+                except Exception:  # noqa: BLE001 — tokenizer errors vary
+                    truncated = True
+            input_ids, attention_mask = strip_post_processor_leading_bos(
+                tokenizer, input_ids, attention_mask, bos_added_by_post_processor
             )
             # #791: the live training path appends ``eos_token`` (TRL 0.29.1's
             # ``add_eos``, ``sft_trainer.py:1026-1038``) to every chat row that
@@ -2532,7 +2554,7 @@ def preprocess_dataset(
             # ``max_length`` was truncated, and the live path (append-then-truncate)
             # keeps no trailing EOS there either, so matching it means not pushing
             # the row past the budget.
-            if len(input_ids) < max_length:
+            if not truncated and len(input_ids) < max_length:
                 with_eos = append_training_eos(tokenizer, input_ids)
                 if len(with_eos) != len(input_ids):
                     input_ids = with_eos
