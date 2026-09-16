@@ -147,14 +147,12 @@ iff their semantic content matches.
 from both `regex` and `rlvr`, etc. Missing scorers surface as named
 recommendations so operators can spot gaps before shipping the gate.
 
-
-
-
 ## Run-vs-run Regression (`soup eval against`)
 
 Compare a candidate run to a baseline with a paired-bootstrap confidence interval
 on a chosen metric. Exit `0` when no regression is detected, `1` otherwise — the
-same check the pre-push hook from `soup eval gate-install` invokes.
+same check the pre-push hook from `soup eval gate-install` invokes. Exit `2` when
+the experiment tracker is too old to expose per-row metric series.
 
 ```bash
 soup eval against run-baseline-123 --candidate run-candidate-456

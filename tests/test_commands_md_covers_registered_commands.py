@@ -6,6 +6,15 @@ reference drifts (see #822 — 23 leaves were missing). This test walks the live
 Typer app the same way the issue reproduced the gap and asserts coverage,
 accepting the page's existing `a|b|c` / `a / b` shorthand and the
 `soup advise <data>` → `soup advise run` argv rewrite.
+
+Matching rules (mutation-tested):
+- Only lines that *start* with ``soup `` count as documentation (prose mentions
+  do not).
+- A command needle must end on a token boundary ``(?![\\w-])`` so
+  ``soup eval gate-install`` cannot cover ``soup eval gate``.
+- Shorthand alternatives are one ``|``/``/``-connected group after the path
+  prefix (not adjacent bare tokens), so ``soup llama …|quantize`` cannot cover
+  top-level ``soup quantize``.
 """
 
 from __future__ import annotations
@@ -45,8 +54,19 @@ def iter_leaf_paths(cmd=None, prefix: tuple[str, ...] = ()) -> list[tuple[str, .
     return leaves
 
 
+def _entry_rows(doc: str) -> list[str]:
+    """Return command-list rows: lines that start with ``soup ``."""
+    return [line for line in doc.splitlines() if line.startswith("soup ")]
+
+
 def _shorthand_alts(line: str, prefix: tuple[str, ...]) -> list[str]:
-    """Return alternate leaf names from a shorthand region after ``prefix``."""
+    """Return alternate leaf names from one shorthand group after ``prefix``.
+
+    A shorthand group is a single argv slot (``a|b|c``) or a ``|`` / ``/``-
+    connected run (``a | b | c``, ``a / b``). Adjacent bare command tokens
+    without a separator — e.g. ``llama`` then ``cli|…|quantize`` — are *not*
+    one group, so top-level ``soup quantize`` cannot ride a ``soup llama`` row.
+    """
     alts: list[str] = []
     idx = 0
     while True:
@@ -57,21 +77,41 @@ def _shorthand_alts(line: str, prefix: tuple[str, ...]) -> list[str]:
         if list(toks[: len(prefix)]) != list(prefix):
             idx = j + 1
             continue
+        rest = toks[len(prefix) :]
         region: list[str] = []
-        for t in toks[len(prefix) :]:
-            if t.startswith(("-", "<", "[", "./", '"', "'")):
+        expecting_name = True
+        for t in rest:
+            if expecting_name:
+                if t.startswith(("-", "<", "[", "./", '"', "'")):
+                    break
+                if _ARGISH.fullmatch(t):
+                    break
+                if any(
+                    t.endswith(suf)
+                    for suf in (
+                        ".jsonl",
+                        ".yaml",
+                        ".can",
+                        ".gguf",
+                        ".json",
+                        ".md",
+                        ".py",
+                    )
+                ):
+                    break
+                if t in ("|", "/"):
+                    break
+                cleaned = t.rstrip(".")
+                if not _CMDISH.fullmatch(cleaned):
+                    break
+                region.append(cleaned)
+                expecting_name = False
+            else:
+                if t in ("|", "/"):
+                    region.append(t)
+                    expecting_name = True
+                    continue
                 break
-            if _ARGISH.fullmatch(t):
-                break
-            if any(
-                t.endswith(suf)
-                for suf in (".jsonl", ".yaml", ".can", ".gguf", ".json", ".md", ".py")
-            ):
-                break
-            if t in ("|", "/") or _CMDISH.fullmatch(t):
-                region.append(t.rstrip("."))
-                continue
-            break
         blob = " ".join(region).replace("...", "")
         for piece in re.split(r"\s*[|/]\s*", blob):
             piece = piece.strip()
@@ -83,19 +123,19 @@ def _shorthand_alts(line: str, prefix: tuple[str, ...]) -> list[str]:
 
 
 def is_documented(path: tuple[str, ...], doc: str) -> bool:
-    """True when ``docs/commands.md`` mentions ``soup <path>`` (or shorthand)."""
+    """True when ``docs/commands.md`` has a real entry row for ``soup <path>``."""
     if path == ("advise", "run"):
         # cli._rewrite_advise_argv turns documented `soup advise <data>` into
-        # `soup advise run <data>`.
-        return "soup advise " in doc
+        # `soup advise run <data>`. Anchor on `<` so compare/explain rows cannot
+        # satisfy the special case.
+        return any(line.startswith("soup advise <") for line in _entry_rows(doc))
     needle = "soup " + " ".join(path)
-    if needle in doc:
-        return True
+    boundary = re.compile(re.escape(needle) + r"(?![\w-])")
     leaf = path[-1]
     prefix = path[:-1]
-    for line in doc.splitlines():
-        if "soup " not in line:
-            continue
+    for line in _entry_rows(doc):
+        if boundary.search(line):
+            return True
         if leaf in _shorthand_alts(line, prefix):
             return True
     return False
@@ -127,6 +167,15 @@ class TestCommandsMdCoversRegisteredCommands:
         assert len(leaves) >= 200
         assert ("eval", "against") in leaves
         assert ("llama", "quantize") in leaves
+        assert ("mcp", "runs", "reconcile") in leaves
+
+    def test_advise_run_special_case_tracks_live_typer_tree(self) -> None:
+        leaves = iter_leaf_paths()
+        assert ("advise", "run") in leaves, (
+            "the live Typer tree no longer registers `soup advise run`, but "
+            "is_documented() still special-cases it — delete the special case "
+            "with the command"
+        )
 
 
 @pytest.mark.unit
@@ -153,3 +202,38 @@ class TestCommandsMdCoverageGuardHasTeeth:
         assert undocumented_commands(stub_old, leaves=[("llama", "quantize")]) == [
             "soup llama quantize"
         ]
+
+    def test_stripped_advise_data_row_is_reported(self) -> None:
+        doc = COMMANDS_MD.read_text(encoding="utf-8")
+        scrubbed = "\n".join(
+            line
+            for line in doc.splitlines()
+            if not line.startswith("soup advise <")
+        )
+        missing = undocumented_commands(scrubbed, leaves=[("advise", "run")])
+        assert missing == ["soup advise run"]
+
+
+@pytest.mark.unit
+class TestCoverageRequiresARealEntry:
+    """Stub-based controls so matcher regressions fail without the live document."""
+
+    def test_longer_command_does_not_document_its_prefix(self) -> None:
+        stub = "soup eval gate-install --baseline X  Install gate\n"
+        assert undocumented_commands(stub, leaves=[("eval", "gate")]) == [
+            "soup eval gate"
+        ]
+
+    def test_prose_mention_does_not_count_as_documentation(self) -> None:
+        stub = "See `soup ui` in the paragraph below for details.\n"
+        assert undocumented_commands(stub, leaves=[("ui",)]) == ["soup ui"]
+
+    def test_shorthand_does_not_leak_across_argv_slots(self) -> None:
+        stub = (
+            "soup llama cli|mtmd-cli|gguf-split|server|quantize ... "
+            "Proxy to the llama.cpp binaries\n"
+        )
+        assert undocumented_commands(stub, leaves=[("quantize",)]) == [
+            "soup quantize"
+        ]
+        assert undocumented_commands(stub, leaves=[("llama", "quantize")]) == []

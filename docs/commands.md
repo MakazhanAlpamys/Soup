@@ -63,16 +63,16 @@ soup eval leaderboard                         Local model leaderboard
 soup eval human --input p.jsonl               Human A/B evaluation
 soup eval gate --suite gate.yaml              Run eval-gate suite standalone
 soup eval quant-check --before X --after Y --tasks t.jsonl  Before/after quantization eval (OK/MINOR/MAJOR verdict)
-soup eval design DATA                         Draft an eval suite from training data + goal
-soup eval discover DATA                       Discover a held-out canary set
-soup eval lock DESIGN                         Freeze a design as a checksummed suite
-soup eval coverage DESIGN                     Coverage / gap analysis for an eval suite
-soup eval against BASELINE_RUN_ID             Run-vs-run regression check (paired bootstrap)
-soup eval gate-install                        Install a pre-push regression gate
-soup eval behavior RUN_ID                     Behaviour battery pre/post diff
-soup eval capability RUN_ID                   Capability profile (MMLU-Pro / GPQA / AIME ...)
-soup eval checklist SPEC                      CheckList MFT / INV / DIR tests
-soup eval irt-subset RESPONSES                Minimum-cost eval subset via IRT
+soup eval design <data> --goal "..."          Draft an eval suite from training data + goal
+soup eval discover <data>                       Discover a held-out canary set
+soup eval lock <design>                         Freeze a design as a checksummed suite
+soup eval coverage <design> --task <task>       Coverage / gap analysis for an eval suite
+soup eval against <baseline_run_id> --candidate <run_id>  Run-vs-run regression check (paired bootstrap)
+soup eval gate-install --baseline <run_id>      Install a pre-push regression gate
+soup eval behavior <run_id>                     Behaviour battery pre/post diff
+soup eval capability <run_id>                   Capability profile (MMLU-Pro / GPQA / AIME ...)
+soup eval checklist <spec>                      CheckList MFT / INV / DIR tests
+soup eval irt-subset <responses>                Minimum-cost eval subset via IRT
 soup diagnose <run-id>                        Post-training report card: forgetting / refusal / format / mode collapse / memorization / contamination
 soup serve --model ./output --port 8000       OpenAI-compatible API server
 soup serve --model ./output --backend vllm    vLLM backend (2-4x throughput)
@@ -136,9 +136,9 @@ soup data push --input d.jsonl --hf-dataset u/n --hub modelscope|modelers  Uploa
 soup data registry                           List all registered datasets
 soup data demo                                List bundled demo JSONL fixtures
 soup data demo alpaca_demo --output ./d.jsonl Copy a bundled demo JSONL fixture
-soup data ingest FILE                         PDF/DOCX/MD/TXT -> JSONL (one row per page/heading)
-soup data preprocess CONFIG                   AOT-tokenize and cache for reuse across runs
-soup data recipe PATH                         Validate / execute a Data Recipe DAG
+soup data ingest <file>                         PDF/DOCX/MD/TXT -> JSONL (one row per page/heading)
+soup data preprocess <config>                   AOT-tokenize and cache for reuse across runs
+soup data recipe <path>                         Validate / execute a Data Recipe DAG
 soup data mix                                 BETA mixture-weight optimiser (proxy runs)
 soup data forge --docs ./docs --task sft --target-rows 1000  Synthetic data pipeline + provenance
 soup data forge --docs ./docs --hub modelscope --teacher owner/name  Pre-fetch the teacher from an alternative hub
@@ -158,8 +158,8 @@ soup adapters list ./output/                 Scan for LoRA adapters
 soup adapters info ./output/checkpoint-500/  Show adapter metadata
 soup adapters compare adapter1/ adapter2/    Compare two adapters
 soup adapters branches                        List snapshotted branches
-soup adapters checkout NAME                   Restore a snapshotted branch's config
-soup adapters diff A B                        Per-layer ΔW Frobenius diff + effective-rank drift
+soup adapters checkout <name>                   Restore a snapshotted branch's config
+soup adapters diff <a> <b>                      Per-layer ΔW Frobenius diff + effective-rank drift
 soup loop init <model> --eval <s> --baseline <b> [--pre-wired]  Create .soup/loop.yaml (data flywheel; --pre-wired = real stages)
 soup loop status                              Counters + status + pre_wired flag
 soup loop watch [--detach] [--max-iter N] [--pre-wired] [--pack-cans]  Harvest → train → gate → deploy daemon (pre-wired stages + Soup Can packing)
@@ -189,9 +189,9 @@ soup runs                                     List training runs
 soup runs show <run_id>                       Run details + loss graph + cost
 soup runs compare <run_1> <run_2>             Compare two runs
 soup runs replay <run_id>                     Replay summary + loss curve from history (also plots a benchmark-score curve when the metric lives in eval_results)
-soup runs clean RUN_ID                        Clean redundant checkpoint files
-soup runs curriculum-curve RUN_ID             BETA curriculum bucket-weight plot
-soup runs delete RUN_ID                       Delete a run and its metrics
+soup runs clean [<run_id>] [--all]              Clean redundant checkpoint files
+soup runs curriculum-curve <run_id>             BETA curriculum bucket-weight plot
+soup runs delete <run_id>                       Delete a run and its metrics
 soup why [run_id]                             Explain training anomalies (heuristic)
 soup ship --base <m> --adapter <lora> --task-eval t.jsonl  SHIP / DON'T-SHIP verdict: task win AND no regression on the bundled suite (exit 0=SHIP / 2=DON'T / 3=usage / 1=runtime) (v0.71.25; leg-2 real + usage-off-2 v0.71.38)
 soup ship --evidence ev.json [--output v.json]  Decide offline from pre-computed scores (no model load)
@@ -212,6 +212,7 @@ soup mcp serve --allow-execute                Implies --allow-mutating; enables 
 soup mcp serve --transport sse [--host H --port N]  Serve the same registry over HTTP+SSE instead of stdio; binds 127.0.0.1 and requires a Bearer token (#296)
 soup mcp serve --transport http [--auth-token T]    Same over the streamable-HTTP transport (/mcp); --auth-token pins the token instead of generating one (#296)
 soup mcp serve --transport sse|http --allow-execute   REFUSED - gated execution spawns real processes and is stdio-only (#296)
+soup mcp runs reconcile [--expunge-launching] [--older-than-seconds N]  Clear stale launching rows left by a crashed server; refuses if any candidate PID is still alive (#402)
 soup shrink --model <id|path> --drop-ratio 0.25 --calib c.jsonl -o shrunk  Depth-prune least-important layer block + SHIP/DON'T-SHIP ppl verdict (exit 0/2/1) (v0.71.29)
 soup shrink ... --drop-layers N --heal h.jsonl --heal-steps 200 --device cpu  Drop N layers + distill-heal (fuse LoRA back to one dense model)
 soup shrink ... --tolerance 0.10 --plan-only [--attach-to-registry <id>]  Ppl-regression tolerance / print importance table only / registry attach
