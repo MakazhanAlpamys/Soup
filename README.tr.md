@@ -1,4 +1,4 @@
-<!-- synced-from: README.md sha256:aadfbcf19826412c7b952e3f9e3ef312813e7e0793343e546399741ddeb0e5e4 -->
+<!-- synced-from: README.md sha256:4bd5eec9325ffc23aa0d961669700c53bca4f28f850e6a98c9468ca1c90b44da -->
 <p align="center">🌍 <a href="README.md">English</a> | <strong>Türkçe</strong></p>
 
 <p align="center">
@@ -63,8 +63,10 @@ soup train
 dışında tutar ve GPU'ya her seferinde bir kod çözücü katman besler. RTX 3050 Laptop 4 GB üzerinde
 ölçüldü: Llama-3.1-8B-Instruct + NF4 ile **119.6 tok/s, 3.32 GB tepe** — normal, belleğe tamamen
 yerleşik bir çalıştırmayla bit düzeyinde özdeş ve bir H100 üzerinde aynı 3.32 GB'da 113.00 tok/s
-ile bağımsız olarak yeniden üretildi. (tok/s rakamı, 32B'de −%4.8'e mal olan v0.73.0 doğruluk
-onarımından önce, v0.72.2'de ölçüldü; o zamandan beri 4 GB bir kartta yeniden çalıştırılmadı.)
+ile bağımsız olarak yeniden üretildi. (Her iki rakam da 32B'de −%4.8'e mal olan v0.73.0 doğruluk
+onarımından önce, v0.72.2'de ölçüldü; o zamandan beri hiçbiri 4 GB bir kartta yeniden
+çalıştırılmadı — yeniden ölçüm [#361](https://github.com/MakazhanAlpamys/Soup/issues/361)
+sayısında bekliyor.)
 İsteğe bağlıdır (`stream_layers: true`) ve hâlâ BETA —
 [nasıl çalışır](docs/performance-and-quantization.md#layer-streaming-beta-v0720-nf4-v0722-disk--wider-archs-v0723-preference-losses-v0724) ·
 [tüm ölçümler](benchmarks/) · [makale](https://doi.org/10.5281/zenodo.21771064) ·
@@ -72,8 +74,8 @@ onarımından önce, v0.72.2'de ölçüldü; o zamandan beri 4 GB bir kartta yen
 sınırlar, ardından akışlı bir modelin normal bir modelle bit düzeyinde özdeş olduğunu doğrular)
 
 <p align="center">
-  <a href="https://youtu.be/T1LCErE943E"><img src="docs/assets/layer-streaming.gif" alt="4 GB bir kartta Llama-3.1-8B için soup train ön kontrolü: 32 katman boyunca RAM'e sabitlenmiş 3.60 GB'lık bir taban deposu ve iki adet 113 MB VRAM tamponu, ardından 119.6 tok/s'de ölçülen 3.32 GB tepe; 4 GB çizgisinin altında kalıyor"></a><br>
-  <sub>Llama-3.1-8B-Instruct + NF4, LoRA, toplu iş 1, dizi 512, RTX 3050 Laptop 4 GB üzerinde — <b>3.32 GB tepe, 119.6 tok/s</b>. <a href="https://youtu.be/T1LCErE943E">Tam video (90 sn)</a></sub>
+  <a href="https://youtu.be/T1LCErE943E"><img src="docs/assets/layer-streaming.gif" alt="4 GB bir kartta Llama-3.1-8B için soup train ön kontrolü: 32 katman boyunca RAM'e sabitlenmiş 3.60 GB'lık bir taban deposu ve iki adet 113 MB VRAM tamponu, ardından 119.6 tok/s'de ölçülen 3.32 GB tepe; 4 GB çizgisinin altında kalıyor (v0.72.2'de ölçüldü, #331 onarımından önce; yeniden ölçüm #361 sayısında bekliyor)"></a><br>
+  <sub>Llama-3.1-8B-Instruct + NF4, LoRA, toplu iş 1, dizi 512, RTX 3050 Laptop 4 GB üzerinde — <b>3.32 GB tepe, 119.6 tok/s</b> (v0.72.2'de ölçüldü, #331 onarımından önce; yeniden ölçüm #361 sayısında bekliyor). <a href="https://youtu.be/T1LCErE943E">Tam video (90 sn)</a></sub>
 </p>
 
 ## Neden Soup?
@@ -440,7 +442,8 @@ bu aynı zamanda makalenin ne işe yaradığını anlatmanın en kısa yoludur:
   yeniden üretim daha zayıf bir biçimde ayakta kalıyor — kısıt her iki makinede ortak ve GPU'nun
   hesaplama gücü değil.
 - **Özgününe hiç benzemeyen donanımda yeniden üretim** (v2'de eklendi): RTX 3050'de 119.6 tok/s'ye
-  karşı bir H100'de medyan 113.00, aynı 3.32 GB tepede.
+  karşı bir H100'de medyan 113.00, aynı 3.32 GB tepede. İkisi de #331 onarımından önce
+  ölçüldü; 4 GB yeniden ölçümü #361 sayısında bekliyor.
 - **Sessiz bir yanlış gradyan kusuru, bulundu ve onarıldı.** Katman başına ~165 MiB'ın üzerindeki
   NF4'te ileri geçiş bit düzeyinde özdeş kaldı ve kayıp eğrisi sağlıklı göründü, ama gradyanlar
   yanlıştı. Neden, üst akış kütüphanesinde adıyla belirtildi ve orada bildirildi; onarım, gerçek 32B

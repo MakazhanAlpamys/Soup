@@ -340,14 +340,14 @@ Correctness is not a tradeoff here either: a streamed NF4 run is **bit-exact** a
 
 | Model | Quant | Seq | Throughput | GPU Util | Peak VRAM | RAM store |
 |---|---|---|---|---|---|---|
-| **Llama-3.1-8B-Instruct** | **NF4** | 512 | **119.6 tok/s** | 100% | **3.32 GB** | 3.60 GB pinned |
+| **Llama-3.1-8B-Instruct** | **NF4** | 512 | **119.6 tok/s (pre-repair, [#361](https://github.com/MakazhanAlpamys/Soup/issues/361))** | 100% | **3.32 GB** | 3.60 GB pinned |
 | Qwen2.5-3B | NF4 | 512 | 264.2 tok/s | 100% | 1.76 GB | 1.43 GB pinned |
 | Qwen2.5-3B | bf16 | 512 | 143.1 tok/s | 79.3% | 2.15 GB | 5.55 GB pageable |
 | Qwen2.5-1.5B | bf16 | 512 | 525.0 tok/s | 96.8% | 1.82 GB | pinned |
 | Qwen2.5-1.5B | bf16 | 1024 | 487.6 tok/s | 96.7% | 2.96 GB | pinned |
 | Qwen2.5-0.5B | bf16 | 512 | 978.6 tok/s | 91.4% | 1.47 GB | pinned |
 
-**Headline:** **Llama-3.1-8B fine-tunes on a 4 GB card at 119.6 tok/s in 3.32 GB.** For scale, 1M training tokens is ~2.3 h at 8B (arithmetic from the measured rate, not a separate measurement).
+**Headline:** **Llama-3.1-8B fine-tunes on a 4 GB card at 119.6 tok/s in 3.32 GB (pre-repair; re-measurement pending in [#361](https://github.com/MakazhanAlpamys/Soup/issues/361)).** For scale, 1M training tokens is ~2.3 h at 8B (arithmetic from the measured rate, not a separate measurement).
 
 The 3B NF4-vs-bf16 rows differ by 1.85×, but attribute that to **pinning, not arithmetic** — see point 2 above. The two rows also come from different sessions, and this card's boost clock varies ~13% between sessions, so treat the factor as indicative and the mechanism as the claim.
 
