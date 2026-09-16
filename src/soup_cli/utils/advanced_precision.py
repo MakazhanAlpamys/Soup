@@ -307,6 +307,19 @@ def apply_fp8_attention(model: object, *, recipe: str = "tensorwise") -> int:
     return len(already_converted) + len(pending)
 
 
+def is_nvfp4_software_supported() -> bool:
+    """Return True when the installed torchao exposes NVFP4 training support."""
+    try:
+        from soup_cli.utils.torchao_compat import resolve_torchao_class
+
+        resolve_torchao_class("NVFP4Training")
+        resolve_torchao_class("quantize_")
+    except RuntimeError:
+        return False
+
+    return True
+
+
 def apply_nvfp4(model: object) -> int:
     """Quantise ``model`` with torchao's NVFP4 scheme (Blackwell-only).
 

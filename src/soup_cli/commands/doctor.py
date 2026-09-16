@@ -527,6 +527,7 @@ def _get_precision_capabilities(torch) -> dict[str, tuple[bool, bool | None]]:
     from soup_cli.utils.advanced_precision import (
         _torchao_available,
         is_blackwell_gpu,
+        is_nvfp4_software_supported,
     )
     from soup_cli.utils.fp8 import is_fp8_gpu_supported
 
@@ -536,17 +537,7 @@ def _get_precision_capabilities(torch) -> dict[str, tuple[bool, bool | None]]:
         bf16_supported = False
 
     torchao_available = bool(_torchao_available())
-
-    nvfp4_software = False
-    if torchao_available:
-        try:
-            from torchao import quantization as ao_q
-
-            nvfp4_software = hasattr(ao_q, "NVFP4Config") and hasattr(
-                ao_q, "quantize_"
-            )
-        except ImportError:
-            nvfp4_software = False
+    nvfp4_software = bool(is_nvfp4_software_supported())
 
     return {
         "BF16": (bf16_supported, None),

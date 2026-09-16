@@ -243,6 +243,78 @@ def test_doctor_gpu_panel_shows_compute_capability_and_precision(monkeypatch):
     assert "NVFP4: hardware=yes, software=yes" in out
 
 
+def test_get_precision_capabilities_reports_negative_nvfp4_software(
+    monkeypatch,
+):
+    """NVFP4 software support must report false when the runtime gate is absent."""
+    import types
+
+    fake_torch = types.SimpleNamespace(
+        cuda=types.SimpleNamespace(
+            is_bf16_supported=lambda: True,
+        )
+    )
+
+    monkeypatch.setattr(
+        "soup_cli.utils.fp8.is_fp8_gpu_supported",
+        lambda: False,
+    )
+    monkeypatch.setattr(
+        "soup_cli.utils.advanced_precision._torchao_available",
+        lambda: True,
+    )
+    monkeypatch.setattr(
+        "soup_cli.utils.advanced_precision.is_blackwell_gpu",
+        lambda: True,
+    )
+    monkeypatch.setattr(
+        "soup_cli.utils.advanced_precision.is_nvfp4_software_supported",
+        lambda: False,
+    )
+
+    from soup_cli.commands.doctor import _get_precision_capabilities
+
+    result = _get_precision_capabilities(fake_torch)
+
+    assert result["NVFP4"] == (True, False)
+
+
+def test_get_precision_capabilities_requires_torchao_for_fp8_attention(
+    monkeypatch,
+):
+    """FP8 software support follows the torchao-specific attention gate."""
+    import types
+
+    fake_torch = types.SimpleNamespace(
+        cuda=types.SimpleNamespace(
+            is_bf16_supported=lambda: True,
+        )
+    )
+
+    monkeypatch.setattr(
+        "soup_cli.utils.fp8.is_fp8_gpu_supported",
+        lambda: True,
+    )
+    monkeypatch.setattr(
+        "soup_cli.utils.advanced_precision._torchao_available",
+        lambda: False,
+    )
+    monkeypatch.setattr(
+        "soup_cli.utils.advanced_precision.is_blackwell_gpu",
+        lambda: False,
+    )
+    monkeypatch.setattr(
+        "soup_cli.utils.advanced_precision.is_nvfp4_software_supported",
+        lambda: False,
+    )
+
+    from soup_cli.commands.doctor import _get_precision_capabilities
+
+    result = _get_precision_capabilities(fake_torch)
+
+    assert result["FP8"] == (True, False)
+
+
 def test_get_precision_capabilities_reports_negative_bf16(monkeypatch):
     """BF16 hardware support must reflect the real Torch probe."""
     import types
@@ -365,25 +437,58 @@ def test_doctor_checks_optional_deps():
     assert "optional" in result.output
 
 
-def test_doctor_requires_torchao_070_for_optional_feature_support(monkeypatch):
-    """Doctor must report the production torchao floor when it is outdated."""
+def test_doctor_requires_declared_torchao_floor_for_optional_feature_support(
+    monkeypatch,
+):
+    """Doctor's torchao floor must match the declared optional dependency floor."""
     import importlib.machinery
+    import pathlib
+    import re
     import types
+
+    root = pathlib.Path(__file__).resolve().parents[1]
+    pyproject = (root / "pyproject.toml").read_text(encoding="utf-8")
+
+    optional_deps = re.search(
+        r"^\[project\.optional-dependencies\]\s*$(.*?)^\[",
+        pyproject,
+        re.M | re.S,
+    )
+    assert optional_deps, "pyproject.toml has no [project.optional-dependencies] table"
+
+    qat = re.search(
+        r'^qat\s*=\s*\[\s*"torchao\s*>=\s*([^"]+)',
+        optional_deps.group(1),
+        re.M,
+    )
+    assert qat, "pyproject.toml qat extra has no torchao>= floor"
+    declared_floor = qat.group(1)
+
+    from soup_cli.commands.doctor import DEPS
+
+    torchao_rows = [
+        (pkg_name, floor)
+        for _, pkg_name, floor, _required in DEPS
+        if pkg_name == "torchao"
+    ]
+
+    assert len(torchao_rows) == 1, "expected exactly one torchao row in DEPS"
+    assert torchao_rows[0][1] == declared_floor, (
+        f"doctor.py checks torchao>={torchao_rows[0][1]} but pyproject.toml "
+        f"qat declares torchao>={declared_floor} — doctor must report the "
+        "declared floor"
+    )
 
     fake_torchao = types.SimpleNamespace(
         __version__="0.6.0",
         __spec__=importlib.machinery.ModuleSpec("torchao", None),
     )
-    monkeypatch.setitem(
-        __import__("sys").modules,
-        "torchao",
-        fake_torchao,
-    )
+    monkeypatch.setitem(__import__("sys").modules, "torchao", fake_torchao)
 
     result = runner.invoke(app, ["doctor"])
     assert result.exit_code == 0
     assert "outdated" in result.output
-    assert ">=0.7.0" in result.output
+    assert f">={declared_floor}" in result.output
 
 
 def test_doctor_missing_dep():
