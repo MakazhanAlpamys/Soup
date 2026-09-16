@@ -832,8 +832,9 @@ class DistillTrainerWrapper:
                         inputs["input_ids"],
                         inputs.get("attention_mask"),
                     )
-                    if nonfinite_tracker is not None:
-                        nonfinite_tracker.record_step(rollout_loss)
+                    _tracker = getattr(self, "nonfinite_tracker", None)
+                    if _tracker is not None:
+                        _tracker.record_step(rollout_loss)
                     anchor = _minillm_cb.anchor_term(model)
                     total = _CE_WEIGHT * ce_loss + _DISTILL_WEIGHT * rollout_loss
                     if anchor is not None:
@@ -903,8 +904,9 @@ class DistillTrainerWrapper:
                         attention_mask=s_mask,
                         labels=labels,
                     )
-                    if nonfinite_tracker is not None:
-                        nonfinite_tracker.record_step(distill_loss)
+                    _tracker = getattr(self, "nonfinite_tracker", None)
+                    if _tracker is not None:
+                        _tracker.record_step(distill_loss)
                     total = _CE_WEIGHT * ce_loss + _DISTILL_WEIGHT * distill_loss
                     total = _token_weighted_accumulation(total)
                     return (total, outputs) if return_outputs else total
@@ -955,8 +957,9 @@ class DistillTrainerWrapper:
                         chunk_size=_distill_chunk_size,
                         use_checkpoint=_distill_checkpoint,
                     )
-                if nonfinite_tracker is not None:
-                    nonfinite_tracker.record_step(distill_loss)
+                _tracker = getattr(self, "nonfinite_tracker", None)
+                if _tracker is not None:
+                    _tracker.record_step(distill_loss)
                 total = _CE_WEIGHT * ce_loss + _DISTILL_WEIGHT * distill_loss
                 if anchor is not None:
                     total = total + anchor
@@ -984,11 +987,15 @@ class DistillTrainerWrapper:
         )
 
         class _NonfiniteTrackerCallback(TrainerCallback):
-            def on_train_end(self, args, state, control, **kwargs):
-                if nonfinite_tracker is not None:
-                    nonfinite_tracker.check_and_warn()
+            def __init__(self, tracker: DistillNonfiniteTracker | None = None) -> None:
+                super().__init__()
+                self.tracker = tracker
 
-        self.trainer.add_callback(_NonfiniteTrackerCallback())
+            def on_train_end(self, args, state, control, **kwargs):
+                if self.tracker is not None:
+                    self.tracker.check_and_warn()
+
+        self.trainer.add_callback(_NonfiniteTrackerCallback(tracker=nonfinite_tracker))
 
         # #359 - the same exposure #336 fixed in sft.py: with LoRA the
         # no-decay optimizer group is empty, DeepSpeed drops it, and the LR
