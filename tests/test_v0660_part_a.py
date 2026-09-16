@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import json
 import os
-import sys
 
 import numpy as np
 import pytest
@@ -401,7 +400,7 @@ def test_load_sae_weights_empty_path_rejected():
         load_sae_weights("")
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="POSIX symlink test")
+@pytest.mark.requires_symlink
 def test_load_sae_weights_symlink_rejected(tmp_path):
     from soup_cli.utils.sae_diff import load_sae_weights
 

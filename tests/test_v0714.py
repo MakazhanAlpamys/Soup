@@ -15,16 +15,11 @@ from __future__ import annotations
 import json
 import os
 import re
-import sys
 
 import pytest
 from typer.testing import CliRunner
 
 runner = CliRunner()
-
-POSIX_ONLY = pytest.mark.skipif(
-    sys.platform == "win32", reason="symlink rejection is POSIX-only here"
-)
 
 
 def _clean_help(text: str) -> str:

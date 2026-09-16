@@ -768,7 +768,7 @@ class TestShardGuards:
         with pytest.raises(ValueError, match="decoder layer"):
             shard_checkpoint(str(src), str(tmp_path / "out"), dtype="float32")
 
-    @pytest.mark.skipif(os.name == "nt", reason="POSIX symlink semantics")
+    @pytest.mark.requires_symlink
     def test_symlinked_source_shard_is_skipped(self, tmp_path):
         """Mirrors spectrum_scan._discover_safetensors."""
         import torch
@@ -2314,7 +2314,7 @@ class TestShardWriteContainment:
         with pytest.raises(ValueError, match="under"):
             shard_checkpoint(src, outside, dtype="float32")
 
-    @pytest.mark.skipif(os.name == "nt", reason="POSIX symlink semantics")
+    @pytest.mark.requires_symlink
     def test_symlinked_ancestor_is_resolved_not_followed_blindly(self, tmp_path):
         from soup_cli.utils.layer_shard import shard_checkpoint
 

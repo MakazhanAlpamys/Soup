@@ -505,7 +505,7 @@ class TestRunner:
         with pytest.raises(ValueError, match="cwd"):
             write_report(report, outside)
 
-    @pytest.mark.skipif(os.name == "nt", reason="POSIX symlink semantics")
+    @pytest.mark.requires_symlink
     def test_write_report_symlink_rejected(self, tmp_path: Path) -> None:
         os.chdir(tmp_path)
         target = tmp_path / "real.json"
@@ -837,7 +837,7 @@ class TestReviewFixCoverage:
         assert "tempfile.mkstemp" in source
         assert "os.replace" in source
 
-    @pytest.mark.skipif(os.name == "nt", reason="POSIX symlink semantics")
+    @pytest.mark.requires_symlink
     def test_badge_symlink_rejected(self, tmp_path: Path) -> None:
         os.chdir(tmp_path)
         target = tmp_path / "real.svg"

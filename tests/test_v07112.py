@@ -636,7 +636,7 @@ class TestVectorBankServing:
         with pytest.raises(ValueError, match="size"):
             load_bank("big.json")
 
-    @pytest.mark.skipif(sys.platform == "win32", reason="symlink needs elevation on Windows")
+    @pytest.mark.requires_symlink
     def test_load_bank_symlink_rejected(self, tmp_path, monkeypatch):
         from soup_cli.utils.vector_bank import load_bank
 

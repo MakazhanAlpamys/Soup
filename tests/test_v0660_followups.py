@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import inspect
 import os
-import sys
 from dataclasses import FrozenInstanceError
 from types import MappingProxyType
 
@@ -228,7 +227,7 @@ def test_probe_pack_render_markdown_escapes_description():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="POSIX symlink test")
+@pytest.mark.requires_symlink
 def test_count_dataset_rows_rejects_symlink_via_o_nofollow(tmp_path, monkeypatch):
     """O_NOFOLLOW path open rejects symlink targets (TOCTOU defence)."""
     from soup_cli.utils.blame import plan_blame
@@ -252,7 +251,7 @@ def test_count_dataset_rows_rejects_symlink_via_o_nofollow(tmp_path, monkeypatch
         )
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="POSIX symlink test")
+@pytest.mark.requires_symlink
 def test_load_sae_weights_rejects_symlink_via_o_nofollow(tmp_path, monkeypatch):
     from soup_cli.utils.sae_diff import load_sae_weights
 

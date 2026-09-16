@@ -70,9 +70,8 @@ class TestMerge4bitWiring:
                 forced=False,
             )
 
+    @pytest.mark.requires_symlink
     def test_rejects_symlink_output(self, tmp_path, monkeypatch):
-        if sys.platform == "win32":
-            pytest.skip("symlink rejection POSIX-only")
         from soup_cli.utils.save_formats import merge_4bit
 
         monkeypatch.chdir(tmp_path)
@@ -454,9 +453,8 @@ class TestValidateQuantConfigPath:
         with pytest.raises(ValueError, match="under cwd"):
             load_quant_config(str(outside))
 
+    @pytest.mark.requires_symlink
     def test_load_quant_config_yaml_symlink(self, tmp_path, monkeypatch):
-        if sys.platform == "win32":
-            pytest.skip("symlink rejection POSIX-only")
         from soup_cli.utils.save_formats import load_quant_config
 
         monkeypatch.chdir(tmp_path)
@@ -571,9 +569,7 @@ class TestTorchAOKwargAllowlist:
 
 
 class TestDetectPrequantizedSymlinkRejection:
-    @pytest.mark.skipif(
-        sys.platform == "win32", reason="symlink rejection POSIX-only"
-    )
+    @pytest.mark.requires_symlink
     def test_config_json_symlink_returns_none(self, tmp_path, monkeypatch):
         """Security regression — `config.json` as a symlink is refused."""
         from soup_cli.autopilot.decisions import detect_prequantized_format_from_path
