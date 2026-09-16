@@ -219,3 +219,64 @@ class TestWarnUnsupportedFeatures:
             nvfp4=True,
         )
         assert warn_unsupported_features(tcfg, "sft") is None
+
+
+class TestSFTSetupQuantizationAwareIntegration:
+    """Kill mutation M5: ensure SFTTrainerWrapper.setup() calls apply_v028_speed_memory."""
+
+    def test_sft_setup_applies_v028_speed_memory_post_lora(self, tmp_path) -> None:
+        for module in ("torch", "transformers", "peft", "trl", "datasets"):
+            pytest.importorskip(module, reason=f"{module} is only in the [train] extra")
+
+        from tests.test_issue804_chat_template_trainers import _tiny_llama_dir
+
+        weights = _tiny_llama_dir(tmp_path)
+
+        train_file = tmp_path / "train.jsonl"
+        train_file.write_text(
+            '{"messages": [{"role": "user", "content": "hi"}, '
+            '{"role": "assistant", "content": "hello"}]}\n',
+            encoding="utf-8",
+        )
+
+        cfg = SoupConfig(
+            base=str(weights),
+            task="sft",
+            data={"train": str(train_file)},
+            training={
+                "quantization_aware": "fp8",
+                "fp8_attention": True,
+                "nvfp4": True,
+                "lora": {"r": 4, "alpha": 8, "target_modules": ["q_proj", "v_proj"]},
+            },
+        )
+
+        class StopAfterSetupError(Exception):
+            pass
+
+        wrapper = SFTTrainerWrapper(config=cfg, device="cpu")
+
+        with patch(
+            "trl.SFTTrainer.__init__",
+            side_effect=StopAfterSetupError,
+        ), patch(
+            "soup_cli.utils.v028_features.apply_v028_speed_memory",
+            wraps=apply_v028_speed_memory,
+        ) as mock_v028:
+            with pytest.raises(StopAfterSetupError):
+                wrapper.setup({
+                    "train": [
+                        {
+                            "messages": [
+                                {"role": "user", "content": "hi"},
+                                {"role": "assistant", "content": "hello"},
+                            ]
+                        }
+                    ]
+                })
+
+            mock_v028.assert_called_once()
+            assert mock_v028.call_args.kwargs.get("skip_cut_ce") is True
+            passed_model = mock_v028.call_args.kwargs.get("model")
+            assert passed_model is not None
+            assert passed_model.__class__.__name__ == "PeftModelForCausalLM"

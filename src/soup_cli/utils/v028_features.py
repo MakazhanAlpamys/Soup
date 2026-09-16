@@ -84,8 +84,9 @@ def apply_v028_speed_memory(
             _say(f"FP8 training enabled (Float8Linear, recipe={recipe})")
         else:
             _say(
-                "FP8 training: torchao.float8 unavailable or no "
-                "compatible linears", style="yellow",
+                "FP8 training requested but unavailable "
+                "(no Hopper+ GPU or torchao.float8 missing)",
+                style="yellow",
             )
 
     # --- FP8 attention (v0.71.21 #141) ---------------------------------------
