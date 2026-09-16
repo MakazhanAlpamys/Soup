@@ -300,6 +300,7 @@ def test_layer_streaming_builds_the_lora_config_with_its_patterns(monkeypatch, t
     streamed skeleton.
     """
     from soup_cli.trainer.stream_setup import StreamingSetupMixin
+    from soup_cli.utils.layer_stream import DEFAULT_STREAM_READ_AHEAD
 
     class _Wrapper(StreamingSetupMixin):
         def __init__(self):
@@ -323,6 +324,7 @@ def test_layer_streaming_builds_the_lora_config_with_its_patterns(monkeypatch, t
         gradient_accumulation_steps=1,
         stream_vram_probe=False,
         stream_vram_override=None,
+        stream_read_ahead=DEFAULT_STREAM_READ_AHEAD,
         lora=config.training.lora,
     )
     cfg = SimpleNamespace(base="Qwen/Qwen3-0.6B", data=SimpleNamespace(max_length=64))
