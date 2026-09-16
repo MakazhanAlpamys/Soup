@@ -59,6 +59,9 @@ from soup_cli.utils.exit_codes import (
 from soup_cli.utils.exit_codes import (
     EXIT_USAGE_ERROR as _EXIT_USAGE,
 )
+from soup_cli.utils.exit_codes import (
+    GateGroup,
+)
 from soup_cli.utils.paths import atomic_write_text, enforce_under_cwd_and_no_symlink
 
 if TYPE_CHECKING:  # pydantic models — import for typing only (no eager cost)
@@ -90,7 +93,7 @@ from soup_cli.utils.ship_verdict import (
 
 console = Console()
 
-app = typer.Typer(no_args_is_help=False)
+app = typer.Typer(cls=GateGroup, no_args_is_help=False)
 
 # 16 MiB cap on evidence JSON (mirrors `soup diagnose` — prevents a
 # multi-GB / symlink-pointed file from OOMing at json.load time).

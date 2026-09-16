@@ -18,6 +18,7 @@ from soup_cli.utils.exit_codes import (
     EXIT_OK,
     EXIT_RUNTIME_ERROR,
     EXIT_USAGE_ERROR,
+    GateCommand,
 )
 
 
@@ -236,7 +237,7 @@ def register(app: typer.Typer, console: Console) -> None:
         for rec in report.recommendations:
             console.print(f"[dim]•[/] {escape(rec)}")
 
-    @app.command(name="against")
+    @app.command(name="against", cls=GateCommand)
     def against_cmd(
         baseline_run_id: str = typer.Argument(
             ..., help="Baseline run id (from `soup runs list`).",

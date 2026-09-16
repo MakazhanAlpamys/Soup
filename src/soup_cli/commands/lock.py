@@ -19,7 +19,7 @@ from rich.console import Console
 from rich.markup import escape
 from rich.panel import Panel
 
-from soup_cli.utils.exit_codes import EXIT_GATE_FAILED, EXIT_USAGE_ERROR
+from soup_cli.utils.exit_codes import EXIT_GATE_FAILED, EXIT_USAGE_ERROR, GateCommand
 
 console = Console()
 
@@ -70,10 +70,10 @@ def write_lock_cmd(
                 "Either pass --env-hash <64-hex> explicitly, or run "
                 "`soup env lock` first to create soup-env.lock."
             )
-            raise typer.Exit(EXIT_USAGE_ERROR) from exc
+            raise typer.Exit(2) from exc
         except (TypeError, ValueError) as exc:
             console.print(f"[red]{escape(str(exc))}[/]")
-            raise typer.Exit(EXIT_USAGE_ERROR) from exc
+            raise typer.Exit(2) from exc
         env_hash = compute_env_hash(env_lock_obj)
 
     try:
@@ -94,7 +94,7 @@ def write_lock_cmd(
         write_lock(lock, output)
     except (TypeError, ValueError) as exc:
         console.print(f"[red]{escape(str(exc))}[/]")
-        raise typer.Exit(EXIT_USAGE_ERROR) from exc
+        raise typer.Exit(2) from exc
 
     console.print(
         Panel(
@@ -133,7 +133,7 @@ def show_lock_cmd(
     )
 
 
-@app.command(name="check")
+@app.command(name="check", cls=GateCommand)
 def check_lock_cmd(
     path: str = typer.Argument("soup.lock", help="Path to tracked soup.lock"),
     base_sha: str = typer.Option(..., "--base-sha", help="64-hex current base-model SHA"),

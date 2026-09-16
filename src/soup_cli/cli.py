@@ -12,22 +12,10 @@ from soup_cli.utils.encoding import force_utf8_stdio
 force_utf8_stdio()
 _utf8_bootstrap_done = True
 
-import click.exceptions  # noqa: E402
 import typer  # noqa: E402
 from rich.console import Console  # noqa: E402
 
 from soup_cli import __version__  # noqa: E402
-from soup_cli.utils.exit_codes import EXIT_USAGE_ERROR  # noqa: E402
-
-# Align Click/Typer usage errors (e.g. unknown options like --bogus) with
-# the project-wide 0/2/3 taxonomy (#813): 3 = EXIT_USAGE_ERROR.
-click.exceptions.UsageError.exit_code = EXIT_USAGE_ERROR
-try:
-    import typer._click.exceptions  # noqa: E402
-
-    typer._click.exceptions.UsageError.exit_code = EXIT_USAGE_ERROR
-except (ImportError, AttributeError):
-    pass
 from soup_cli.commands import (  # noqa: E402
     adapters,
     autopilot,
@@ -81,6 +69,7 @@ from soup_cli.commands import (  # noqa: E402
     why as why_cmd,
 )
 from soup_cli.utils.constants import GITHUB_URL  # noqa: E402
+from soup_cli.utils.exit_codes import GateCommand  # noqa: E402
 
 console = Console()
 
@@ -509,6 +498,7 @@ from soup_cli.commands import expect as _expect_cmd  # noqa: E402
 
 app.command(
     name="expect",
+    cls=GateCommand,
     help="Run an expectations suite against a JSONL dataset.",
 )(_expect_cmd.expect_cmd)
 
@@ -535,7 +525,7 @@ app.add_typer(
 from soup_cli.commands import data_doctor as _data_doctor_cmd  # noqa: E402
 
 data.app.command(name="doctor")(_data_doctor_cmd.doctor)
-data.app.command(name="lint")(_data_doctor_cmd.lint)
+data.app.command(name="lint", cls=GateCommand)(_data_doctor_cmd.lint)
 
 # v0.71.36 — Data Moat II: topic map + Secret-Sharer canaries.
 from soup_cli.commands import data_topics as _data_topics_cmd  # noqa: E402

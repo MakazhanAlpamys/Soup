@@ -16,6 +16,7 @@ from soup_cli.utils.exit_codes import (
     EXIT_OK,
     EXIT_RUNTIME_ERROR,
     EXIT_USAGE_ERROR,
+    GateCommand,
 )
 
 console = Console()
@@ -1166,7 +1167,7 @@ def _short_model_name(path: str) -> str:
 # ─── soup eval gate (v0.26.0 Part B) ───
 
 
-@app.command(name="gate")
+@app.command(name="gate", cls=GateCommand)
 def gate_cmd(
     suite: str = typer.Option(
         ..., "--suite", "-s",
@@ -1278,7 +1279,7 @@ def gate_cmd(
 # ─── soup eval quant-check (v0.26.0 Part D) ───
 
 
-@app.command(name="quant-check")
+@app.command(name="quant-check", cls=GateCommand)
 def quant_check_cmd(
     before: str = typer.Option(
         ..., "--before",
