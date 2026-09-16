@@ -141,30 +141,37 @@ def _build_streamed_dpo_wrapper(tmp_path, monkeypatch):
 # the bug and the fix
 # --------------------------------------------------------------------------
 class TestCanonicalNamedParameters:
-    def test_control_raw_named_parameters_do_not_intersect_the_resident_peft_model(
+    def test_raw_named_parameters_now_equal_the_resident_peft_model(
         self, tmp_path, monkeypatch
     ):
-        """CONTROL: proves the bug this issue reports, and that the fix below
-        is not a no-op. Same checkpoint, same LoRA config, one streamed and
-        one not: every trainable (LoRA) name lives inside a wrapped decoder
-        layer, so the trainable key sets share nothing, reproducing the
-        #331 gate's "grads exact 0/0", since gradients only exist for the
-        trainable parameters. (Non-layer weights like the embeddings already
-        match without canonicalising; only per-layer names carry `.inner.`,
-        so the assertion is scoped to the LoRA names the gate actually
-        compared.)"""
+        """This was the CONTROL that proved the bug: same checkpoint, same LoRA
+        config, one streamed and one not, and the trainable (LoRA) name sets
+        shared nothing because every streamed name carried `.inner.` —
+        reproducing the #331 gate's "grads exact 0/0". #1005 removed the
+        premise: the wrapper's names are canonical now (peft 0.21 selects
+        adapter entries by module-name prefix, and the two spellings saved an
+        adapter as ZERO tensors), so the raw sets are EQUAL and the helpers
+        below are identities. Kept, inverted, so a regression to two
+        spellings fails here by name."""
         _requires_train_extra()
         from peft import get_peft_model
 
         wrapper, resident = _build_streamed_dpo_wrapper(tmp_path, monkeypatch)
         resident_peft = get_peft_model(resident, _lora_config())
 
-        streamed_lora = {name for name, _ in wrapper.model.named_parameters() if "lora_" in name}
+        # The streamed DPO wrapper also carries the `ref` adapter (the reference
+        # model is the same streamed base with adapters disabled, v0.72.4); the
+        # resident control has only `default`. Compare the adapter both have.
+        streamed_lora = {
+            name
+            for name, _ in wrapper.model.named_parameters()
+            if "lora_" in name and ".ref." not in name
+        }
         resident_lora = {name for name, _ in resident_peft.named_parameters() if "lora_" in name}
         assert streamed_lora and resident_lora
-        assert any(".inner." in name for name in streamed_lora)
+        assert not any(".inner." in name for name in streamed_lora)
         assert not any(".inner." in name for name in resident_lora)
-        assert not (streamed_lora & resident_lora)
+        assert streamed_lora == resident_lora
 
     def test_canonical_names_strip_the_inner_segment(self, tmp_path, monkeypatch):
         _requires_train_extra()
@@ -173,9 +180,10 @@ class TestCanonicalNamedParameters:
         wrapper, _ = _build_streamed_dpo_wrapper(tmp_path, monkeypatch)
         raw_names = [name for name, _ in wrapper.model.named_parameters()]
         canonical_names = [name for name, _ in canonical_named_parameters(wrapper.model)]
-        assert any(".inner." in name for name in raw_names)
+        # #1005: the raw names are canonical already; the helper is an identity.
+        assert not any(".inner." in name for name in raw_names)
         assert not any(".inner." in name for name in canonical_names)
-        assert len(canonical_names) == len(raw_names)
+        assert canonical_names == raw_names
 
     def test_streamed_and_resident_canonical_names_intersect(self, tmp_path, monkeypatch):
         """Acceptance criterion: a streamed and a resident model built from
