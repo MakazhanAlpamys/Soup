@@ -569,14 +569,6 @@ class TestBitNetUtils:
         with pytest.raises(exc):
             validate_bitnet_export(bad)
 
-    def test_build_bitnet_trainer_lifted_v07120(self):
-        """v0.52.0 stub lifted in v0.71.20 #134 to a BitNetTrainerWrapper
-        factory taking ``config``. No-arg call now raises TypeError."""
-        from soup_cli.utils.bitnet import build_bitnet_trainer
-
-        with pytest.raises(TypeError):
-            build_bitnet_trainer()
-
     def test_export_bitnet_gguf_lifted_v07120(self):
         """v0.52.0 stub lifted in v0.71.20 #134 to a real export taking
         required kwargs. No-arg call now raises TypeError."""

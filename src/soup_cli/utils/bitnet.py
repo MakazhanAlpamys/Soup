@@ -164,22 +164,6 @@ _BITNET_GGUF_QUANT_ARG: Mapping[str, str] = MappingProxyType({
 })
 
 
-def build_bitnet_trainer(config: object, **kwargs: object):
-    """Live BitNet 1.58-bit trainer factory (v0.71.20 #134).
-
-    Returns a :class:`~soup_cli.trainer.bitnet.BitNetTrainerWrapper`. BitNet
-    1.58 fine-tuning trains an SFT-style next-token CE objective on a model
-    whose ``BitLinear`` layers carry ternary weights. The faithful training
-    path needs the upstream ``onebitllms`` package (CUDA / Linux only); the
-    wrapper surfaces a friendly ``RuntimeError`` naming it when absent.
-
-    Lazy import keeps ``soup_cli.utils.bitnet`` torch-free.
-    """
-    from soup_cli.trainer.bitnet import BitNetTrainerWrapper
-
-    return BitNetTrainerWrapper(config, **kwargs)
-
-
 def export_bitnet_gguf(
     *,
     model_dir: str,

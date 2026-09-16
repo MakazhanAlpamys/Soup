@@ -360,13 +360,7 @@ class TestTtsSchemaAndRouting:
 # --------------------------------------------------------------------------- #
 # #134 BitNet
 # --------------------------------------------------------------------------- #
-class TestBuildBitnetTrainer:
-    def test_no_arg_typeerror(self):
-        from soup_cli.utils.bitnet import build_bitnet_trainer
-
-        with pytest.raises(TypeError):
-            build_bitnet_trainer()
-
+class TestBitNetTrainerWrapper:
     def test_config_refuses_unwired_training(self):
         from soup_cli.config.loader import load_config_from_string
 

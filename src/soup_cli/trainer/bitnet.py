@@ -1,6 +1,6 @@
 """v0.71.20 #134 — Live BitNet 1.58-bit fine-tuning trainer (BETA, hw-gated).
 
-``BitNetTrainerWrapper`` lifts the v0.52.0 ``build_bitnet_trainer`` schema
+``BitNetTrainerWrapper`` lifts the v0.52.0 BitNet schema
 stub. BitNet 1.58 fine-tuning trains an SFT-style next-token cross-entropy
 objective on a model whose ``BitLinear`` layers carry ternary weights. The
 faithful training path needs the upstream ``onebitllms`` package, which wraps
