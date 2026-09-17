@@ -44,8 +44,8 @@ def test_draft_panel_strips_control_bytes_from_model_names() -> None:
         n_generated_tokens=10,
         acceptance_rate=0.75,
         verdict="STRONG",
-        tok_s_plain=10.0,
         tok_s_assisted=12.0,
+        tok_s_plain=10.0,
         speedup=1.2,
         num_assistant_tokens=5,
         soup_version="0.75.0",
@@ -54,7 +54,7 @@ def test_draft_panel_strips_control_bytes_from_model_names() -> None:
     Console(file=buf, force_terminal=True, width=100).print(render_draft_panel(report))
 
     output = buf.getvalue()
-    assert "org/EVIL" in output
-    assert "org/DRAFT" in output
+    assert "org/[31mEVIL[0m" in _plain(output)
+    assert "org/[34mDRAFT[0m" in _plain(output)
     assert "\x1b[31m" not in output
     assert "\x1b[34m" not in output
