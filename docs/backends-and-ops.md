@@ -221,6 +221,12 @@ soup train --config soup.yaml --cloud modal --gpu a100 --cloud-submit
 `soup_modal_app.py` builds an image with `soup-cli[train]` pinned to your running version, writes
 the embedded config inside the container, and runs `soup train` on the chosen GPU.
 
+Run outputs are written to the `soup-outputs` Modal volume (created on first use), in a directory
+named after the run (`soup-<12 hex>`), so checkpoints outlive the container. When the run ends,
+including after a failed run, the app downloads every file in that directory into your local
+output directory and prints a `modal volume get soup-outputs /<run name> <output dir> --force`
+command that retries the download; that command places the files under `<output dir>/<run name>`.
+
 ### RunPod (Planned)
 
 RunPod support is currently in development and descoped from live CLI dispatch pending automated
