@@ -86,7 +86,13 @@ def test_keyboard_interrupt_keeps_waiting_and_never_kills(monkeypatch, capsys):
 
     _patch_popen(monkeypatch, [KeyboardInterrupt(), KeyboardInterrupt(), 0])
 
-    assert submit_lambda_run(_plan(), env=dict(_ENV)) == 0
+    # An escaping KeyboardInterrupt would abort the whole pytest session rather
+    # than fail this test, so it is converted into an ordinary failure.
+    try:
+        result = submit_lambda_run(_plan(), env=dict(_ENV))
+    except KeyboardInterrupt:
+        pytest.fail("KeyboardInterrupt escaped submit_lambda_run")
+    assert result == 0
 
     assert len(_FakePopen.instances) == 1
     proc = _FakePopen.instances[0]
