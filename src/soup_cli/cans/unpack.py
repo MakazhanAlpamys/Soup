@@ -31,8 +31,14 @@ MAX_EXTRACT_MEMBERS = 10_000
 MAX_EXTRACT_BYTES = 8 * 1024 * 1024 * 1024
 
 
-def _read_text_member(tar: tarfile.TarFile, name: str, max_bytes: int) -> str:
-    member = tar.getmember(name)
+def _read_text_member(
+    tar: tarfile.TarFile, name: str, max_bytes: int,
+) -> tuple[str, int]:
+    """Return ``(text, byte_length)`` of a regular UTF-8 member, size-capped."""
+    try:
+        member = tar.getmember(name)
+    except KeyError as exc:
+        raise ValueError(f"can has no member '{name}'") from exc
     if not member.isfile():
         raise ValueError(f"member '{name}' in can is not a regular file")
     if member.size > max_bytes:
@@ -50,7 +56,7 @@ def _read_text_member(tar: tarfile.TarFile, name: str, max_bytes: int) -> str:
             f"member '{name}' in can is too large (> {max_bytes} bytes)"
         )
     try:
-        return raw.decode("utf-8")
+        return raw.decode("utf-8"), len(raw)
     except UnicodeDecodeError as exc:
         raise ValueError(f"member '{name}' in can is not valid UTF-8: {exc}") from exc
 
@@ -67,9 +73,11 @@ def inspect_can(path: str) -> Manifest:
     if not can_path.exists():
         raise FileNotFoundError(f"can not found: {path}")
     with tarfile.open(can_path, mode="r:gz") as tar:
-        manifest_text = _read_text_member(tar, "manifest.yaml", MAX_MANIFEST_BYTES)
+        manifest_text, manifest_bytes = _read_text_member(
+            tar, "manifest.yaml", MAX_MANIFEST_BYTES,
+        )
     data = yaml.safe_load(manifest_text) or {}
-    check_yaml_expanded_size(data, "manifest.yaml")
+    check_yaml_expanded_size(data, "manifest.yaml", source_bytes=manifest_bytes)
     return Manifest(**data)
 
 
@@ -81,9 +89,9 @@ def read_config(path: str) -> dict[str, Any]:
     if not can_path.exists():
         raise FileNotFoundError(f"can not found: {path}")
     with tarfile.open(can_path, mode="r:gz") as tar:
-        cfg_text = _read_text_member(tar, "config.yaml", MAX_CONFIG_BYTES)
+        cfg_text, cfg_bytes = _read_text_member(tar, "config.yaml", MAX_CONFIG_BYTES)
     data = yaml.safe_load(cfg_text) or {}
-    check_yaml_expanded_size(data, "config.yaml")
+    check_yaml_expanded_size(data, "config.yaml", source_bytes=cfg_bytes)
     if not isinstance(data, dict):
         raise ValueError("config.yaml must deserialise to a mapping")
     return data

@@ -8,7 +8,7 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
-from soup_cli.utils.yaml_limits import check_yaml_expanded_size
+from soup_cli.utils.yaml_limits import check_expanded_nodes
 
 CAN_FORMAT_VERSION = 3  # v0.71.3 #182: attestations field (additive over v2)
 SUPPORTED_CAN_FORMAT_VERSIONS = (1, 2, 3)
@@ -31,8 +31,10 @@ def validate_attestation_statement(stmt: object) -> dict:
     if not isinstance(stmt, dict):
         raise ValueError("attestation must be a dict (in-toto Statement)")
     # Before json.dumps: a statement loaded from YAML may share references
-    # (anchors / aliases) whose serialised form is exponentially larger.
-    check_yaml_expanded_size(stmt, "attestation")
+    # (anchors / aliases) whose serialised form is exponentially larger. Every
+    # node costs at least one byte of JSON, so a statement within the byte cap
+    # below has fewer nodes than _MAX_ATTESTATION_BYTES and always passes.
+    check_expanded_nodes(stmt, "attestation", limit=_MAX_ATTESTATION_BYTES)
     type_field = stmt.get("_type")
     predicate_type = stmt.get("predicateType")
     if not isinstance(type_field, str) or not type_field:
