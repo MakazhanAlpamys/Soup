@@ -445,6 +445,19 @@ class ExperimentTracker:
         ).fetchall()
         return [self._reconcile_orphaned_run(dict(row)) for row in rows]
 
+    def list_active_execution_runs(self) -> list[dict]:
+        """Return every 'launching' or 'running' run, newest first, with no limit.
+
+        The MCP one-active-execution cap reads this rather than ``list_runs``,
+        whose 50-row window lets an older live run fall out of view.
+        """
+        conn = self._get_conn()
+        rows = conn.execute(
+            "SELECT * FROM runs WHERE status IN ('launching', 'running') "
+            "ORDER BY created_at DESC, rowid DESC"
+        ).fetchall()
+        return [self._reconcile_orphaned_run(dict(row)) for row in rows]
+
     def get_run(self, run_id: str) -> Optional[dict]:
         """Get full details of a single run. Supports prefix matching."""
         conn = self._get_conn()

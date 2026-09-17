@@ -208,7 +208,8 @@ class ExecutionManager:
         problem degrades to the in-memory-only behaviour rather than wedging.
         """
         try:
-            runs = ExperimentTracker().list_runs()
+            # Every launching/running row, not the 50-row list_runs() window.
+            runs = ExperimentTracker().list_active_execution_runs()
         except Exception:
             return None
         for run in runs:
