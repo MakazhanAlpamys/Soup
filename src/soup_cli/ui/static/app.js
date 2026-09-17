@@ -242,7 +242,7 @@ function statusBadge(status) {
     failed: 'badge-danger',
     running: 'badge-warning',
   };
-  return `<span class="badge ${map[status] || 'badge-info'}">${escapeHtml(status)}</span>`;
+  return html`<span class="badge ${map[status] || 'badge-info'}">${status}</span>`;
 }
 
 function truncate(str, len = 30) {
@@ -261,8 +261,8 @@ async function loadDashboard() {
     systemInfo = sysResp;
     renderDashboard();
   } catch (err) {
-    document.getElementById('dashboard-content').innerHTML =
-      `<div class="empty-state"><div class="empty-state-text">Error loading dashboard: ${escapeHtml(err.message)}</div></div>`;
+    setHtml(document.getElementById('dashboard-content'),
+      html`<div class="empty-state"><div class="empty-state-text">Error loading dashboard: ${err.message}</div></div>`);
   }
 }
 
@@ -274,7 +274,7 @@ function renderDashboard() {
     ? Math.min(...completed.map(r => r.final_loss).filter(Boolean)).toFixed(4)
     : '-';
 
-  document.getElementById('dashboard-content').innerHTML = `
+  setHtml(document.getElementById('dashboard-content'), html`
     <div class="stats-row">
       <div class="card stat-card">
         <div class="stat-value">${runsData.length}</div>
@@ -297,25 +297,25 @@ function renderDashboard() {
     <div class="card">
       <div class="card-title">System</div>
       <div style="font-size:0.9rem; color: var(--text-dim)">
-        Device: <strong style="color:var(--text)">${escapeHtml(systemInfo.device_name)}</strong> &nbsp;|&nbsp;
-        GPU Memory: <strong style="color:var(--text)">${escapeHtml(systemInfo.gpu_info.memory_total)}</strong> &nbsp;|&nbsp;
-        Python: <strong style="color:var(--text)">${escapeHtml(systemInfo.python_version)}</strong> &nbsp;|&nbsp;
-        Soup: <strong style="color:var(--text)">v${escapeHtml(systemInfo.version)}</strong>
+        Device: <strong style="color:var(--text)">${systemInfo.device_name}</strong> &nbsp;|&nbsp;
+        GPU Memory: <strong style="color:var(--text)">${systemInfo.gpu_info.memory_total}</strong> &nbsp;|&nbsp;
+        Python: <strong style="color:var(--text)">${systemInfo.python_version}</strong> &nbsp;|&nbsp;
+        Soup: <strong style="color:var(--text)">v${systemInfo.version}</strong>
       </div>
     </div>
 
     <div class="card">
       <div class="card-title">Recent Runs</div>
       ${runsData.length === 0
-        ? '<div class="empty-state"><div class="empty-state-text">No runs yet</div><div class="empty-state-hint">Start training with "soup train" or use the New Training page</div></div>'
+        ? html`<div class="empty-state"><div class="empty-state-text">No runs yet</div><div class="empty-state-hint">Start training with "soup train" or use the New Training page</div></div>`
         : renderRunsTable(runsData.slice(0, 20))
       }
     </div>
-  `;
+  `);
 }
 
 function renderRunsTable(runs) {
-  return `
+  return html`
     <div class="table-wrap">
       <table>
         <thead>
@@ -332,21 +332,21 @@ function renderRunsTable(runs) {
           </tr>
         </thead>
         <tbody>
-          ${runs.map(r => `
-            <tr style="cursor:pointer" onclick="showRunDetail('${escapeHtml(r.run_id)}')">
-              <td><code style="font-size:0.8rem">${escapeHtml(r.run_id.substring(0, 20))}...</code></td>
-              <td>${escapeHtml(r.experiment_name || '-')}</td>
-              <td>${escapeHtml(truncate(r.base_model))}</td>
-              <td>${escapeHtml(r.task || 'sft')}</td>
+          ${runs.map(r => html`
+            <tr style="cursor:pointer" onclick="showRunDetail('${r.run_id}')">
+              <td><code style="font-size:0.8rem">${r.run_id.substring(0, 20)}...</code></td>
+              <td>${r.experiment_name || '-'}</td>
+              <td>${truncate(r.base_model)}</td>
+              <td>${r.task || 'sft'}</td>
               <td>${statusBadge(r.status)}</td>
               <td>${r.final_loss ? r.final_loss.toFixed(4) : '-'}</td>
               <td>${formatDuration(r.duration_secs)}</td>
               <td>${formatDate(r.created_at)}</td>
               <td>
-                <button class="btn btn-danger btn-sm" onclick="event.stopPropagation(); deleteRun('${escapeHtml(r.run_id)}')">Delete</button>
+                <button class="btn btn-danger btn-sm" onclick="event.stopPropagation(); deleteRun('${r.run_id}')">Delete</button>
               </td>
             </tr>
-          `).join('')}
+          `)}
         </tbody>
       </table>
     </div>
@@ -371,7 +371,7 @@ async function showRunDetail(runId) {
   const body = document.getElementById('run-modal-body');
   modal.classList.add('active');
 
-  body.innerHTML = '<div style="text-align:center;padding:2rem;color:var(--text-dim)">Loading...</div>';
+  setHtml(body, html`<div style="text-align:center;padding:2rem;color:var(--text-dim)">Loading...</div>`);
 
   try {
     const [run, metricsResp, evalResp] = await Promise.all([
@@ -383,11 +383,11 @@ async function showRunDetail(runId) {
     const config = run.config_json ? JSON.parse(run.config_json) : {};
     const metrics = metricsResp.metrics;
 
-    body.innerHTML = `
+    setHtml(body, html`
       <div class="grid-2" style="margin-bottom:1rem">
         <div>
           <div class="form-label">Run ID</div>
-          <div><code>${escapeHtml(run.run_id)}</code></div>
+          <div><code>${run.run_id}</code></div>
         </div>
         <div>
           <div class="form-label">Status</div>
@@ -395,15 +395,15 @@ async function showRunDetail(runId) {
         </div>
         <div>
           <div class="form-label">Model</div>
-          <div>${escapeHtml(run.base_model || '-')}</div>
+          <div>${run.base_model || '-'}</div>
         </div>
         <div>
           <div class="form-label">Task</div>
-          <div>${escapeHtml(run.task || 'sft')}</div>
+          <div>${run.task || 'sft'}</div>
         </div>
         <div>
           <div class="form-label">Device</div>
-          <div>${escapeHtml(run.device_name || run.device || '-')}</div>
+          <div>${run.device_name || run.device || '-'}</div>
         </div>
         <div>
           <div class="form-label">Duration</div>
@@ -419,7 +419,7 @@ async function showRunDetail(runId) {
         </div>
       </div>
 
-      ${metrics.length > 0 ? `
+      ${metrics.length > 0 ? html`
         <div class="chart-grid">
           <div class="card">
             <div class="card-title">Loss</div>
@@ -438,7 +438,7 @@ async function showRunDetail(runId) {
             <div class="chart-container"><canvas id="speed-chart"></canvas></div>
           </div>
         </div>
-        ${metrics.some(m => m.gpu_mem) ? `
+        ${metrics.some(m => m.gpu_mem) ? html`
           <div class="card">
             <div class="card-title">GPU Memory</div>
             <div class="chart-container"><canvas id="gpumem-chart"></canvas></div>
@@ -446,20 +446,20 @@ async function showRunDetail(runId) {
         ` : ''}
       ` : ''}
 
-      ${evalResp.eval_results && evalResp.eval_results.length > 0 ? `
+      ${evalResp.eval_results && evalResp.eval_results.length > 0 ? html`
         <div class="card">
           <div class="card-title">Eval Results</div>
           <div class="table-wrap">
             <table class="eval-table">
               <thead><tr><th>Benchmark</th><th>Score</th><th>Details</th></tr></thead>
               <tbody>
-                ${evalResp.eval_results.map(er => `
+                ${evalResp.eval_results.map(er => html`
                   <tr>
-                    <td>${escapeHtml(er.benchmark)}</td>
-                    <td>${typeof er.score === 'number' ? er.score.toFixed(4) : escapeHtml(String(er.score))}</td>
-                    <td><code style="font-size:0.75rem">${er.details_json ? escapeHtml(String(er.details_json).substring(0, 100)) : '-'}</code></td>
+                    <td>${er.benchmark}</td>
+                    <td>${typeof er.score === 'number' ? er.score.toFixed(4) : String(er.score)}</td>
+                    <td><code style="font-size:0.75rem">${er.details_json ? String(er.details_json).substring(0, 100) : '-'}</code></td>
                   </tr>
-                `).join('')}
+                `)}
               </tbody>
             </table>
           </div>
@@ -470,13 +470,13 @@ async function showRunDetail(runId) {
         <div class="card-title">Config</div>
         <pre style="font-size:0.8rem;color:var(--text-dim);white-space:pre-wrap;max-height:300px;overflow-y:auto">${JSON.stringify(config, null, 2)}</pre>
       </div>
-    `;
+    `);
 
     if (metrics.length > 0) {
       renderCharts(metrics);
     }
   } catch (err) {
-    body.innerHTML = `<div class="empty-state"><div class="empty-state-text">Error: ${escapeHtml(err.message)}</div></div>`;
+    setHtml(body, html`<div class="empty-state"><div class="empty-state-text">Error: ${err.message}</div></div>`);
   }
 }
 
@@ -575,8 +575,8 @@ async function loadTrainingPage() {
     window._recipes = recipesResp.recipes || [];
     renderTrainingPage(templatesResp.templates, statusResp);
   } catch (err) {
-    document.getElementById('training-content').innerHTML =
-      `<div class="empty-state"><div class="empty-state-text">Error: ${escapeHtml(err.message)}</div></div>`;
+    setHtml(document.getElementById('training-content'),
+      html`<div class="empty-state"><div class="empty-state-text">Error: ${err.message}</div></div>`);
   }
 }
 
@@ -584,7 +584,7 @@ function renderTrainingPage(templates, status) {
   const templateNames = Object.keys(templates);
   const editorId = 'config-editor';
 
-  document.getElementById('training-content').innerHTML = `
+  setHtml(document.getElementById('training-content'), html`
     <div class="grid-2">
       <div>
         <div class="card">
@@ -594,14 +594,14 @@ function renderTrainingPage(templates, status) {
               <label class="form-label" style="font-size:0.8rem">Template</label>
               <select id="template-select" onchange="loadTemplate()">
                 <option value="">-- Template --</option>
-                ${templateNames.map(t => `<option value="${escapeHtml(t)}">${escapeHtml(t)}</option>`).join('')}
+                ${templateNames.map(t => html`<option value="${t}">${t}</option>`)}
               </select>
             </div>
             <div class="form-group" style="margin-bottom:0">
               <label class="form-label" style="font-size:0.8rem">Recipe</label>
               <select id="recipe-select" onchange="loadRecipe()">
                 <option value="">-- Recipe --</option>
-                ${(window._recipes || []).map(r => `<option value="${escapeHtml(r.name)}">${escapeHtml(r.name)} (${escapeHtml(r.task)})</option>`).join('')}
+                ${(window._recipes || []).map(r => html`<option value="${r.name}">${r.name} (${r.task})</option>`)}
               </select>
             </div>
           </div>
@@ -624,9 +624,9 @@ function renderTrainingPage(templates, status) {
           <div class="card-title">Training Status</div>
           <div id="train-status-panel">
             ${status.running
-              ? `<div><span class="badge badge-warning">Running</span> PID: ${escapeHtml(String(status.pid))}</div>
+              ? html`<div><span class="badge badge-warning">Running</span> PID: ${String(status.pid)}</div>
                  <button class="btn btn-danger btn-sm" style="margin-top:0.75rem" onclick="stopTraining()">Stop Training</button>`
-              : '<div style="color:var(--text-dim)">No training in progress</div>'
+              : html`<div style="color:var(--text-dim)">No training in progress</div>`
             }
           </div>
         </div>
@@ -643,7 +643,7 @@ function renderTrainingPage(templates, status) {
         </div>
       </div>
     </div>
-  `;
+  `);
 
   // Store templates globally
   window._templates = templates;
@@ -676,12 +676,12 @@ async function validateConfig() {
       body: JSON.stringify({ yaml }),
     });
     if (result.valid) {
-      statusEl.innerHTML = '<span style="color:var(--accent)">Config is valid!</span>';
+      setHtml(statusEl, html`<span style="color:var(--accent)">Config is valid!</span>`);
     } else {
-      statusEl.innerHTML = `<span style="color:var(--danger)">Invalid: ${escapeHtml(result.error)}</span>`;
+      setHtml(statusEl, html`<span style="color:var(--danger)">Invalid: ${result.error}</span>`);
     }
   } catch (err) {
-    statusEl.innerHTML = `<span style="color:var(--danger)">Error: ${escapeHtml(err.message)}</span>`;
+    setHtml(statusEl, html`<span style="color:var(--danger)">Error: ${err.message}</span>`);
   }
 }
 
@@ -698,13 +698,13 @@ async function startTraining() {
       method: 'POST',
       body: JSON.stringify({ config_yaml: yaml }),
     });
-    document.getElementById('config-status').innerHTML =
-      `<span style="color:var(--accent)">Training started! PID: ${escapeHtml(String(result.pid))}</span>`;
+    setHtml(document.getElementById('config-status'),
+      html`<span style="color:var(--accent)">Training started! PID: ${String(result.pid)}</span>`);
     // Refresh status
     loadTrainingPage();
   } catch (err) {
-    document.getElementById('config-status').innerHTML =
-      `<span style="color:var(--danger)">Error: ${escapeHtml(err.message)}</span>`;
+    setHtml(document.getElementById('config-status'),
+      html`<span style="color:var(--danger)">Error: ${err.message}</span>`);
   }
 }
 
@@ -725,7 +725,7 @@ async function inspectData() {
 
   const limit = parseInt(document.getElementById('data-limit').value) || 50;
   const content = document.getElementById('data-content');
-  content.innerHTML = '<div style="text-align:center;padding:2rem;color:var(--text-dim)">Loading...</div>';
+  setHtml(content, html`<div style="text-align:center;padding:2rem;color:var(--text-dim)">Loading...</div>`);
 
   try {
     const result = await api('/api/data/inspect', {
@@ -734,14 +734,14 @@ async function inspectData() {
     });
     renderDataResults(result);
   } catch (err) {
-    content.innerHTML = `<div class="empty-state"><div class="empty-state-text">Error: ${escapeHtml(err.message)}</div></div>`;
+    setHtml(content, html`<div class="empty-state"><div class="empty-state-text">Error: ${err.message}</div></div>`);
   }
 }
 
 function renderDataResults(data) {
   const content = document.getElementById('data-content');
 
-  content.innerHTML = `
+  setHtml(content, html`
     <div class="stats-row" style="margin-bottom:1rem">
       <div class="card stat-card">
         <div class="stat-value">${data.total}</div>
@@ -763,19 +763,19 @@ function renderDataResults(data) {
 
     <div class="card">
       <div class="card-title">Sample Data (${data.sample.length} of ${data.total})</div>
-      ${data.sample.map((entry, idx) => `
+      ${data.sample.map((entry, idx) => html`
         <div class="data-entry">
           <div style="font-size:0.75rem; color:var(--text-dim); margin-bottom:0.5rem">#${idx + 1}</div>
-          ${Object.entries(entry).map(([key, val]) => `
+          ${Object.entries(entry).map(([key, val]) => html`
             <div class="data-entry-field">
               <span class="data-entry-key">${key}:</span>
               <span>${typeof val === 'object' ? JSON.stringify(val).substring(0, 200) : String(val).substring(0, 200)}</span>
             </div>
-          `).join('')}
+          `)}
         </div>
-      `).join('')}
+      `)}
     </div>
-  `;
+  `);
 }
 
 // --- Model Chat ---
@@ -790,46 +790,41 @@ function renderChatMessages() {
   if (!container) return;
 
   if (chatMessages.length === 0) {
-    container.innerHTML = `
+    setHtml(container, html`
       <div class="empty-state">
         <div class="empty-state-text">No messages yet</div>
         <div class="empty-state-hint">Enter a server URL and start chatting</div>
       </div>
-    `;
+    `);
     return;
   }
 
-  container.innerHTML = chatMessages.map(msg => `
+  setHtml(container, html`${chatMessages.map(msg => html`
     <div class="chat-msg ${msg.role}">
       <div class="chat-msg-role">${msg.role}</div>
-      <div class="chat-msg-content chat-markdown">${msg.role === 'assistant' ? renderMarkdown(msg.content) : escapeHtml(msg.content)}</div>
+      <div class="chat-msg-content chat-markdown">${msg.role === 'assistant' ? renderMarkdown(msg.content) : msg.content}</div>
     </div>
-  `).join('');
+  `)}`);
 
   container.scrollTop = container.scrollHeight;
 }
 
-function escapeHtml(text) {
-  const div = document.createElement('div');
-  div.textContent = text;
-  return div.innerHTML;
-}
-
+// Returns SafeHtml: the text is escaped first, then only fixed tags are added.
 function renderMarkdown(text) {
-  let html = escapeHtml(text);
+  let out = escapeHtml(text);
   // Code blocks (``` ... ```)
-  html = html.replace(/```(\w*)\n([\s\S]*?)```/g, '<pre class="code-block"><code>$2</code></pre>');
+  out = out.replace(/```(\w*)\n([\s\S]*?)```/g, '<pre class="code-block"><code>$2</code></pre>');
   // Inline code
-  html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+  out = out.replace(/`([^`]+)`/g, '<code>$1</code>');
   // Bold
-  html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+  out = out.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
   // Italic
-  html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
+  out = out.replace(/\*(.+?)\*/g, '<em>$1</em>');
   // List items
-  html = html.replace(/^- (.+)$/gm, '<li>$1</li>');
+  out = out.replace(/^- (.+)$/gm, '<li>$1</li>');
   // Line breaks
-  html = html.replace(/\n/g, '<br>');
-  return html;
+  out = out.replace(/\n/g, '<br>');
+  return trustedHtml(out);
 }
 
 async function sendChatMessage() {
