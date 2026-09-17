@@ -8,7 +8,8 @@ user sets ``quantization_aware: 'fp8'`` in soup.yaml the FP8 recipe is applied;
 ``quantization_aware: true`` keeps the legacy int8 QAT path.
 
 Requires:
-- NVIDIA Hopper+ GPU (SM 9.0+) — H100, H200, B100, B200
+- NVIDIA Ada or newer GPU (SM 8.9+) — RTX 40/50-series, L4, L40S, H100, H200,
+  B100, B200. Rowwise recipes on Ada need torch >= 2.7 (#835).
 - torchao >= 0.5.0 OR transformer-engine >= 1.0
 - CUDA 12.0+
 """
@@ -43,18 +44,79 @@ def is_fp8_available() -> bool:
     return False
 
 
-def is_fp8_gpu_supported() -> bool:
-    """Return True if a Hopper+ GPU is detected (FP8 requires SM 9.0+)."""
+# #835: torch's own floors, read from its source at the release tags.
+# ``_scaled_mm_allowed_device()`` accepts ``major >= 9 or (8, 9)`` for every
+# recipe (identical at v2.4.0, v2.6.0, v2.7.0, v2.13.0). Rowwise scaling on
+# (8, 9) needs the CUTLASS sm89 kernel, first shipped in v2.7.0; v2.6.0 builds
+# only ``cutlass::arch::Sm90`` and raises "Rowwise scaling is not currenlty
+# supported on your device".
+_FP8_MIN_CAPABILITY = (8, 9)
+_ROWWISE_ADA_MIN_TORCH = (2, 7)
+
+_FP8_GPU_REFUSAL = (
+    "FP8 training requires an Ada or newer GPU (compute capability >= 8.9): "
+    "RTX 40/50-series, L4, L40S, RTX 6000 Ada, Hopper (H100/H200) or "
+    "Blackwell (B100/B200)."
+)
+
+
+def _cuda_capability() -> "tuple[int, int] | None":
+    """Return the first CUDA device's capability, or None without CUDA."""
     try:
         import torch
 
         if not torch.cuda.is_available():
-            return False
-        # SM 9.0 = Hopper (H100), SM 10.0 = Blackwell (B100)
-        major, _ = torch.cuda.get_device_capability(0)
-        return major >= 9
+            return None
+        major, minor = torch.cuda.get_device_capability(0)
+        return int(major), int(minor)
     except (ImportError, RuntimeError, AssertionError):
+        return None
+
+
+def _torch_at_least(floor: "tuple[int, int]") -> bool:
+    """True when the installed torch's major.minor is at least ``floor``."""
+    import re
+
+    import torch
+
+    match = re.match(r"(\d+)\.(\d+)", str(torch.__version__))
+    if match is None:
         return False
+    return (int(match.group(1)), int(match.group(2))) >= floor
+
+
+def is_fp8_gpu_supported() -> bool:
+    """Return True if the GPU meets torch's FP8 floor (SM 8.9+, Ada or newer).
+
+    This is the recipe-independent part of :func:`fp8_training_supported`.
+    """
+    capability = _cuda_capability()
+    return capability is not None and capability >= _FP8_MIN_CAPABILITY
+
+
+def fp8_training_supported(recipe: str = "tensorwise") -> "tuple[bool, str]":
+    """The one FP8 hardware gate (#835): ``(ok, reason)`` for ``recipe``.
+
+    Both ``quantization_aware: fp8`` (:func:`apply_fp8_training`) and
+    ``fp8_attention`` (``advanced_precision.apply_fp8_attention``) ask this.
+    """
+    if not is_fp8_gpu_supported():
+        return False, _FP8_GPU_REFUSAL
+    capability = _cuda_capability()
+    if (
+        recipe != "tensorwise"
+        and capability is not None
+        and capability < (9, 0)
+        and not _torch_at_least(_ROWWISE_ADA_MIN_TORCH)
+    ):
+        import torch
+
+        return False, (
+            f"fp8_recipe '{recipe}' on an Ada GPU (compute capability 8.9) needs "
+            f"torch >= 2.7 (installed: {torch.__version__}); upgrade torch or use "
+            "fp8_recipe: tensorwise."
+        )
+    return True, ""
 
 
 def apply_fp8_training(
@@ -81,9 +143,16 @@ def apply_fp8_training(
 
     Returns:
         True on success, False if FP8 is unavailable or conversion failed.
+
+    Raises:
+        RuntimeError: the GPU cannot run ``recipe`` (#835). Nothing is converted.
     """
     if not is_fp8_available():
         return False
+
+    ok, reason = fp8_training_supported(recipe)
+    if not ok:
+        raise RuntimeError(reason)
 
     try:
         from torchao.float8 import convert_to_float8_training
@@ -100,6 +169,7 @@ def validate_fp8_config(
     quantization_aware: QuantizationAwareLike,
     backend: str,
     device: str,
+    recipe: str = "tensorwise",
 ) -> list[str]:
     """Validate FP8 training config.
 
@@ -107,6 +177,7 @@ def validate_fp8_config(
         quantization_aware: TrainingConfig.quantization_aware (False/True/'fp8').
         backend: Training backend (transformers/unsloth/mlx).
         device: Training device (cuda/cpu/mps).
+        recipe: TrainingConfig.fp8_recipe; rowwise has its own floor (#835).
 
     Returns:
         List of error messages. Empty list means valid (or FP8 not requested).
@@ -138,11 +209,9 @@ def validate_fp8_config(
         )
         return errors
 
-    if not is_fp8_gpu_supported():
-        errors.append(
-            "FP8 training requires a Hopper+ GPU (H100/H200/B100/B200, "
-            "compute capability >= 9.0)."
-        )
+    ok, reason = fp8_training_supported(recipe)
+    if not ok:
+        errors.append(reason)
 
     if not is_fp8_available():
         errors.append(

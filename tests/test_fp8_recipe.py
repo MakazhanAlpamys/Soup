@@ -138,6 +138,20 @@ class TestFP8RecipeRequiresFP8:
 class TestFP8RecipeDispatch:
     """apply_fp8_training passes recipe to Float8LinearConfig.from_recipe_name."""
 
+    @pytest.fixture(autouse=True)
+    def _hopper_card(self, monkeypatch):
+        """#835: apply_fp8_training now asks the hardware gate before converting.
+
+        These tests are about recipe dispatch, so they run on a Hopper card
+        (SM 9.0, every recipe admitted); ``tests/test_issue835_fp8_gate.py``
+        covers the gate. torch is patched, not the gate, because each test
+        reloads ``soup_cli.utils.fp8``.
+        """
+        import torch
+
+        monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+        monkeypatch.setattr(torch.cuda, "get_device_capability", lambda *_a, **_k: (9, 0))
+
     def test_apply_fp8_dispatches_tensorwise(self):
         """Default recipe passes 'tensorwise' to from_recipe_name."""
         mock_config = MagicMock()

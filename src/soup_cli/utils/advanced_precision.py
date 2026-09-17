@@ -14,7 +14,7 @@ Three TrainingConfig surfaces ship here:
 v0.71.21 #141 lifts the two ``apply_*`` stubs to live, BETA hw-gated code:
 
 * :func:`apply_fp8_attention` converts the attention-projection linears to
-  torchao ``Float8Linear`` training modules (Hopper+ gate, SM >= 9.0).
+  torchao ``Float8Linear`` training modules (the shared FP8 gate, SM >= 8.9; #835).
 * :func:`apply_nvfp4` routes the model through torchao's ``NVFP4Config``
   quantisation (Blackwell gate — SM 10.0 datacenter B100/B200/GB200 or
   SM 12.0 consumer RTX 50-series).
@@ -227,7 +227,7 @@ def apply_fp8_attention(model: object, *, recipe: str = "tensorwise") -> int:
         TypeError: ``model`` is None or ``recipe`` is not a string.
         ValueError: ``recipe`` is empty, or the model has no attention
             projections at all (silent-no-op footgun).
-        RuntimeError: torchao is missing or the GPU is not Hopper+
+        RuntimeError: torchao is missing or the GPU fails the FP8 gate
             (BETA hw gate — friendly message, never a silent no-op).
     """
     if model is None:
@@ -249,13 +249,11 @@ def apply_fp8_attention(model: object, *, recipe: str = "tensorwise") -> int:
             "(pip install 'torchao>=0.5.0')."
         )
 
-    from soup_cli.utils.fp8 import is_fp8_gpu_supported
+    from soup_cli.utils import fp8
 
-    if not is_fp8_gpu_supported():
-        raise RuntimeError(
-            "fp8_attention requires a Hopper+ GPU (H100/H200/B100/B200, "
-            "compute capability >= 9.0)."
-        )
+    ok, reason = fp8.fp8_training_supported(recipe)
+    if not ok:
+        raise RuntimeError(f"fp8_attention: {reason}")
 
     import torch.nn as nn
 
