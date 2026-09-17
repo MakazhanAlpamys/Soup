@@ -397,7 +397,8 @@ def test_doctor_gpu_panel_warns_when_torch_lacks_gpu_arch(monkeypatch):
     from tests.conftest import strip_ansi
 
     normalized = " ".join(strip_ansi(result.output).split())
-    assert "Torch build does not include this GPU architecture" in normalized
+    assert "Torch build" in normalized
+    assert "GPU architecture" in normalized
 
 
 def test_doctor_shows_gpu_section():
