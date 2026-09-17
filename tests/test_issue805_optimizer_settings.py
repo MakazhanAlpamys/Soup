@@ -23,6 +23,9 @@ def tiny_model(tmp_path, monkeypatch):
     torch.set_num_threads(1)
     monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
     monkeypatch.setattr(torch.backends.mps, "is_available", lambda: False)
+    # Transformers caches MPS availability across tests. Override the Trainer's
+    # lookup too, so a prior MPS probe cannot move this CPU fixture's model.
+    monkeypatch.setattr("transformers.training_args.is_torch_mps_available", lambda: False)
     torch.manual_seed(42)
     tokenizer = Tokenizer(WordLevel(
         {"<pad>": 0, "<unk>": 1, "<eos>": 2, "one": 3, "two": 4, "three": 5},
