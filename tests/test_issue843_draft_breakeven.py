@@ -16,6 +16,7 @@ import math
 import re
 
 import pytest
+from rich.console import Console
 
 # benchmarks/gate-h100-validation.md STEP 26: target and draft tok/s on one H100.
 _TARGET_TOK_S = 39.28
@@ -219,6 +220,17 @@ def _run(monkeypatch, tmp_path, throughput, extra=(), acceptance=(81, 100)):
         encoding="utf-8",
     )
     target_model, draft_model = object(), object()
+    # Pin the panel width. The module Console measures the terminal, and on a
+    # legacy Windows console Rich reports width - 1 (Console.size subtracts
+    # legacy_windows): an 80-column CI runner renders at 79, which wraps the
+    # 80-character "closest: k=1 -> 0.995x" row, fails the positive match, and
+    # makes the "not in" guard pass whatever is printed (#1042 review).
+    # file=None keeps writing to sys.stdout, which CliRunner captures.
+    monkeypatch.setattr(
+        draft_cmd,
+        "console",
+        Console(width=200, legacy_windows=False, force_terminal=False, color_system=None),
+    )
     monkeypatch.setattr(draft_cmd, "_vocab_size_of", lambda mid, trc=False: 49152)
     monkeypatch.setattr(
         draft_cmd,
