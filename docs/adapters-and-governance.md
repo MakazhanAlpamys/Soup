@@ -524,7 +524,8 @@ soup adapters verify ./adapter --public-key trusted.pub
 ```
 
 `verify` fails closed — any tamper, wrong/missing/unreadable key, or a
-signature from an untrusted key marks the adapter invalid. Signing keys and
+signature from an untrusted key marks the adapter invalid. With `--public-key`,
+an adapter whose signature record is not `ed25519` is also invalid. Signing keys and
 trusted public keys are symlink-rejected and size-capped but **not**
 cwd-contained (keys are secrets that live outside the project). Signature
 persists as `.soup-signature.json` (atomic write). `sigstore` keyless signing

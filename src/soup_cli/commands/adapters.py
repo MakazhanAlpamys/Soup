@@ -1313,7 +1313,8 @@ def verify(
     public_key: Optional[str] = typer.Option(
         None, "--public-key",
         help="Trusted ed25519 public-key PEM. When set, the embedded signing "
-             "key must match it (genuine authentication, not just consistency).",
+             "key must match it and requires an ed25519 signature "
+             "(genuine authentication, not just consistency).",
     ),
 ):
     """Verify ``.soup-signature.json`` against current files (v0.60.0, ed25519 v0.71.2).
