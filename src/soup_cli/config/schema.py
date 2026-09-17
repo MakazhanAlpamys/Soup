@@ -19,6 +19,9 @@ from soup_cli.utils.layer_stream import (
     SUPPORTED_STREAM_TASKS as _STREAM_SUPPORTED_TASKS,
 )
 
+# Stdlib-only structural check shared by every regex a config can carry.
+from soup_cli.utils.safe_regex import check_config_regex
+
 # Noise-floor bounds live with the ship verdict so the schema bound and the
 # `--noise-floor` CLI validator can never disagree (ship_verdict has no torch,
 # same reasoning as stream_buffers importing its bounds from layer_stream).
@@ -36,11 +39,10 @@ _MAX_LORA_TARGET_PARAMETER_LEN = 512
 # v0.71.23 #266 — Spectrum targeted-training unfrozen-parameter caps
 _MAX_UNFROZEN_PARAMETERS = 50_000
 _MAX_UNFROZEN_PATTERN_LEN = 512
-# Reject nested-unbounded-quantifier regexes — e.g. ``(x+)+y`` / ``(a*)*`` —
-# which catastrophically backtrack (ReDoS) when re.search'd against parameter
-# names in apply_unfrozen_parameters. soup.yaml is shareable config, so the
-# pattern *class* is rejected at parse time, not just compile failures.
-_UNFROZEN_REDOS_RE = re.compile(r"\([^)]*[+*][^)]*\)\s*[+*]")
+# Patterns whose structure allows super-linear backtracking — e.g. ``(x+)+y`` /
+# ``(.+){2,}z`` / ``(?:.|.)+z`` — would stall re.search against parameter names
+# in apply_unfrozen_parameters. soup.yaml is shareable config, so the pattern
+# *class* is refused at parse time by utils/safe_regex, not just compile failures.
 
 # v0.71.34 #267 / #307 — tasks whose transformers trainer wires LisaCallback.
 # LISA is full-FT of a rotating set of decoder layers, so a task only belongs
@@ -213,7 +215,7 @@ class LoraConfig(BaseModel):
 
     @field_validator("rank_pattern", "alpha_pattern", mode="before")
     @classmethod
-    def _validate_pattern_dict(cls, value) -> Optional[Dict[str, int]]:
+    def _validate_pattern_dict(cls, value, info) -> Optional[Dict[str, int]]:
         if value is None:
             return None
         if not isinstance(value, dict):
@@ -231,6 +233,15 @@ class LoraConfig(BaseModel):
                 )
             if "\x00" in key:
                 raise ValueError("rank_pattern/alpha_pattern keys cannot contain null bytes")
+            # peft matches each key as a regex against every module name
+            # (peft.utils.other.get_pattern_key), so the key is held to the
+            # same complexity check as unfrozen_parameters / lr_groups.
+            field = f"lora.{info.field_name}"
+            try:
+                re.compile(key)
+            except re.error as exc:
+                raise ValueError(f"{field}: invalid regex {key!r}: {exc}") from None
+            check_config_regex(key, field)
             if isinstance(val, bool) or not isinstance(val, int):
                 raise ValueError(
                     f"rank_pattern/alpha_pattern values must be int, "
@@ -3081,13 +3092,13 @@ class TrainingConfig(BaseModel):
                 raise ValueError(
                     f"training.unfrozen_parameters: invalid regex {pat!r}: {exc}"
                 ) from exc
-            if _UNFROZEN_REDOS_RE.search(pat):
+            try:
+                check_config_regex(pat, "training.unfrozen_parameters")
+            except ValueError as exc:
                 raise ValueError(
-                    f"training.unfrozen_parameters: pattern {pat!r} has nested "
-                    f"unbounded quantifiers (ReDoS risk). Use a literal "
-                    f"parameter-name prefix such as "
-                    f"'model.layers.0.mlp.down_proj' (run `soup spectrum scan`)."
-                )
+                    f"{exc}, such as 'model.layers.0.mlp.down_proj' "
+                    f"(run `soup spectrum scan`). ReDoS risk otherwise."
+                ) from None
         return value
 
     # v0.71.34 #267 — LISA (Layerwise Importance Sampled AdamW,
