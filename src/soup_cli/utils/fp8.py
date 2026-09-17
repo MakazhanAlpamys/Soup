@@ -9,7 +9,9 @@ user sets ``quantization_aware: 'fp8'`` in soup.yaml the FP8 recipe is applied;
 
 Requires:
 - NVIDIA Ada or newer GPU (SM 8.9+) — RTX 40/50-series, L4, L40S, H100, H200,
-  B100, B200. Rowwise recipes on Ada need torch >= 2.7 (#835).
+  B100, B200. Rowwise recipes also need a torch that dispatches their kernel on
+  the card (Ada >= 2.7, RTX 50 >= 2.8, 11.x >= 2.10) and never run on Windows
+  (#835).
 - torchao >= 0.5.0 OR transformer-engine >= 1.0
 - CUDA 12.0+
 """
@@ -45,19 +47,55 @@ def is_fp8_available() -> bool:
 
 
 # #835: torch's own floors, read from its source at the release tags.
-# ``_scaled_mm_allowed_device()`` accepts ``major >= 9 or (8, 9)`` for every
-# recipe (identical at v2.4.0, v2.6.0, v2.7.0, v2.13.0). Rowwise scaling on
-# (8, 9) needs the CUTLASS sm89 kernel, first shipped in v2.7.0; v2.6.0 builds
-# only ``cutlass::arch::Sm90`` and raises "Rowwise scaling is not currenlty
-# supported on your device".
+#
+# Every recipe: ``_scaled_mm_allowed_device()`` accepts ``major >= 9 or (8, 9)``
+# (identical at v2.4.0, v2.6.0, v2.7.0, v2.13.0).
+#
+# Rowwise recipes run a CUTLASS kernel in ``RowwiseScaledMM.cu``, which has two
+# separate gates:
+#
+# * a BUILD gate, ``BUILD_ROWWISE_FP8_KERNEL``, defined only when
+#   ``!USE_ROCM && !_WIN32`` (every release through v2.14.0) and, before v2.11.0,
+#   ``CUDA_VERSION >= 12000``. Without it, ``f8f8bf16_rowwise`` raises "Rowwise
+#   scaling is not currenlty supported on your device" on EVERY device -- the
+#   message names the device but the refusal is the build's. So rowwise never
+#   runs on Windows, and never on a CUDA 11 build of torch before 2.11.
+# * a DEVICE dispatch, first added in v2.7.0: ``sm89 || sm9x || sm10x``, then
+#   ``sm12x`` in v2.8.0 and ``sm11x`` in v2.10.0 (still the full list at
+#   v2.14.0). Any other major raises "Rowwise scaling is not currently supported
+#   on your device" at the first forward.
 _FP8_MIN_CAPABILITY = (8, 9)
-_ROWWISE_ADA_MIN_TORCH = (2, 7)
+
+#: The first torch whose rowwise dispatch accepts each compute-capability major.
+#: A major missing here is accepted by no release this was checked against.
+#: 9.x and 10.x are Soup's own torch floor (2.6): v2.6.0 has no device dispatch
+#: at all, and v2.7.0 already lists both.
+_ROWWISE_MIN_TORCH_BY_MAJOR = {
+    8: (2, 7),
+    9: (2, 6),
+    10: (2, 6),
+    11: (2, 10),
+    12: (2, 8),
+}
+
+#: Before this torch, the rowwise kernel is only built against CUDA >= 12.
+_ROWWISE_ANY_CUDA_TORCH = (2, 11)
 
 _FP8_GPU_REFUSAL = (
     "FP8 training requires an Ada or newer GPU (compute capability >= 8.9): "
     "RTX 40/50-series, L4, L40S, RTX 6000 Ada, Hopper (H100/H200) or "
     "Blackwell (B100/B200)."
 )
+
+
+class FP8HardwareUnsupportedError(RuntimeError):
+    """An explicitly requested FP8 setting this card, OS or torch build cannot run.
+
+    Raised before anything is converted, and never caught as an optional
+    feature: a setting that is accepted and then silently not applied is the
+    defect class this exists to stop (#835 review). Every trainer lets it end
+    the run at setup.
+    """
 
 
 def _cuda_capability() -> "tuple[int, int] | None":
@@ -73,16 +111,21 @@ def _cuda_capability() -> "tuple[int, int] | None":
         return None
 
 
-def _torch_at_least(floor: "tuple[int, int]") -> bool:
-    """True when the installed torch's major.minor is at least ``floor``."""
+def _version_at_least(version: object, floor: "tuple[int, int]") -> bool:
+    """True when ``version``'s major.minor is at least ``floor``; False if unreadable."""
     import re
 
-    import torch
-
-    match = re.match(r"(\d+)\.(\d+)", str(torch.__version__))
+    match = re.match(r"(\d+)\.(\d+)", str(version))
     if match is None:
         return False
     return (int(match.group(1)), int(match.group(2))) >= floor
+
+
+def _torch_at_least(floor: "tuple[int, int]") -> bool:
+    """True when the installed torch's major.minor is at least ``floor``."""
+    import torch
+
+    return _version_at_least(torch.__version__, floor)
 
 
 def is_fp8_gpu_supported() -> bool:
@@ -94,6 +137,45 @@ def is_fp8_gpu_supported() -> bool:
     return capability is not None and capability >= _FP8_MIN_CAPABILITY
 
 
+def _rowwise_refusal(recipe: str, capability: "tuple[int, int] | None") -> "str | None":
+    """Why ``recipe`` (a rowwise one) cannot run here, or None if it can."""
+    import sys
+
+    import torch
+
+    if sys.platform.startswith("win"):
+        return (
+            f"fp8_recipe '{recipe}' cannot run on Windows: torch never builds its "
+            "rowwise FP8 kernel there (BUILD_ROWWISE_FP8_KERNEL requires !_WIN32). "
+            "Use fp8_recipe: tensorwise."
+        )
+    cuda_build = getattr(torch.version, "cuda", None)
+    if not _torch_at_least(_ROWWISE_ANY_CUDA_TORCH) and not _version_at_least(
+        cuda_build, (12, 0)
+    ):
+        return (
+            f"fp8_recipe '{recipe}' needs a torch built against CUDA >= 12 before "
+            f"torch 2.11 (installed: torch {torch.__version__}, CUDA {cuda_build}); "
+            "use fp8_recipe: tensorwise."
+        )
+    if capability is None:
+        return None
+    floor = _ROWWISE_MIN_TORCH_BY_MAJOR.get(capability[0])
+    if floor is None:
+        return (
+            f"fp8_recipe '{recipe}' is not supported on compute capability "
+            f"{capability[0]}.{capability[1]}: no torch release checked (through 2.14) "
+            "dispatches its rowwise FP8 kernel there. Use fp8_recipe: tensorwise."
+        )
+    if not _torch_at_least(floor):
+        return (
+            f"fp8_recipe '{recipe}' on compute capability {capability[0]}."
+            f"{capability[1]} needs torch >= {floor[0]}.{floor[1]} (installed: "
+            f"{torch.__version__}); upgrade torch or use fp8_recipe: tensorwise."
+        )
+    return None
+
+
 def fp8_training_supported(recipe: str = "tensorwise") -> "tuple[bool, str]":
     """The one FP8 hardware gate (#835): ``(ok, reason)`` for ``recipe``.
 
@@ -102,20 +184,10 @@ def fp8_training_supported(recipe: str = "tensorwise") -> "tuple[bool, str]":
     """
     if not is_fp8_gpu_supported():
         return False, _FP8_GPU_REFUSAL
-    capability = _cuda_capability()
-    if (
-        recipe != "tensorwise"
-        and capability is not None
-        and capability < (9, 0)
-        and not _torch_at_least(_ROWWISE_ADA_MIN_TORCH)
-    ):
-        import torch
-
-        return False, (
-            f"fp8_recipe '{recipe}' on an Ada GPU (compute capability 8.9) needs "
-            f"torch >= 2.7 (installed: {torch.__version__}); upgrade torch or use "
-            "fp8_recipe: tensorwise."
-        )
+    if recipe != "tensorwise":
+        reason = _rowwise_refusal(recipe, _cuda_capability())
+        if reason is not None:
+            return False, reason
     return True, ""
 
 
@@ -145,14 +217,15 @@ def apply_fp8_training(
         True on success, False if FP8 is unavailable or conversion failed.
 
     Raises:
-        RuntimeError: the GPU cannot run ``recipe`` (#835). Nothing is converted.
+        FP8HardwareUnsupportedError: this card, OS or torch build cannot run
+            ``recipe`` (#835). Nothing is converted, and the run must stop.
     """
     if not is_fp8_available():
         return False
 
     ok, reason = fp8_training_supported(recipe)
     if not ok:
-        raise RuntimeError(reason)
+        raise FP8HardwareUnsupportedError(reason)
 
     try:
         from torchao.float8 import convert_to_float8_training

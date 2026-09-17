@@ -70,20 +70,20 @@ def apply_v028_speed_memory(
     # --- FP8 training --------------------------------------------------------
     if getattr(tcfg, "quantization_aware", None) == "fp8":
         recipe = getattr(tcfg, "fp8_recipe", "tensorwise")
-        refusal = None
+        from soup_cli.utils.fp8 import FP8HardwareUnsupportedError
         try:
             from soup_cli.utils.fp8 import apply_fp8_training
             ok = bool(apply_fp8_training(model, recipe=recipe))
-        except RuntimeError as exc:
-            # #835: the hardware gate refused before converting; say why.
-            ok, refusal = False, str(exc)
+        except FP8HardwareUnsupportedError:
+            # #835 ruling: FP8 was asked for explicitly and this card cannot run
+            # it. Warning and training on without it is the silent-setting
+            # defect; the run stops here, before anything trains.
+            raise
         except Exception:  # noqa: BLE001
             ok = False
         applied["fp8"] = ok
         if ok:
             _say(f"FP8 training enabled (Float8Linear, recipe={recipe})")
-        elif refusal is not None:
-            _say(f"FP8 training: {refusal}", style="yellow")
         else:
             _say(
                 "FP8 training: torchao.float8 unavailable or no "
@@ -95,11 +95,14 @@ def apply_v028_speed_memory(
     # contract on the no-features path (test_part_c exact-equality).
     if getattr(tcfg, "fp8_attention", False):
         recipe = getattr(tcfg, "fp8_recipe", "tensorwise")
+        from soup_cli.utils.fp8 import FP8HardwareUnsupportedError
         try:
             from soup_cli.utils.advanced_precision import apply_fp8_attention
             converted = apply_fp8_attention(model, recipe=recipe)
             applied["fp8_attention"] = True
             _say(f"FP8 attention enabled ({converted} projections)")
+        except FP8HardwareUnsupportedError:
+            raise
         except (RuntimeError, ValueError, TypeError) as exc:
             applied["fp8_attention"] = False
             _say(f"FP8 attention: {exc}", style="yellow")

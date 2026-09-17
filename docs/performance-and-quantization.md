@@ -99,7 +99,7 @@ training:
 
 Omitting `fp8_recipe` defaults to `tensorwise` (identical to v0.28.0 behavior).
 
-Bool `true` stays on the int8 QAT path for backward compatibility. FP8 requires CUDA + an Ada or newer GPU (compute capability ≥ 8.9) and is rejected on unsloth/mlx backends. The `rowwise` and `rowwise_with_gw_hp` recipes on Ada (8.9) also need torch ≥ 2.7, the first release with torch's sm89 rowwise kernel; Hopper and newer run every recipe on any supported torch. On a GPU below the floor, `quantization_aware: fp8` is refused before any layer is converted, with the reason. `fp8_attention` asks the same gate (#835). Wired across every transformer-backend trainer (SFT, DPO, GRPO, KTO, ORPO, SimPO, IPO, PPO, Reward-Model, Embedding, Pretrain).
+Bool `true` stays on the int8 QAT path for backward compatibility. FP8 requires CUDA + an Ada or newer GPU (compute capability ≥ 8.9) and is rejected on unsloth/mlx backends. The `rowwise` and `rowwise_with_gw_hp` recipes run a separate torch kernel with its own limits: it needs a torch that dispatches it on the card (Ada 8.9: torch ≥ 2.7; Hopper 9.x and Blackwell datacenter 10.x: any supported torch; RTX 50-series 12.x: torch ≥ 2.8; 11.x: torch ≥ 2.10; no release through 2.14 runs it on 13.x), it is **never built on Windows**, and before torch 2.11 it is only built against CUDA 12 or newer. `tensorwise` has none of these limits. When FP8 is requested and this card, OS or torch build cannot run it, **the run stops at setup** with the reason (`FP8HardwareUnsupportedError`), before any layer is converted, on every trainer; it never trains on without FP8. `fp8_attention` asks the same gate (#835). Wired across every transformer-backend trainer (SFT, DPO, GRPO, KTO, ORPO, SimPO, IPO, PPO, Reward-Model, Embedding, Pretrain).
 
 
 ## Cut Cross-Entropy (Large-Vocab Models)
@@ -1010,7 +1010,7 @@ soup serve --model ./output --kv-cache-type q8_0     # 8-bit quantized KV cache 
 Three TrainingConfig bools extend the v0.28.0 FP8 menu. `fp8_attention` and `nvfp4` are LIVE
 torchao converters as of v0.71.21 (hardware-gated):
 
-- `fp8_attention: true` — requires `quantization_aware: fp8` AND a non-MLX backend. Converts the attention projections (q/k/v/o and fused variants) to torchao float8 training on Ada or newer GPUs (the same gate as `quantization_aware: fp8`). Missing torchao or a GPU below the FP8 floor degrades to a clear advisory; a conversion-phase failure raises an honest "model may be PARTIALLY converted" error instead of training on a half-converted model.
+- `fp8_attention: true` — requires `quantization_aware: fp8` AND a non-MLX backend. Converts the attention projections (q/k/v/o and fused variants) to torchao float8 training on Ada or newer GPUs (the same gate as `quantization_aware: fp8`). A card, OS or torch build the gate refuses stops the run at setup; missing torchao degrades to a clear advisory; a conversion-phase failure raises an honest "model may be PARTIALLY converted" error instead of training on a half-converted model.
 - `nvfp4: true` — Blackwell-only FP4 training via torchao `NVFP4Config` + `quantize_`. Gated to non-MLX + `modality: text`; the SM ≥ 10 runtime check fires at trainer construction.
 - `unsloth_bnb_4bit: true` — promotes "Unsloth Dynamic 4-bit" from an implicit `backend=unsloth + quantization=4bit` combo to a named flag. Mutual rejection of inconsistent combos at config load.
 

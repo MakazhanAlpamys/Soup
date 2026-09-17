@@ -253,7 +253,7 @@ def apply_fp8_attention(model: object, *, recipe: str = "tensorwise") -> int:
 
     ok, reason = fp8.fp8_training_supported(recipe)
     if not ok:
-        raise RuntimeError(f"fp8_attention: {reason}")
+        raise fp8.FP8HardwareUnsupportedError(f"fp8_attention: {reason}")
 
     import torch.nn as nn
 
