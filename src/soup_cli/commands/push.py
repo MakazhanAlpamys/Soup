@@ -20,6 +20,7 @@ ADAPTER_FILES_ALT = {"adapter_config.json", "adapter_model.bin"}
 
 
 def push(
+    ctx: typer.Context,
     model: str = typer.Option(
         ...,
         "--model",
@@ -41,7 +42,10 @@ def push(
         None,
         "--token",
         "-t",
-        help="[deprecated] Use HF_TOKEN env var instead. Falls back to cached login.",
+        help=(
+            "Upload token. For --hub hf: [deprecated] use HF_TOKEN or cached login. "
+            "For other hubs: that hub's token (or MODELSCOPE_API_TOKEN / MODELERS_TOKEN)."
+        ),
         envvar="HF_TOKEN",
     ),
     commit_message: str = typer.Option(
@@ -107,8 +111,8 @@ def push(
         )
         raise typer.Exit(1)
 
-    # Deprecated --token flag: warn once if explicitly provided.
-    if token is not None:
+    # Deprecated --token flag (HF hub): warn once if explicitly provided.
+    if hub_canonical == "hf" and token is not None:
         console.print(
             "[yellow]Warning: --token is deprecated. Use HF_TOKEN env var or "
             "run 'huggingface-cli login'.[/]"
@@ -137,22 +141,44 @@ def push(
         console.print(f"[red]Invalid --repo:[/] {exc}")
         raise typer.Exit(1) from exc
 
-    hf_token = resolve_token(explicit=token)
-    if not hf_token:
-        console.print(
-            "[red]No HuggingFace token found.[/]\n"
-            "Provide one via:\n"
-            "  --token YOUR_TOKEN\n"
-            "  HF_TOKEN=... env variable\n"
-            "  huggingface-cli login"
-        )
-        raise typer.Exit(1)
+    hub_token: Optional[str] = None
+    hf_token: Optional[str] = None
+    hf_endpoint: Optional[str] = None
+    if hub_canonical != "hf":
+        import click
 
-    try:
-        hf_endpoint = resolve_endpoint()
-    except ValueError as exc:
-        console.print(f"[red]HF_ENDPOINT invalid:[/] {exc}")
-        raise typer.Exit(1) from exc
+        from soup_cli.utils.hubs import hub_token_env_var, resolve_hub_token
+
+        # --token also reads HF_TOKEN via envvar; only a value typed on the
+        # command line is meant for this hub.
+        typed = ctx.get_parameter_source("token") == click.core.ParameterSource.COMMANDLINE
+        hub_token = resolve_hub_token(hub_canonical, token if typed else None)
+        if not hub_token:
+            env_var = hub_token_env_var(hub_canonical)
+            console.print(
+                f"[red]No {hub_canonical} token found.[/]\n"
+                "Provide one via:\n"
+                "  --token YOUR_TOKEN\n"
+                f"  {env_var}=... env variable"
+            )
+            raise typer.Exit(1)
+    else:
+        hf_token = resolve_token(explicit=token)
+        if not hf_token:
+            console.print(
+                "[red]No HuggingFace token found.[/]\n"
+                "Provide one via:\n"
+                "  --token YOUR_TOKEN\n"
+                "  HF_TOKEN=... env variable\n"
+                "  huggingface-cli login"
+            )
+            raise typer.Exit(1)
+
+        try:
+            hf_endpoint = resolve_endpoint()
+        except ValueError as exc:
+            console.print(f"[red]HF_ENDPOINT invalid:[/] {exc}")
+            raise typer.Exit(1) from exc
 
     # --- Show upload plan ---
     file_count = sum(1 for _ in model_path.rglob("*") if _.is_file())
@@ -206,7 +232,7 @@ def push(
                 repo,
                 folder_path=str(model_path),
                 commit_message=commit_message,
-                token=hf_token,
+                token=hub_token,
             )
         except ImportError as exc:
             console.print(f"[red]{exc}[/]")
