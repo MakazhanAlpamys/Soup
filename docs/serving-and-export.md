@@ -425,7 +425,7 @@ curl http://localhost:8000/v1/adapters
 # → {"adapters": [{"name": "chat", "active": true}, ...], "active": "chat"}
 ```
 
-Names are validated against `^[a-zA-Z0-9][a-zA-Z0-9-]*$`; activate/deactivate calls are thread-safe behind a lock.
+Names are validated against `^[a-zA-Z0-9][a-zA-Z0-9-]*$`; activate/deactivate calls are thread-safe behind a lock. Activate/deactivate also check the `Host` and `Origin` headers (see [Server-Side Tool Endpoints](#server-side-tool-endpoints)).
 
 ### Multi-Tenant Vector Bank (`soup serve --bank`)
 
@@ -768,3 +768,8 @@ Three POST routes are now available on `soup serve`:
   process's read access to world-readable system files. The endpoint fails closed with
   HTTP 501 when strict OS isolation is unavailable (including on Windows or restricted
   Linux containers).
+
+Tool routes, `/v1/thumbs` and adapter activate/deactivate accept requests only when the
+`Host` header names the bound address (any loopback name for a loopback bind) and any
+`Origin` header names the same; otherwise they answer 421 or 403. Inference routes are not
+restricted, so a reverse proxy can still front them.

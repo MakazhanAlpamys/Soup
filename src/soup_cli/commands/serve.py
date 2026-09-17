@@ -1683,14 +1683,26 @@ def _create_app(
             loopback-only CORS trust boundary. When set, callers must
             supply ``Authorization: Bearer <token>``.
     """
+    import secrets as _secrets
     import threading as _threading
 
-    from fastapi import FastAPI, Header, HTTPException
+    from fastapi import Depends, FastAPI, Header, HTTPException, Request
     from fastapi import Path as FPath
     from fastapi.middleware.cors import CORSMiddleware
     from fastapi.responses import StreamingResponse
     from pydantic import BaseModel as PydanticBaseModel
     from pydantic import Field
+
+    from soup_cli.utils.local_request_guard import check_local_request
+
+    def _check_local_request(request: Request) -> None:
+        """Refuse tool / state-changing calls whose Host or Origin names another site."""
+        refusal = check_local_request(
+            host, request.headers.get("host"), request.headers.get("origin")
+        )
+        if refusal is not None:
+            status_code, detail = refusal
+            raise HTTPException(status_code=status_code, detail=detail)
 
     def _check_tool_auth(authorization: Optional[str]) -> None:
         """v0.53.7 H-A: gate tool endpoints when host is exposed or auth_token is set."""
@@ -1702,7 +1714,9 @@ def _create_app(
         if not auth_token:
             return
         expected = f"Bearer {auth_token}"
-        if not authorization or authorization != expected:
+        if not authorization or not _secrets.compare_digest(
+            authorization.encode("utf-8"), expected.encode("utf-8")
+        ):
             raise HTTPException(
                 status_code=401, detail="Invalid or missing bearer token"
             )
@@ -1711,10 +1725,10 @@ def _create_app(
 
     app = FastAPI(title="Soup Inference Server", version="1.0.0")
 
-    # Loopback-only CORS: the inference server hosts state-mutating POST
-    # endpoints (activate/deactivate adapter) without auth, so wildcard CORS
-    # would let any browser page swap the active adapter. Loopback origins
-    # cover the curl / same-host IDE extension cases.
+    # Loopback-only CORS: CORS limits which browser pages can read responses;
+    # the Host/Origin guard on tool and adapter routes is what refuses
+    # requests from other sites. Loopback origins cover the curl / same-host
+    # IDE extension cases.
     app.add_middleware(
         CORSMiddleware,
         allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$",
@@ -1794,7 +1808,7 @@ def _create_app(
             "active": current,
         }
 
-    @app.post("/v1/adapters/activate/{name}")
+    @app.post("/v1/adapters/activate/{name}", dependencies=[Depends(_check_local_request)])
     def activate_adapter(name: str = FPath(..., pattern=r"^[a-zA-Z0-9][a-zA-Z0-9\-]*$")):
         """Hot-swap the active adapter. Name must be in the loaded map."""
         if not _adapter_map:
@@ -1810,7 +1824,7 @@ def _create_app(
             active_state["active"] = name
         return {"active": name, "status": "ok"}
 
-    @app.post("/v1/adapters/deactivate")
+    @app.post("/v1/adapters/deactivate", dependencies=[Depends(_check_local_request)])
     def deactivate_adapter():
         """Return to base model (clear active adapter)."""
         with active_lock:
@@ -2093,7 +2107,7 @@ def _create_app(
     tool_max_query_len = 1024
     tool_max_results = 16
 
-    @app.post("/v1/tools/python")
+    @app.post("/v1/tools/python", dependencies=[Depends(_check_local_request)])
     def tool_python(
         payload: dict,
         authorization: Optional[str] = Header(default=None),
@@ -2120,7 +2134,7 @@ def _create_app(
             "timed_out": stdout is None,
         }
 
-    @app.post("/v1/tools/bash")
+    @app.post("/v1/tools/bash", dependencies=[Depends(_check_local_request)])
     def tool_bash(
         payload: dict,
         authorization: Optional[str] = Header(default=None),
@@ -2170,7 +2184,7 @@ def _create_app(
             "timed_out": result.timed_out,
         }
 
-    @app.post("/v1/tools/web_search")
+    @app.post("/v1/tools/web_search", dependencies=[Depends(_check_local_request)])
     def tool_web_search(
         payload: dict,
         authorization: Optional[str] = Header(default=None),
@@ -2246,7 +2260,7 @@ def _create_app(
                         )
         return {"results": results}
 
-    @app.post("/v1/thumbs")
+    @app.post("/v1/thumbs", dependencies=[Depends(_check_local_request)])
     def record_thumb_endpoint(
         payload: dict,
         authorization: Optional[str] = Header(default=None),

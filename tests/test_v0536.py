@@ -495,7 +495,7 @@ def test_tool_endpoint_returns_501(path: str):
     from fastapi.testclient import TestClient
 
     app = _build_app()
-    client = TestClient(app)
+    client = TestClient(app, base_url="http://127.0.0.1")
     response = client.post(path, json={"code": "print(1)"})
     assert response.status_code != 501
 
