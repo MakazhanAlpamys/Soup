@@ -1,4 +1,4 @@
-<!-- synced-from: README.md sha256:5ceff359925678608a55dc8a4d522221b75668b10e659aa4f0dd05a28f2eb1c4 -->
+<!-- synced-from: README.md sha256:e84ef41b498bfe5dadc02934bf8dbe0d8e85f812ebc9dcc94830a564313306f0 -->
 <p align="center">🌍 <a href="README.md">English</a> | <strong>Türkçe</strong></p>
 
 <p align="center">
@@ -262,7 +262,7 @@ Tam özellik başvurusu [`docs/`](docs/) içinde. Buradan başlayın:
 
 | Rehber | Kapsam |
 |---|---|
-| [Eğitim görevleri ve yöntemleri](docs/training.md) | SFT, DPO/GRPO/PPO/KTO/ORPO/SimPO/IPO/BCO, araç çağırma, PRM, ön eğitim, damıtma, sınıflandırma, görü/ses/TTS, unutturma, RAFT/RA-DIT, döngü sağlamlaştırma dedektörleri |
+| [Eğitim görevleri ve yöntemleri](docs/training.md) | SFT, DPO/GRPO/PPO/KTO/ORPO/SimPO/IPO/BCO, araç çağırma, PRM, ön eğitim, damıtma, sınıflandırma, görü/ses/TTS, unutturma (eğitim ayarları ve dizi uzunluğu sınırları), RAFT/RA-DIT, döngü sağlamlaştırma dedektörleri |
 | [PEFT, uzun bağlam ve verimlilik](docs/peft-and-efficiency.md) | DoRA, LoRA+, rsLoRA, VeRA, OLoRA, NEFTune, PiSSA, ReLoRA, optimizer ve PEFT koleksiyonu, LLaMA Pro, GaLore, YaRN/LongLoRA, paketleme, müfredat, otomatik ayarlama |
 | [Performans ve niceleme](docs/performance-and-quantization.md) | QAT, FP8, Niceleme Menüsü (I + II), KV önbelleği, NVFP4, kayıt biçimleri, Cut Cross-Entropy, gradyan denetim noktası, çekirdekler, aktivasyon boşaltma, katman akışı, çoklu GPU / DeepSpeed / FSDP |
 | [Veri mühendisliği](docs/data.md) | Biçimler, Axolotl/LF eşdeğeri ardışık düzen, veri araçları, sentetik üretim ve forge, kalite karneleri, iz (trace) araçları, uzak veri kümeleri, karıştırma, tarif DAG'ları |
