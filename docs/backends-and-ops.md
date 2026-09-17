@@ -397,6 +397,9 @@ The endpoint validator follows the same SSRF rules as `HF_ENDPOINT`: only `http`
 
 The hub adapter is schema-only in this release; the live downloader and uploader land in v0.51.1.
 
+`soup push --hub modelscope` authenticates with `--token` or `MODELSCOPE_API_TOKEN`; `--hub modelers`
+with `--token` or `MODELERS_TOKEN`. Neither reads `HF_TOKEN`.
+
 
 ## TensorBoard Integration
 
