@@ -1676,6 +1676,55 @@ class StepPeak:
     error: Optional[str] = None
 
 
+def _classify_probe_exception(
+    exc: BaseException,
+    *,
+    rows: int,
+    seq_len: int,
+    seconds: float = 0.0,
+) -> StepPeak:
+    """Map a probe-step failure to its StepPeak outcome without requiring CUDA.
+
+    An out-of-memory exception (allocator OOM or an asynchronous CUDA OOM
+    surfacing via AcceleratorError/RuntimeError) is a result (oom=True), not an
+    instrument failure. Any other exception is an instrument failure that may
+    leave the device context poisoned (failed=True).
+    """
+    if _is_out_of_memory(exc):
+        # A result, not a failure: the shape provably does not fit. That is
+        # the allocator's own `torch.OutOfMemoryError` on Linux, and — #649's
+        # shape, seen again in #901 — under WDDM, where the allocator has
+        # often already spilled, an `AcceleratorError("CUDA error: out of
+        # memory")` surfacing later at a synchronise. One spelling for both:
+        # the verdict is what tells the operator to lower batch or
+        # max_length, where "instrument failure" tells them nothing they can
+        # act on. (A WDDM run that spills WITHOUT raising reaches the success
+        # path with a peak above free VRAM, which the caller refuses too.)
+        return StepPeak(
+            peak_bytes=0,
+            reserved_bytes=0,
+            seconds=seconds,
+            rows=rows,
+            seq_len=seq_len,
+            oom=True,
+        )
+    # NOT `return None`. None means "never attempted"; this op ran and broke,
+    # which can leave the CUDA context poisoned (an illegal access or device
+    # assert surfaces exactly here). Reporting that as "cannot tell" would
+    # let the caller proceed on the prediction alone, into a context that may
+    # no longer work.
+    logger.warning("stream VRAM probe raised during the step: %r", exc)
+    return StepPeak(
+        peak_bytes=0,
+        reserved_bytes=0,
+        seconds=seconds,
+        rows=rows,
+        seq_len=seq_len,
+        failed=True,
+        error=type(exc).__name__,
+    )
+
+
 def measure_step_peak_bytes(
     model: Any,
     *,
@@ -1740,38 +1789,11 @@ def measure_step_peak_bytes(
         peak = int(torch.cuda.max_memory_allocated(device))
         reserved = int(torch.cuda.max_memory_reserved(device))
     except Exception as exc:  # pragma: no cover - a real CUDA op raised
-        if _is_out_of_memory(exc):
-            # A result, not a failure: the shape provably does not fit. That is
-            # the allocator's own `torch.OutOfMemoryError` on Linux, and — #649's
-            # shape, seen again in #901 — under WDDM, where the allocator has
-            # often already spilled, an `AcceleratorError("CUDA error: out of
-            # memory")` surfacing later at a synchronise. One spelling for both:
-            # the verdict is what tells the operator to lower batch or
-            # max_length, where "instrument failure" tells them nothing they can
-            # act on. (A WDDM run that spills WITHOUT raising reaches the success
-            # path with a peak above free VRAM, which the caller refuses too.)
-            return StepPeak(
-                peak_bytes=0,
-                reserved_bytes=0,
-                seconds=time.perf_counter() - started,
-                rows=rows,
-                seq_len=seq_len,
-                oom=True,
-            )
-        # NOT `return None`. None means "never attempted"; this op ran and broke,
-        # which can leave the CUDA context poisoned (an illegal access or device
-        # assert surfaces exactly here). Reporting that as "cannot tell" would
-        # let the caller proceed on the prediction alone, into a context that may
-        # no longer work.
-        logger.warning("stream VRAM probe raised during the step: %r", exc)
-        return StepPeak(
-            peak_bytes=0,
-            reserved_bytes=0,
-            seconds=time.perf_counter() - started,
+        return _classify_probe_exception(
+            exc,
             rows=rows,
             seq_len=seq_len,
-            failed=True,
-            error=type(exc).__name__,
+            seconds=time.perf_counter() - started,
         )
     finally:  # pragma: no cover - exercised only where torch + CUDA exist
         del ids, out
