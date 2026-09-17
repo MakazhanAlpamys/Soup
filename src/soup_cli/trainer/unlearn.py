@@ -322,7 +322,11 @@ class UnlearnTrainerWrapper:
             f"[green]Unlearn done:[/] {step} steps, "
             f"loss {initial_loss} -> {final_loss}, saved {output_dir}"
         )
-        losses = [loss for loss in (initial_loss, final_loss) if loss is not None]
+        losses = (
+            [final_loss]
+            if step == 1 and final_loss is not None
+            else [loss for loss in (initial_loss, final_loss) if loss is not None]
+        )
         loss_summary = summarize_training_loss([{"loss": loss} for loss in losses])
         return {
             **loss_summary,

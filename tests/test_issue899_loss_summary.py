@@ -1,5 +1,7 @@
 import ast
 import math
+import sys
+import types
 from pathlib import Path
 
 from soup_cli.commands.train import _format_training_complete_loss
@@ -213,3 +215,136 @@ def result(logs, loss_summary):
     assert _private_loss_result_lines(alternate_spelling) == [2]
     assert _private_loss_result_lines(shared_subscript) == []
     assert _private_loss_result_lines(overrides_shared_spread) == [2]
+
+
+class _StubOptimizer:
+    def zero_grad(self, *, set_to_none=False):
+        pass
+
+    def step(self):
+        pass
+
+
+class _StubSavedObject:
+    def save_pretrained(self, output_dir):
+        pass
+
+
+class _StubLoss:
+    def __init__(self, value):
+        self.value = value
+
+    def backward(self):
+        pass
+
+    def item(self):
+        return self.value
+
+
+def _run_unlearn_loss_result(tmp_path, monkeypatch, losses):
+    monkeypatch.setitem(sys.modules, "torch", types.ModuleType("torch"))
+
+    from soup_cli.config.schema import SoupConfig
+    from soup_cli.trainer.unlearn import UnlearnTrainerWrapper
+
+    monkeypatch.chdir(tmp_path)
+    cfg = SoupConfig(
+        base="test-model",
+        task="unlearn",
+        data={"train": "train.jsonl", "forget_set": "forget.jsonl"},
+        training={"unlearn_method": "npo", "epochs": 1},
+        output="out",
+    )
+    wrapper = UnlearnTrainerWrapper(cfg)
+    wrapper._setup_called = True
+    wrapper.model = _StubSavedObject()
+    wrapper.tokenizer = _StubSavedObject()
+    wrapper._dev = "cpu"
+    wrapper._optimizer = _StubOptimizer()
+    wrapper._forget = [("prompt", "target")] * max(1, len(losses))
+    wrapper._retain = []
+    remaining = iter(losses)
+    monkeypatch.setattr(
+        wrapper,
+        "_step_preference",
+        lambda *args, **kwargs: _StubLoss(next(remaining)) if losses else None,
+    )
+    return wrapper.train()
+
+
+def test_unlearn_real_train_reports_unavailable_without_measured_loss(tmp_path, monkeypatch):
+    result = _run_unlearn_loss_result(tmp_path, monkeypatch, [])
+
+    assert result["loss_summary_kind"] == "unavailable"
+    assert result["initial_loss"] == result["final_loss"] == 0.0
+
+
+def test_unlearn_real_train_reports_single_for_one_step(tmp_path, monkeypatch):
+    result = _run_unlearn_loss_result(tmp_path, monkeypatch, [2.1])
+
+    assert result["loss_summary_kind"] == "single"
+    assert result["initial_loss"] == result["final_loss"] == 2.1
+
+
+def test_unlearn_real_train_reports_delta_for_multiple_steps(tmp_path, monkeypatch):
+    result = _run_unlearn_loss_result(tmp_path, monkeypatch, [2.1, 1.4, 0.9])
+
+    assert result["loss_summary_kind"] == "delta"
+    assert result["initial_loss"] == 2.1
+    assert result["final_loss"] == 0.9
+
+
+def _run_mlx_loss_result(tmp_path, monkeypatch, losses):
+    from tests.test_issue634_mlx_resume import _FakeMlxModel, _install_fake_mlx
+
+    _install_fake_mlx(monkeypatch)
+
+    def _train_with_losses(**kwargs):
+        callback = kwargs["training_callback"]
+        for loss in losses:
+            callback.on_train_loss_report({"train_loss": loss})
+
+    monkeypatch.setattr(sys.modules["mlx_lm.tuner.trainer"], "train", _train_with_losses)
+
+    from soup_cli.config.schema import DataConfig, SoupConfig, TrainingConfig
+    from soup_cli.trainer.mlx_sft import MLXSFTTrainerWrapper
+
+    cfg = SoupConfig(
+        base="mlx-community/Llama-3.1-8B-Instruct-4bit",
+        task="sft",
+        backend="mlx",
+        data=DataConfig(
+            train="./data/train.jsonl",
+            format="chatml",
+            train_on_responses_only=False,
+        ),
+        training=TrainingConfig(epochs=1, batch_size=1),
+        output=str(tmp_path / "mlx-out"),
+    )
+    wrapper = MLXSFTTrainerWrapper(cfg)
+    wrapper.model = _FakeMlxModel()
+    wrapper.tokenizer = object()
+    wrapper._dataset = {"train": [{"text": "hello"}], "val": []}
+    return wrapper.train()
+
+
+def test_mlx_real_result_path_reports_unavailable_without_measured_loss(tmp_path, monkeypatch):
+    result = _run_mlx_loss_result(tmp_path, monkeypatch, [])
+
+    assert result["loss_summary_kind"] == "unavailable"
+    assert result["initial_loss"] == result["final_loss"] == 0.0
+
+
+def test_mlx_real_result_path_reports_single_for_one_loss(tmp_path, monkeypatch):
+    result = _run_mlx_loss_result(tmp_path, monkeypatch, [1.75])
+
+    assert result["loss_summary_kind"] == "single"
+    assert result["initial_loss"] == result["final_loss"] == 1.75
+
+
+def test_mlx_real_result_path_reports_delta_for_multiple_losses(tmp_path, monkeypatch):
+    result = _run_mlx_loss_result(tmp_path, monkeypatch, [2.1, 0.9])
+
+    assert result["loss_summary_kind"] == "delta"
+    assert result["initial_loss"] == 2.1
+    assert result["final_loss"] == 0.9
