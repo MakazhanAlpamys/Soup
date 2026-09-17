@@ -1,1 +1,0 @@
-- `soup runs clean` now accepts `--no-keep-weights` to delete whole non-best checkpoints; `--keep-weights` (the default) keeps weights on every supported Click version — on Click 8.1 it previously deleted whole checkpoints.
