@@ -1,1 +1,0 @@
-- `soup train --cloud modal` now writes run outputs to the `soup-outputs` Modal volume and downloads them to the local output directory when the run ends (also after a failed run); previously checkpoints were lost with the container.
