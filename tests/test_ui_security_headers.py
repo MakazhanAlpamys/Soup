@@ -86,13 +86,29 @@ def test_headers_on_unauthorized_response(client):
     assert resp.headers.get("content-security-policy")
 
 
-def test_headers_on_body_size_rejection(client):
+def test_headers_on_request_validation_rejection(client):
     resp = client.post(
         "/api/data/inspect",
         content=b"x" * (64 * 1024),
         headers={"Content-Type": "application/json"},
     )
-    assert resp.status_code == 413
+    assert resp.status_code == 422
+    assert resp.headers.get("content-security-policy")
+    _assert_plain_headers(resp)
+
+
+def test_headers_on_response_answered_by_an_inner_middleware(client):
+    # CORSMiddleware answers a preflight itself, without reaching a route, so
+    # the headers here prove the security middleware wraps the other layers.
+    resp = client.options(
+        "/api/data/inspect",
+        headers={
+            "Origin": "http://127.0.0.1:7860",
+            "Access-Control-Request-Method": "POST",
+        },
+    )
+    assert resp.status_code == 200
+    assert resp.headers.get("access-control-allow-origin") == "http://127.0.0.1:7860"
     assert resp.headers.get("content-security-policy")
     _assert_plain_headers(resp)
 
