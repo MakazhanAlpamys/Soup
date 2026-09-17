@@ -643,10 +643,10 @@ class DataConfig(BaseModel):
     remove_unused_columns: bool = Field(
         default=False,
         description=(
-            "HF Trainer remove_unused_columns. Only False is supported: all "
-            "fifteen trainers pass False so a custom collator can still see "
-            "the extra columns, so `true` is refused at load rather than "
-            "silently ignored. (v0.42.0 Part E; #759)"
+            "HF Trainer remove_unused_columns. No trainer reads this field; the "
+            "trainers that set it pass False so a custom collator can still see "
+            "the extra columns. An explicit `true` loads with a warning and is "
+            "ignored, and a later release refuses it. (v0.42.0 Part E; #759)"
         ),
     )
     prompt_strategy: Optional[str] = Field(
@@ -937,31 +937,28 @@ class DataConfig(BaseModel):
             )
         return self
 
-    @model_validator(mode="after")
-    def _reject_remove_unused_columns_true(self) -> "DataConfig":
-        """`true` never took effect, and the declared default said otherwise.
+    @field_validator("remove_unused_columns", mode="after")
+    @classmethod
+    def _ignore_remove_unused_columns_true(cls, value: bool) -> bool:
+        """``true`` never took effect: warn, and load it as ``false`` (#759).
 
-        Every trainer hardcodes ``remove_unused_columns=False`` so a custom
-        collator still receives the columns the model's ``forward()`` does not
-        name, so this was a setting with one outcome and a wrong label: the
-        documented default said ``True``, and a user who wrote ``true``
-        deliberately got ``False`` with no warning. Refusing at load says so
-        immediately rather than three hours into a run.
-
-        Not deleted, because an unknown key is now a hard error and this
-        field's own documentation told people to write it: deleting it would
-        refuse the configs of exactly the users who followed the docs. The
-        deadline release is named once, in ``config/unknown_keys.py``.
+        No trainer reads this field; the trainers that set the HF argument pass
+        ``False`` so a custom collator still receives the columns the model's
+        ``forward()`` does not name. The declared default used to say ``True``,
+        so ``soup autopilot`` wrote ``remove_unused_columns: true`` into every
+        config it generated. Refusing that would break files Soup wrote itself,
+        so for one release an explicit ``true`` loads, is ignored, and says so.
+        The release that refuses it is named once, in ``config/deprecation.py``.
         """
-        if self.remove_unused_columns:
-            raise ValueError(
-                "data.remove_unused_columns: true is not supported. Every "
-                "trainer passes remove_unused_columns=False so a custom "
-                "collator still receives columns the model's forward() does "
-                "not name; true never took effect. Remove the line, or set it "
-                "to false."
+        if value:
+            from soup_cli.config.deprecation import warn_deprecated_value
+
+            warn_deprecated_value(
+                "data.remove_unused_columns: true has no effect and is ignored "
+                "(no trainer reads it; the trainers that set it pass false). "
+                "Delete the line."
             )
-        return self
+        return False
 
 
 class AdviseConfig(BaseModel):
@@ -1048,7 +1045,6 @@ class EvalGateConfig(BaseModel):
                 "eval_gate.suite is required when eval_gate.enabled=true"
             )
         return self
-
 
 
 class TrainingConfig(BaseModel):
