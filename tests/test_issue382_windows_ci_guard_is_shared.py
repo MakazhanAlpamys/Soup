@@ -60,7 +60,12 @@ class TestThereIsExactlyOneDefinition:
         )
 
     def test_both_known_call_sites_import_rather_than_redeclare(self):
-        for name in ("test_v07202.py", "test_v05311.py", "test_rewind_hf.py"):
+        for name in (
+            "test_v07202.py",
+            "test_v05311.py",
+            "test_rewind_hf.py",
+            "test_rewind_wiring.py",
+        ):
             src = (_TESTS_DIR / name).read_text(encoding="utf-8")
             assert "from tests._windows_ci import" in src, f"{name} must import the guard"
 

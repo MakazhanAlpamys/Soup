@@ -16,6 +16,7 @@ import pytest
 
 from soup_cli.config.schema import TrainingConfig
 from soup_cli.monitoring.rewind_log import RewindLog, dataset_fingerprint, read_rewind_log
+from tests._windows_ci import skip_on_windows_ci
 
 
 def test_rewind_log_defaults_on_and_can_be_turned_off():
@@ -53,6 +54,7 @@ def test_hf_rewind_log_false_builds_the_plain_trainer_and_no_file(tmp_path, monk
     assert not (tmp_path / "out" / RewindLog.FILENAME).exists()
 
 
+@skip_on_windows_ci
 def test_hf_training_run_records_every_row_once(tmp_path, monkeypatch):
     wrapper, dataset = _hf_wrapper(tmp_path, monkeypatch)
     wrapper.setup(dataset)
