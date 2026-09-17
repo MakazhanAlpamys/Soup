@@ -277,6 +277,11 @@ def test_every_streamable_trainer_checks_its_saves(module):
 
 def test_the_streamable_task_list_matches_the_schema():
     """If streaming is opened to another task, its trainer needs the check too."""
+    from soup_cli.utils.layer_stream import SUPPORTED_STREAM_TASKS
+
+    # the tasks the schema lets stream are exactly the trainers checked above
+    assert set(SUPPORTED_STREAM_TASKS) == set(STREAMABLE_TRAINERS)
+
     trainer_dir = Path(__file__).resolve().parents[1] / "src" / "soup_cli" / "trainer"
     trainers = {
         path.stem
@@ -285,3 +290,40 @@ def test_the_streamable_task_list_matches_the_schema():
         and path.stem != "stream_setup"
     }
     assert trainers == set(STREAMABLE_TRAINERS)
+
+
+@pytest.mark.parametrize("task", STREAMABLE_TRAINERS)
+def test_a_real_streamed_train_checks_every_checkpoint_and_the_final_save(
+    tmp_path, monkeypatch, task
+):
+    """The wiring, by behaviour rather than by source text: a real
+    ``wrapper.train()`` with ``save_steps=1`` runs the check on
+    ``checkpoint-1``, ``checkpoint-2`` and the final output directory."""
+    _requires_train_extra()
+    from test_v07204 import _build_streamed_wrapper
+
+    try:
+        from transformers.trainer_utils import SaveStrategy
+    except ImportError:  # transformers < 4.46
+        from transformers.trainer_utils import IntervalStrategy as SaveStrategy
+
+    from soup_cli.utils import layer_stream_runtime
+
+    wrapper, _, _ = _build_streamed_wrapper(tmp_path, monkeypatch, task=task, device="cpu")
+    args = wrapper.trainer.args
+    args.max_steps = 2
+    args.save_steps = 1
+    args.save_strategy = SaveStrategy.STEPS
+
+    checked = []
+    real_check = layer_stream_runtime.assert_streamed_adapter_saved
+
+    def spy(model, output_dir):
+        checked.append(Path(output_dir).resolve())
+        return real_check(model, output_dir)
+
+    monkeypatch.setattr(layer_stream_runtime, "assert_streamed_adapter_saved", spy)
+    wrapper.train()
+
+    out = Path(wrapper._output_dir).resolve()
+    assert checked == [out / "checkpoint-1", out / "checkpoint-2", out]
