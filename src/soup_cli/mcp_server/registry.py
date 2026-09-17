@@ -24,6 +24,7 @@ from soup_cli.mcp_server.execution import (
     ExecutionError,
     ExecutionManager,
     ProtectedFile,
+    absent_marker,
     digest_file,
 )
 from soup_cli.utils.paths import enforce_under_cwd_and_no_symlink, is_under_cwd
@@ -603,32 +604,93 @@ _MUTATING_NOTE = (
 )
 
 
-def _collect_external_protected_inputs(cfg: SoupConfig) -> list[ProtectedFile]:
-    """Collect and digest external paths (datasets, models) referenced by cfg."""
-    protected: list[ProtectedFile] = []
-    candidate_paths: list[tuple[str, str | list[str] | None]] = [
-        ("data.train", getattr(cfg.data, "train", None)),
-        ("data.eval", getattr(cfg.data, "eval", None)),
-        ("data.replay", getattr(cfg.data, "replay", None)),
-        ("data.image_dir", getattr(cfg.data, "image_dir", None)),
-        ("data.audio_dir", getattr(cfg.data, "audio_dir", None)),
-        ("base", getattr(cfg, "base", None)),
-        ("training.adapter", getattr(cfg.training, "adapter", None)),
-    ]
-    if getattr(cfg.training, "eval_gate", None) and cfg.training.eval_gate.enabled:
-        candidate_paths.append(("training.eval_gate.suite", cfg.training.eval_gate.suite))
+# Every schema field whose value names a local file or directory that the
+# spawned ``soup train`` may read. A plan pins each of them: an existing path is
+# digested, a value that does not exist yet (a hub id, a built-in reward name, a
+# ``registry://`` reference) is recorded as absent and must still be absent at
+# execution. ``tests/test_mcp_plan_inputs.py`` walks the schema and fails when a
+# path-like string field is in neither this tuple nor NOT_PLAN_INPUT_FIELDS.
+PLAN_INPUT_FIELDS: tuple[str, ...] = (
+    "base",
+    "data.train",
+    "data.image_dir",
+    "data.audio_dir",
+    "data.video_dir",
+    "data.replay",
+    "data.tokenized_path",
+    "data.forget_set",
+    "data.retain_set",
+    "training.reward_fn",
+    "training.prm_reward",
+    "training.reward_model",
+    "training.teacher_model",
+    "training.minillm_pretrain_anchor_path",
+    "training.mole_task_adapters",
+    "training.ra_dit_retriever_model",
+    "training.checkpoint_eval_tasks",
+    "training.eval_gate.suite",
+    "training.eval_gate.baseline",
+    "eval.custom_tasks",
+)
 
-    for field, path in candidate_paths:
-        # #443 — data.interleave lets data.train be a list of local paths.
-        # Digest each entry independently (one ProtectedFile per file) so
-        # every interleaved file is re-validated before execution, instead
-        # of the list silently contributing zero entries (isinstance(path,
-        # str) used to fail before os.path.exists even ran).
-        entries = path if isinstance(path, list) else [path]
-        for i, entry in enumerate(entries):
-            entry_field = f"{field}[{i}]" if isinstance(path, list) else field
-            if isinstance(entry, str) and entry and is_under_cwd(entry) and os.path.exists(entry):
-                protected.append(digest_file(entry, entry_field))
+NOT_PLAN_INPUT_FIELDS: Mapping[str, str] = {
+    "output": "written by the run, not read",
+    "data.chat_template": (
+        "a registered template name or inline Jinja (data/chat_templates.py "
+        "resolve_chat_template); never opened as a file"
+    ),
+    "training.online_dpo_judge": "a judge URL, not a local path",
+    "training.preference_loss_weights": "a mapping of loss weights",
+    "training.reward_hack_signals": "signal names",
+    "eval.ship.general_suite": "read by soup ship, not soup train",
+    "eval.ship.judge_model": "a judge URL read by soup ship, not soup train",
+    "eval.ship.baseline": "read by soup ship, not soup train",
+}
+
+# ``training.reward_fn`` accepts a comma-separated ensemble (v0.71.40 #311); each
+# segment is a built-in name or a ``.py`` path loaded by trainer/rewards.py.
+_COMMA_SEPARATED_PLAN_INPUTS = frozenset({"training.reward_fn"})
+
+
+def _plan_input_value(cfg: SoupConfig, dotted: str) -> Any:
+    """Resolve a dotted schema path; a missing intermediate model yields None."""
+    value: Any = cfg
+    for part in dotted.split("."):
+        value = getattr(value, part, None)
+        if value is None:
+            return None
+    return value
+
+
+def _protect_plan_input(entry: str, field: str) -> ProtectedFile:
+    """Digest an existing input, or record that it is absent; refuse outside cwd."""
+    if not is_under_cwd(entry):
+        raise ExecutionError(
+            f"{field} points outside the working directory; move it under the "
+            "project to execute"
+        )
+    if os.path.lexists(entry):
+        return digest_file(entry, field)
+    return absent_marker(entry, field)
+
+
+def _collect_external_protected_inputs(cfg: SoupConfig) -> list[ProtectedFile]:
+    """Pin every local input named by PLAN_INPUT_FIELDS (digest or absent marker)."""
+    protected: list[ProtectedFile] = []
+    for field in PLAN_INPUT_FIELDS:
+        value = _plan_input_value(cfg, field)
+        if value is None:
+            continue
+        # #443 — data.train may be a list (interleave): one entry per element.
+        if isinstance(value, (list, tuple)):
+            named = [(f"{field}[{i}]", entry) for i, entry in enumerate(value)]
+        elif field in _COMMA_SEPARATED_PLAN_INPUTS and isinstance(value, str):
+            named = [(field, part.strip()) for part in value.split(",") if part.strip()]
+        else:
+            named = [(field, value)]
+        for entry_field, entry in named:
+            if isinstance(entry, str) and entry:
+                protected.append(_protect_plan_input(entry, entry_field))
     return protected
 
 

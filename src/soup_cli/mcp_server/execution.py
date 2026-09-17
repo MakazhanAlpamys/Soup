@@ -43,6 +43,18 @@ class ProtectedFile:
     digest: str
 
 
+# Digest recorded for a planned input that did not exist at plan time (a hub id,
+# a built-in reward name, a file the run would create). A sha256 hex digest can
+# never equal it, and revalidation requires the path to still be absent.
+ABSENT_DIGEST = "absent"
+
+
+def absent_marker(path: str, field: str) -> ProtectedFile:
+    """Record that planned input ``field`` at ``path`` does not exist."""
+    del field  # kept for signature symmetry with digest_file
+    return ProtectedFile(path=os.path.realpath(path), digest=ABSENT_DIGEST)
+
+
 @dataclass
 class PendingPlan:
     token: str
@@ -305,6 +317,10 @@ class ExecutionManager:
         if os.path.realpath(os.getcwd()) != plan.cwd:
             raise ExecutionError("server working directory changed; create a new plan")
         for protected in plan.protected_files:
+            if protected.digest == ABSENT_DIGEST:
+                if os.path.lexists(protected.path):
+                    raise ExecutionError("planned input changed; create a new plan")
+                continue
             current = digest_file(protected.path, "planned input")
             if current.path != protected.path or not secrets.compare_digest(
                 current.digest, protected.digest
