@@ -526,28 +526,6 @@ class TestBitNetUtils:
 
         assert is_bitnet_model(name) is expected
 
-    def test_validate_bitnet_compat_mlx_reject(self):
-        from soup_cli.utils.bitnet import validate_bitnet_compat
-
-        with pytest.raises(ValueError, match="mlx"):
-            validate_bitnet_compat(task="sft", backend="mlx", modality="text")
-
-    def test_validate_bitnet_compat_vision_reject(self):
-        from soup_cli.utils.bitnet import validate_bitnet_compat
-
-        with pytest.raises(ValueError, match="text"):
-            validate_bitnet_compat(
-                task="sft", backend="transformers", modality="vision",
-            )
-
-    def test_validate_bitnet_compat_grpo_reject(self):
-        from soup_cli.utils.bitnet import validate_bitnet_compat
-
-        with pytest.raises(ValueError, match="task"):
-            validate_bitnet_compat(
-                task="grpo", backend="transformers", modality="text",
-            )
-
     def test_validate_bitnet_export_canonical(self):
         from soup_cli.utils.bitnet import validate_bitnet_export
 
@@ -576,6 +554,18 @@ class TestBitNetUtils:
 
         with pytest.raises(TypeError):
             export_bitnet_gguf()
+
+    def test_build_bitnet_trainer_removed_from_utils_bitnet(self) -> None:
+        """Unreferenced build_bitnet_trainer was removed under #1004."""
+        from soup_cli.utils import bitnet
+
+        assert not hasattr(bitnet, "build_bitnet_trainer")
+
+    def test_validate_bitnet_compat_removed_from_utils_bitnet(self) -> None:
+        """validate_bitnet_compat orphaned by #981 was removed under #1004."""
+        from soup_cli.utils import bitnet
+
+        assert not hasattr(bitnet, "validate_bitnet_compat")
 
 
 class TestBitNetSchema:
