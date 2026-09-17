@@ -333,7 +333,7 @@ function renderRunsTable(runs) {
         </thead>
         <tbody>
           ${runs.map(r => html`
-            <tr style="cursor:pointer" onclick="showRunDetail('${r.run_id}')">
+            <tr style="cursor:pointer" data-action="showRunDetail" data-arg="${r.run_id}">
               <td><code style="font-size:0.8rem">${r.run_id.substring(0, 20)}...</code></td>
               <td>${r.experiment_name || '-'}</td>
               <td>${truncate(r.base_model)}</td>
@@ -343,7 +343,7 @@ function renderRunsTable(runs) {
               <td>${formatDuration(r.duration_secs)}</td>
               <td>${formatDate(r.created_at)}</td>
               <td>
-                <button class="btn btn-danger btn-sm" onclick="event.stopPropagation(); deleteRun('${r.run_id}')">Delete</button>
+                <button class="btn btn-danger btn-sm" data-action="deleteRun" data-arg="${r.run_id}">Delete</button>
               </td>
             </tr>
           `)}
@@ -592,14 +592,14 @@ function renderTrainingPage(templates, status) {
           <div class="grid-2" style="margin-bottom:0">
             <div class="form-group" style="margin-bottom:0">
               <label class="form-label" style="font-size:0.8rem">Template</label>
-              <select id="template-select" onchange="loadTemplate()">
+              <select id="template-select" data-change="loadTemplate">
                 <option value="">-- Template --</option>
                 ${templateNames.map(t => html`<option value="${t}">${t}</option>`)}
               </select>
             </div>
             <div class="form-group" style="margin-bottom:0">
               <label class="form-label" style="font-size:0.8rem">Recipe</label>
-              <select id="recipe-select" onchange="loadRecipe()">
+              <select id="recipe-select" data-change="loadRecipe">
                 <option value="">-- Recipe --</option>
                 ${(window._recipes || []).map(r => html`<option value="${r.name}">${r.name} (${r.task})</option>`)}
               </select>
@@ -613,8 +613,8 @@ function renderTrainingPage(templates, status) {
         </div>
 
         <div style="display:flex; gap:0.75rem; margin-top:0.75rem">
-          <button class="btn btn-primary" onclick="validateConfig()">Validate</button>
-          <button class="btn btn-primary" onclick="startTraining()">Start Training</button>
+          <button class="btn btn-primary" data-action="validateConfig">Validate</button>
+          <button class="btn btn-primary" data-action="startTraining">Start Training</button>
         </div>
         <div id="config-status" style="margin-top:0.75rem; font-size:0.85rem"></div>
       </div>
@@ -625,7 +625,7 @@ function renderTrainingPage(templates, status) {
           <div id="train-status-panel">
             ${status.running
               ? html`<div><span class="badge badge-warning">Running</span> PID: ${String(status.pid)}</div>
-                 <button class="btn btn-danger btn-sm" style="margin-top:0.75rem" onclick="stopTraining()">Stop Training</button>`
+                 <button class="btn btn-danger btn-sm" style="margin-top:0.75rem" data-action="stopTraining">Stop Training</button>`
               : html`<div style="color:var(--text-dim)">No training in progress</div>`
             }
           </div>
@@ -1026,6 +1026,60 @@ function updateProgressBar(step, total, elapsed, eta) {
   if (elapsedEl) elapsedEl.textContent = 'Elapsed: ' + formatDuration(elapsed);
   if (etaEl) etaEl.textContent = 'ETA: ' + formatDuration(eta);
 }
+
+// --- Event delegation: markup carries data-* names, never inline handlers ---
+// Closed map: an attribute naming anything not listed here does nothing.
+const ACTIONS = Object.freeze({
+  navigate: (arg) => navigate(arg),
+  loadDashboard: () => loadDashboard(),
+  showRunDetail: (arg) => showRunDetail(arg),
+  deleteRun: (arg, event) => { event.stopPropagation(); deleteRun(arg); },
+  closeModal: () => closeModal(),
+  validateConfig: () => validateConfig(),
+  startTraining: () => startTraining(),
+  stopTraining: () => stopTraining(),
+  loadTemplate: () => loadTemplate(),
+  loadRecipe: () => loadRecipe(),
+  inspectData: () => inspectData(),
+  sendChatMessage: () => sendChatMessage(),
+  cancelChat: () => cancelChat(),
+  exportChat: () => exportChat(),
+  clearChat: () => clearChat(),
+  loadToolOutputs: () => loadToolOutputs(),
+  handleChatKey: (arg, event) => handleChatKey(event),
+});
+
+// Runs only the nearest element's action, so a button inside a clickable row
+// fires its own action and not the row's.
+function _dispatch(attr, event) {
+  if (!(event.target instanceof Element)) return;
+  const el = event.target.closest(`[${attr}]`);
+  if (!el) return;
+  const name = el.getAttribute(attr);
+  if (!Object.prototype.hasOwnProperty.call(ACTIONS, name)) return;
+  ACTIONS[name](el.dataset.arg, event);
+}
+
+document.addEventListener('click', (event) => {
+  // The overlay closes only when the overlay itself is clicked, not the modal body.
+  const backdrop = event.target instanceof Element
+    ? event.target.closest('[data-backdrop-close]')
+    : null;
+  if (backdrop && event.target === backdrop) {
+    closeModal();
+    return;
+  }
+  _dispatch('data-action', event);
+});
+document.addEventListener('change', (event) => _dispatch('data-change', event));
+document.addEventListener('keydown', (event) => _dispatch('data-keydown', event));
+document.addEventListener('input', (event) => {
+  if (!(event.target instanceof Element)) return;
+  const el = event.target.closest('[data-input-mirror]');
+  if (!el) return;
+  const target = document.getElementById(el.getAttribute('data-input-mirror'));
+  if (target) target.textContent = el.value;
+});
 
 // --- Init ---
 document.addEventListener('DOMContentLoaded', () => {

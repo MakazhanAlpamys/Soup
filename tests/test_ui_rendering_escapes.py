@@ -58,6 +58,15 @@ class TestSingleMarkupSink:
         text = INDEX.read_text(encoding="utf-8")
         assert text.index("/static/safe_html.js") < text.index("/static/app.js")
 
+    def test_trusted_html_is_used_only_by_render_markdown(self):
+        # trustedHtml skips escaping; its one caller builds markup from an already
+        # escaped string. A second caller must be reviewed, so it fails here.
+        code = _code_without_comments(APP_JS.read_text(encoding="utf-8"))
+        assert code.count("trustedHtml(") == 1, code.count("trustedHtml(")
+        start = code.index("function renderMarkdown(")
+        end = code.index("\n}", start)
+        assert start < code.index("trustedHtml(") < end, "trustedHtml outside renderMarkdown"
+
 
 NODE = shutil.which("node")
 
@@ -110,3 +119,52 @@ class TestSafeHtmlUnderNode:
 
     def test_plain_string_is_not_trusted(self):
         assert self._run("return m.html`${'<br>'}`.value;") == "&lt;br&gt;"
+
+
+INLINE_HANDLER = re.compile(r"""\son[a-z]+\s*=\s*["']""", re.I)
+
+
+class TestNoInlineHandlers:
+    @pytest.mark.parametrize("path", [INDEX, APP_JS], ids=["index", "app"])
+    def test_no_on_attributes(self, path):
+        text = path.read_text(encoding="utf-8")
+        found = INLINE_HANDLER.findall(text)
+        assert not found, (path.name, found)
+
+    def test_handler_pattern_ignores_content_attribute(self):
+        meta = '<meta name="viewport" content="width=device-width, initial-scale=1.0">'
+        assert not INLINE_HANDLER.findall(meta)
+        assert INLINE_HANDLER.findall('<button onclick="go()">')
+
+    def test_no_javascript_urls(self):
+        for path in (INDEX, APP_JS):
+            assert "javascript:" not in path.read_text(encoding="utf-8").lower()
+
+    def test_every_data_action_is_registered(self):
+        code = APP_JS.read_text(encoding="utf-8")
+        used = set(re.findall(r'data-(?:action|change|keydown)="([A-Za-z_]\w*)"',
+                              code + INDEX.read_text(encoding="utf-8")))
+        block = re.search(r"const ACTIONS = Object\.freeze\(\{(.*?)\}\);", code, re.S)
+        assert block, "ACTIONS map missing"
+        registered = set(re.findall(r"^\s*([A-Za-z_]\w*)\s*[:,(]", block.group(1), re.M))
+        assert used, "no data-action attributes found"
+        assert used <= registered, used - registered
+
+    def test_every_input_mirror_target_exists(self):
+        text = INDEX.read_text(encoding="utf-8")
+        targets = re.findall(r'data-input-mirror="([\w-]+)"', text)
+        assert len(targets) == 3, targets
+        for target in targets:
+            assert f'id="{target}"' in text, target
+
+    def test_modal_backdrop_closes_only_on_its_own_target(self):
+        text = INDEX.read_text(encoding="utf-8")
+        overlay = re.search(r'<div class="modal-overlay"[^>]*>', text).group(0)
+        assert "data-backdrop-close" in overlay, overlay
+        code = _code_without_comments(APP_JS.read_text(encoding="utf-8"))
+        assert "event.target === backdrop" in code
+
+    def test_no_inline_script_blocks(self):
+        text = INDEX.read_text(encoding="utf-8")
+        for tag in re.findall(r"<script\b[^>]*>", text, re.I):
+            assert "src=" in tag, tag
