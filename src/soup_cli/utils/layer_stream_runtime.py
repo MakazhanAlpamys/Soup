@@ -1366,16 +1366,22 @@ def _build_streamed_large_layer_class():
         def _redirect_canonical_weight(
             self, state_dict: Any, prefix: str, *_args: Any, **_kwargs: Any
         ) -> None:
-            canonical = prefix + "weight"
-            redirected = prefix + "inner.weight"
-            if canonical not in state_dict:
-                return
-            if redirected in state_dict:
-                raise ValueError(
-                    f"checkpoint contains both {canonical!r} and {redirected!r} "
-                    "for the same streamed large-layer weight"
-                )
-            state_dict[redirected] = state_dict.pop(canonical)
+            # Mirrors StreamedDecoderLayer._redirect_canonical_keys: redirect
+            # every key under this prefix, not only the literal "weight" one
+            # (#1048: a peft-wrapped inner saves lora_A/lora_B keys too).
+            inner_prefix = prefix + "inner."
+            for key in [
+                k for k in state_dict if k.startswith(prefix) and not k.startswith(inner_prefix)
+            ]:
+                redirected = inner_prefix + key[len(prefix) :]
+                value = state_dict.pop(key)
+                if redirected in state_dict:
+                    raise ValueError(
+                        f"checkpoint contains both {key!r} and {redirected!r} "
+                        f"for the same streamed large-layer weight; it is "
+                        f"malformed, re-save the adapter"
+                    )
+                state_dict[redirected] = value
 
         def _apply(self, fn: Any, recurse: bool = True) -> Any:
             def _skip_meta(tensor: Any) -> Any:
