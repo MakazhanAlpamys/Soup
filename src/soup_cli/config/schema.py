@@ -5541,11 +5541,10 @@ class SoupConfig(BaseModel):
             )
         # #1012 follow-up: the forward pass for a LoRA target on the streamed
         # large-layer boundary modules (lm_head / embed_tokens) is correct
-        # (#1019), but saving and resuming that adapter is not implemented
-        # yet: save_pretrained() raises trying to copy a meta tensor, and a
-        # save -> load_adapter round trip silently drops most of the
-        # adapter's tensors. Refuse by name at parse time rather than let a
-        # run train for hours and die at its first save_steps.
+        # (#1019), and a save -> load_adapter round trip now preserves the
+        # adapter's tensors (#1048), but save_pretrained() still raises
+        # trying to copy a meta tensor. Refuse by name at parse time rather
+        # than let a run train for hours and die at its first save_steps.
         target_modules = tcfg.lora.target_modules
         named_targets = (
             {target_modules} if isinstance(target_modules, str) else set(target_modules)
