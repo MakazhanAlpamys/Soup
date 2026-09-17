@@ -1061,6 +1061,7 @@ class TestTheTreeMismatchCheck:
     between implementations is exactly what a test should be doing instead.
     """
 
+    @pytest.mark.requires_symlink
     def test_the_same_directory_reached_by_a_different_spelling_is_not_a_mismatch(
         self, tmp_path
     ):

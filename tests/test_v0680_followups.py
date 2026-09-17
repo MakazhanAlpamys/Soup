@@ -236,7 +236,6 @@ class TestCompileResultBoundaries:
 
 @pytest.mark.requires_symlink
 class TestEvalSuitePathSymlink:
-    @pytest.mark.requires_symlink
     def test_symlink_rejected(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
