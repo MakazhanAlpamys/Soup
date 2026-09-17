@@ -31,15 +31,6 @@ pytest.importorskip("torch")
 MiB = 2**20
 
 
-def _cuda() -> bool:
-    import torch
-
-    return torch.cuda.is_available()
-
-
-requires_cuda = pytest.mark.skipif(not _cuda(), reason="needs a CUDA device")
-
-
 #: One Qwen2.5-14B NF4 decoder layer, from the shard cache's own headers (bytes):
 #: three 35.39 MB packed MLP projections, two 13.11 MB attention projections,
 #: two 2.62 MB k/v projections, their absmax / nested-absmax / nested-offset
@@ -251,7 +242,7 @@ class TestPageableStoreIsUntouched:
                 assert torch.equal(got, _shard_tensor(shards, idx, name))
 
 
-@requires_cuda
+@pytest.mark.gpu
 class TestPinnedStoreLivesInArenas:
     def test_every_store_tensor_is_a_pinned_view_into_a_power_of_two_arena(self, tmp_path):
         from soup_cli.utils.layer_stream_runtime import RamSource
@@ -396,7 +387,7 @@ class TestTheRuntimeReportsPageLockedBytes:
 
         assert _runtime(_Source(), pinned=True).stats()["pinned_bytes"] is None
 
-    @requires_cuda
+    @pytest.mark.gpu
     def test_a_pinned_runtime_reports_the_arenas(self, tmp_path):
         from soup_cli.utils.layer_stream_runtime import RamSource
 

@@ -745,9 +745,6 @@ class TestPinnedStagingRefusesAnUnreleasedBorrowWithoutAGpu:
 # ==========================================================================
 # the hazards pin=False cannot express
 # ==========================================================================
-_NO_CUDA = not torch.cuda.is_available()
-
-
 def _uniform_shards(tmp_path: Path, n_layers: int, size: int) -> str:
     """One tensor per layer, every byte equal to the layer index.
 
@@ -767,7 +764,7 @@ def _uniform_shards(tmp_path: Path, n_layers: int, size: int) -> str:
     return str(out)
 
 
-@pytest.mark.skipif(_NO_CUDA, reason="the hazard is a CUDA copy draining out of pinned host memory")
+@pytest.mark.gpu(reason="the hazard is a CUDA copy draining out of pinned host memory")
 class TestTheDeviceGetsTheLayerItAskedFor:
     """THE gate for the recycle-under-an-in-flight-copy defect.
 
@@ -1469,7 +1466,7 @@ class TestTheSettingReachesTheSource:
         finally:
             source.close()
 
-    @pytest.mark.skipif(_NO_CUDA, reason="pinned staging needs a CUDA device")
+    @pytest.mark.gpu(reason="pinned staging needs a CUDA device")
     def test_the_disk_tier_pins_its_staging_when_asked(self, tmp_path):
         """The flag means page-locked on BOTH tiers, so the disk tier must be
         able to return True. Before pinned staging existed it was hardcoded
@@ -1619,7 +1616,7 @@ class TestEveryRuntimeConsumerReleases:
         )
 
 
-@pytest.mark.skipif(_NO_CUDA, reason="pinned staging needs a CUDA device")
+@pytest.mark.gpu(reason="pinned staging needs a CUDA device")
 class TestPinnedStagingRefusesAnUnreleasedBorrow:
     """The dynamic half of the contract (see the scan above).
 
