@@ -87,6 +87,90 @@ def resolve_mlx_target_keys(lora_cfg: object) -> list[str]:
     return list(raw) if isinstance(raw, list) else [raw]
 
 
+class _MlxRewind:
+    """The flight recorder attached to one MLX run (see ``trainer/rewind_mlx.py``)."""
+
+    def __init__(self, log: object, state: object, loss: object) -> None:
+        self.log = log
+        self.state = state
+        self.loss = loss
+
+    def wrap(self, train_dataset: object) -> object:
+        # Training dataset only: a validation dataset wrapped with the same state
+        # would flush the pending training ids against the previous iteration.
+        from soup_cli.trainer.rewind_mlx import wrap_dataset
+
+        return wrap_dataset(train_dataset, self.state)
+
+    def finish(self) -> None:
+        self.state.flush()
+        self.log.close()
+        notes = []
+        if self.state.dropped:
+            notes.append(f"rewind: {self.state.dropped} iteration(s) dropped")
+        if self.log.dropped:
+            notes.append(f"rewind: {self.log.dropped} malformed record(s) not written")
+        for note in notes:
+            console.print(f"[yellow]{note}[/]")
+
+
+def _start_rewind(
+    *,
+    output_dir: Path,
+    rows: list,
+    optimizer: object,
+    batch_size: int,
+    grad_accum: int,
+    masked: bool,
+):
+    """Create the rewind log and recorder for an MLX run, or return None.
+
+    ``optimizer.state`` gains the recorder's two keys BEFORE mlx-lm captures it
+    for ``mx.compile``; ``Optimizer.init`` only adds keys for parameters, so they
+    survive the lazy init inside the first update. ``batch_size`` is per worker.
+    Setup can never stop training: any failure is one line and no recorder.
+    """
+    try:
+        import mlx.core as mx
+
+        world = mx.distributed.init().size()
+        if world > 1:
+            console.print(
+                "[yellow]Rewind log off:[/] the recorder is single-process; "
+                f"this run has {world} workers"
+            )
+            return None
+
+        from soup_cli.monitoring.rewind_log import RewindLog, dataset_fingerprint
+        from soup_cli.trainer.rewind_mlx import MlxRewindState, make_rewind_loss
+
+        log = RewindLog(
+            output_dir / RewindLog.FILENAME,
+            backend="mlx",
+            task="sft",
+            n_rows=len(rows),
+            batch_size=batch_size,
+            grad_accum=grad_accum,
+            dataset_fingerprint=dataset_fingerprint(rows),
+        )
+        state = MlxRewindState(
+            log,
+            optimizer_state=optimizer.state,
+            batch_size=batch_size,
+            grad_accum=grad_accum,
+        )
+        loss = make_rewind_loss(state, kind="masked" if masked else "span")
+    except Exception as exc:  # noqa: BLE001 — a recorder must never stop a run
+        from rich.markup import escape
+
+        console.print(
+            f"[yellow]Rewind log off:[/] {escape(type(exc).__name__)}: {escape(str(exc))}"
+        )
+        return None
+    console.print(f"[green]Rewind log:[/] {log.path}")
+    return _MlxRewind(log, state, loss)
+
+
 class _GradientClippingOptimizer:
     """An MLX optimizer that clips the global gradient norm before applying it.
 
@@ -724,6 +808,20 @@ class MLXSFTTrainerWrapper:
         if display is not None:
             display.start(iters)
 
+        rewind = None
+        if cfg.training.rewind_log:
+            rewind = _start_rewind(
+                output_dir=output_dir,
+                rows=train_rows,
+                optimizer=optimizer,
+                batch_size=batch_size,
+                grad_accum=grad_accumulation_steps,
+                masked=use_token_mask,
+            )
+            if rewind is not None:
+                train_dataset = rewind.wrap(train_dataset)
+                train_hooks = {**train_hooks, "loss": rewind.loss}
+
         t0 = time.time()
         try:
             train(
@@ -736,6 +834,10 @@ class MLXSFTTrainerWrapper:
                 **train_hooks,
             )
         finally:
+            # The final iteration has no next fetch to flush it, and it is the
+            # one that matters most when a non-finite loss ends the run.
+            if rewind is not None:
+                rewind.finish()
             # A Live display left attached would corrupt the terminal if
             # mlx-lm raises, so this is a finally rather than a trailing call.
             if display is not None:

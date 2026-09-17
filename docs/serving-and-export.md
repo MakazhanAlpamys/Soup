@@ -212,6 +212,12 @@ This acts as a built-in "speedometer," outputting Tokens-Per-Second (TPS), Total
 
 ## Inference Server
 
+`--auto-quant` currently refuses with exit code 2. Soup cannot compare GGUF, AWQ,
+GPTQ, FP8, and an unquantized baseline before a serving engine has loaded them;
+timing an unevaluated stub would make the result depend on timer noise and could
+force a format the checkpoint does not contain. Quantize the checkpoint explicitly,
+then serve that checkpoint without `--auto-quant`.
+
 Start a local OpenAI-compatible inference server:
 
 ```bash
@@ -548,7 +554,7 @@ soup ui
 
 **Pages:**
 - **Dashboard** — view all experiment runs, loss charts, system info, multi-run comparison
-- **New Training** — create configs from templates or 176 ready-made recipes, validate, start training with live SSE log streaming and progress bar
+- **New Training** — create configs from templates or 175 ready-made recipes, validate, start training with live SSE log streaming and progress bar
 - **Data Explorer** — browse and inspect datasets (JSONL, JSON, CSV, Parquet)
 - **Model Chat** — chat with streaming responses, configurable temperature/top_p/max_tokens, system prompt, adapter selection, markdown rendering, chat export
 
@@ -557,7 +563,7 @@ soup ui
 - **Enhanced Metrics** — 2x2 chart grid (loss, LR, grad_norm, throughput) + GPU memory chart, eval results table
 - **Multi-Run Compare** — overlay loss curves from up to 5 runs side-by-side
 - **Chat Upgrade** — SSE streaming via proxy, typing indicator, cancel button, markdown renderer (bold, italic, code blocks), chat export as JSON
-- **Config Builder** — recipe dropdown (176 recipes), config schema API for dynamic form generation
+- **Config Builder** — recipe dropdown (175 recipes), config schema API for dynamic form generation
 
 **Security:** The Web UI generates a random auth token at startup (printed to console). Every private endpoint — mutating (start/stop training, delete runs, inspect data, validate config) and reading (runs, metrics, system, recipes, SSE streams) — requires an `Authorization: Bearer <token>` header. `/` and `/api/health` stay open so the dashboard can load. CORS is restricted to the served origin. Data inspection is sandboxed to the working directory.
 

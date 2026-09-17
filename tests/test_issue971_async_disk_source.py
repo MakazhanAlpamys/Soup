@@ -434,29 +434,52 @@ class TestFailuresAreLoudAndNeverHang:
             AsyncDiskSource(shard_dir, N_LAYERS, spec, read_ahead=True, pin=False)
 
 
-def _get_on_a_thread(source, idx, name, timeout=20.0):
+def _get_on_a_thread(source, idx, name, timeout=20.0, attempts=3):
     """Call ``get`` where a REGRESSION fails the test instead of hanging it.
 
     Every test below drives a reader that is deliberately wedged or dead. If
     the liveness checks stop working, a direct ``get`` would block the whole
     suite forever; on a worker thread it times out and the assertion names it.
+
+    A helper that never ENTERED ``call`` is not that regression, and is not
+    reported as one. On CPython <= 3.11 ``_PyEval_SetTrace`` guards itself with
+    a process-wide ``static int reentrant``; with coverage's
+    ``threading.settrace`` hook installed and any Python audit hook registered
+    (filelock adds one on every POSIX box), a thread starting while another
+    thread is inside ``sys.settrace`` dies in ``Thread._bootstrap_inner`` with
+    "Cannot install a trace function while another trace function is being
+    installed" -- before its target runs. ``get`` was never called, so starting
+    a fresh helper is exact, not a retry of the thing under test.
     """
-    done = threading.Event()
-    captured = {}
+    for _ in range(attempts):
+        entered = threading.Event()
+        done = threading.Event()
+        captured = {}
 
-    def call():
-        try:
-            captured["value"] = source.get(idx, name)
-        except BaseException as exc:  # noqa: BLE001 — recorded for the assert
-            captured["exc"] = exc
-        done.set()
+        def call(entered=entered, done=done, captured=captured):
+            entered.set()
+            try:
+                captured["value"] = source.get(idx, name)
+            except BaseException as exc:  # noqa: BLE001 — recorded for the assert
+                captured["exc"] = exc
+            done.set()
 
-    threading.Thread(target=call, daemon=True).start()
-    assert done.wait(timeout=timeout), (
-        f"get({idx}, {name!r}) never returned — the liveness checks in "
-        f"AsyncDiskSource.get did not fire"
+        helper = threading.Thread(target=call, daemon=True)
+        helper.start()
+        deadline = time.monotonic() + timeout
+        while not done.wait(timeout=0.05):
+            if not entered.is_set() and not helper.is_alive():
+                break  # died in bootstrap: get() never ran
+            assert time.monotonic() < deadline, (
+                f"get({idx}, {name!r}) never returned — the liveness checks in "
+                f"AsyncDiskSource.get did not fire"
+            )
+        else:
+            return captured
+    raise AssertionError(
+        f"the helper thread for get({idx}, {name!r}) died before running "
+        f"{attempts} times — a thread-start failure, not the liveness checks"
     )
-    return captured
 
 
 class TestTheLivenessChecksCanActuallyFire:
@@ -1665,3 +1688,46 @@ class TestPinnedStagingRefusesAnUnreleasedBorrow:
             assert source.get(1, "input_layernorm.weight") is not None
         finally:
             source.close()
+
+
+class TestTheHelperDoesNotBlameTheDetectorForAThreadThatNeverRan:
+    """#971 CI flake: a helper killed in ``_bootstrap_inner`` read as 'the
+    liveness checks did not fire'. Injected deterministically here: a trace
+    hook that raises on the helper's first frame, so ``call`` never runs."""
+
+    @staticmethod
+    def _kill_the_next_helper(monkeypatch):
+        killed = []
+
+        def killer(frame, event, arg):
+            if not killed and frame.f_code.co_name == "run":
+                killed.append(threading.current_thread().name)
+                raise RuntimeError("injected: thread died before its target ran")
+            return None
+
+        monkeypatch.setattr(threading, "_trace_hook", killer)
+        monkeypatch.setattr(threading, "excepthook", lambda args: None)
+        return killed
+
+    def test_a_helper_that_died_in_bootstrap_is_restarted(self, monkeypatch):
+        class _Instant:
+            def get(self, idx, name):
+                return "served"
+
+        killed = self._kill_the_next_helper(monkeypatch)
+        captured = _get_on_a_thread(_Instant(), 0, "w", timeout=2.0)
+        assert killed, "the injection never fired, so this proves nothing"
+        assert captured == {"value": "served"}, captured
+
+    def test_a_get_that_really_hangs_still_fails_as_the_detector(self):
+        gate = threading.Event()
+
+        class _Hangs:
+            def get(self, idx, name):
+                gate.wait(timeout=30.0)
+
+        try:
+            with pytest.raises(AssertionError, match="did not fire"):
+                _get_on_a_thread(_Hangs(), 0, "w", timeout=0.3)
+        finally:
+            gate.set()

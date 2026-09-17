@@ -1692,7 +1692,7 @@ class TestV025NewRecipes:
             assert cfg.base == recipe.model
             assert cfg.task == recipe.task
 
-    def test_catalog_size_is_176(self):
+    def test_catalog_size_is_175(self):
         """Total catalog size — grew with each release.
 
         v0.25.0 shipped 43 recipes (29 + 9 Part A + 2 Part B tools + 3 Part E MLX).
@@ -1727,10 +1727,11 @@ class TestV025NewRecipes:
         Issue #847 added 1 (qwen3.5-35b-a3b-grpo) -> 172.
         Task-variant for #275 / #846 added 2 (qwen3.6-35b-a3b-dpo, qwen3.6-35b-a3b-grpo) -> 174.
         Issue #845 added 2 (qwen3.6-27b-dpo, qwen3.6-27b-grpo) -> 176.
+        Issue #825 retires the unusable Falcon-E BitNet training recipe -> 175.
         """
         from soup_cli.recipes.catalog import RECIPES
 
-        assert len(RECIPES) == 176
+        assert len(RECIPES) == 175
 
     def test_new_recipes_searchable(self):
         """Search returns the new recipes via keyword/task filter."""

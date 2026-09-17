@@ -48,6 +48,7 @@
 - [EBFT + GDPO (BETA, v0.52.0)](#ebft--gdpo-beta-v0520)
 - [gpt-oss `reasoning_effort` + `train_on_eot` (v0.52.0)](#gpt-oss-reasoning_effort--train_on_eot-v0520)
 - [Seeds & reproducibility (`training.seed`)](#seeds--reproducibility-trainingseed)
+- [Rewind — which row spiked the loss (`soup rewind`)](#rewind--which-row-spiked-the-loss-soup-rewind)
 - [Full fine-tuning (`lora.r: 0`)](#full-fine-tuning-lorar-0)
 
 ---
@@ -130,6 +131,61 @@ reproducible. It does not make CUDA kernels bit-reproducible — non-determinist
 atomics, autotuned algorithms and a different GPU or library version can still
 move the last digits. For bit-exact reruns you also need
 `torch.use_deterministic_algorithms(True)`, which Soup does not set for you.
+
+---
+
+## Rewind — which row spiked the loss (`soup rewind`)
+
+While an SFT run trains, Soup writes `<output>/rewind.jsonl`: one line per micro-batch
+with the dataset rows in it, each row's mean supervised-token loss, and its
+supervised-token count. When the loss jumps, `soup rewind` reads that file and names
+the rows that carried the step. It needs no model or GPU, and runs in seconds.
+
+```yaml
+training:
+  rewind_log: true   # default; set false to write nothing
+```
+
+```bash
+soup rewind                      # most recent run: list spikes, detail the worst
+soup rewind <run_id> --step 340  # rank the rows of one step
+soup rewind <run_id> --top 25    # how many rows to list (default 10)
+soup rewind <run_id> --json r.json --no-preview
+```
+
+A spike is a step whose loss is non-finite, or more than 2x the median of the previous
+20 measured steps. Rows are ranked by their share of the step's summed token loss, so
+one long, badly-formed row stands out even when its per-token mean is ordinary. Example
+output (illustrative numbers):
+
+```text
+                Step 340 rows
+ Row    Loss   Tokens   Share  Preview
+  91  6.8120    3,900   94.1%  iVBORw0KGgoAAAANSUhEUgAAAyAAAAJYCAYAAAC…
+  12  1.1034      212    0.8%  Sure — here is a summary of the article…
+row 91: 94% of step 340's loss, 3,900 tokens
+Inspect or drop this row, then retrain.
+```
+
+Scope: task `sft` on the transformers and MLX backends, single process, on the plain
+text path. The recorder turns itself off, with one warning naming the reason, for
+resumed runs, `packing` / `padding_free`, multipack, vision, audio, a pre-tokenised
+dataset, and anything else it cannot attribute row by row. Previews are shown only when
+the dataset on disk still matches the one the run trained on.
+
+**What it costs.** Writing one line per micro-batch measured under 0.1 ms per
+micro-batch, which is negligible against any real step, and a run's peak memory was
+unchanged with the recorder on and off. The file grows without a cap: roughly 14 MB per
+50,000 micro-batches at batch 8, or about 100 MB for a million rows over three epochs.
+Delete it, or set `rewind_log: false`, if that matters to you.
+
+**What it contains.** Integer row indices, one loss and one token count per row — never
+any text from your dataset. Previews in `soup rewind` are rebuilt at read time from your
+own data file, and only while its fingerprint still matches. The indices and token counts
+are still weak metadata about a private dataset, so treat the file as you would the
+`output` directory it sits in.
+
+---
 
 ## Full fine-tuning (`lora.r: 0`)
 

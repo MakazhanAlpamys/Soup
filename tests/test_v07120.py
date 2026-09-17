@@ -367,10 +367,8 @@ class TestBuildBitnetTrainer:
         with pytest.raises(TypeError):
             build_bitnet_trainer()
 
-    def test_returns_wrapper(self):
+    def test_config_refuses_unwired_training(self):
         from soup_cli.config.loader import load_config_from_string
-        from soup_cli.trainer.bitnet import BitNetTrainerWrapper
-        from soup_cli.utils.bitnet import build_bitnet_trainer
 
         yaml_str = (
             "base: hf-internal-testing/tiny-random-gpt2\n"
@@ -381,9 +379,8 @@ class TestBuildBitnetTrainer:
             "training:\n"
             "  quantization: bitnet_1.58\n"
         )
-        cfg = load_config_from_string(yaml_str)
-        wrapper = build_bitnet_trainer(cfg, device="cpu")
-        assert isinstance(wrapper, BitNetTrainerWrapper)
+        with pytest.raises(ValueError, match="training is not implemented yet"):
+            load_config_from_string(yaml_str)
 
     def test_setup_gates_on_onebitllms(self):
         from soup_cli.trainer.bitnet import BitNetTrainerWrapper

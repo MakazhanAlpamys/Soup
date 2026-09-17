@@ -114,6 +114,12 @@ jobs:
           python -c "import importlib.util; names=('torch','trl','datasets','peft','accelerate','bitsandbytes'); present=[name for name in names if importlib.util.find_spec(name)]; assert not present, f'unexpected training dependencies: {present}'"
       - name: Run one-step MLX SFT through the real CLI
         run: pytest -o addopts= -m smoke -k mlx_sft_smoke -q tests/test_smoke_train.py
+      - name: Run the MLX flight-recorder tests
+        # These importorskip on `mlx.core` / `mlx_lm`, which the 3x3 matrix does
+        # not install (`mlx` is not in [dev]), so this is the only job that can
+        # execute them. Without this step, replacing the whole MLX per-row loss
+        # with a constant 0.0 left the suite green (#1018 review).
+        run: pytest -o addopts= -q tests/test_rewind_mlx.py
   pytorch-smoke:
     # #596: exercise the real PyTorch SFT + DPO training pipeline on every PR.
     # Keep this separate from the 3x3 matrix so the expensive model-backed
@@ -324,6 +330,7 @@ jobs:
           models = [
               ("sshleifer/tiny-gpt2", LEGACY_BIN),
               ("hf-internal-testing/tiny-random-gpt2", SAFETENSORS),
+              ("hf-internal-testing/tiny-random-LlamaForCausalLM", SAFETENSORS),
               ("hf-internal-testing/tiny-random-WhisperForConditionalGeneration", LEGACY_BIN),
               # Weights are never loaded for these two — only the config the
               # 429 above was raised on.

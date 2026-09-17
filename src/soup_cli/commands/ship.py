@@ -255,10 +255,20 @@ def _config_sha_of(cfg: "SoupConfig") -> str:
     is EXCLUDED: it is applied at verdict time, not training time, so loosening
     ``forgetting_threshold`` must NOT invalidate evidence about an unchanged
     model (the staleness gate fingerprints the recipe, not the gate config).
+
+    ``training.rewind_log`` is excluded on the same criterion: it decides whether
+    the run writes ``rewind.jsonl`` beside the model, not what the model becomes.
+    Measured on a CUDA run in the #1018 review, toggling it left ``train_loss``
+    bit-identical while moving this sha, which would have invalidated evidence
+    about a model that had not changed.
     """
     from soup_cli.registry.hashing import hash_config
 
-    return hash_config(cfg.model_dump(mode="json", exclude={"eval": {"ship"}}))
+    return hash_config(
+        cfg.model_dump(
+            mode="json", exclude={"eval": {"ship"}, "training": {"rewind_log"}}
+        )
+    )
 
 
 def _safe_hash_file(path: str, max_bytes: int) -> Optional[str]:

@@ -48,7 +48,7 @@ def search_recipes(
 
 
 # ---------------------------------------------------------------------------
-# Recipe catalog (176 recipes)
+# Recipe catalog (175 recipes)
 # ---------------------------------------------------------------------------
 
 RECIPES: Dict[str, RecipeMeta] = {
@@ -3732,34 +3732,6 @@ training:
     alpha: 32
     target_modules: auto
   quantization: 4bit
-
-output: ./output
-""",
-    ),
-    "falcon-e-bitnet-sft": RecipeMeta(
-        model="tiiuae/Falcon-E-1B-Instruct",
-        task="sft",
-        size="1B",
-        tags=("bitnet", "1.58bit", "falcon-e", "ternary", "v0.52.0"),
-        description="Falcon-E BitNet 1.58-bit SFT — live (v0.71.20)",
-        yaml_str="""\
-base: tiiuae/Falcon-E-1B-Instruct
-task: sft
-
-data:
-  train: ./data/train.jsonl
-  format: auto
-  max_length: 2048
-
-training:
-  epochs: 3
-  lr: 1e-4
-  batch_size: auto
-  quantization: bitnet_1.58
-  lora:
-    r: 16
-    alpha: 32
-    target_modules: auto
 
 output: ./output
 """,

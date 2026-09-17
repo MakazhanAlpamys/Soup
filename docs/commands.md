@@ -68,6 +68,7 @@ soup serve --model ./output --backend sglang  SGLang backend
 soup serve --model ./output --backend mii     DeepSpeed-MII backend (live)
 soup serve --model ./output --speculative-decoding draft-model  Speculative decoding
 soup serve --model <m> --auto-spec            Auto-pair draft model for speculative decoding
+soup serve --model <m> --auto-quant           Refuses until candidates can be loaded and measured; quantize explicitly instead
 soup serve --model <m> --backend vllm --prefix-cache  vLLM prefix caching (RAG/agent)
 soup serve --model <m> --structured-output json --json-schema s.json  Constrained output
 soup serve --model <m> --structured-output regex --regex-pattern '...'  Regex-constrained output
@@ -152,7 +153,7 @@ soup migrate --from llamafactory config.yaml  Import config from LLaMA-Factory
 soup migrate --from axolotl config.yml        Import config from Axolotl
 soup migrate --from unsloth notebook.ipynb    Import config from Unsloth notebook
 soup migrate --from llamafactory c.yaml --dry-run  Preview without writing
-soup recipes list                             List all 176 ready-made recipes
+soup recipes list                             List all 175 ready-made recipes
 soup recipes show llama3.1-8b-sft            Print recipe YAML
 soup recipes use llama3.1-8b-sft             Copy recipe to soup.yaml
 soup recipes search "reasoning"              Search by keyword/task/size
@@ -175,6 +176,7 @@ soup runs show <run_id>                       Run details + loss graph + cost (s
 soup runs compare <run_1> <run_2>             Compare two runs
 soup runs replay <run_id>                     Replay summary + loss curve from history (also plots a benchmark-score curve when the metric lives in eval_results)
 soup why [run_id]                             Explain training anomalies (heuristic)
+soup rewind [run_id] [--step N]               Name the dataset rows behind a loss spike
 soup ship --base <m> --adapter <lora> --task-eval t.jsonl  SHIP / DON'T-SHIP verdict: task win AND no regression on the bundled suite (exit 0=SHIP / 2=DON'T / 3=usage / 1=runtime) (v0.71.25; leg-2 real + usage-off-2 v0.71.38)
 soup ship --evidence ev.json [--output v.json]  Decide offline from pre-computed scores (no model load)
 soup ship ... --task-mode judge_score --judge-model ollama://llama3.1  Leg-1 via LLM-as-a-judge
@@ -327,7 +329,7 @@ soup train  # use_mod | expand_layers | use_longlora  Mixture-of-Depths / LLaMA 
 soup train  # task='tts' + tts_family + modality='audio_out'  TTS fine-tune via SFT CE over pre-encoded codec tokens; emotion templating; live-codec hw-gated — LIVE (v0.71.20)
 soup train  # task in {sft,pretrain,dpo} + moe_expert_quant=nf4|int8_rowwise [+moe_lora]  bnb per-expert quant of fused-MoE experts (CUDA) — LIVE (v0.71.20)
 soup train  # train_router_only=true [+moe_lora]  Freeze MoE experts, train only the gating router — LIVE (v0.71.20)
-soup train  # quantization='bitnet_1.58' (sft/pretrain/dpo)  BitNet 1.58 SFT (requires onebitllms) — LIVE-gated (v0.71.20)
+soup train  # quantization='bitnet_1.58'  BitNet 1.58 training is not implemented; config load refuses it
 soup export --model ./output --format bitnet|tq1_0  BitNet 1.58 TQ1_0 ternary GGUF via llama.cpp — LIVE (v0.71.20)
 soup version [--full] [--json]                Show version (--full: system info, --json: JSON output)
 soup --verbose <command>                      Full traceback on errors
