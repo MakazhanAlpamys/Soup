@@ -1941,7 +1941,9 @@ class TestAMalformedLoraBlockIsAVerdictNotAPathError:
 
         result = audit_adapter(_config(), _mlx_record(lora_parameters=params))
         row = next(r for r in result.rows if r.setting == "lora.r")
-        assert row.status != "ok", "a junk record is not agreement"
+        # A malformed block is a finding about the record, not an absent one:
+        # "unknown" would exit 0 and let a CI gate wave the adapter through.
+        assert row.status == "diverged", (row.status, row.detail)
         assert row.detail, "a refusal has to say why"
 
     @pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf")])
@@ -1996,7 +1998,8 @@ class TestAMalformedLoraBlockIsAVerdictNotAPathError:
             f"a malformed record exited 1, which the docs reserve for a path "
             f"error:\n{res.output}"
         )
-        assert res.exit_code in (0, 2), res.output
+        # Exactly the verdict code: 0 would mean the junk record passed the gate.
+        assert res.exit_code == 2, res.output
         assert "Traceback" not in res.output
         assert res.exception is None or isinstance(res.exception, SystemExit), (
             f"raised out of the command: {res.exception!r}"
