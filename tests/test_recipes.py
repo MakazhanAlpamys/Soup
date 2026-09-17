@@ -1731,6 +1731,7 @@ class TestV025NewRecipes:
         Issue #847 added 1 (qwen3.5-35b-a3b-grpo) -> 172.
         Task-variant for #275 / #846 added 2 (qwen3.6-35b-a3b-dpo, qwen3.6-35b-a3b-grpo) -> 174.
         Issue #845 added 2 (qwen3.6-27b-dpo, qwen3.6-27b-grpo) -> 176.
+        Issue #825 retires the unusable Falcon-E BitNet training recipe -> 175.
         """
         from soup_cli.recipes.catalog import RECIPES
         from tests.recipe_count import EXPECTED_RECIPE_COUNT, recipe_count_hint

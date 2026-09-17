@@ -9,7 +9,7 @@ the catalog, in ``tests/test_recipe_count_is_synced.py``.
 
 from __future__ import annotations
 
-EXPECTED_RECIPE_COUNT = 176
+EXPECTED_RECIPE_COUNT = 175
 
 
 def recipe_count_hint(actual: int) -> str:

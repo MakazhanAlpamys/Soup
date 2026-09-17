@@ -2994,6 +2994,16 @@ class TrainingConfig(BaseModel):
         le=1000,
         description="Consecutive high-loss steps before stopping",
     )
+    # Flight recorder read by `soup rewind`
+    rewind_log: bool = Field(
+        default=True,
+        description=(
+            "Write <output>/rewind.jsonl: the dataset rows in every training "
+            "micro-batch with each row's loss, read by `soup rewind` to name the "
+            "rows behind a loss spike. SFT only (transformers and MLX, single "
+            "process); resumed runs and packing turn it off with one warning."
+        ),
+    )
     # Loss spike auto-recovery (v0.32.0 Part E) — extends watchdog
     loss_spike_recovery: bool = Field(
         default=False,
@@ -4413,7 +4423,17 @@ class SoupConfig(BaseModel):
     @model_validator(mode="after")
     def _validate_chat_template_supported_tasks(self) -> "SoupConfig":
         """Reject chat-template overrides on trainers that never render chat."""
-        unsupported = {"pretrain", "embedding", "classifier", "reranker", "cross_encoder"}
+        unsupported = {
+            "pretrain",
+            "embedding",
+            "classifier",
+            "reranker",
+            "cross_encoder",
+            "prm",
+            "asr",
+            "moe_lora_routing",
+            "unlearn",
+        }
         if (
             self.data.chat_template is not None
             and self.task in unsupported
@@ -4461,8 +4481,6 @@ class SoupConfig(BaseModel):
             offenders.append('quantization_aware="fp8"')
         if tcfg.activation_offloading is not None:
             offenders.append("activation_offloading")
-        if tcfg.kernel_auto_compose:
-            offenders.append("kernel_auto_compose")
         if not offenders:
             return self
         # Distinct reasons get distinct messages so users don't waste time
@@ -4934,17 +4952,11 @@ class SoupConfig(BaseModel):
         """v0.52.0 Part D — ``quantization='bitnet_1.58'`` gate."""
         if self.training.quantization != "bitnet_1.58":
             return self
-        from soup_cli.utils.bitnet import validate_bitnet_compat
-
-        try:
-            validate_bitnet_compat(
-                task=self.task,
-                backend=self.backend,
-                modality=self.modality,
-            )
-        except ValueError as exc:
-            raise ValueError(str(exc)) from exc
-        return self
+        raise ValueError(
+            "BitNet 1.58 training is not implemented yet; "
+            "the export path `soup export --format tq1_0` works on an "
+            "existing BitNet checkpoint."
+        )
 
     @model_validator(mode="after")
     def _validate_ebft_compat(self) -> "SoupConfig":
@@ -5526,6 +5538,27 @@ class SoupConfig(BaseModel):
                 "training.stream_layers is incompatible with lora.use_vera: "
                 "VeRA's shared projections are built from the materialised "
                 "base weights, which streaming keeps on the meta device."
+            )
+        # #1012 follow-up: the forward pass for a LoRA target on the streamed
+        # large-layer boundary modules (lm_head / embed_tokens) is correct
+        # (#1019), but saving and resuming that adapter is not implemented
+        # yet: save_pretrained() raises trying to copy a meta tensor, and a
+        # save -> load_adapter round trip silently drops most of the
+        # adapter's tensors. Refuse by name at parse time rather than let a
+        # run train for hours and die at its first save_steps.
+        target_modules = tcfg.lora.target_modules
+        named_targets = (
+            {target_modules} if isinstance(target_modules, str) else set(target_modules)
+        )
+        head_targets = sorted(named_targets & {"lm_head", "embed_tokens"})
+        if head_targets:
+            raise ValueError(
+                "training.stream_layers does not yet support a LoRA target on "
+                f"{', '.join(head_targets)}: the forward pass is correct, but "
+                "saving or resuming an adapter that targets the streamed "
+                "head/embedding boundary is not supported yet. Drop "
+                f"{', '.join(head_targets)} from training.lora.target_modules, "
+                "or train without stream_layers."
             )
         if tcfg.moe_expert_quant is not None:
             raise ValueError(

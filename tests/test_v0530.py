@@ -6,11 +6,32 @@ v0.51.0 / v0.52.0 single-file test layout).
 
 from __future__ import annotations
 
-from types import MappingProxyType
+import sys
+from types import MappingProxyType, ModuleType
 
 import pytest
 
 from soup_cli.config.loader import load_config_from_string
+
+
+def _tiny_linear_model(with_attention: bool = True):
+    """A real module, so a gate that lets the call through fails on an assertion
+    instead of on ``object().named_modules`` (#834)."""
+    torch = pytest.importorskip("torch")
+    nn = torch.nn
+
+    class _Tiny(nn.Module):
+        def __init__(self):
+            super().__init__()
+            if with_attention:
+                self.q_proj = nn.Linear(4, 4)
+                self.k_proj = nn.Linear(4, 4)
+                self.v_proj = nn.Linear(4, 4)
+                self.o_proj = nn.Linear(4, 4)
+            else:
+                self.up_proj = nn.Linear(4, 4)
+
+    return _Tiny()
 
 # ---------------------------------------------------------------------------
 # Part A — Unsloth Dynamic 2.0 GGUF ladder
@@ -412,12 +433,30 @@ class TestFP8Attention:
                 "training: {fp8_attention: true}\n"
             )
 
-    def test_apply_live_gated(self):
-        """v0.71.21 #141 lifted the stub — now a friendly hw/dep gate."""
+    # #834: each gate is its own test with the gate patched, so the result is the
+    # same on a CPU box, a Hopper box and a Blackwell box, with or without
+    # torchao. The previous single test called the real gates with ``object()``
+    # and passed only while one of them happened to refuse on the test machine.
+
+    def test_apply_refuses_without_torchao(self, monkeypatch):
+        """No attention projections on purpose: the conversion step's own torchao
+        import also refuses, so on a model WITH projections the up-front gate is
+        invisible. Here only the gate can answer "torchao" -- without it the walk
+        runs first and reports "no attention projections" instead."""
         from soup_cli.utils.advanced_precision import apply_fp8_attention
 
-        with pytest.raises((RuntimeError, ValueError), match="(?i)torchao|hopper"):
-            apply_fp8_attention(object())
+        monkeypatch.setattr("soup_cli.utils.fp8.is_fp8_gpu_supported", lambda: True)
+        monkeypatch.setitem(sys.modules, "torchao", None)
+        with pytest.raises(RuntimeError, match="torchao"):
+            apply_fp8_attention(_tiny_linear_model(with_attention=False))
+
+    def test_apply_refuses_off_hopper(self, monkeypatch):
+        from soup_cli.utils.advanced_precision import apply_fp8_attention
+
+        monkeypatch.setitem(sys.modules, "torchao", ModuleType("torchao"))
+        monkeypatch.setattr("soup_cli.utils.fp8.is_fp8_gpu_supported", lambda: False)
+        with pytest.raises(RuntimeError, match="Hopper"):
+            apply_fp8_attention(_tiny_linear_model())
 
 
 class TestNVFP4:
@@ -496,32 +535,29 @@ class TestNVFP4:
                 "training: {nvfp4: true}\n"
             )
 
-    def test_apply_live_gated(self):
-        """v0.71.21 #141 lifted the stub — now a friendly Blackwell gate.
+    # #834: as for FP8 above. The previous test branched on the real
+    # ``is_blackwell_gpu()``, so it still depended on the machine, one gate later.
 
-        The gate is hardware-dependent, so the assertion has to be too. Asserting
-        the Blackwell refusal unconditionally encoded the assumption that the test
-        machine is NOT Blackwell: on an RTX 50-series card (SM 12.0) the hardware
-        gate correctly passes, the next gate decides instead, and the regex missed.
-        Verified on an RTX 5070 (sm_120), where the message is the torchao one.
-        """
-        from soup_cli.utils.advanced_precision import apply_nvfp4, is_blackwell_gpu
+    def test_apply_refuses_off_blackwell(self, monkeypatch):
+        from soup_cli.utils.advanced_precision import apply_nvfp4
 
-        if not is_blackwell_gpu():
-            with pytest.raises(RuntimeError, match="Blackwell"):
-                apply_nvfp4(object())
-            return
+        monkeypatch.setattr(
+            "soup_cli.utils.advanced_precision.is_blackwell_gpu", lambda: False
+        )
+        with pytest.raises(RuntimeError, match="no Blackwell device detected"):
+            apply_nvfp4(_tiny_linear_model())
 
-        # On Blackwell the hardware gate must NOT be what refuses. Which gate
-        # refuses instead depends on the environment (torchao absent here), so
-        # only the hardware property is asserted -- pinning the torchao text
-        # would re-encode an environment assumption, which is the defect this
-        # is fixing.
-        with pytest.raises(RuntimeError) as excinfo:
-            apply_nvfp4(object())
-        message = str(excinfo.value)
-        assert "no Blackwell device detected" not in message, message
-        assert "Blackwell" not in message, message
+    def test_apply_on_blackwell_refuses_without_torchao(self, monkeypatch):
+        """On Blackwell the hardware gate passes and torchao decides."""
+        from soup_cli.utils.advanced_precision import apply_nvfp4
+
+        monkeypatch.setattr(
+            "soup_cli.utils.advanced_precision.is_blackwell_gpu", lambda: True
+        )
+        monkeypatch.setitem(sys.modules, "torchao", None)
+        with pytest.raises(RuntimeError, match="requires torchao") as excinfo:
+            apply_nvfp4(_tiny_linear_model())
+        assert "no Blackwell device detected" not in str(excinfo.value)
 
 
 class TestUnslothBNB4Bit:

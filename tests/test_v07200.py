@@ -2188,6 +2188,70 @@ class TestStreamLoraVariantGates:
             _load(_stream_yaml(training={"lora": {"r": 4, "init_strategy": "olora"}}))
 
 
+class TestStreamLoraHeadTargetGate:
+    """#1012 follow-up (#1019 review): the forward pass for a LoRA target on
+    lm_head/embed_tokens under streaming is correct, but saving and resuming
+    that adapter is not implemented yet (save_pretrained() raises copying a
+    meta tensor; a save -> load_adapter round trip silently drops most of the
+    adapter's tensors). Refuse at parse time, before any shard I/O runs, the
+    same way lora.use_dora / lora.use_vera are refused above."""
+
+    def test_lm_head_target_rejected(self):
+        with pytest.raises(ValueError, match="lm_head"):
+            _load(
+                _stream_yaml(
+                    training={"lora": {"r": 4, "target_modules": ["q_proj", "lm_head"]}}
+                )
+            )
+
+    def test_embed_tokens_target_rejected(self):
+        with pytest.raises(ValueError, match="embed_tokens"):
+            _load(
+                _stream_yaml(
+                    training={
+                        "lora": {"r": 4, "target_modules": ["q_proj", "embed_tokens"]}
+                    }
+                )
+            )
+
+    def test_both_boundary_modules_named_together(self):
+        with pytest.raises(ValueError, match="embed_tokens.*lm_head|lm_head.*embed_tokens"):
+            _load(
+                _stream_yaml(
+                    training={
+                        "lora": {
+                            "r": 4,
+                            "target_modules": ["embed_tokens", "q_proj", "lm_head"],
+                        }
+                    }
+                )
+            )
+
+    def test_bare_string_target_is_checked_too(self):
+        """target_modules accepts a bare string (Union[str, List[str]]), not
+        only a list: the guard must not assume a list."""
+        with pytest.raises(ValueError, match="lm_head"):
+            _load(_stream_yaml(training={"lora": {"r": 4, "target_modules": "lm_head"}}))
+
+    def test_non_boundary_targets_still_accepted(self):
+        """Negative control: q_proj/v_proj/o_proj/k_proj are unaffected. This
+        is the exact config #1019's own forward-fix tests exercise and it must
+        keep training."""
+        cfg = _load(
+            _stream_yaml(
+                training={
+                    "lora": {"r": 4, "target_modules": ["q_proj", "v_proj", "k_proj", "o_proj"]}
+                }
+            )
+        )
+        assert cfg.training.lora.target_modules == ["q_proj", "v_proj", "k_proj", "o_proj"]
+
+    def test_auto_target_modules_still_accepted(self):
+        """Negative control: the default 'auto' sentinel is untouched."""
+        cfg = _load(_stream_yaml(training={"lora": {"r": 4}}))
+        assert cfg.training.lora.target_modules == "auto"
+
+
 class TestPrefetchDirectionIsExplicit:
     """Direction was inferred from call order, which is correct today only
     because the turnaround index happens to be the last layer. Make it explicit

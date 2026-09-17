@@ -2351,12 +2351,9 @@ def _cache_key_dataset_path(cfg) -> str:
     function so it can be exercised directly by
     tests/test_issue443_interleave_wiring.py's enumerating test.
     """
-    if isinstance(cfg.data.train, list):
-        return json.dumps(
-            {"train": cfg.data.train, "interleave": cfg.data.interleave},
-            sort_keys=True,
-        )
-    return cfg.data.train
+    from soup_cli.utils.data_pipeline import preprocess_dataset_key_input
+
+    return preprocess_dataset_key_input(cfg.data)
 
 
 @app.command(name="preprocess")
@@ -2574,6 +2571,8 @@ def preprocess_dataset(
         _shutil.rmtree(tmp_dir, ignore_errors=True)
         raise
 
+    from soup_cli import __version__ as _soup_version
+
     metadata = {
         "cache_key": cache_key,
         "row_count": len(rendered_rows),
@@ -2581,7 +2580,7 @@ def preprocess_dataset(
         "max_length": max_length,
         "format": cfg.data.format,
         "task": cfg.task,
-        "soup_version": "0.53.7",
+        "soup_version": _soup_version,
     }
     metadata_path = target / "metadata.json"
     with open(metadata_path, "w", encoding="utf-8") as f:
