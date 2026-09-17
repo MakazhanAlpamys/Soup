@@ -184,6 +184,22 @@ class TestAnExplicitValueIsRefused:
         assert cfg.training.quantization == "none"
 
 
+class TestTheResolverRunsFirst:
+    def test_it_is_the_first_after_validator(self):
+        """Every later SoupConfig validator that reads ``quantization`` must see the
+        resolved ``none``. In particular #1037's
+        ``_validate_peft_variant_backend_and_quantization`` would refuse a distill +
+        LoftQ config with ``quantization`` unset as 4-bit if it ran first. The order
+        lived only in a docstring; this pins it, so a conflict resolution that
+        pastes a validator above this one fails here (#1043 review)."""
+        from soup_cli.config.schema import SoupConfig
+
+        validators = SoupConfig.__pydantic_decorators__.model_validators
+        after = [name for name, dec in validators.items() if dec.info.mode == "after"]
+        assert after, "SoupConfig has no after-validators to order"
+        assert after[0] == "_resolve_quantization_for_unhonouring_tasks", after[:3]
+
+
 class TestHonouringTasksAreUnchanged:
     """Controls: the gate must not reach the trainers that DO read the field."""
 
