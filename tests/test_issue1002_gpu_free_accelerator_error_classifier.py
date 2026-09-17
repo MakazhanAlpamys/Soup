@@ -19,6 +19,7 @@ from soup_cli.utils.layer_stream_runtime import (
     StepPeak,
     _classify_probe_exception,
     _is_out_of_memory,
+    measure_step_peak_bytes,
 )
 
 
@@ -181,3 +182,56 @@ class TestPredicateIdentityAndAntiForking:
         from soup_cli.utils.batch_probe import _is_cuda_oom
 
         assert _is_out_of_memory(exc) == _is_cuda_oom(exc, torch)
+
+
+class TestMeasureStepPeakBytesOutcomeMappingGpuFree:
+    """Pin that measure_step_peak_bytes delegates to the classifier without a GPU.
+
+    Pins the call site at measure_step_peak_bytes:1792 so a mutation bypassing
+    _classify_probe_exception fails in GPU-free CI (#1002 criterion 2).
+    """
+
+    def test_measure_step_peak_bytes_oom_accelerator_error(self, monkeypatch):
+        torch, accelerator_error = _get_torch_and_accelerator_error()
+
+        monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+
+        def raise_oom(*args, **kwargs):
+            raise accelerator_error("CUDA error: out of memory")
+
+        monkeypatch.setattr(torch.cuda, "synchronize", raise_oom)
+        monkeypatch.setattr(torch.cuda, "empty_cache", lambda: None)
+        monkeypatch.setattr(
+            "soup_cli.utils.layer_stream_runtime._zero_probe_grads", lambda *_: None
+        )
+
+        peak = measure_step_peak_bytes(object(), rows=1, seq_len=4, vocab_size=8)
+        assert peak is not None
+        assert peak.oom is True
+        assert peak.failed is False
+        assert peak.error is None
+        assert peak.rows == 1
+        assert peak.seq_len == 4
+
+    def test_measure_step_peak_bytes_illegal_access_accelerator_error(self, monkeypatch):
+        torch, accelerator_error = _get_torch_and_accelerator_error()
+
+        monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+
+        def raise_illegal_access(*args, **kwargs):
+            raise accelerator_error("CUDA error: an illegal memory access was encountered")
+
+        monkeypatch.setattr(torch.cuda, "synchronize", raise_illegal_access)
+        monkeypatch.setattr(torch.cuda, "empty_cache", lambda: None)
+        monkeypatch.setattr(
+            "soup_cli.utils.layer_stream_runtime._zero_probe_grads", lambda *_: None
+        )
+
+        peak = measure_step_peak_bytes(object(), rows=1, seq_len=4, vocab_size=8)
+        assert peak is not None
+        assert peak.oom is False
+        assert peak.failed is True
+        assert peak.error == "AcceleratorError"
+        assert peak.rows == 1
+        assert peak.seq_len == 4
+
