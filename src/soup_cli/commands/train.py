@@ -105,8 +105,18 @@ def _build_hardware_fit_input(cfg):
     )
     if quant is None:
         return None
+    task = getattr(cfg, "task", None)
     if quant == "4bit":
         peft = "qlora"
+    elif task == "prm" or (
+        task in ("classifier", "reranker", "cross_encoder")
+        and not (tcfg.classifier_lora and tcfg.lora.r > 0)
+    ) or (task == "asr" and not (tcfg.asr_lora and tcfg.lora.r > 0)):
+        # #795: these trainers decide full fine-tuning themselves -- PRM always,
+        # the classifier family and ASR unless their own LoRA opt-in is on
+        # (classifier.py:262, asr.py::_should_use_lora). Budgeting them as LoRA
+        # under-predicts, the unsafe direction.
+        peft = "full"
     elif is_full_finetune(tcfg):
         # #471 — was an independent, hand-maintained check
         # (unfrozen_parameters / freeze_layers / freeze_ratio) that had
