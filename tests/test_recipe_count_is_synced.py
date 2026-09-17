@@ -203,9 +203,20 @@ _DATED_MEASUREMENTS: frozenset[tuple[str, str]] = frozenset(
 )
 
 
+def literal_milestone_sites(
+    root: pathlib.Path, rel_paths: Sequence[str] = MILESTONE_SITES
+) -> list[str]:
+    """``file: literal`` for every milestone file that pins a count by literal."""
+    found: list[str] = []
+    for rel in rel_paths:
+        text = (root / rel).read_text(encoding="utf-8")
+        found.extend(f"{rel}: {literal}" for literal in _LITERAL_MILESTONE.findall(text))
+    return found
+
+
 def _tracked_files(root: pathlib.Path) -> list[str]:
     result = subprocess.run(
-        ["git", "ls-files"],
+        ["git", "ls-files", "-z"],
         cwd=root,
         capture_output=True,
         encoding="utf-8",
@@ -213,7 +224,7 @@ def _tracked_files(root: pathlib.Path) -> list[str]:
     )
     if result.returncode != 0:  # pragma: no cover - not a git checkout (sdist)
         pytest.skip("not a git checkout; tracked files cannot be listed")
-    return result.stdout.split()
+    return [path for path in result.stdout.split("\0") if path]
 
 
 def undeclared_count_sites(
@@ -255,14 +266,14 @@ class TestRecipeCountIsSynchronised:
         assert len(RECIPES) == EXPECTED_RECIPE_COUNT, recipe_count_hint(len(RECIPES))
 
     def test_milestone_sites_use_the_pinned_count_not_a_literal(self) -> None:
+        literals = literal_milestone_sites(ROOT)
+        assert not literals, (
+            "These milestone files pin the recipe count with a literal; compare against "
+            "EXPECTED_RECIPE_COUNT from tests/recipe_count.py so adding a recipe is one "
+            "edit, not one per milestone file (#1016):\n  " + "\n  ".join(literals)
+        )
         for rel in MILESTONE_SITES:
             text = (ROOT / rel).read_text(encoding="utf-8")
-            literals = _LITERAL_MILESTONE.findall(text)
-            assert not literals, (
-                f"{rel} pins the recipe count with a literal ({literals[0]!r}); compare "
-                "against EXPECTED_RECIPE_COUNT from tests/recipe_count.py so adding a "
-                "recipe is one edit, not one per milestone file (#1016)."
-            )
             assert "EXPECTED_RECIPE_COUNT" in text, (
                 f"{rel} is listed in MILESTONE_SITES but no longer pins the count; "
                 "drop it from the table if that milestone was retired on purpose."
@@ -386,6 +397,20 @@ class TestTheGuardHasTeeth:
         assert not verdict.is_synced
         assert len(verdict.missing_patterns) == 1
         assert verdict.missing_patterns[0].rel_path == "non_existent.md"
+
+    def test_a_literal_milestone_is_caught(self, tmp_path: pathlib.Path) -> None:
+        """CONTROL: a milestone file that goes back to a literal is reported by
+        name, and one comparing against the pinned count is not."""
+        (tmp_path / "tests").mkdir()
+        (tmp_path / "tests" / "test_old.py").write_text(
+            "def test_size():\n    assert len(RECIPES) == 175\n", encoding="utf-8"
+        )
+        (tmp_path / "tests" / "test_new.py").write_text(
+            "def test_size():\n    assert len(RECIPES) == EXPECTED_RECIPE_COUNT\n",
+            encoding="utf-8",
+        )
+        found = literal_milestone_sites(tmp_path, ("tests/test_old.py", "tests/test_new.py"))
+        assert found == ["tests/test_old.py: len(RECIPES) == 175"]
 
     def test_mutated_catalog_count_fails_all_sites(self) -> None:
         fake_count = len(RECIPES) + 1
