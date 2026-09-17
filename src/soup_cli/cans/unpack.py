@@ -11,6 +11,7 @@ import yaml
 
 from soup_cli.cans.schema import Manifest
 from soup_cli.utils.paths import is_under_cwd
+from soup_cli.utils.yaml_limits import check_yaml_expanded_size
 
 #: Largest ``manifest.yaml`` read into memory. A manifest holds a handful of
 #: short fields plus at most 64 attestations of <= 1 MiB each, so a real one is
@@ -68,6 +69,7 @@ def inspect_can(path: str) -> Manifest:
     with tarfile.open(can_path, mode="r:gz") as tar:
         manifest_text = _read_text_member(tar, "manifest.yaml", MAX_MANIFEST_BYTES)
     data = yaml.safe_load(manifest_text) or {}
+    check_yaml_expanded_size(data, "manifest.yaml")
     return Manifest(**data)
 
 
@@ -81,6 +83,7 @@ def read_config(path: str) -> dict[str, Any]:
     with tarfile.open(can_path, mode="r:gz") as tar:
         cfg_text = _read_text_member(tar, "config.yaml", MAX_CONFIG_BYTES)
     data = yaml.safe_load(cfg_text) or {}
+    check_yaml_expanded_size(data, "config.yaml")
     if not isinstance(data, dict):
         raise ValueError("config.yaml must deserialise to a mapping")
     return data
