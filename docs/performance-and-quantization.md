@@ -20,7 +20,7 @@
 - [Performance + Long-Context](#performance--long-context)
 - [Live CUDA Batch-Size Probe](#live-cuda-batch-size-probe)
 - [FSDP Shard Consolidation](#fsdp-shard-consolidation)
-- [BitNet 1.58-Bit Fine-Tuning (BETA, live in v0.71.20)](#bitnet-158-bit-fine-tuning-beta-live-in-v07120)
+- [BitNet 1.58-Bit Export](#bitnet-158-bit-export)
 - [MoE Expert Quantization + Router-Only Training (live in v0.71.20)](#moe-expert-quantization--router-only-training-live-in-v07120)
 - [Unsloth Dynamic 2.0 GGUF Ladder (v0.53.0)](#unsloth-dynamic-20-gguf-ladder-v0530)
 - [KV Cache Types (v0.53.0)](#kv-cache-types-v0530)
@@ -717,10 +717,10 @@ data:
 ```
 
 The override is installed before conversational SFT, preference, reward-model,
-GRPO, or Online DPO data is rendered. The saved tokenizer keeps the same template
+PPO, GRPO, or Online DPO data is rendered. The saved tokenizer keeps the same template
 for inference. Tasks that do not render chat (`pretrain`, `embedding`, `classifier`,
-`reranker`, and `cross_encoder`) reject `data.chat_template` instead of silently
-ignoring it.
+`reranker`, `cross_encoder`, `prm`, `asr`, `moe_lora_routing`, and `unlearn`) reject
+`data.chat_template` instead of silently ignoring it.
 
 Raw Jinja strings are validated: null bytes / >64KB / filesystem-touching directives (`{% include %}`, `{% import %}`, `{% from %}`, `{% macro %}`, `{% extends %}`) are rejected at config-load.
 
@@ -898,30 +898,22 @@ soup merge-sharded-fsdp-weights ./fsdp-checkpoint -o ./merged.safetensors
 Consolidates `pytorch_model_fsdp_*.bin` shard files into a single `.safetensors`. Each shard is loaded one at a time (streaming, not all-at-once) with `torch.load(weights_only=True)`, tensor shapes validated (a duplicate key with a conflicting shape is rejected; a same-shape duplicate keeps the first and warns), and the merged dict written atomically. cwd-containment + symlink rejection apply to the output path and every shard; per-shard 16 GiB cap; `_MAX_SHARDS=1024`. `--plan-only` prints the plan and exits 0. Live torch-side consolidation shipped in v0.71.14.
 
 
-## BitNet 1.58-Bit Fine-Tuning (BETA, live in v0.71.20)
+## BitNet 1.58-Bit Export
 
-`training.quantization: bitnet_1.58` routes to a live `BitNetTrainerWrapper`
-(an SFT subclass) for ternary-weight training. It is gated on the upstream
-`onebitllms` package — when absent, training fails fast with a friendly
-`RuntimeError` naming it (`onebitllms` is CUDA/Linux-only). The export targets
-run a **real llama.cpp TQ1_0 ternary GGUF** export (reusing the v0.53.1
-convert→quantize pipeline) instead of a stub:
+BitNet 1.58 training is not implemented yet. Setting
+`training.quantization: bitnet_1.58` is rejected at config load with an
+actionable error instead of falling through to the ordinary SFT path.
+
+Export of an existing BitNet checkpoint remains live through llama.cpp's
+TQ1_0 ternary GGUF pipeline:
 
 ```bash
 soup export --model ./output --format bitnet   # → TQ1_0 ternary GGUF
 soup export --model ./output --format tq1_0     # same flavour, explicit name
 ```
 
-The export requires a built llama.cpp toolchain (the convert/quantize binaries
-raise a friendly `FileNotFoundError` when missing). A ready-made
-`falcon-e-bitnet-sft` recipe is shipped:
-
-```bash
-soup recipes use falcon-e-bitnet-sft
-soup train --config soup.yaml
-```
-
-Restricted to `task ∈ {sft, pretrain, dpo}` on `backend ∈ {transformers, unsloth}` with text modality; the cross-validator rejects MLX and vision/audio configurations loudly at config load.
+The export requires a built llama.cpp toolchain; the convert/quantize binaries
+raise a friendly `FileNotFoundError` when missing.
 
 
 ## MoE Expert Quantization + Router-Only Training (live in v0.71.20)

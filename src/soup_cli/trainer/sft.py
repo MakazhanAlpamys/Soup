@@ -103,6 +103,37 @@ def _assert_finite_training_state(
         )
 
 
+def rewind_skip_reason(
+    *,
+    task: str,
+    pretokenized: bool,
+    is_raft: bool,
+    multipack: bool,
+    vision: bool,
+    audio: bool,
+) -> str:
+    """Why this run takes no rewind recorder, in words a user can act on.
+
+    The recording trainer is the last branch of the trainer chain, so every
+    earlier one skips it. Extracted so each reason can be asserted directly:
+    the failure this guards against is silence, and a test that only checks
+    "something was printed" would not notice the wrong reason.
+    """
+    if pretokenized:
+        return "the dataset is pre-tokenised, so row ids are not the config's rows"
+    if is_raft:
+        return "RAFT builds its own trainer and collator"
+    if multipack:
+        return "multipack owns the dataloader the recorder wraps"
+    if vision:
+        return "vision runs a custom collator"
+    if audio:
+        return "audio runs a custom collator"
+    if task != "sft":
+        return f"the recorder is SFT-only and this is task {task!r}"
+    return "this run does not take the recording trainer path"
+
+
 def _map_text_sft_rows(
     rows: list[dict],
     *,
@@ -442,6 +473,7 @@ def _maybe_load_pretokenized(
     from soup_cli.utils.data_pipeline import (
         load_pretokenized_dataset,
         make_preprocess_cache_key,
+        preprocess_dataset_key_input,
     )
 
     tokenized_path = dcfg.tokenized_path
@@ -455,11 +487,20 @@ def _maybe_load_pretokenized(
                 f"pre_tokenized metadata.json is unreadable: {exc}"
             ) from exc
         stored_key = metadata.get("cache_key")
+        # #1038: preprocess hashed the SOURCE format (chatml, alpaca, ...), which a
+        # ``pre_tokenized`` config cannot restate -- ``dcfg.format`` is always
+        # ``pre_tokenized`` here, so hashing it rejected every real cache. Use the
+        # format preprocess recorded as an input to the recomputed key: it is not
+        # trusted on its own, since editing it without the key still mismatches.
+        # Metadata without the field (older hand-written caches) keeps the old input.
+        source_format = metadata.get("format")
+        if not isinstance(source_format, str) or not source_format:
+            source_format = dcfg.format
         current_key = make_preprocess_cache_key(
-            dataset_path=dcfg.train,
+            dataset_path=preprocess_dataset_key_input(dcfg),
             tokenizer_name=base,
             max_length=dcfg.max_length,
-            format_name=dcfg.format,
+            format_name=source_format,
         )
         if stored_key != current_key:
             raise ValueError(
@@ -559,6 +600,71 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             console=console,
             requires_remote_code=requires,
         )
+
+    def _build_rewind_trainer(
+        self,
+        base_cls: Any,
+        trainer_kwargs: dict,
+        *,
+        rows: list,
+        output_dir: Path,
+        batch_size: int,
+        grad_accum: int,
+    ) -> Any:
+        """Build the plain SFT trainer with the rewind flight recorder attached.
+
+        ``rows`` is the ``load_dataset`` train list the text path maps 1:1 into
+        ``train_ds``, so a recorded row id indexes it -- and its fingerprint is
+        what ``soup rewind`` checks before previewing. Under a distributed launch
+        each rank samples a shard, so the recorder is left off with one line.
+        """
+        from soup_cli.trainer.stream_setup import _distributed_launch
+
+        if _distributed_launch():
+            console.print(
+                "[yellow]Rewind log off:[/] the recorder is single-process; "
+                "this is a distributed launch"
+            )
+            self._rewind_notice = True
+            return base_cls(**trainer_kwargs)
+
+        from soup_cli.monitoring.rewind_log import RewindLog, dataset_fingerprint
+        from soup_cli.trainer.rewind_hf import (
+            attach_rewind_state,
+            make_rewind_trainer_class,
+        )
+
+        trainer = make_rewind_trainer_class(base_cls)(**trainer_kwargs)
+        log = RewindLog(
+            output_dir / RewindLog.FILENAME,
+            backend="transformers",
+            task="sft",
+            n_rows=len(rows),
+            batch_size=batch_size,
+            grad_accum=grad_accum,
+            dataset_fingerprint=dataset_fingerprint(rows),
+        )
+        state = attach_rewind_state(trainer, log)
+        self._rewind_log = log
+        self._rewind_state = state
+        if not state.failed and not log.disabled:
+            console.print(f"[green]Rewind log:[/] {log.path}")
+        return trainer
+
+    def _report_rewind(self) -> None:
+        """One line after training when the flight recorder lost records."""
+        state = getattr(self, "_rewind_state", None)
+        log = getattr(self, "_rewind_log", None)
+        if state is None or log is None:
+            return
+        log.close()
+        notes = []
+        if state.summary() is not None:
+            notes.append(state.summary())
+        if log.dropped:
+            notes.append(f"rewind: {log.dropped} malformed record(s) not written")
+        for note in notes:
+            console.print(f"[yellow]{note}[/]")
 
     def setup(self, dataset: dict):
         """Load model, tokenizer, apply LoRA, create trainer."""
@@ -1016,8 +1122,43 @@ class SFTTrainerWrapper(StreamingSetupMixin):
                 processor=self.processor,
                 max_length=cfg.data.max_length,
             )
+        elif (
+            tcfg.rewind_log
+            and cfg.task == "sft"
+            and pretok is None
+            and not use_vision
+            and not use_audio
+        ):
+            self.trainer = self._build_rewind_trainer(
+                SFTTrainer,
+                trainer_kwargs,
+                rows=dataset["train"],
+                output_dir=output_dir,
+                batch_size=batch_size,
+                grad_accum=int(tcfg.gradient_accumulation_steps),
+            )
         else:
             self.trainer = SFTTrainer(**trainer_kwargs)
+
+        # The recording trainer is the last branch above, so RAFT, multipack,
+        # vision, audio and a pre-tokenised dataset all skip it -- silently,
+        # until now. Silence is the failure this repo keeps filing: the run
+        # writes no log, and `soup rewind` then offers "it was not an SFT run"
+        # among its reasons, which is false. Name the reason once, here, where
+        # every skipping path lands.
+        if tcfg.rewind_log and getattr(self, "_rewind_state", None) is None:
+            if not getattr(self, "_rewind_notice", False):
+                console.print(
+                    "[yellow]Rewind log off:[/] "
+                    + rewind_skip_reason(
+                        task=cfg.task,
+                        pretokenized=pretok is not None,
+                        is_raft=self._is_raft,
+                        multipack=use_multipack,
+                        vision=use_vision,
+                        audio=use_audio,
+                    )
+                )
 
         # #336 — DeepSpeed + LoRA died on every stage before the first step.
         # HF builds two optimizer parameter groups (decay / no-decay) and with
@@ -1972,6 +2113,7 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             )
             self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)
         duration = time.time() - start
+        self._report_rewind()
 
         _assert_finite_training_state(
             self.trainer.state.log_history, model=self.trainer.model

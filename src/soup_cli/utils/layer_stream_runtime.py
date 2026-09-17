@@ -1328,6 +1328,26 @@ class _StreamedDecoderLayerProxy:
 StreamedDecoderLayer = _StreamedDecoderLayerProxy()
 
 
+def _large_layer_weight_param_name(inner: Any) -> str:
+    """The meta parameter name ``StreamedLargeLayer.forward`` must substitute.
+
+    Normally ``"weight"``. get_peft_model() runs before install_streaming(),
+    so a LoRA target on the input/output embedding wraps ``inner`` in a peft
+    tuner layer first (#1012): the real, still-meta base weight moves to
+    ``inner.base_layer.weight`` (``inner`` is the leaf embedding/head module
+    itself here, so the prefix carries no leading dot, unlike a nested
+    decoder-layer projection), and peft's own ``weight`` exposes a READ-ONLY
+    property delegating to it, which a plain ``{"weight": ...}`` substitution
+    cannot setattr onto. ``_layer_name_map`` resolves the same indirection one
+    level down, for decoder-layer projections (q_proj/v_proj); this mirrors
+    it for the large-layer boundary modules.
+    """
+    for pname, param in inner.named_parameters(recurse=True):
+        if param.is_meta and pname in ("weight", "base_layer.weight"):
+            return pname
+    return "weight"
+
+
 def _build_streamed_large_layer_class():
     import torch.nn as nn
     from torch.func import functional_call
@@ -1341,6 +1361,7 @@ def _build_streamed_large_layer_class():
             self.key = str(key)
             self.pool = pool
             self._register_load_state_dict_pre_hook(self._redirect_canonical_weight)
+            self._weight_param_name = _large_layer_weight_param_name(inner)
 
         def _redirect_canonical_weight(
             self, state_dict: Any, prefix: str, *_args: Any, **_kwargs: Any
@@ -1447,7 +1468,7 @@ def _build_streamed_large_layer_class():
         def forward(self, *args: Any, **kwargs: Any) -> Any:
             return functional_call(
                 self.inner,
-                {"weight": self.pool.wait(self.key)},
+                {self._weight_param_name: self.pool.wait(self.key)},
                 args,
                 kwargs,
             )

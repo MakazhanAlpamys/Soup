@@ -141,13 +141,11 @@ def test_apply_v028_speed_memory_refuses_kernel_picker(task: str) -> None:
     from soup_cli.utils import v028_features as vf
 
     tcfg = _make_tcfg("kernel_auto_compose")
-    with patch.object(vf, "_bench_and_pick_kernel") as picker:
-        result = vf.apply_v028_speed_memory(
-            model=MagicMock(), tcfg=tcfg,
-            base_model="meta-llama/Llama-3.2-1B", console=None,
-            device="cuda", backend="transformers",
-        )
-    picker.assert_not_called()
+    result = vf.apply_v028_speed_memory(
+        model=MagicMock(), tcfg=tcfg,
+        base_model="meta-llama/Llama-3.2-1B", console=None,
+        device="cuda", backend="transformers",
+    )
     assert result["kernel_auto_compose"] is False
 
 
@@ -733,25 +731,11 @@ def test_benchmark_kernel_combos_clamps_seq_len() -> None:
     assert out[0]["time_ms"] is None
 
 
-def test_bench_and_pick_kernel_returns_none_on_cpu() -> None:
-    """The internal helper degrades to None on CPU so caller advisories fire."""
-    from soup_cli.utils.v028_features import _bench_and_pick_kernel
+def test_bench_and_pick_kernel_removed_from_v028_features() -> None:
+    """Unreachable _bench_and_pick_kernel helper was removed under #976."""
+    from soup_cli.utils import v028_features as vf
 
-    result = _bench_and_pick_kernel(
-        model=MagicMock(), device="cpu", backend="transformers",
-    )
-    # CPU enumerate returns [baseline] only (len <= 1) → bench_and_pick returns None
-    assert result is None
-
-
-def test_bench_and_pick_kernel_returns_none_on_unsloth() -> None:
-    """unsloth backend uses its own kernels — picker degrades."""
-    from soup_cli.utils.v028_features import _bench_and_pick_kernel
-
-    result = _bench_and_pick_kernel(
-        model=MagicMock(), device="cuda", backend="unsloth",
-    )
-    assert result is None
+    assert not hasattr(vf, "_bench_and_pick_kernel")
 
 
 def test_apply_v028_kernel_auto_compose_never_claims_application() -> None:
@@ -762,30 +746,11 @@ def test_apply_v028_kernel_auto_compose_never_claims_application() -> None:
         use_cut_ce=False, quantization_aware=False,
         kernel_auto_compose=True, activation_offloading=None,
     )
-    with patch.object(vf, "_bench_and_pick_kernel") as picker:
-        result = vf.apply_v028_speed_memory(
-            model=MagicMock(), tcfg=tcfg,
-            base_model="meta-llama/Llama-3.2-1B", console=None,
-            device="cuda", backend="transformers",
-        )
-    picker.assert_not_called()
-    assert result["kernel_auto_compose"] is False
-
-
-def test_apply_v028_kernel_auto_compose_stays_false_when_validation_is_bypassed() -> None:
-    """The defensive runtime guard never reports the unsupported feature."""
-    from soup_cli.utils import v028_features as vf
-
-    tcfg = SimpleNamespace(
-        use_cut_ce=False, quantization_aware=False,
-        kernel_auto_compose=True, activation_offloading=None,
+    result = vf.apply_v028_speed_memory(
+        model=MagicMock(), tcfg=tcfg,
+        base_model="meta-llama/Llama-3.2-1B", console=None,
+        device="cuda", backend="transformers",
     )
-    with patch.object(vf, "_bench_and_pick_kernel", return_value=None):
-        result = vf.apply_v028_speed_memory(
-            model=MagicMock(), tcfg=tcfg,
-            base_model="meta-llama/Llama-3.2-1B", console=None,
-            device="cuda", backend="transformers",
-        )
     assert result["kernel_auto_compose"] is False
 
 
