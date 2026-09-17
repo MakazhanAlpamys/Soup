@@ -239,6 +239,10 @@ Lambda uses an instance rather than a serverless function. The generated local c
 secret-free cloud-init script as API `user_data`, waits for it over SSH, copies the configured
 output back, and requests instance termination in a `finally` block. Keep the controller running
 until it reports that termination succeeded; shutting down the guest does not terminate billing.
+Pressing Ctrl+C during `--cloud-submit` interrupts the controller, which still runs that `finally`
+block, and `soup` waits for it to terminate the instance and exit rather than killing it; the only
+way to skip that cleanup is to kill the controller process itself (for example with `kill` from
+another terminal), which can leave the instance running.
 
 Register the public half of an SSH key with Lambda first, then set:
 
