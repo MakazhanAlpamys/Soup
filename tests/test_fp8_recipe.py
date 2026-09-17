@@ -146,11 +146,20 @@ class TestFP8RecipeDispatch:
         (SM 9.0, every recipe admitted); ``tests/test_issue835_fp8_gate.py``
         covers the gate. torch is patched, not the gate, because each test
         reloads ``soup_cli.utils.fp8``.
+
+        The OS and torch's CUDA build are pinned with it: the rowwise recipes
+        need a build that has the kernel, and torch never builds it on Windows,
+        so the three Windows CI cells would otherwise fail these dispatch tests
+        (#1044 review).
         """
+        import sys
+
         import torch
 
         monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
         monkeypatch.setattr(torch.cuda, "get_device_capability", lambda *_a, **_k: (9, 0))
+        monkeypatch.setattr(sys, "platform", "linux")
+        monkeypatch.setattr(torch.version, "cuda", "12.4")
 
     def test_apply_fp8_dispatches_tensorwise(self):
         """Default recipe passes 'tensorwise' to from_recipe_name."""

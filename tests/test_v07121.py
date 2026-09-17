@@ -192,6 +192,13 @@ def _enable_fp8_gates(monkeypatch):
     if "torchao" not in sys.modules:
         monkeypatch.setitem(sys.modules, "torchao", types.ModuleType("torchao"))
     monkeypatch.setattr("soup_cli.utils.fp8.is_fp8_gpu_supported", lambda: True)
+    # The card is not the whole gate: a rowwise recipe also needs a torch build
+    # that has the kernel, and torch never builds it on Windows, so the Windows
+    # CI cells would fail test_converts_only_attention (#1044 review).
+    import torch
+
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(torch.version, "cuda", "12.4")
 
 
 class TestApplyFp8Attention:

@@ -1716,9 +1716,12 @@ class SFTTrainerWrapper(StreamingSetupMixin):
                     f"converted linears to Float8Linear (recipe={tcfg.fp8_recipe})"
                 )
             else:
+                # A card the gate refuses raises FP8HardwareUnsupportedError and
+                # stops the run (#835), so this branch is now the dependency case
+                # only.
                 console.print(
                     "[yellow]FP8 training requested but unavailable "
-                    "(no Hopper+ GPU or torchao.float8 missing)[/]"
+                    "(torchao.float8 missing)[/]"
                 )
         elif tcfg.quantization_aware is True:
             from soup_cli.utils.qat import prepare_model_for_qat
