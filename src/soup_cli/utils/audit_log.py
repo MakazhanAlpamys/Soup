@@ -5,7 +5,10 @@ via ``SOUP_AUDIT_LOG_PATH``). Lines are JSON objects with a fixed set of
 keys so Splunk / ELK can ingest them without a custom parser.
 
 PII redaction reuses the v0.40.3 #33 ``_SECRET_RE`` policy: ``hf_*`` /
-``sk-*`` / ``Bearer …`` tokens are masked as ``<redacted>``. Rotation at
+``sk-*`` / ``Bearer …`` tokens are masked as ``<redacted>``. Before a record
+reaches this module, ``cli._emit_audit_event`` masks the values of credential
+options by option name (``utils/argv_redaction.py``); this value-pattern layer
+applies on top of that. Rotation at
 100 MiB by default — operators wanting longer retention should run
 ``logrotate``.
 """
