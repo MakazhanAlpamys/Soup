@@ -212,26 +212,38 @@ def render_modal_stub(
         "    return count\n"
         "\n"
         "\n"
-        "@app.local_entrypoint()\n"
-        "def main() -> None:\n"
-        "    try:\n"
-        "        train.remote()\n"
-        "    finally:\n"
         # Only already-repr()-embedded names are referenced, through runtime
         # f-strings in the GENERATED code — no user value is interpolated into
         # the stub source here. (Interpolating raw ``{output_dir}`` was a code-
         # injection hole; ``{output_dir!r}`` alone would still break for a path
         # containing a quote because the repr is nested inside a "..." literal.)
-        '        count = _download(f"/{_RUN_NAME}", _LOCAL_OUTPUT)\n'
-        "        print(\n"
-        '            f"Downloaded {count} file(s) from volume "\n'
-        '            f"{_VOLUME_NAME}/{_RUN_NAME} to {_LOCAL_OUTPUT}"\n'
-        "        )\n"
-        "        print(\n"
-        '            "Retry the download with: "\n'
-        '            f"modal volume get {_VOLUME_NAME} /{_RUN_NAME} {_LOCAL_OUTPUT} --force"\n'
-        '            f" (files land under {_LOCAL_OUTPUT}/{_RUN_NAME})"\n'
-        "        )\n"
+        "def _fetch_outputs() -> None:\n"
+        '    count = _download(f"/{_RUN_NAME}", _LOCAL_OUTPUT)\n'
+        "    print(\n"
+        '        f"Downloaded {count} file(s) from volume "\n'
+        '        f"{_VOLUME_NAME}/{_RUN_NAME} to {_LOCAL_OUTPUT}"\n'
+        "    )\n"
+        "    print(\n"
+        '        "Retry the download with: "\n'
+        '        f"modal volume get {_VOLUME_NAME} /{_RUN_NAME} {_LOCAL_OUTPUT} --force"\n'
+        '        f" (files land under {_LOCAL_OUTPUT}/{_RUN_NAME})"\n'
+        "    )\n"
+        "\n"
+        "\n"
+        "@app.local_entrypoint()\n"
+        "def main() -> None:\n"
+        "    try:\n"
+        "        train.remote()\n"
+        "    except BaseException:\n"
+        "        # Save whatever the failed run left on the volume, but never let a\n"
+        "        # download error (e.g. the run directory was never created)\n"
+        "        # replace the training error that explains the failure.\n"
+        "        try:\n"
+        "            _fetch_outputs()\n"
+        "        except Exception as exc:\n"
+        '            print(f"Could not download outputs after the failed run: {exc!r}")\n'
+        "        raise  # the training error, not the download error\n"
+        "    _fetch_outputs()\n"
     )
 
 

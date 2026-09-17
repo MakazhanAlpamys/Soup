@@ -41,10 +41,13 @@ class _Entry:
 
 
 class _FakeVolume:
-    def __init__(self, root: Path, *, leading_slash: bool, extra_entries=()):
+    def __init__(
+        self, root: Path, *, leading_slash: bool, extra_entries=(), listdir_error=None
+    ):
         self.root = root
         self.leading_slash = leading_slash
         self.extra_entries = list(extra_entries)
+        self.listdir_error = listdir_error
         self.commits = 0
         self.from_name_kwargs: dict = {}
 
@@ -53,6 +56,8 @@ class _FakeVolume:
 
     def listdir(self, path: str, *, recursive: bool = False):
         assert recursive is True
+        if self.listdir_error is not None:
+            raise self.listdir_error
         base = self.root / path.strip("/")
         entries = []
         for item in sorted(base.rglob("*")):
@@ -251,6 +256,48 @@ def test_download_runs_even_when_training_fails(tmp_path, monkeypatch):
     saved = tmp_path / "local-out" / "output" / "checkpoint-1" / "adapter_model.safetensors"
     assert saved.read_bytes() == b"partial"
     assert volume.commits == 1
+
+
+def test_failed_download_does_not_hide_the_training_error(tmp_path, monkeypatch, capsys):
+    vol_root = tmp_path / "volume"
+    vol_root.mkdir()
+    volume = _FakeVolume(
+        vol_root,
+        leading_slash=False,
+        listdir_error=FileNotFoundError("run directory does not exist"),
+    )
+    _install_fake_modal(monkeypatch, volume)
+
+    def failing_run(argv, check, cwd):
+        raise subprocess.CalledProcessError(1, argv)
+
+    monkeypatch.setattr(subprocess, "run", failing_run)
+    namespace = _exec_stub(_render(tmp_path, vol_root))
+
+    with pytest.raises(subprocess.CalledProcessError):
+        namespace["main"]()
+
+    out = " ".join(capsys.readouterr().out.split())
+    assert "Could not download outputs after the failed run" in out
+    assert "run directory does not exist" in out
+
+
+def test_download_error_propagates_after_successful_training(tmp_path, monkeypatch):
+    vol_root = tmp_path / "volume"
+    vol_root.mkdir()
+    volume = _FakeVolume(
+        vol_root,
+        leading_slash=False,
+        listdir_error=FileNotFoundError("run directory does not exist"),
+    )
+    _install_fake_modal(monkeypatch, volume)
+    monkeypatch.setattr(
+        subprocess, "run", lambda argv, check, cwd: subprocess.CompletedProcess(argv, 0)
+    )
+    namespace = _exec_stub(_render(tmp_path, vol_root))
+
+    with pytest.raises(FileNotFoundError, match="run directory does not exist"):
+        namespace["main"]()
 
 
 def test_download_refuses_escaping_entry(tmp_path, monkeypatch):
