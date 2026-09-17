@@ -209,6 +209,35 @@ class MLXSFTTrainerWrapper:
             unsupported.append("Ring Attention")
         if tcfg.use_flash_attn:
             unsupported.append("FlashAttention (MLX has its own attention kernels)")
+        if tcfg.use_liger:
+            unsupported.append(
+                "training.use_liger (Liger fused kernels have no MLX implementation)"
+            )
+        if tcfg.neftune_alpha is not None:
+            unsupported.append(
+                "training.neftune_alpha (NEFT noise is applied on the "
+                "transformers training path, not MLX)"
+            )
+        if tcfg.use_mod:
+            unsupported.append(
+                "training.use_mod (Mixture-of-Depths routing is wired on the "
+                "transformers path, not MLX)"
+            )
+        if tcfg.moe_lora:
+            unsupported.append(
+                "training.moe_lora (ScatterMoE LoRA targets expert layers on the "
+                "transformers path; no MLX implementation)"
+            )
+        if tcfg.quantization_aware:
+            unsupported.append(
+                "training.quantization_aware (QAT/FP8 prepare runs on the "
+                "transformers path, not MLX)"
+            )
+        if tcfg.use_fsdp2_compile:
+            unsupported.append(
+                "training.use_fsdp2_compile (torch.compile on FSDP2 requires "
+                "CUDA and the transformers backend)"
+            )
         # #353's fourth criterion. #381 threaded training.seed through every
         # transformers task wrapper; MLX has its own RNG (mx.random) and reads
         # neither field, so a seeded MLX run is silently unseeded. `is not None`

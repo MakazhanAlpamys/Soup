@@ -17,7 +17,7 @@ console = Console()
 
 app = typer.Typer(
     no_args_is_help=True,
-    help="Iterative DPO loop driver (v0.70.0 Part E)",
+    help="Iterative DPO sample, score, pair, and train loop",
 )
 
 
@@ -39,7 +39,7 @@ def main(
         help="Print the resolved plan and exit (no training).",
     ),
 ):
-    """Render the iterative-DPO plan and (in v0.70.1) execute it."""
+    """Render the iterative-DPO plan and optionally execute it."""
     from soup_cli.utils.iterative_dpo import (
         build_iterative_dpo_plan,
         run_iterative_dpo,

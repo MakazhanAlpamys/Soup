@@ -11,6 +11,8 @@ from typing import Any, Optional
 from rich.console import Console
 
 from soup_cli.config.schema import SoupConfig, TrainingConfig
+from soup_cli.data.chat_templates import apply_chat_template_override
+from soup_cli.trainer.loss_summary import summarize_training_loss
 from soup_cli.utils.gpu import (
     bf16_fp16_flags,
     estimate_batch_size,
@@ -354,6 +356,10 @@ class GRPOTrainerWrapper:
         else:
             self._setup_transformers(cfg, tcfg)
 
+        apply_chat_template_override(
+            self.tokenizer, cfg.data.chat_template, console=console
+        )
+
         # Ensure tokenizer has a chat template — trl's GRPOTrainer calls
         # apply_chat_template() when it detects conversational prompts (message
         # lists) and will raise ValueError if the template is missing.
@@ -573,7 +579,7 @@ class GRPOTrainerWrapper:
 
     def _setup_transformers(self, cfg: SoupConfig, tcfg) -> None:
         """Load model via standard transformers + peft pipeline."""
-        from peft import LoraConfig, TaskType, get_peft_model, prepare_model_for_kbit_training
+        from peft import TaskType, get_peft_model, prepare_model_for_kbit_training
         from transformers import AutoModelForCausalLM, AutoTokenizer
 
         console.print(f"[dim]Loading tokenizer: {cfg.base}[/]")
@@ -614,19 +620,17 @@ class GRPOTrainerWrapper:
         if tcfg.quantization in ("4bit", "8bit", "mxfp4"):
             self.model = prepare_model_for_kbit_training(self.model)
 
-        from soup_cli.utils.peft_wiring import resolve_lora_target_modules
+        from soup_cli.utils.peft_wiring import (
+            build_lora_config,
+            resolve_lora_target_modules,
+        )
 
         target_modules = resolve_lora_target_modules(self.model, tcfg.lora.target_modules)
 
-        lora_config = LoraConfig(
-            r=tcfg.lora.r,
-            lora_alpha=tcfg.lora.alpha,
-            lora_dropout=tcfg.lora.dropout,
+        lora_config = build_lora_config(
+            tcfg.lora,
             target_modules=target_modules,
             task_type=TaskType.CAUSAL_LM,
-            bias="none",
-            use_dora=tcfg.lora.use_dora,
-            use_rslora=tcfg.lora.use_rslora,
         )
         # v0.40.6 #67 — surgical PEFT patches (Gemma4 ClippableLinear pre-LoRA;
         # 3-D fused-MoE expert dropout strip post-LoRA).
@@ -721,15 +725,14 @@ class GRPOTrainerWrapper:
 
         # Extract metrics
         logs = self.trainer.state.log_history
-        train_losses = [entry["loss"] for entry in logs if "loss" in entry]
+        loss_summary = summarize_training_loss(logs)
 
         hours = int(duration // 3600)
         minutes = int((duration % 3600) // 60)
         duration_str = f"{hours}h {minutes}m" if hours > 0 else f"{minutes}m"
 
         return {
-            "initial_loss": train_losses[0] if train_losses else 0,
-            "final_loss": train_losses[-1] if train_losses else 0,
+            **loss_summary,
             "duration": duration_str,
             "duration_secs": duration,
             "output_dir": self._output_dir,

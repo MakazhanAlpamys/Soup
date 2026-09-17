@@ -11,6 +11,7 @@ import argparse
 import hashlib
 import json
 import os
+import secrets
 import subprocess
 import sys
 import tempfile
@@ -48,6 +49,7 @@ _MAX_CONTROL_BYTES = 8 * 1024 * 1024
 _MAX_CAPTURE_ROWS = 1_000_000
 _ARTIFACT_ID_PATTERN = r"^[A-Za-z0-9][-A-Za-z0-9_.:]{0,127}$"
 _SHA256_PATTERN = r"^[0-9a-f]{64}$"
+_NONCE_PATTERN = r"^[0-9a-f]{32}$"
 
 
 class _FrozenModel(BaseModel):
@@ -88,6 +90,7 @@ class MlxTeacherCaptureRequest(_FrozenModel):
     publication_root: str = Field(min_length=1)
     shard_id: str = Field(pattern=_ARTIFACT_ID_PATTERN)
     transaction_id: str = Field(pattern=_ARTIFACT_ID_PATTERN)
+    worker_nonce: str = Field(pattern=_NONCE_PATTERN)
     example_start: int = Field(ge=0)
     example_end: int | None = Field(default=None, gt=0)
 
@@ -111,7 +114,12 @@ class MlxTeacherWorkerReceipt(_FrozenModel):
     schema_id: Literal["soup.autodistill.mlx-teacher-worker-receipt.v1"] = Field(
         alias="schema"
     )
+    # worker_pid is informational only: a venv's Scripts/python.exe launcher
+    # spawns the real interpreter as a grandchild, so Popen.pid never equals
+    # the child's own os.getpid() there (#898). worker_nonce is what the
+    # parent actually verifies against the request it wrote.
     worker_pid: int = Field(gt=0)
+    worker_nonce: str = Field(pattern=_NONCE_PATTERN)
     student_loaded: Literal[False]
     plan_sha256: str = Field(pattern=_SHA256_PATTERN)
     teacher_fingerprint_sha256: str = Field(pattern=_SHA256_PATTERN)
@@ -448,6 +456,7 @@ def _run_worker(request_path: Path) -> None:
         receipt = MlxTeacherWorkerReceipt(
             schema=MLX_TEACHER_WORKER_RECEIPT_SCHEMA,
             worker_pid=os.getpid(),
+            worker_nonce=request.worker_nonce,
             student_loaded=False,
             plan_sha256=canonical_sha256(request.plan),
             teacher_fingerprint_sha256=canonical_sha256(request.plan.teacher),
@@ -511,6 +520,7 @@ def run_mlx_teacher_capture_process(
         publication_root=os.path.realpath(publication),
         shard_id=shard_id,
         transaction_id=transaction_id,
+        worker_nonce=secrets.token_hex(16),
         example_start=example_start,
         example_end=example_end,
     )
@@ -546,8 +556,8 @@ def run_mlx_teacher_capture_process(
         MlxTeacherWorkerReceipt,
     )
     assert isinstance(receipt, MlxTeacherWorkerReceipt)
-    if receipt.worker_pid != process.pid:
-        raise ValueError("worker receipt PID does not match the exited child")
+    if receipt.worker_nonce != request.worker_nonce:
+        raise ValueError("worker receipt nonce does not match the dispatched request")
     manifest_path = publication / "shards" / shard_id / "manifest.available.json"
     manifest = ShardManifest.model_validate_json(manifest_path.read_bytes())
     if canonical_sha256(manifest) != receipt.available_manifest_sha256:

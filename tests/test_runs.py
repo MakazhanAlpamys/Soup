@@ -79,6 +79,102 @@ def test_runs_show_with_data(tracker):
     assert "test-model" in result.output
 
 
+def test_runs_show_a_terminated_run_reads_terminated_not_running(tracker):
+    """#764/#767 review: the status branch had a silent 'else: running'
+    catch-all, so a row _reconcile_orphaned_run (#401) had already
+    rewritten to 'terminated' still displayed as 'running' in `soup runs
+    show` — the database and the CLI disagreed about the same run."""
+    import subprocess
+    import sys
+
+    run_id = tracker.start_run(
+        config_dict={"base": "test-model", "task": "sft"},
+        device="cpu",
+        device_name="CPU",
+        gpu_info={"memory_total": "16 GB"},
+    )
+    proc = subprocess.Popen([sys.executable, "-c", "pass"])
+    proc.wait()
+    tracker.mark_running(run_id, pid=proc.pid)
+
+    assert tracker.get_run(run_id)["status"] == "terminated"
+
+    result = runner.invoke(app, ["runs", "show", run_id, "--no-plot"])
+    assert result.exit_code == 0
+    assert "terminated" in result.output.lower()
+    assert "running" not in result.output.lower()
+
+
+def test_runs_show_surfaces_the_stored_error_message(tracker):
+    """error_message was written by fail_run since #764, but nothing read
+    it — a failed run's recorded reason was sitting in the database with
+    no way to see it from the CLI."""
+    run_id = tracker.start_run(
+        config_dict={"base": "test-model", "task": "sft"},
+        device="cpu",
+        device_name="CPU",
+        gpu_info={"memory_total": "16 GB"},
+    )
+    tracker.fail_run(run_id, error="RuntimeError: simulated tokenizer load failure")
+
+    result = runner.invoke(app, ["runs", "show", run_id, "--no-plot"])
+    assert result.exit_code == 0
+    assert "RuntimeError" in result.output
+    assert "simulated tokenizer load failure" in result.output
+
+
+def test_runs_show_strips_control_bytes_from_the_error_message(tracker, monkeypatch):
+    """#767 follow-up review: error_message is exception text, not a
+    config-derived string, so it can carry a remote error body verbatim.
+    markup_escape alone only neutralises '[...]' -- a raw ESC (window-title
+    or SGR color) reaches the terminal untouched. for_terminal strips C0
+    control bytes first, so neither escape sequence should survive."""
+    from rich.console import Console
+
+    from soup_cli.commands import runs as runs_command
+
+    # Pin tty detection so this asserts that for_terminal sanitised the
+    # error_message, not that the ambient shell happens not to force colour
+    # on the surrounding panel markup.
+    monkeypatch.setattr(
+        runs_command, "console", Console(force_terminal=False)
+    )
+
+    run_id = tracker.start_run(
+        config_dict={"base": "test-model", "task": "sft"},
+        device="cpu",
+        device_name="CPU",
+        gpu_info={"memory_total": "16 GB"},
+    )
+    tracker.fail_run(
+        run_id,
+        error="boom \x1b]0;HIJACKED\x07 and \x1b[31mRED\x1b[0m tail",
+    )
+
+    result = runner.invoke(app, ["runs", "show", run_id, "--no-plot"])
+    assert result.exit_code == 0
+    assert "\x1b" not in result.output
+    assert "boom" in result.output
+    assert "HIJACKED" in result.output
+    assert "tail" in result.output
+
+
+def test_runs_show_omits_the_error_line_when_there_is_none(tracker):
+    """Control: a run with no error_message must not print a stray 'Error:'
+    line — the field is genuinely absent for completed/running runs, not
+    an empty string worth displaying."""
+    run_id = tracker.start_run(
+        config_dict={"base": "test-model", "task": "sft"},
+        device="cpu",
+        device_name="CPU",
+        gpu_info={"memory_total": "16 GB"},
+    )
+
+    result = runner.invoke(app, ["runs", "show", run_id, "--no-plot"])
+    assert result.exit_code == 0
+    assert "Error:" not in result.output
+
+
 def test_runs_compare_not_found():
     """soup runs compare with bad IDs should fail."""
     result = runner.invoke(app, ["runs", "compare", "run_1", "run_2"])

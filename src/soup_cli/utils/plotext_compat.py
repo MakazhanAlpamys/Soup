@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from rich.text import Text
+
 
 def _v6_figure(plotext: Any) -> Any | None:
     """Return plotext 6's figure object, or ``None`` for the 5.x API."""
@@ -15,13 +17,14 @@ def render_histogram(
     plotext: Any,
     values: list[int],
     *,
+    console: Any,
     bins: int,
     title: str,
     xlabel: str,
     ylabel: str,
-    theme: str,
+    theme: str | None = None,
 ) -> None:
-    """Render a histogram with either plotext 5.x or 6.x."""
+    """Render a histogram through Rich with either plotext 5.x or 6.x."""
     figure = _v6_figure(plotext)
     if figure is not None:
         figure.clear()
@@ -29,8 +32,9 @@ def render_histogram(
         figure.title(title)
         figure.label(xlabel, axis=0)
         figure.label(ylabel, axis=1)
-        figure.theme(theme)
-        figure.show()
+        if theme is not None:
+            figure.theme(theme)
+        console.print(Text.from_ansi(str(figure.build())), soft_wrap=True)
         return
 
     plotext.clf()
@@ -38,8 +42,9 @@ def render_histogram(
     plotext.title(title)
     plotext.xlabel(xlabel)
     plotext.ylabel(ylabel)
-    plotext.theme(theme)
-    plotext.show()
+    if theme is not None:
+        plotext.theme(theme)
+    console.print(Text.from_ansi(str(plotext.build())), soft_wrap=True)
 
 
 def render_line(
@@ -47,13 +52,14 @@ def render_line(
     x_values: list[int],
     y_values: list[float],
     *,
+    console: Any,
     label: str,
     title: str,
     xlabel: str,
     ylabel: str,
-    theme: str,
+    theme: str | None = None,
 ) -> None:
-    """Render a labelled line with either plotext 5.x or 6.x."""
+    """Render a labelled line through Rich with either plotext 5.x or 6.x."""
     figure = _v6_figure(plotext)
     if figure is not None:
         figure.clear()
@@ -62,8 +68,9 @@ def render_line(
         figure.title(title)
         figure.label(xlabel, axis=0)
         figure.label(ylabel, axis=1)
-        figure.theme(theme)
-        figure.show()
+        if theme is not None:
+            figure.theme(theme)
+        console.print(Text.from_ansi(str(figure.build())), soft_wrap=True)
         return
 
     plotext.clf()
@@ -71,5 +78,6 @@ def render_line(
     plotext.title(title)
     plotext.xlabel(xlabel)
     plotext.ylabel(ylabel)
-    plotext.theme(theme)
-    plotext.show()
+    if theme is not None:
+        plotext.theme(theme)
+    console.print(Text.from_ansi(str(plotext.build())), soft_wrap=True)

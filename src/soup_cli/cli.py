@@ -172,7 +172,7 @@ from soup_cli.commands import plugins as plugins_cmd  # noqa: E402
 app.add_typer(
     plugins_cmd.app,
     name="plugins",
-    help="List, enable, disable Soup plugins (v0.45.0).",
+    help="Discover, list, enable, and disable Soup plugins.",
 )
 
 # v0.46.0 Part B — Agent Forge.
@@ -445,7 +445,7 @@ from soup_cli.commands import lock as _lock_cmd  # noqa: E402
 app.add_typer(
     _lock_cmd.app,
     name="lock",
-    help="Shared run lockfile (write / show / check) - v0.67.0 Part E.",
+    help="Shared run lockfile (write / show / check).",
 )
 
 # v0.68.0 — Anti-trend insurance (compile / distill-prompt / compile-tools /
@@ -487,7 +487,7 @@ from soup_cli.commands import build as _build_cmd  # noqa: E402
 
 app.command(
     name="build",
-    help="dbt-for-SFT DAG: validate + plan dataset transforms (v0.69.0 Part A).",
+    help="dbt-for-SFT DAG: validate, plan, and materialise dataset transforms.",
 )(_build_cmd.build_cmd)
 
 # v0.69.0 Part B — `soup expect` (expectations suite).
@@ -495,7 +495,7 @@ from soup_cli.commands import expect as _expect_cmd  # noqa: E402
 
 app.command(
     name="expect",
-    help="Run an expectations suite against a JSONL dataset (v0.69.0 Part B).",
+    help="Run an expectations suite against a JSONL dataset.",
 )(_expect_cmd.expect_cmd)
 
 # v0.70.0 Part E — `soup iterative-dpo` (iterative DPO loop driver).
@@ -504,7 +504,7 @@ from soup_cli.commands import iterative_dpo as _iterative_dpo_cmd  # noqa: E402
 app.add_typer(
     _iterative_dpo_cmd.app,
     name="iterative-dpo",
-    help="Iterative DPO loop driver (v0.70.0 Part E).",
+    help="Iterative DPO sample, score, pair, and train loop.",
 )
 
 # v0.71.10 #200 — `soup ra-dit` (two-stage RA-DIT orchestrator).
@@ -663,26 +663,68 @@ def version(
         parts.append("no torch")
 
     # Installed extras
-    extras = []
-    for name, label in [
-        ("fastapi", "serve"),
-        ("vllm", "serve-fast"),
-        ("datasketch", "data"),
-        ("lm_eval", "eval"),
-        ("deepspeed", "deepspeed"),
-        ("wandb", "wandb"),
-    ]:
-        try:
-            __import__(name)
-            extras.append(label)
-        except ImportError:
-            pass
+    extras = _installed_extras()
 
     if extras:
         parts.append(f"extras: {', '.join(extras)}")
 
     console.print(" | ".join(parts))
     console.print(f"[dim]GitHub: [link={GITHUB_URL}]{GITHUB_URL}[/link][/]")
+
+
+def _installed_extras() -> list[str]:
+    """Extras whose requirements are all importable, derived from dist metadata."""
+    import importlib.metadata
+
+    try:
+        from importlib.metadata import PackageNotFoundError
+        from importlib.metadata import metadata as _metadata
+        from importlib.metadata import requires as _requires
+    except ImportError:
+        return []
+    try:
+        dist_meta = _metadata("soup-cli")
+        reqs = _requires("soup-cli") or []
+    except PackageNotFoundError:
+        return []
+    provided = dist_meta.get_all("Provides-Extra") or []
+    try:
+        from packaging.requirements import Requirement
+    except ImportError:
+        return []
+    installed: list[str] = []
+    for extra in provided:
+        names: list[str] = []
+        try:
+            for raw in reqs:
+                req = Requirement(raw)
+                if req.marker is None:
+                    # A bare requirement with no marker applies to every
+                    # install, not to this extra in particular.
+                    continue
+                if not req.marker.evaluate({"extra": extra}):
+                    continue
+                if req.name.lower().replace("_", "-") == "soup-cli":
+                    # Self-reference (e.g. all = ["soup-cli[train,...]"]):
+                    # it names our own extras, not a third-party package.
+                    continue
+                names.append(req.name)
+        except Exception:  # noqa: BLE001 — unreadable metadata is not installed
+            continue
+        if not names:
+            continue
+        try:
+            for name in names:
+                # Distribution metadata, not the import name: ``scikit-learn``
+                # / ``sklearn`` and ``pillow`` / ``PIL`` never match find_spec,
+                # which dropped data/vision/dev from ``version --full`` (#828).
+                importlib.metadata.distribution(name)
+        except importlib.metadata.PackageNotFoundError:
+            continue
+        except Exception:  # noqa: BLE001 — unreadable metadata, skip extra
+            continue
+        installed.append(extra)
+    return sorted(installed)
 
 
 @app.callback(invoke_without_command=True)

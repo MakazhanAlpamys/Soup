@@ -8,6 +8,7 @@ from typing import Optional
 from rich.console import Console
 
 from soup_cli.config.schema import SoupConfig
+from soup_cli.trainer.loss_summary import summarize_training_loss
 from soup_cli.utils.gpu import (
     bf16_fp16_flags,
     estimate_batch_size,
@@ -287,7 +288,7 @@ class PretrainTrainerWrapper:
 
     def _setup_transformers(self, cfg: SoupConfig, tcfg) -> None:
         """Load model via standard transformers + peft pipeline."""
-        from peft import LoraConfig, TaskType, get_peft_model, prepare_model_for_kbit_training
+        from peft import TaskType, get_peft_model, prepare_model_for_kbit_training
         from transformers import AutoModelForCausalLM, AutoTokenizer
 
         from soup_cli.utils.moe import detect_moe_model, get_moe_target_modules
@@ -318,7 +319,34 @@ class PretrainTrainerWrapper:
         if quant_config_obj is not None:
             model_kwargs["quantization_config"] = quant_config_obj
 
+        rope_config = None
+        if tcfg.rope_scaling_type:
+            from transformers import AutoConfig
+
+            from soup_cli.utils.long_context import apply_long_context_config
+
+            model_config = AutoConfig.from_pretrained(
+                cfg.base, trust_remote_code=self._trust_remote_code
+            )
+            rope_config = apply_long_context_config(
+                model_config,
+                target_length=cfg.data.max_length,
+                rope_scaling_type=tcfg.rope_scaling_type,
+                model_name=cfg.base,
+                yarn_factor=tcfg.yarn_factor,
+                yarn_attn_factor=tcfg.yarn_attn_factor,
+                yarn_beta_fast=tcfg.yarn_beta_fast,
+                yarn_beta_slow=tcfg.yarn_beta_slow,
+            )
+            if rope_config:
+                model_kwargs["config"] = model_config
+
         self.model = AutoModelForCausalLM.from_pretrained(cfg.base, **model_kwargs)
+        if rope_config:
+            console.print(
+                f"[green]Long-context enabled:[/] RoPE {tcfg.rope_scaling_type} "
+                f"scaling to {cfg.data.max_length} tokens"
+            )
 
         # MoE aux loss for load balancing
         is_moe = detect_moe_model(self.model)
@@ -347,7 +375,7 @@ class PretrainTrainerWrapper:
         # combined). Shared with the SFT trainer so the two cannot drift.
         from soup_cli.utils.peft_wiring import (
             apply_lisa_setup,
-            build_lora_config_kwargs,
+            build_lora_config,
             resolve_lora_target_modules,
             resolve_lora_target_parameters,
         )
@@ -367,13 +395,11 @@ class PretrainTrainerWrapper:
                         f"[green]ScatterMoE LoRA:[/] targeting {len(moe_targets)} module patterns"
                     )
 
-            lora_config = LoraConfig(
-                **build_lora_config_kwargs(
-                    tcfg.lora,
-                    target_modules=target_modules,
-                    target_parameters=target_parameters,
-                    task_type=TaskType.CAUSAL_LM,
-                )
+            lora_config = build_lora_config(
+                tcfg.lora,
+                target_modules=target_modules,
+                target_parameters=target_parameters,
+                task_type=TaskType.CAUSAL_LM,
             )
             # v0.40.6 #67 — surgical PEFT patches.
             from soup_cli.utils.peft_wiring import (
@@ -468,15 +494,14 @@ class PretrainTrainerWrapper:
 
         # Extract metrics
         logs = self.trainer.state.log_history
-        train_losses = [entry["loss"] for entry in logs if "loss" in entry]
+        loss_summary = summarize_training_loss(logs)
 
         hours = int(duration // 3600)
         minutes = int((duration % 3600) // 60)
         duration_str = f"{hours}h {minutes}m" if hours > 0 else f"{minutes}m"
 
         return {
-            "initial_loss": train_losses[0] if train_losses else 0,
-            "final_loss": train_losses[-1] if train_losses else 0,
+            **loss_summary,
             "duration": duration_str,
             "duration_secs": duration,
             "output_dir": self._output_dir,

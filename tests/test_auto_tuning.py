@@ -748,6 +748,42 @@ class TestAutopilotConfigEmission:
         cfg = yaml.safe_load(text)
         assert cfg["training"].get("warmup_auto") is True
 
+    def test_generated_config_scopes_perf_flags_to_sft_family(
+        self, tmp_path, monkeypatch,
+    ):
+        """#806 follow-up: generate_config shares the same use_flash_attn /
+        use_liger scoping as build_soup_config. A dpo decisions dict with
+        both flags on must not raise, and the emitted config must not carry
+        either flag."""
+        from soup_cli.autopilot.generate_config import generate_config
+
+        monkeypatch.chdir(tmp_path)
+        decisions = {
+            "task": "dpo",
+            "format": "dpo",
+            "max_length": 2048,
+            "quantization": "4bit",
+            "lora": {"r": 16, "alpha": 32, "use_dora": False},
+            "lr": 2e-4,
+            "epochs": 3,
+            "batch_size": 4,
+            "grad_accum": 2,
+            "perf": {
+                "use_flash_attn": True, "use_liger": True,
+                "gradient_checkpointing": False,
+            },
+        }
+        out = Path("soup.yaml")
+        generate_config(
+            base="meta-llama/Llama-3-8B",
+            data_path="data.jsonl",
+            decisions=decisions,
+            output_path=out,
+        )
+        cfg = yaml.safe_load(out.read_text(encoding="utf-8"))
+        assert cfg["training"].get("use_flash_attn") is not True
+        assert cfg["training"].get("use_liger") is not True
+
     def test_decisions_output_must_stay_under_cwd(self, tmp_path, monkeypatch):
         from soup_cli.autopilot.generate_config import generate_config
 

@@ -10,6 +10,7 @@ from click.testing import Result
 from typer.testing import CliRunner
 
 from soup_cli.cli import app
+from soup_cli.data.formats import VALID_FORMATS
 
 from .conftest import strip_ansi
 
@@ -95,3 +96,43 @@ def test_validate_keeps_input_errors_at_exit_one(tmp_path: Path) -> None:
 
     assert undetectable.exit_code == 1
     assert "Cannot detect format" in strip_ansi(undetectable.output)
+
+
+def test_validate_rejects_an_unknown_format(tmp_path: Path) -> None:
+    """#866: --format accepted any string and reported every row valid for
+    it. An unknown format is an input error (exit 1), not the failed-gate
+    exit code (2) #858 settled on for '0 usable rows' -- the two must stay
+    distinguishable so a CI gate can tell a typo'd flag from real bad data."""
+    path = tmp_path / "two_alpaca_rows.jsonl"
+    _write_alpaca(
+        path,
+        [
+            {"instruction": "Summarize this", "output": "A summary long enough"},
+            {"instruction": "Another one", "output": "Another summary here"},
+        ],
+    )
+
+    result = CliRunner().invoke(
+        app, ["data", "validate", str(path), "--format", "bogus"]
+    )
+    output = strip_ansi(result.output)
+
+    assert result.exit_code == 1, output
+    assert "bogus" in output
+    assert "alpaca" in output  # names at least one accepted format
+
+
+@pytest.mark.parametrize("fmt", VALID_FORMATS)
+def test_validate_still_accepts_every_valid_format(tmp_path: Path, fmt: str) -> None:
+    """The guard above must reject unknown values without narrowing what
+    was already accepted. Rows need not be semantically valid for every
+    format here -- only that --format itself is not rejected before
+    validate_and_stats ever runs."""
+    path = tmp_path / "rows.jsonl"
+    path.write_text('{"anything": "goes"}\n', encoding="utf-8")
+
+    result = CliRunner().invoke(
+        app, ["data", "validate", str(path), "--format", fmt]
+    )
+
+    assert "Unknown --format" not in strip_ansi(result.output), result.output

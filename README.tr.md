@@ -1,4 +1,4 @@
-<!-- synced-from: README.md sha256:7a1e969c1c98d4687b33a6dd3ece1fefa81cc0c8db0fb4695895abd6a170e6ff -->
+<!-- synced-from: README.md sha256:5ceff359925678608a55dc8a4d522221b75668b10e659aa4f0dd05a28f2eb1c4 -->
 <p align="center">🌍 <a href="README.md">English</a> | <strong>Türkçe</strong></p>
 
 <p align="center">
@@ -61,9 +61,9 @@ soup train
 
 **4 GB dizüstü GPU'da 8B bir modele ince ayar yapın.** Katman akışı, dondurulmuş tabanı VRAM'in
 dışında tutar ve GPU'ya her seferinde bir kod çözücü katman besler. RTX 3050 Laptop 4 GB üzerinde
-ölçüldü: Llama-3.1-8B-Instruct + NF4 ile **119,6 tok/s, 3,32 GB tepe** — normal, belleğe tamamen
-yerleşik bir çalıştırmayla bit düzeyinde özdeş ve bir H100 üzerinde aynı 3,32 GB'da 113,00 tok/s
-ile bağımsız olarak yeniden üretildi. (tok/s rakamı, 32B'de −%4,8'e mal olan v0.73.0 doğruluk
+ölçüldü: Llama-3.1-8B-Instruct + NF4 ile **119.6 tok/s, 3.32 GB tepe** — normal, belleğe tamamen
+yerleşik bir çalıştırmayla bit düzeyinde özdeş ve bir H100 üzerinde aynı 3.32 GB'da 113.00 tok/s
+ile bağımsız olarak yeniden üretildi. (tok/s rakamı, 32B'de −%4.8'e mal olan v0.73.0 doğruluk
 onarımından önce, v0.72.2'de ölçüldü; o zamandan beri 4 GB bir kartta yeniden çalıştırılmadı.)
 İsteğe bağlıdır (`stream_layers: true`) ve hâlâ BETA —
 [nasıl çalışır](docs/performance-and-quantization.md#layer-streaming-beta-v0720-nf4-v0722-disk--wider-archs-v0723-preference-losses-v0724) ·
@@ -72,8 +72,8 @@ onarımından önce, v0.72.2'de ölçüldü; o zamandan beri 4 GB bir kartta yen
 sınırlar, ardından akışlı bir modelin normal bir modelle bit düzeyinde özdeş olduğunu doğrular)
 
 <p align="center">
-  <a href="https://youtu.be/T1LCErE943E"><img src="docs/assets/layer-streaming.gif" alt="4 GB bir kartta Llama-3.1-8B için soup train ön kontrolü: 32 katman boyunca RAM'e sabitlenmiş 3,60 GB'lık bir taban deposu ve iki adet 113 MB VRAM tamponu, ardından 119,6 tok/s'de ölçülen 3,32 GB tepe; 4 GB çizgisinin altında kalıyor"></a><br>
-  <sub>Llama-3.1-8B-Instruct + NF4, LoRA, toplu iş 1, dizi 512, RTX 3050 Laptop 4 GB üzerinde — <b>3,32 GB tepe, 119,6 tok/s</b>. <a href="https://youtu.be/T1LCErE943E">Tam video (90 sn)</a></sub>
+  <a href="https://youtu.be/T1LCErE943E"><img src="docs/assets/layer-streaming.gif" alt="4 GB bir kartta Llama-3.1-8B için soup train ön kontrolü: 32 katman boyunca RAM'e sabitlenmiş 3.60 GB'lık bir taban deposu ve iki adet 113 MB VRAM tamponu, ardından 119.6 tok/s'de ölçülen 3.32 GB tepe; 4 GB çizgisinin altında kalıyor"></a><br>
+  <sub>Llama-3.1-8B-Instruct + NF4, LoRA, toplu iş 1, dizi 512, RTX 3050 Laptop 4 GB üzerinde — <b>3.32 GB tepe, 119.6 tok/s</b>. <a href="https://youtu.be/T1LCErE943E">Tam video (90 sn)</a></sub>
 </p>
 
 ## Neden Soup?
@@ -88,90 +88,44 @@ yerine altyapıyla boğuşarak geçiriyor. Soup bunu çözer.
 
 ## Yenilikler
 
-**v0.74.0 — dondurulmuş taban baştan beri fp32'de yükleniyordu.** Yalnızca bunu düzeltmek,
-değiştirilmemiş bir yapılandırmada tepe VRAM'i 2,59 kat düşürüyor. **Bu sürümde birleştirilen 120
-pull request'in 116'sı bakımcı dışından geldi**, 25 kişiden.
+**v0.75.0 — aynı `soup.yaml`, MLX'te transformers'takinden farklı bir tarif eğitiyordu,
+sessizce.** Altı eğitim seçeneği doğrulanıyor, belgeleniyor, kabul ediliyor — ve o arka uçta
+hiçbir şey tarafından okunmuyordu. **Bu sürümdeki 60 pull request'in tamamı bakımcı dışından
+geldi**, 22 kişiden.
 
-- **Her SFT yüklemesi dondurulmuş tabanı sessizce fp32'ye yükseltiyordu.** Hiç optimizer adımı
-  almayan bir taban, üç yükleme yolunun üçünde de denetim noktası hassasiyetinin iki katında
-  somutlaştırılıyordu. Bir H100'de Llama-3.1-8B + LoRA ile ölçüldü: **48.241 MiB → 18.658 MiB
-  tepe — 2,59 kat, 28,9 GB**, üç tekrarda bayt bayt özdeş. Eğitilebilir bir taban, kasıtlı
-  olarak, hâlâ fp32 yüklenir.
-- **Transformers 5.x, TRL 0.29, PEFT 0.20.** Qwen3.5 ailesi metin kod çözücüleri Transformers
-  yolunda eğitilir ve `pip install "soup-cli[train,mlx]"` yeniden çözümlenir — bu iki ek, daha
-  önce birlikte karşılanamayan sürüm aralıkları bildiriyordu.
-- **Ücretsiz Colab/Kaggle katmanı hiç akış yapamıyordu.** T4 / P100 / V100 / GTX 16xx katman
-  akışında çöküyordu; çünkü peft, LoRA bağdaştırıcılarını denetim noktasının veri türünde
-  oluştururken fp16 GradScaler fp32 gradyanlara ihtiyaç duyar.
-- **Aynı biçimde dört SSRF atlatması.** Kısaltılmış, ondalık, onaltılık ve sekizlik IPv4
-  yazımları (`127.1`, `2130706433`, `0x7f000001`, `0177.0.0.1`) telemetri ve webhook korumasına
-  ulaşıyordu — ve ilk düzeltmenin hiç dokunmadığı bir yol üzerinden OTLP izleme doğrulayıcısına.
-- **Geriye dönük uyumsuz: `soup serve` artık 2 koduyla çıkıyor**; `--tool-auth-token` olmadan
-  loopback dışı bir adrese bağlandığında uyarı basmak yerine. `/v1/tools/bash`, gerçek işletim
-  sistemi düzeyinde yalıtımın arkasında yeniden etkinleştirildi; böylece koruduğu uç nokta artık
-  gerçekten çalışıyor.
-- **`soup train --cloud lambda`**, varsayılan olarak yalnızca plan; sonlandırma, gerçekleştiğini
-  doğrulamak için ayrıca yoklama da yapan bir `finally` içinde.
-
-> Bilinen sınırlama: bildirilen `torch>=2.5.0` alt sınırı `trl>=0.29` ile çalışmaz —
-> torch 2.5.1'de trl içe aktarılamaz. Temiz bir kurulum daha yeni bir torch çözümler ve
-> etkilenmez; 2.5.x'e sabitlenmiş bir ortam ise etkilenir. Bkz.
-> [#651](https://github.com/MakazhanAlpamys/Soup/issues/651).
+- **Kırıcı değişiklik: bilinmeyen bir yapılandırma anahtarı artık yüklemeyi reddediyor.**
+  v0.74 uyarmış ve son tarih olarak bu sürümü belirlemişti. `quantizaton` gibi bir yazım
+  hatası ya da yalnızca daha yeni bir Soup sürümünde bulunan bir anahtar eskiden yoksayılıyor ve
+  çalıştırma o ayar uygulanmadan devam ediyordu; artık CLI'da (çıkış kodu 1) ve API'de
+  (`ValueError`) reddediliyor ve muhtemelen kastettiğiniz alanı belirtiyor. Tespit edici,
+  şemanın v0.40.1'den beri desteklediği kök düzeyindeki `lora:` yeniden eşlemesini uyguluyor;
+  yani bu yazım reddedilmiyor, kabul ediliyor. Bu yazımı kullanan iki `soup fetch examples`
+  dosyası standart `training.lora` biçimine taşındı. Tüm tarif ve şablonlar sorunsuz yükleniyor,
+  anahtar adları terminale ulaşmadan önce filtreleniyor ve tarama sınırlandırılmış durumda.
+- **MLX, kabul ettiği yapılandırmaya uyuyor.** `train_on_responses_only`, `warmup_ratio` /
+  `scheduler` / `weight_decay` / `optimizer`, `max_grad_norm`, `gradient_accumulation_steps`
+  ve `gradient_checkpointing`, `backend: mlx` üzerinde tek tek doğrulanıp sonra düşürülüyordu.
+  32 optimizer adından yalnızca 8'inin MLX karşılığı var; diğer 24'ü sessizce AdamW'ye
+  dönüşmek yerine adıyla reddediliyor. MLX ayrıca canlı panoyu, izleyiciyi ve `soup ui`'yi
+  sürüyor; `soup doctor --config` ise bir arka ucun okumadığı ayarları listeliyor.
+- **Doğrulama kaybı hiçbir yerde yoktu.** Her arka uçta hesaplanıp atılıyordu: metrik sütunu
+  yok, olay alanı yok, panoda hiçbir şey yok. Artık kaydediliyor, akıtılıyor ve gösteriliyor.
+- **Geriye dönük uyumsuz: `grpo_variant: gspo`, yayımlanmış dizi düzeyi hedef fonksiyonudur**
+  (arXiv:2507.18071); bir dolgu belirtecinin aynı sütunu paylaşan her satırın gradyanını da
+  kaydırdığı sütun merkezleme sezgiselinin yerini alıyor. Mevcut gspo yapılandırmaları önceki
+  çalıştırmaları yeniden üretmeyecek.
+- **Web arayüzünün okuma uç noktaları ve SSE, kimlik doğrulama gerektiriyor**; sorgu
+  dizesindeki bir belirteç yerine kısa ömürlü, tek kullanımlık biletlerle. `--public` artık
+  `/docs` ve `/openapi.json`'ı yerel ağa sunmuyor; eğitim alt süreci de çıktısını kimse
+  okumadığında artık askıda kalmıyor.
+- **`torch>=2.6.0`**, v0.74.0'ın bilinen sınırlamasını kapatıyor: 2.5.1'de `trl>=0.29` içe
+  aktarılamıyor ve her tercih eğiticisi ölüydü. Ayrıca düzeltildi: `training.loraplus_lr_ratio`
+  onu ayarlayan her çalıştırmayı çökertiyordu ve `packing: true` TRL 0.29'da hata veriyordu.
 
 > Yalnızca Python **3.10–3.12**. 3.13+ sürümlerinde pip, Soup daha hiç çalışmadan yerel
 > eklentide çöken, test edilmemiş PyTorch tekerleklerini çözümlüyordu.
 
-<details>
-<summary>Önceki sürüm — v0.73.3, her pull request bakımcı dışından geldi</summary>
-
-**v0.73.3 — bu sürümdeki her pull request bakımcıdan başka birinden geldi.** Sekiz kişiden
-24'ünün tamamı; bunlardan beşi burada ilk kez yer alıyor. Buldukları şey işin ilginç kısmı:
-doğrulanan, belgelenen ve sonra hiçbir şey tarafından okunmayan dört ayrı bayrak.
-- **Yalnızca asistan maskelemesi sıfır token üzerinde eğitiyordu, normal bir kayıp eğrisiyle.**
-  Bir `dict` olmayan `BatchEncoding` döndüren bir tokenizer korumadan sızdı; bu yüzden etiket
-  maskesi eşlemenin **anahtar dizelerinden** oluşturuldu. İstisna yok, uyarı yok, eğitim gibi
-  görünen bir kayıp eğrisi. Hata tetiklenerek değil, tür okunarak bulundu.
-- **Apple Silicon'da `quantization: 4bit` sessizce `none` olarak yeniden yazılıyordu.**
-
-</details>
-
-<details>
-<summary>Önceki sürüm — v0.72.4, dizüstünde hizalama (katman akışı üzerinde DPO / ORPO / SimPO / KTO)</summary>
-
-Katman akışı eskiden yalnızca denetimli ince ayarı destekliyordu; v0.72.4 onu tercih kayıplarına
-açtı. Risk tek bir şeydi: DPO bir referans modele ihtiyaç duyar ve ikinci bir kopya belleği ikiye
-katlayıp amacı boşa çıkarırdı. Soup, *bağdaştırıcıları kapatılmış aynı akışlı tabanı* kullanır —
-SFT tepesinin **0,914×**'ü olarak ölçüldü; gerçek bir ikinci örneği zorlamak ise **+730 MB, tam
-olarak ağırlıkların bir kopyası** kadar maliyet getirdi. Dördü için de normal, akışsız bir
-çalıştırmaya karşı bit düzeyinde özdeş. Dürüst maliyet: *bellekte* bedava, *zamanda* değil — DPO
-katman yığınını adım başına **1,52×** daha sık okur. `grpo` / `ppo` bilerek dışarıda bırakıldı.
-
-> **v0.72.0'da `stream_layers: true` ile mi eğittiniz?** O bağdaştırıcı etkisizdir — tensörleri
-> fazladan bir `.inner.` bölümü içeren anahtarlar altında kaydedildi; bu yüzden her yükleyici
-> ayarlanmamış tabanı döndürdü. v0.72.1'de düzeltildi; yeniden çalıştırın ya da yeniden kaydedin.
-> Şununla kontrol edin:
-> `python -c "from safetensors.torch import load_file; print([k for k in load_file('adapter_model.safetensors') if '.inner.' in k][:3])"`
-
-</details>
-
-<details>
-<summary>Önceki sürüm — v0.71.40, soup reward synth (verinizden bir ödül doğrulayıcısı üretin)</summary>
-
-`soup reward synth`'i referans çıktılardan oluşan bir JSONL dosyasına yöneltin; deterministik bir
-doğrulayıcı çıkarır, okunabilir / commit'lenebilir bir `.py` ödül fonksiyonu yazar ve — başka hiç
-kimsenin yapmadığı kısım — referanslarınızı kötü yanıtlardan ayırt edemeyen bir fonksiyon üretmeyi
-*reddeder* (dört aile: `numeric` / `json_schema` / `regex` / `tool_call`; zorunlu kalibrasyon
-raporu asıl rekabet avantajıdır). Ödül toplulukları (`reward_fn: "accuracy,format"`) da artık
-eğitiliyor. (#311)
-
-```bash
-soup reward synth references.jsonl -o reward.py --output-report calib.json
-```
-
-</details>
-
-
-Tüm geçmiş: [CHANGELOG.md](CHANGELOG.md) &middot; [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases).
+Eski sürümlerin öne çıkanları [GitHub Releases](https://github.com/MakazhanAlpamys/Soup/releases) sayfasında.
 
 ## Hızlı Başlangıç
 
@@ -294,13 +248,13 @@ output: ./output
 `config/schema.py` her alanın tek doğru kaynağıdır. Gelişmiş veri, eğitim ve PEFT seçenekleri
 [Belgeler](#belgeler) altında belgelenmiştir.
 
-> **Bilinmeyen yapılandırma anahtarları bugün uyarı veriyor, v0.75'te reddedilecek.** Hiçbir
-> modelin bildirmediği bir anahtar — `quantizaton` gibi bir yazım hatası ya da yalnızca daha yeni
-> bir Soup'ta bulunan bir alan — eskiden temiz biçimde doğrulanıp atılıyordu; yani çalıştırma, o
-> ayar hiç uygulanmadan devam ediyordu. Artık yükleme sırasında, muhtemelen kastettiğiniz alanla
-> birlikte raporlanıyor. **v0.75**'ten itibaren aynı yapılandırma uyarı vermek yerine
-> yüklenemeyecek; bu yüzden anahtarın yok sayılmasına güvenmek yerine onu düzeltin ya da
-> kaldırın. Bkz. [Bilinmeyen yapılandırma anahtarları](docs/backends-and-ops.md#unknown-config-keys).
+> **Bilinmeyen yapılandırma anahtarları v0.75'ten beri reddediliyor.** Hiçbir modelin
+> tanımlamadığı bir anahtar — `quantizaton` gibi bir yazım hatası ya da yalnızca daha yeni bir
+> Soup sürümünde bulunan bir alan — eskiden şemadan geçip göz ardı ediliyordu; yani çalıştırma,
+> o ayar hiç uygulanmadan devam ediyordu. v0.74 bunu yükleme anında, muhtemelen kastettiğiniz
+> alanla birlikte raporluyordu; **v0.75**'ten itibaren aynı yapılandırma doğrudan reddediliyor;
+> bu yüzden anahtarın yoksayılmasına güvenmek yerine onu düzeltin ya da kaldırın. Bkz.
+> [Bilinmeyen yapılandırma anahtarları](docs/backends-and-ops.md#unknown-config-keys).
 
 ## Belgeler
 
@@ -478,20 +432,20 @@ bu aynı zamanda makalenin ne işe yaradığını anlatmanın en kısa yoludur:
 - **v3'te geri çekildi: "katman akışını sınırlayan GPU değil, ana bilgisayardan cihaza aktarımdır."**
   Bu, aşağıdaki H100 yeniden üretiminden yapılmış bir *çıkarımdı* ve hiç ölçülmemişti. 11 Ağustos'ta
   ölçtük ve yayımlanan yapılandırmada yanlış: ana bilgisayardan cihaza giden her baytı silmek
-  yalnızca **%1,4** kazandırıyor, hesaplama akışı adımın **%0,20**'sinde bir kopyayı bekliyor ve
-  adım, o kartın aynı oturumdaki GEMM tavanının **%71,3**'ünde çalışıyor. Akışa özgü en büyük
-  maliyet, %9,8 ile katman başına NF4 ters nicelemesi
+  yalnızca **%1.4** kazandırıyor, hesaplama akışı adımın **%0.20**'sinde bir kopyayı bekliyor ve
+  adım, o kartın aynı oturumdaki GEMM tavanının **%71.3**'ünde çalışıyor. Akışa özgü en büyük
+  maliyet, %9.8 ile katman başına NF4 ters nicelemesi
   ([kayıt](benchmarks/probe-v0.73.0-what-bounds-streaming.md)). Her ölçüm geçerliliğini koruyor;
   yeniden üretim daha zayıf bir biçimde ayakta kalıyor — kısıt her iki makinede ortak ve GPU'nun
   hesaplama gücü değil.
-- **Özgününe hiç benzemeyen donanımda yeniden üretim** (v2'de eklendi): RTX 3050'de 119,6 tok/s'ye
-  karşı bir H100'de medyan 113,00, aynı 3,32 GB tepede.
+- **Özgününe hiç benzemeyen donanımda yeniden üretim** (v2'de eklendi): RTX 3050'de 119.6 tok/s'ye
+  karşı bir H100'de medyan 113.00, aynı 3.32 GB tepede.
 - **Sessiz bir yanlış gradyan kusuru, bulundu ve onarıldı.** Katman başına ~165 MiB'ın üzerindeki
   NF4'te ileri geçiş bit düzeyinde özdeş kaldı ve kayıp eğrisi sağlıklı göründü, ama gradyanlar
   yanlıştı. Neden, üst akış kütüphanesinde adıyla belirtildi ve orada bildirildi; onarım, gerçek 32B
   ve 72B üzerinde kontrollere karşı kapılandı.
 - **Gerçek model boyutlarında bit düzeyinde özdeşlik**, üç katmanlı oyuncaklar yerine: ileri geçiş
-  0,5B'den 72B'ye, geri geçiş 8B ve 14B'de.
+  0.5B'den 72B'ye, geri geçiş 8B ve 14B'de.
 - **Eğitilmiş model kalitesi, ilk kez ölçüldü** ve belleğe yerleşik bir çalıştırmadan ayırt
   edilemiyor.
 - **DeepSpeed ile karşılaştırma** — bizi pohpohlamayan sonuç dahil: sekiz kartlık ZeRO-3, belleğe

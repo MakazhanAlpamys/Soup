@@ -260,8 +260,8 @@ def _build_row_labels(
     """
     from soup_cli.data.loss_mask import (
         build_assistant_only_labels,
+        build_full_sequence_labels,
         build_per_message_train_labels,
-        coerce_token_ids,
     )
 
     if train_on_messages_with_train_field:
@@ -270,18 +270,12 @@ def _build_row_labels(
         return build_assistant_only_labels(
             messages, tokenizer, max_length=max_length, include_eot=include_eot
         )
-    ids = coerce_token_ids(
-        tokenizer.apply_chat_template(
-            messages, tokenize=True, add_generation_prompt=False
-        )
-    )
-    # Truncate to max_length like the other two strategies (both delegate
-    # to data.loss_mask._truncate) — otherwise legacy_text is the only path
-    # where --show-mask can render more tokens than the trainer actually
-    # would, and the max_length-truncation check above would never trigger
-    # for this strategy either.
-    ids = list(ids)[:max_length]
-    return {"input_ids": ids, "labels": ids}
+    # #788: legacy full-sequence path — call the SAME builder the trainer uses
+    # (build_full_sequence_labels) so --show-mask reflects the one-BOS,
+    # add_eos-EOS tokenization. Re-rendering here with the tokenizer's default
+    # add_special_tokens=True instead doubled the BOS and skipped TRL's EOS rule,
+    # so the X-ray stopped matching what training actually consumes.
+    return build_full_sequence_labels(messages, tokenizer, max_length=max_length)
 
 
 def _mask_strategy_name(

@@ -816,6 +816,7 @@ class TestQwen35StreamingSetup:
             double_quant_on=True,
             stream_source="auto",
             stream_buffers=2,
+            stream_read_ahead=2,
             stream_disk_kind=None,
             stream_pin=None,
             seed=7,
@@ -831,6 +832,8 @@ class TestQwen35StreamingSetup:
                 target_modules="auto",
                 use_dora=False,
                 use_rslora=False,
+                rank_pattern=None,
+                alpha_pattern=None,
             ),
         )
         model_cfg = types.SimpleNamespace(

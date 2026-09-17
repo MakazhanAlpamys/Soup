@@ -14,6 +14,7 @@ from __future__ import annotations
 import csv
 import json
 import os
+import re
 import shlex
 import sys
 from dataclasses import asdict, dataclass
@@ -27,6 +28,7 @@ from soup_cli.mcp_server.execution import (
     digest_file,
 )
 from soup_cli.utils.paths import enforce_under_cwd_and_no_symlink, is_under_cwd
+from soup_cli.utils.terminal import strip_control
 
 if TYPE_CHECKING:
     from soup_cli.config.schema import SoupConfig
@@ -37,14 +39,6 @@ _MAX_JSON_BYTES = 16 * 1024 * 1024
 # be able to point `data` at an arbitrarily large file and exhaust memory
 # (mirrors advise's own 1 GiB cap; security-review MEDIUM).
 _MAX_DATA_BYTES = 1024 * 1024 * 1024
-
-# C0 control bytes (keep tab / newline / CR) + DEL, stripped from every string
-# in a handler result before it reaches the MCP client. ``rich.markup.escape``
-# only neutralises ``[...]`` markup, not raw ESC/OSC sequences a malicious
-# dataset string could smuggle into a client's terminal. Mirrors
-# ``commands/data_doctor.py::_CONTROL_STRIP_TABLE``.
-_CONTROL_STRIP_TABLE = {i: None for i in range(0x20) if i not in (0x09, 0x0A, 0x0D)}
-_CONTROL_STRIP_TABLE[0x7F] = None
 
 
 class McpToolError(Exception):
@@ -81,7 +75,7 @@ def _sanitize(obj: Any) -> Any:
     dicts and lists. Applied to every handler result as defence-in-depth.
     """
     if isinstance(obj, str):
-        return obj.translate(_CONTROL_STRIP_TABLE)
+        return strip_control(obj)
     if isinstance(obj, Mapping):
         return {_sanitize(k): _sanitize(v) for k, v in obj.items()}
     if isinstance(obj, (list, tuple)):
@@ -231,16 +225,51 @@ def tool_data_inspect(args: dict) -> dict:
 
 
 def tool_data_validate(args: dict) -> dict:
-    """`soup data validate` — format-compliance report."""
+    """`soup data validate` — format-compliance report.
+
+    Resolves ``format`` exactly as ``tool_data_doctor`` below already does,
+    and for the same reason (#878). ``validator.validate_and_stats`` computes
+    ``check_format = bool(expected_format and expected_format in
+    VALID_FORMATS)``, so an unrecognised format silently turns the format
+    check *off* and a missing one never turns it on -- both answer "every row
+    valid" for a reason that has nothing to do with the data. #869 guarded the
+    CLI against that; this surface kept reporting the old verdict, so one file
+    got two answers depending on which surface asked.
+
+    The allowlist is ``VALID_FORMATS`` itself rather than a copy: a
+    hand-written second tuple is how the two surfaces drifted apart in the
+    first place.
+    """
+    from soup_cli.data import formats as _formats
     from soup_cli.data.validator import validate_and_stats
 
     rows = _load_data_rows(_require_str(args, "data"))
+    # Absent means auto; an empty or blank string is a value the caller
+    # supplied and it is not a format, so it is refused -- `soup data
+    # validate --format ""` exits 1 rather than auto-detecting, and this
+    # surface has to answer the same way.
     fmt = _opt_str(args, "format")
-    return validate_and_stats(rows, expected_format=fmt)
+    fmt = "auto" if fmt is None else fmt
+    if fmt != "auto" and fmt not in _formats.VALID_FORMATS:
+        raise McpToolError(
+            f"unknown format {fmt!r}; accepted: auto, "
+            + ", ".join(sorted(_formats.VALID_FORMATS))
+        )
+    if fmt == "auto":
+        try:
+            fmt = _formats.detect_format(rows)
+        except ValueError as exc:
+            raise McpToolError(
+                "could not auto-detect data format; pass 'format'"
+            ) from exc
+    # The resolved format travels back with the report: without it a caller
+    # cannot tell which format was checked, which makes the schema's
+    # "omit to auto-detect" unobservable even once it is true.
+    return {**validate_and_stats(rows, expected_format=fmt), "format": fmt}
 
 
 def tool_data_score(args: dict) -> dict:
-    """`soup data score` — PII / toxicity / language / educational scorecard."""
+    """`soup data score` — PII / keyword triage / language / educational scorecard."""
     from soup_cli.utils.data_score import compute_scorecard
 
     rows = _load_data_rows(_require_str(args, "data"))
@@ -249,6 +278,7 @@ def tool_data_score(args: dict) -> dict:
         "total": rep.total,
         "pii_flagged": rep.pii_flagged,
         "toxic_flagged": rep.toxic_flagged,
+        "abuse_keyword_flagged": rep.toxic_flagged,
         "decontaminated_removed": rep.decontaminated_removed,
         "languages": dict(rep.languages),
         "educational_mean": rep.educational_mean,
@@ -262,7 +292,13 @@ def tool_data_doctor(args: dict) -> dict:
 
     rows = _load_data_rows(_require_str(args, "data"))
     model = _require_str(args, "model")
-    fmt = _opt_str(args, "format") or "auto"
+    fmt = _opt_str(args, "format")
+    fmt = "auto" if fmt is None else fmt
+    if fmt != "auto" and fmt not in _formats.VALID_FORMATS:
+        raise McpToolError(
+            f"unknown format {fmt!r}; accepted: auto, "
+            + ", ".join(sorted(_formats.VALID_FORMATS))
+        )
     max_length = _opt_int(args, "max_length", 2048, lo=64, hi=1_048_576)
     sample_size = _opt_int(args, "sample_size", 200, lo=1, hi=2000)
     if fmt == "auto":
@@ -386,26 +422,26 @@ def tool_registry_show(args: dict) -> dict:
     return entry
 
 
-def _resolve_gpu_memory_mcp(gpu: str | None) -> float:
-    """GPU memory in GB from a flag or auto-detection (non-Typer mirror of
-    ``commands/profile.py::_resolve_gpu_memory``)."""
-    from soup_cli.utils.profiler import GPU_MEMORY
+def _resolve_gpu_memory_mcp(gpu: str | None) -> tuple[float, str]:
+    """GPU memory in GB and its source, from a flag or auto-detection (non-Typer
+    mirror of ``commands/profile.py::_resolve_gpu_memory``)."""
+    from soup_cli.utils.profiler import ASSUMED_GPU_MEMORY_GB, GPU_MEMORY, normalize_gpu_key
 
     if gpu is not None:
-        gpu_key = gpu.lower().replace(" ", "").replace("-", "")
+        gpu_key = normalize_gpu_key(gpu)
         if gpu_key not in GPU_MEMORY:
             raise McpToolError("unknown gpu (see 'soup profile --help' for valid options)")
-        return float(GPU_MEMORY[gpu_key])
+        return float(GPU_MEMORY[gpu_key]), "flag"
     try:
         from soup_cli.utils.gpu import get_gpu_info
 
         info = get_gpu_info()
         mem_bytes = info.get("memory_total_bytes", 0)
         if mem_bytes > 0:
-            return mem_bytes / (1024**3)
+            return mem_bytes / (1024**3), "detected"
     except (ImportError, RuntimeError, OSError):
         pass
-    return 24.0
+    return ASSUMED_GPU_MEMORY_GB, "assumed"
 
 
 def _load_config_under_cwd(config: str) -> SoupConfig:
@@ -439,7 +475,7 @@ def tool_profile(args: dict) -> dict:
     model_params_b = model_size_from_name(cfg.base)
     batch_size = cfg.training.batch_size
     batch_size = 4 if batch_size == "auto" else int(batch_size)
-    gpu_memory_gb = _resolve_gpu_memory_mcp(gpu)
+    gpu_memory_gb, gpu_memory_source = _resolve_gpu_memory_mcp(gpu)
 
     result = estimate_total(
         model_name=cfg.base,
@@ -460,6 +496,7 @@ def tool_profile(args: dict) -> dict:
     )
     result["compatible_gpus"] = recommend_gpu(result["total_memory_gb"])
     result["gpu_memory_gb"] = gpu_memory_gb
+    result["gpu_memory_source"] = gpu_memory_source
     return result
 
 
@@ -509,84 +546,71 @@ def tool_diagnose_evidence(args: dict) -> dict:
     return report.to_dict()
 
 
+# The shared evidence decoder (#758) quotes the offending value with ``!r``/
+# ``repr()`` every time it echoes evidence-file content, and never quotes the
+# structural part of its message. So redacting every quoted run drops exactly
+# the untrusted half and keeps the schema path that says what was refused.
+# Each alternative tracks DELIMITERS, not merely balance. When a value holds
+# both quote characters ``repr()`` delimits with single quotes and
+# backslash-escapes the internal ones; a naive ``'[^']*'`` then pairs an escaped
+# quote with a real delimiter, the pairing slips by one, and the evidence text
+# between them survives. Consuming ``\\.`` inside each run keeps an escaped quote
+# from ending it.
+# The trailing alternative redacts from an UNTERMINATED quote to end-of-string:
+# ``repr()`` always balances its quotes, so that cannot happen today, but a
+# boundary that fails open on one malformed message is the wrong default.
+_EVIDENCE_ERROR_QUOTED = re.compile(
+    r"'(?:\\.|[^'\\])*'|\"(?:\\.|[^\"\\])*\"|['\"].*\Z", re.DOTALL
+)
+_EVIDENCE_ERROR_REDACTION = "<redacted>"
+
+
+def _evidence_error_message(exc: Exception) -> str:
+    """Strip evidence-file content out of a shared-decoder error message.
+
+    ``McpToolError`` is documented above as a path-free/user-input-free message,
+    and every other handler raises a fixed string. The evidence decoder is
+    shared with the CLI (#758), where naming the offending value on stderr is
+    the point, so the sanitising happens HERE at the MCP boundary rather than by
+    degrading the CLI diagnostic. Schema field names outside quotes are kept:
+    they are constants from ``EVIDENCE_SCHEMA_FIELDS`` rather than user input,
+    and the v0.73.2 contract test asserts the refusal names the block it refused.
+    """
+    redacted = _EVIDENCE_ERROR_QUOTED.sub(_EVIDENCE_ERROR_REDACTION, str(exc)).strip()
+    if not redacted:
+        return f"invalid evidence ({type(exc).__name__})"
+    return f"{redacted} ({type(exc).__name__})"
+
+
 def tool_ship_evidence(args: dict) -> dict:
     """`soup ship --evidence` — SHIP / DON'T-SHIP verdict from pre-computed scores."""
     from soup_cli.utils.ship_verdict import (
-        SUPPORTED_TASK_MODES,
-        build_task_win,
-        compute_benchmark_deltas,
-        decide_ship,
+        DEFAULT_FORGETTING_THRESHOLD,
         floor_exceeds_threshold,
-        noise_floor_from_evidence,
+        verdict_from_evidence,
         verdict_to_dict,
     )
 
     payload = _read_json_under_cwd(_require_str(args, "evidence"), "evidence")
-    threshold = args.get("forgetting_threshold", 0.05)
-    if isinstance(threshold, bool) or not isinstance(threshold, (int, float)):
-        raise McpToolError("'forgetting_threshold' must be a number")
-    threshold = float(threshold)
-    # Inclusive [0, 1] matches ship_verdict._validate_threshold + the CLI (a
-    # 0.0 zero-tolerance gate is legitimate) (code-review LOW).
-    if not 0.0 <= threshold <= 1.0:
-        raise McpToolError("'forgetting_threshold' must be in [0, 1]")
-
-    task = payload.get("task")
-    if not isinstance(task, dict):
-        raise McpToolError("evidence.task must be an object with mode/base/tuned")
-    mode = task.get("mode", "metric")
-    if mode not in SUPPORTED_TASK_MODES:
-        raise McpToolError("evidence.task.mode must be 'metric' or 'judge_score'")
-    if "base" not in task or "tuned" not in task:
-        raise McpToolError("evidence.task needs both 'base' and 'tuned'")
-    # v0.73.2 — the evidence schema gained an optional `noise_floor` block, and
-    # this reader must honour it exactly as `commands/ship.py` does. Dropping it
-    # here would make the SAME evidence file replay to a DIFFERENT verdict
-    # through the MCP tool than through the CLI.
+    threshold = args.get("forgetting_threshold", DEFAULT_FORGETTING_THRESHOLD)
     try:
-        stored_floor = noise_floor_from_evidence(payload.get("noise_floor"))
-    except (TypeError, ValueError) as exc:
-        raise McpToolError(f"invalid evidence.noise_floor ({type(exc).__name__})") from exc
-
-    try:
-        task_win = build_task_win(
-            mode, task["base"], task["tuned"], noise_floor=stored_floor
+        verdict = verdict_from_evidence(
+            payload, forgetting_threshold=threshold
         )
-    except (TypeError, ValueError) as exc:
-        raise McpToolError(f"invalid evidence.task ({type(exc).__name__})") from exc
-
-    raw_bench = payload.get("benchmarks", {})
-    if not isinstance(raw_bench, dict):
-        raise McpToolError("evidence.benchmarks must be an object of {name: {base, tuned}}")
-    base_scores: dict = {}
-    tuned_scores: dict = {}
-    for name, entry in raw_bench.items():
-        if not isinstance(entry, dict) or "base" not in entry or "tuned" not in entry:
-            raise McpToolError("each evidence.benchmarks entry needs 'base' and 'tuned'")
-        base_scores[str(name)] = entry["base"]
-        tuned_scores[str(name)] = entry["tuned"]
-    try:
-        deltas = compute_benchmark_deltas(
-            base_scores,
-            tuned_scores,
-            forgetting_threshold=threshold,
-            noise_floor=stored_floor,
-        )
-        verdict = decide_ship(
-            task_win, deltas, forgetting_threshold=threshold, noise_floor=stored_floor
-        )
-    except (TypeError, ValueError) as exc:
-        raise McpToolError(f"invalid evidence.benchmarks ({type(exc).__name__})") from exc
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise McpToolError(_evidence_error_message(exc)) from exc
     payload_out = verdict_to_dict(verdict)
     # An evidence-supplied floor WIDENS the gate, and the CLI announces that on
     # stderr. This transport cannot: stdout is the JSON-RPC channel and the
     # server redirects prints away from it. So the warning rides in the RESULT,
     # which is the MCP-native equivalent — the point is that neither reader is
     # the quiet one an attacker would pick.
-    widened = floor_exceeds_threshold(stored_floor, threshold)
+    widened = floor_exceeds_threshold(
+        verdict.noise_floor, verdict.forgetting_threshold
+    )
     payload_out["warnings"] = [
         f"noise floor {value:.4f} on {name!r} exceeds forgetting_threshold "
-        f"{threshold:.4f}; that axis is gated LOOSER than requested"
+        f"{verdict.forgetting_threshold:.4f}; that axis is gated LOOSER than requested"
         for name, value in widened
     ]
     return payload_out
@@ -808,7 +832,11 @@ def _readonly_specs() -> list[ToolSpec]:
                     "data": _DATA_ARG,
                     "format": {
                         "type": "string",
-                        "description": "Expected format; omit to auto-detect.",
+                        "description": (
+                            "Expected format (alpaca/sharegpt/chatml/dpo/...); "
+                            "'auto' or omitted auto-detects. The resolved "
+                            "format is returned as 'format'."
+                        ),
                     },
                 },
                 "required": ["data"],
@@ -819,7 +847,10 @@ def _readonly_specs() -> list[ToolSpec]:
         ToolSpec(
             name="data_score",
             title="Score dataset",
-            description="Data-quality scorecard: PII, toxicity, language mix, educational value.",
+            description=(
+                "Data-quality scorecard: PII, abuse-keyword triage, "
+                "language mix, educational value."
+            ),
             input_schema={
                 "type": "object",
                 "properties": {"data": _DATA_ARG},

@@ -56,7 +56,7 @@ def score(
         help="Decontamination overlap threshold.",
     ),
 ):
-    """Composite data-quality scorecard (PII + toxicity + lang + edu + dec)."""
+    """Composite data-quality scorecard (PII + keyword triage + lang + edu + dec)."""
     from soup_cli.utils.data_score import BENCHMARKS, compute_scorecard
 
     rows = _read_rows(input)
@@ -88,7 +88,7 @@ def score(
     table.add_column("Value")
     table.add_row("Total rows", str(report.total))
     table.add_row("PII flagged", str(report.pii_flagged))
-    table.add_row("Toxic flagged", str(report.toxic_flagged))
+    table.add_row("Abuse-keyword flagged", str(report.toxic_flagged))
     table.add_row("Edu mean", f"{report.educational_mean:.3f}")
     table.add_row("Decontaminated", str(report.decontaminated_removed))
     for lang, count in sorted(report.languages.items(), key=lambda kv: -kv[1]):
@@ -191,22 +191,22 @@ def toxicity(
     output: str = typer.Option("toxicity.jsonl", "--output", "-o"),
     threshold: float = typer.Option(
         0.05, "--threshold", min=0.0, max=1.0,
-        help="Rows scoring ≥ threshold are kept in the flagged JSONL.",
+        help="Rows meeting the abuse-keyword threshold are kept.",
     ),
 ):
-    """Score toxicity per row via the keyword baseline."""
-    from soup_cli.utils.data_score import extract_row_text, score_toxicity
+    """Run an abuse-keyword heuristic (not a toxicity classifier)."""
+    from soup_cli.utils.data_score import extract_row_text, score_abuse_keywords
 
     rows = _read_rows(input)
     out_rows = []
     for row in rows:
         try:
             text = extract_row_text(row)
-            s = score_toxicity(text) if text else 0.0
+            s = score_abuse_keywords(text) if text else 0.0
         except (TypeError, ValueError):
             s = 0.0
         if s >= threshold:
-            out_rows.append({**row, "_toxicity": s})
+            out_rows.append({**row, "_toxicity": s, "_abuse_keyword_score": s})
     path = _write_rows(out_rows, output)
     console.print(
         Panel(
@@ -214,7 +214,7 @@ def toxicity(
             f"Flagged:    [bold]{len(out_rows)}[/]\n"
             f"Threshold:  [bold]{threshold:.3f}[/]\n"
             f"Output:     [bold]{escape(path)}[/]",
-            title="[bold green]Toxicity[/]",
+            title="[bold green]Abuse-keyword heuristic[/]",
         )
     )
 

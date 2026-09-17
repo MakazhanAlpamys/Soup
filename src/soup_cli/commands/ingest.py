@@ -34,6 +34,7 @@ from soup_cli.utils.ingest_sources import (
     validate_source_name,
 )
 from soup_cli.utils.paths import is_under_cwd
+from soup_cli.utils.terminal import for_terminal
 
 console = Console()
 
@@ -242,7 +243,7 @@ def _pull(
             os.environ, allow_private_host=allow_private_host
         )
     except ingest_pull.PullError as exc:
-        console.print(f"[red]{escape(str(exc))}[/]")
+        console.print(f"[red]{for_terminal(str(exc))}[/]")
         raise typer.Exit(1) from None
     except ValueError as exc:
         console.print(f"[red]{escape(str(exc))}[/]")
@@ -254,22 +255,18 @@ def _pull(
         f"for the last {escape(since_text)}...[/]"
     )
 
-    pulled = 0
+    stats = ingest_pull.PullStats()
     written = 0
-
-    def _generations():
-        nonlocal pulled
-        for row in ingest_pull.pull_langfuse_generations(
-            credentials,
-            since=window,
-            max_pages=max_pages if max_pages is not None else ingest_pull.DEFAULT_MAX_PAGES,
-        ):
-            pulled += 1
-            yield row
 
     def _lines():
         nonlocal written
-        for record in _ingest_sources.parse_langfuse(_generations()):
+        generations = ingest_pull.pull_langfuse_generations(
+            credentials,
+            since=window,
+            max_pages=max_pages if max_pages is not None else ingest_pull.DEFAULT_MAX_PAGES,
+            stats=stats,
+        )
+        for record in _ingest_sources.parse_langfuse(generations):
             written += 1
             yield json.dumps(record.to_dict(), ensure_ascii=False) + "\n"
 
@@ -277,17 +274,22 @@ def _pull(
         # Streams to a staging file; the target only appears once the pull finished.
         atomic_write_lines(_lines(), str(output_path), field="--output")
     except ingest_pull.PullError as exc:
-        console.print(f"[red]{escape(str(exc))}[/]")
+        console.print(f"[red]{for_terminal(str(exc))}[/]")
         console.print(f"[red]Nothing was written to {escape(output_path.name)}.[/]")
         raise typer.Exit(1) from None
 
     console.print(
-        f"[green]Wrote {written} traces from langfuse ({pulled} generations pulled) -> "
-        f"{escape(output_path.name)}[/]"
+        f"[green]Wrote {written} traces from langfuse ({stats.generations} generations "
+        f"pulled) -> {escape(output_path.name)}[/]"
     )
-    if pulled > written:
+    if stats.generations > written:
         console.print(
-            f"[yellow]{pulled - written} generation(s) had no input or no output "
+            f"[yellow]{stats.generations - written} generation(s) had no input or no output "
+            "and were skipped.[/]"
+        )
+    if stats.skipped_not_generation:
+        console.print(
+            f"[yellow]{stats.skipped_not_generation} observation(s) were not generations "
             "and were skipped.[/]"
         )
 
@@ -299,7 +301,7 @@ def _pull(
             "source": canonical,
             "traces_written": written,
             "auth_env_set": True,
-            "generations_pulled": pulled,
+            "generations_pulled": stats.generations,
         },
         console=console,
     )

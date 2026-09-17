@@ -325,15 +325,16 @@ def set_edit(
 @app.command(name="diff")
 def diff_edit(
     before: str = typer.Argument(
-        ..., help="Registry run id of the model BEFORE the edit.",
+        ..., help="Label or run id of the model BEFORE the edit (metadata).",
     ),
     after: str = typer.Argument(
-        ..., help="Registry run id of the model AFTER the edit.",
+        ..., help="Label or run id of the model AFTER the edit (metadata).",
     ),
     probe_file: Optional[str] = typer.Option(
         None, "--probes",
         help=(
-            "Optional JSONL file with probe prompts. Each row should "
+            "JSONL file with probe prompts; required when both "
+            "--before-model and --after-model are given. Each row should "
             "have a 'prompt' field. Capped at 1000 rows."
         ),
     ),
@@ -347,11 +348,17 @@ def diff_edit(
     ),
     before_model: Optional[str] = typer.Option(
         None, "--before-model",
-        help="Model path / HF id of the BEFORE model (enables live generation).",
+        help=(
+            "Model path / HF id of the BEFORE model "
+            "(live generation with --after-model and --probes)."
+        ),
     ),
     after_model: Optional[str] = typer.Option(
         None, "--after-model",
-        help="Model path / HF id of the AFTER model (enables live generation).",
+        help=(
+            "Model path / HF id of the AFTER model "
+            "(live generation with --before-model and --probes)."
+        ),
     ),
     device: Optional[str] = typer.Option(
         None, "--device",
@@ -360,10 +367,8 @@ def diff_edit(
 ) -> None:
     """Knowledge-injection diff: facts changed between before / after.
 
-    Pass both ``--before-model`` and ``--after-model`` (plus ``--probes``) to
-    generate the diff LIVE (v0.71.9 #194): each probe is run through both
-    models and changed completions are surfaced. Without model paths the
-    report is a validated placeholder.
+    Pass both ``--before-model`` and ``--after-model`` alongside ``--probes``
+    to evaluate probe completions live and surface changed facts.
     """
     from soup_cli.utils.edit_diff import build_diff_report, render_diff_table
 

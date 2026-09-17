@@ -21,9 +21,14 @@ Design decisions, each pinned by ``tests/test_issue204_langfuse_pull.py``:
   flag, so never in the audit log's argv), the ``Authorization`` header is
   built inline where no local variable holds it, reprs are redacted, and any
   text quoted from a server is scrubbed of the key pair.
-- **Bounded.** Per-call timeout, capped response size, a page cap and a row cap
-  that stop with an error instead of truncating, and a 429 retry budget that
+- **Bounded.** A wall-clock deadline per request (#865: the socket timeout alone
+  let a drip-feeding server hold the call open indefinitely), capped response
+  size, a page cap and a row cap that stop with an error instead of truncating,
+  a repeated pagination cursor that stops the pull, and a 429 retry budget that
   honours ``Retry-After`` up to a ceiling.
+- **Only generations become rows.** ``type=GENERATION`` is sent as a query
+  parameter and checked again on each observation (#865), so a server that
+  ignores the filter cannot turn spans or tool calls into training rows.
 """
 
 from __future__ import annotations
@@ -55,6 +60,9 @@ RETRY_AFTER_CEILING_SECONDS = 60.0
 
 _BACKOFF_BASE_SECONDS = 2.0
 _MAX_RESPONSE_BYTES = 64 * 1024 * 1024
+# Read in chunks so the deadline is checked while a slow server is still sending.
+_READ_CHUNK_BYTES = 256 * 1024
+_GENERATION_TYPE = "GENERATION"
 _MAX_ERROR_DETAIL_CHARS = 200
 _SINCE_RE = re.compile(r"([1-9][0-9]{0,5})([mhd])")
 _SINCE_UNITS = {"m": "minutes", "h": "hours", "d": "days"}
@@ -103,6 +111,16 @@ class HttpResponse:
     def __repr__(self) -> str:
         # The body may quote the request back; keep it out of reprs.
         return f"HttpResponse(status={self.status}, body_bytes={len(self.body)})"
+
+
+@dataclass
+class PullStats:
+    """What a pull saw, for the summary line the CLI prints (#865)."""
+
+    pages: int = 0
+    observations: int = 0
+    generations: int = 0
+    skipped_not_generation: int = 0
 
 
 Transport = Callable[[str, LangfuseCredentials, float], HttpResponse]
@@ -224,13 +242,17 @@ def pull_langfuse_generations(
     now: Optional[datetime] = None,
     transport: Optional[Transport] = None,
     sleep: Optional[Callable[[float], None]] = None,
+    stats: Optional[PullStats] = None,
 ) -> Iterator[Any]:
     """Yield one ``parse_langfuse``-shaped row per GENERATION in the window.
 
     The window ``[now - since, now)`` is fixed before the first request so
-    later pages cannot drift. Raises :class:`PullLimitError` when ``max_pages``
-    or the ingest row cap is reached with results still pending, and
-    :class:`PullError` for any other failure.
+    later pages cannot drift. Only observations whose own ``type`` is
+    ``GENERATION`` are yielded, whatever the server did with the query
+    parameter (#865); the rest are counted in ``stats``. Raises
+    :class:`PullLimitError` when ``max_pages`` or the ingest row cap is reached
+    with results still pending, and :class:`PullError` for any other failure,
+    including a repeated pagination cursor.
     """
     if isinstance(max_pages, bool) or not isinstance(max_pages, int):
         raise TypeError("max_pages must be an int")
@@ -254,7 +276,9 @@ def pull_langfuse_generations(
         window["toStartTime"],
     )
 
+    counters = stats if stats is not None else PullStats()
     cursor: Optional[str] = None
+    seen_cursors: set[str] = set()
     pages = 0
     rows = 0
     while True:
@@ -262,12 +286,17 @@ def pull_langfuse_generations(
         url = f"{credentials.host}{LANGFUSE_OBSERVATIONS_PATH}?{urlencode(query)}"
         response = _get_with_backoff(send, url, credentials, timeout, pause)
         pages += 1
+        counters.pages = pages
         observations, cursor = _decode_page(response, credentials)
         _LOG.debug(
             "langfuse pull: page %d, %d observation(s), %s",
             pages, len(observations), "more pending" if cursor else "last page",
         )
         for observation in observations:
+            counters.observations += 1
+            if not _is_generation(observation):
+                counters.skipped_not_generation += 1
+                continue
             rows += 1
             if rows > _MAX_INGEST_LINES:
                 raise PullLimitError(
@@ -276,9 +305,16 @@ def pull_langfuse_generations(
                     pages=pages,
                     rows=rows - 1,
                 )
+            counters.generations += 1
             yield _to_parser_row(observation)
         if not cursor:
             return
+        if cursor in seen_cursors:
+            raise PullError(
+                f"Langfuse returned a pagination cursor it had already sent, after {pages} "
+                "page(s); stopping rather than repeating the same request"
+            )
+        seen_cursors.add(cursor)
         if pages >= max_pages:
             raise PullLimitError(
                 f"stopped after {pages} page(s) and {rows} generation(s) with more results "
@@ -372,6 +408,14 @@ def _decode_page(
     return data, cursor or None
 
 
+def _is_generation(observation: Any) -> bool:
+    """``type=GENERATION`` is a request parameter; this is the check on the answer."""
+    if not isinstance(observation, dict):
+        return False
+    kind = observation.get("type")
+    return isinstance(kind, str) and kind.strip().upper() == _GENERATION_TYPE
+
+
 def _to_parser_row(observation: Any) -> Any:
     """Shape one observation the way ``parse_langfuse`` reads a trace export."""
     if not isinstance(observation, dict):
@@ -422,6 +466,7 @@ def _urllib_transport(url: str, credentials: LangfuseCredentials, timeout: float
 
     from soup_cli import __version__
 
+    deadline = time.monotonic() + timeout
     opener = urllib.request.build_opener(_refuse_redirects_handler())
     # Built inline: no local variable of this frame holds the header value, so a
     # traceback that renders locals cannot show it.
@@ -439,14 +484,16 @@ def _urllib_transport(url: str, credentials: LangfuseCredentials, timeout: float
             return HttpResponse(
                 status=response.status,
                 headers=dict(response.headers.items()),
-                body=_read_capped(response),
+                body=_read_capped(response, deadline=deadline, timeout=timeout),
             )
     except urllib.error.HTTPError as exc:
         try:
             # The status is what the caller acts on; an error body that cannot be
             # read in time must not turn a clean "HTTP 401" into a raw traceback.
-            body = _read_capped(exc)
-        except (OSError, http.client.HTTPException):
+            # PullError belongs here too: since #865 the deadline and the size cap
+            # raise it from _read_capped, and it is not an OSError.
+            body = _read_capped(exc, deadline=deadline, timeout=timeout)
+        except (OSError, http.client.HTTPException, PullError):
             body = b""
         finally:
             exc.close()
@@ -478,11 +525,27 @@ def _basic_authorization(credentials: LangfuseCredentials) -> str:
     return "Basic " + base64.b64encode(pair).decode("ascii")
 
 
-def _read_capped(stream: Any) -> bytes:
-    body = stream.read(_MAX_RESPONSE_BYTES + 1)
-    if len(body) > _MAX_RESPONSE_BYTES:
-        raise PullError(f"Langfuse response exceeded {_MAX_RESPONSE_BYTES} bytes")
-    return body
+def _read_capped(stream: Any, *, deadline: float, timeout: float) -> bytes:
+    """Read the body under both the size cap and the wall-clock deadline (#865).
+
+    ``read1`` returns what has arrived instead of blocking for a full chunk, so
+    a server drip-feeding bytes inside the socket timeout is still cut off at
+    the deadline. A read already in flight can overshoot by at most the socket
+    timeout, which is what bounds a server that stops sending entirely.
+    """
+    read = getattr(stream, "read1", None) or stream.read
+    chunks: list[bytes] = []
+    size = 0
+    while True:
+        if time.monotonic() >= deadline:
+            raise PullError(f"the request to Langfuse timed out after {timeout:g}s")
+        chunk = read(_READ_CHUNK_BYTES)
+        if not chunk:
+            return b"".join(chunks)
+        size += len(chunk)
+        if size > _MAX_RESPONSE_BYTES:
+            raise PullError(f"Langfuse response exceeded {_MAX_RESPONSE_BYTES} bytes")
+        chunks.append(chunk)
 
 
 def _origin(url: str) -> str:
@@ -530,6 +593,7 @@ __all__ = [
     "LangfuseCredentials",
     "PullError",
     "PullLimitError",
+    "PullStats",
     "load_langfuse_credentials",
     "parse_since",
     "pull_langfuse_generations",

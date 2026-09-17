@@ -160,7 +160,8 @@ class TestPagination:
     def test_page_cap_stops_loudly_while_results_are_pending(self):
         from soup_cli.utils.ingest_pull import PullLimitError
 
-        transport = _Transport(_page([_obs(1)], cursor="more"))
+        # Distinct cursors per page: a repeated cursor is its own error (#865).
+        transport = _Transport(_page([_obs(1)], cursor="c1"), _page([_obs(2)], cursor="c2"))
 
         with pytest.raises(PullLimitError) as info:
             _pull(transport, max_pages=2)
@@ -406,7 +407,7 @@ class TestUrllibTransport:
 
         base, _ = loopback
 
-        def _stalls(stream):
+        def _stalls(stream, **kwargs):  # kwargs: deadline/timeout, added by #865
             raise TimeoutError("timed out")
 
         monkeypatch.setattr(ingest_pull, "_read_capped", _stalls)
@@ -721,7 +722,10 @@ class TestCli:
         """The output streams to a staging file, so a pull stopped on page N neither
         truncates last run's file nor leaves the staging file behind."""
         (pull_env / "out.jsonl").write_text("previous run\n", encoding="utf-8")
-        _use_transport(monkeypatch, _Transport(_page([_obs(1)], cursor="more")))
+        _use_transport(
+            monkeypatch,
+            _Transport(_page([_obs(1)], cursor="c1"), _page([_obs(2)], cursor="c2")),
+        )
 
         result = _invoke(
             ["--source", "langfuse", "--pull", "--max-pages", "2", "--output", "out.jsonl"]
@@ -1106,7 +1110,10 @@ def _scenario(name):
         "success": (_Transport(_page([_obs(1)], cursor="c1"), _page([_obs(2)])), 0),
         "unauthorized": (_Transport(denied), 1),
         "server_echoes_request": (_Transport(_response(500, body=echo)), 1),
-        "page_cap": (_Transport(_page([_obs(1)], cursor="more")), 1),
+        "page_cap": (
+            _Transport(_page([_obs(1)], cursor="c1"), _page([_obs(2)], cursor="c2")),
+            1,
+        ),
         "rate_limited": (_Transport(_response(429, headers={"Retry-After": "1"})), 1),
         "network_error": (_Transport(unreachable), 1),
         "unexpected_exception": (_Transport(RuntimeError("transport bug")), 1),

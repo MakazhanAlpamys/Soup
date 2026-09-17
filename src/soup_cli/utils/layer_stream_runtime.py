@@ -22,7 +22,24 @@ import os
 import sys
 import time
 from dataclasses import dataclass
-from typing import Any, Dict, FrozenSet, Iterator, Mapping, Optional, Sequence, Tuple, Union
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    FrozenSet,
+    Iterator,
+    List,
+    Mapping,
+    Optional,
+    Sequence,
+    Tuple,
+    Union,
+)
+
+# Stdlib-only at import (it defers torch to its own constructor), so the
+# default is safe to read at module scope. ``AsyncDiskSource`` itself is
+# imported inside ``_build_source``, where torch is already unavoidable.
+from soup_cli.utils.async_disk_source import DEFAULT_STREAM_READ_AHEAD
 
 logger = logging.getLogger(__name__)
 
@@ -183,13 +200,12 @@ def install_dequant_forward(module: Any) -> int:
     tensor through the ordinary mechanism, which checkpointing DOES discard and
     recompute, and the transient lives only inside the recomputed block — O(window).
 
-    This is not a numerics change at training shapes. ``bitsandbytes::gemm_4bit``
-    dispatches on M with ``_gemm_4bit_custom_max_m = 1536``, and on real projection
-    shapes it takes ``_dequant_linear_fallback`` at every M measured from 8 to 2048 —
-    i.e. bitsandbytes already does exactly this. The dtype handling below therefore
-    mirrors ``Linear4bit.forward`` line for line, replacing only the final call: a
-    dequantisation into a different dtype than bnb's own would introduce a rounding
-    difference precisely where there is none today.
+    This changes the computation path used by the patched NF4 module. With
+    bitsandbytes 0.50.2, the native fused ``MatMul4Bit`` path and explicit
+    ``dequantize_4bit`` + ``F.linear`` can differ depending on the CUDA
+    architecture and projection shape. The dequantise + linear path is retained
+    for correctness under checkpointing (#331); this path choice is not assumed
+    to be numerically free.
 
     Returns the number of modules patched, so a caller can assert it patched
     something. Zero would mean the model carries no 4-bit linears at all.
@@ -289,6 +305,107 @@ def quant_sidecar_keys(key: str, spec: Any) -> Tuple[str, ...]:
 # ==========================================================================
 # Tier 1 — the whole frozen base in CPU RAM (plan 5.5)
 # ==========================================================================
+#: torch's caching host allocator hands out page-locked memory in blocks rounded
+#: UP to the next power of two, so pinning the store one tensor at a time costs
+#: far more than its byte count — measured on the dev box (#901): 1.73x on the
+#: Qwen2.5-14B NF4 store (6.82 GB requested, 11.83 GB of private commit), 1.90x
+#: on a run of 35 MB tensors, and a single 9 GB request refused outright because
+#: it rounds to 16 GiB. That rounding, against the box's RAM, is what "could not
+#: page-lock the base" meant on a 32 GB machine. The pinned store is therefore
+#: packed into arenas whose sizes ARE powers of two, every tensor a view.
+PINNED_ARENA_BYTES = 2**28
+#: The largest arena the packer will open on its own. A tensor bigger than this
+#: still gets an arena that fits it. Measured on the dev box: an 8 GB pinned
+#: request was granted, 9 GB refused (it rounds to 16 GiB), 2 GB chunks fine.
+PINNED_ARENA_MAX_BYTES = 2**31
+#: Every view starts on this boundary: enough for any dtype and for the DMA
+#: engine, and a rounding error of at most 255 bytes per tensor.
+PINNED_ARENA_ALIGN = 256
+
+
+@dataclass(frozen=True)
+class ArenaPlan:
+    """Where each tensor of a pinned store lands, and what the arenas cost."""
+
+    #: Bytes per arena; each is a power of two.
+    arena_sizes: Tuple[int, ...]
+    #: ``(arena, offset)`` per tensor, in the order the sizes were given.
+    placements: Tuple[Tuple[int, int], ...]
+    #: The tensors' own bytes, before any rounding.
+    requested_bytes: int
+
+    @property
+    def pinned_bytes(self) -> int:
+        return sum(self.arena_sizes)
+
+
+def _next_power_of_two(value: int) -> int:
+    return 1 if value <= 1 else 1 << (value - 1).bit_length()
+
+
+def plan_pinned_arenas(
+    sizes: Sequence[int],
+    *,
+    arena_bytes: int = PINNED_ARENA_BYTES,
+    align: int = PINNED_ARENA_ALIGN,
+) -> ArenaPlan:
+    """Pack ``sizes`` (bytes, allocation order) into power-of-two arenas.
+
+    First-fit into the current arena, else open the next; a tensor never
+    straddles two arenas, because it has to be one contiguous view.
+
+    The arena capacity is the power of two above FOUR times the store's largest
+    tensor, floored at ``arena_bytes`` and capped at
+    :data:`PINNED_ARENA_MAX_BYTES`; a tensor beyond the cap still gets an arena
+    that fits it. Two review findings and one failed alternative shaped that.
+    A fixed capacity packs badly the moment tensors approach it — at 256 MiB a
+    bf16 Qwen2.5-14B store, whose 141.6 MB projections cannot share an arena
+    two at a time, cost 1.46x. Sizing each arena from the tensor that opened it
+    was tried and rejected: in that same store an arena opened by a 52 MB
+    projection stayed at 256 MiB and packed the 141.6 MB tensors that followed
+    one per arena again. Four times the largest tensor bounds every arena's
+    tail waste to a quarter and measures ~5% on that store. The cost of a
+    global capacity is that one outlier raises every arena's REQUEST size —
+    which the cap bounds at 2 GiB, a request this box granted where a 9 GB one
+    (rounded to 16 GiB) was refused; the total stays near the store's bytes
+    either way. Each arena is finally trimmed to the power of two above what
+    it holds — the last one is usually part-filled, and a tiny model must not
+    page-lock a whole default arena for a 5 MB store. Pure arithmetic, no torch.
+    """
+    if arena_bytes <= 0 or arena_bytes & (arena_bytes - 1):
+        raise ValueError(f"arena_bytes must be a power of two; got {arena_bytes}")
+    if align <= 0 or align & (align - 1):
+        raise ValueError(f"align must be a power of two; got {align}")
+    if align > arena_bytes:
+        raise ValueError(f"align ({align}) cannot exceed arena_bytes ({arena_bytes})")
+    sizes = [int(size) for size in sizes]
+    if any(size < 0 for size in sizes):
+        raise ValueError(f"a negative tensor size was planned: {min(sizes)}")
+    if not sizes:
+        return ArenaPlan(arena_sizes=(), placements=(), requested_bytes=0)
+    ceiling = max(arena_bytes, PINNED_ARENA_MAX_BYTES)
+    capacity = min(max(arena_bytes, _next_power_of_two(4 * max(sizes))), ceiling)
+    fills: List[int] = []
+    capacities: List[int] = []
+    placements: List[Tuple[int, int]] = []
+    for size in sizes:
+        if fills:
+            start = -(-fills[-1] // align) * align
+            if start + size <= capacities[-1]:
+                placements.append((len(fills) - 1, start))
+                fills[-1] = start + size
+                continue
+        fills.append(size)
+        # Only a tensor beyond the ceiling opens an arena wider than the rest.
+        capacities.append(max(capacity, _next_power_of_two(size)))
+        placements.append((len(fills) - 1, 0))
+    return ArenaPlan(
+        arena_sizes=tuple(max(align, _next_power_of_two(fill)) for fill in fills),
+        placements=tuple(placements),
+        requested_bytes=sum(sizes),
+    )
+
+
 class RamSource:
     """The base held in CPU RAM, allocated ONCE and filled by ``copy_``.
 
@@ -297,6 +414,11 @@ class RamSource:
     not the store — is what pushed a 5.55 GB base past the 7.12 GB page-locked
     ceiling and made a 3B run impossible. So the store is pre-allocated at its
     final dtype and each source tensor is streamed into it one at a time.
+
+    Pinned, the store is a handful of power-of-two arenas with every tensor a
+    view (:func:`plan_pinned_arenas`, #901): ``nbytes`` is still the tensors'
+    own bytes, ``pinned_bytes`` is what is actually page-locked. Pageable, each
+    tensor is its own allocation, as before — the CPU allocator does not round.
     """
 
     def __init__(
@@ -310,6 +432,7 @@ class RamSource:
         *,
         pin: bool = True,
         shard_paths: Optional[Sequence[str]] = None,
+        arena_bytes: int = PINNED_ARENA_BYTES,
     ):
         import torch
         from safetensors import safe_open
@@ -319,32 +442,56 @@ class RamSource:
         self.store: list = []
         self.nbytes = 0
         self.pinned = bool(pin)
+        self.arena_sizes: Tuple[int, ...] = ()
+        self.pinned_bytes = 0
+        plan: Optional[ArenaPlan] = None
+        planned_sizes: List[int] = []
+        arenas: List[Any] = []
+        if self.pinned:
+            # ONE walk defines the order the plan is indexed by; the fill loop
+            # below re-derives each length and refuses to proceed if it ever
+            # disagrees, so the two cannot drift apart silently.
+            planned_sizes = [
+                math.prod(shape) * _dtype_size(dtype)
+                for idx in range(n_layers)
+                for _name, (shape, dtype) in layer_specs[idx].items()
+            ]
+            plan = plan_pinned_arenas(planned_sizes, arena_bytes=arena_bytes)
+            for size in plan.arena_sizes:
+                # This is the host store; never inherit a process-wide MPS/CUDA default.
+                arena = torch.empty(size, dtype=torch.uint8, device="cpu", pin_memory=True)
+                self._check_host_tensor(arena)
+                arenas.append(arena)
+            self.arena_sizes = plan.arena_sizes
+            self.pinned_bytes = plan.pinned_bytes
+        self._arenas = arenas
+        position = 0
         for idx in range(n_layers):
             held: Dict[str, Any] = {}
             with safe_open(paths[idx], framework="pt") as handle:
                 for name, (shape, dtype) in layer_specs[idx].items():
-                    # This is the host store; never inherit a process-wide MPS/CUDA default.
-                    dst = torch.empty(
-                        tuple(shape),
-                        dtype=_torch_dtype(dtype),
-                        device="cpu",
-                        pin_memory=self.pinned,
-                    )
-                    # PyTorch 2.7+ on Apple Silicon may return an MPS tensor for
-                    # ``device="cpu", pin_memory=True``.  Accepting that would put
-                    # the entire supposed host store in the accelerator allocator
-                    # while reporting it as pinned CPU RAM (#434).
-                    if dst.device.type != "cpu":
-                        raise RuntimeError(
-                            "layer streaming's RAM source requested a CPU tensor, "
-                            f"but torch returned {dst.device}. Pinned host memory is "
-                            "CUDA-only here; retry with pin=False."
+                    torch_dtype = _torch_dtype(dtype)
+                    if plan is not None:
+                        arena_index, offset = plan.placements[position]
+                        length = math.prod(shape) * _dtype_size(dtype)
+                        if planned_sizes[position] != length:
+                            raise RuntimeError(
+                                f"layer streaming's pinned-arena plan is out of step with "
+                                f"the store at layer {idx}, tensor {name!r} (planned "
+                                f"{planned_sizes[position]} bytes, filling {length}); this "
+                                f"is a bug, please report it"
+                            )
+                        position += 1
+                        dst = (
+                            arenas[arena_index][offset : offset + length]
+                            .view(torch_dtype)
+                            .view(tuple(shape))
                         )
-                    if self.pinned and not dst.is_pinned():
-                        raise RuntimeError(
-                            "layer streaming requested pinned CPU RAM, but torch "
-                            "returned pageable memory; retry with pin=False."
+                    else:
+                        dst = torch.empty(
+                            tuple(shape), dtype=torch_dtype, device="cpu", pin_memory=False
                         )
+                        self._check_host_tensor(dst)
                     src = handle.get_tensor(name)
                     dst.copy_(src)
                     del src
@@ -352,10 +499,25 @@ class RamSource:
                     self.nbytes += dst.numel() * dst.element_size()
             self.store.append(held)
 
+    def _check_host_tensor(self, tensor: Any) -> None:
+        # PyTorch 2.7+ on Apple Silicon may return an MPS tensor for
+        # ``device="cpu", pin_memory=True``.  Accepting that would put
+        # the entire supposed host store in the accelerator allocator
+        # while reporting it as pinned CPU RAM (#434).
+        if tensor.device.type != "cpu":
+            raise RuntimeError(
+                "layer streaming's RAM source requested a CPU tensor, "
+                f"but torch returned {tensor.device}. Pinned host memory is "
+                "CUDA-only here; retry with pin=False."
+            )
+        if self.pinned and not tensor.is_pinned():
+            raise RuntimeError(
+                "layer streaming requested pinned CPU RAM, but torch "
+                "returned pageable memory; retry with pin=False."
+            )
+
     @staticmethod
-    def spec_from_shard(
-        shard_dir: str, idx: int = 0
-    ) -> Dict[str, Tuple[Tuple[int, ...], str]]:
+    def spec_from_shard(shard_dir: str, idx: int = 0) -> Dict[str, Tuple[Tuple[int, ...], str]]:
         """Shape AND dtype for ONE decoder layer, read from the shard header.
 
         The dtype is read per tensor rather than taken from ``index.dtype``: an
@@ -390,7 +552,7 @@ class RamSource:
 
     @staticmethod
     def merge_layer_specs(
-        layer_specs: Sequence[Mapping[str, Tuple[Tuple[int, ...], str]]]
+        layer_specs: Sequence[Mapping[str, Tuple[Tuple[int, ...], str]]],
     ) -> Dict[str, Tuple[Tuple[int, ...], str]]:
         merged: Dict[str, Tuple[Tuple[int, ...], str]] = {}
         for idx, spec in enumerate(layer_specs):
@@ -418,9 +580,7 @@ class RamSource:
             return [spec] * n_layers
         layer_specs = list(spec)
         if len(layer_specs) != n_layers:
-            raise ValueError(
-                f"expected {n_layers} layer specs, but got {len(layer_specs)}"
-            )
+            raise ValueError(f"expected {n_layers} layer specs, but got {len(layer_specs)}")
         return layer_specs
 
     @staticmethod
@@ -488,9 +648,7 @@ class DiskSource:
         # open, everything opened before it must still be closed.
         try:
             self._handles = [
-                self._stack.enter_context(
-                    safe_open(paths[idx], framework="pt")
-                )
+                self._stack.enter_context(safe_open(paths[idx], framework="pt"))
                 for idx in range(n_layers)
             ]
         except BaseException:
@@ -570,9 +728,7 @@ def extras_resident_bytes(shard_dir: str) -> int:
     return total
 
 
-def large_layer_specs(
-    shard_dir: str, index: Any
-) -> Dict[str, Tuple[Tuple[int, ...], str]]:
+def large_layer_specs(shard_dir: str, index: Any) -> Dict[str, Tuple[Tuple[int, ...], str]]:
     """Shape and dtype for the streamed embedding/head shards."""
     from safetensors import safe_open
 
@@ -629,6 +785,28 @@ def large_layer_buffer_bytes(shard_dir: str, index: Any) -> int:
 # ==========================================================================
 # Tier 0 — pre-allocated VRAM buffers (plan 5.4)
 # ==========================================================================
+def _release_source(source: Any, idx: int, event: Any) -> None:
+    """Tell a staging source the copy out of layer ``idx`` has been enqueued.
+
+    ``RamSource`` holds every layer for the whole run and ``DiskSource`` returns
+    a freshly allocated tensor per call, so neither can have a buffer recycled
+    underneath an in-flight copy and neither defines ``release``. A source that
+    stages into a small pool of reusable HOST buffers can: out of PINNED memory
+    ``dst.copy_(..., non_blocking=True)`` is still draining when ``load_async``
+    returns, and ``wait()`` is a GPU-side ``wait_event`` that never blocks the
+    Python thread — so the reader is free to run ahead and overwrite the bytes
+    the copy is reading. Measured through this pool against ``AsyncDiskSource``
+    before this call existed: 7 of 8 layers reached the device holding another
+    layer's weights at read_ahead=1, 6 of 8 at the default 2, 4 of 8 at 4.
+
+    Duck-typed rather than isinstance-gated so the two shipped sources stay
+    untouched and a future source opts in by defining the method.
+    """
+    release = getattr(source, "release", None)
+    if callable(release):
+        release(idx, event)
+
+
 class LayerBufferPool:
     """N pre-allocated per-layer buffers. Never allocates inside the loop —
     that is what keeps the allocator from fragmenting (plan P7)."""
@@ -660,9 +838,9 @@ class LayerBufferPool:
         else:
             self.active_keys_by_layer = [tuple(keys) for keys in active_keys_by_layer]
         self.loads = 0
-        self.nbytes = sum(
-            buf.numel() * buf.element_size() for buf in self.buffers[0].values()
-        ) * self.n
+        self.nbytes = (
+            sum(buf.numel() * buf.element_size() for buf in self.buffers[0].values()) * self.n
+        )
 
     def slot_for(self, idx: int) -> int:
         return idx % self.n
@@ -685,10 +863,16 @@ class LayerBufferPool:
                     dst = self.buffers[slot][name]
                     dst.copy_(source.get(idx, name), non_blocking=True)
                 self.events[slot].record(stream)
+            _release_source(source, idx, self.events[slot])
         else:
             for name in keys:
                 dst = self.buffers[slot][name]
                 dst.copy_(source.get(idx, name))
+            # No event: this branch's copy has already finished when `copy_`
+            # returns, so the source's buffer is free NOW rather than when a
+            # stream drains. Saying so is not decoration — a source that stages
+            # into a small reusable pool refills sooner for it.
+            _release_source(source, idx, None)
         self.owner[slot] = idx
         self.loads += 1
         return slot
@@ -768,8 +952,10 @@ class LargeLayerBufferPool:
             with torch.cuda.stream(stream):
                 dst.copy_(source.get(source_idx, key), non_blocking=True)
                 self.event.record(stream)
+            _release_source(source, source_idx, self.event)
         else:
             dst.copy_(source.get(source_idx, key))
+            _release_source(source, source_idx, None)
         self.owner = key
         self.loads += 1
 
@@ -778,8 +964,7 @@ class LargeLayerBufferPool:
 
         if self.owner != key:
             raise RuntimeError(
-                f"large-layer scheduler bug: slot holds {self.owner!r}, but {key!r} "
-                "was requested"
+                f"large-layer scheduler bug: slot holds {self.owner!r}, but {key!r} was requested"
             )
         if self.is_cuda and self.event is not None:
             torch.cuda.current_stream().wait_event(self.event)
@@ -879,9 +1064,7 @@ def _build_streamed_layer_class():
             # v0.72.3 — the mirror of the state_dict() override below.
             self._register_load_state_dict_pre_hook(self._redirect_canonical_keys)
 
-        def _redirect_canonical_keys(
-            self, state_dict, prefix, *_args: Any, **_kwargs: Any
-        ) -> None:
+        def _redirect_canonical_keys(self, state_dict, prefix, *_args: Any, **_kwargs: Any) -> None:
             # v0.72.1 made SAVING canonical; this makes LOADING accept the same
             # keys, which is what `--resume` needs.
             #
@@ -915,11 +1098,9 @@ def _build_streamed_layer_class():
             # here is an intermediate one, never the caller's own.
             inner_prefix = prefix + "inner."
             for key in [
-                k
-                for k in state_dict
-                if k.startswith(prefix) and not k.startswith(inner_prefix)
+                k for k in state_dict if k.startswith(prefix) and not k.startswith(inner_prefix)
             ]:
-                redirected = inner_prefix + key[len(prefix):]
+                redirected = inner_prefix + key[len(prefix) :]
                 value = state_dict.pop(key)
                 if redirected in state_dict:
                     # A checkpoint carrying BOTH spellings of one weight is
@@ -945,7 +1126,84 @@ def _build_streamed_layer_class():
                     return tensor
                 return fn(tensor)
 
-            return super()._apply(_skip_meta, recurse=recurse)
+            # #1005 — `named_children()` below no longer lists `inner`, and
+            # torch's `_apply` recurses over `children()`, so the inner layer's
+            # OWN parameters and buffers (none on a decoder layer today, but
+            # not a contract) would be skipped. Reach it explicitly.
+            if recurse:
+                self.inner._apply(_skip_meta, recurse=True)
+            return super()._apply(_skip_meta, recurse=False)
+
+        # ------------------------------------------------------------------
+        # #1005 — the wrapper's NAMES are canonical, not only its KEYS.
+        #
+        # v0.72.1 made `state_dict()` write `...layers.0.self_attn...` (below)
+        # while `named_modules()` / `named_parameters()` still said
+        # `...layers.0.inner.self_attn...` — two spellings of one tensor. That
+        # was harmless while every consumer joined keys to keys. peft 0.21
+        # selects the adapter entries STRUCTURALLY: it collects key prefixes
+        # from `named_modules()` (every tuner layer's attribute names) and keeps
+        # the `state_dict()` entries under them — prefixes built from one
+        # spelling, applied to the other, so a streamed adapter saved as ZERO
+        # tensors with no exception (9 CI cells, every PR, the day 0.21.0 was
+        # published). transformers' `get_parameter_names` — the weight-decay
+        # grouping — walks `named_children()` and joins the result with
+        # `named_parameters()`: self-consistent before this fix (both spelled
+        # `.inner.`) and broken the moment only `named_modules()` changed, so
+        # the two move together.
+        #
+        # So the inner layer's subtree is reported at THIS wrapper's prefix,
+        # and the wrapper itself is NOT enumerated — `named_modules()` yields
+        # the inner layer under the wrapper's own name and then its children;
+        # `named_children()` yields the inner layer's children. The wrapper
+        # stays reachable where the tree is walked structurally (`children()`
+        # of the container, `get_submodule`, attribute access), which is what
+        # `train()` / `apply()` / `_apply()` go through. Enumerating the
+        # wrapper TOO would be worse than either: it is attribute-transparent
+        # (`__getattr__` below), so transformers' `_set_gradient_checkpointing`
+        # — `hasattr(module, "gradient_checkpointing")` then `setattr` over
+        # `modules()` — would answer on the wrapper and land the write on it,
+        # and a name-keyed patcher (`utils/gradient_ckpt.py`) would patch two
+        # objects under one name. `named_parameters()` / `named_buffers()` /
+        # `parameters()` derive from `named_modules()` and become canonical
+        # with it. Whatever reads `_modules` directly needs no help and gets
+        # none — `__repr__`, `get_submodule`, `load_state_dict`'s recursion
+        # (for which the load-side pre-hook above keeps redirecting canonical
+        # keys into `.inner.`); whatever goes through `children()` —
+        # `train()`, `apply()`, `_apply()` — is overridden below to reach
+        # `inner` itself. `apply()` deliberately still visits the wrapper too,
+        # AFTER the inner tree: it serves caller-supplied initialisers and
+        # hook installers that should see every object, and the
+        # hasattr/setattr hazard above is specific to the `modules()`- and
+        # name-driven walks; a test pins the opt-back-in. Naming only: nothing
+        # on the streamed forward path changes, so the bit-exactness gates
+        # stay valid un-re-run.
+        # ------------------------------------------------------------------
+        def named_children(self) -> Any:
+            yield from self.inner.named_children()
+
+        def named_modules(
+            self, memo: Any = None, prefix: str = "", remove_duplicate: bool = True
+        ) -> Any:
+            if memo is None:
+                memo = set()
+            if remove_duplicate:
+                if self in memo:
+                    return
+                memo.add(self)
+            yield from self.inner.named_modules(memo, prefix, remove_duplicate)
+
+        def train(self, mode: bool = True) -> Any:
+            if not isinstance(mode, bool):
+                raise ValueError("training mode is expected to be boolean")
+            self.training = mode
+            self.inner.train(mode)
+            return self
+
+        def apply(self, fn: Any) -> Any:
+            self.inner.apply(fn)
+            fn(self)
+            return self
 
         def state_dict(
             self,
@@ -969,12 +1227,14 @@ def _build_streamed_layer_class():
             # LoRA run.
             #
             # Serialisation-only, deliberately: the forward path is untouched,
-            # so v0.72.0's bit-exactness gates remain valid. The cost is that
-            # `named_parameters()` still shows `.inner.`, which is why
-            # `canonical_named_parameters()` below exists. `--resume` /
-            # `--hf-resume` load INTO a streamed model fine (v0.72.3,
-            # `train.py`): a separate load-side pre-hook redirects canonical
-            # keys at load time, mirroring this save-side delegation.
+            # so v0.72.0's bit-exactness gates remain valid. Until #1005 the
+            # cost was that `named_parameters()` still showed `.inner.` (which
+            # is why `canonical_named_parameters()` below existed); since #1005
+            # the naming methods above agree with these keys, and that helper
+            # is an identity kept for its callers. `--resume` / `--hf-resume`
+            # load INTO a streamed model fine (v0.72.3, `train.py`): a separate
+            # load-side pre-hook redirects canonical keys at load time,
+            # mirroring this save-side delegation.
             #
             # The wrapper owns no parameters or buffers of its own — they all
             # live on `inner` — so nothing is lost by not serialising it. It
@@ -1011,9 +1271,7 @@ def _build_streamed_layer_class():
 
         def forward(self, hidden_states: Any, *args: Any, **kwargs: Any) -> Any:
             if self.use_checkpoint and torch.is_grad_enabled():
-                return checkpoint(
-                    self._body, hidden_states, *args, use_reentrant=False, **kwargs
-                )
+                return checkpoint(self._body, hidden_states, *args, use_reentrant=False, **kwargs)
             return self._body(hidden_states, *args, **kwargs)
 
         def _substituted_weights(self, buffers: Any) -> Any:
@@ -1102,7 +1360,60 @@ def _build_streamed_large_layer_class():
             def _skip_meta(tensor: Any) -> Any:
                 return tensor if getattr(tensor, "is_meta", False) else fn(tensor)
 
-            return super()._apply(_skip_meta, recurse=recurse)
+            # #1005 — `named_children()` no longer lists `inner`; reach it
+            # explicitly (its `weight` is the meta placeholder `_skip_meta`
+            # passes through).
+            if recurse:
+                self.inner._apply(_skip_meta, recurse=True)
+            return super()._apply(_skip_meta, recurse=False)
+
+        # #1005 — canonical NAMES, mirroring StreamedDecoderLayer: the inner
+        # module (an Embedding or a Linear, which owns `weight` directly) is
+        # enumerated under this wrapper's own prefix in place of the wrapper,
+        # so `named_parameters()` says `model.embed_tokens.weight` exactly as
+        # `state_dict()` does.
+        #
+        # ONE documented exception (found in #1010's review): the inner module
+        # has no children, so `named_children()` yields nothing and this
+        # wrapper owns no `_parameters` — transformers' `get_parameter_names`
+        # (the weight-decay grouping, which walks `named_children()` and reads
+        # each visited module's own `_parameters`) therefore never lists the
+        # streamed large weight, where a resident model lists it. That is
+        # safe, and only because of WHAT the weight is: a frozen meta
+        # placeholder (`requires_grad=False`; the large slot serves the real
+        # bytes), and `Trainer.create_optimizer` filters every group on
+        # `requires_grad`, so the optimizer groups equal a resident model's
+        # exactly — pinned, with the exact name difference, by
+        # tests/test_issue1005_peft021_review_round.py. The alternative,
+        # registering `inner.weight` on this wrapper as well, is WRONG rather
+        # than untidy: `_load_from_state_dict` would then report the canonical
+        # key missing, because the pre-hook above has already renamed it into
+        # `.inner.` by the time the wrapper's own parameters are checked.
+        def named_children(self) -> Any:
+            yield from self.inner.named_children()
+
+        def named_modules(
+            self, memo: Any = None, prefix: str = "", remove_duplicate: bool = True
+        ) -> Any:
+            if memo is None:
+                memo = set()
+            if remove_duplicate:
+                if self in memo:
+                    return
+                memo.add(self)
+            yield from self.inner.named_modules(memo, prefix, remove_duplicate)
+
+        def train(self, mode: bool = True) -> Any:
+            if not isinstance(mode, bool):
+                raise ValueError("training mode is expected to be boolean")
+            self.training = mode
+            self.inner.train(mode)
+            return self
+
+        def apply(self, fn: Any) -> Any:
+            self.inner.apply(fn)
+            fn(self)
+            return self
 
         def state_dict(
             self,
@@ -1157,10 +1468,26 @@ def _streamed_large_layer_class():
 def _replace_module_references(root: Any, target: Any, replacement: Any) -> int:
     """Replace every child reference to ``target`` without relying on its path."""
     replaced = 0
-    # Snapshot the original module graph before mutating it.  Iterating the live
-    # graph would visit ``replacement`` after the first assignment and replace
-    # its own ``inner`` reference, making the wrapper its own child.
-    for module in tuple(root.modules()):
+    # Walk the graph STRUCTURALLY (`_modules`, by identity) rather than through
+    # `root.modules()`: since #1005 a streamed wrapper enumerates its inner
+    # layer in its own place, so `modules()` never visits a wrapper and would
+    # skip its `_modules` — inert for today's callers (embed_tokens / lm_head
+    # hang off top-level containers, and every call is guarded by
+    # `if not _replace_module_references(...): raise`), but the docstring's
+    # promise should not depend on that. Snapshot before mutating: visiting
+    # ``replacement`` after the first assignment would replace its own
+    # ``inner`` reference and make the wrapper its own child.
+    seen: set = set()
+    stack = [root]
+    snapshot = []
+    while stack:
+        module = stack.pop()
+        if id(module) in seen:
+            continue
+        seen.add(id(module))
+        snapshot.append(module)
+        stack.extend(child for child in module._modules.values() if child is not None)
+    for module in snapshot:
         # ``named_children()`` removes duplicate modules, but tied architectures
         # may expose the same boundary module through more than one attribute.
         for name, child in tuple(module._modules.items()):
@@ -1171,13 +1498,13 @@ def _replace_module_references(root: Any, target: Any, replacement: Any) -> int:
 
 
 def canonical_named_parameters(model: Any) -> Iterator[Tuple[str, Any]]:
-    """Yield ``(name, param)`` with the wrapper's ``.inner.`` segment stripped,
-    matching the spelling ``StreamedDecoderLayer.state_dict()`` already uses
-    (v0.72.1). ``named_parameters()`` on a streamed model is not canonical on
-    its own: every wrapped layer's parameters carry an extra ``.inner.``
-    segment that a resident (non-streamed) model of the same checkpoint does
-    not, so a name-keyed comparison between the two sees no overlap unless it
-    goes through this function first.
+    """Yield ``(name, param)`` with any wrapper ``.inner.`` segment stripped,
+    matching the spelling ``StreamedDecoderLayer.state_dict()`` uses (v0.72.1).
+
+    Since #1005 a streamed model's ``named_parameters()`` is canonical on its
+    own (the wrapper reports the inner layer's tree at its own prefix), so this
+    is an identity for it; it is kept for its callers and for any tree that
+    still nests a wrapped module under a child named ``inner``.
     """
     for name, param in model.named_parameters():
         yield name.replace(".inner.", "."), param
@@ -1392,8 +1719,7 @@ def measure_step_peak_bytes(
         return None
     if rows < 1 or seq_len < 1 or vocab_size < 1:
         raise ValueError(
-            f"rows/seq_len/vocab_size must all be >= 1; got "
-            f"{rows}/{seq_len}/{vocab_size}"
+            f"rows/seq_len/vocab_size must all be >= 1; got {rows}/{seq_len}/{vocab_size}"
         )
     ids = None
     out = None
@@ -1413,20 +1739,25 @@ def measure_step_peak_bytes(
         elapsed = time.perf_counter() - started
         peak = int(torch.cuda.max_memory_allocated(device))
         reserved = int(torch.cuda.max_memory_reserved(device))
-    except torch.cuda.OutOfMemoryError:  # pragma: no cover - needs a real OOM
-        # A result, not a failure: the shape provably does not fit. Linux raises
-        # here; Windows/WDDM spills to host memory instead and reaches the
-        # success path with a peak above free VRAM, which the caller refuses just
-        # the same.
-        return StepPeak(
-            peak_bytes=0,
-            reserved_bytes=0,
-            seconds=time.perf_counter() - started,
-            rows=rows,
-            seq_len=seq_len,
-            oom=True,
-        )
     except Exception as exc:  # pragma: no cover - a real CUDA op raised
+        if _is_out_of_memory(exc):
+            # A result, not a failure: the shape provably does not fit. That is
+            # the allocator's own `torch.OutOfMemoryError` on Linux, and — #649's
+            # shape, seen again in #901 — under WDDM, where the allocator has
+            # often already spilled, an `AcceleratorError("CUDA error: out of
+            # memory")` surfacing later at a synchronise. One spelling for both:
+            # the verdict is what tells the operator to lower batch or
+            # max_length, where "instrument failure" tells them nothing they can
+            # act on. (A WDDM run that spills WITHOUT raising reaches the success
+            # path with a peak above free VRAM, which the caller refuses too.)
+            return StepPeak(
+                peak_bytes=0,
+                reserved_bytes=0,
+                seconds=time.perf_counter() - started,
+                rows=rows,
+                seq_len=seq_len,
+                oom=True,
+            )
         # NOT `return None`. None means "never attempted"; this op ran and broke,
         # which can leave the CUDA context poisoned (an illegal access or device
         # assert surfaces exactly here). Reporting that as "cannot tell" would
@@ -1840,9 +2171,7 @@ def materialize_meta_adapter_copy(
         copied += 1
 
     stranded = [
-        name
-        for name, param in model.named_parameters()
-        if target_marker in name and param.is_meta
+        name for name, param in model.named_parameters() if target_marker in name and param.is_meta
     ]
     if stranded:
         raise RuntimeError(
@@ -1878,9 +2207,12 @@ class StreamRuntime:
     def close(self) -> None:
         """Release the weight source and detach the prefetch hook.
 
-        The disk tier holds one open shard handle per decoder layer, so a run
-        that finishes without closing leaks 80+ descriptors on a large model.
-        A no-op for the RAM tier, which owns no handles.
+        On the disk tier this stops the reader THREAD and frees its host
+        staging buffers, which on a pinned run are page-locked and so cost the
+        box until they are released. It holds no shard handles to leak:
+        ``AsyncDiskSource`` opens each shard per read precisely because a
+        mapping charges Windows commit for the file's whole size (#926).
+        A no-op for the RAM tier, which owns neither a thread nor handles.
         """
         source_close = getattr(self.source, "close", None)
         if callable(source_close):
@@ -1901,7 +2233,16 @@ class StreamRuntime:
             "large_buffer_bytes": getattr(self.large_pool, "nbytes", 0),
             "store_bytes": self.source.nbytes,
             "pinned": self.pinned,
+            # What is actually page-locked for the store (#901): the arenas'
+            # power-of-two sizes on a pinned RamSource, 0 on a pageable one, and
+            # None for a source that does not account for it (the disk tier's
+            # staging still pins per tensor).
+            "pinned_bytes": getattr(self.source, "pinned_bytes", None) if self.pinned else 0,
             "tier": self.tier,
+            # The reader's depth, where there is a reader. None on the RAM
+            # tier — RamSource holds every layer and reads nothing ahead, so a
+            # number there would be an invented one.
+            "read_ahead": getattr(self.source, "read_ahead", None),
             "disk_bytes": getattr(self.source, "disk_bytes", 0),
             "layer_loads": self.pool.loads,
             "large_loads": getattr(self.large_pool, "loads", 0),
@@ -1951,6 +2292,7 @@ def install_streaming(
     console: Any = None,
     codes: Optional[Mapping[str, Any]] = None,
     tier: str = "ram",
+    read_ahead: int = DEFAULT_STREAM_READ_AHEAD,
 ) -> StreamRuntime:
     """Wrap every decoder layer and wire the buffer pool + prefetch scheduler."""
     import torch
@@ -2041,8 +2383,7 @@ def install_streaming(
             for key in wanted:
                 if key not in shard_spec:
                     raise ValueError(
-                        f"shard is missing the NF4 sidecar {key!r} — reshard the "
-                        f"checkpoint"
+                        f"shard is missing the NF4 sidecar {key!r} — reshard the checkpoint"
                     )
                 needed[key] = shard_spec[key]
             if spec_q is not None:
@@ -2051,9 +2392,7 @@ def install_streaming(
         active_keys_by_layer.append(tuple(sorted(needed)))
     spec = RamSource.merge_layer_specs(needed_specs_by_layer)
 
-    large_source_indices = {
-        key: n_layers + offset for offset, key in enumerate(large_keys)
-    }
+    large_source_indices = {key: n_layers + offset for offset, key in enumerate(large_keys)}
     source_specs = needed_specs_by_layer + [{key: large_specs[key]} for key in large_keys]
     source_paths = [layer_shard_path(shard_dir, idx) for idx in range(n_layers)] + [
         large_shard_path(shard_dir, key) for key in large_keys
@@ -2067,6 +2406,7 @@ def install_streaming(
         tier,
         require_pin=require_pin,
         shard_paths=source_paths,
+        read_ahead=read_ahead,
     )
     pool = LayerBufferPool(
         spec,
@@ -2110,18 +2450,14 @@ def install_streaming(
         input_module = model.get_input_embeddings()
         output_module = model.get_output_embeddings()
         if input_module is None or output_module is None:
-            raise RuntimeError(
-                "layer streaming needs both input and output embedding modules"
-            )
+            raise RuntimeError("layer streaming needs both input and output embedding modules")
         for role, module, key in (
             ("input embedding", input_module, embed_key),
             ("output head", output_module, output_key),
         ):
             weight = getattr(module, "weight", None)
             if key is None or weight is None or not getattr(weight, "is_meta", False):
-                raise RuntimeError(
-                    f"streamed {role} is not an unmaterialised meta weight"
-                )
+                raise RuntimeError(f"streamed {role} is not an unmaterialised meta weight")
             expected_shape = tuple(large_specs[key][0])
             if tuple(weight.shape) != expected_shape:
                 raise ValueError(
@@ -2131,6 +2467,13 @@ def install_streaming(
 
         large_cls = _streamed_large_layer_class()
         if input_module is output_module:
+            # UNEXERCISED by the test suite, deliberately (#1010 review): no
+            # supported architecture returns ONE module object for both
+            # boundaries -- a tied Llama shares the Parameter, not the module,
+            # and takes the resident path above -- so this branch has no fixture
+            # and its `named_modules()` memo de-duplication (one wrapper reached
+            # under two attribute names yields once, as torch's own walk would)
+            # is read, not run. Kept for the architecture that does share it.
             if embed_key != output_key:
                 raise ValueError("one module cannot represent two untied large-layer weights")
             shared = large_cls(input_module, embed_key, large_pool)
@@ -2172,6 +2515,127 @@ def install_streaming(
     )
 
 
+def _is_out_of_memory(exc: BaseException) -> bool:
+    """THE one spelling of "the device ran out of memory", shared with the batch
+    probe: the allocator's ``torch.OutOfMemoryError``, or a ``RuntimeError``
+    (``AcceleratorError`` is one) whose text says so."""
+    import torch
+
+    from soup_cli.utils.batch_probe import _is_cuda_oom
+
+    return _is_cuda_oom(exc, torch)
+
+
+def drain_stale_cuda_error(
+    device: str = "cuda", *, launch: Optional[Callable[[], None]] = None
+) -> bool:
+    """#901 — consume the stale error a failed page-lock leaves on the CUDA runtime.
+
+    ``cuMemHostAlloc`` refusing a ``pin_memory=True`` allocation raises
+    ``AcceleratorError("CUDA error: out of memory")`` and leaves the runtime's
+    per-thread last error set. Measured on the dev box after such a failure:
+    ``cudaMalloc``, ``synchronize`` and a host-to-device copy all succeed, and the
+    FIRST kernel launch raises that same "out of memory" with 7.3 GB of VRAM
+    free, because its launch check reads the stale value — and clears it, so
+    the second launch works. In the report that first launch was the adapter
+    cast inside ``SFTTrainer.__init__``; with the probe on it was the forward.
+
+    torch exposes no ``cudaGetLastError``, so this launches one trivial kernel
+    to let its check consume the error, then a second to prove the context is
+    healthy. Returns True when a stale error was drained. A launch that fails
+    for any other reason, or twice, propagates: that is a context which is
+    genuinely broken or genuinely out of memory, and hiding it would recreate
+    the silent failure this exists to end. ``launch`` is injectable for tests;
+    the default is a no-op without a CUDA device, where nothing was pinned.
+    """
+    if launch is None:
+        import torch
+
+        if not torch.cuda.is_available():
+            return False
+
+        def launch() -> None:
+            torch.ones(1, device=device)
+            torch.cuda.synchronize(device)
+
+    try:
+        launch()
+    except RuntimeError as exc:
+        if not _is_out_of_memory(exc):
+            raise
+    else:
+        return False
+    launch()
+    return True
+
+
+def release_cached_pinned_memory() -> int:
+    """Return the page-locked blocks torch's caching host allocator kept.
+
+    A pinned tensor that is freed goes back to that cache, not to the OS, so
+    the blocks a partially pinned store allocated before its page-lock failed
+    stay page-locked for the rest of the process — gigabytes on a 14B store,
+    beside the pageable store that replaced it. Returns the bytes released, or
+    0 when the stats or the cache call are unavailable.
+    """
+    import torch
+
+    if not torch.cuda.is_available():
+        return 0
+    empty = getattr(torch._C, "_host_emptyCache", None)
+    if empty is None:  # pragma: no cover - torch without the host-cache call
+        return 0
+    stats = getattr(torch.cuda, "host_memory_stats", None)
+    try:
+        before = int(stats().get("allocated_bytes.current", 0)) if stats else 0
+        empty()
+        after = int(stats().get("allocated_bytes.current", 0)) if stats else 0
+    except Exception as exc:  # noqa: BLE001 - a private API with no contract
+        # Reported, never raised: this runs inside the page-lock fallback, and
+        # an error here would replace "could not page-lock the base" with one
+        # about the recovery. The cache staying full costs RAM, not correctness.
+        logger.warning("could not release torch's cached pinned memory: %r", exc)
+        return 0
+    return max(0, before - after)
+
+
+def recover_from_failed_page_lock(*, device: str = "cuda", console: Any = None) -> bool:
+    """What a pageable fallback owes the run before it builds anything (#901).
+
+    Returns True when a stale CUDA error was drained — the half that decides
+    whether the run's next kernel launch lives. The cache release is reported
+    in the message (bytes, when any were returned) but not in the return value:
+    a full cache costs RAM, an undrained error costs the run.
+    """
+    drained = drain_stale_cuda_error(device)
+    released = release_cached_pinned_memory()
+    if not drained and not released:
+        return False
+    parts = []
+    if drained:
+        parts.append("cleared the stale CUDA out-of-memory error it left on the runtime")
+    if released:
+        parts.append(f"released {released / 1e9:.2f} GB of page-locked memory it left cached")
+    message = f"after the failed page-lock: {' and '.join(parts)}."
+    if console is not None:
+        console.print(f"[dim]{message}[/]")
+    else:
+        logger.info(message)
+    return drained
+
+
+def _recover_before_refusing(console: Any) -> None:
+    """The refusal branches of ``_build_source`` raise instead of falling back,
+    but the stale error a failed page-lock leaves is per-thread and outlives
+    the exception: a caller that catches the refusal (a test, a wrapper that
+    retries with other settings) would inherit it. Best effort, because the
+    refusal is the message that matters and nothing here may replace it."""
+    try:
+        recover_from_failed_page_lock(console=console)
+    except Exception as exc:  # noqa: BLE001 - never let cleanup mask the refusal
+        logger.warning("page-lock recovery failed before the refusal: %r", exc)
+
+
 def _build_source(
     shard_dir,
     n_layers,
@@ -2181,6 +2645,7 @@ def _build_source(
     tier="ram",
     require_pin=False,
     shard_paths=None,
+    read_ahead=DEFAULT_STREAM_READ_AHEAD,
 ):
     """Build the weight source for the chosen tier.
 
@@ -2195,33 +2660,86 @@ def _build_source(
     throughput margin pinning exists to provide — is exactly the outcome the flag
     exists to prevent.
 
-    On the DISK tier pinning is not *unsatisfiable*, it is *inapplicable*: the
-    base does not fit in RAM, so weights stream directly from NVMe and there is
-    no RAM store to page-lock. Refusing here would brick the very runs the disk
-    tier exists for, so ``require_pin`` proceeds — but it is announced, never
-    dropped in silence (#366 review).
+    The DISK tier now behaves the same way, for the same reason. It used to
+    *announce* that pinning was inapplicable — true while the base streamed from
+    NVMe into a freshly allocated tensor per call, with nothing to page-lock.
+    ``AsyncDiskSource`` reads ahead into reusable HOST STAGING (#971), and that
+    staging is exactly the kind of memory pinning exists for: out of pageable
+    memory the host-to-device copy is synchronous and the reader cannot overlap
+    with compute. So an explicit ``training.stream_pin`` is honoured or refused
+    here, never explained away.
+
+    ``read_ahead`` (``training.stream_read_ahead``) is the reader's depth and
+    therefore the multiplier on how much host memory is page-locked, which makes
+    lowering it a remedy the RAM tier cannot offer.
+
+    The second element of the returned tuple means the same thing on both tiers:
+    the host-side source memory is page-locked.
     """
     source_kwargs = {} if shard_paths is None else {"shard_paths": shard_paths}
     if tier == "disk":
-        if require_pin:
-            message = (
-                "training.stream_pin=true, but this run is on the disk tier: the "
-                "base does not fit in RAM, so weights stream directly from NVMe "
-                "and there is no RAM store to page-lock. Pinning does not apply "
-                "here; proceeding without it."
-            )
-            if console is not None:
-                console.print(f"[yellow]{message}[/]")
+        from soup_cli.utils.async_disk_source import AsyncDiskSource
+
+        open_kwargs = dict(read_ahead=read_ahead, **source_kwargs)
+        if pin:
+            try:
+                source = AsyncDiskSource(shard_dir, n_layers, spec, pin=True, **open_kwargs)
+            except (RuntimeError, MemoryError) as exc:
+                # Staging is allocated before the reader thread starts, so a
+                # constructor that raised here owns no thread and no buffers —
+                # there is nothing to close before retrying.
+                if require_pin:
+                    _recover_before_refusing(console)
+                    raise RuntimeError(
+                        "training.stream_pin=true but this box could not "
+                        "page-lock the disk tier's host staging "
+                        f"({type(exc).__name__}). The staging is "
+                        f"training.stream_read_ahead={read_ahead} layers deep "
+                        "per distinct layer shape, so that depth is what decides "
+                        "how much gets page-locked. Refusing rather than silently "
+                        "degrading to pageable staging, which makes host-to-device "
+                        "copies synchronous and costs the ~97% -> ~79% "
+                        "GPU-utilisation overlap pinning buys. Lower "
+                        "training.stream_read_ahead, free RAM, or unset "
+                        "training.stream_pin to allow the pageable fallback."
+                    ) from exc
+                message = (
+                    "layer streaming could not page-lock the disk tier's host "
+                    f"staging ({type(exc).__name__}); falling back to PAGEABLE "
+                    "staging. Host-to-device copies become synchronous, which "
+                    "costs overlap — measured GPU utilisation drops from ~97% to "
+                    "~79%. Lower training.stream_read_ahead (its depth is what "
+                    "decides how much is page-locked) or free RAM to keep the "
+                    "pinned staging."
+                )
+                if console is not None:
+                    console.print(f"[yellow]{message}[/]")
+                else:
+                    logger.warning(message)
+                # #901 — BEFORE the pageable retry: the failed page-lock leaves
+                # a stale CUDA error that the run's first kernel launch would
+                # otherwise report as an out-of-memory it never had.
+                recover_from_failed_page_lock(console=console)
             else:
-                logger.warning(message)
-        return DiskSource(shard_dir, n_layers, spec, **source_kwargs), False
+                return source, source.pinned
+        source = AsyncDiskSource(shard_dir, n_layers, spec, pin=False, **open_kwargs)
+        return source, source.pinned
+    # `source.pinned` on both branches rather than the literal, so the tuple's
+    # second element has ONE meaning to read off: what the source says about
+    # itself. Value-identical today — `RamSource.__init__` raises rather than
+    # returning a pageable store under pin=True — but a literal is a claim
+    # about the constructor made at the call site, which is where the disk
+    # branch's two spellings used to disagree.
     if not pin:
-        return RamSource(shard_dir, n_layers, spec, pin=False, **source_kwargs), False
+        source = RamSource(shard_dir, n_layers, spec, pin=False, **source_kwargs)
+        return source, source.pinned
     try:
-        return RamSource(shard_dir, n_layers, spec, pin=True, **source_kwargs), True
+        source = RamSource(shard_dir, n_layers, spec, pin=True, **source_kwargs)
+        return source, source.pinned
     except (RuntimeError, MemoryError) as exc:
         store_gb = _spec_bytes(spec, n_layers=n_layers) / 1e9
         if require_pin:
+            _recover_before_refusing(console)
             raise RuntimeError(
                 "training.stream_pin=true but this box could not page-lock the "
                 f"{store_gb:.2f} GB RAM store ({type(exc).__name__}). Refusing "
@@ -2242,7 +2760,15 @@ def _build_source(
             console.print(f"[yellow]{message}[/]")
         else:
             logger.warning(message)
-        return RamSource(shard_dir, n_layers, spec, pin=False, **source_kwargs), False
+        # #901 — the fallback was dead on arrival without this: the failed
+        # page-lock leaves a stale CUDA error, and the first kernel launch of
+        # the run (in the report, `param.data.to(bfloat16)` in
+        # SFTTrainer.__init__) reported it as an out-of-memory with gigabytes
+        # free. Drain it, and give back the page-locked blocks the abandoned
+        # attempt left in torch's host cache, before building the store.
+        recover_from_failed_page_lock(console=console)
+        source = RamSource(shard_dir, n_layers, spec, pin=False, **source_kwargs)
+        return source, source.pinned
 
 
 def _spec_bytes(
@@ -2259,9 +2785,7 @@ def _spec_bytes(
     else:
         layer_specs = list(spec)
         if len(layer_specs) != n_layers:
-            raise ValueError(
-                f"expected {n_layers} layer specs, but got {len(layer_specs)}"
-            )
+            raise ValueError(f"expected {n_layers} layer specs, but got {len(layer_specs)}")
     return sum(
         math.prod(shape) * _dtype_size(dtype)
         for layer_spec in layer_specs
@@ -2286,6 +2810,7 @@ def build_streamed_model(
     quant: str = "none",
     double_quant: bool = True,
     tier: str = "ram",
+    read_ahead: int = DEFAULT_STREAM_READ_AHEAD,
     weights_dir: Optional[str] = None,
     ngram_source: str = "disk",
 ) -> Tuple[Any, StreamRuntime]:
@@ -2303,9 +2828,7 @@ def build_streamed_model(
     external_sources: Tuple[Any, ...] = ()
     if external_tensors:
         if weights_dir is None:
-            raise ValueError(
-                "a Qwen4 shard index with external PLE tensors requires weights_dir"
-            )
+            raise ValueError("a Qwen4 shard index with external PLE tensors requires weights_dir")
         from soup_cli.utils.qwen4_ple import install_qwen4_ple_embeddings
 
         external_sources = install_qwen4_ple_embeddings(
@@ -2315,9 +2838,7 @@ def build_streamed_model(
             source=ngram_source,
         )
     try:
-        extras = materialize_extras(
-            model, shard_dir, index, device=device, dtype=dtype
-        )
+        extras = materialize_extras(model, shard_dir, index, device=device, dtype=dtype)
         for param in model.parameters():
             param.requires_grad = False
         from soup_cli.utils.peft_wiring import apply_pre_lora_patches
@@ -2337,6 +2858,7 @@ def build_streamed_model(
             console=console,
             codes=extras.codes,
             tier=tier,
+            read_ahead=read_ahead,
         )
     except BaseException:
         for external in external_sources:

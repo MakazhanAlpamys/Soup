@@ -45,6 +45,7 @@ from __future__ import annotations
 import contextlib
 import io
 import json
+import math
 import re
 import subprocess
 import sys
@@ -136,6 +137,25 @@ def host_mem() -> tuple[str, str]:
         return f"unavailable: {exc!r}", "unavailable"
 
 
+def resolve_step_counts(
+    rows_n: int, epochs: int, batch_size: int, grad_accumulation_steps: int
+) -> tuple[int, int]:
+    """Return ``(iterations, optimizer_updates)`` as the MLX wrapper resolves them.
+
+    Mirrors ``MLXSFTTrainerWrapper.setup``: iterations are ``epochs`` times the
+    ceiling of rows over ``batch_size``, then rounded DOWN to a whole multiple of
+    ``grad_accumulation_steps`` (never below one group). mlx-lm updates the
+    optimizer once per group, so updates are ``iterations // accum``.
+    """
+    iters = int(epochs * max(1, math.ceil(rows_n / batch_size)))
+    if grad_accumulation_steps > 1:
+        iters = max(
+            grad_accumulation_steps,
+            iters - (iters % grad_accumulation_steps),
+        )
+    return iters, iters // max(1, grad_accumulation_steps)
+
+
 def main() -> int:
     model = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_MODEL
     rows_n = int(sys.argv[2]) if len(sys.argv) > 2 else 48
@@ -174,12 +194,19 @@ data:
   # the record was measured under. Re-measure deliberately, not by default.
   train_on_responses_only: false
 training:
+  # Everything that moves the iteration or optimizer-update count is pinned
+  # here, with the reason, because this harness backs a published throughput
+  # record. A field left to the schema default makes the run behind that
+  # record depend on a value the harness never mentions, which is #716.
   epochs: {epochs}
   lr: 1e-4
+  # One sample per forward pass, so iterations == rows * epochs. Any other
+  # value makes iterations ceil(rows / batch_size) * epochs.
   batch_size: 1
-  # Pinned: the schema default (4) would round `iters` down to a whole
-  # accumulation window (#696), moving the step count this harness reports
-  # out from under any published benchmark record that assumes 1:1 rows-to-iters.
+  # Pinned to 1, not left at the schema default of 4. At 4, mlx-lm steps the
+  # optimizer once per 4 iterations, so the record's 48 iterations would be 12
+  # updates -- and #696 rounds `iters` DOWN to a whole number of groups, so a
+  # row count not divisible by 4 (50, say) silently drops the remainder rows.
   gradient_accumulation_steps: 1
   # Pinned, not left at the schema defaults of `cosine` / 0.03 / 0.01 (#686).
   # Once MLX honours the schedule, the published record's constant 1.000e-04
@@ -200,6 +227,27 @@ training:
   logging_steps: 5
 output: {out}
 """)
+
+    # Assert the resolved counts from the LOADED config rather than trusting
+    # the pins above to have been read. A schema default that moved, or a pin
+    # deleted in a later edit, exits non-zero here instead of quietly
+    # publishing a figure measured over a different run.
+    expected = rows_n * epochs
+    batch_size = cfg.training.batch_size
+    accum = cfg.training.gradient_accumulation_steps
+    iters, updates = resolve_step_counts(rows_n, epochs, batch_size, accum)
+    if iters != expected or updates != expected:
+        dropped = max(0, expected - iters * batch_size)
+        sys.exit(
+            f"harness run is not {expected} iterations / {expected} optimizer "
+            f"updates: batch_size={batch_size}, gradient_accumulation_steps="
+            f"{accum} resolve {rows_n} rows x {epochs} epoch(s) to {iters} "
+            f"iterations and {updates} optimizer updates, dropping {dropped} "
+            "row(s). Pin them in the YAML above; a published figure must not "
+            "depend on a schema default."
+        )
+    print(f"steps         : {iters} iterations / {updates} optimizer updates  "
+          f"(batch_size={batch_size}, grad_accum={accum})")
 
     # Dispatch first (#363): a transformers-path number would be a lie.
     resolved = resolve_trainer(cfg)

@@ -156,13 +156,15 @@ class UnlearnTrainerWrapper:
         self._optimizer: Any = None
         self._scheduler: Any = None
         self._max_updates = 0
+        self._batch_size = 1
+        self._max_examples = 0
         # Kept None — this wrapper has no HF Trainer object (the push-callback
         # path in commands/train.py gracefully skips when .trainer is None).
         self.trainer: Any = None
 
     def setup(self, dataset: Any = None) -> None:
         """Load policy + (optional) frozen reference, LoRA, and datasets."""
-        from peft import LoraConfig, get_peft_model
+        from peft import get_peft_model
 
         from soup_cli.utils.live_eval import load_model_and_tokenizer
         from soup_cli.utils.seeding import apply_training_seed
@@ -170,12 +172,6 @@ class UnlearnTrainerWrapper:
 
         cfg = self.config
         tcfg = cfg.training
-
-        if tcfg.batch_size == "auto":
-            raise ValueError(
-                "task='unlearn' requires an integer training.batch_size; "
-                "batch_size='auto' is unsupported"
-            )
 
         # #353: seed before the model and any adapter are built. This wrapper
         # never builds a Trainer, so nothing else would apply the seed at all.
@@ -190,20 +186,15 @@ class UnlearnTrainerWrapper:
             trust_remote_code=self.trust_remote_code,
             quantization=tcfg.quantization,
         )
-        lora_cfg = LoraConfig(
-            r=cfg.training.lora.r,
-            lora_alpha=cfg.training.lora.alpha,
-            lora_dropout=cfg.training.lora.dropout,
-            target_modules=(
-                cfg.training.lora.target_modules
-                if cfg.training.lora.target_modules != "auto"
-                else None
-            ),
-            use_dora=cfg.training.lora.use_dora,
-            use_rslora=cfg.training.lora.use_rslora,
-            rank_pattern=cfg.training.lora.rank_pattern,
-            alpha_pattern=cfg.training.lora.alpha_pattern,
-            bias="none",
+        from soup_cli.utils.peft_wiring import (
+            build_lora_config,
+            resolve_lora_target_modules,
+        )
+
+        target_modules = resolve_lora_target_modules(self.model, tcfg.lora.target_modules)
+        lora_cfg = build_lora_config(
+            tcfg.lora,
+            target_modules=target_modules,
             task_type="CAUSAL_LM",
         )
         self.model = get_peft_model(self.model, lora_cfg)
@@ -241,11 +232,26 @@ class UnlearnTrainerWrapper:
 
         import math
 
-        batch_size = int(tcfg.batch_size)
-        accumulation = int(tcfg.gradient_accumulation_steps)
-        batches_per_epoch = math.ceil(len(self._forget) / batch_size)
-        self._max_updates = min(
-            _MAX_STEPS_CAP, math.ceil(batches_per_epoch / accumulation) * int(tcfg.epochs)
+        batch_size = tcfg.batch_size
+        if batch_size == "auto":
+            from soup_cli.utils.gpu import estimate_batch_size, get_gpu_info, model_size_from_name
+
+            batch_size = estimate_batch_size(
+                model_params_b=model_size_from_name(cfg.base),
+                seq_length=cfg.data.max_length,
+                gpu_memory_bytes=get_gpu_info()["memory_total_bytes"],
+                quantization=tcfg.quantization,
+                lora_r=tcfg.lora.r,
+            )
+            console.print(f"[green]Auto batch size (unlearn):[/] {batch_size}")
+        self._batch_size = int(batch_size)
+        effective_batch = self._batch_size * int(tcfg.gradient_accumulation_steps)
+        # Keep the pre-existing sample budget and reported total_steps scale.
+        self._max_examples = min(_MAX_STEPS_CAP, len(self._forget) * int(tcfg.epochs))
+        full_epochs, remainder = divmod(self._max_examples, len(self._forget))
+        self._max_updates = (
+            full_epochs * math.ceil(len(self._forget) / effective_batch)
+            + math.ceil(remainder / effective_batch)
         )
         lr = float(tcfg.lr)
         # Reuse Transformers' optimizer resolution so the hand-rolled loop
@@ -305,7 +311,7 @@ class UnlearnTrainerWrapper:
 
         cfg = self.config
         tcfg = cfg.training
-        batch_size = int(tcfg.batch_size)
+        batch_size = self._batch_size
         accumulation = int(tcfg.gradient_accumulation_steps)
         started = time.monotonic()
         dev = self._dev
@@ -337,9 +343,9 @@ class UnlearnTrainerWrapper:
         retain_idx = 0
         accumulated = 0
         self._optimizer.zero_grad(set_to_none=True)
-        while step < self._max_updates:
+        for _epoch in range(int(tcfg.epochs)):
             for f_prompt, f_target in self._forget:
-                if step >= self._max_updates:
+                if step >= self._max_examples:
                     break
                 if method in ("npo", "simnpo"):
                     loss = self._step_preference(
@@ -358,15 +364,20 @@ class UnlearnTrainerWrapper:
                     )
                 if loss is None:
                     continue
-                loss = loss / float(batch_size * accumulation)
+                # Accumulate unscaled gradients, then average by the actual
+                # number of contributing examples (including a partial batch).
+                lval = float(loss.item())
                 loss.backward()
                 accumulated += 1
-                lval = float(loss.item())
+                step += 1
                 if initial_loss is None:
                     initial_loss = lval
                 final_loss = lval
                 if accumulated < batch_size * accumulation:
                     continue
+                for parameter in self.model.parameters():
+                    if parameter.grad is not None:
+                        parameter.grad.div_(accumulated)
                 torch.nn.utils.clip_grad_norm_(
                     self.model.parameters(), float(tcfg.max_grad_norm)
                 )
@@ -374,8 +385,10 @@ class UnlearnTrainerWrapper:
                 self._scheduler.step()
                 self._optimizer.zero_grad(set_to_none=True)
                 accumulated = 0
-                step += 1
             if accumulated:
+                for parameter in self.model.parameters():
+                    if parameter.grad is not None:
+                        parameter.grad.div_(accumulated)
                 torch.nn.utils.clip_grad_norm_(
                     self.model.parameters(), float(tcfg.max_grad_norm)
                 )
@@ -383,8 +396,7 @@ class UnlearnTrainerWrapper:
                 self._scheduler.step()
                 self._optimizer.zero_grad(set_to_none=True)
                 accumulated = 0
-                step += 1
-            if step == 0:
+            if step >= self._max_examples:
                 break
 
         output_dir = _validated_output_dir(cfg.output)

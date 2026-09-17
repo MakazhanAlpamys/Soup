@@ -326,10 +326,10 @@ export LANGFUSE_HOST=https://us.cloud.langfuse.com   # optional: default is http
 soup ingest --source langfuse --pull --since 7d --output traces.jsonl
 ```
 
-- **What one row is.** One output row per `GENERATION` observation in the window — the unit that carries a model, the exact input it was given and the output it produced — read from Langfuse's Observations API v2 (`/api/public/traces` is removed from Langfuse Cloud on 2026-11-16). A row's `trace_id` is the observation id. The API returns plain-text input and output as-is but structured values (chat message lists, objects) as JSON inside a string; those are decoded, and a chat message list becomes a `prompt` of every message's content joined by newlines (system prompt included), the same flattening `parse_langfuse` applies to a `{"messages": [...]}` export. An agent trace therefore yields one row per LLM call it made; its spans and tool calls yield none. Generations with no input or no output are skipped and counted in the summary line, so a pull that matched nothing usable says so instead of writing an empty file silently.
+- **What one row is.** One output row per `GENERATION` observation in the window — the unit that carries a model, the exact input it was given and the output it produced — read from Langfuse's Observations API v2 (`/api/public/traces` is removed from Langfuse Cloud on 2026-11-16) and checked again on each observation, so a server that ignores the `type` filter cannot turn spans or tool calls into rows — they are counted as skipped in the summary. A row's `trace_id` is the observation id. The API returns plain-text input and output as-is but structured values (chat message lists, objects) as JSON inside a string; those are decoded, and a chat message list becomes a `prompt` of every message's content joined by newlines (system prompt included), the same flattening `parse_langfuse` applies to a `{"messages": [...]}` export. An agent trace therefore yields one row per LLM call it made; its spans and tool calls yield none. Generations with no input or no output are skipped and counted in the summary line, so a pull that matched nothing usable says so instead of writing an empty file silently.
 - **Credentials.** Read from the environment only, never from a flag, so they never reach the audit log's argv. `LANGFUSE_BASE_URL` is honoured before `LANGFUSE_HOST`, the same precedence as the Langfuse SDK. The key pair is not written to the output, the console, debug logs or error messages.
 - **Host checks.** HTTPS only. The host goes through the same SSRF validator as `--slack-url`; a private, link-local or loopback address (self-hosted Langfuse) additionally needs `--allow-private-host`. Redirects are refused rather than followed with credentials attached.
-- **Bounds.** `--since` accepts `30m` / `24h` / `7d` up to `365d` (default `7d`). Each request times out after 30 s and a response is capped at 64 MiB. Pages hold 100 generations; if results are still pending after `--max-pages` pages (default 100, max 10 000), the command stops with exit 1 and writes nothing — the output streams to a staging file, so an earlier file at `--output` is left untouched. HTTP 429 is retried up to 5 times, honouring `Retry-After` with a 60 s ceiling.
+- **Bounds.** `--since` accepts `30m` / `24h` / `7d` up to `365d` (default `7d`). Each request is bounded by a 30 s wall-clock deadline covering the connect and the whole response — a server that drip-feeds bytes cannot outlast it — and a response is capped at 64 MiB. Pages hold 100 generations; if results are still pending after `--max-pages` pages (default 100, max 10 000), the command stops with exit 1 and writes nothing — the output streams to a staging file, so an earlier file at `--output` is left untouched. HTTP 429 is retried up to 5 times, honouring `Retry-After` with a 60 s ceiling, and a pagination cursor the server repeats stops the pull instead of spending the rest of the page budget.
 - **Without `--pull`** nothing changes: the pull code is not imported and no connection is opened.
 
 The other sources have no live pull yet — export them and pass `--logs`.
@@ -608,7 +608,7 @@ Use with `data.format: pre_tokenized` and `data.tokenized_path: ./.soup-tokenize
 
 Soup speaks the same dataset surface as Axolotl + LlamaFactory + Unsloth — remote URIs, streaming, sharding, multi-dataset interleaving, vocab expansion, and document ingestion all live in one schema.
 
-**Remote datasets** (schema gate live; fsspec backend wiring lands in v0.42.1):
+**Remote datasets** are loaded through the matching fsspec backend:
 
 ```yaml
 data:
@@ -684,8 +684,25 @@ not byte-identically (a streaming source's size generally can't be known ahead o
 On the local (eager) and all-hub-name paths, `data.val_split` is applied per source before
 `over`/`probs` pad it with copies of its own rows, so a padded row can never land on both
 sides of the split; `concat`/`under` never duplicate rows and still split the combined
-result as before. This does not reach the streaming path below, which still splits after
-combining and can still duplicate a row across `train` and `val` under `over`/`probs`.
+result as before.
+
+The streaming path reaches the same guarantee by a different route (#702). A stream is not
+countable ahead of time, so there is nothing to take a fraction of before interleaving
+starts; instead, once `over` has been materialised, the split is sized over the *distinct*
+rows and val is taken from the end of the stream, preferring rows whose content occurs only
+once, so train keeps every row and all of its oversampling. Only if there are too few such
+rows is repeated content moved to val, and then its other copies are withheld from train
+and the number withheld is printed as a warning. A split that would leave train empty
+raises instead. Because val comes from distinct rows in stream order rather than from each
+source in turn, **it is not balanced across sources**: with 100 rows against 10 under
+`val_split: 0.1`, every val row comes from the larger source, since the smaller one's rows
+are all recycled. The eager path's per-source carve-out is mixture-representative; this one
+is not.
+
+`concat`/`under`/`probs` do not *add* duplicates on the streaming path (only `over` uses
+`stopping_strategy="all_exhausted"`), so they keep the ordinary positional split. That is a
+statement about interleaving, not about your data: rows that are already duplicated in a
+source can still land on both sides of the split under any strategy, on either path.
 
 Splitting before padding also means the requested `val_split` fraction is no longer exact
 under `over`/`probs`: it is taken from each source's own (smaller, unpadded) row count, so
@@ -854,7 +871,7 @@ soup data educational  --input training.jsonl --output scored.jsonl
 soup data decontaminate --input training.jsonl --benchmarks mmlu,gsm8k,humaneval --output clean.jsonl
 ```
 
-The scorecard reports PII flagged, toxic flagged, language distribution, mean educational value, and decontamination removed. PII detection uses a narrow ReDoS-hardened regex set (email / phone / SSN / credit-card) with a 50 KB pre-cap on every input. Language detection is a stopword heuristic across six languages. Toxicity is a keyword baseline; the Llama-Guard-3-1B variant + FineWeb-Edu classifier ship behind `[data-pro]` extras. Decontamination uses n-gram containment against benchmark corpora: use `--benchmarks mmlu,gsm8k` for built-in allowlist, or `--benchmark-file custom_benchmark.jsonl` for your own corpus.
+The scorecard reports PII matches, abuse-keyword matches, language distribution, mean heuristic educational value, and decontamination removals. PII detection uses a narrow ReDoS-hardened regex set (email / phone / SSN / credit-card) with a 50 KB pre-cap on every input. Language detection is a stopword heuristic across six languages. `soup data toxicity` is retained as a compatible command name, but its output is explicitly an abuse-keyword heuristic, not a toxicity classifier. Ambiguous technical and medical terms such as process `kill`, thread `die`, and heart `attack` are not treated as standalone safety signals. This trades one known failure mode for explicit limitations: in maintainer review, 9 of 10 held-out abusive examples scored zero and 10 of 12 benign technical or editorial examples were flagged at the default threshold. Use it only for keyword triage, never as a safety decision. The default Magpie quality filter therefore applies only non-empty and educational heuristics; provide an explicit model-backed policy outside Soup when safety classification is required. The `[data-pro]` extra currently adds `langdetect` and Presidio only; it does not install Llama Guard or FineWeb-Edu. Decontamination uses n-gram containment against benchmark corpora: use `--benchmarks mmlu,gsm8k` for built-in allowlist, or `--benchmark-file custom_benchmark.jsonl` for your own corpus.
 
 
 ## Remote Datasets (S3 / GCS / Azure / OCI)
@@ -891,6 +908,7 @@ nodes:
     config: {path: prompts.jsonl}
   - name: llm1
     kind: llm_text
+    config: {prompt: "Answer the request: {text}"}
   - name: judge1
     kind: judge
   - name: samp1
@@ -901,7 +919,7 @@ edges:
   - [judge1, samp1]
 ```
 
-Closed node-kind allowlist (`seed` / `llm_text` / `code` / `judge` / `validator` / `sampler`); Kahn's topological sort via `collections.deque` (deterministic, O(N+E)); cycle / self-loop / duplicate-edge / dangling-edge / unknown-kind rejection. `_MAX_NODES=256`, `_MAX_EDGES=1024`, `_MAX_FILE_BYTES=1MiB`. The recipe file must stay under cwd and **must not be a symlink** (`os.lstat + S_ISLNK` TOCTOU defence). Live offline runner against a local model lands in v0.45.1.
+Closed node-kind allowlist (`seed` / `llm_text` / `code` / `judge` / `validator` / `sampler`); Kahn's topological sort via `collections.deque` (deterministic, O(N+E)); cycle / self-loop / duplicate-edge / dangling-edge / unknown-kind rejection. `_MAX_NODES=256`, `_MAX_EDGES=1024`, `_MAX_FILE_BYTES=1MiB`. The recipe file must stay under cwd and **must not be a symlink** (`os.lstat + S_ISLNK` TOCTOU defence).
 
 
 ## Data Mixing Optimizer (BETA)
@@ -922,7 +940,7 @@ Re-apply a previously written recipe:
 soup data mix --apply mix_recipe.yaml
 ```
 
-Live wiring of the proxy training loop into a short `soup train` run is the v0.48.1 deliverable; v0.48.0 ships a synthetic offline proxy (quadratic penalty around the uniform simplex) so the budget tracker, optimiser surface, and recipe writer can be exercised without GPUs. `scikit-optimize` is opt-in via `OptimizerProtocol`; the default fallback is a deterministic Dirichlet sampler.
+Pass `--live --base-yaml soup.yaml` to score each candidate with a short `soup train` proxy run. Without `--live`, Soup uses a synthetic offline proxy (quadratic penalty around the uniform simplex) so the budget tracker, optimiser surface, and recipe writer can be exercised without GPUs. `scikit-optimize` is opt-in via `OptimizerProtocol`; the default fallback is a deterministic Dirichlet sampler.
 
 
 ## AOT Tokenization with `soup data preprocess`
@@ -945,11 +963,24 @@ up from the last completed shard.
 Execute a Data Recipe DAG end-to-end:
 
 ```bash
-soup data recipe path/to/recipe.yaml --execute --output ./out
+soup data recipe path/to/recipe.yaml --execute --output ./out \
+    --provider ollama --model llama3.1
 ```
 
+`llm_text` and `judge` nodes support `ollama`, `anthropic`, and `vllm`; use
+`--base-url` to override the loopback endpoint for Ollama or vLLM. Running either
+node kind without `--provider` is refused so placeholder data cannot be mistaken
+for live generations. For deterministic tests only, `--offline` explicitly enables
+`llm_text(offline): ...` placeholders and makes judge nodes accept every row; the
+command prints a warning whenever this mode is active.
+
+Live provider-call failures are counted: if every attempted call for an `llm_text`
+or `judge` node fails, the command names the endpoint and exits 1. Partial failures
+keep usable rows and report their count in the completion summary, while a provider
+that legitimately returns an empty completion still counts as a successful call.
+
 Six node kinds now run live: **seed** (JSONL load), **llm_text** (LLM generation via
-any provider), **code** (execution via RLVR sandbox), **judge** (binary scoring),
+Ollama, Anthropic, or vLLM), **code** (execution via RLVR sandbox), **judge** (binary scoring),
 **validator** (regex or JSON schema), **sampler** (deterministic selection). Checkpoint
 written per node; resume rehydrates from per-node sidecars. Failed rows logged with
 redacted reasons (paths stripped, capped at 256 chars).
@@ -991,11 +1022,15 @@ soup data lint ./data/prefs.jsonl --model meta-llama/Llama-3.1-8B-Instruct  # ex
 ```
 
 Five checks: `length_bias` — the **#1 silent DPO degradation**: `chosen`
-systematically longer than `rejected`, reported as a Cohen's d effect size —
+systematically longer than `rejected`, reported as a Cohen's d effect size; MAJOR
+needs |d| >= 0.8 and mean lengths at least 10% apart, MINOR |d| >= 0.3 and 5%, so a
+consistent one-word gap between near-constant lengths is not flagged —
 `label_imbalance` (KTO desirable:undesirable ratio), `near_duplicates`
 (MinHash/LSH, reuses the `soup data dedup` kernel; requires
 `pip install "soup-cli[data]"`, degrades to an advisory skip otherwise),
 `identical_pairs` (`chosen == rejected` — zero preference signal), and
 `prompt_leak` (the prompt echoed verbatim inside the completion, a common
-synthetic-data pipeline bug). Same OK/MINOR/MAJOR taxonomy and exit codes as
+synthetic-data pipeline bug). For conversational `chosen` / `rejected` (message
+lists), `length_bias` and `prompt_leak` read only the assistant turns, since the
+leading user turn is the prompt itself. Same OK/MINOR/MAJOR taxonomy and exit codes as
 `soup data doctor`.

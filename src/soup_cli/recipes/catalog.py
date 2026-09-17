@@ -48,7 +48,7 @@ def search_recipes(
 
 
 # ---------------------------------------------------------------------------
-# Recipe catalog (165 recipes)
+# Recipe catalog (176 recipes)
 # ---------------------------------------------------------------------------
 
 RECIPES: Dict[str, RecipeMeta] = {
@@ -3798,6 +3798,39 @@ training:
 output: ./output
 """,
     ),
+    "qwen3.5-0.8b-grpo": RecipeMeta(
+        model="Qwen/Qwen3.5-0.8B",
+        task="grpo",
+        size="0.8B",
+        tags=("qwen", "qwen3.5", "grpo", "reasoning", "thinking", "tiny", "edge", "mobile"),
+        description="Qwen 3.5 0.8B GRPO reasoning training (Apache-2.0, tiny / mobile)",
+        yaml_str="""\
+base: Qwen/Qwen3.5-0.8B
+task: grpo
+modality: text
+
+data:
+  train: ./data/reasoning_train.jsonl
+  format: auto
+  max_length: 4096
+
+training:
+  epochs: 3
+  lr: 1e-5
+  batch_size: auto
+  gradient_accumulation_steps: 8
+  lora:
+    r: 16
+    alpha: 32
+    target_modules: auto
+  quantization: 4bit
+  grpo_beta: 0.1
+  num_generations: 4
+  reward_fn: accuracy
+
+output: ./output
+""",
+    ),
     "qwen3.5-2b-sft": RecipeMeta(
         model="Qwen/Qwen3.5-2B",
         task="sft",
@@ -3823,6 +3856,39 @@ training:
     alpha: 16
     target_modules: auto
   quantization: 4bit
+
+output: ./output
+""",
+    ),
+    "qwen3.5-2b-grpo": RecipeMeta(
+        model="Qwen/Qwen3.5-2B",
+        task="grpo",
+        size="2B",
+        tags=("qwen", "qwen3.5", "grpo", "reasoning", "thinking", "small", "edge"),
+        description="Qwen 3.5 2B GRPO reasoning training (Apache-2.0, small / edge)",
+        yaml_str="""\
+base: Qwen/Qwen3.5-2B
+task: grpo
+modality: text
+
+data:
+  train: ./data/reasoning_train.jsonl
+  format: auto
+  max_length: 4096
+
+training:
+  epochs: 3
+  lr: 1e-5
+  batch_size: auto
+  gradient_accumulation_steps: 8
+  lora:
+    r: 16
+    alpha: 32
+    target_modules: auto
+  quantization: 4bit
+  grpo_beta: 0.1
+  num_generations: 4
+  reward_fn: accuracy
 
 output: ./output
 """,
@@ -4073,6 +4139,49 @@ training:
 output: ./output
 """,
     ),
+    "qwen3.5-35b-a3b-grpo": RecipeMeta(
+        model="Qwen/Qwen3.5-35B-A3B",
+        task="grpo",
+        size="35B",
+        tags=(
+            "qwen",
+            "qwen3.5",
+            "grpo",
+            "reasoning",
+            "moe",
+            "mixture-of-experts",
+        ),
+        description="Qwen 3.5 35B-A3B MoE GRPO reasoning (Apache-2.0, 3B active)",
+        yaml_str="""\
+base: Qwen/Qwen3.5-35B-A3B
+task: grpo
+modality: text
+
+data:
+  train: ./data/reasoning_train.jsonl
+  format: auto
+  max_length: 4096
+
+training:
+  epochs: 3
+  lr: 1e-5
+  batch_size: 1
+  gradient_accumulation_steps: 16
+  lora:
+    r: 16
+    alpha: 32
+    target_modules: auto
+  quantization: 4bit
+  grpo_beta: 0.1
+  num_generations: 4
+  reward_fn: accuracy
+  moe_lora: true
+  moe_aux_loss_coeff: 0.01
+  gradient_checkpointing: true
+
+output: ./output
+""",
+    ),
     "qwen3.5-122b-a10b-sft": RecipeMeta(
         model="Qwen/Qwen3.5-122B-A10B",
         task="sft",
@@ -4175,6 +4284,70 @@ training:
 output: ./output
 """,
     ),
+    "qwen3.6-27b-dpo": RecipeMeta(
+        model="Qwen/Qwen3.6-27B",
+        task="dpo",
+        size="27B",
+        tags=("qwen", "qwen3.6", "dpo", "alignment", "preference", "large", "deepspeed"),
+        description="Qwen 3.6 27B DPO alignment (Apache-2.0) with DeepSpeed ZeRO-2",
+        yaml_str="""\
+base: Qwen/Qwen3.6-27B
+task: dpo
+modality: text
+
+data:
+  train: ./data/preference_train.jsonl
+  format: dpo
+  max_length: 4096
+
+training:
+  epochs: 3
+  lr: 5e-6
+  batch_size: auto
+  gradient_accumulation_steps: 8
+  lora:
+    r: 16
+    alpha: 32
+    target_modules: auto
+  quantization: 4bit
+  dpo_beta: 0.1
+
+output: ./output
+""",
+    ),
+    "qwen3.6-27b-grpo": RecipeMeta(
+        model="Qwen/Qwen3.6-27B",
+        task="grpo",
+        size="27B",
+        tags=("qwen", "qwen3.6", "grpo", "reasoning", "thinking", "large", "deepspeed"),
+        description="Qwen 3.6 27B GRPO reasoning training (Apache-2.0) with DeepSpeed ZeRO-2",
+        yaml_str="""\
+base: Qwen/Qwen3.6-27B
+task: grpo
+modality: text
+
+data:
+  train: ./data/reasoning_train.jsonl
+  format: auto
+  max_length: 4096
+
+training:
+  epochs: 3
+  lr: 1e-5
+  batch_size: auto
+  gradient_accumulation_steps: 8
+  lora:
+    r: 16
+    alpha: 32
+    target_modules: auto
+  quantization: 4bit
+  grpo_beta: 0.1
+  num_generations: 4
+  reward_fn: accuracy
+
+output: ./output
+""",
+    ),
     "qwen3.6-35b-a3b-sft": RecipeMeta(
         model="Qwen/Qwen3.6-35B-A3B",
         task="sft",
@@ -4203,6 +4376,75 @@ training:
   quantization: 4bit
   moe_lora: true
   moe_aux_loss_coeff: 0.01
+
+output: ./output
+""",
+    ),
+    "qwen3.6-35b-a3b-dpo": RecipeMeta(
+        model="Qwen/Qwen3.6-35B-A3B",
+        task="dpo",
+        size="35B",
+        tags=("qwen", "qwen3.6", "dpo", "alignment", "preference", "moe", "mixture-of-experts"),
+        description="Qwen 3.6 35B-A3B MoE DPO alignment (Apache-2.0, 3B active)",
+        yaml_str="""\
+base: Qwen/Qwen3.6-35B-A3B
+task: dpo
+modality: text
+
+data:
+  train: ./data/preference_train.jsonl
+  format: dpo
+  max_length: 4096
+
+training:
+  epochs: 3
+  lr: 5e-6
+  batch_size: auto
+  gradient_accumulation_steps: 8
+  lora:
+    r: 16
+    alpha: 32
+    target_modules: auto
+  quantization: 4bit
+  dpo_beta: 0.1
+  moe_lora: true
+  moe_aux_loss_coeff: 0.01
+
+output: ./output
+""",
+    ),
+    "qwen3.6-35b-a3b-grpo": RecipeMeta(
+        model="Qwen/Qwen3.6-35B-A3B",
+        task="grpo",
+        size="35B",
+        tags=("qwen", "qwen3.6", "grpo", "reasoning", "moe", "mixture-of-experts", "thinking"),
+        description="Qwen 3.6 35B-A3B MoE GRPO reasoning training (Apache-2.0, 3B active)",
+        yaml_str="""\
+base: Qwen/Qwen3.6-35B-A3B
+task: grpo
+modality: text
+
+data:
+  train: ./data/reasoning_train.jsonl
+  format: auto
+  max_length: 8192
+
+training:
+  epochs: 3
+  lr: 1e-5
+  batch_size: 1
+  gradient_accumulation_steps: 16
+  lora:
+    r: 16
+    alpha: 32
+    target_modules: auto
+  quantization: 4bit
+  grpo_beta: 0.1
+  num_generations: 4
+  reward_fn: accuracy
+  moe_lora: true
+  moe_aux_loss_coeff: 0.01
+  gradient_checkpointing: true
 
 output: ./output
 """,
@@ -4519,6 +4761,79 @@ training:
 output: ./output
 """,
     ),
+    "kimi-k2.5-dpo": RecipeMeta(
+        model="moonshotai/Kimi-K2.5",
+        task="dpo",
+        size="1T",
+        tags=("kimi", "moonshot", "dpo", "alignment", "preference", "moe", "large", "multi-gpu"),
+        description=(
+            "Kimi K2.5 MoE DPO alignment (Modified MIT, ~1T / 32B active). "
+            "Requires multi-node DeepSpeed."
+        ),
+        yaml_str="""\
+base: moonshotai/Kimi-K2.5
+task: dpo
+
+data:
+  train: ./data/preference_train.jsonl
+  format: dpo
+  max_length: 8192
+
+training:
+  epochs: 1
+  lr: 5e-6
+  batch_size: 1
+  gradient_accumulation_steps: 16
+  lora:
+    r: 32
+    alpha: 64
+    target_modules: auto
+  quantization: 4bit
+  dpo_beta: 0.1
+  moe_lora: true
+  moe_aux_loss_coeff: 0.01
+  gradient_checkpointing: true
+
+output: ./output
+""",
+    ),
+    "kimi-k2.5-grpo": RecipeMeta(
+        model="moonshotai/Kimi-K2.5",
+        task="grpo",
+        size="1T",
+        tags=("kimi", "moonshot", "grpo", "reasoning", "moe", "large", "multi-gpu"),
+        description=(
+            "Kimi K2.5 MoE GRPO reasoning (Modified MIT, ~1T / 32B active). "
+            "Requires multi-node DeepSpeed."
+        ),
+        yaml_str="""\
+base: moonshotai/Kimi-K2.5
+task: grpo
+
+data:
+  train: ./data/reasoning_train.jsonl
+  format: auto
+  max_length: 8192
+
+training:
+  epochs: 3
+  lr: 1e-5
+  batch_size: 1
+  gradient_accumulation_steps: 16
+  lora:
+    r: 16
+    alpha: 32
+    target_modules: auto
+  quantization: 4bit
+  grpo_beta: 0.1
+  num_generations: 4
+  reward_fn: accuracy
+  moe_lora: true
+  gradient_checkpointing: true
+
+output: ./output
+""",
+    ),
     "kimi-k2.6-sft": RecipeMeta(
         model="moonshotai/Kimi-K2.6",
         task="sft",
@@ -4662,6 +4977,42 @@ training:
 output: ./output
 """,
     ),
+    "minimax-m3-dpo": RecipeMeta(
+        model="MiniMaxAI/MiniMax-M3",
+        task="dpo",
+        size="428B",
+        tags=("minimax", "dpo", "alignment", "preference", "moe", "large", "multi-gpu"),
+        description=(
+            "MiniMax M3 MoE DPO alignment (428B / 23B active). MiniMax Community License "
+            "- commercial use requires a separate agreement. Multi-GPU recommended."
+        ),
+        yaml_str="""\
+base: MiniMaxAI/MiniMax-M3
+task: dpo
+
+data:
+  train: ./data/preference_train.jsonl
+  format: dpo
+  max_length: 4096
+
+training:
+  epochs: 1
+  lr: 5e-6
+  batch_size: 1
+  gradient_accumulation_steps: 16
+  lora:
+    r: 32
+    alpha: 64
+    target_modules: auto
+  quantization: 4bit
+  dpo_beta: 0.1
+  moe_lora: true
+  moe_aux_loss_coeff: 0.01
+  gradient_checkpointing: true
+
+output: ./output
+""",
+    ),
     "mistral-large-3-sft": RecipeMeta(
         model="mistralai/Mistral-Large-3-675B-Instruct-2512",
         task="sft",
@@ -4690,6 +5041,51 @@ training:
     alpha: 64
     target_modules: auto
   quantization: 4bit
+  moe_lora: true
+  moe_aux_loss_coeff: 0.01
+  gradient_checkpointing: true
+
+output: ./output
+""",
+    ),
+    "mistral-large-3-dpo": RecipeMeta(
+        model="mistralai/Mistral-Large-3-675B-Instruct-2512",
+        task="dpo",
+        size="675B",
+        tags=(
+            "mistral",
+            "mistral-large",
+            "dpo",
+            "alignment",
+            "preference",
+            "moe",
+            "large",
+            "multi-gpu",
+        ),
+        description=(
+            "Mistral Large 3 MoE DPO alignment "
+            "(Apache-2.0, 675B / 41B active, multimodal). Requires multi-node DeepSpeed."
+        ),
+        yaml_str="""\
+base: mistralai/Mistral-Large-3-675B-Instruct-2512
+task: dpo
+
+data:
+  train: ./data/preference_train.jsonl
+  format: dpo
+  max_length: 4096
+
+training:
+  epochs: 1
+  lr: 5e-6
+  batch_size: 1
+  gradient_accumulation_steps: 32
+  lora:
+    r: 32
+    alpha: 64
+    target_modules: auto
+  quantization: 4bit
+  dpo_beta: 0.1
   moe_lora: true
   moe_aux_loss_coeff: 0.01
   gradient_checkpointing: true

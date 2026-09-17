@@ -189,6 +189,17 @@ def validate_shards(value: Optional[int]) -> Optional[int]:
 
 # Mirrors v0.36.0 batch_cache.json content-hash policy. Cache key includes
 # tokenizer + max_length + format + dataset path → SHA-256 → cache filename.
+# Bump whenever the on-disk tokenization of a preprocessed row changes, so a
+# dataset cached under an older encoding is never silently reused. v2 (#785):
+# the chat path still tokenizes with the tokenizer's default add_special_tokens=True
+# but now strips the one doubled leading BOS the chat template already rendered, so a
+# row that used to bake in [bos, bos, ...] no longer does. v3 (#791): the chat path
+# now also applies TRL's ``add_eos`` rule — a chat row that does not already end on
+# the EOS gets one appended — so a cache built before this no longer trains without a
+# stop token on templates that render none (the Qwen shape). A v2 cache is rejected.
+_PREPROCESS_TOKENIZE_SCHEMA = "v3"
+
+
 def make_preprocess_cache_key(
     *,
     dataset_path: str,
@@ -215,7 +226,10 @@ def make_preprocess_cache_key(
         raise ValueError("max_length must be a positive int")
     if not isinstance(format_name, str) or not format_name:
         raise ValueError("format_name must be a non-empty string")
-    blob = f"{dataset_path}\x1f{tokenizer_name}\x1f{max_length}\x1f{format_name}"
+    blob = (
+        f"{_PREPROCESS_TOKENIZE_SCHEMA}\x1f{dataset_path}\x1f{tokenizer_name}"
+        f"\x1f{max_length}\x1f{format_name}"
+    )
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:16]
 
 

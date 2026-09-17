@@ -372,13 +372,17 @@ class TestPromptStrategyRuntime:
         )
         tokenizer = MagicMock()
         tokenizer.chat_template = "{% for msg in messages %}{{msg['content']}}{% endfor %}"
-        tokenizer.apply_chat_template = MagicMock(return_value="rendered")
+        # #785/#788: the legacy path now pre-tokenizes (apply_chat_template
+        # tokenize=True returns ids). No EOS is appended here not because the mock
+        # is uncallable (a MagicMock IS callable) but because its eos_token_id does
+        # not resolve to an int, so append_training_eos is a no-op.
+        tokenizer.apply_chat_template = MagicMock(return_value=[7, 8, 9])
         fn = build_format_row(tokenizer, data_cfg)
         # When invoked, the inner row should pass through the attach transform
         result = fn({"messages": [{"role": "user", "content": "hi"}]})
-        # Verify the legacy text formatter ran with attached row.
+        # Verify the legacy formatter ran (pre-tokenized) through the wrapper.
         assert tokenizer.apply_chat_template.called
-        assert "rendered" in result.get("text", "")
+        assert result.get("input_ids") == [7, 8, 9]
 
 
 # ----- #86 soup data preprocess live tokenize ----------------------------
@@ -659,7 +663,7 @@ class TestRunRecipeLive:
         assert result["node_row_counts"]["vchk"] == 1
         assert result["node_row_counts"]["sink"] == 1
 
-    def test_llm_text_offline_stub(self, tmp_path, monkeypatch):
+    def test_llm_text_explicit_offline_stub(self, tmp_path, monkeypatch):
         from soup_cli.utils.recipe_dag import parse_recipe
         from soup_cli.utils.recipe_run import run_recipe
 
@@ -681,14 +685,14 @@ class TestRunRecipeLive:
                 "edges": [["seed1", "llm"], ["llm", "sink"]],
             }
         )
-        result = run_recipe(dag, output_dir=str(out_dir))
+        result = run_recipe(dag, output_dir=str(out_dir), offline=True)
         assert result["status"] == "completed"
         # Offline stub injects llm column
         sink = (out_dir / "sink.jsonl").read_text(encoding="utf-8").strip().splitlines()
         first = json.loads(sink[0])
         assert "llm" in first
 
-    def test_judge_node_offline_default_keeps_all(self, tmp_path, monkeypatch):
+    def test_judge_node_explicit_offline_keeps_all(self, tmp_path, monkeypatch):
         from soup_cli.utils.recipe_dag import parse_recipe
         from soup_cli.utils.recipe_run import run_recipe
 
@@ -709,7 +713,7 @@ class TestRunRecipeLive:
                 "edges": [["seed1", "j"], ["j", "sink"]],
             }
         )
-        result = run_recipe(dag, output_dir=str(out_dir))
+        result = run_recipe(dag, output_dir=str(out_dir), offline=True)
         assert result["node_row_counts"]["j"] == 2
 
     def test_checkpoint_written_on_completion(self, tmp_path, monkeypatch):

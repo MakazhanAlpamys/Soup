@@ -1,15 +1,16 @@
 """v0.28.0 speed/memory feature application — extracted for multi-trainer reuse.
 
-The original v0.28.0 release wired Cut Cross-Entropy, FP8, kernel-auto-compose
+The original v0.28.0 release wired Cut Cross-Entropy, FP8, and kernel auto-compose
 into ``SFTTrainerWrapper`` only and gated other trainers via a
 ``model_validator`` to fail-fast at config-load. v0.33.0 (#43) drops that
 gate and extracts the apply logic here so any trainer wrapper can call it
 in two lines.
 
-Activation-offloading is NOT included here — its scope is the entire
-``trainer.train()`` call (it wraps in a context manager), so each trainer
-wires it inline. CCE / FP8 / kernel-pick are pre-train one-shots and fit
-this single helper.
+Kernel auto-compose is now rejected at config load because it never applied
+the candidate it reported. Activation-offloading is NOT included here — its
+scope is the entire ``trainer.train()`` call (it wraps in a context manager),
+so each trainer wires it inline. CCE / FP8 are pre-train one-shots and fit this
+single helper.
 """
 
 from __future__ import annotations
@@ -33,7 +34,7 @@ def apply_v028_speed_memory(
     device: str = "cpu",
     backend: str = "transformers",
 ) -> dict[str, bool]:
-    """Apply Cut-CE / FP8 / kernel-auto-compose features to ``model``.
+    """Apply Cut-CE / FP8 features to ``model``.
 
     Returns a dict ``{feature_name: applied}`` so the caller can log the
     decisions for the run record. Each feature degrades silently to a
@@ -109,18 +110,15 @@ def apply_v028_speed_memory(
             _say(f"NVFP4: {exc}", style="yellow")
 
     # --- Kernel auto-compose -------------------------------------------------
+    # Config validation rejects this flag. Keep a defensive guard for callers
+    # that bypass Pydantic so the old helper can no longer report a selection
+    # that it never applied (#801).
     if getattr(tcfg, "kernel_auto_compose", False):
-        picked_name = _bench_and_pick_kernel(
-            model=model, device=device, backend=backend,
+        _say(
+            "Kernel auto-compose is unsupported; enable use_liger and/or "
+            "use_flash_attn explicitly",
+            style="yellow",
         )
-        if picked_name is None:
-            _say(
-                "Kernel auto-compose: benchmarking unavailable on this host",
-                style="yellow",
-            )
-        else:
-            applied["kernel_auto_compose"] = True
-            _say(f"Kernel auto-compose picked: {picked_name}")
 
     return applied
 

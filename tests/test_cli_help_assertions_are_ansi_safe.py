@@ -23,6 +23,45 @@ before writing this guard: 13 such error-message assertions exist across 10
 files and all of them are correct. Flagging those would make this test noise,
 and a noisy guard gets deleted.
 
+**A third class exists and is deliberately NOT scanned (issue #987).** A bare
+`assert "\\x1b" not in result.output` on ordinary (non-`--help`,
+non-highlighted) CLI output is environment-dependent: the command under test
+prints through an unpinned module-level `Console()`, so under
+`FORCE_COLOR=1 TERM=xterm-256color` Rich styles the *surrounding* panel markup
+and the assertion fails even when the untrusted field itself was sanitised
+correctly. The fix is per-test Console pinning::
+
+    monkeypatch.setattr(mod, "console", Console(force_terminal=False))
+
+`no_color=True` alone is NOT sufficient — it suppresses colour but does not pin
+tty detection, which is why `test_replay.py` carried that exact bug.
+
+**Why this is not automated.** These assertions split roughly half and half
+between ones reading CLI output and ones reading a pure-function return
+(`_safe_md_cell(...)`, `_yaml_dq(...)`, `str(exc.value)`, a `cleaned` local, a
+`messages[0]`). No exact count is quoted here on purpose: four AST definitions
+of "such an assertion" gave four different totals, so any number would be an
+artefact of its matcher. The ratio survives every definition, and the ratio is
+what the argument needs. A scanner rule for this class must tell those two
+kinds apart, and at a roughly even split a rule that cannot do so cleanly
+false-positives about half of what it sees — the same "a noisy guard gets
+deleted" argument made one paragraph up. The split is not academic:
+`test_issue627_unknown_config_keys.py` asserts on a local named `out` that *is*
+console output (a `Console(file=...)` StringIO), so name-based and call-based
+heuristics both misclassify it. That distinction is left to review and to
+per-test pinning, not automated here.
+
+Seven were pinned under #987 (`test_replay`, `test_runs`,
+`test_review_fixes_v07133`, `test_v07127`, `test_v07136`, `test_v07139`,
+`test_issue367_ship_numerics`). `test_issue627_unknown_config_keys.py::
+TestTheReportIsSafeForTheTerminal` was the same defect and was fixed
+separately in #984.
+
+CI does not go red on these today: no workflow sets `FORCE_COLOR`/`TERM`, and
+`CliRunner`/`StringIO` are non-ttys, so Rich disables colour on every runner.
+They are latent-until-something-upstream-changes — exactly the shape of the
+four incidents named at the top of this docstring.
+
 At the time of writing this scanner finds **zero** offenders — it is a ratchet,
 not a cleanup. `TestTheScannerCanActuallyFail` is therefore load-bearing: a
 scanner that has nothing to find must still be shown capable of finding

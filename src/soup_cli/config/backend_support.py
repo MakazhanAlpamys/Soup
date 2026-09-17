@@ -118,6 +118,45 @@ _MLX_SFT: tuple[SupportEntry, ...] = (
         "MLX masks the prompt or supervises the whole sequence; no per-field switch",
         trainer_reads=True,
     ),
+    SupportEntry(
+        "training.use_liger",
+        IGNORED,
+        "Liger fused kernels have no MLX implementation (and soup train "
+        "refuses the run on non-CUDA before MLX ever sees it)",
+        trainer_reads=True,
+    ),
+    SupportEntry(
+        "training.neftune_alpha",
+        IGNORED,
+        "NEFT noise is applied on the transformers training path, not MLX",
+        trainer_reads=True,
+    ),
+    SupportEntry(
+        "training.use_mod",
+        IGNORED,
+        "Mixture-of-Depths routing is wired on the transformers path, not MLX",
+        trainer_reads=True,
+    ),
+    SupportEntry(
+        "training.moe_lora",
+        IGNORED,
+        "ScatterMoE LoRA targets expert layers on the transformers path; no MLX implementation",
+        trainer_reads=True,
+    ),
+    SupportEntry(
+        "training.quantization_aware",
+        IGNORED,
+        "QAT/FP8 prepare runs on the transformers path, not MLX",
+        trainer_reads=True,
+    ),
+    SupportEntry(
+        "training.use_fsdp2_compile",
+        IGNORED,
+        "torch.compile on FSDP2 requires CUDA and the transformers backend "
+        "(and validate_fsdp2_compile_config refuses backend=mlx at "
+        "commands/train.py:1235 before resolve_trainer)",
+        trainer_reads=True,
+    ),
 )
 
 

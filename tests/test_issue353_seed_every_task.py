@@ -184,6 +184,9 @@ def _cfg(weights, out_dir, task, **training_over):
     }
     training.update(_LIVE[task][3])
     training.update(training_over)
+    data = {"train": "train.jsonl", "max_length": 64}
+    if task not in {"pretrain", "embedding", "classifier"}:
+        data["chat_template"] = "chatml"
     return load_config_from_string(
         yaml.safe_dump(
             {
@@ -191,7 +194,7 @@ def _cfg(weights, out_dir, task, **training_over):
                 "task": task,
                 "backend": "transformers",
                 "modality": "text",
-                "data": {"train": "train.jsonl", "max_length": 64, "chat_template": "chatml"},
+                "data": data,
                 "training": training,
                 "output": str(out_dir),
             }

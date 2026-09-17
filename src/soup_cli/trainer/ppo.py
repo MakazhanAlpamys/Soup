@@ -9,11 +9,12 @@ Full RLHF pipeline:  SFT → Reward Model → PPO
 
 import time
 from pathlib import Path
-from typing import Optional
+from typing import Any, Mapping, Optional
 
 from rich.console import Console
 
 from soup_cli.config.schema import SoupConfig
+from soup_cli.trainer.loss_summary import summarize_training_loss
 from soup_cli.utils.gpu import (
     bf16_fp16_flags,
     estimate_batch_size,
@@ -25,6 +26,72 @@ from soup_cli.utils.mixed_precision import align_trainable_dtype_for_fp16
 from soup_cli.utils.seeding import apply_training_seed, training_seed_kwargs
 
 console = Console()
+
+
+def _set_ppo_training_kwargs(
+    ppo_kwargs: dict[str, object],
+    ppo_config_cls: type,
+    tcfg: Any,
+    *,
+    total_steps: int | None = None,
+    device: str = "cpu",
+) -> dict[str, str]:
+    """Forward Soup's three PPO schedules across TRL parameter renames."""
+    from soup_cli.trainer._trl_compat import config_accepts, kl_penalty_kwargs
+
+    applied: dict[str, str] = {}
+
+    if config_accepts(ppo_config_cls, "num_train_epochs"):
+        ppo_kwargs["num_train_epochs"] = tcfg.epochs
+        applied["train_epochs"] = "num_train_epochs"
+
+    if config_accepts(ppo_config_cls, "num_ppo_epochs"):
+        ppo_kwargs["num_ppo_epochs"] = tcfg.ppo_epochs
+        applied["ppo_epochs"] = "num_ppo_epochs"
+    elif config_accepts(ppo_config_cls, "ppo_epochs"):
+        ppo_kwargs["ppo_epochs"] = tcfg.ppo_epochs
+        applied["ppo_epochs"] = "ppo_epochs"
+
+    kl_kwargs = kl_penalty_kwargs(ppo_config_cls, tcfg.ppo_kl_penalty)
+    ppo_kwargs.update(kl_kwargs)
+    for name in kl_kwargs:
+        applied["kl_coef"] = name
+
+    if total_steps is not None:
+        from soup_cli.utils.layer_stream import should_enable_hf_gradient_checkpointing
+
+        use_bf16, use_fp16 = bf16_fp16_flags(device)
+        training_kwargs = {
+            "warmup_steps": int(total_steps * tcfg.warmup_ratio),
+            "weight_decay": tcfg.weight_decay,
+            "max_grad_norm": tcfg.max_grad_norm,
+            "optim": tcfg.optimizer,
+            "lr_scheduler_type": tcfg.scheduler,
+            "logging_steps": tcfg.logging_steps,
+            "save_steps": tcfg.save_steps,
+            "bf16": use_bf16,
+            "fp16": use_fp16,
+            "gradient_checkpointing": should_enable_hf_gradient_checkpointing(
+                tcfg.gradient_checkpointing, stream_layers=tcfg.stream_layers
+            ),
+        }
+        for name, value in training_kwargs.items():
+            if config_accepts(ppo_config_cls, name):
+                ppo_kwargs[name] = value
+
+    return applied
+
+
+def _effective_ppo_setting(
+    config: object,
+    kwargs: Mapping[str, object],
+    field: str | None,
+    fallback: object,
+) -> object:
+    """Read the constructed config value, with compatibility fallbacks."""
+    if field is None:
+        return f"{fallback} (not forwarded)"
+    return getattr(config, field, kwargs[field])
 
 
 class PPOTrainerWrapper:
@@ -174,39 +241,13 @@ class PPOTrainerWrapper:
         total_steps = math.ceil(
             len(train_ds) / batch_size / tcfg.gradient_accumulation_steps
         ) * tcfg.epochs
-        optional_training_kwargs = {
-            "warmup_steps": int(total_steps * tcfg.warmup_ratio),
-            "weight_decay": tcfg.weight_decay,
-            "max_grad_norm": tcfg.max_grad_norm,
-            "optim": tcfg.optimizer,
-            "lr_scheduler_type": tcfg.scheduler,
-            "logging_steps": tcfg.logging_steps,
-            "save_steps": tcfg.save_steps,
-            "save_total_limit": 3,
-        }
-        use_bf16, use_fp16 = bf16_fp16_flags(self.device, allow_mps_bf16=True)
-        optional_training_kwargs.update(bf16=use_bf16, fp16=use_fp16)
-        from soup_cli.utils.layer_stream import should_enable_hf_gradient_checkpointing
-
-        optional_training_kwargs["gradient_checkpointing"] = (
-            should_enable_hf_gradient_checkpointing(
-                tcfg.gradient_checkpointing, stream_layers=tcfg.stream_layers
-            )
+        applied_ppo_fields = _set_ppo_training_kwargs(
+            ppo_kwargs, ppo_config_cls, tcfg,
+            total_steps=total_steps, device=self.device,
         )
-        for name, value in optional_training_kwargs.items():
-            if name in ppo_params:
-                ppo_kwargs[name] = value
-
-        # trl renamed ppo_epochs -> num_ppo_epochs in newer versions
-        if "num_ppo_epochs" in ppo_params:
-            ppo_kwargs["num_ppo_epochs"] = tcfg.ppo_epochs
-        elif "ppo_epochs" in ppo_params:
-            ppo_kwargs["ppo_epochs"] = tcfg.ppo_epochs
 
         if "cliprange" in ppo_params:
             ppo_kwargs["cliprange"] = tcfg.ppo_clip_ratio
-        if "init_kl_coef" in ppo_params:
-            ppo_kwargs["init_kl_coef"] = tcfg.ppo_kl_penalty
 
         # Optional params that may not exist in all trl versions
         if "log_with" in ppo_params:
@@ -224,6 +265,30 @@ class PPOTrainerWrapper:
             ppo_kwargs["use_cpu"] = True
 
         ppo_config = ppo_config_cls(**ppo_kwargs)
+        effective_train_epochs = _effective_ppo_setting(
+            ppo_config,
+            ppo_kwargs,
+            applied_ppo_fields.get("train_epochs"),
+            tcfg.epochs,
+        )
+        effective_ppo_epochs = _effective_ppo_setting(
+            ppo_config,
+            ppo_kwargs,
+            applied_ppo_fields.get("ppo_epochs"),
+            tcfg.ppo_epochs,
+        )
+        effective_kl_coef = _effective_ppo_setting(
+            ppo_config,
+            ppo_kwargs,
+            applied_ppo_fields.get("kl_coef"),
+            tcfg.ppo_kl_penalty,
+        )
+        console.print(
+            "[green]PPO schedule:[/] "
+            f"train epochs={effective_train_epochs}, "
+            f"PPO epochs={effective_ppo_epochs}, "
+            f"KL coefficient={effective_kl_coef}"
+        )
 
         # --- Build reward functions list for PPOTrainer ---
         reward_funcs = []
@@ -462,7 +527,7 @@ class PPOTrainerWrapper:
 
     def _setup_transformers(self, cfg: SoupConfig, tcfg) -> None:
         """Load model via standard transformers + peft pipeline."""
-        from peft import LoraConfig, TaskType, get_peft_model, prepare_model_for_kbit_training
+        from peft import TaskType, get_peft_model, prepare_model_for_kbit_training
         from transformers import AutoModelForCausalLM, AutoTokenizer
 
         console.print(f"[dim]Loading tokenizer: {cfg.base}[/]")
@@ -494,19 +559,17 @@ class PPOTrainerWrapper:
         if tcfg.quantization in ("4bit", "8bit", "mxfp4"):
             self.model = prepare_model_for_kbit_training(self.model)
 
-        from soup_cli.utils.peft_wiring import resolve_lora_target_modules
+        from soup_cli.utils.peft_wiring import (
+            build_lora_config,
+            resolve_lora_target_modules,
+        )
 
         target_modules = resolve_lora_target_modules(self.model, tcfg.lora.target_modules)
 
-        lora_config = LoraConfig(
-            r=tcfg.lora.r,
-            lora_alpha=tcfg.lora.alpha,
-            lora_dropout=tcfg.lora.dropout,
+        lora_config = build_lora_config(
+            tcfg.lora,
             target_modules=target_modules,
             task_type=TaskType.CAUSAL_LM,
-            bias="none",
-            use_dora=tcfg.lora.use_dora,
-            use_rslora=tcfg.lora.use_rslora,
         )
         # v0.40.6 #67 — surgical PEFT patches.
         from soup_cli.utils.peft_wiring import (
@@ -631,15 +694,14 @@ class PPOTrainerWrapper:
 
         # Extract metrics
         logs = self.trainer.state.log_history
-        train_losses = [entry["loss"] for entry in logs if "loss" in entry]
+        loss_summary = summarize_training_loss(logs)
 
         hours = int(duration // 3600)
         minutes = int((duration % 3600) // 60)
         duration_str = f"{hours}h {minutes}m" if hours > 0 else f"{minutes}m"
 
         return {
-            "initial_loss": train_losses[0] if train_losses else 0,
-            "final_loss": train_losses[-1] if train_losses else 0,
+            **loss_summary,
             "duration": duration_str,
             "duration_secs": duration,
             "output_dir": self._output_dir,
@@ -727,15 +789,14 @@ class PPOTrainerWrapper:
         self.tokenizer.save_pretrained(self._output_dir)
 
         # Extract metrics
-        losses = [entry["loss"] for entry in log_history if "loss" in entry]
+        loss_summary = summarize_training_loss(log_history)
 
         hours = int(duration // 3600)
         minutes = int((duration % 3600) // 60)
         duration_str = f"{hours}h {minutes}m" if hours > 0 else f"{minutes}m"
 
         return {
-            "initial_loss": losses[0] if losses else 0,
-            "final_loss": losses[-1] if losses else 0,
+            **loss_summary,
             "duration": duration_str,
             "duration_secs": duration,
             "output_dir": self._output_dir,

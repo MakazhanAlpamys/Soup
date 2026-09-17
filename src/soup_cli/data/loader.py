@@ -472,6 +472,85 @@ def _split_val_per_source(
     return train_rows, val_rows
 
 
+def _row_key(row: dict) -> str:
+    """A stable identity for a formatted row, for duplicate detection.
+
+    Rows are plain dicts of JSON-ish values, so a sorted-key dump is both
+    hashable and order-insensitive. Falls back to ``repr`` for anything
+    ``json`` refuses, which keeps an exotic value from turning a leak check
+    into a crash.
+    """
+    import json
+
+    try:
+        return json.dumps(row, sort_keys=True, default=repr)
+    except (TypeError, ValueError):
+        return repr(sorted(row.items(), key=lambda kv: str(kv[0])))
+
+
+def _split_val_deduplicated(
+    rows: list[dict], val_split: float
+) -> tuple[list[dict], list[dict]]:
+    """Carve val out of ``rows`` so no val row has a duplicate left in train (#702).
+
+    The streaming ``over`` path interleaves with
+    ``stopping_strategy="all_exhausted"``, which recycles the shorter stream
+    to exhaust the longer one. A row and its recycled copy are separate
+    entries, so the positional tail slice ``_split_val`` takes could put one
+    on each side -- validation loss on the recycled source then measures
+    memorisation and reports a suspiciously good number rather than an error.
+
+    A stream is not countable ahead of time, so #701's per-source carve-out
+    does not transfer. The split is instead sized over *distinct* rows, and
+    val is drawn from the tail of the distinct rows in stream order,
+    preferring content that occurs exactly once: such a row has no copy to
+    leave behind, so taking it costs train nothing. Content is keyed by
+    value, so a recycled copy and a genuinely repeated source row are
+    indistinguishable; only when too few unique rows exist is repeated
+    content used, and then every other copy is withheld from train and the
+    number withheld is reported rather than dropped silently.
+
+    Raises ``ValueError`` when the split would leave no training rows, the
+    same refusal ``_split_val_per_source`` makes on the eager path.
+    """
+    from collections import Counter
+
+    keys = [_row_key(row) for row in rows]
+    counts = Counter(keys)
+    first_index: dict[str, int] = {}
+    for index, key in enumerate(keys):
+        first_index.setdefault(key, index)
+    distinct = list(first_index)
+
+    n_val = len(distinct) - int(len(distinct) * (1 - val_split))
+    newest_first = distinct[::-1]
+    unique = [key for key in newest_first if counts[key] == 1]
+    repeated = [key for key in newest_first if counts[key] > 1]
+    chosen = unique[:n_val]
+    fallback = repeated[: n_val - len(chosen)]
+    val_keys = set(chosen) | set(fallback)
+
+    val_rows = [rows[first_index[key]] for key in sorted(val_keys, key=first_index.get)]
+    train_rows = [row for row, key in zip(rows, keys) if key not in val_keys]
+
+    if rows and not train_rows:
+        raise ValueError(
+            f"data.interleave: data.val_split={val_split} leaves 0 training rows "
+            f"under streaming 'over', which splits over distinct rows: the "
+            f"{len(rows)} materialised row(s) hold {len(distinct)} distinct "
+            "row(s). Add distinct rows, set val_split: 0, or use 'concat'/'under'."
+        )
+    withheld = sum(counts[key] - 1 for key in fallback)
+    if withheld:
+        console.print(
+            f"[yellow]Warning: data.val_split under streaming 'over' withheld "
+            f"{withheld} duplicate row(s) from train: too few rows with unique "
+            f"content to fill val, so {len(fallback)} val row(s) have copies "
+            "that would otherwise have leaked into train.[/]"
+        )
+    return train_rows, val_rows
+
+
 def _cycle_to(rows: list[dict], target: int) -> list[dict]:
     """Deterministically repeat/truncate ``rows`` to exactly ``target`` rows
     via round-robin cycling. No RNG, no new seed knob — #443's scope does
@@ -760,6 +839,21 @@ def _load_interleaved_streaming_datasets(
         f"[dim]Streaming-interleaved {len(train_paths)} datasets "
         f"(strategy={spec.strategy}) -> {len(formatted)} rows[/]"
     )
+    # `over` recycles the shorter stream, so the materialised rows contain
+    # duplicates and the positional split in `_finalize` could put a row and
+    # its copy on opposite sides (#702). The other three strategies never
+    # duplicate a row here, so they keep the ordinary path.
+    if spec.strategy == "over" and data_config.val_split > 0:
+        train_rows, val_rows = _split_val_deduplicated(
+            formatted, data_config.val_split
+        )
+        return _finalize(
+            train_rows,
+            data_config,
+            val=val_rows,
+            preserve_source_columns=preserve_source_columns,
+        )
+
     return _finalize(
         formatted,
         data_config,

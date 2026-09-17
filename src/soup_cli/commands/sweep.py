@@ -1,6 +1,7 @@
 """soup sweep — hyperparameter search over training configs."""
 
 import itertools
+import math
 import random
 from pathlib import Path
 from typing import Optional
@@ -13,6 +14,39 @@ from rich.table import Table
 from soup_cli.config.loader import load_config
 
 console = Console()
+
+
+def _finite_loss(value: object) -> Optional[float]:
+    """Return a numeric finite loss, or ``None`` for missing/diverged values."""
+    try:
+        loss = float(value)
+    except (TypeError, ValueError):
+        return None
+    return loss if math.isfinite(loss) else None
+
+
+def _is_diverged_loss(value: object) -> bool:
+    """Whether a recorded loss is explicitly non-finite."""
+    try:
+        return not math.isfinite(float(value))
+    except (TypeError, ValueError):
+        return False
+
+
+def _loss_sort_key(result: dict) -> tuple[int, float]:
+    """Rank finite completed runs first and keep divergent/failed runs visible last."""
+    if result.get("status") != "completed":
+        return (2, float("inf"))
+    loss = _finite_loss(result.get("final_loss"))
+    return (0, loss) if loss is not None else (1, float("inf"))
+
+
+def _exceeds_early_stop(final_loss: object, best_loss: float, factor: float) -> bool:
+    """Treat an explicitly diverged arm as worse than any finite threshold."""
+    if _is_diverged_loss(final_loss):
+        return True
+    loss = _finite_loss(final_loss)
+    return loss is not None and math.isfinite(best_loss) and loss > best_loss * factor
 
 
 def sweep(
@@ -161,14 +195,20 @@ def sweep(
                 "status": "completed",
             })
 
-            # Update best loss and check early stopping for remaining runs
-            if final_loss and final_loss < best_loss:
-                best_loss = final_loss
+            # A diverged run stays in results but can never become the best arm.
+            finite_loss = _finite_loss(final_loss)
+            if finite_loss is not None and finite_loss < best_loss:
+                best_loss = finite_loss
 
-            if early_stop and final_loss and best_loss < float("inf"):
-                if final_loss > best_loss * early_stop:
+            if early_stop and _exceeds_early_stop(final_loss, best_loss, early_stop):
+                if _is_diverged_loss(final_loss):
                     console.print(
-                        f"[yellow]Loss {final_loss:.4f} exceeds threshold "
+                        f"[yellow]Loss {final_loss} diverged; treating this arm as worse "
+                        "than the early-stop threshold.[/]"
+                    )
+                else:
+                    console.print(
+                        f"[yellow]Loss {finite_loss:.4f} exceeds threshold "
                         f"({best_loss:.4f} x {early_stop} = {best_loss * early_stop:.4f})[/]"
                     )
         except Exception as exc:
@@ -184,16 +224,22 @@ def sweep(
 
         # Early stopping: skip remaining runs if too many are poor
         if early_stop and len(results) >= 2:
-            completed = [r for r in results if r["status"] == "completed" and r["final_loss"]]
+            completed = [r for r in results if r["status"] == "completed"]
             if completed:
                 recent = completed[-1]
-                if recent["final_loss"] > best_loss * early_stop:
+                if _exceeds_early_stop(recent["final_loss"], best_loss, early_stop):
                     remaining = len(combinations) - idx - 1
                     if remaining > 0:
                         skipped = remaining
+                        if _is_diverged_loss(recent["final_loss"]):
+                            reason = "Last run diverged."
+                        else:
+                            reason = (
+                                f"Last loss {recent['final_loss']:.4f} exceeded threshold."
+                            )
                         console.print(
                             f"[yellow]Early stopping: skipping {remaining} remaining run(s). "
-                            f"Last loss {recent['final_loss']:.4f} exceeded threshold.[/]"
+                            f"{reason}[/]"
                         )
                         break
 
@@ -500,26 +546,42 @@ def _display_summary(results: list[dict], sweep_params: dict[str, list]):
     table.add_column("Duration", justify="right")
     table.add_column("Status")
 
-    # Sort by final loss (best first)
-    sorted_results = sorted(results, key=lambda r: r.get("final_loss", float("inf")))
+    # Sort finite completed losses first; divergent and failed rows remain visible last.
+    sorted_results = sorted(results, key=_loss_sort_key)
 
     for idx, res in enumerate(sorted_results):
-        status_style = "green" if res["status"] == "completed" else "red"
+        diverged = res["status"] == "completed" and _is_diverged_loss(res.get("final_loss"))
+        display_status = "diverged" if diverged else res["status"]
+        status_style = "green" if display_status == "completed" else "red"
         param_vals = [str(res["params"].get(k, "")) for k in sweep_params]
-        loss_str = f"{res['final_loss']:.4f}" if res["final_loss"] else "-"
-        best_marker = " [bold yellow]*[/]" if idx == 0 and res["status"] == "completed" else ""
+        finite_loss = _finite_loss(res.get("final_loss"))
+        if diverged:
+            loss_str = str(res["final_loss"])
+        elif res["status"] == "completed" and finite_loss is not None:
+            loss_str = f"{finite_loss:.4f}"
+        else:
+            loss_str = "-"
+        best_marker = (
+            " [bold yellow]*[/]"
+            if idx == 0 and display_status == "completed"
+            else ""
+        )
         table.add_row(
             res["name"],
             *param_vals,
             f"{loss_str}{best_marker}",
             res.get("duration", "-"),
-            f"[{status_style}]{res['status']}[/]",
+            f"[{status_style}]{display_status}[/]",
         )
 
     console.print(table)
 
     # Best run
-    completed = [r for r in sorted_results if r["status"] == "completed"]
+    completed = [
+        r
+        for r in sorted_results
+        if r["status"] == "completed" and _finite_loss(r.get("final_loss")) is not None
+    ]
     if completed:
         best = completed[0]
         console.print(

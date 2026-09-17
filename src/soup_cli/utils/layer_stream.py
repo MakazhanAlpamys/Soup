@@ -61,6 +61,15 @@ MIN_STREAM_BUFFERS = 2
 MAX_STREAM_BUFFERS = 8
 DEFAULT_STREAM_BUFFERS = 2
 
+# Re-exported, not redeclared: the schema imports its bound from here and the
+# runtime declares it, so the message and the check cannot disagree (the same
+# reasoning as stream_buffers).
+from soup_cli.utils.async_disk_source import (  # noqa: E402
+    DEFAULT_STREAM_READ_AHEAD,  # noqa: F401
+    MAX_STREAM_READ_AHEAD,  # noqa: F401
+    MIN_STREAM_READ_AHEAD,  # noqa: F401
+)
+
 # --- tasks ----------------------------------------------------------------
 #: Tasks whose trainers can run against a streamed base (v0.72.4).
 #:
@@ -842,36 +851,54 @@ def decide_pinning(
     That cost is stated out loud rather than absorbed silently.
 
     ``stream_pin`` (``training.stream_pin``) overrides the automatic choice:
-    ``None`` keeps the behaviour above; ``False`` forces the pageable store and
-    states its throughput cost; ``True`` forces the pinned store — the run then
-    refuses (in the runtime) rather than falling back if the box cannot
-    page-lock it. The refusal itself lives where the pin is actually attempted;
-    here ``True`` only records the intent so the pre-flight reflects it.
+    ``None`` keeps the behaviour above; ``False`` forces pageable host memory
+    and states its throughput cost; ``True`` forces the page-locked one — on a
+    CUDA target the run then refuses (in the runtime) rather than falling back
+    if the box cannot page-lock it. The refusal itself lives where the pin is
+    actually attempted, which is also why a non-CUDA target does not refuse:
+    nothing is attempted there. Here ``True`` only records the intent so the
+    pre-flight reflects it.
+
+    BOTH TIERS, since #971. The flag used to describe the RAM store alone,
+    because the disk tier held nothing to page-lock; it now decides whether the
+    async reader's host STAGING is page-locked, and the runtime honours or
+    refuses it there exactly as it does on the RAM tier. The reasons below name
+    what each tier actually has rather than assuming a RAM store.
     """
     if stream_pin is False:
         return PinDecision(
             pinned=False,
             reason=(
-                "training.stream_pin=false forces a pageable RAM store. "
-                "Host-to-device copies become synchronous, which costs overlap: "
-                "measured GPU utilisation drops from ~97% to ~79%, and "
-                f"page-locking is worth up to {PIN_THROUGHPUT_GAIN_REAL:.2f}x "
-                "measured throughput (Qwen2.5-32B NF4), "
-                f"{PIN_THROUGHPUT_GAIN_SYNTHETIC:.2f}x on a synthetic. Unset "
-                "stream_pin to let the box page-lock when it can."
+                "training.stream_pin=false forces PAGEABLE host memory — the "
+                "base store on the RAM tier, the async reader's staging on the "
+                "disk tier. Host-to-device copies become synchronous, which "
+                "costs overlap: measured GPU utilisation drops from ~97% to "
+                f"~79%, and page-locking is worth up to "
+                f"{PIN_THROUGHPUT_GAIN_REAL:.2f}x measured throughput "
+                f"(Qwen2.5-32B NF4), {PIN_THROUGHPUT_GAIN_SYNTHETIC:.2f}x on a "
+                "synthetic. Unset stream_pin to let the box page-lock when it "
+                "can."
             ),
         )
     if stream_pin is True:
         return PinDecision(
             pinned=True,
+            # The tier gate this note used to carry ("on the RAM tier the run
+            # refuses") was dropped in #971 because the disk tier now HAS
+            # staging to page-lock and does refuse over it. The gate's OTHER
+            # reason is answered in the sentence rather than dropped with it:
+            # on a non-CUDA target nothing is page-locked at all — setup passes
+            # ``pin=plan.pinned and on_cuda`` and gates ``require_pin`` on the
+            # same flag — so an unconditional "the run refuses" would print a
+            # promise that path does not keep. It announces and proceeds.
             reason=(
-                # Scoped to the RAM tier on purpose: this note is now surfaced
-                # for a forced-on pin, and the disk tier / CPU announce that
-                # pinning is inapplicable and PROCEED. An unconditional "the run
-                # refuses" here would print a promise those paths do not keep.
-                "training.stream_pin=true forces a page-locked store; on the RAM "
-                "tier the run refuses rather than falling back to a pageable "
-                "store if the box cannot page-lock it."
+                "training.stream_pin=true forces page-locked host memory — the "
+                "base store on the RAM tier, the async reader's staging on the "
+                "disk tier. On a CUDA target the run refuses, on either tier, "
+                "rather than falling back to pageable memory if the box cannot "
+                "page-lock it; on a non-CUDA target there is no CUDA pinning to "
+                "force, so the request is announced as inapplicable and the run "
+                "proceeds with pageable host memory."
             ),
         )
     if pinned_limit_bytes is None:
@@ -1485,6 +1512,36 @@ class StreamPlan:
     buffer_bytes: int
     pinned: bool
     notes: Tuple[str, ...]
+    read_ahead: int = DEFAULT_STREAM_READ_AHEAD
+    staging_bytes: int = 0
+
+
+def staging_bytes_for(
+    *,
+    read_ahead: int,
+    n_layers: int,
+    layer_bytes: int,
+    large_store_bytes: int = 0,
+) -> int:
+    """Host memory the disk tier's async reader page-locks, before it does.
+
+    THE one formula, so the pre-flight, the panel and the RAM refusal cannot
+    each keep their own. The disk tier used to predict zero host residency,
+    which was true of the synchronous source it replaced and false of this one:
+    ``AsyncDiskSource`` allocates ``min(read_ahead, members) x group_bytes``
+    per DISTINCT layer spec and holds it for the whole run.
+
+    ``read_ahead`` does NOT bound the vocabulary weights. The embedding and an
+    untied ``lm_head`` are one member each, so each takes a full slot at any
+    depth — and they are the largest tensors in the model, left unquantised by
+    ``replace_with_bnb_linear``. ``large_store_bytes`` is exactly that pair, so
+    it is charged once rather than multiplied. Worked, on the 70B NF4 shape at
+    the default depth 2: ~0.9 GB of decoder staging plus ~2.1 GB embed plus
+    ~2.1 GB head, i.e. ~5 GB of unswappable host memory on a box that reached
+    this tier BECAUSE its RAM could not hold the model.
+    """
+    depth = max(0, min(int(read_ahead), int(n_layers)))
+    return depth * int(layer_bytes) + int(large_store_bytes)
 
 
 def build_stream_plan(
@@ -1502,6 +1559,7 @@ def build_stream_plan(
     store_bytes: Optional[int] = None,
     large_store_bytes: int = 0,
     large_buffer_bytes: int = 0,
+    read_ahead: int = DEFAULT_STREAM_READ_AHEAD,
 ) -> StreamPlan:
     """Decide tier + pinning and record every caveat as a visible note."""
     buffers = validate_stream_buffers(buffers)
@@ -1536,10 +1594,12 @@ def build_stream_plan(
     if tier == TIER_DISK:
         # Falling back is the point of stream_source='auto', but a silent
         # fallback to a slower path is the failure mode this project keeps
-        # calling out elsewhere. Say what happened and be explicit that the
-        # slowdown is NOT quantified: safetensors memory-maps the shards, so the
-        # OS page cache blurs the RAM-vs-disk boundary, and the dev box could not
-        # produce a trustworthy gap measurement.
+        # calling out elsewhere. Say what happened, and say what it costs:
+        # benchmarks/gate-971-async-nvme-source.md measured the gap against a
+        # same-day control of the synchronous source, cold on a store larger
+        # than RAM and warm with the store fully cached. The honest summary is
+        # that the disk tier is slower than RAM either way, which is why this
+        # is a fallback and not a choice.
         if physical_budget_exceeded:
             notes.append(
                 "base exceeds the physical RAM safety ceiling — streaming from "
@@ -1558,9 +1618,15 @@ def build_stream_plan(
         else:
             notes.append(
                 "base does not fit in RAM — streaming from the NVMe disk tier "
-                "instead. Nothing is held resident, and the slowdown versus the RAM "
-                "tier is unmeasured on this hardware. Set stream_source='ram' to "
-                "refuse rather than fall back."
+                "instead. An async reader stages training.stream_read_ahead layers "
+                "in host RAM (page-locked where the box allows) rather than "
+                "holding the base resident. It is "
+                "slower than the RAM tier — measured 1.9-2.3x its step time with the "
+                "store fully cached, on one box "
+                "(benchmarks/gate-971-async-nvme-source.md); a store larger than "
+                "RAM has no RAM-tier comparison, which is what makes this a "
+                "fallback. Set stream_source='ram' to refuse rather than fall "
+                "back."
             )
     decision = decide_pinning(host_store_bytes, pinned_limit_bytes, stream_pin=stream_pin)
     # #366 review round 3 — "record, never silence". An automatic pinned store is
@@ -1569,12 +1635,17 @@ def build_stream_plan(
     # branch was the one path that decided something and said nothing, which is
     # also what decide_pinning's docstring already promised it did not do.
     #
-    # Restricted to the RAM tier deliberately: the reason says the store IS
-    # page-locked, which is only true where a RAM store exists. On the disk tier
-    # there is none, and printing it there would state a promise that tier does
-    # not keep — the runtime announces the inapplicability instead
-    # (layer_stream_runtime._build_source), so the decision is still recorded.
-    if not decision.pinned or (stream_pin is True and tier == TIER_RAM):
+    # NOT scoped to the RAM tier. It was, because the reason claimed a RAM store
+    # the disk tier did not have and the runtime announced the inapplicability
+    # instead — but #971 gave the disk tier host staging that stream_pin now
+    # honours or refuses, and deleted that announcement. Gating on the tier left
+    # the two spellings of reaching disk printing different prose for the same
+    # config: `stream_source: disk` on a RAM-sized box planned tier=ram, so this
+    # fired and printed a RAM-tier promise under a panel headed `tier disk`,
+    # while `auto` on a RAM-poor box planned tier=disk and recorded the explicit
+    # request nowhere at all. The reason above now names both tiers, so it is
+    # true wherever it prints.
+    if not decision.pinned or stream_pin is True:
         notes.append(decision.reason)
     return StreamPlan(
         arch=arch,
@@ -1589,18 +1660,35 @@ def build_stream_plan(
         buffer_bytes=layer_bytes * buffers + int(large_buffer_bytes),
         pinned=decision.pinned,
         notes=tuple(notes),
+        read_ahead=int(read_ahead),
+        # Zero on the RAM tier because the reader does not exist there — the
+        # whole base is resident and already charged as `store_bytes`.
+        staging_bytes=(
+            staging_bytes_for(
+                read_ahead=read_ahead,
+                n_layers=n_layers,
+                layer_bytes=layer_bytes,
+                large_store_bytes=large_store_bytes,
+            )
+            if tier == TIER_DISK
+            else 0
+        ),
     )
 
 
 def render_stream_panel(plan: StreamPlan, extra_lines: Sequence[str] = ()) -> Panel:
     """Pre-flight summary. plan 10: tell the user the cost BEFORE the run."""
     if plan.tier == TIER_DISK:
-        # "store ... (pinned)" is meaningless here: the disk tier deliberately
-        # holds nothing resident, so reporting a pinned store of 0.00 GB reads
-        # as a bug rather than as the design.
+        # `plan.store_bytes` is 0 on this tier and reporting it as a pinned
+        # store would read as a bug rather than as the design. What the disk
+        # tier does hold is the reader's staging, whose size depends on
+        # training.stream_read_ahead and is not known until the source is
+        # built — the runtime's own ready line prints it. So this says the
+        # SHAPE and leaves the number to the line that has it, rather than
+        # claiming "nothing held resident", which stopped being true in #971.
         store_line = (
             f"  base         streamed from disk across {plan.n_layers} layers, "
-            f"nothing held resident"
+            f"staged by an async reader (no resident copy)"
         )
     else:
         store_line = (
@@ -1612,6 +1700,17 @@ def render_stream_panel(plan: StreamPlan, extra_lines: Sequence[str] = ()) -> Pa
         f"[bold]Layer streaming[/] [yellow]BETA[/] — arch [cyan]{plan.arch}[/], "
         f"tier [cyan]{plan.tier}[/]",
         store_line,
+    ]
+    if plan.tier == TIER_DISK:
+        # The number the disk tier used to predict as zero. It is host memory,
+        # so it does not belong in the VRAM line below, and it is held for the
+        # whole run — an operator choosing a depth is choosing this.
+        lines.append(
+            f"  host staging read_ahead {plan.read_ahead} -> "
+            f"{plan.staging_bytes / 1e6:.0f} MB "
+            f"(page-locked when the box allows)"
+        )
+    lines += [
         f"  VRAM buffers {plan.buffers} x {plan.layer_bytes / 1e6:.0f} MB "
         f"+ 1 x {plan.large_buffer_bytes / 1e6:.0f} MB large-layer slot "
         f"= {plan.buffer_bytes / 1e6:.0f} MB",

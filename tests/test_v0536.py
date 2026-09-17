@@ -50,12 +50,14 @@ class _RaisingPlugin:
 
 
 @pytest.fixture
-def clear_plugins_fixture():
-    from soup_cli.plugins import clear_plugins
+def clear_plugins_fixture(monkeypatch, tmp_path):
+    from soup_cli import plugins as plugins_pkg
 
-    clear_plugins()
+    monkeypatch.setenv("SOUP_PLUGIN_STATE_PATH", str(tmp_path / "plugins.json"))
+    monkeypatch.setattr(plugins_pkg, "_iter_plugin_entry_points", lambda: ())
+    plugins_pkg.clear_plugins()
     yield
-    clear_plugins()
+    plugins_pkg.clear_plugins()
 
 
 def test_build_plugin_callback_none_when_no_plugins(clear_plugins_fixture):

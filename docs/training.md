@@ -284,8 +284,10 @@ soup train --config soup.yaml --uld-strategy wasserstein
 #   training:
 #     uld_strategy: wasserstein_aligned
 
-# MiniLLM reverse-KL on-policy distillation — bundles 3 stability tricks
-# (Gu et al. 2024 arXiv:2306.08543)
+# MiniLLM reverse-KL distillation (Gu et al. 2024 arXiv:2306.08543).
+# Offline blend: mix ratio is the teacher weight in the reverse-KL target and
+# must be > 0 (ratio 0 is KL(student || stopgrad(student)) and is rejected).
+# On-policy: mix 0 is legal — student-only sampling, loss still KL(student || teacher).
 soup train --config soup.yaml --minillm-enabled \
     --minillm-teacher-mix-ratio 0.3 \
     --minillm-pretrain-anchor-weight 0.1 \
@@ -294,7 +296,7 @@ soup train --config soup.yaml --minillm-enabled \
 # MiniLLM TRUE on-policy rollout (v0.71.18, Gu et al. §3.1) — sample a fresh
 # autoregressive rollout from the per-token teacher/student mixture each step,
 # then length-normalised reverse-KL. training.minillm_rollout_length tunes the
-# rollout (auto min(max_length, 32)).
+# rollout (auto min(max_length, 32)). Mix 0 here means student-only sampling.
 soup train --config soup.yaml --minillm-enabled --minillm-on-policy
 
 # Mid-epoch checkpoint for PPO/GRPO — TorchTune punts this; Soup ships it
@@ -369,6 +371,20 @@ soup eval unlearning <run-id> --benchmark tofu --evidence evidence.json --output
 
 `task: unlearn` is live (v0.71.9): it loads a LoRA-wrapped policy, a frozen reference copy (NPO / RMU), and the forget / retain JSONL sets, then optimises the per-method loss — NPO's `(2/β)·mean(-logσ(-β·(π_logp − ref_logp)))` drives the policy's forget-set log-prob below the reference (= forgetting), while the retain set anchors capability. Run NPO/SimNPO **with** a `retain_set` — without one the policy has no utility anchor and Soup warns loudly.
 
+Unlearning honors `training.optimizer`, `scheduler`, `warmup_ratio`, `weight_decay`,
+`max_grad_norm`, `batch_size` and `gradient_accumulation_steps`. The default
+`batch_size: auto` uses the same memory estimate as the other trainers. This
+memory-constrained loop processes one example at a time and accumulates gradients
+for `batch_size * gradient_accumulation_steps` examples per optimizer update;
+a final partial group is averaged by its actual size. `initial_loss` and
+`final_loss` remain unscaled per-example losses, and `total_steps` and the 2,000-step
+budget continue to count examples rather than optimizer updates.
+
+`data.max_length` now controls forget and retain tokenization instead of the old
+256-token cap. Its default is 2,048, so existing configurations can use more memory
+and take longer. Set `data.max_length: 256` to retain the old sequence-length limit,
+or explicitly choose a value that fits the model and device.
+
 Three orthogonal axes: **Forget Quality** (pre/post forget-loss delta), **Model Utility** (retain-accuracy preserved), **PrivLeak** (membership-inference AUC distance from 0.5). Bundled mini-fixtures for all three benchmarks ship in the box (v0.71.1 added MUSE + WMDP alongside the existing TOFU set), so `--benchmark muse|wmdp` runs without supplying evidence. The WMDP forget-set probes ship **redacted** (placeholder prompts + `REFUSED` responses) — Soup never bundles verbatim hazardous-knowledge content.
 
 
@@ -416,6 +432,8 @@ training:
   teacher_model: meta-llama/Llama-3.1-8B
   distill_divergence: forward_kl   # kl | forward_kl | reverse_kl | js
   distill_temperature: 2.0
+  distill_chunk_size: 256          # token chunk size for divergence evaluation
+  distill_checkpoint: true         # non-reentrant activation checkpointing
   epochs: 3
   lr: 5e-5
   quantization: 4bit               # quantizes student only
@@ -424,6 +442,47 @@ training:
 Loss = student CE + (T**2) × KL(teacher_logits / T  ||  student_logits / T).
 Teacher is loaded once, frozen via `requires_grad_(False)` + `.eval()`, and its
 inputs / logits are auto-bridged across CPU / CUDA devices.
+Gradient accumulation uses the number of shifted, non-masked training targets across the complete
+optimizer window. Splitting the same rows into unequal-length microbatches therefore preserves the
+full-batch token mean instead of weighting every microbatch equally.
+
+The token-divergence kernel evaluates all three divergences in FP32 and deliberately
+returns an FP32 scalar, including for FP16/BF16 logits. Forward-KL values can therefore
+also differ slightly from the previous low-precision calculation. The log-space
+reverse-KL and Jensen-Shannon formulas prevent finite losses with non-finite
+gradients; the upcast also preserves small losses that would underflow to zero.
+Non-finite logits propagate into the loss/gradients, allowing AMP's GradScaler to
+skip overflowed steps rather than aborting training with a validation exception.
+
+FP32 intermediates cost time and memory. The [maintainer's PR #736 measurement](https://github.com/MakazhanAlpamys/Soup/pull/736)
+on an RTX 5070 (BF16, B=1/S=512/V=32000, forward plus backward) found the originally
+submitted kernel took 1.71 times as long and 1.24 times the peak memory of main.
+That measurement included finite-value guards removed here: without them it took
+9.40 ms versus 6.39 ms, with the same 376.5 MiB versus 303.6 MiB peak. These are
+hardware-specific measurements, not a benchmark of this revised implementation,
+which also avoids unused probability tensors. Two FP32 logits copies alone occupy
+about 7.8 GiB at B=4/S=2048/V=128256; budget for additional intermediates as well.
+
+### Chunking and Activation Checkpointing
+
+Distillation with large vocabularies (e.g. 150k for Qwen 2.5) and long sequences
+can exhaust GPU memory due to massive intermediate logit and probability tensors.
+Soup provides two controls to bound activation memory:
+
+- `distill_chunk_size`: Evaluates divergence in chunks of active response tokens
+  (`labels != -100`). Pre-filtering immediately sheds unmasked prompt and padding
+  tokens from retained autograd memory, while chunking bounds transient peak
+  activation tensors during divergence evaluation. Moderate chunk sizes (e.g. 64
+  to 256 tokens) balance peak memory reduction with kernel launch overhead.
+- `distill_checkpoint`: Wraps chunk evaluation in non-reentrant activation
+  checkpointing (`torch.utils.checkpoint.checkpoint(..., use_reentrant=False)`).
+  Discards intermediate `log_softmax` and probability tensors during the forward
+  pass and recomputes them during backward, substantially reducing retained autograd
+  tensor bytes at the cost of recomputation time in the backward pass. Note that
+  enabling `distill_checkpoint: true` without setting `distill_chunk_size` processes
+  all active tokens in a single chunk, which reduces retained bytes via checkpointing
+  but leaves transient peak activations unbounded.
+
 
 Set `distill_mode: sequence` (default `token`) to train on the teacher's **generated
 continuations** instead of per-token logit matching — a hard-label, cross-tokenizer-friendly
@@ -1092,15 +1151,30 @@ soup reward stress reward.py --references golds.jsonl --output-report stress.jso
 # probe a builtin verifier instead of a .py file
 soup reward stress verifiable --verifiable-domain math --references golds.jsonl
 
+# JSON-schema references may be stored as objects in a `schema` field
+soup reward stress verifiable --verifiable-domain json_schema \
+    --references schemas.jsonl --field schema
+
 # tune the attack set / accept threshold / gameability tolerance
 soup reward stress reward.py --references golds.jsonl \
-    --attacks empty,length,repetition,sentinel --sentinel GOLD \
-    --threshold 0.5 --max-gameable 0.0
+    --attacks empty,length,repetition,sentinel,wrapped_junk,answer_spray \
+    --sentinel GOLD --threshold 0.5 --max-gameable 0.0
 ```
 
 The report shows a per-attack accept-rate and an overall verdict. A gold-requiring verifier probed
-with **no** `--references` is a hard error (it can't be measured), never a false "robust". Probing a
-`.py` executes its module code, like any custom reward — only stress files you trust.
+with **no** `--references` is a hard error (it can't be measured), never a false "robust". Because
+each attack family evaluates multiple distinct variants across sampled references (up to 23 batched
+verifier invocations, or 4,600 scored completions at the 200-gold cap), slow or model-based verifiers
+will take proportionally longer than simple string checks. Probing a `.py` executes its module code,
+like any custom reward — only stress files you trust.
+For the builtin `json_schema` domain, references are forwarded as `schema=` metadata; JSON objects
+selected by `--field` are decoded before the verifier scores them.
+
+Current limitation: the built-in attack families emit plain text that is not valid JSON, so
+`json_schema` rejects them during parsing before schema-specific constraints are evaluated. The
+result therefore does not yet distinguish a strict schema from a permissive one. Its `reference_accept`
+value is also not a meaningful self-acceptance control for this domain because it scores the schema
+document as though it were an instance of itself (and is normally `0%`).
 
 ### Verifiable Rewards (RLVR)
 
@@ -1198,6 +1272,7 @@ data:
   format: chatml
 training:
   reward_model: ./output_rm
+  epochs: 1
   ppo_epochs: 4
   ppo_clip_ratio: 0.2
   ppo_kl_penalty: 0.05
@@ -1207,6 +1282,11 @@ training:
   quantization: 4bit
 output: ./output_ppo
 ```
+
+`epochs` controls complete passes over the training dataset. `ppo_epochs`
+controls optimization passes within each PPO update. Soup forwards both values,
+plus `ppo_kl_penalty`, to the active TRL `PPOConfig` names and prints the
+effective schedule during setup.
 
 PPO supports two reward sources:
 - **Reward model** (`reward_model`): pre-trained reward model (from step 2)

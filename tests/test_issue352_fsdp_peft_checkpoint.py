@@ -30,13 +30,17 @@ def test_pyproject_accelerate_floor_supports_adapter_only_fsdp_checkpoints():
 
 
 def test_doctor_deps_accelerate_floor_matches_declared_extra():
-    from soup_cli.commands.doctor import DEPS
+    from soup_cli.commands.doctor import EXTRA_GROUPS
 
     pyproject = Path(__file__).parent.parent / "pyproject.toml"
     match = re.search(r'"accelerate>=([0-9.]+)"', pyproject.read_text(encoding="utf-8"))
     assert match, "accelerate floor pin not found in pyproject.toml"
 
-    doctor_floors = {package: floor for _, package, floor, _ in DEPS}
+    doctor_floors = {
+        package: floor
+        for _, members in EXTRA_GROUPS
+        for _, package, floor in members
+    }
     assert doctor_floors["accelerate"] == match.group(1), (
         f"soup doctor reports accelerate>={doctor_floors['accelerate']} but pyproject.toml "
         f"declares accelerate>={match.group(1)}; doctor would certify an environment that "

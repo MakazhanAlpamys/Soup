@@ -24,6 +24,7 @@ from typing import Any, Optional
 from rich.console import Console
 
 from soup_cli.config.schema import SoupConfig
+from soup_cli.trainer.loss_summary import summarize_training_loss
 from soup_cli.utils.gpu import (
     bf16_fp16_flags,
     estimate_batch_size,
@@ -110,22 +111,15 @@ def build_prm_train_result(
     missing ``initial_loss`` / ``final_loss`` / ``duration`` / ``total_steps``,
     crashing the CLI with a ``KeyError`` right after ``save_model``.
     """
-    train_losses = [e["loss"] for e in log_history if isinstance(e, dict) and "loss" in e]
-    fallback = 0.0
-    if isinstance(metrics, dict):
-        try:
-            fallback = float(metrics.get("train_loss", 0.0))
-        except (TypeError, ValueError):
-            fallback = 0.0
-    initial = train_losses[0] if train_losses else fallback
-    final = train_losses[-1] if train_losses else fallback
+    loss_summary = summarize_training_loss(
+        log_history, metrics if isinstance(metrics, dict) else None
+    )
     hours = int(duration_secs // 3600)
     minutes = int((duration_secs % 3600) // 60)
     duration = f"{hours}h {minutes}m" if hours > 0 else f"{minutes}m"
     return {
         "status": "ok",
-        "initial_loss": initial,
-        "final_loss": final,
+        **loss_summary,
         "duration": duration,
         "duration_secs": duration_secs,
         "total_steps": global_step,
@@ -362,7 +356,6 @@ class PRMTrainerWrapper:
             remove_unused_columns=False,
             deepspeed=self.deepspeed_config,
             **training_seed_kwargs(tcfg),
-            **(self.fsdp_config or {}),
         )
 
         prm_trainer_cls = make_prm_trainer_class(Trainer)

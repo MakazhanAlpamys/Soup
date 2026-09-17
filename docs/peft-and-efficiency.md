@@ -139,9 +139,11 @@ training:
 
 **YaRN.** Best quality for 4-8x extension. Tunables (`yarn_factor`, `yarn_attn_factor`, `yarn_beta_fast`, `yarn_beta_slow`) only apply when `rope_scaling_type=yarn`; the schema rejects them otherwise. Pure-Python math kernels are exposed at `soup_cli.utils.long_context.yarn_*` for reference / config-emit. The actual RoPE rotation runs inside HF Transformers.
 
-**Llama 3.1 NTK-aware.** Use `rope_scaling_type: llama3` for the canonical Llama 3.1 frequency-band scaling (`scale_factor=8`, `low_freq_factor=1`, `high_freq_factor=4`, `old_context_len=8192`). `detect_llama3_rope_in_config` auto-detects the block in any HF model config dict. Omit `rope_scaling_type` from your YAML (so it stays `None`) on a Llama 3.1 base and `apply_long_context_config` will auto-pick `llama3` by reading `model.config.rope_scaling` at load time — explicit caller picks still win.
+**Llama 3.1 NTK-aware.** Use `rope_scaling_type: llama3` for the canonical Llama 3.1 frequency-band scaling (`scale_factor=8`, `low_freq_factor=1`, `high_freq_factor=4`, `old_context_len=8192`). `detect_llama3_rope_in_config` can identify the block in an HF model config dict, but `soup train` changes RoPE only when `rope_scaling_type` is explicit; omitting it preserves the checkpoint's native RoPE configuration.
 
-**LongLoRA S² (schema-only this release).** `training.use_longlora: true` requires `task=sft`, `backend=transformers`, a base in the architecture allowlist (Llama / CodeLlama / Mistral / Qwen / Phi — Mixtral excluded), and `use_ring_attention=false`. The schema also rejects the combo with FlashAttention v3 installed (the S² custom-mask kernel conflicts with FA-v3 native custom-mask). The schema gate fails fast at config load; live forward override mirroring LlamaFactory `model/model_utils/longlora.py` lands in a follow-up release.
+RoPE scaling is applied before model construction for the Transformers text paths of `task: sft` and `task: pretrain`. Vision, audio, layer-streaming and Unsloth setup paths do not consume these fields, nor do other training tasks. Existing type-independent model parameters such as `rope_theta` are preserved; tunables belonging to a previous RoPE algorithm are removed when the type changes. Models such as Gemma 3 that use nested per-layer RoPE sections are refused rather than partially modified. `longrope` additionally requires a checkpoint that already ships its learned `short_factor` and `long_factor` vectors; Soup refuses to invent those model-specific values.
+
+**LongLoRA S².** `training.use_longlora: true` requires `task=sft`, `backend=transformers`, a base in the architecture allowlist (Llama / CodeLlama / Mistral / Mixtral / Qwen / Phi), and `use_ring_attention=false`. The schema also rejects the combo with FlashAttention v3 installed (the S² custom-mask kernel conflicts with FA-v3 native custom-mask). During SFT setup, Soup installs the shifted-sparse attention forward override on matching attention modules.
 
 ```yaml
 # Llama 3.1 with NTK-aware scaling out to 128k
@@ -596,33 +598,31 @@ Records peak memory each step. When pressure crosses the threshold, recommends a
 
 ## Training Intelligence (Forgetting + Checkpoint Quality)
 
-Two optional in-training evaluators that run alongside your main loss curve.
+The `forgetting_*`, `checkpoint_*`, and `early_stop_on_regression` settings are
+reserved for planned in-training callbacks. They are accepted by the schema but
+are not enforced during training in this build. `soup train` warns when one is
+set away from its default, and Autopilot does not enable or advertise them.
 
-**Forgetting detection** — runs a small benchmark during training to detect catastrophic forgetting (quality regression on abilities the base model had). Can auto-stop if forgetting exceeds a threshold.
-
-```yaml
-training:
-  forgetting_detection: true
-  forgetting_eval_steps: 500       # How often to evaluate (10-10,000)
-  forgetting_benchmark: mmlu        # Baseline benchmark to track
-  forgetting_threshold: 0.10        # Regression threshold (0.01-0.50)
-  forgetting_stop: true             # Halt training on breach (default: warn only)
-```
-
-**Checkpoint intelligence** — tracks a quality metric across checkpoints and keeps only the top-N by eval score (not by loss). Pairs nicely with `early_stop_on_regression`.
+Use the live eval gate for regression detection and automatic stopping today:
 
 ```yaml
+base: meta-llama/Llama-3.1-8B-Instruct
+task: sft
+data:
+  train: ./data/chat.jsonl
 training:
-  checkpoint_intelligence: true
-  checkpoint_eval_steps: 500
-  checkpoint_eval_metric: accuracy   # or: bleu, rouge, exact_match, custom
-  checkpoint_eval_tasks: ./evals/sanity.jsonl
-  checkpoint_keep_top: 3             # Keep the 3 best (1-20)
-  early_stop_on_regression: true
-  early_stop_patience: 3             # Stop after N regressions (1-10)
+  epochs: 5
+  eval_gate:
+    enabled: true
+    suite: ./evals/gate.yaml
+    every_n_epochs: 1
+    regression_threshold: 0.05
+    baseline: registry://llama31-chat-v1
+    on_regression: stop
 ```
 
-Checkpoint pruning refuses to delete symlinks or paths outside the output directory — safe to run on any `output:` path.
+The gate runs at epoch boundaries. See [Eval-Gated Training](evaluation.md#eval-gated-training)
+for the suite format and post-training invocation.
 
 
 ## GaLore (Memory-Efficient Full-Parameter Training)
