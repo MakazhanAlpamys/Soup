@@ -291,14 +291,52 @@ class ExecutionManager:
             if isinstance(exc, ExecutionError):
                 raise
             raise ExecutionError("could not spawn execution subprocess") from exc
-        tracker.mark_running(run_id, pid=process.pid)
-        threading.Thread(
-            target=self._watch,
-            args=(process, run_id),
-            daemon=True,
-            name=f"soup-mcp-{run_id}",
-        ).start()
+        try:
+            tracker.mark_running(run_id, pid=process.pid)
+            threading.Thread(
+                target=self._watch,
+                args=(process, run_id),
+                daemon=True,
+                name=f"soup-mcp-{run_id}",
+            ).start()
+        except Exception as exc:
+            # No record of a live pid and no watcher: stop the child rather
+            # than leave it running unsupervised, then free the slot.
+            self._stop_child(process)
+            try:
+                ExperimentTracker().finish_execution(run_id, status="spawn_failed", exit_code=None)
+            except Exception:
+                pass
+            with self._lock:
+                if self._active_run_id == run_id:
+                    self._active_run_id = None
+            raise ExecutionError(
+                "could not record the execution; the child process was stopped"
+            ) from exc
         return {"run_id": run_id, "status": "running", "pid": process.pid, "log_path": log_path}
+
+    @staticmethod
+    def _stop_child(process: subprocess.Popen) -> None:
+        """Terminate, then kill after 10 s; never raises."""
+        try:
+            process.terminate()
+        except Exception:
+            pass
+        try:
+            process.wait(timeout=10)
+            return
+        except subprocess.TimeoutExpired:
+            pass
+        except Exception:
+            return
+        try:
+            process.kill()
+        except Exception:
+            pass
+        try:
+            process.wait(timeout=10)
+        except Exception:
+            pass
 
     def _watch(self, process: subprocess.Popen, run_id: str) -> None:
         try:
