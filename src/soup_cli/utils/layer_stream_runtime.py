@@ -1348,7 +1348,17 @@ def _large_layer_weight_param_name(inner: Any) -> str:
     return "weight"
 
 
+def _unwrap_tuner_base(module: Any) -> Any:
+    """The real module under any peft tuner wrapper (#1012 wraps a LoRA target)."""
+    seen = 0
+    while hasattr(module, "base_layer") and seen < 8:
+        module = module.base_layer
+        seen += 1
+    return module
+
+
 def _build_streamed_large_layer_class():
+    import torch
     import torch.nn as nn
     from torch.func import functional_call
 
@@ -1466,12 +1476,39 @@ def _build_streamed_large_layer_class():
                 return getattr(inner, name)
 
         def forward(self, *args: Any, **kwargs: Any) -> Any:
+            weight = self.pool.wait(self.key)
+            if torch.is_grad_enabled() and self._needs_a_private_weight():
+                # #1049 -- embed_tokens and an untied lm_head SHARE one slot, and
+                # `wait` returns a view of it, so the next `load_async` refills the
+                # bytes autograd is holding. The projection saves its weight to build
+                # `grad wrt x`, so a second forward in the same step -- the reference
+                # pass of a preference loss -- bumped that tensor's version and the
+                # policy backward died with "modified by an inplace operation".
+                # Hand autograd a private copy: one head-sized allocation, alive only
+                # while the graph is, and only when a backward can follow.
+                weight = weight.clone()
             return functional_call(
                 self.inner,
-                {self._weight_param_name: self.pool.wait(self.key)},
+                {self._weight_param_name: weight},
                 args,
                 kwargs,
             )
+
+        def _needs_a_private_weight(self) -> bool:
+            """True when this layer's weight can be refilled while autograd holds it.
+
+            Two things have to be true. The slot must be SHARED: a tied checkpoint
+            streams one key, so its buffer is never refilled within a step. And the
+            weight must be one autograd can save, which an embedding's is not --
+            ``embedding_backward`` works from the indices and the vocabulary size,
+            never from the weight values, so nothing holds those bytes past the
+            lookup. That leaves the projection, i.e. the untied ``lm_head``, and
+            keeps the cost at one head-sized copy rather than two.
+            """
+            specs = getattr(self.pool, "specs", None)
+            if specs is None or len(specs) <= 1:
+                return False
+            return not isinstance(_unwrap_tuner_base(self.inner), nn.Embedding)
 
     return StreamedLargeLayer
 
