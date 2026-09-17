@@ -224,6 +224,7 @@ soup shrink ... --drop-layers N --heal h.jsonl --heal-steps 200 --device cpu  Dr
 soup shrink ... --tolerance 0.10 --plan-only [--attach-to-registry <id>]  Ppl-regression tolerance / print importance table only / registry attach
 soup draft measure --target <m> --draft <d> --prompts p.jsonl  Draft acceptance rate + real plain-vs-assisted tok/s (exit 0 measured — a best-effort assisted-arm failure stays 0 and is recorded as `assisted_status`; 2 below `--min-acceptance`; 1 error before results) (v0.71.33)
 soup draft measure ... --min-acceptance 0.6 -o report.json  Exit 2 below the floor (CI gate) / write the JSON report (fields incl. `assisted_status`: pending/complete/untimed/crash/interrupted)
+soup draft measure ... --sweep-k 1,2,3,5,8  Time assisted generation at each draft length (at most 8, each 1..64). The JSON adds `tok_s_draft`, `draft_status`, `latency_ratio`, `breakeven_acceptance`, `modelled_best_k`, `modelled_speedup_best_k`, `k_sweep` and `measured_best_k` (#843)
 soup draft distill --target <tuned> --draft-base <tiny> --data d.jsonl -o draft/  Distil a DENSE speculative-decoding draft + register it (v0.71.33)
 soup draft distill ... --steps N --device cpu --force --plan-only  Training budget / device / overwrite -o / render the config only
 soup draft list                               List local drafts that `soup serve --auto-spec` will pick up (v0.71.33)

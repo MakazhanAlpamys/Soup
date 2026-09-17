@@ -202,7 +202,9 @@ def _parse_sweep_k(value: str) -> list[int]:
         raise ValueError(f"--sweep-k needs comma-separated integers, got {value!r}")
     ks: list[int] = []
     for part in parts:
-        if not part.isdigit():
+        # isascii: str.isdigit() also accepts '²' (int() then raises without naming
+        # the flag) and '٣' (silently read as 3).
+        if not (part.isascii() and part.isdigit()):
             raise ValueError(f"--sweep-k values must be integers, got {part!r}")
         k = int(part)
         if not DRAFT_K_MIN <= k <= DRAFT_K_MAX:
@@ -984,7 +986,11 @@ def _run_k_sweep(
 
     def _best() -> Optional[int]:
         done = [row for row in rows if row["status"] == "complete"]
-        return max(done, key=lambda row: row["tok_s_assisted"])["k"] if done else None
+        # A tie goes to the smaller k, as the modelled best k does, whatever order
+        # --sweep-k was typed in.
+        return (
+            max(done, key=lambda row: (row["tok_s_assisted"], -row["k"]))["k"] if done else None
+        )
 
     for k in ks:
         row: dict = {"k": k, "tok_s_assisted": None, "speedup": None, "status": "pending"}

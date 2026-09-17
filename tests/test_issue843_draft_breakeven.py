@@ -309,6 +309,22 @@ class TestMeasureReportsTheModel:
         out = _plain(result.output).lower()
         assert "no k pays at the measured acceptance" in out
 
+    def test_a_near_miss_is_not_rounded_up_to_one(self, in_tmp_cwd, monkeypatch):
+        """c = 1.0 at 99% acceptance models k=1 at 0.995x. Two decimals printed
+        "no k pays ... 1.00x", which reads as a contradiction."""
+        result, data = _run(
+            monkeypatch, in_tmp_cwd, lambda role, k: 20.0, acceptance=(99, 100)
+        )
+        assert result.exit_code == 0, (result.output, repr(result.exception))
+        assert data["modelled_best_k"] == 1
+        assert data["modelled_speedup_best_k"] == pytest.approx(0.995)
+        out = _plain(result.output)
+        assert "no k pays" in out.lower()
+        assert "k=1 -> 0.995x" in out, out
+        # The measured "Speedup 1.00x" row is genuinely 1.00 here; only the
+        # modelled closest-k figure must not round up.
+        assert "k=1 -> 1.00x" not in out
+
     def test_a_best_k_that_pays_is_recommended(self, in_tmp_cwd, monkeypatch):
         result, data = _run(monkeypatch, in_tmp_cwd, _h100)
         assert data["modelled_speedup_best_k"] > 1.0
@@ -376,7 +392,10 @@ class TestSweepK:
         assert data["measured_best_k"] == 1
 
     @pytest.mark.parametrize(
-        "value", ["0", "65", "1,x", "", "1,,2", "1,2,3,4,5,6,7,8,9", "2,2"]
+        "value",
+        # "²" and "٣" pass str.isdigit(): the first used to raise from int() without
+        # naming the flag, the second was silently read as 3.
+        ["0", "65", "1,x", "", "1,,2", "1,2,3,4,5,6,7,8,9", "2,2", "²", "1,٣"],
     )
     def test_bad_values_refused_before_any_model_loads(
         self, in_tmp_cwd, monkeypatch, value
@@ -403,6 +422,19 @@ class TestSweepK:
         assert result.exit_code == 1, (result.exit_code, out)
         assert loaded == [], "refused before loading either model"
         assert "--sweep-k" in out
+
+    @pytest.mark.parametrize("order", ["5,1", "1,5"])
+    def test_a_measured_tie_goes_to_the_smaller_k_whatever_the_order(
+        self, in_tmp_cwd, monkeypatch, order
+    ):
+        """Matches the modelled best k, which takes the smallest k on a tie."""
+        result, data = _run(
+            monkeypatch, in_tmp_cwd,
+            lambda role, k: 30.0 if role == "assisted" else _h100(role, k),
+            extra=["--sweep-k", order],
+        )
+        assert result.exit_code == 0, (result.output, repr(result.exception))
+        assert data["measured_best_k"] == 1
 
     def test_without_the_flag_no_sweep_runs(self, in_tmp_cwd, monkeypatch):
         calls = []

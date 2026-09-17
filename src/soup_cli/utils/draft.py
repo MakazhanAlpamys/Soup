@@ -462,7 +462,9 @@ def render_draft_panel(report: AcceptanceReport) -> Panel:
                 table.add_row(
                     "Best k",
                     "[red]no k pays at the measured acceptance[/] (closest: "
-                    f"k={report.modelled_best_k} -> {report.modelled_speedup_best_k:.2f}x)",
+                    # Three decimals: at 0.995x, "1.00x" beside "no k pays" reads as
+                    # a contradiction.
+                    f"k={report.modelled_best_k} -> {report.modelled_speedup_best_k:.3f}x)",
                 )
         table.add_row("", f"[dim]({MODEL_ASSUMPTIONS}; a ceiling, not a prediction)[/]")
     if report.k_sweep:
