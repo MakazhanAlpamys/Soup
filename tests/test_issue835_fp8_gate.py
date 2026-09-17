@@ -109,6 +109,14 @@ class TestTheFloor:
         assert "2.7" in reason
         assert "tensorwise" in reason
 
+    def test_ada_refuses_rowwise_when_the_torch_version_is_unreadable(self, monkeypatch):
+        """Fail closed: a version the gate cannot parse is not assumed to be >= 2.7."""
+        from soup_cli.utils.fp8 import fp8_training_supported
+
+        _card(monkeypatch, (8, 9), version="unknown")
+        assert fp8_training_supported("rowwise")[0] is False
+        assert fp8_training_supported("tensorwise") == (True, "")
+
     @pytest.mark.parametrize("recipe", RECIPES)
     @pytest.mark.parametrize("capability", [(7, 5), (8, 0), (8, 6), (8, 7)])
     def test_below_ada_refuses_every_recipe(self, monkeypatch, capability, recipe):
