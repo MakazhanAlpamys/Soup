@@ -274,10 +274,14 @@ above.
 | `asr` | `none` only | full fine-tune unless `asr_lora: true` |
 
 For these tasks an unset `quantization` resolves to `none`, so the stored config and the VRAM
-pre-flight describe the run that actually happens. An explicit `4bit`, `8bit`, Quant Menu value,
-`load_in_8bit: true` or a 4-bit-only setting such as `bnb_4bit_quant_storage` is refused at
-config load, naming the task (#795). Every other task applies the field as documented in
-[Performance & Quantization](performance-and-quantization.md).
+pre-flight describe the run that actually happens (#795).
+
+An explicit `4bit` or `8bit` (or `load_in_8bit: true`) **loads with a warning and resolves to
+`none`**, because every config Soup dumped while `4bit` was the default carries it literally.
+The warning names the task and the release that will refuse it; set `quantization: none` to
+silence it. A Quant Menu value (`gptq`, `awq`, ...) or a 4-bit-only setting such as
+`bnb_4bit_quant_storage` is refused at config load, naming the task. Every other task applies
+the field as documented in [Performance & Quantization](performance-and-quantization.md).
 
 ---
 

@@ -7,14 +7,23 @@ explicit ``8bit`` for all of them, the stored config recorded a quantisation tha
 never happened, and the VRAM pre-flight budgeted e.g. a full-precision PRM fine-tune
 as a ~4 GB QLoRA job -- under-prediction, the unsafe direction.
 
-Shaped like #983 (#806): refuse what the trainer cannot honour. Because the default
-is ``4bit``, an UNSET ``quantization`` resolves to ``none`` for these tasks so a
-minimal config still parses and the stored config is truthful; an explicit
-non-``none`` value -- including via the ``load_in_8bit`` alias -- is refused.
+Because the default is ``4bit``, an UNSET ``quantization`` resolves to ``none`` for
+these tasks so a minimal config still parses and the stored config is truthful.
+
+An explicit bitsandbytes value -- ``4bit``, ``8bit``, or the ``load_in_8bit`` alias --
+loads with a warning and resolves to ``none`` (#1043 review): every config Soup
+dumped on the old default carries ``quantization: 4bit`` literally, and refusing it
+broke files Soup wrote itself. A quant-menu value was never a default, so it is
+still refused.
 """
 
-import pytest
+import io
 
+import pytest
+from rich.console import Console
+
+from soup_cli.config import loader
+from soup_cli.config.deprecation import SoupConfigDeprecationWarning
 from soup_cli.config.loader import load_config_from_string
 
 _MINIMAL = {
@@ -65,27 +74,84 @@ class TestTheDefaultResolves:
         assert reloaded.training.quantization == "none"
 
 
-class TestAnExplicitValueIsRefused:
+@pytest.fixture
+def printed(monkeypatch):
+    buffer = io.StringIO()
+    monkeypatch.setattr(
+        loader, "console", Console(file=buffer, width=500, force_terminal=False, color_system=None)
+    )
+    return buffer
+
+
+class TestAnExplicitBnbValueWarnsAndResolves:
     @pytest.mark.parametrize("task", _UNHONOURED)
     @pytest.mark.parametrize("quant", ["4bit", "8bit"])
-    def test_bnb_values_name_the_task(self, task, quant):
-        with pytest.raises(ValueError) as excinfo:
-            load_config_from_string(_yaml(task, f"  quantization: {quant}\n"))
-        message = str(excinfo.value)
-        assert f"task='{task}'" in message
-        assert "quantization" in message
+    def test_bnb_values_name_the_task(self, task, quant, printed):
+        """Loads, says so once naming the task and the value, and trains as none."""
+        cfg = load_config_from_string(_yaml(task, f"  quantization: {quant}\n"))
+        assert cfg.training.quantization == "none"
+        out = printed.getvalue()
+        assert out.count(f"training.quantization: {quant} has no effect") == 1, out
+        assert f"task='{task}'" in out
+        assert "will refuse it" in out
+
+    @pytest.mark.parametrize("task", ["prm", "distill"])
+    def test_the_warning_is_a_deprecation_warning_outside_the_loader(self, task):
+        """Code that builds SoupConfig directly sees an ordinary warning."""
+        import yaml
+
+        from soup_cli.config.schema import SoupConfig
+
+        raw = yaml.safe_load(_yaml(task, "  quantization: 4bit\n"))
+        with pytest.warns(SoupConfigDeprecationWarning, match=f"task='{task}'"):
+            cfg = SoupConfig(**raw)
+        assert cfg.training.quantization == "none"
+
+    @pytest.mark.parametrize("task", _UNHONOURED)
+    def test_an_unset_value_does_not_warn(self, task, printed):
+        """Control: only an explicit value warns. The default resolves quietly."""
+        import warnings
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", SoupConfigDeprecationWarning)
+            cfg = load_config_from_string(_yaml(task))
+        assert cfg.training.quantization == "none"
+        assert printed.getvalue() == ""
+
+    @pytest.mark.parametrize("task", ["prm", "unlearn"])
+    def test_the_load_in_8bit_alias_warns_too(self, task, printed):
+        """``load_in_8bit: true`` rewrites ``quantization`` to ``8bit``; for these
+        tasks that is the same unhonoured value by another spelling."""
+        cfg = load_config_from_string(_yaml(task, "  load_in_8bit: true\n"))
+        assert cfg.training.quantization == "none"
+        assert f"task='{task}'" in printed.getvalue()
+
+    @pytest.mark.parametrize("task", _UNHONOURED)
+    @pytest.mark.parametrize("exclude_none", [False, True], ids=["full", "exclude_none"])
+    def test_a_config_dumped_on_the_old_default_still_loads(self, task, exclude_none, printed):
+        """The regression that revised the ruling: a run-config dump, or an
+        autopilot-style ``exclude_none`` dump, written while ``4bit`` was the
+        default carries it literally. Built here by dumping and writing the old
+        value back, which is what those files contain."""
+        import yaml
+
+        from soup_cli.config.schema import SoupConfig
+
+        dumped = SoupConfig(**yaml.safe_load(_yaml(task))).model_dump(
+            mode="json", exclude_none=exclude_none
+        )
+        dumped["training"]["quantization"] = "4bit"
+        cfg = load_config_from_string(yaml.safe_dump(dumped, sort_keys=False))
+        assert cfg.training.quantization == "none"
+        assert printed.getvalue().count("has no effect") == 1
+
+
+class TestAnExplicitValueIsRefused:
 
     @pytest.mark.parametrize("task", ["prm", "distill"])
     def test_a_quant_menu_value_is_refused_too(self, task):
         with pytest.raises(ValueError, match=f"task='{task}'"):
             load_config_from_string(_yaml(task, "  quantization: gptq\n"))
-
-    @pytest.mark.parametrize("task", ["prm", "unlearn"])
-    def test_the_load_in_8bit_alias_is_explicit_intent(self, task):
-        """``load_in_8bit: true`` rewrites ``quantization`` to ``8bit``; for these
-        tasks that is the same unhonoured request by another spelling."""
-        with pytest.raises(ValueError, match=f"task='{task}'"):
-            load_config_from_string(_yaml(task, "  load_in_8bit: true\n"))
 
     @pytest.mark.parametrize(
         "knob",
@@ -102,6 +168,15 @@ class TestAnExplicitValueIsRefused:
         on the unresolved ``4bit`` default."""
         with pytest.raises(ValueError):
             load_config_from_string(_yaml("prm", knob))
+
+    def test_explicit_4bit_with_a_4bit_storage_setting_is_still_refused(self):
+        """Only the bare value Soup's dumps carry is forgiven. ``bnb_4bit_quant_storage``
+        was never written by a dump (it defaults to ``None``), so setting it beside
+        ``4bit`` is a deliberate 4-bit request the trainer cannot honour."""
+        with pytest.raises(ValueError, match="task='prm'"):
+            load_config_from_string(
+                _yaml("prm", "  quantization: 4bit\n  bnb_4bit_quant_storage: bfloat16\n")
+            )
 
     @pytest.mark.parametrize("task", ["prm", "asr"])
     def test_load_in_16bit_is_accepted(self, task):
