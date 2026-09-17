@@ -15,8 +15,8 @@ def _plain(text: str) -> str:
     return re.sub(r"\s+", " ", _ANSI_RE.sub("", text or ""))
 
 
-def _report(**overrides: str) -> AcceptanceReport:
-    values = dict(
+def test_draft_panel_escapes_user_controlled_model_names() -> None:
+    report = AcceptanceReport(
         target="org/[red]EVIL[/red]",
         draft="org/[blue]DRAFT[/blue]",
         n_prompts=1,
@@ -29,15 +29,8 @@ def _report(**overrides: str) -> AcceptanceReport:
         num_assistant_tokens=5,
         soup_version="0.75.0",
     )
-    values.update(overrides)
-    return AcceptanceReport(**values)
-
-
-def test_draft_panel_escapes_user_controlled_model_names() -> None:
     buf = StringIO()
-    Console(file=buf, force_terminal=True, width=100).print(
-        render_draft_panel(_report())
-    )
+    Console(file=buf, force_terminal=True, width=100).print(render_draft_panel(report))
 
     output = _plain(buf.getvalue())
     assert "org/[red]EVIL[/red]" in output
