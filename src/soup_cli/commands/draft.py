@@ -37,13 +37,18 @@ from rich.table import Table
 from soup_cli import __version__
 from soup_cli.utils.adapter_fuse import merge_adapter_to_dense
 from soup_cli.utils.draft import (
+    DRAFT_K_MAX,
+    DRAFT_K_MIN,
     AcceptanceReport,
     acceptance_rate,
+    breakeven_acceptance,
     classify_acceptance,
     draft_report_to_dict,
+    latency_ratio,
     list_drafts,
     measure_acceptance,
     measure_throughput,
+    modelled_best_k,
     register_draft,
     render_draft_panel,
     same_tokenizer,
@@ -57,6 +62,7 @@ if TYPE_CHECKING:  # pragma: no cover — typing only, keeps the CLI import ligh
 app = typer.Typer(help="Train + measure a speculative-decoding draft model.")
 console = Console()
 
+_MAX_SWEEP_K = 8  # each k is a full assisted-generation pass over every prompt
 _MAX_INPUT_BYTES = 64 * 1024 * 1024
 _MAX_PROMPT_ROWS = 10_000
 _MAX_DATA_ROWS = 1_000_000
@@ -162,6 +168,77 @@ def _write_draft_report(report: AcceptanceReport, output: str) -> None:
         output,
         field="report path",
     )
+
+
+def _write_draft_report_best_effort(
+    report: AcceptanceReport, output: Optional[str], what: str
+) -> None:
+    """Persist an intermediate result (#843's draft arm and each ``--sweep-k`` step).
+
+    Best-effort, like :func:`_record_assisted_status`: these writes sit between the
+    pre-arm write that already holds the acceptance rate and the arms still to run,
+    so a failed write here is a warning -- it must not abort the run, and it must
+    not replace an exception being handled.
+    """
+    if output is None:
+        return
+    try:
+        _write_draft_report(report, output)
+    except OSError as exc:
+        console.print(
+            f"[yellow]Warning:[/] could not record the {what} in {escape(output)} "
+            f"({escape(str(exc))}); results written earlier are still on disk."
+        )
+
+
+def _parse_sweep_k(value: str) -> list[int]:
+    """``--sweep-k 1,2,3,5,8`` -> ``[1, 2, 3, 5, 8]``, or ``ValueError`` naming the flag.
+
+    Bounded: every k is one assisted pass over every prompt, so an unbounded list
+    is an unbounded run.
+    """
+    parts = [part.strip() for part in value.split(",")]
+    if not value.strip() or any(not part for part in parts):
+        raise ValueError(f"--sweep-k needs comma-separated integers, got {value!r}")
+    ks: list[int] = []
+    for part in parts:
+        if not part.isdigit():
+            raise ValueError(f"--sweep-k values must be integers, got {part!r}")
+        k = int(part)
+        if not DRAFT_K_MIN <= k <= DRAFT_K_MAX:
+            raise ValueError(
+                f"--sweep-k values must be in {DRAFT_K_MIN}..{DRAFT_K_MAX}, got {k}"
+            )
+        if k in ks:
+            raise ValueError(f"--sweep-k lists k={k} twice")
+        ks.append(k)
+    if len(ks) > _MAX_SWEEP_K:
+        raise ValueError(
+            f"--sweep-k takes at most {_MAX_SWEEP_K} values (got {len(ks)}); each is a "
+            "full assisted pass over every prompt"
+        )
+    return ks
+
+
+def _modelled_fields(
+    rate: float, plain: Optional[float], draft_tok_s: Optional[float], k: int
+) -> dict:
+    """The #843 break-even model for this measurement, or all-``None`` if unmeasured."""
+    c = latency_ratio(plain, draft_tok_s)
+    if c is None:
+        return {
+            "latency_ratio": None,
+            "breakeven_acceptance": None,
+            "modelled_best_k": None,
+            "modelled_speedup_best_k": None,
+        }
+    best_k, best_speedup = modelled_best_k(rate, c)
+    return {
+        "latency_ratio": c,
+        "breakeven_acceptance": breakeven_acceptance(k, c),
+        "modelled_best_k": best_k,
+        "modelled_speedup_best_k": best_speedup,
+    }
 
 
 def _record_assisted_status(
@@ -679,8 +756,20 @@ def measure(
     output: Optional[str] = typer.Option(
         None, "-o", "--output", help="Write the report as JSON."
     ),
+    sweep_k: Optional[str] = typer.Option(
+        None,
+        "--sweep-k",
+        help="Also time assisted generation at each of these draft lengths, e.g. "
+        f"1,2,3,5,8 (at most {_MAX_SWEEP_K}, each in {DRAFT_K_MIN}..{DRAFT_K_MAX}).",
+    ),
 ) -> None:
     """Report a draft's acceptance rate + throughput against its target."""
+    sweep_values: Optional[list[int]] = None
+    if sweep_k is not None:
+        try:
+            sweep_values = _parse_sweep_k(sweep_k)
+        except ValueError as exc:
+            _fail(str(exc))
     try:
         rows = _read_jsonl(prompts, "prompts path", _MAX_PROMPT_ROWS)
     except ValueError as exc:
@@ -785,6 +874,33 @@ def measure(
     if output is not None:
         _write_draft_report(report, output)
 
+    # #843: the draft decoding alone, so the report can say at what acceptance this
+    # pair pays and which k is best. Best-effort like the assisted arm: a failure
+    # here never costs the acceptance rate or plain throughput already on disk.
+    try:
+        tok_s_draft = measure_throughput(
+            draft_model, draft_tok, prompt_texts, max_new_tokens=max_new_tokens
+        )
+    except KeyboardInterrupt:
+        report = replace(report, draft_status="interrupted")
+        _write_draft_report_best_effort(report, output, "draft-arm outcome")
+        raise
+    except Exception as exc:  # noqa: BLE001 — draft arm is best-effort
+        report = replace(report, draft_status="crash")
+        console.print(
+            f"[yellow]Warning:[/] draft-alone throughput could not be measured "
+            f"({escape(str(exc))}); no break-even is reported."
+        )
+    else:
+        draft_tok_s = None if tok_s_draft <= 0 else tok_s_draft
+        report = replace(
+            report,
+            tok_s_draft=draft_tok_s,
+            draft_status="complete" if draft_tok_s is not None else "untimed",
+            **_modelled_fields(rate, plain, draft_tok_s, num_assistant_tokens),
+        )
+    _write_draft_report_best_effort(report, output, "draft-arm outcome")
+
     try:
         tok_s_assisted = measure_throughput(
             target_model,
@@ -824,6 +940,12 @@ def measure(
         if output is not None:
             _write_draft_report(report, output)
 
+    if sweep_values is not None:
+        report = _run_k_sweep(
+            report, output, sweep_values, plain,
+            target_model, target_tok, draft_model, draft_tok, prompt_texts, max_new_tokens,
+        )
+
     console.print(render_draft_panel(report))
     if output is not None:
         console.print(f"[dim]Report written to {escape(output)}[/]")
@@ -833,6 +955,71 @@ def measure(
             f"Acceptance {rate:.1%} is below the required {min_acceptance:.1%}.",
             code=2,
         )
+
+
+def _run_k_sweep(
+    report: AcceptanceReport,
+    output: Optional[str],
+    ks: list[int],
+    plain: Optional[float],
+    target_model,
+    target_tok,
+    draft_model,
+    draft_tok,
+    prompt_texts: list[str],
+    max_new_tokens: int,
+) -> AcceptanceReport:
+    """``--sweep-k``: time assisted generation at each k (#843).
+
+    Each k is best-effort and written as it completes, so one crash or a Ctrl-C
+    keeps every k measured before it. The measured best k sits beside the modelled
+    one; when they disagree, that disagreement is the point of measuring.
+    """
+    rows: list[dict] = []
+
+    def _commit(best: Optional[int]) -> AcceptanceReport:
+        updated = replace(report, k_sweep=tuple(rows), measured_best_k=best)
+        _write_draft_report_best_effort(updated, output, "--sweep-k result")
+        return updated
+
+    def _best() -> Optional[int]:
+        done = [row for row in rows if row["status"] == "complete"]
+        return max(done, key=lambda row: row["tok_s_assisted"])["k"] if done else None
+
+    for k in ks:
+        row: dict = {"k": k, "tok_s_assisted": None, "speedup": None, "status": "pending"}
+        rows.append(row)
+        try:
+            tok_s = measure_throughput(
+                target_model,
+                target_tok,
+                prompt_texts,
+                assistant_model=draft_model,
+                assistant_tokenizer=draft_tok,
+                num_assistant_tokens=k,
+                max_new_tokens=max_new_tokens,
+            )
+        except KeyboardInterrupt:
+            row["status"] = "interrupted"
+            _commit(_best())
+            raise
+        except Exception as exc:  # noqa: BLE001 — each k is best-effort
+            row["status"] = "crash"
+            console.print(
+                f"[yellow]Warning:[/] --sweep-k k={k} could not be measured "
+                f"({escape(str(exc))})."
+            )
+        else:
+            if tok_s > 0:
+                row.update(
+                    tok_s_assisted=tok_s,
+                    speedup=tok_s / plain if plain else None,
+                    status="complete",
+                )
+            else:
+                row["status"] = "untimed"
+        report = _commit(_best())
+    return report
 
 
 # ---------------------------------------------------------------------------

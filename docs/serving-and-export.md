@@ -371,9 +371,30 @@ soup draft list
 
 **Acceptance rate** is the fraction of the target's own greedy tokens the draft would have
 proposed correctly (teacher-forced argmax agreement — the metric the Medusa/EAGLE papers report).
-Higher is better; roughly, ≥70% is where speculative decoding starts paying for the draft's
-forward pass on realistic hardware. `--min-acceptance 0.6` exits **2** below the floor, so CI can
-gate on it (exit 0 = ok, 2 = below floor, 1 = error).
+Higher is better, and the STRONG / MODERATE / WEAK band (≥70% / ≥50%) grades the rate alone. **It
+does not say whether the pair is faster.** That depends on how much faster the draft is than its
+target: on the one pair measured at scale (Llama-3.1-8B target, Llama-3.2-1B draft, one H100),
+81.3% acceptance was STRONG and assisted generation ran at 0.48x of plain.
+`--min-acceptance 0.6` exits **2** below the floor, so CI can gate on it (exit 0 = ok, 2 = below
+floor, 1 = error).
+
+**Break-even and draft length.** `measure` also times the draft decoding alone and reports:
+
+- **Latency ratio** `c` = plain tok/s ÷ draft-alone tok/s: what one draft token costs in target
+  steps.
+- **Break-even acceptance** at the `--num-assistant-tokens` in use: the rate at which assisted
+  generation would stop being slower. "None" means no rate pays, which is always the case once the
+  draft is no faster than the target.
+- **Best k**: the draft length in 1..64 that maximises the modelled speedup at your measured
+  acceptance.
+
+These three are **modelled, not measured**. They use the standard expected-tokens model:
+per-position acceptance `a` independent across positions, `E = (1 − a^(k+1)) / (1 − a)` tokens per
+step at a cost of `k·c + 1` target steps. So they're a ceiling that excludes framework overhead.
+On the H100 pair above the model gave 0.955x at k=5 against a measured 0.481x. To measure
+instead, add `--sweep-k 1,2,3,5,8` (at most 8 values). It times assisted generation at each k and
+reports the measured best k beside the modelled one. The numbers are a single greedy run, and
+`soup serve` samples at temperature 0.7 by default, so treat the best k as a starting point.
 
 *Note: For cross-tokenizer drafts, the measured acceptance rate is a strict lower bound. A token boundary merge between the prompt and the first generated token can cause the score to read up to `1/n_gen` lower than its true value, but it will never over-report.*
 
