@@ -516,6 +516,36 @@ GitHub Actions runs on every push and PR:
 
 See `.github/workflows/ci.yml`.
 
+### Stale CI marks (#1017)
+
+A `pull_request` workflow run pins `refs/pull/N/merge` at **run creation**.
+`actions/checkout` fetches that SHA; later movement of `main` is not re-resolved.
+`gh run rerun` replays the frozen merge and cannot produce a different answer.
+That is why a green tick can describe a `main` that no longer exists (#763's
+`NameError` on `_for_terminal`) and why a red X can describe a test that `main`
+has already fixed. Neither is the contributor's fault, and neither clears by
+waiting.
+
+**If your PR is red for failures you do not touch:** merge or rebase onto current
+`origin/main` and push. That is the only way to rebuild the merge SHA for the
+test matrix. Maintainers will not `gh pr update-branch` onto a fork without
+asking.
+
+**If your PR is green and `main` has moved:** the `merge-freshness` check is
+re-posted on every push to `main`. It rebuilds the merge tree on the runner (no
+write to your branch), fails on ruff F821, and fails when the merge-base is more
+than 10 commits behind `main`. It does not re-run the 13-job test matrix.
+
+`required_status_checks.strict` stays off: flipping it would force a rebase on
+every merge. A docs-only pre-merge procedure is what maintainers already do by
+hand and is not a control — GitHub will still merge a CLEAN PR on stale marks.
+Ask a maintainer to add `merge-freshness` to the required checks on `main` so
+the GitHub merge button honours it.
+
+Before merging anything, `gh pr checks` returning all-green is necessary and not
+sufficient. Compare the newest run's `created_at` against `main`'s commits since,
+or look at `merge-freshness`.
+
 ## Releases
 
 The project follows semantic versioning: `MAJOR.MINOR.PATCH`

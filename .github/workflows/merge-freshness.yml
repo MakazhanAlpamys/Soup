@@ -1,0 +1,83 @@
+# #1017 — re-evaluate a PR against live main without writing to the fork.
+#
+# A pull_request run pins refs/pull/N/merge at creation. gh run rerun
+# replays that SHA; later movement of main is invisible. strict: true would
+# block the stale-green case by forcing a rebase on every merge, which this
+# repo's merge rate cannot afford, and it still would not refresh the frozen
+# merge. A docs-only pre-merge procedure is what maintainers already do by
+# hand and is not a control (four CLEAN PRs were mergeable on marks 12-138
+# commits old). So this workflow is option 2: a check that fails when the
+# live merge-base is more than N commits behind main, plus ruff F821 on a
+# merge rebuilt on the runner (the #763 NameError is one commit, inside any
+# N > 0 window).
+#
+# The 13-job test matrix is deliberately not re-run here. Doing that for
+# every open PR on every push to main is the queue deadlock the issue filed.
+# A false-red test cell still needs a contributor push; CONTRIBUTING says so.
+#
+# Timeout-minutes on ci.yml's test matrix is #1025, not this PR.
+name: merge freshness
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  checks: write
+  pull-requests: read
+
+# PRs supersede themselves. Pushes to main share one group so only the
+# newest tip re-evaluates open PRs; a burst of merges should not fan out.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || 'main-reeval' }}
+  cancel-in-progress: true
+
+jobs:
+  merge-freshness:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      # Check out the PR HEAD, not GitHub's frozen merge commit. The whole
+      # point is to merge that head into *current* origin/main ourselves.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
+      - name: Fetch current main
+        run: git fetch --no-tags origin main
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install ruff
+      - name: Gate the live merge
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: >
+          python scripts/merge_freshness.py --max-behind 10 --repo-root .
+          gate --base origin/main --head HEAD
+          --head-sha ${{ github.event.pull_request.head.sha }}
+          --post-check
+
+  reeval-open-prs:
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      # This job must run main's tree, never a PR's. The script then fetches
+      # pull/N/head as data and ruff's the merged result without executing it.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install ruff
+      - name: Re-evaluate open PRs against live main
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python scripts/merge_freshness.py --max-behind 10 --repo-root . reeval --base origin/main
