@@ -12,6 +12,18 @@ reproducing 70+ versions of notes.
 
 ## [Unreleased]
 
+## [0.75.1] - 2026-09-18
+
+### Fixed
+
+- `soup runs clean` now accepts `--no-keep-weights` to delete whole non-best checkpoints; `--keep-weights` (the default) keeps weights on every supported Click version — on Click 8.1 it previously deleted whole checkpoints (#1057)
+
+- **Cloud runs keep their outputs and their cleanup (#1058).** `soup train --cloud modal` now writes run outputs to the `soup-outputs` Modal volume and downloads them to the local output directory when the run ends (also after a failed run); previously checkpoints were lost with the container. `soup train --cloud lambda --cloud-submit`: pressing Ctrl+C now waits for the controller to terminate the Lambda instance; previously the controller was killed 0.25 s later and the instance could keep running (Linux/macOS).
+
+### Security
+
+- Hardening across the CLI, the inference server, the Web UI, MCP execution, config parsing and `.can` handling. A security advisory with details and upgrade guidance will be published alongside this release.
+
 ## [0.75.0] - 2026-09-12
 
 ### Added
@@ -4650,7 +4662,8 @@ what a fine-tune forgets and leaks.
   `SECURITY.md` (~220 KB). `SECURITY.md` is now a concise security policy; the
   detailed hardening notes remain in git history and the GitHub Releases notes.
 
-[Unreleased]: https://github.com/MakazhanAlpamys/Soup/compare/v0.75.0...HEAD
+[Unreleased]: https://github.com/MakazhanAlpamys/Soup/compare/v0.75.1...HEAD
+[0.75.1]: https://github.com/MakazhanAlpamys/Soup/compare/v0.75.0...v0.75.1
 [0.75.0]: https://github.com/MakazhanAlpamys/Soup/compare/v0.74.0...v0.75.0
 [0.74.0]: https://github.com/MakazhanAlpamys/Soup/compare/v0.73.3...v0.74.0
 [0.73.1]: https://github.com/MakazhanAlpamys/Soup/compare/v0.73.0...v0.73.1
