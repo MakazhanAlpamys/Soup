@@ -168,6 +168,24 @@ jobs:
         # execute them. Without this step, replacing the whole MLX per-row loss
         # with a constant 0.0 left the suite green (#1018 review).
         run: pytest -o addopts= -q tests/test_rewind_mlx.py
+  torchao-contract:
+    # #826: every torchao class Soup names is resolved against the REAL package
+    # here. The 3x3 matrix cannot do it -- `torchao` is not in `[dev]`, so those
+    # cells skip these tests, which is how three names torchao never exported
+    # (NVFP4Config, Int8DynActInt4Config, Float8DynActFloat8Config) survived
+    # behind a stub and a MagicMock.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install the QAT extra (torchao) beside the dev stack
+        run: pip install -e ".[dev]" ".[qat]" "torch>=2.6.0"
+      - name: Prove torchao is actually importable, so the tests do not skip
+        run: python -c "import torchao; print(torchao.__version__)"
+      - name: Resolve every torchao class Soup asks for
+        run: pytest -o addopts= -q tests/test_issue826_torchao_class_names.py
   pytorch-smoke:
     # #596: exercise the real PyTorch SFT + DPO training pipeline on every PR.
     # Keep this separate from the 3x3 matrix so the expensive model-backed

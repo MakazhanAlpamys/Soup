@@ -27,6 +27,8 @@ advisories so a training kick-off never crashes on instrumentation.
 
 from __future__ import annotations
 
+from soup_cli.utils.torchao_compat import TORCHAO_MIN_VERSION
+
 # Attention-projection module names (last FQN component). Covers the
 # separate-QKV Llama/Mistral/Qwen/Phi shape, GPT-2's fused ``c_attn``,
 # Phi-3 / GPT-NeoX fused variants, and encoder-style ``out_proj``.
@@ -257,7 +259,7 @@ def apply_fp8_attention(model: object, *, recipe: str = "tensorwise") -> int:
     if not _torchao_available():
         raise RuntimeError(
             "fp8_attention requires torchao's float8 recipe "
-            "(pip install 'torchao>=0.5.0')."
+            f"(pip install 'torchao>={TORCHAO_MIN_VERSION}')."
         )
 
     import torch.nn as nn
@@ -285,7 +287,7 @@ def apply_fp8_attention(model: object, *, recipe: str = "tensorwise") -> int:
         except ImportError as exc:
             raise RuntimeError(
                 "fp8_attention requires torchao's float8 recipe "
-                "(pip install 'torchao>=0.5.0')."
+                f"(pip install 'torchao>={TORCHAO_MIN_VERSION}')."
             ) from exc
 
         pending_set = frozenset(pending)
@@ -329,17 +331,15 @@ def apply_nvfp4(model: object) -> int:
             "NVFP4 requires a Blackwell GPU (B100/B200/GB200 at SM 10.0 or "
             "RTX 50-series at SM 12.0); no Blackwell device detected."
         )
-    try:
-        from torchao import quantization as ao_q
-    except ImportError as exc:
-        raise RuntimeError(
-            "NVFP4 requires torchao (pip install 'torchao>=0.7.0')."
-        ) from exc
-    if not hasattr(ao_q, "NVFP4Config") or not hasattr(ao_q, "quantize_"):
-        raise RuntimeError(
-            "torchao does not expose NVFP4Config / quantize_; upgrade "
-            "torchao (pip install -U torchao)."
-        )
+    # #826: torchao never exported NVFP4Config. The class that does what this
+    # flag promises is NVFP4TrainingConfig, whose docstring says it "replaces
+    # nn.Linear modules with NVFP4Linear, which quantizes all three GEMMs
+    # (forward and backward) to NVFP4" -- the inference configs beside it are
+    # post-training weight quantization, which is not what training.nvfp4 means.
+    from soup_cli.utils.torchao_compat import resolve_torchao_class
+
+    training_config = resolve_torchao_class("NVFP4Training")
+    quantize_ = resolve_torchao_class("quantize_")
 
     import torch.nn as nn
 
@@ -348,7 +348,7 @@ def apply_nvfp4(model: object) -> int:
         if isinstance(module, nn.Linear)
     )
     try:
-        ao_q.quantize_(model, ao_q.NVFP4Config())
+        quantize_(model, training_config())
     except Exception as exc:  # noqa: BLE001 — in-place mutation honesty
         raise RuntimeError(
             "NVFP4 quantisation failed partway — the model may be "
