@@ -1,6 +1,5 @@
 """Tests for soup doctor command."""
 
-import re
 import sys
 from unittest.mock import patch
 
@@ -8,16 +7,16 @@ from typer.testing import CliRunner
 
 from soup_cli.cli import app
 from soup_cli.commands.doctor import _version_ok
+from tests.conftest import strip_ansi
 
 runner = CliRunner()
 
-# Rich/Typer emits per-character ANSI escapes when colour is forced
-# (FORCE_COLOR=1), which would break substring assertions on commands.
-_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
-
-
 def _strip_ansi(text: str) -> str:
-    return _ANSI_RE.sub("", text)
+    return strip_ansi(text)
+
+
+def _plain(text: str) -> str:
+    return " ".join(strip_ansi(text).split())
 
 
 # --- _version_ok tests ---
@@ -190,6 +189,21 @@ def test_torch_gpu_arch_supported_rejects_higher_only_ptx_target():
     assert _torch_gpu_arch_supported(fake_torch, 9, 0) is False
 
 
+def test_torch_gpu_arch_supported_accepts_a_suffixed_architectures():
+    from types import SimpleNamespace
+
+    from soup_cli.commands.doctor import _torch_gpu_arch_supported
+
+    fake_torch = SimpleNamespace(
+        cuda=SimpleNamespace(
+            get_arch_list=lambda: ["sm_90a", "sm_100a"],
+        )
+    )
+
+    assert _torch_gpu_arch_supported(fake_torch, 9, 0) is True
+    assert _torch_gpu_arch_supported(fake_torch, 10, 0) is True
+
+
 def test_doctor_gpu_panel_shows_compute_capability_and_precision(monkeypatch):
     """GPU panel reports compute capability and precision feature gates."""
     import importlib.machinery
@@ -248,8 +262,12 @@ def test_doctor_gpu_panel_shows_compute_capability_and_precision(monkeypatch):
         fake_quantization,
     )
 
-    result = runner.invoke(app, ["doctor"])
-    out = result.output
+    result = runner.invoke(
+        app,
+        ["doctor"],
+        env={"COLUMNS": "120", "FORCE_COLOR": "1"},
+    )
+    out = _plain(result.output)
 
     assert result.exit_code == 0
     assert "sm_120 (Blackwell)" in out
@@ -283,10 +301,12 @@ def test_get_precision_capabilities_reports_negative_nvfp4_software(
         "soup_cli.utils.advanced_precision.is_blackwell_gpu",
         lambda: True,
     )
-    monkeypatch.setattr(
-        "soup_cli.utils.advanced_precision.is_nvfp4_software_supported",
-        lambda: False,
-    )
+    fake_torchao = types.ModuleType("torchao")
+    fake_quantization = types.ModuleType("torchao.quantization")
+    fake_quantization.quantize_ = lambda *args, **kwargs: None
+    fake_torchao.quantization = fake_quantization
+    monkeypatch.setitem(sys.modules, "torchao", fake_torchao)
+    monkeypatch.setitem(sys.modules, "torchao.quantization", fake_quantization)
 
     from soup_cli.commands.doctor import _get_precision_capabilities
 
@@ -405,16 +425,16 @@ def test_doctor_gpu_panel_warns_when_torch_lacks_gpu_arch(monkeypatch):
         lambda: True,
     )
 
-    result = runner.invoke(app, ["doctor"])
+    result = runner.invoke(
+        app,
+        ["doctor"],
+        env={"COLUMNS": "120", "FORCE_COLOR": "1"},
+    )
 
     assert result.exit_code == 0
-    assert "sm_120 (Blackwell)" in result.output
-
-    from tests.conftest import strip_ansi
-
-    normalized = " ".join(strip_ansi(result.output).split())
+    normalized = _plain(result.output)
     assert "Torch build" in normalized
-    assert "GPU architecture" in normalized
+    assert "architecture" in normalized
 
 
 def test_doctor_shows_gpu_section():

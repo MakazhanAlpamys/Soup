@@ -537,6 +537,16 @@ soup doctor [--nccl]
 
 Shows: Python version, GPU availability, system resources (RAM/Disk), all dependency versions, and fix suggestions. Use `--nccl` to measure and check multi-GPU communication bandwidth against expected hardware ceilings.
 
+### GPU diagnostics
+
+When an NVIDIA GPU is available, `soup doctor` reports its compute capability
+and architecture family, whether the installed PyTorch build contains native
+or PTX support for that architecture, and the hardware/software gates for
+BF16, FP8, and NVFP4. A missing architecture warning includes a CUDA-enabled
+PyTorch reinstall hint based on the CUDA version reported by the driver. When
+the driver version cannot be mapped to a supported wheel, the hint remains
+actionable without constructing a `whl/None` URL.
+
 
 ## Version Info
 
