@@ -5,7 +5,8 @@ Thin Typer/Rich CLI layer over the pure engines in
 and ``utils/data_lint.py`` (preference-data linter). ``soup data lint``
 follows the project-wide 0/2/3 gate taxonomy (#813): exit 0 = OK/MINOR,
 exit 2 = MAJOR defects, exit 3 = usage/format error.
-``soup data doctor`` exits 0 on OK/MINOR, 2 on MAJOR defects or routing failure.
+``soup data doctor`` exits 0 on OK/MINOR, 1 if file is not found or empty,
+and 2 on MAJOR defects or routing failure.
 """
 
 from __future__ import annotations
