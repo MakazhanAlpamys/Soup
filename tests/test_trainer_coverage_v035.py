@@ -84,7 +84,7 @@ def test_supports_v028_features_rejects_unknown_task() -> None:
 
 @pytest.mark.parametrize("task", ALL_TRAINER_TASKS)
 @pytest.mark.parametrize("feature", ("use_cut_ce", "fp8", "kernel_auto_compose"))
-def test_apply_v028_speed_memory_no_exception(task: str, feature: str) -> None:
+def test_apply_v028_speed_memory_no_exception(task: str, feature: str, monkeypatch) -> None:
     """For every trainer × apply-phase feature, the helper must not raise.
 
     cut_ce / fp8 degrade silently if the underlying lib isn't installed (CI
@@ -92,7 +92,20 @@ def test_apply_v028_speed_memory_no_exception(task: str, feature: str) -> None:
     helper returns a dict instead of crashing. kernel_auto_compose's picker
     raises when no candidates have finite times — also degrades silently.
     """
+    # A card that CAN run FP8 (#835/#1044): since the hardware gate moved ahead
+    # of the dependency probe, an explicit FP8 request on a machine without CUDA
+    # -- every CI runner here -- is refused rather than degraded, which is the
+    # ruling. This row is about the OTHER half: a missing torchao still degrades.
+    import sys
+
+    import torch
+
     from soup_cli.utils import v028_features as vf
+
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(torch.cuda, "get_device_capability", lambda *_a, **_k: (9, 0))
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(torch.version, "cuda", "12.4")
 
     tcfg = _make_tcfg(feature)
     result = vf.apply_v028_speed_memory(

@@ -286,11 +286,42 @@ class TestQuantizationAwareFp8:
             apply_fp8_training(_Attn(), recipe="rowwise")
         assert converts == []
 
-    def test_missing_torchao_still_returns_false(self, monkeypatch):
-        """The dependency answer is unchanged: False, not a refusal."""
-        from soup_cli.utils.fp8 import apply_fp8_training
+    def test_the_card_is_refused_even_when_torchao_is_missing(self, monkeypatch):
+        """#1044 review: the gate must run BEFORE the dependency probe.
+
+        torchao is not a default dependency, so absent is the common case. With
+        the checks in the other order an Ampere user who asked for FP8 got
+        "torchao.float8 unavailable", a yellow line and a bf16 run -- the silent
+        no-op this issue exists to remove. What they asked for cannot run on this
+        card either way."""
+        from soup_cli.utils.fp8 import FP8HardwareUnsupportedError, apply_fp8_training
 
         _card(monkeypatch, (8, 6))
+        monkeypatch.setattr("soup_cli.utils.fp8.is_fp8_available", lambda: False)
+        with pytest.raises(FP8HardwareUnsupportedError, match="8.9"):
+            apply_fp8_training(_Attn())
+
+    def test_fp8_attention_refuses_the_card_before_naming_torchao(self, monkeypatch):
+        """Same ordering in the attention path: the message must name the card,
+        not send the user to install a package that would not help."""
+        from soup_cli.utils.advanced_precision import apply_fp8_attention
+        from soup_cli.utils.fp8 import FP8HardwareUnsupportedError
+
+        _card(monkeypatch, (8, 6))
+        monkeypatch.setitem(sys.modules, "torchao", None)
+        with pytest.raises(FP8HardwareUnsupportedError, match="8.9"):
+            apply_fp8_attention(_Attn())
+
+    def test_missing_torchao_still_returns_false(self, monkeypatch):
+        """The dependency answer is unchanged: False, not a refusal.
+
+        On a card that CAN run FP8 -- (8, 6) before the #1044 review, when the
+        dependency probe ran first and hid the hardware refusal. The reorder must
+        not swallow this answer: a supported card with no torchao still reports
+        the missing package rather than raising."""
+        from soup_cli.utils.fp8 import apply_fp8_training
+
+        _card(monkeypatch, (9, 0))
         monkeypatch.setattr("soup_cli.utils.fp8.is_fp8_available", lambda: False)
         assert apply_fp8_training(_Attn()) is False
 
@@ -413,12 +444,17 @@ class TestTheRunStops:
         assert converts == []
 
     def test_missing_torchao_still_only_warns(self, monkeypatch):
-        """Control: the ruling is about the CARD. A missing optional dependency keeps
-        its existing advisory, so the stop is not a catch-everything raise."""
+        """Control: the ruling is about what the CARD can run. On a card that can,
+        a missing optional dependency keeps its existing advisory, so the stop is
+        not a catch-everything raise.
+
+        On a Hopper card, not Ampere: since the #1044 review the gate runs before
+        the dependency probe, so an Ampere card refuses whether or not torchao is
+        installed."""
         from soup_cli.config.schema import TrainingConfig
         from soup_cli.utils.v028_features import apply_v028_speed_memory
 
-        _card(monkeypatch, (8, 6))
+        _card(monkeypatch, (9, 0))
         monkeypatch.setattr("soup_cli.utils.fp8.is_fp8_available", lambda: False)
         out, console = self._console()
         applied = apply_v028_speed_memory(

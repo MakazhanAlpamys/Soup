@@ -239,6 +239,17 @@ def apply_fp8_attention(model: object, *, recipe: str = "tensorwise") -> int:
     if "\x00" in recipe:
         raise ValueError("recipe must not contain null bytes")
 
+    # The hardware gate runs FIRST, for the same reason as apply_fp8_training
+    # (#1044 review): torchao is not a default dependency, so "absent" is the
+    # common case, and a card that cannot run this recipe must be named as the
+    # reason rather than hidden behind "install torchao" -- which would send the
+    # user to fix the wrong thing and, worse, let the run continue.
+    from soup_cli.utils import fp8
+
+    ok, reason = fp8.fp8_training_supported(recipe)
+    if not ok:
+        raise fp8.FP8HardwareUnsupportedError(f"fp8_attention: {reason}")
+
     # Probe the torchao float8 path SPECIFICALLY — fp8.is_fp8_available()
     # also accepts transformer_engine, which cannot serve this converter
     # (review fix: an NGC container with TE but no torchao must hit the
@@ -248,12 +259,6 @@ def apply_fp8_attention(model: object, *, recipe: str = "tensorwise") -> int:
             "fp8_attention requires torchao's float8 recipe "
             "(pip install 'torchao>=0.5.0')."
         )
-
-    from soup_cli.utils import fp8
-
-    ok, reason = fp8.fp8_training_supported(recipe)
-    if not ok:
-        raise fp8.FP8HardwareUnsupportedError(f"fp8_attention: {reason}")
 
     import torch.nn as nn
 

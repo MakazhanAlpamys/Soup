@@ -209,7 +209,14 @@ class TestApplyFp8Attention:
             apply_fp8_attention(None)
 
     def test_no_torchao_friendly_gate(self, monkeypatch):
+        # The card must pass, or the #1044 hardware refusal answers first and the
+        # torchao message -- what this test is about -- is never reached.
+        import torch
+
         from soup_cli.utils.advanced_precision import apply_fp8_attention
+
+        monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+        monkeypatch.setattr(torch.cuda, "get_device_capability", lambda *_a, **_k: (9, 0))
 
         # v0.27.0 None-stub idiom — the probe must treat this as absent.
         monkeypatch.setitem(sys.modules, "torchao", None)
@@ -358,6 +365,21 @@ class TestApplyNvfp4:
 
 
 class TestV028PrecisionWiring:
+    @pytest.fixture(autouse=True)
+    def _card_that_can_run_fp8(self, monkeypatch):
+        """#1044 review moved the hardware gate ahead of the dependency probe, so
+        an explicit FP8 request on a CPU box is now refused rather than degraded.
+        These tests are about the degrade paths, so they run on a Hopper card;
+        tests/test_issue835_fp8_gate.py owns the hardware refusal itself."""
+        import sys
+
+        import torch
+
+        monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+        monkeypatch.setattr(torch.cuda, "get_device_capability", lambda *_a, **_k: (9, 0))
+        monkeypatch.setattr(sys, "platform", "linux")
+        monkeypatch.setattr(torch.version, "cuda", "12.4")
+
     def _tcfg(self, **kwargs):
         base = {
             "use_cut_ce": False,
@@ -1633,6 +1655,21 @@ class TestPatchInvariants:
 
 
 class TestReviewFollowupsPrecision:
+    @pytest.fixture(autouse=True)
+    def _card_that_can_run_fp8(self, monkeypatch):
+        """#1044 review moved the hardware gate ahead of the dependency probe, so
+        an explicit FP8 request on a CPU box is now refused rather than degraded.
+        These tests are about the degrade paths, so they run on a Hopper card;
+        tests/test_issue835_fp8_gate.py owns the hardware refusal itself."""
+        import sys
+
+        import torch
+
+        monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+        monkeypatch.setattr(torch.cuda, "get_device_capability", lambda *_a, **_k: (9, 0))
+        monkeypatch.setattr(sys, "platform", "linux")
+        monkeypatch.setattr(torch.version, "cuda", "12.4")
+
     """#141 review fixes — torchao probe, recipe NUL, partial-conversion."""
 
     def test_out_proj_and_wqkv_in_allowlist(self):

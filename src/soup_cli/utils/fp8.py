@@ -64,6 +64,12 @@ def is_fp8_available() -> bool:
 #   ``sm12x`` in v2.8.0 and ``sm11x`` in v2.10.0 (still the full list at
 #   v2.14.0). Any other major raises "Rowwise scaling is not currently supported
 #   on your device" at the first forward.
+#: TRANSCRIBED from torch's source, not queried from torch: torch 2.14 exposes no
+#: runtime FP8 capability API (no `scaled`/`float8` symbol on `torch._C` or
+#: `torch.backends.cuda`), so a table is the only option short of a trial matmul.
+#: Checked against torch source through v2.14.0; a major that is not listed below
+#: is REFUSED for rowwise until someone updates this table, which is the
+#: conservative direction (#1044 review).
 _FP8_MIN_CAPABILITY = (8, 9)
 
 #: The first torch whose rowwise dispatch accepts each compute-capability major.
@@ -214,18 +220,25 @@ def apply_fp8_training(
         recipe: Scaling recipe name. Default ``"tensorwise"``.
 
     Returns:
-        True on success, False if FP8 is unavailable or conversion failed.
+        True on success, False if the torchao/transformer-engine dependency is
+        missing or the conversion failed. A card that cannot run ``recipe``
+        raises instead, whether or not the dependency is present.
 
     Raises:
         FP8HardwareUnsupportedError: this card, OS or torch build cannot run
             ``recipe`` (#835). Nothing is converted, and the run must stop.
     """
-    if not is_fp8_available():
-        return False
-
+    # The hardware gate runs FIRST, before the dependency probe (#1044 review).
+    # torchao is not a default dependency, so "absent" is the common case: asking
+    # availability first meant an Ampere user who wrote quantization_aware: fp8
+    # got a yellow line and a bf16 run -- exactly what the ruling removes. What
+    # the user asked for cannot run here whether or not torchao is installed.
     ok, reason = fp8_training_supported(recipe)
     if not ok:
         raise FP8HardwareUnsupportedError(reason)
+
+    if not is_fp8_available():
+        return False
 
     try:
         from torchao.float8 import convert_to_float8_training
