@@ -357,6 +357,7 @@ pip install -e ".[dev]"
 ruff check src/soup_cli/ tests/    # lint
 pytest tests/ -v                   # unit tests (fast, no GPU)
 pytest tests/ -m smoke -v          # smoke tests (downloads a tiny model, trains)
+pytest tests/ -m gpu --no-cov -v   # GPU tests (need a CUDA card; report results, see CONTRIBUTING.md)
 
 pre-commit install                 # optional: ruff lint+format on commit
 ```

@@ -40,18 +40,6 @@ def _requires_train_extra():
     pytest.importorskip("safetensors")
 
 
-def _cuda() -> bool:
-    try:
-        import torch
-
-        return torch.cuda.is_available()
-    except Exception:  # pragma: no cover - torch absent
-        return False
-
-
-requires_cuda = pytest.mark.skipif(not _cuda(), reason="needs a CUDA device")
-
-
 # --------------------------------------------------------------------------
 # fixtures (standalone, mirroring tests/test_issue1005_peft021_canonical_names.py,
 # with the tie switch exposed)
@@ -225,7 +213,7 @@ class TestApplyReachesTheAdapters:
         assert not [n for n in streamed_names if ".inner." in n]
         assert streamed_names == plain_names
 
-    @requires_cuda
+    @pytest.mark.gpu
     def test_to_device_moves_every_adapter_and_leaves_the_base_on_meta(self, tied_pair):
         """The same path as `Trainer._move_model_to_device`: every adapter lands on
         the card, every streamed base weight stays a meta placeholder."""

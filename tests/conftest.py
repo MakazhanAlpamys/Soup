@@ -1,10 +1,41 @@
 """Shared pytest fixtures and helpers."""
 
+import functools
 import json
 import re
 from pathlib import Path
 
 import pytest
+
+#: The skip message for a ``gpu``-marked test on a machine without CUDA (#833).
+GPU_SKIP_REASON = "needs a CUDA device (run the GPU subset with: pytest -m gpu --no-cov)"
+
+
+@functools.lru_cache(maxsize=None)
+def cuda_available() -> bool:
+    """THE one CUDA probe for the test suite (#833). Probed once per session.
+
+    Fifteen modules had grown a private copy of this, and nine of them turned it
+    into an identical ``requires_cuda`` skipif, so ``pytest -m gpu`` had nothing
+    to select. Gate a test that needs CUDA with ``@pytest.mark.gpu`` (optionally
+    ``@pytest.mark.gpu(reason="...")``) rather than calling this in a skip;
+    ``tests/test_issue833_gpu_marker.py`` holds that line.
+    """
+    try:
+        import torch
+    except ImportError:
+        return False
+    try:
+        return bool(torch.cuda.is_available())
+    except Exception:  # noqa: BLE001 — a broken CUDA install counts as no CUDA
+        return False
+
+
+def pytest_runtest_setup(item: pytest.Item) -> None:
+    marker = item.get_closest_marker("gpu")
+    if marker is not None and not cuda_available():
+        why = marker.kwargs.get("reason")
+        pytest.skip(f"{GPU_SKIP_REASON}: {why}" if why else GPU_SKIP_REASON)
 
 #: Rich/Pygments emit SGR escapes *between* the tokens of one logical line, so a
 #: multi-token substring like "modality: text" is absent from raw output and

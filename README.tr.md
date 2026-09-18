@@ -1,4 +1,4 @@
-<!-- synced-from: README.md sha256:debdbc5a00fcc9eadfe05500cca86b4abd5cb96d2202be5cba66849348db65d8 -->
+<!-- synced-from: README.md sha256:598eec923faa4f0ad56fc820f482456c3e95002bc8950e4d0575929e0522c270 -->
 <p align="center">🌍 <a href="README.md">English</a> | <strong>Türkçe</strong></p>
 
 <p align="center">
@@ -359,6 +359,7 @@ pip install -e ".[dev]"
 ruff check src/soup_cli/ tests/    # lint
 pytest tests/ -v                   # birim testleri (hızlı, GPU yok)
 pytest tests/ -m smoke -v          # duman testleri (küçük bir model indirir, eğitir)
+pytest tests/ -m gpu --no-cov -v   # GPU testleri (CUDA kartı gerekir; sonuçları bildirin, bkz. CONTRIBUTING.md)
 
 pre-commit install                 # isteğe bağlı: commit'te ruff lint+format
 ```

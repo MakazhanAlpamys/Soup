@@ -88,14 +88,6 @@ _HIDDEN = 64
 _SEQ_LEN = 12  # <= FUSED_KERNEL_MAX_ROWS, and the shape test_issue385 uses
 
 
-def _cuda_available() -> bool:
-    try:
-        import torch
-
-        return torch.cuda.is_available()
-    except Exception:
-        return False
-
 
 def _bnb_version() -> str:
     try:
@@ -106,10 +98,7 @@ def _bnb_version() -> str:
         return ""
 
 
-CUDA = pytest.mark.skipif(
-    not _cuda_available(),
-    reason="requires CUDA (the bitsandbytes 4-bit kernels are GPU-only)",
-)
+CUDA = pytest.mark.gpu(reason="the bitsandbytes 4-bit kernels are GPU-only")
 
 PINNED = pytest.mark.skipif(
     _bnb_version() != PINNED_BITSANDBYTES,
