@@ -720,7 +720,8 @@ def _detect_gpu_arch_mismatch_advisory() -> str:
     if wheel is None:
         return (
             "Try reinstalling a CUDA-enabled PyTorch build that supports "
-            "your GPU architecture."
+            "your GPU architecture. Run `nvidia-smi` and install a PyTorch "
+            "CUDA wheel compatible with the reported driver."
         )
 
     index_url = f"https://download.pytorch.org/whl/{wheel}"
