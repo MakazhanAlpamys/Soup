@@ -156,13 +156,23 @@ class TestSchemaV028Gating:
             )
 
     def test_mlx_backend_rejects_nvfp4(self) -> None:
-        with pytest.raises(ValueError, match=r"Apple Silicon mlx backend"):
+        with pytest.raises(ValueError, match=r"requires Blackwell"):
             SoupConfig(
                 base="test/model",
                 task="sft",
                 backend="mlx",
                 data={"train": "tests/fixtures/sample_train.jsonl"},
                 training={"nvfp4": True},
+            )
+
+    def test_mlx_backend_rejects_fp8_attention_without_quantization_aware(self) -> None:
+        with pytest.raises(ValueError, match=r"requires training\.quantization_aware"):
+            SoupConfig(
+                base="test/model",
+                task="sft",
+                backend="mlx",
+                data={"train": "tests/fixtures/sample_train.jsonl"},
+                training={"fp8_attention": True},
             )
 
     def test_mlx_backend_rejects_fp8_attention(self) -> None:
