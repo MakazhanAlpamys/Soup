@@ -70,7 +70,7 @@ def _config(task: str, *, moe_lora: bool, extra: str = "") -> object:
         f"training:\n"
         f"  quantization: none\n"
         f"  moe_lora: {'true' if moe_lora else 'false'}\n"
-        f"  lora:\n    r: 4\n    alpha: 8\n"
+        f"  lora:\n    r: 4\n    alpha: 8\n    dropout: 0.0\n"
         f"{training_extra}{extra}"
     )
 
@@ -188,8 +188,10 @@ class TestTheFlagsNoTrainerReadsAreRefused:
         with pytest.raises(ValueError) as excinfo:
             load_config_from_string(
                 f"base: org/m\ntask: {task}\n"
-                f"data:\n  train: x.jsonl\n  format: {_TASK_YAML.get(task, ('sft', ''))[0]}\n"
-                f"training:\n  moe_lora: true\n{knob}"
+                f"data:\n  train: x.jsonl\n  format: {_TASK_YAML.get(task, ('alpaca', ''))[0]}\n"
+                # dropout 0 so the #798 dropout refusal does not answer first:
+                # this test is about the task, not about the dropout.
+                f"training:\n  moe_lora: true\n  lora:\n    dropout: 0.0\n{knob}"
                 + ("  reward_fn: length\n" if task == "grpo" else "")
             )
         message = str(excinfo.value)
@@ -200,7 +202,7 @@ class TestTheFlagsNoTrainerReadsAreRefused:
     def test_sft_still_accepts_them(self, knob):
         cfg = load_config_from_string(
             "base: org/m\ntask: sft\ndata: {train: x.jsonl}\n"
-            f"training: {{moe_lora: true, {knob}}}\n"
+            f"training: {{moe_lora: true, lora: {{dropout: 0.0}}, {knob}}}\n"
         )
         assert cfg.task == "sft"
 
@@ -256,3 +258,98 @@ class TestShippedConfigs:
                 tasks.append(cfg["task"])
         assert sorted(tasks) == ["dpo"] * 8 + ["grpo"] * 7, sorted(tasks)
 
+
+
+class TestTheDropoutConstraint:
+    """peft's ParamWrapper refuses dropout on fused MoE experts, so moe_lora
+    could not attach on ANY task -- including sft, which #798 assumed worked."""
+
+    @pytest.mark.parametrize("task", ["sft", "pretrain", "dpo", "grpo"])
+    def test_moe_lora_with_the_default_dropout_is_refused(self, task):
+        extra = "  reward_fn: length\n" if task == "grpo" else ""
+        data_format = _TASK_YAML.get(task, ("alpaca", ""))[0]
+        with pytest.raises(ValueError) as excinfo:
+            load_config_from_string(
+                f"base: org/m\ntask: {task}\n"
+                f"data:\n  train: x.jsonl\n  format: {data_format}\n"
+                f"training:\n  moe_lora: true\n{extra}"
+            )
+        message = str(excinfo.value)
+        assert "lora.dropout: 0.0" in message
+        # The reason must be peft's own words, or the rule reads as arbitrary and
+        # the first thing a user does is set the dropout back (#798 ruling).
+        assert "lora.ParamWrapper does not work with lora_dropout != 0" in message
+
+    @pytest.mark.parametrize("task", ["sft", "dpo"])
+    def test_dropout_zero_loads(self, task):
+        extra = "" if task == "sft" else ""
+        data_format = _TASK_YAML.get(task, ("alpaca", ""))[0]
+        cfg = load_config_from_string(
+            f"base: org/m\ntask: {task}\n"
+            f"data:\n  train: x.jsonl\n  format: {data_format}\n"
+            f"training:\n  moe_lora: true\n  lora:\n    dropout: 0.0\n{extra}"
+        )
+        assert cfg.training.lora.dropout == 0.0
+
+    def test_dropout_is_untouched_without_moe_lora(self):
+        """The control: the rule is about moe_lora, not about dropout."""
+        cfg = load_config_from_string(
+            "base: org/m\ntask: sft\ndata: {train: x.jsonl}\n"
+            "training: {lora: {dropout: 0.05}}\n"
+        )
+        assert cfg.training.lora.dropout == 0.05
+
+    def test_peft_really_refuses_it(self):
+        """Not taken on trust: the constraint this rule exists for, reproduced.
+
+        A dropout LoRA over the fused experts raises inside peft; the same attach
+        with dropout 0 succeeds and adapts the expert module."""
+        from peft import LoraConfig, TaskType, get_peft_model
+
+        targets = ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
+        with pytest.raises(ValueError, match="ParamWrapper"):
+            get_peft_model(
+                _tiny_moe(),
+                LoraConfig(r=4, lora_dropout=0.05, target_modules=targets,
+                           task_type=TaskType.CAUSAL_LM),
+            )
+        model = get_peft_model(
+            _tiny_moe(),
+            LoraConfig(r=4, lora_dropout=0.0, target_modules=targets,
+                       task_type=TaskType.CAUSAL_LM),
+        )
+        assert [n for n in _adapted(model) if "experts" in n]
+
+
+class TestEveryMoeRecipeCanAttach:
+    """Recipe 32 must not arrive broken on the day it ships (#798 ruling)."""
+
+    def test_every_recipe_that_sets_moe_lora_pins_dropout_zero(self):
+        import yaml
+
+        from soup_cli.recipes.catalog import RECIPES
+
+        offenders = []
+        for name, recipe in RECIPES.items():
+            training = yaml.safe_load(recipe.yaml_str).get("training") or {}
+            if not training.get("moe_lora"):
+                continue
+            dropout = (training.get("lora") or {}).get("dropout")
+            if dropout != 0.0:
+                offenders.append(f"{name}: lora.dropout={dropout!r}")
+        assert offenders == [], (
+            "a recipe with moe_lora: true and a non-zero lora.dropout cannot "
+            "attach LoRA at all (peft ParamWrapper): " + "; ".join(offenders)
+        )
+
+    def test_the_guard_sees_the_recipes_it_is_guarding(self):
+        """A control: the loop above passes vacuously if nothing sets moe_lora."""
+        import yaml
+
+        from soup_cli.recipes.catalog import RECIPES
+
+        counted = sum(
+            1 for r in RECIPES.values()
+            if (yaml.safe_load(r.yaml_str).get("training") or {}).get("moe_lora")
+        )
+        assert counted >= 31, counted

@@ -988,6 +988,18 @@ For fused-MoE models trained with `moe_lora: true`, two live toggles:
 
 Both reject silently-no-op combinations: setting either flag without `moe_lora=true` fails at config load with an actionable message.
 
+**Which tasks read which flag (#798).** These were accepted on every task and applied by only some, so the stored config claimed a run that never happened:
+
+| flag | applied by | elsewhere |
+|---|---|---|
+| `moe_lora` | `sft`, `pretrain`, `tts`, and (since #798) `dpo`, `kto`, `orpo`, `simpo`, `grpo` | — |
+| `moe_expert_quant`, `train_router_only` | `sft`, `tts` | refused at config load, naming the task |
+| `moe_aux_loss_coeff` | `sft`, `tts`, `pretrain` | a **non-default** value is refused; the default `0.01` still loads, because every stored config and eleven shipped recipes write it |
+
+**`moe_lora` requires `lora.dropout: 0.0`.** MoE experts are fused parameters, which peft adapts through `lora.ParamWrapper`, and that wrapper raises `lora.ParamWrapper does not work with lora_dropout != 0.` With the schema default of `0.05` the LoRA attach failed outright, so `moe_lora` did not work on any task — including `sft`. Soup refuses the combination at config load rather than zeroing the dropout for you, and all 31 shipped MoE recipes now pin `lora.dropout: 0.0`.
+
+**`target_modules: auto` on a MoE base.** `resolve_lora_target_modules` has no mapping for `qwen3_moe`, so `auto` resolved to `None` and peft refused with `No target_modules passed but also no target_parameters found`. With `moe_lora: true` the targets come from the model scan instead, which is what the 15 DPO/GRPO recipes needed.
+
 
 ## Unsloth Dynamic 2.0 GGUF Ladder (v0.53.0)
 
