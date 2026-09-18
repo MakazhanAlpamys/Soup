@@ -315,3 +315,88 @@ class TestSchemaRejectionOnUnsupportedTasks:
         assert cfg.training.loss_watchdog is True
         assert cfg.training.loss_spike_recovery is True
         assert cfg.training.grad_accum_auto_tune is True
+
+
+# ===========================================================================
+# 5. Behavioural Wrapper-Path Test (Issue #802 Acceptance Criterion 2)
+# ===========================================================================
+
+
+class TestTrainerWrapperBehaviouralCallbackWiring:
+    """Verify that wrappers genuinely wire their config into SoupTrainerCallback
+    on their train() execution path rather than relying on unpinned defaults (#802).
+    """
+
+    def test_grpo_wrapper_train_wires_spike_and_grad_accum_config(
+        self, tmp_path: Path
+    ) -> None:
+        from soup_cli.trainer.grpo import GRPOTrainerWrapper
+
+        wrapper = object.__new__(GRPOTrainerWrapper)
+        wrapper.config = SoupConfig(
+            base="sshleifer/tiny-gpt2",
+            task="grpo",
+            data={"train": "train.jsonl", "format": "chatml"},
+            training={
+                "loss_watchdog": True,
+                "loss_spike_recovery": True,
+                "grad_accum_auto_tune": True,
+            },
+        )
+        wrapper._batch_size = 4
+        wrapper._output_dir = str(tmp_path)
+        wrapper.tokenizer = MagicMock()
+        mock_trainer = MagicMock()
+        mock_trainer.state.log_history = []
+        wrapper.trainer = mock_trainer
+
+        captured_callbacks: list[object] = []
+        mock_trainer.add_callback.side_effect = captured_callbacks.append
+
+        wrapper.train(display=MagicMock())
+
+        soup_cbs = [
+            cb for cb in captured_callbacks if isinstance(cb, SoupTrainerCallback)
+        ]
+        assert len(soup_cbs) == 1
+        cb = soup_cbs[0]
+        assert cb._spike_recovery_enabled is True
+        assert cb._grad_accum_enabled is True
+        assert cb._grad_accum_batch == 4
+
+    def test_dpo_wrapper_train_wires_spike_and_grad_accum_config(
+        self, tmp_path: Path
+    ) -> None:
+        from soup_cli.trainer.dpo import DPOTrainerWrapper
+
+        wrapper = object.__new__(DPOTrainerWrapper)
+        wrapper.config = SoupConfig(
+            base="sshleifer/tiny-gpt2",
+            task="dpo",
+            data={"train": "train.jsonl", "format": "chatml"},
+            training={
+                "loss_watchdog": True,
+                "loss_spike_recovery": True,
+                "grad_accum_auto_tune": True,
+            },
+        )
+        wrapper._batch_size = 8
+        wrapper._output_dir = str(tmp_path)
+        wrapper.tokenizer = MagicMock()
+        mock_trainer = MagicMock()
+        mock_trainer.state.log_history = []
+        wrapper.trainer = mock_trainer
+
+        captured_callbacks: list[object] = []
+        mock_trainer.add_callback.side_effect = captured_callbacks.append
+
+        wrapper.train(display=MagicMock())
+
+        soup_cbs = [
+            cb for cb in captured_callbacks if isinstance(cb, SoupTrainerCallback)
+        ]
+        assert len(soup_cbs) == 1
+        cb = soup_cbs[0]
+        assert cb._spike_recovery_enabled is True
+        assert cb._grad_accum_enabled is True
+        assert cb._grad_accum_batch == 8

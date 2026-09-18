@@ -326,19 +326,7 @@ class IPOTrainerWrapper:
                     eval_gate_config=self.config.training.eval_gate,
                     **soup_callback_kwargs(
                         self.config.training,
-                        batch_size=getattr(
-                            self,
-                            "_batch_size",
-                            getattr(
-                                getattr(self, "trainer", None), "args", None
-                            )
-                            and getattr(
-                                self.trainer.args,
-                                "per_device_train_batch_size",
-                                1,
-                            )
-                            or 1,
-                        ),
+                        batch_size=self._batch_size,
                         output_dir=self._output_dir,
                         include_eval_gate=False,
                     ),
