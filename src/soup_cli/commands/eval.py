@@ -1420,9 +1420,6 @@ def quant_check_cmd(
         console.print(rendered, markup=False, highlight=False)
 
     has_major = any(r.verdict == "MAJOR" for r in result.rows)
-    raise typer.Exit(2 if has_major else 0)
-
-    has_major = any(r.verdict == "MAJOR" for r in result.rows)
     raise typer.Exit(EXIT_GATE_FAILED if has_major else EXIT_OK)
 
 
