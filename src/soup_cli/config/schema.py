@@ -4390,6 +4390,11 @@ SFT_KERNEL_AWARE_TASKS: frozenset[str] = frozenset({"sft", "tts"})
 
 # #795: trainers that load the base at checkpoint precision and never read
 # ``training.quantization``.
+_QUANTIZATION_UNHONOURED_TASKS = frozenset({
+    "distill", "classifier", "reranker", "cross_encoder", "prm",
+    "moe_lora_routing", "unlearn", "asr",
+})
+
 #: #798 — the tasks whose trainers actually read each MoE flag, mapped from the
 #: readers rather than from the docs: ``moe_expert_quant`` and
 #: ``train_router_only`` are applied only by ``trainer/sft.py`` (``tts`` inherits
@@ -4398,11 +4403,6 @@ SFT_KERNEL_AWARE_TASKS: frozenset[str] = frozenset({"sft", "tts"})
 #: never applied.
 _MOE_EXPERT_KNOB_TASKS = frozenset({"sft", "tts"})
 _MOE_AUX_LOSS_TASKS = frozenset({"sft", "tts", "pretrain"})
-
-_QUANTIZATION_UNHONOURED_TASKS = frozenset({
-    "distill", "classifier", "reranker", "cross_encoder", "prm",
-    "moe_lora_routing", "unlearn", "asr",
-})
 
 #: The bitsandbytes values: ``4bit`` was the default, so every config Soup dumped
 #: for these tasks carries one of them literally (#795 review).

@@ -88,6 +88,51 @@ _WRAPPERS = {
 }
 
 
+_SMALL = dict(
+    vocab_size=64,
+    hidden_size=16,
+    num_hidden_layers=1,
+    num_attention_heads=2,
+    num_key_value_heads=1,
+)
+
+
+def _stand_in(arch):
+    """A tiny real model per MoE family, for the per-architecture evidence.
+
+    Only families with a config class in the installed transformers can be built;
+    `mistral-large-3` and `kimi-k2.x` have none here, and the PR names them as
+    untested rather than implying coverage.
+    """
+    import transformers as tf
+
+    if arch == "qwen3_moe":
+        return _tiny_moe()
+    if arch == "mixtral":
+        return tf.MixtralForCausalLM(tf.MixtralConfig(
+            **_SMALL, intermediate_size=32, num_local_experts=4, num_experts_per_tok=2))
+    if arch == "minimax":
+        return tf.MiniMaxForCausalLM(tf.MiniMaxConfig(
+            **_SMALL, intermediate_size=32, num_local_experts=4, num_experts_per_tok=2))
+    if arch == "deepseek_v3":
+        return tf.DeepseekV3ForCausalLM(tf.DeepseekV3Config(
+            **_SMALL, intermediate_size=32, moe_intermediate_size=16, n_routed_experts=4,
+            num_experts_per_tok=2, n_shared_experts=1, first_k_dense_replace=0,
+            n_group=1, topk_group=1))
+    if arch == "glm4_moe":
+        return tf.Glm4MoeForCausalLM(tf.Glm4MoeConfig(
+            **_SMALL, intermediate_size=32, moe_intermediate_size=16, n_routed_experts=4,
+            num_experts_per_tok=2, n_shared_experts=1, first_k_dense_replace=0,
+            n_group=1, topk_group=1))
+    raise KeyError(arch)
+
+
+_MOE_STAND_INS = {
+    arch: (lambda a=arch: _stand_in(a))
+    for arch in ("qwen3_moe", "deepseek_v3", "glm4_moe", "mixtral", "minimax")
+}
+
+
 def _tiny_dense():
     """A dense Qwen3 of the same size: the control for "MoE only"."""
     from transformers import Qwen3Config, Qwen3ForCausalLM
@@ -308,13 +353,94 @@ class TestTheDropoutConstraint:
             _tiny_dense(), self._tcfg(0.05), ["q_proj"]
         ) == ["q_proj"]
 
-    def test_fused_detection_is_about_rank_not_the_name(self):
-        """``has_fused_expert_params`` keys on a 3-D parameter under an
-        expert-named path; a per-expert-module MoE takes dropout fine."""
-        from soup_cli.utils.moe import has_fused_expert_params
+    def test_the_predicate_follows_peft_not_the_parameter_shapes(self):
+        """Mixtral and MiniMax have the SAME fused 3-D expert parameters and the
+        same module structure as Qwen3-MoE, and peft attaches to them happily at
+        dropout 0.05. A model-wide "are there fused expert params" scan -- the
+        first version of this check, and what #1074's review caught -- refuses
+        those two for a reason that does not apply to them.
 
-        assert has_fused_expert_params(_tiny_moe()) is True
-        assert has_fused_expert_params(_tiny_dense()) is False
+        What actually differs is inside peft: its v4->v5 checkpoint conversion
+        rewrites target_modules into target_parameters only for model types that
+        have a conversion mapping, and only that rewrite produces the
+        ParamWrapper which refuses dropout.
+        """
+        from soup_cli.utils.moe import (
+            get_moe_target_modules,
+            peft_routes_lora_to_fused_params,
+        )
+
+        routed, fused_params = {}, {}
+        for name, build in _MOE_STAND_INS.items():
+            model = build()
+            targets = get_moe_target_modules(model)
+            routed[name] = peft_routes_lora_to_fused_params(model, targets)
+            fused_params[name] = sorted({
+                param_name.rsplit(".", 1)[-1]
+                for param_name, param in model.named_parameters()
+                if "expert" in param_name.lower() and param.ndim == 3
+            })
+
+        assert routed == {
+            "qwen3_moe": True,
+            "deepseek_v3": True,
+            "glm4_moe": True,
+            "mixtral": False,
+            "minimax": False,
+        }, routed
+        # The control that makes the point: every one of them HAS fused 3-D
+        # expert parameters, under the same names.
+        assert all(names == ["down_proj", "gate_up_proj"] for names in fused_params.values()), (
+            fused_params
+        )
+
+    @pytest.mark.parametrize("arch", ["mixtral", "minimax"])
+    def test_an_architecture_peft_does_not_route_is_not_refused(self, arch):
+        """The over-refusal this replaced: peft accepts these at dropout 0.05,
+        so Soup must not refuse them. Verified against the real attach below."""
+        from soup_cli.utils.moe import resolve_moe_lora_targets
+
+        model = _MOE_STAND_INS[arch]()
+        assert resolve_moe_lora_targets(model, self._tcfg(0.05), ["q_proj"]) is not None
+
+    @pytest.mark.parametrize("arch", ["mixtral", "minimax"])
+    def test_peft_really_accepts_those_two_at_dropout(self, arch):
+        """Not taken from the review on trust: the attach Soup now allows."""
+        from peft import LoraConfig, TaskType, get_peft_model
+
+        from soup_cli.utils.moe import get_moe_target_modules
+
+        model = _MOE_STAND_INS[arch]()
+        get_peft_model(model, LoraConfig(
+            r=4, lora_dropout=0.05, target_modules=get_moe_target_modules(model),
+            task_type=TaskType.CAUSAL_LM,
+        ))
+
+    def test_a_stub_model_with_peft_patched_out_is_never_refused(self, monkeypatch):
+        """The shape `tests/test_pretrain.py` actually uses, which caught this.
+
+        That suite stubs the model AND patches `peft.LoraConfig`, so the probe
+        built a MagicMock config whose `target_parameters` is truthy for any
+        model -- and a stub with no experts got refused. Patching LoraConfig is
+        the load-bearing half: with the real class a bare MagicMock returns None
+        and the bug hides, which is how my first version of this test passed
+        while proving nothing.
+        """
+        from unittest.mock import MagicMock
+
+        import peft
+
+        from soup_cli.utils.moe import peft_routes_lora_to_fused_params
+
+        monkeypatch.setattr(peft, "LoraConfig", MagicMock())
+        assert peft_routes_lora_to_fused_params(MagicMock(), ["down_proj"]) is False
+
+    @pytest.mark.parametrize("arch", ["qwen3_moe", "deepseek_v3", "glm4_moe"])
+    def test_the_routed_architectures_are_refused(self, arch):
+        from soup_cli.utils.moe import resolve_moe_lora_targets
+
+        with pytest.raises(ValueError, match="ParamWrapper"):
+            resolve_moe_lora_targets(_MOE_STAND_INS[arch](), self._tcfg(0.05), ["q_proj"])
 
     @pytest.mark.parametrize("task", ["dpo", "sft"] )
     def test_the_refusal_reaches_a_real_trainer_setup(self, task, monkeypatch):
@@ -371,6 +497,80 @@ class TestTheDropoutConstraint:
                        task_type=TaskType.CAUSAL_LM),
         )
         assert [n for n in _adapted(model) if "experts" in n]
+
+
+class TestTheSweepInteraction:
+    """`soup sweep` can generate the combination this PR refuses (#1074 ask 4).
+
+    `commands/sweep.py`'s parameter map exposes `moe_aux_loss_coeff`, so a grid
+    over it on `dpo` or `grpo` now hard-fails at config load for every non-
+    default point. The values are user-typed rather than Soup-generated, so the
+    warn-then-refuse staging for generated values does not cover it -- but the
+    interaction should be a known fact rather than a surprise.
+    """
+
+    def test_the_sweep_shortcut_writes_the_refused_knob(self):
+        """Driven through the function rather than reading its dict: the map is
+        a local in `_set_nested_param`, and what matters is where a sweep point
+        lands, not how the table is spelled."""
+        from soup_cli.commands.sweep import _set_nested_param
+
+        written = _set_nested_param({}, "moe_aux_loss_coeff", 0.05)
+        assert written["training"]["moe_aux_loss_coeff"] == 0.05
+
+    def test_a_non_default_point_on_dpo_is_refused_and_the_default_is_not(self):
+        yaml_ = ("base: org/m\ntask: dpo\n"
+                 "data:\n  train: x.jsonl\n  format: dpo\n"
+                 "training:\n  moe_aux_loss_coeff: {}\n")
+        assert load_config_from_string(yaml_.format("0.01")).training.moe_aux_loss_coeff == 0.01
+        with pytest.raises(ValueError, match="moe_aux_loss_coeff"):
+            load_config_from_string(yaml_.format("0.05"))
+
+
+class TestPerArchitectureCoverage:
+    """Which families the wiring actually reaches, measured (#1074 review ask 3).
+
+    The wiring is not uniform across MoE families, and saying so is the point:
+    a recipe that looks fixed and is not is worse than one that visibly fails.
+    """
+
+    #: What `get_moe_target_modules` + a real peft attach does per family, on
+    #: tiny stand-ins. `expert adapters > 0` is the thing `moe_lora` promises.
+    EXPECTED = {
+        "qwen3_moe": True,
+        "deepseek_v3": True,
+        "glm4_moe": True,
+        "mixtral": False,
+        "minimax": False,
+    }
+
+    @pytest.mark.parametrize("arch", sorted(EXPECTED))
+    def test_expert_coverage_is_what_the_pr_claims(self, arch):
+        from peft import LoraConfig, TaskType, get_peft_model
+
+        from soup_cli.utils.moe import get_moe_target_modules
+
+        model = _MOE_STAND_INS[arch]()
+        attached = get_peft_model(model, LoraConfig(
+            r=4, lora_dropout=0.0, target_modules=get_moe_target_modules(model),
+            task_type=TaskType.CAUSAL_LM,
+        ))
+        experts = [name for name in _adapted(attached) if "expert" in name.lower()]
+        assert bool(experts) is self.EXPECTED[arch], (arch, experts)
+
+    def test_the_uncovered_families_are_named_in_the_docs(self):
+        """MiniMax gets zero expert adapters, so `minimax-m3-sft` and
+        `minimax-m3-dpo` still train attention-only after this PR. That has to be
+        written down where a user looks, not only in a test."""
+        from pathlib import Path
+
+        docs = (Path(__file__).resolve().parents[1]
+                / "docs" / "performance-and-quantization.md").read_text(encoding="utf-8")
+        lowered = docs.lower()
+        assert "minimax-m3-sft" in lowered and "minimax-m3-dpo" in lowered, (
+            "the two recipes the wiring does not reach must be named in the docs"
+        )
+        assert "attention-only" in lowered, "and what they do instead"
 
 
 class TestEveryMoeRecipeCanAttach:
