@@ -9,30 +9,33 @@ sixteen PRs reported failures that were only true of an older ``main``.
 
 This script is the check, not a rebase policy:
 
-* Fail when the PR head's merge-base is more than ``MAX_BEHIND`` commits
-  behind the live base (option 2 on #1017). That is the #853 class: a new
-  gate on ``main`` that the PR never ran.
-* Rebuild the merge locally (no ``gh pr update-branch``) and run ruff F821
-  on it. That is the #763 class: a 1-commit deletion that any ``N > 0``
-  lag window would still allow.
+* Rebuild the merge with ``git merge-tree --write-tree`` (no committer
+  identity, no commit) and fail on conflict or ruff F821. That is the #763
+  class. A non-zero merge-tree exit that is not a conflict is an error, not
+  a conflict — classifying every git failure as ``merge_conflict`` is how a
+  missing identity painted every open PR red.
+* Report lag above ``MAX_BEHIND`` as NEUTRAL, not FAILURE. At ~27 commits/day
+  a 10-commit cap is ``strict: true`` with extra steps (~4 hours) and would
+  block ~40% of open PRs pending a rebase. The broken-merge half is the part
+  with no false positives.
 * On a push to ``main``, post those results onto each open PR's head SHA via
   the Checks API so GitHub re-evaluates without a contributor push.
 
-It does not flip ``required_status_checks.strict`` (every merge would then
-force a rebase, and strict still does not refresh a frozen merge SHA). It
-does not replace the 13-job test matrix: a false-red *test* cell still needs
-a push. The CONTRIBUTING note says so.
+It does not flip ``required_status_checks.strict``. It does not replace the
+13-job test matrix: a false-red *test* cell still needs a push.
 """
 
 from __future__ import annotations
 
 import argparse
 import enum
+import io
 import json
 import os
 import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
 import urllib.error
 import urllib.request
@@ -53,6 +56,19 @@ class Conclusion(enum.Enum):
     NEUTRAL = "neutral"
 
 
+class MergeStatus(enum.Enum):
+    CLEAN = "clean"
+    CONFLICT = "conflict"
+    ERROR = "error"
+
+
+@dataclass(frozen=True)
+class MergeBuild:
+    status: MergeStatus
+    tree: str = ""
+    detail: str = ""
+
+
 @dataclass(frozen=True)
 class Verdict:
     conclusion: Conclusion
@@ -71,13 +87,17 @@ def decide(
     f821_hits: tuple[str, ...] = (),
     merge_conflict: bool = False,
     fetch_failed: bool = False,
+    git_error: bool = False,
 ) -> Verdict:
     """Turn measurements into a Checks API conclusion.
 
-    ``fetch_failed`` is NEUTRAL, not FAILURE: a missing ``pull/N/head`` ref
-    must not paint every other PR red, and must not fail the ``main`` reeval
-    job. The PR-event gate passes ``fetch_failed=False`` because that job
-    already has the head checked out.
+    GitHub counts NEUTRAL as passing a required check. So:
+
+    * ``fetch_failed`` and ``git_error`` are FAILURE — we could not evaluate,
+      and a required check must not pass on "we did not look".
+    * lag above ``max_behind`` with a clean merge is NEUTRAL — informational,
+      not a rebase demand.
+    * conflict and F821 are FAILURE. Those are the #763 class.
     """
     if behind < 0:
         raise ValueError(f"behind must be >= 0, got {behind}")
@@ -91,39 +111,44 @@ def decide(
 
     if fetch_failed:
         return Verdict(
-            Conclusion.NEUTRAL,
+            Conclusion.FAILURE,
             "could not fetch PR head",
-            "Skipped: GitHub did not expose pull/N/head for this PR.",
+            "GitHub did not expose pull/N/head for this PR. "
+            "A required check must not pass on a skipped evaluation.\n\n" + remedy,
+        )
+    if git_error:
+        return Verdict(
+            Conclusion.FAILURE,
+            "could not rebuild the live merge",
+            "git failed before a merge result existed (not a conflict). "
+            "Check that origin/main is fetched.\n\n" + remedy,
         )
 
-    reasons: list[str] = []
     if merge_conflict:
-        reasons.append("Live merge against current main has conflicts.")
+        return Verdict(
+            Conclusion.FAILURE,
+            "live merge has conflicts",
+            "Live merge against current main has conflicts.\n\n" + remedy,
+        )
     if f821_hits:
         listed = "\n".join(f"  {hit}" for hit in f821_hits)
-        reasons.append(
+        return Verdict(
+            Conclusion.FAILURE,
+            "live merge has undefined names",
             f"ruff F821 on the live merge ({len(f821_hits)} hit(s)):\n{listed}"
+            f"\n\n{remedy}",
         )
     if behind > max_behind:
-        reasons.append(
-            f"Merge-base is {behind} commits behind main "
-            f"(cap is {max_behind})."
+        return Verdict(
+            Conclusion.NEUTRAL,
+            f"{behind} commits behind main (informational)",
+            f"Merge-base is {behind} commits behind main (report threshold is "
+            f"{max_behind}). The live merge is clean; this is not a failure.",
         )
-
-    if reasons:
-        body = "\n".join(reasons) + "\n\n" + remedy
-        if merge_conflict:
-            title = "live merge has conflicts"
-        elif f821_hits:
-            title = "live merge has undefined names"
-        else:
-            title = f"{behind} commits behind main"
-        return Verdict(Conclusion.FAILURE, title, body)
-
     return Verdict(
         Conclusion.SUCCESS,
-        f"{behind} commits behind main (cap {max_behind})",
-        f"Live merge is clean for F821 and within the {max_behind}-commit cap.",
+        f"{behind} commits behind main",
+        f"Live merge is clean for F821 ({behind} commit(s) behind main).",
     )
 
 
@@ -138,24 +163,56 @@ def commits_behind(repo: Path, base: str, head: str) -> int:
     return int(count)
 
 
-def rebuild_merge(repo: Path, base: str, head: str, dest: Path) -> bool:
-    """Materialise ``base`` merged into ``head`` at ``dest``.
+def write_merge_tree(repo: Path, base: str, head: str) -> MergeBuild:
+    """Merge ``base`` into ``head`` as a tree. Needs no committer identity.
 
-    Returns True on a clean merge, False on conflict. The caller runs ruff
-    against ``dest``; this function never executes anything from ``dest``.
+    ``git merge --no-ff`` on a GitHub runner has no user.name, exits 128, and
+    used to be classified as a conflict. ``merge-tree --write-tree`` writes a
+    tree and uses exit 0 / 1 / other for clean / conflict / error.
     """
-    dest = dest.resolve()
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    _git(repo, "worktree", "add", "--detach", str(dest), head)
-    merge = subprocess.run(
-        ["git", "merge", "--no-edit", "--no-ff", base],
-        cwd=dest,
+    proc = subprocess.run(
+        ["git", "merge-tree", "--write-tree", base, head],
+        cwd=repo,
         check=False,
         capture_output=True,
         text=True,
         env=_git_env(),
     )
-    return merge.returncode == 0
+    if proc.returncode == 0:
+        tree = proc.stdout.strip().splitlines()[0] if proc.stdout.strip() else ""
+        if not tree:
+            return MergeBuild(MergeStatus.ERROR, detail="merge-tree wrote no tree")
+        return MergeBuild(MergeStatus.CLEAN, tree=tree)
+    if proc.returncode == 1:
+        return MergeBuild(
+            MergeStatus.CONFLICT, detail=(proc.stderr or proc.stdout)[:500]
+        )
+    return MergeBuild(
+        MergeStatus.ERROR,
+        detail=(proc.stderr or proc.stdout or str(proc.returncode))[:500],
+    )
+
+
+def materialize_tree(repo: Path, tree: str, dest: Path) -> None:
+    """Unpack ``tree`` into ``dest``. Never executes anything from ``dest``."""
+    dest.mkdir(parents=True, exist_ok=True)
+    archive = subprocess.run(
+        ["git", "archive", "--format=tar", tree],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        env=_git_env(),
+    )
+    with tarfile.open(fileobj=io.BytesIO(archive.stdout), mode="r:") as bundle:
+        bundle.extractall(dest)
+
+
+def rebuild_merge(repo: Path, base: str, head: str, dest: Path) -> MergeBuild:
+    """Materialise a live merge at ``dest``. Returns the merge-tree status."""
+    build = write_merge_tree(repo, base, head)
+    if build.status is MergeStatus.CLEAN:
+        materialize_tree(repo, build.tree, dest)
+    return build
 
 
 def run_f821(
@@ -264,26 +321,23 @@ def evaluate_refs(
     f821_runner: Callable[..., subprocess.CompletedProcess] | None = None,
 ) -> Verdict:
     """Measure one head against a live base and return the verdict."""
-    behind = commits_behind(repo, base, head)
+    try:
+        behind = commits_behind(repo, base, head)
+    except subprocess.CalledProcessError:
+        return decide(behind=0, max_behind=max_behind, git_error=True)
     tmp = tempfile.mkdtemp(prefix="soup-merge-freshness-")
     dest = Path(tmp) / "merge"
     try:
-        clean = rebuild_merge(repo, base, head, dest)
-        if not clean:
+        build = rebuild_merge(repo, base, head, dest)
+        if build.status is MergeStatus.CONFLICT:
             return decide(
                 behind=behind, max_behind=max_behind, merge_conflict=True
             )
+        if build.status is MergeStatus.ERROR:
+            return decide(behind=behind, max_behind=max_behind, git_error=True)
         hits = run_f821(dest, runner=f821_runner)
         return decide(behind=behind, max_behind=max_behind, f821_hits=hits)
     finally:
-        subprocess.run(
-            ["git", "worktree", "remove", "--force", str(dest)],
-            cwd=repo,
-            check=False,
-            capture_output=True,
-            text=True,
-            env=_git_env(),
-        )
         shutil.rmtree(tmp, ignore_errors=True)
 
 
@@ -413,6 +467,7 @@ def _cmd_decide(args: argparse.Namespace) -> int:
         f821_hits=hits,
         merge_conflict=args.merge_conflict,
         fetch_failed=args.fetch_failed,
+        git_error=args.git_error,
     )
     _print_verdict(verdict)
     return verdict.exit_code
@@ -446,6 +501,7 @@ def build_parser() -> argparse.ArgumentParser:
     decide_cmd.add_argument("--f821-hit", action="append", default=[])
     decide_cmd.add_argument("--merge-conflict", action="store_true")
     decide_cmd.add_argument("--fetch-failed", action="store_true")
+    decide_cmd.add_argument("--git-error", action="store_true")
     decide_cmd.set_defaults(func=_cmd_decide)
     return parser
 

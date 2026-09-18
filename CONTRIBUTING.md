@@ -532,9 +532,11 @@ test matrix. Maintainers will not `gh pr update-branch` onto a fork without
 asking.
 
 **If your PR is green and `main` has moved:** the `merge-freshness` check is
-re-posted on every push to `main`. It rebuilds the merge tree on the runner (no
-write to your branch), fails on ruff F821, and fails when the merge-base is more
-than 10 commits behind `main`. It does not re-run the 13-job test matrix.
+re-posted on every push to `main`. It rebuilds the merge with
+`git merge-tree --write-tree` (no write to your branch) and fails on ruff F821
+or a conflict. Lag behind `main` is reported as a **neutral** check, not a
+failure — a 10-commit cap at this repo's merge rate is `strict: true` with extra
+steps. It does not re-run the 13-job test matrix.
 
 `required_status_checks.strict` stays off: flipping it would force a rebase on
 every merge. A docs-only pre-merge procedure is what maintainers already do by

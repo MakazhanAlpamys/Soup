@@ -1,21 +1,22 @@
 # #1017 — re-evaluate a PR against live main without writing to the fork.
 #
 # A pull_request run pins refs/pull/N/merge at creation. gh run rerun
-# replays that SHA; later movement of main is invisible. strict: true would
-# block the stale-green case by forcing a rebase on every merge, which this
-# repo's merge rate cannot afford, and it still would not refresh the frozen
-# merge. A docs-only pre-merge procedure is what maintainers already do by
-# hand and is not a control (four CLEAN PRs were mergeable on marks 12-138
-# commits old). So this workflow is option 2: a check that fails when the
-# live merge-base is more than N commits behind main, plus ruff F821 on a
-# merge rebuilt on the runner (the #763 NameError is one commit, inside any
-# N > 0 window).
+# replays that SHA; later movement of main is invisible. This workflow
+# rebuilds the merge with `git merge-tree --write-tree` (no committer
+# identity) and fails on conflict or ruff F821. Lag is reported as a
+# NEUTRAL check, not a failure: a 10-commit cap at ~27 commits/day is
+# strict:true with extra steps and would block ~40% of open PRs.
 #
-# The 13-job test matrix is deliberately not re-run here. Doing that for
-# every open PR on every push to main is the queue deadlock the issue filed.
-# A false-red test cell still needs a contributor push; CONTRIBUTING says so.
+# The 13-job test matrix is deliberately not re-run here. A false-red
+# test cell still needs a contributor push; CONTRIBUTING says so.
+#
+# The reeval job holds checks:write and materialises untrusted fork heads
+# into trees. Nothing from those trees is executed — ruff only reads.
+# Do not add `pip install -e .` or pytest against that tree.
 #
 # Timeout-minutes on ci.yml's test matrix is #1025, not this PR.
+# The Checks API name is `merge-freshness`; the PR job id is `gate` so
+# the two check runs on one SHA are not the same required context.
 name: merge freshness
 
 on:
@@ -37,19 +38,22 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  merge-freshness:
+  gate:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       # Check out the PR HEAD, not GitHub's frozen merge commit. The whole
-      # point is to merge that head into *current* origin/main ourselves.
+      # point is to merge-tree that head against *current* origin/main.
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
           ref: ${{ github.event.pull_request.head.sha }}
       - name: Fetch current main
-        run: git fetch --no-tags origin main
+        # Named refspec: checkout with an explicit SHA does not create
+        # origin/main, and merge-tree / merge-base would then raise instead
+        # of returning a verdict.
+        run: git fetch --no-tags origin main:refs/remotes/origin/main
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
