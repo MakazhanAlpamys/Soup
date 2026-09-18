@@ -97,6 +97,22 @@ def test_gpu_arch_mismatch_advisory_uses_driver_cuda_wheel(monkeypatch):
     assert "pip install torch" in advisory
 
 
+def test_gpu_arch_mismatch_advisory_falls_back_for_unsupported_driver(
+    monkeypatch,
+):
+    from soup_cli.commands.doctor import _detect_gpu_arch_mismatch_advisory
+
+    monkeypatch.setattr(
+        "soup_cli.commands.doctor._nvidia_smi_cuda_version",
+        lambda: (11, 7),
+    )
+
+    advisory = _detect_gpu_arch_mismatch_advisory()
+
+    assert "whl/None" not in advisory
+    assert "CUDA-enabled PyTorch build" in advisory
+
+
 def test_format_gpu_capability_handles_missing_torch_cuda_attribute():
     from types import SimpleNamespace
 
