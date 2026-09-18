@@ -1,13 +1,126 @@
-"""Tests for v0.34.0 Part B — per-run cost tracking."""
+"""Tests for v0.34.0 Part B — per-run cost tracking.
+
+Device-name fixtures are the strings ``torch.cuda.get_device_name()`` returns,
+taken from Appendix A "Supported NVIDIA GPU Products" of the NVIDIA Linux
+x86_64 driver README (590.48.01,
+https://us.download.nvidia.com/XFree86/Linux-x86_64/590.48.01/README/supportedchips.html)
+and from the probe list in issue #831. Non-NVIDIA names come from
+``detect_device()`` in ``soup_cli/utils/gpu.py``.
+"""
 
 from __future__ import annotations
 
+import pytest
+
+from soup_cli.utils import run_cost
 from soup_cli.utils.run_cost import (
     MAX_DURATION_SECS,
     estimate_run_cost_usd,
     format_cost_usd,
     lookup_gpu_rate,
 )
+
+# (device name as the driver reports it, expected label or None)
+REAL_DEVICE_NAMES = [
+    ("NVIDIA RTX A4000", "RTX A4000"),
+    ("NVIDIA RTX A4500", "RTX A4500"),
+    ("NVIDIA A40", "A40"),
+    ("NVIDIA RTX A6000", "A6000"),
+    ("NVIDIA RTX 6000 Ada Generation", "RTX 6000 Ada"),
+    ("NVIDIA H100 80GB HBM3", "H100"),  # SXM5 board; name carries no SXM token
+    ("NVIDIA H100 NVL", "H100"),
+    ("NVIDIA H200", "H200"),
+    ("NVIDIA B200", "B200"),
+    ("NVIDIA L4", "L4"),
+    ("NVIDIA L40S", "L40S"),
+    ("NVIDIA GeForce RTX 5090", "RTX 5090"),
+    ("NVIDIA GeForce RTX 5080", "RTX 5080"),
+    ("NVIDIA GeForce RTX 5070", "RTX 5070"),
+    ("NVIDIA GeForce RTX 3090 Ti", "RTX 3090"),  # no separate rental tier
+    ("NVIDIA A100-SXM4-80GB", "A100 80GB"),
+    ("NVIDIA A100 80GB PCIe", "A100 80GB"),
+    ("NVIDIA A100-SXM4-40GB", "A100 40GB"),
+    ("NVIDIA A10G", "A10G"),
+    ("Tesla T4", "T4"),
+    ("NVIDIA GeForce RTX 4070 Ti", "RTX 4070 Ti"),
+    ("NVIDIA RTX PRO 6000 Blackwell Workstation Edition", "RTX PRO 6000"),
+]
+
+
+class TestRealDeviceNames:
+    @pytest.mark.parametrize(("name", "label"), REAL_DEVICE_NAMES)
+    def test_resolves(self, name, label):
+        result = lookup_gpu_rate(name)
+        assert result is not None
+        assert result[0] == label
+
+    def test_rtx_a4000_is_not_priced_as_an_a40(self):
+        # "a40" used to match inside "a4000".
+        assert lookup_gpu_rate("NVIDIA RTX A4000") != ("A40", 0.55)
+        assert lookup_gpu_rate("NVIDIA A40") == ("A40", 0.55)
+
+    def test_a100_sxm4_80gb_gets_the_80gb_rate(self):
+        # The SXM part reports "A100-SXM4-80GB"; it used to fall to the 40 GB row.
+        assert lookup_gpu_rate("NVIDIA A100-SXM4-80GB") == ("A100 80GB", 2.05)
+
+    def test_h100_80gb_hbm3_stays_on_generic_h100_row(self):
+        # The name does not say SXM or PCIe, so we must not claim either.
+        assert lookup_gpu_rate("NVIDIA H100 80GB HBM3") == ("H100", 4.11)
+
+    def test_h100_nvl_stays_on_generic_h100_row(self):
+        assert lookup_gpu_rate("NVIDIA H100 NVL") == ("H100", 4.11)
+
+    def test_general_row_cannot_shadow_specific_row(self):
+        table = run_cost._GPU_RATE_TABLE
+        labels = [label for _p, label, _r in table]
+        pairs = [
+            ("A100 80GB", "A100 40GB", "NVIDIA A100-SXM4-80GB"),
+            ("H100 SXM", "H100", "NVIDIA H100-SXM5-80GB"),
+            ("RTX 4070 Ti", "RTX 4070", "NVIDIA GeForce RTX 4070 Ti"),
+            ("RTX 5070 Ti", "RTX 5070", "NVIDIA GeForce RTX 5070 Ti"),
+        ]
+        for specific, general, name in pairs:
+            general_pattern = table[labels.index(general)][0]
+            # The tie is real: the general row also matches this name...
+            assert general_pattern.search(name)
+            # ...but the specific row is earlier and therefore wins.
+            assert labels.index(specific) < labels.index(general)
+            assert lookup_gpu_rate(name)[0] == specific
+
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "Some Unknown GPU",
+            "CPU (no GPU detected)",
+            "Apple Silicon (Apple M2 Max)",
+            "NVIDIA T4G",
+            "NVIDIA GH200 480GB",
+            "NVIDIA GB200",
+            "NVIDIA B100",
+        ],
+    )
+    def test_unknown_names_stay_none(self, name):
+        assert lookup_gpu_rate(name) is None
+
+
+class TestTableHygiene:
+    def test_every_pattern_is_word_anchored_and_case_insensitive(self):
+        import re
+
+        for pattern, label, rate in run_cost._GPU_RATE_TABLE:
+            assert "\\b" in pattern.pattern, label
+            assert pattern.flags & re.IGNORECASE, label
+            assert rate > 0, label
+
+    def test_labels_unique(self):
+        labels = [label for _p, label, _r in run_cost._GPU_RATE_TABLE]
+        assert len(labels) == len(set(labels))
+
+    def test_rates_other_suites_depend_on_are_unchanged(self):
+        # tests/test_v07115.py pins A100 40GB and T4; a repricing PR must update both.
+        assert lookup_gpu_rate("NVIDIA A100")[1] == 1.10
+        assert lookup_gpu_rate("T4")[1] == 0.20
+        assert lookup_gpu_rate("NVIDIA RTX 4090")[1] == 0.35
 
 
 class TestLookup:
@@ -19,13 +132,14 @@ class TestLookup:
         assert rate > 0
 
     def test_h100_sxm_more_specific_wins(self):
+        # Provider label (RunPod pod type "H100 SXM"), not a driver string.
         result = lookup_gpu_rate("NVIDIA H100 SXM 80GB")
         assert result is not None
         label, _rate = result
         assert label == "H100 SXM"
 
     def test_a100_80gb_more_specific_than_a100(self):
-        result = lookup_gpu_rate("NVIDIA A100 80GB")
+        result = lookup_gpu_rate("NVIDIA A100 80GB PCIe")
         assert result is not None
         assert result[0] == "A100 80GB"
 
