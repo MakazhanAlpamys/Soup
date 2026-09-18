@@ -20,12 +20,6 @@ EXIT_GATE_FAILED: int = 2
 EXIT_USAGE_ERROR: int = 3
 
 _USAGE_ERRORS: tuple[type[Exception], ...] = (click.exceptions.UsageError,)
-try:
-    import typer._click.exceptions
-
-    _USAGE_ERRORS = (click.exceptions.UsageError, typer._click.exceptions.UsageError)
-except (ImportError, AttributeError):
-    pass
 
 
 class _GateUsageErrorMixin:
@@ -34,13 +28,6 @@ class _GateUsageErrorMixin:
     def make_context(self, info_name, args, parent=None, **extra):
         try:
             return super().make_context(info_name, args, parent=parent, **extra)
-        except _USAGE_ERRORS as exc:
-            exc.exit_code = EXIT_USAGE_ERROR
-            raise
-
-    def invoke(self, ctx):
-        try:
-            return super().invoke(ctx)
         except _USAGE_ERRORS as exc:
             exc.exit_code = EXIT_USAGE_ERROR
             raise
