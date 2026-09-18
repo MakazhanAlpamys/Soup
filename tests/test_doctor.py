@@ -63,23 +63,25 @@ def test_doctor_runs():
     """soup doctor runs without crashing."""
     result = runner.invoke(app, ["doctor"])
     assert result.exit_code == 0
-    assert "Soup Doctor" in result.output
+    assert "Soup Doctor" in _strip_ansi(result.output)
 
 
 def test_doctor_shows_system_info():
     """soup doctor shows system info panel."""
     result = runner.invoke(app, ["doctor"])
     assert result.exit_code == 0
-    assert "Python" in result.output
-    assert "Platform" in result.output
+    output = _strip_ansi(result.output)
+    assert "Python" in output
+    assert "Platform" in output
 
 
 def test_doctor_shows_dependencies():
     """soup doctor shows dependency table."""
     result = runner.invoke(app, ["doctor"])
     assert result.exit_code == 0
-    assert "Dependencies" in result.output
-    assert "Package" in result.output
+    output = _strip_ansi(result.output)
+    assert "Dependencies" in output
+    assert "Package" in output
 
 
 def test_gpu_arch_mismatch_advisory_uses_driver_cuda_wheel(monkeypatch):
@@ -456,37 +458,38 @@ def test_doctor_shows_gpu_section():
     """soup doctor shows GPU section."""
     result = runner.invoke(app, ["doctor"])
     assert result.exit_code == 0
-    assert "GPU" in result.output
+    assert "GPU" in _strip_ansi(result.output)
 
 
 def test_doctor_shows_system_resources():
     """soup doctor shows System Resources section."""
     result = runner.invoke(app, ["doctor"])
     assert result.exit_code == 0
-    assert "System Resources" in result.output
-    assert "RAM" in result.output
-    assert "Disk" in result.output
+    output = _strip_ansi(result.output)
+    assert "System Resources" in output
+    assert "RAM" in output
+    assert "Disk" in output
 
 
 def test_doctor_checks_torch():
     """soup doctor checks for torch."""
     result = runner.invoke(app, ["doctor"])
     assert result.exit_code == 0
-    assert "torch" in result.output
+    assert "torch" in _strip_ansi(result.output)
 
 
 def test_doctor_checks_pydantic():
     """soup doctor checks for pydantic."""
     result = runner.invoke(app, ["doctor"])
     assert result.exit_code == 0
-    assert "pydantic" in result.output
+    assert "pydantic" in _strip_ansi(result.output)
 
 
 def test_doctor_checks_optional_deps():
     """soup doctor shows optional deps."""
     result = runner.invoke(app, ["doctor"])
     assert result.exit_code == 0
-    assert "optional" in result.output
+    assert "optional" in _strip_ansi(result.output)
 
 
 def test_doctor_requires_declared_torchao_floor_for_optional_feature_support(
@@ -539,8 +542,9 @@ def test_doctor_requires_declared_torchao_floor_for_optional_feature_support(
 
     result = runner.invoke(app, ["doctor"])
     assert result.exit_code == 0
-    assert "outdated" in result.output
-    assert f">={declared_floor}" in result.output
+    output = _strip_ansi(result.output)
+    assert "outdated" in output
+    assert f">={declared_floor}" in output
 
 
 def test_doctor_missing_dep():
@@ -553,7 +557,7 @@ def test_doctor_missing_dep():
     ):
         result = runner.invoke(app, ["doctor"])
         assert result.exit_code == 1
-        assert "MISSING" in result.output
+        assert "MISSING" in _strip_ansi(result.output)
 
 
 def test_doctor_outdated_dep():
@@ -883,7 +887,7 @@ def test_doctor_missing_core_dependency_exits_nonzero(monkeypatch):
     monkeypatch.setitem(sys.modules, "plotext", None)
     result = runner.invoke(app, ["doctor"])
     assert result.exit_code != 0
-    assert "MISSING" in result.output
+    assert "MISSING" in _strip_ansi(result.output)
 
 
 def test_doctor_full_install_exits_zero():
