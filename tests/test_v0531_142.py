@@ -511,7 +511,6 @@ class TestTorchAOKwargAllowlist:
         fake_tokenizer = MagicMock()
         fake_torchao = MagicMock()
         fake_torchao.quantization.Int4WeightOnlyConfig.return_value = MagicMock()
-        fake_torchao.quantization.NVFP4Config.return_value = MagicMock()
         fake_torchao.quantize_ = MagicMock()
 
         original_torchao = sys.modules.get("torchao")
