@@ -830,11 +830,33 @@ class AsyncDiskSource:
                     self._ready.notify_all()
         except BaseException as exc:  # noqa: BLE001 — handed to the consumer
             self._fail(exc)
+        finally:
+            # A future edit adding a second `return`, a monkeypatched `_run` in
+            # a test, or an interpreter/thread termination this file cannot see
+            # must never leave a consumer blocked on a reader that is gone with
+            # nothing recorded. If the loop above exits some way that skipped
+            # both the `_closed` return and `_fail`, this is the last chance to
+            # convert that into a deterministic stored error before `get`'s
+            # liveness check has to infer it from `is_alive()` alone.
+            with self._ready:
+                if not self._closed and self._error is None:
+                    self._error = RuntimeError(
+                        "layer-stream reader thread exited unexpectedly"
+                    )
+                    self._in_flight = None
+                    self._read_started_at = None
+                    self._ready.notify_all()
 
     def _fail(self, exc: BaseException) -> None:
-        """Record a reader failure and wake everyone waiting on it."""
+        """Record a reader failure and wake everyone waiting on it.
+
+        Never overwrites an earlier failure — the first recorded error is the
+        one that explains what actually went wrong; a later one (e.g. from the
+        `finally` backstop in ``_run``) is just the thread unwinding after it.
+        """
         with self._ready:
-            self._error = exc
+            if self._error is None:
+                self._error = exc
             self._in_flight = None
             self._read_started_at = None
             self._ready.notify_all()
@@ -960,11 +982,13 @@ class AsyncDiskSource:
 
         * The reader thread is gone and said nothing. A backstop, deliberately:
           ``_run`` is one ``try`` around the whole loop whose only ``return`` is
-          guarded by ``self._closed``, and every other exit runs ``_fail``, so
-          the thread cannot exit with ``_error`` unset and ``_closed`` False
-          through any path in this file. It exists for the ones that are not in
-          this file — a monkeypatched ``_run`` in a test, a future edit adding a
-          second ``return``, an interpreter that kills the thread — where the
+          guarded by ``self._closed``, every other exit runs ``_fail``, and a
+          ``finally`` around the whole thing stores a fallback error for any
+          exit that skipped both — so ``_error`` is set, under this same lock,
+          before ``is_alive()`` can report the thread gone. This condition
+          should therefore never fire in practice; it stays as defense for the
+          ones ``_run``'s own guards cannot see — a monkeypatched ``_run`` in a
+          test, an interpreter that kills the thread outright — where the
           alternative is a consumer blocking forever on a reader that is not
           there.
         * One read has been in flight past ``_MAX_READ_SECONDS``. THIS is the
