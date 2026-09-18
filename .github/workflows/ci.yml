@@ -181,7 +181,9 @@ jobs:
         with:
           python-version: "3.11"
       - name: Install the QAT extra (torchao) beside the dev stack
-        run: pip install -e ".[dev]" ".[qat]" "torch>=2.6.0"
+        # One spec with both extras: `-e ".[dev]" ".[qat]"` asks pip for
+        # soup-cli twice, once editable and once not, and resolution fails.
+        run: pip install -e ".[dev,qat]" "torch>=2.6.0"
       - name: Prove torchao is actually importable, so the tests do not skip
         run: python -c "import torchao; print(torchao.__version__)"
       - name: Resolve every torchao class Soup asks for
