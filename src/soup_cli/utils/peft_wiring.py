@@ -458,6 +458,28 @@ def attach_grpo_stability_callback(trainer: Any, tcfg: Any) -> bool:
     return True
 
 
+def ensure_grpo_stability_callback(trainer: Any) -> bool:
+    """Ensure the stability callback is attached for the gradient watchdog.
+
+    #342 — ``on_pre_optimizer_step`` in ``GRPOStabilityCallback`` must run
+    unconditionally.  ``attach_grpo_stability_callback`` only attaches when
+    stability knobs are set.  This function is a no-op if the callback is
+    already attached; otherwise it attaches with all stability knobs at
+    their defaults (inactive) so only the gradient watchdog hooks fire.
+    """
+    from soup_cli.monitoring.grpo_stability_callback import (
+        GRPOStabilityCallback,
+    )
+
+    # Check if already attached by the stability-knob path.
+    for cb in trainer.callback_handler.callbacks:
+        if isinstance(cb, GRPOStabilityCallback):
+            return False  # already wired — watchdog will fire
+    # Attach with defaults: all stability knobs inactive, watchdog active.
+    trainer.add_callback(GRPOStabilityCallback())
+    return True
+
+
 def rl_callbacks_need_buffer(tcfg: Any) -> bool:
     """True when a reward-fn capture buffer is needed (v0.71.11 #235/#240).
 
