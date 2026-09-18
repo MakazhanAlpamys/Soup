@@ -69,18 +69,38 @@ class TestAgainstTheInstalledTorchao:
 
     def test_the_names_are_the_ones_torchao_defines(self):
         """Resolution by import path, not by ``hasattr`` on the package root:
-        the attribute has to be defined where the map says it is."""
-        for key, (module_path, attribute) in TORCHAO_CLASSES.items():
-            module = importlib.import_module(module_path)
-            assert hasattr(module, attribute), f"{key}: {module_path}.{attribute}"
+        at least one candidate per key has to define the attribute where the
+        map says it does."""
+        for key, candidates in TORCHAO_CLASSES.items():
+            found = []
+            for module_path, attribute in candidates:
+                try:
+                    module = importlib.import_module(module_path)
+                except ImportError:
+                    continue
+                if hasattr(module, attribute):
+                    found.append(f"{module_path}.{attribute}")
+            assert found, f"{key}: none of {candidates} defines its attribute"
+
+    def test_the_public_candidate_is_tried_before_the_prototype_one(self):
+        """``torchao.prototype`` is not a promised location, so a release that
+        graduates one of these must be picked up without a code change. Same
+        shape as ``_trl_compat.resolve_trl_symbol`` trying ``trl`` before
+        ``trl.experimental``."""
+        for key, candidates in TORCHAO_CLASSES.items():
+            paths = [module_path for module_path, _ in candidates]
+            prototypes = [i for i, p in enumerate(paths) if p.startswith("torchao.prototype")]
+            publics = [i for i, p in enumerate(paths) if not p.startswith("torchao.prototype")]
+            if prototypes and publics:
+                assert max(publics) < min(prototypes), (key, paths)
 
     def test_nvfp4_training_uses_the_training_config_not_an_inference_one(self):
         """``quantize_(model, <inference config>)`` is post-training weight
         quantization. Only the training config replaces ``nn.Linear`` with
         ``NVFP4Linear`` and quantises the backward GEMMs too, which is what
         ``training.nvfp4`` claims."""
-        module_path, attribute = TORCHAO_CLASSES["NVFP4Training"]
-        assert attribute == "NVFP4TrainingConfig"
+        attributes = {attribute for _, attribute in TORCHAO_CLASSES["NVFP4Training"]}
+        assert attributes == {"NVFP4TrainingConfig"}
         doc = resolve_torchao_class("NVFP4Training").__doc__ or ""
         assert "backward" in doc.lower(), doc[:200]
 
@@ -109,6 +129,28 @@ class TestAgainstTheInstalledTorchao:
 
 
 class TestTheOrderOfTheChecks:
+    def test_absent_torchao_is_absent_even_with_its_submodules_cached(self, monkeypatch):
+        """The root package is imported before any submodule.
+
+        ``import_module("torchao.prototype....")`` answers from ``sys.modules``
+        when anything earlier in the process imported it, so with only the root
+        set to None the resolver sailed past a torchao that is not importable
+        and the "torchao is missing" branch was unreachable. Found by the
+        maintainer on #1066: ``test_v07121.py`` passed alone and failed when
+        this file ran first. So this test deliberately leaves the submodules
+        cached — deleting them is what hid the bug.
+        """
+        import sys
+
+        pytest.importorskip("torchao", reason="install .[qat] to run the contract")
+        resolve_torchao_class("NVFP4Training")  # warm the submodule cache
+        assert any(name.startswith("torchao.") for name in sys.modules)
+
+        monkeypatch.setitem(sys.modules, "torchao", None)
+        with pytest.raises(RuntimeError, match="Could not import torchao"):
+            resolve_torchao_class("NVFP4Training")
+
+
     def test_a_rejected_kwarg_is_a_kwarg_error_even_without_torchao(self, monkeypatch):
         """The allowlist runs before the class is resolved. Resolving first turned
         "that key is not allowed" into "torchao is missing", which sends the user

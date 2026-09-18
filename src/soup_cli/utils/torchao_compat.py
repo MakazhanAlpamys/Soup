@@ -8,8 +8,8 @@ in 0.18.0, the newest release. The refusal told the user to upgrade, and there
 was nothing newer to upgrade to.
 
 So each name is resolved by importing the module that defines it. A rename then
-fails at a named import with the path in the message, rather than degrading into
-advice that cannot work. Measured against torchao 0.18.0:
+fails at a named import with the paths it tried in the message, rather than
+degrading into advice that cannot work. Measured against torchao 0.18.0:
 
 =========================  =========================================================
 what Soup wants            where it is
@@ -24,6 +24,15 @@ NVFP4 export (PTQ)         ``torchao.prototype.mx_formats.inference_workflow``
 NVFP4 *training*           ``torchao.prototype.moe_training.nvfp4_training``
                            ``.nvfp4_training.NVFP4TrainingConfig``
 =========================  =========================================================
+
+Three of those are ``torchao.prototype``, which is by definition not a promised
+location, so each key carries a tuple of candidate modules and the **public**
+path is tried first. A release that graduates one of these into
+``torchao.quantization`` is then picked up with no change here, which is the
+shape ``trainer/_trl_compat.py:resolve_trl_symbol`` already uses for the three
+configs ``trl`` moved into ``trl.experimental``. The candidates below are the
+paths that were probed against 0.18.0, not guesses: today the public candidate
+misses for those three and the prototype one answers.
 
 The training and export entries are deliberately different classes.
 ``quantize_(model, <inference config>)`` is post-training weight quantization;
@@ -46,26 +55,37 @@ from typing import Any, Tuple
 #: stable, so claiming an older floor would be a guess.
 TORCHAO_MIN_VERSION = "0.18.0"
 
-#: ``(module path, attribute)`` for every torchao class Soup asks for.
-TORCHAO_CLASSES: dict[str, Tuple[str, str]] = {
-    "Int4WeightOnly": ("torchao.quantization", "Int4WeightOnlyConfig"),
+#: ``key -> ((module path, attribute), ...)``, most public candidate first.
+#: The attribute is repeated per candidate because a graduated class is free to
+#: be renamed on the way out of ``prototype``.
+TORCHAO_CLASSES: dict[str, Tuple[Tuple[str, str], ...]] = {
+    "Int4WeightOnly": (("torchao.quantization", "Int4WeightOnlyConfig"),),
     "Int8DynActInt4": (
-        "torchao.prototype.quantization.int4.inference_workflow",
-        "Int8DynamicActivationInt4WeightConfig",
+        ("torchao.quantization", "Int8DynamicActivationInt4WeightConfig"),
+        (
+            "torchao.prototype.quantization.int4.inference_workflow",
+            "Int8DynamicActivationInt4WeightConfig",
+        ),
     ),
     "Float8DynActFloat8": (
-        "torchao.quantization",
-        "Float8DynamicActivationFloat8WeightConfig",
+        ("torchao.quantization", "Float8DynamicActivationFloat8WeightConfig"),
     ),
     "NVFP4": (
-        "torchao.prototype.mx_formats.inference_workflow",
-        "NVFP4DynamicActivationNVFP4WeightConfig",
+        ("torchao.quantization", "NVFP4DynamicActivationNVFP4WeightConfig"),
+        (
+            "torchao.prototype.mx_formats.inference_workflow",
+            "NVFP4DynamicActivationNVFP4WeightConfig",
+        ),
+        ("torchao.prototype.mx_formats", "NVFP4DynamicActivationNVFP4WeightConfig"),
     ),
     "NVFP4Training": (
-        "torchao.prototype.moe_training.nvfp4_training.nvfp4_training",
-        "NVFP4TrainingConfig",
+        ("torchao.quantization", "NVFP4TrainingConfig"),
+        (
+            "torchao.prototype.moe_training.nvfp4_training.nvfp4_training",
+            "NVFP4TrainingConfig",
+        ),
     ),
-    "quantize_": ("torchao.quantization", "quantize_"),
+    "quantize_": (("torchao.quantization", "quantize_"),),
 }
 
 
@@ -81,26 +101,45 @@ def resolve_torchao_class(key: str) -> Any:
         key: a key of :data:`TORCHAO_CLASSES`.
 
     Raises:
-        RuntimeError: torchao is absent, or the class moved. The message carries
-            the module path and attribute, so a rename is actionable instead of
-            "upgrade torchao" against the newest release.
+        RuntimeError: torchao is absent, or the class moved out of every
+            candidate module. The message carries each path tried, so a rename
+            is actionable instead of "upgrade torchao" against the newest
+            release.
     """
-    module_path, attribute = TORCHAO_CLASSES[key]
     import importlib
 
+    # The root package first, before any submodule. Importing
+    # ``torchao.prototype.…`` directly answers from ``sys.modules`` when an
+    # earlier import in the same process cached it, so an absent torchao was
+    # only absent if nothing had imported it yet: the "torchao is missing"
+    # branch was unreachable in a process that had ever touched torchao, and
+    # test_v07121.py's absent-torchao test passed alone and failed after
+    # tests/test_issue826_torchao_class_names.py had imported the real package.
     try:
-        module = importlib.import_module(module_path)
+        importlib.import_module("torchao")
     except ImportError as exc:
         raise RuntimeError(
-            f"{torchao_install_hint(key)} Could not import {module_path} "
+            f"{torchao_install_hint(key)} Could not import torchao "
             f"({type(exc).__name__}: {exc})."
         ) from exc
-    try:
-        return getattr(module, attribute)
-    except AttributeError as exc:
-        raise RuntimeError(
-            f"this torchao has no {module_path}.{attribute}, which Soup needs for "
-            f"{key}. It exists in torchao {TORCHAO_MIN_VERSION}; a newer release "
-            "may have moved it, in which case soup_cli/utils/torchao_compat.py "
-            "is the one place to update."
-        ) from exc
+
+    candidates = TORCHAO_CLASSES[key]
+    tried: list[str] = []
+    for module_path, attribute in candidates:
+        try:
+            module = importlib.import_module(module_path)
+        except ImportError as exc:
+            tried.append(f"{module_path}.{attribute} ({type(exc).__name__}: {exc})")
+            continue
+        try:
+            return getattr(module, attribute)
+        except AttributeError:
+            tried.append(f"{module_path}.{attribute} (not defined there)")
+
+    looked = "; ".join(tried)
+    raise RuntimeError(
+        f"this torchao has no class for {key}. Soup looked for {looked}. The "
+        f"last of those exists in torchao {TORCHAO_MIN_VERSION}; a newer release "
+        "may have moved it, in which case soup_cli/utils/torchao_compat.py is the "
+        "one place to update."
+    )

@@ -187,7 +187,17 @@ jobs:
       - name: Prove torchao is actually importable, so the tests do not skip
         run: python -c "import torchao; print(torchao.__version__)"
       - name: Resolve every torchao class Soup asks for
-        run: pytest -o addopts= -q tests/test_issue826_torchao_class_names.py
+        # test_v07121.py runs here too, and not only in the matrix: it is the
+        # suite that fakes torchao, so with the real package installed it is
+        # the one that catches a resolver which answers from a cached
+        # `torchao.*` submodule after the root import has been made to fail.
+        # That exact regression shipped in this PR's first push and was found
+        # by hand; running both files in one job is what makes it a CI failure
+        # next time.
+        run: |
+          pytest -o addopts= -q \
+            tests/test_issue826_torchao_class_names.py \
+            tests/test_v07121.py
   pytorch-smoke:
     # #596: exercise the real PyTorch SFT + DPO training pipeline on every PR.
     # Keep this separate from the 3x3 matrix so the expensive model-backed

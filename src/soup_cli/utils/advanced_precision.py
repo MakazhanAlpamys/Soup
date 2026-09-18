@@ -15,8 +15,8 @@ v0.71.21 #141 lifts the two ``apply_*`` stubs to live, BETA hw-gated code:
 
 * :func:`apply_fp8_attention` converts the attention-projection linears to
   torchao ``Float8Linear`` training modules (the shared FP8 gate, SM >= 8.9; #835).
-* :func:`apply_nvfp4` routes the model through torchao's ``NVFP4Config``
-  quantisation (Blackwell gate — SM 10.0 datacenter B100/B200/GB200 or
+* :func:`apply_nvfp4` routes the model through torchao's
+  ``NVFP4TrainingConfig`` (Blackwell gate — SM 10.0 datacenter B100/B200/GB200 or
   SM 12.0 consumer RTX 50-series).
 
 Both raise friendly ``RuntimeError`` on missing hardware / torchao instead
@@ -310,10 +310,12 @@ def apply_fp8_attention(model: object, *, recipe: str = "tensorwise") -> int:
 def apply_nvfp4(model: object) -> int:
     """Quantise ``model`` with torchao's NVFP4 scheme (Blackwell-only).
 
-    Live since v0.71.21 (#141). Routes through the same
-    ``torchao.quantization.NVFP4Config`` surface as the v0.53.1
-    ``soup export --format torchao`` path, gated on a Blackwell GPU
-    (SM 10.0 datacenter / SM 12.0 consumer).
+    Live since v0.71.21 (#141). Routes through torchao's
+    ``NVFP4TrainingConfig``, gated on a Blackwell GPU (SM 10.0 datacenter /
+    SM 12.0 consumer). Deliberately NOT the config the v0.53.1
+    ``soup export --format torchao`` path uses: that one is post-training
+    weight quantization, while this flag promises quantised training.
+    ``soup_cli/utils/torchao_compat.py`` holds both, and where each lives.
 
     Returns:
         The number of ``nn.Linear`` modules torchao targeted (advisory
@@ -321,8 +323,8 @@ def apply_nvfp4(model: object) -> int:
 
     Raises:
         TypeError: ``model`` is None.
-        RuntimeError: non-Blackwell GPU, torchao missing, or the installed
-            torchao does not expose ``NVFP4Config``.
+        RuntimeError: non-Blackwell GPU, torchao missing, or no candidate
+            module in ``torchao_compat`` defines ``NVFP4TrainingConfig``.
     """
     if model is None:
         raise TypeError("model must not be None")
