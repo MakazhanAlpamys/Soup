@@ -54,6 +54,12 @@ def test_hf_rewind_log_false_builds_the_plain_trainer_and_no_file(tmp_path, monk
     assert not (tmp_path / "out" / RewindLog.FILENAME).exists()
 
 
+# #382 via #1062: a real `trainer.train()` over a real tiny Llama, WITH the
+# rewind recorder attached -- the same shape as the crash site in
+# test_rewind_hf.py. Not every real train dies on those runners: on both
+# 0xc000001d cells (runs 35228388681 and 35254266989) the full fine-tune tests in
+# test_issue341_seed_and_fullft.py passed at 12%, long before the crash at 41%.
+# So the marker follows the recorder, not `.train()` in general.
 @skip_on_windows_ci
 def test_hf_training_run_records_every_row_once(tmp_path, monkeypatch):
     wrapper, dataset = _hf_wrapper(tmp_path, monkeypatch)
