@@ -292,7 +292,7 @@ class PretrainTrainerWrapper:
         from peft import TaskType, get_peft_model, prepare_model_for_kbit_training
         from transformers import AutoModelForCausalLM, AutoTokenizer
 
-        from soup_cli.utils.moe import detect_moe_model, get_moe_target_modules
+        from soup_cli.utils.moe import detect_moe_model
 
         console.print(f"[dim]Loading tokenizer: {cfg.base}[/]")
         self.tokenizer = AutoTokenizer.from_pretrained(
@@ -388,13 +388,12 @@ class PretrainTrainerWrapper:
                 self.model, tcfg.lora.target_parameters
             )
 
-            if tcfg.moe_lora and is_moe:
-                moe_targets = get_moe_target_modules(self.model)
-                if moe_targets:
-                    target_modules = moe_targets
-                    console.print(
-                        f"[green]ScatterMoE LoRA:[/] targeting {len(moe_targets)} module patterns"
-                    )
+            # #798: the same helper every other trainer uses (see sft.py).
+            from soup_cli.utils.moe import resolve_moe_lora_targets
+
+            target_modules = resolve_moe_lora_targets(
+                self.model, tcfg, target_modules, console
+            )
 
             lora_config = build_lora_config(
                 tcfg.lora,

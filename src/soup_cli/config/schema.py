@@ -5216,8 +5216,11 @@ class SoupConfig(BaseModel):
         ``moe_expert_quant`` and ``train_router_only`` are applied in
         ``trainer/sft.py`` only; ``moe_aux_loss_coeff`` in ``sft.py`` and
         ``pretrain.py``. On every other task they were accepted, stored in the
-        run's config, and silently not applied -- the defect class v0.75.0 spent
-        a release removing.
+        run's config, and silently not applied -- the defect class this release
+        cycle spent its time removing. (The version is deliberately not spelled
+        out here: ``config/unknown_keys.py`` is the one file allowed to hold it,
+        and ``test_issue627...::test_the_version_is_written_out_in_exactly_one_source_file``
+        fails on a second copy.)
 
         ``moe_aux_loss_coeff``'s default is ``0.01``, and a dumped config writes
         it out, so only a NON-DEFAULT value is refused: refusing the default
@@ -5244,37 +5247,6 @@ class SoupConfig(BaseModel):
                     f"{sorted(_MOE_AUX_LOSS_TASKS)} read it (sft.py, "
                     f"pretrain.py). Remove it, or use one of those tasks."
                 )
-        return self
-
-    @model_validator(mode="after")
-    def _validate_moe_lora_dropout(self) -> "SoupConfig":
-        """#798 — peft cannot attach a dropout LoRA to fused MoE experts.
-
-        On transformers 5.x a Qwen3-MoE keeps its experts as fused 3-D
-        parameters (``mlp.experts.gate_up_proj``), which peft adapts through
-        ``lora.ParamWrapper``. That wrapper refuses any dropout:
-
-            ValueError: lora.ParamWrapper does not work with lora_dropout != 0.
-
-        Measured on a real ``Qwen3MoeForCausalLM`` through the real SFT path with
-        the schema default ``lora.dropout: 0.05``: the attach raises, so
-        ``moe_lora`` could not work on ANY task, including the one #798 assumed
-        was the working one.
-
-        Refused at load rather than zeroed for the user: silently changing a
-        training hyperparameter is the defect class this release removed, and the
-        run record would not show it either (#798 ruling).
-        """
-        tcfg = self.training
-        if tcfg.moe_lora and tcfg.lora.dropout != 0:
-            raise ValueError(
-                f"training.moe_lora=true requires training.lora.dropout: 0.0 "
-                f"(got {tcfg.lora.dropout}). MoE experts are fused parameters, "
-                f"which peft adapts through lora.ParamWrapper, and that refuses "
-                f"dropout: 'lora.ParamWrapper does not work with lora_dropout "
-                f"!= 0.' Set lora.dropout: 0.0 to train the experts, or remove "
-                f"moe_lora to keep dropout on the attention-only adapters."
-            )
         return self
 
     @model_validator(mode="after")

@@ -114,6 +114,41 @@ def get_moe_target_modules(model) -> Optional[list[str]]:
     return targets
 
 
+def has_fused_expert_params(model) -> bool:
+    """True when the experts are ONE 3-D parameter per projection, not modules.
+
+    transformers 5.x packs a Qwen3-MoE's experts as
+    ``mlp.experts.gate_up_proj`` with shape ``(num_experts, ..., ...)`` instead
+    of ``experts.0.gate_proj`` and friends. peft cannot wrap a bare parameter in
+    a Linear adapter, so it reaches for ``lora.ParamWrapper``, and that is where
+    the dropout constraint comes from. Older layouts (one module per expert) are
+    adapted normally and take dropout fine, which is why this is checked against
+    the model rather than refused at config load.
+    """
+    named = getattr(model, "named_parameters", None)
+    if named is None:
+        return False
+    for name, param in named():
+        if "expert" in name.lower() and getattr(param, "ndim", 0) == 3:
+            return True
+    return False
+
+
+def _refuse_dropout_on_fused_experts(model, tcfg) -> None:
+    """Stop before peft does, naming the flag that caused it (#798)."""
+    dropout = getattr(getattr(tcfg, "lora", None), "dropout", 0) or 0
+    if dropout == 0 or not has_fused_expert_params(model):
+        return
+    raise ValueError(
+        f"training.moe_lora=true needs training.lora.dropout: 0.0 on this model "
+        f"(got {dropout}). Its experts are fused parameters, which peft adapts "
+        f"through lora.ParamWrapper, and that refuses dropout: "
+        f"'lora.ParamWrapper does not work with lora_dropout != 0.' Set "
+        f"lora.dropout: 0.0 to train the experts, or remove moe_lora to keep "
+        f"dropout on the attention-only adapters."
+    )
+
+
 def resolve_moe_lora_targets(model, tcfg, target_modules, console=None):
     """Return MoE-aware LoRA targets when ``training.moe_lora`` asks for them.
 
@@ -126,6 +161,12 @@ def resolve_moe_lora_targets(model, tcfg, target_modules, console=None):
 
     Returns ``target_modules`` unchanged when the flag is off, the model is not
     MoE, or no expert modules are found, so a non-MoE base is untouched.
+
+    Raises:
+        ValueError: the experts are fused 3-D parameters AND ``lora.dropout``
+            is non-zero. peft adapts fused experts through ``lora.ParamWrapper``,
+            which refuses any dropout; letting the attach proceed gets the user
+            peft's message with no mention of the flag that caused it.
     """
     if not getattr(tcfg, "moe_lora", False):
         return target_modules
@@ -134,6 +175,7 @@ def resolve_moe_lora_targets(model, tcfg, target_modules, console=None):
     moe_targets = get_moe_target_modules(model)
     if not moe_targets:
         return target_modules
+    _refuse_dropout_on_fused_experts(model, tcfg)
     if console is not None:
         console.print(
             f"[green]ScatterMoE LoRA:[/] targeting {len(moe_targets)} module patterns"
