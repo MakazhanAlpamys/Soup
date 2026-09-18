@@ -114,6 +114,33 @@ def get_moe_target_modules(model) -> Optional[list[str]]:
     return targets
 
 
+def resolve_moe_lora_targets(model, tcfg, target_modules, console=None):
+    """Return MoE-aware LoRA targets when ``training.moe_lora`` asks for them.
+
+    THE one place the flag turns into targets (#798). ``sft`` and ``pretrain``
+    grew their own copy of this block; the five preference/RL trainers had
+    none, so ``moe_lora: true`` did nothing there -- and on a fused-expert MoE
+    (Qwen3-MoE on transformers 5.x) ``target_modules: auto`` resolves to
+    ``None``, which peft refuses outright, so the eight DPO and seven GRPO
+    recipes that set the flag could not attach LoRA at all.
+
+    Returns ``target_modules`` unchanged when the flag is off, the model is not
+    MoE, or no expert modules are found, so a non-MoE base is untouched.
+    """
+    if not getattr(tcfg, "moe_lora", False):
+        return target_modules
+    if not detect_moe_model(model):
+        return target_modules
+    moe_targets = get_moe_target_modules(model)
+    if not moe_targets:
+        return target_modules
+    if console is not None:
+        console.print(
+            f"[green]ScatterMoE LoRA:[/] targeting {len(moe_targets)} module patterns"
+        )
+    return moe_targets
+
+
 def get_moe_info(model) -> dict:
     """Extract MoE architecture details from a model config.
 
