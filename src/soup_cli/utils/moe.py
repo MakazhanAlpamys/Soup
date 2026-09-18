@@ -114,38 +114,83 @@ def get_moe_target_modules(model) -> Optional[list[str]]:
     return targets
 
 
-def has_fused_expert_params(model) -> bool:
-    """True when the experts are ONE 3-D parameter per projection, not modules.
+def peft_routes_lora_to_fused_params(model, target_modules) -> bool:
+    """Will peft turn THESE targets into ``target_parameters`` on THIS model?
 
-    transformers 5.x packs a Qwen3-MoE's experts as
-    ``mlp.experts.gate_up_proj`` with shape ``(num_experts, ..., ...)`` instead
-    of ``experts.0.gate_proj`` and friends. peft cannot wrap a bare parameter in
-    a Linear adapter, so it reaches for ``lora.ParamWrapper``, and that is where
-    the dropout constraint comes from. Older layouts (one module per expert) are
-    adapted normally and take dropout fine, which is why this is checked against
-    the model rather than refused at config load.
+    Asks peft rather than guessing, because a model-wide "are there fused 3-D
+    expert parameters" scan gets the answer wrong. Measured on tiny stand-ins,
+    transformers 5.16.1 / peft 0.20.0, with the targets
+    ``get_moe_target_modules`` produces:
+
+    ================  ===================  =========================  ==============
+    architecture      fused 3-D params     attach at dropout 0.05     expert adapters
+    ================  ===================  =========================  ==============
+    qwen3_moe         yes                  ValueError, ParamWrapper   2
+    deepseek_v3       yes                  ValueError, ParamWrapper   2
+    glm4_moe          yes                  ValueError, ParamWrapper   2
+    mixtral           yes                  attaches fine              0
+    minimax           yes                  attaches fine              0
+    ================  ===================  =========================  ==============
+
+    All five have ``mlp.experts.gate_up_proj`` and ``mlp.experts.down_proj`` as
+    3-D parameters, and identical module structure, so the model alone cannot
+    tell these rows apart. What differs is inside peft:
+    ``utils/transformers_weight_conversion.convert_peft_config_for_transformers``
+    rewrites ``target_modules`` into ``target_parameters`` only when the model
+    type has a v4->v5 checkpoint conversion mapping. That rewrite is what
+    produces a ``lora.ParamWrapper``, and the wrapper is what refuses dropout.
+    Mixtral and MiniMax have no mapping, so their experts are never targeted --
+    they attach happily, and adapt no experts at all (see #1070).
+
+    So the probe runs peft's own conversion over a throwaway config and looks
+    at what came out. If that private path is not importable -- a different peft
+    -- this returns False: Soup then stays quiet and peft raises its own error,
+    which is worse UX but strictly better than refusing a config that works.
     """
-    named = getattr(model, "named_parameters", None)
-    if named is None:
+    # The conversion keys off ``model.config.model_type``. A stub or a MagicMock
+    # answers every attribute, so peft's lookup succeeds against nothing real and
+    # the probe comes back True for a model that has no experts at all; a real
+    # architecture always has a plain string here.
+    model_type = getattr(getattr(model, "config", None), "model_type", None)
+    if not isinstance(model_type, str):
         return False
-    for name, param in named():
-        if "expert" in name.lower() and getattr(param, "ndim", 0) == 3:
-            return True
-    return False
+
+    try:
+        from peft import LoraConfig
+        from peft.utils.transformers_weight_conversion import (
+            convert_peft_config_for_transformers,
+        )
+    except ImportError:
+        return False
+
+    # A throwaway config, so the conversion's in-place rewrite touches nothing
+    # the caller owns.
+    probe = LoraConfig(r=8, target_modules=list(target_modules or []))
+    try:
+        convert_peft_config_for_transformers(probe, model, None)
+    except Exception:  # noqa: BLE001 - a probe must never break the run
+        return False
+    return bool(getattr(probe, "target_parameters", None))
 
 
-def _refuse_dropout_on_fused_experts(model, tcfg) -> None:
-    """Stop before peft does, naming the flag that caused it (#798)."""
+def _refuse_dropout_on_fused_experts(model, tcfg, target_modules) -> None:
+    """Stop before peft does, naming the flag that caused it (#798).
+
+    Only when peft would really route these targets onto fused parameters. The
+    first version of this check asked the model whether fused expert parameters
+    existed anywhere, which refused Mixtral and MiniMax configs that peft
+    accepts, with a message describing a mechanism that does not apply to them.
+    """
     dropout = getattr(getattr(tcfg, "lora", None), "dropout", 0) or 0
-    if dropout == 0 or not has_fused_expert_params(model):
+    if dropout == 0 or not peft_routes_lora_to_fused_params(model, target_modules):
         return
     raise ValueError(
         f"training.moe_lora=true needs training.lora.dropout: 0.0 on this model "
-        f"(got {dropout}). Its experts are fused parameters, which peft adapts "
-        f"through lora.ParamWrapper, and that refuses dropout: "
-        f"'lora.ParamWrapper does not work with lora_dropout != 0.' Set "
-        f"lora.dropout: 0.0 to train the experts, or remove moe_lora to keep "
-        f"dropout on the attention-only adapters."
+        f"(got {dropout}). peft adapts its fused expert parameters through "
+        f"lora.ParamWrapper, and that refuses dropout: 'lora.ParamWrapper does "
+        f"not work with lora_dropout != 0.' Set lora.dropout: 0.0 to train the "
+        f"experts, or remove moe_lora to keep dropout on the attention-only "
+        f"adapters."
     )
 
 
@@ -163,10 +208,12 @@ def resolve_moe_lora_targets(model, tcfg, target_modules, console=None):
     MoE, or no expert modules are found, so a non-MoE base is untouched.
 
     Raises:
-        ValueError: the experts are fused 3-D parameters AND ``lora.dropout``
-            is non-zero. peft adapts fused experts through ``lora.ParamWrapper``,
-            which refuses any dropout; letting the attach proceed gets the user
-            peft's message with no mention of the flag that caused it.
+        ValueError: peft would route these targets onto fused expert parameters
+            AND ``lora.dropout`` is non-zero. It adapts those through
+            ``lora.ParamWrapper``, which refuses any dropout; letting the attach
+            proceed gets the user peft's message with no mention of the flag that
+            caused it. Architectures peft does not route this way (Mixtral,
+            MiniMax) are NOT refused -- they attach fine, and adapt no experts.
     """
     if not getattr(tcfg, "moe_lora", False):
         return target_modules
@@ -175,7 +222,7 @@ def resolve_moe_lora_targets(model, tcfg, target_modules, console=None):
     moe_targets = get_moe_target_modules(model)
     if not moe_targets:
         return target_modules
-    _refuse_dropout_on_fused_experts(model, tcfg)
+    _refuse_dropout_on_fused_experts(model, tcfg, moe_targets)
     if console is not None:
         console.print(
             f"[green]ScatterMoE LoRA:[/] targeting {len(moe_targets)} module patterns"

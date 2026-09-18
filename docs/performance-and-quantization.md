@@ -992,6 +992,19 @@ Both reject silently-no-op combinations: setting either flag without `moe_lora=t
 
 **`moe_lora` requires `lora.dropout: 0.0` on a fused-expert MoE.** transformers 5.x keeps a Qwen3-MoE's experts as fused 3-D parameters (`mlp.experts.gate_up_proj`), which peft adapts through `lora.ParamWrapper`, and that wrapper raises `lora.ParamWrapper does not work with lora_dropout != 0.` With the schema default of `0.05` the LoRA attach failed outright, so `moe_lora` did not work on any task — including `sft`. Soup now stops at the attach with a message naming the flag, instead of letting peft's reach the user, and all 31 shipped MoE recipes pin `lora.dropout: 0.0`. The check is made against the loaded model, not at config load: whether the experts are fused depends on the checkpoint and the transformers version, and a model with one module per expert takes dropout normally. A dense base is untouched — there the flag is a no-op.
 
+**`moe_lora` does not reach every MoE family (measured, v0.75.0).** `get_moe_target_modules` picks module names, and whether peft turns those into adapters on the fused expert parameters depends on the architecture. On tiny stand-ins with transformers 5.16.1 / peft 0.20.0:
+
+| family | expert adapters attach | recipes |
+|---|---|---|
+| `qwen3_moe` | yes | 11 |
+| `deepseek_v3` | yes | 6 |
+| `glm4_moe` | yes | 3 |
+| `minimax` | **no — attention-only** | 2 (`minimax-m3-sft`, `minimax-m3-dpo`) |
+| `mixtral` | **no — attention-only** | — |
+| `kimi_k2`, `mistral-large-3` | **not measured** (no stand-in builds here) | 9 |
+
+So `minimax-m3-sft` and `minimax-m3-dpo` still train attention-only LoRA: peft has no v4→v5 conversion mapping for those model types, so their experts are never targeted and the attach succeeds quietly. Extending target resolution per architecture is #1070. The nine `kimi-k2.x` and `mistral-large-3` recipes are untested rather than known-good — no tiny stand-in for those configs exists in the installed transformers.
+
 **`target_modules: auto` on a MoE base.** `resolve_lora_target_modules` has no mapping for `qwen3_moe`, so `auto` resolved to `None` and peft refused with `No target_modules passed but also no target_parameters found`. With `moe_lora: true` the targets come from the model scan instead, which is what the 15 DPO/GRPO recipes needed.
 
 
