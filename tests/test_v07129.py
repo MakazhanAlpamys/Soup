@@ -673,12 +673,17 @@ class TestHeal:
         outside = tmp_path / "outside_heal.jsonl"
         outside.write_text('{"text":"hi"}\n', encoding="utf-8")
         monkeypatch.chdir(work)
-        model_dir = _write_tiny_model(work / "m", layers=6)
+        # Local dummy dir is enough: heal-path containment runs before any
+        # Hub / from_pretrained call. Do not use _write_tiny_model here —
+        # that helper downloads a tokenizer.
+        model_dir = work / "m"
+        model_dir.mkdir()
         calib = work / "calib.jsonl"
         calib.write_text('{"text":"hi there friend"}\n', encoding="utf-8")
+        monkeypatch.setenv("HF_HUB_OFFLINE", "1")
         r = CliRunner().invoke(
             app,
-            ["shrink", "--model", model_dir, "--drop-layers", "2",
+            ["shrink", "--model", str(model_dir), "--drop-layers", "2",
              "--calib", "calib.jsonl", "--heal", str(outside), "--device", "cpu"],
         )
         assert r.exit_code == 1, (r.output, repr(r.exception))
@@ -734,7 +739,15 @@ class TestRegistryAttach:
 # ---------------------------------------------------------------------------
 class TestReviewFixes:
     def test_output_dir_outside_cwd_rejected(self, tmp_path, monkeypatch):
-        """--output-dir must be cwd-contained (arbitrary-write guard)."""
+        """--output-dir must be cwd-contained (arbitrary-write guard).
+
+        This is a local path-containment property. ``soup shrink`` refuses
+        ``--output-dir`` before any Hugging Face Hub call
+        (``_shrink_impl`` checks it first). The test must not download a
+        tokenizer via ``_write_tiny_model`` — that helper is what used to
+        reach ``list_repo_tree`` and turn a containment assertion into a
+        network flake (#1076).
+        """
         from typer.testing import CliRunner
 
         from soup_cli.cli import app
@@ -744,10 +757,24 @@ class TestReviewFixes:
         monkeypatch.chdir(work)
         calib = work / "calib.jsonl"
         calib.write_text('{"text":"hi there friend"}\n', encoding="utf-8")
-        model_dir = _write_tiny_model(work / "m", layers=6)
+        # Empty local dir is enough: the refusal runs before model load.
+        model_dir = work / "m"
+        model_dir.mkdir()
+        monkeypatch.setenv("HF_HUB_OFFLINE", "1")
+
+        def _hub_must_not_run(*_a, **_k):
+            raise AssertionError(
+                "list_repo_tree must not run for an output-dir containment check"
+            )
+
+        monkeypatch.setattr(
+            "huggingface_hub.hf_api.HfApi.list_repo_tree",
+            _hub_must_not_run,
+            raising=False,
+        )
         r = CliRunner().invoke(
             app,
-            ["shrink", "--model", model_dir, "--drop-layers", "2",
+            ["shrink", "--model", str(model_dir), "--drop-layers", "2",
              "--calib", "calib.jsonl", "--device", "cpu",
              "--output-dir", str(tmp_path / "escape")],
         )
