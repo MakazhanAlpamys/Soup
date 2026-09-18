@@ -1,0 +1,140 @@
+{
+ "arm": "ram",
+ "label": "",
+ "source_class": "RamSource",
+ "read_ahead": null,
+ "pinned": true,
+ "store_gb": 4.137812864,
+ "disk_gb": 0.0,
+ "tokens_per_step": 512,
+ "steps": 8,
+ "warmup": 3,
+ "step_s_mean": 1.084658762498293,
+ "step_s_min": 1.077131099998951,
+ "step_s_max": 1.093559400003869,
+ "tok_per_s": 472.03785900434815,
+ "copy_s_mean": 0.342764828145504,
+ "stall_s_mean": 0.0026996680019801714,
+ "stage_s_mean": {},
+ "stage_count_mean": {},
+ "peak_alloc_gb": 1.34248192,
+ "records": [
+  {
+   "step_s": 1.077131099998951,
+   "copy_s": 0.34425609636306764,
+   "stall_s": 0.0171049280121224,
+   "copy_events": 63,
+   "stages": {
+    "seconds": {},
+    "counts": {}
+   },
+   "loss": 11.137495994567871
+  },
+  {
+   "step_s": 1.079033200017875,
+   "copy_s": 0.3443689932823181,
+   "stall_s": 0.0003931520081823692,
+   "copy_events": 63,
+   "stages": {
+    "seconds": {},
+    "counts": {}
+   },
+   "loss": 10.824910163879395
+  },
+  {
+   "step_s": 1.093559400003869,
+   "copy_s": 0.34977775859832766,
+   "stall_s": 0.0007833599714795128,
+   "copy_events": 63,
+   "stages": {
+    "seconds": {},
+    "counts": {}
+   },
+   "loss": 10.56872272491455
+  },
+  {
+   "step_s": 1.091389099980006,
+   "copy_s": 0.3436847686767578,
+   "stall_s": 0.0007321280104806647,
+   "copy_events": 63,
+   "stages": {
+    "seconds": {},
+    "counts": {}
+   },
+   "loss": 10.409748077392578
+  },
+  {
+   "step_s": 1.0857620999740902,
+   "copy_s": 0.3440272307395935,
+   "stall_s": 0.0005309760123491287,
+   "copy_events": 63,
+   "stages": {
+    "seconds": {},
+    "counts": {}
+   },
+   "loss": 10.292757034301758
+  },
+  {
+   "step_s": 1.0811323999951128,
+   "copy_s": 0.3379104328155518,
+   "stall_s": 0.0007469120105961337,
+   "copy_events": 63,
+   "stages": {
+    "seconds": {},
+    "counts": {}
+   },
+   "loss": 10.211816787719727
+  },
+  {
+   "step_s": 1.084749900008319,
+   "copy_s": 0.3383073592185974,
+   "stall_s": 0.0005701120104640722,
+   "copy_events": 63,
+   "stages": {
+    "seconds": {},
+    "counts": {}
+   },
+   "loss": 10.082592964172363
+  },
+  {
+   "step_s": 1.0845129000081215,
+   "copy_s": 0.33978598546981814,
+   "stall_s": 0.0007357759801670909,
+   "copy_events": 63,
+   "stages": {
+    "seconds": {},
+    "counts": {}
+   },
+   "loss": 9.944816589355469
+  }
+ ],
+ "facts": {
+  "gpu": "NVIDIA GeForce RTX 5070 Laptop GPU",
+  "torch": "2.14.0+cu130",
+  "vram_total_gb": 8.518,
+  "driver": "616.92",
+  "pcie_gen": "5",
+  "pcie_width": "8"
+ },
+ "shard_dir": "C:\\Users\\user\\.soup\\layer-stream\\unsloth__mistral-7b-instruct-v0.3",
+ "driver": "benchmarks/harness/issue974_warm_stages.py",
+ "started": "2026-09-15T13:21:26",
+ "args": {
+  "weights": "unsloth/mistral-7b-instruct-v0.3",
+  "arm": "ram",
+  "quant": "nf4",
+  "read_ahead": 2,
+  "buffers": 2,
+  "no_pin": false,
+  "seq": 512,
+  "batch": 1,
+  "steps": 8,
+  "warmup": 3,
+  "lora_r": 8,
+  "lora_targets": "q_proj,k_proj,v_proj,o_proj",
+  "seed": 3,
+  "input_seed": 17,
+  "label": "",
+  "out": "C:/Users/user/AppData/Local/Temp/claude/c--Users-user-projects-Soup/1331a00f-69d4-4427-8c7f-68a2ab79082b/scratchpad/i974_order1_ram.json"
+ }
+}

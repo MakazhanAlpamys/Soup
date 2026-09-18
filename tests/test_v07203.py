@@ -18,17 +18,6 @@ from soup_cli.utils import layer_stream, layer_stream_runtime
 pytestmark = pytest.mark.filterwarnings("ignore::UserWarning")
 
 
-def _cuda() -> bool:
-    try:
-        import torch
-    except ImportError:  # pragma: no cover - torch is a [train] extra
-        return False
-    return torch.cuda.is_available()
-
-
-requires_cuda = pytest.mark.skipif(not _cuda(), reason="needs a CUDA device")
-
-
 # ==========================================================================
 # item 2 — pre-flight VRAM budget (batch- and vocab-aware)
 # ==========================================================================
@@ -637,7 +626,7 @@ class TestThroughputForecast:
 _MAX_PLAUSIBLE_GEMM_TFLOPS = 10_000.0
 
 
-@requires_cuda
+@pytest.mark.gpu
 class TestMeasuredGemmCeiling:
     def test_returns_a_plausible_tflops_and_the_clock_it_was_taken_at(self):
         """A fraction-of-ceiling quoted without a stated clock is meaningless --
@@ -2190,7 +2179,7 @@ class TestAutoTierFallback:
         do: the free-VRAM measurement and the allocator hint, both stubbed here.
         `build_streamed_model` is stubbed too, so nothing ever reaches a kernel.
 
-        Written this way on purpose: gated behind @requires_cuda these two cases
+        Written this way on purpose: gated behind @pytest.mark.gpu these two cases
         would skip on CI, which is exactly where the mutation they exist to kill
         needs to die."""
         import torch
@@ -2318,7 +2307,7 @@ class TestAutoTierFallback:
                 disk_kind="hdd",
             )
 
-    @requires_cuda
+    @pytest.mark.gpu
     def test_an_over_budget_config_is_refused_by_the_trainer_not_just_the_math(
         self, tmp_path, monkeypatch
     ):
@@ -2336,7 +2325,7 @@ class TestAutoTierFallback:
                 stream_source="auto", device="cuda",
             )
 
-    @requires_cuda
+    @pytest.mark.gpu
     def test_stream_vram_override_below_measured_free_refuses_a_fitting_config(
         self, tmp_path, monkeypatch
     ):
@@ -2357,7 +2346,7 @@ class TestAutoTierFallback:
                 extra_training_yaml="  stream_vram_override: 1000000\n",
             )
 
-    @requires_cuda
+    @pytest.mark.gpu
     def test_stream_vram_override_above_measured_free_lets_a_refused_config_through(
         self, tmp_path, monkeypatch
     ):
@@ -2375,7 +2364,7 @@ class TestAutoTierFallback:
         )
         assert wrapper._stream_runtime is not None
 
-    @requires_cuda
+    @pytest.mark.gpu
     def test_the_measured_probe_actually_runs_from_setup(self, tmp_path, monkeypatch):
         """v0.73.1 (#349): `_run_stream_vram_probe` is unit-tested by calling it
         directly, which proves the method and NOT that anything calls it. This
@@ -2415,7 +2404,7 @@ class TestAutoTierFallback:
         assert seen["seq_len"] == wrapper.config.data.max_length, seen
         assert seen["vocab_size"] > 0, seen
 
-    @requires_cuda
+    @pytest.mark.gpu
     def test_a_measured_miss_stops_setup_from_completing(self, tmp_path, monkeypatch):
         """Control for the test above: it asserts the probe is CALLED, which a
         wiring that ignored the answer would also satisfy."""
@@ -2943,15 +2932,21 @@ class TestResumeLoadsIntoAStreamedModel:
         if resolved is not None:
             assert os.path.isabs(resolved)
 
-    def test_named_parameters_still_carries_inner(self, tmp_path):
-        """The fix is load-side only, by design: it redirects keys at load time
-        rather than re-parenting the module tree, so v0.72.0's bit-exactness
-        gates stay valid without being re-run."""
+    def test_named_parameters_no_longer_carry_inner(self, tmp_path):
+        """The v0.72.3 fix was load-side only (it redirected keys at load time
+        rather than re-parenting the module tree). #1005 made the wrapper's
+        NAMES canonical as well — without re-parenting: the inner layer is
+        still the wrapper's ``_modules['inner']``, so the load-side redirection
+        is still needed and still exercised by this class — because peft 0.21
+        joins module names to state-dict keys and saved a streamed adapter as
+        ZERO tensors while they differed."""
         model, _, _ = _tiny_stream(tmp_path)
-        assert any(".inner." in n for n, _ in model.named_parameters())
+        names = {n for n, _ in model.named_parameters()}
+        assert names and not any(".inner." in n for n in names)
+        assert names <= set(model.state_dict().keys())
 
 
-@requires_cuda
+@pytest.mark.gpu
 class TestResumeOnTheProductionPath:
     """The brief's gate, driven through the real ``load_adapter`` on CUDA --
     which is what ``Trainer._load_from_checkpoint`` calls for a PEFT model."""

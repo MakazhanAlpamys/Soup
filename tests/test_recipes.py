@@ -1342,6 +1342,117 @@ class TestQwen35NineBDpoRecipe:
         assert "Qwen/Qwen3.5-9B" in (tmp_path / "soup.yaml").read_text(encoding="utf-8")
 
 
+class TestQwen36DenseTaskVariantRecipes:
+    """Coverage for the two Qwen3.6-27B task variants from #845."""
+
+    MODEL = "Qwen/Qwen3.6-27B"
+    RECIPES = {
+        "qwen3.6-27b-dpo": {
+            "task": "dpo",
+            "train": "./data/preference_train.jsonl",
+            "format": "dpo",
+            "lr": 5e-6,
+        },
+        "qwen3.6-27b-grpo": {
+            "task": "grpo",
+            "train": "./data/reasoning_train.jsonl",
+            "format": "auto",
+            "lr": 1e-5,
+        },
+    }
+
+    @pytest.mark.parametrize("name,expected", list(RECIPES.items()))
+    def test_recipe_meta_pins_the_model_id(self, name: str, expected: dict) -> None:
+        """Surface 1: metadata must independently pin the Hugging Face id."""
+        from soup_cli.recipes.catalog import get_recipe
+
+        recipe = get_recipe(name)
+        assert recipe is not None, f"{name} is missing from the catalog"
+        assert recipe.model == self.MODEL
+        assert recipe.task == expected["task"]
+        assert recipe.size == "27B"
+        assert expected["task"] in recipe.tags
+        assert "Apache-2.0" in recipe.description
+
+    @pytest.mark.parametrize("name,expected", list(RECIPES.items()))
+    def test_yaml_base_pins_the_model_id(self, name: str, expected: dict) -> None:
+        """Surface 2: YAML must pin the id without reading RecipeMeta.model."""
+        import yaml
+
+        from soup_cli.recipes.catalog import get_recipe
+
+        recipe = get_recipe(name)
+        assert recipe is not None
+        parsed = yaml.safe_load(recipe.yaml_str)
+        assert parsed["base"] == self.MODEL
+        assert parsed["task"] == expected["task"]
+
+    @pytest.mark.parametrize("name,expected", list(RECIPES.items()))
+    def test_recipe_loads_with_expected_dense_shape(self, name: str, expected: dict) -> None:
+        from soup_cli.config.loader import load_config_from_string
+        from soup_cli.recipes.catalog import get_recipe
+
+        recipe = get_recipe(name)
+        assert recipe is not None
+        config = load_config_from_string(recipe.yaml_str)
+
+        assert config.base == self.MODEL
+        assert config.task == expected["task"]
+        assert config.modality == "text"
+        assert config.data.train == expected["train"]
+        assert config.data.format == expected["format"]
+        assert config.data.max_length == 4096
+        assert config.training.epochs == 3
+        assert config.training.lr == expected["lr"]
+        assert config.training.batch_size == "auto"
+        assert config.training.gradient_accumulation_steps == 8
+        assert config.training.lora.r == 16
+        assert config.training.lora.alpha == 32
+        assert config.training.quantization == "4bit"
+        if expected["task"] == "dpo":
+            assert config.training.dpo_beta == 0.1
+        else:
+            assert config.training.grpo_beta == 0.1
+            assert config.training.num_generations == 4
+            assert config.training.reward_fn == "accuracy"
+
+    def test_completes_the_task_trio_for_this_base(self) -> None:
+        from soup_cli.recipes.catalog import RECIPES
+
+        tasks = {recipe.task for recipe in RECIPES.values() if recipe.model == self.MODEL}
+        assert {"sft", "dpo", "grpo"} <= tasks
+
+    @pytest.mark.parametrize("name", list(RECIPES))
+    def test_shares_base_and_size_with_sft_sibling(self, name: str) -> None:
+        from soup_cli.recipes.catalog import get_recipe
+
+        variant = get_recipe(name)
+        sft = get_recipe("qwen3.6-27b-sft")
+        assert variant is not None and sft is not None
+        assert variant.model == sft.model
+        assert variant.size == sft.size
+        assert variant.task != sft.task
+
+    @pytest.mark.parametrize("name,expected", list(RECIPES.items()))
+    def test_show_and_use_recipe(
+        self,
+        name: str,
+        expected: dict,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        show_result = runner.invoke(app, ["recipes", "show", name])
+        assert show_result.exit_code == 0
+        assert self.MODEL in strip_ansi(show_result.output)
+
+        monkeypatch.chdir(tmp_path)
+        use_result = runner.invoke(app, ["recipes", "use", name, "--yes"])
+        assert use_result.exit_code == 0
+        written = (tmp_path / "soup.yaml").read_text(encoding="utf-8")
+        assert self.MODEL in written
+        assert f"task: {expected['task']}" in written
+
+
 class TestQwen36A3bDpoRecipe:
     """Coverage for the qwen3.6-35b-a3b-dpo recipe (#275 / #846 task-variant).
 
@@ -1581,8 +1692,12 @@ class TestV025NewRecipes:
             assert cfg.base == recipe.model
             assert cfg.task == recipe.task
 
-    def test_catalog_size_is_174(self):
+    def test_catalog_size_matches_the_pinned_count(self):
         """Total catalog size — grew with each release.
+
+        The pinned number is ``EXPECTED_RECIPE_COUNT`` in ``tests/recipe_count.py``
+        (#1016); the history below is context, not something a new recipe has to
+        extend.
 
         v0.25.0 shipped 43 recipes (29 + 9 Part A + 2 Part B tools + 3 Part E MLX).
         v0.27.0 added 3 multi-GPU recipes -> 46.
@@ -1615,10 +1730,13 @@ class TestV025NewRecipes:
         Issue #849 added 2 (minimax-m3-dpo, mistral-large-3-dpo) -> 171.
         Issue #847 added 1 (qwen3.5-35b-a3b-grpo) -> 172.
         Task-variant for #275 / #846 added 2 (qwen3.6-35b-a3b-dpo, qwen3.6-35b-a3b-grpo) -> 174.
+        Issue #845 added 2 (qwen3.6-27b-dpo, qwen3.6-27b-grpo) -> 176.
+        Issue #825 retires the unusable Falcon-E BitNet training recipe -> 175.
         """
         from soup_cli.recipes.catalog import RECIPES
+        from tests.recipe_count import EXPECTED_RECIPE_COUNT, recipe_count_hint
 
-        assert len(RECIPES) == 174
+        assert len(RECIPES) == EXPECTED_RECIPE_COUNT, recipe_count_hint(len(RECIPES))
 
     def test_new_recipes_searchable(self):
         """Search returns the new recipes via keyword/task filter."""

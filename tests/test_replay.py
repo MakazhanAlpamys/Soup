@@ -158,7 +158,12 @@ class TestCli:
         from soup_cli.commands import runs as runs_command
         from soup_cli.experiment.tracker import ExperimentTracker
 
-        monkeypatch.setattr(runs_command, "console", Console(no_color=True))
+        # force_terminal=False pins tty detection; no_color=True alone does not,
+        # so under FORCE_COLOR=1 Rich still styles the surrounding panel markup
+        # and the "\x1b" assertion below fails on sanitised output.
+        monkeypatch.setattr(
+            runs_command, "console", Console(force_terminal=False)
+        )
 
         tracker = ExperimentTracker()
         run_id = tracker.start_run(

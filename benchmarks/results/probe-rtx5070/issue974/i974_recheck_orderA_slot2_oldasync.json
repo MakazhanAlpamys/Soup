@@ -1,0 +1,253 @@
+{
+ "meta": {
+  "gpu": "NVIDIA GeForce RTX 5070 Laptop GPU",
+  "torch": "2.14.0+cu130",
+  "vram_total_gb": 8.518,
+  "soup_cli_file": "C:\\Users\\user\\AppData\\Local\\Temp\\claude\\c--Users-user-projects-Soup\\6f67502c-b5ce-4886-9f94-6e1d8dd11659\\scratchpad\\main-src\\src\\soup_cli\\__init__.py",
+  "driver": "616.92",
+  "pcie_gen": "5",
+  "pcie_width": "8",
+  "label": "orderA slot2 OLD async (origin/main a08ae74f)",
+  "weights": "unsloth/mistral-7b-instruct-v0.3",
+  "weights_dir": "C:\\Users\\user\\.soup\\spectrum\\weights\\unsloth__mistral-7b-instruct-v0.3",
+  "shard_dir": "C:\\Users\\user\\.soup\\layer-stream\\unsloth__mistral-7b-instruct-v0.3",
+  "quant": "nf4",
+  "dtype": "bfloat16",
+  "tier": "disk",
+  "pinned": true,
+  "source_class": "AsyncDiskSource",
+  "control_sync_source": false,
+  "read_ahead": 2,
+  "store_gb": 0.761929784,
+  "disk_gb": 4.137812864,
+  "buffers": 2,
+  "buffer_bytes": 493494328,
+  "large_buffer_bytes": 268435456,
+  "n_layers": 32,
+  "total_params": 7248023552,
+  "shapes": {
+   "hidden": 4096,
+   "intermediate": 14336,
+   "layers": 32,
+   "kv_out": 1024,
+   "q_out": 4096,
+   "vocab": 32768,
+   "decoder_params": 6979321856,
+   "lm_head_params": 134217728,
+   "flop_per_token": 42412802048,
+   "tied": false
+  },
+  "lora_r": 8,
+  "lora_targets": "q_proj,k_proj,v_proj,o_proj",
+  "batch": 1,
+  "seq": 512,
+  "steps": 8,
+  "warmup": 3,
+  "shard_seconds": 0.006108399975346401,
+  "build_seconds": 1.827124500006903,
+  "evict_gb": 0.0,
+  "started": "2026-09-15T19:39:28"
+ },
+ "records": [
+  {
+   "kind": "step",
+   "label": "step_plain",
+   "tokens_per_step": 512,
+   "steps": 8,
+   "warmup": 3,
+   "events_on": false,
+   "nocopy": false,
+   "nodequant": false,
+   "step_s_mean": 4.024380362505326,
+   "step_s_min": 3.7416015000198968,
+   "step_s_max": 4.223868400003994,
+   "tok_per_s": 127.22455480854723,
+   "layer_loads_per_step": 61.0,
+   "large_loads_per_step": 2.0,
+   "bytes_moved_per_step": 7401166508.0,
+   "implied_h2d_gb_per_s": 1.839082253992637,
+   "copy_s_per_step": 0.0,
+   "copy_stream_gb_per_s": null,
+   "stall_s_per_step": 0.0,
+   "stall_share": 0.0,
+   "peak_alloc_gb": 1.34248192,
+   "peak_reserved_gb": 1.411383296,
+   "sm_clock_mhz_start": 375,
+   "sm_clock_mhz_end": 1192,
+   "records": [
+    {
+     "step_s": 4.048893900006078,
+     "loss": 11.136526107788086,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 0.0,
+     "stall_s": 0.0,
+     "copy_events": 0
+    },
+    {
+     "step_s": 4.021741100004874,
+     "loss": 10.825334548950195,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 0.0,
+     "stall_s": 0.0,
+     "copy_events": 0
+    },
+    {
+     "step_s": 4.223868400003994,
+     "loss": 10.566832542419434,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 0.0,
+     "stall_s": 0.0,
+     "copy_events": 0
+    },
+    {
+     "step_s": 4.0631380999984685,
+     "loss": 10.409320831298828,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 0.0,
+     "stall_s": 0.0,
+     "copy_events": 0
+    },
+    {
+     "step_s": 4.223064199992223,
+     "loss": 10.292876243591309,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 0.0,
+     "stall_s": 0.0,
+     "copy_events": 0
+    },
+    {
+     "step_s": 4.091505500022322,
+     "loss": 10.211177825927734,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 0.0,
+     "stall_s": 0.0,
+     "copy_events": 0
+    },
+    {
+     "step_s": 3.781230199994752,
+     "loss": 10.081503868103027,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 0.0,
+     "stall_s": 0.0,
+     "copy_events": 0
+    },
+    {
+     "step_s": 3.7416015000198968,
+     "loss": 9.943397521972656,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 0.0,
+     "stall_s": 0.0,
+     "copy_events": 0
+    }
+   ]
+  },
+  {
+   "kind": "step",
+   "label": "step_events",
+   "tokens_per_step": 512,
+   "steps": 8,
+   "warmup": 3,
+   "events_on": true,
+   "nocopy": false,
+   "nodequant": false,
+   "step_s_mean": 3.7602356749957835,
+   "step_s_min": 3.628470199997537,
+   "step_s_max": 3.9424328999884892,
+   "tok_per_s": 136.16167821730326,
+   "layer_loads_per_step": 61.0,
+   "large_loads_per_step": 2.0,
+   "bytes_moved_per_step": 7401166508.0,
+   "implied_h2d_gb_per_s": 1.9682719775292539,
+   "copy_s_per_step": 2.323622470140457,
+   "copy_stream_gb_per_s": 3.185184599954664,
+   "stall_s_per_step": 0.0034423760195350043,
+   "stall_share": 0.0009154681560056377,
+   "peak_alloc_gb": 1.34248192,
+   "peak_reserved_gb": 1.411383296,
+   "sm_clock_mhz_start": 1192,
+   "sm_clock_mhz_end": 1185,
+   "records": [
+    {
+     "step_s": 3.9424328999884892,
+     "loss": 9.300515174865723,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 2.416085214138031,
+     "stall_s": 0.014297439973568544,
+     "copy_events": 63
+    },
+    {
+     "step_s": 3.658606399985729,
+     "loss": 9.13355827331543,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 2.1975612888336182,
+     "stall_s": 0.0008502720069373026,
+     "copy_events": 63
+    },
+    {
+     "step_s": 3.7901095999986865,
+     "loss": 8.95553970336914,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 2.3156693449020387,
+     "stall_s": 0.0012554879958042876,
+     "copy_events": 63
+    },
+    {
+     "step_s": 3.7444421999971382,
+     "loss": 8.787284851074219,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 2.2822045550346375,
+     "stall_s": 0.0008731520016444847,
+     "copy_events": 63
+    },
+    {
+     "step_s": 3.628470199997537,
+     "loss": 8.637674331665039,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 2.279992571353912,
+     "stall_s": 0.0001302400012500584,
+     "copy_events": 63
+    },
+    {
+     "step_s": 3.7099273999920115,
+     "loss": 8.487611770629883,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 2.351127052307129,
+     "stall_s": 0.0003362239990383387,
+     "copy_events": 63
+    },
+    {
+     "step_s": 3.733510499994736,
+     "loss": 8.334985733032227,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 2.3338530511856077,
+     "stall_s": 0.0006257280064746738,
+     "copy_events": 63
+    },
+    {
+     "step_s": 3.8743862000119407,
+     "loss": 8.197381973266602,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 2.412486683368683,
+     "stall_s": 0.009170464171562344,
+     "copy_events": 63
+    }
+   ]
+  }
+ ]
+}

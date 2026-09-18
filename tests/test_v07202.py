@@ -26,18 +26,9 @@ import sys
 
 import pytest
 
+from tests.conftest import cuda_available
+
 pytestmark = pytest.mark.filterwarnings("ignore::UserWarning")
-
-
-def _cuda() -> bool:
-    try:
-        import torch
-    except ImportError:  # pragma: no cover - torch is a [train] extra
-        return False
-    return torch.cuda.is_available()
-
-
-requires_cuda = pytest.mark.skipif(not _cuda(), reason="needs a CUDA device")
 
 
 def _mps_is_the_accelerator() -> bool:
@@ -54,7 +45,7 @@ def _mps_is_the_accelerator() -> bool:
     try:
         import torch
 
-        if torch.cuda.is_available():
+        if cuda_available():
             return False
         backend = getattr(torch.backends, "mps", None)
         return bool(backend is not None and backend.is_available())
@@ -420,8 +411,24 @@ class TestQuantCacheInvalidation:
             quant_device="cpu",
         )
         assert first.quant_device == "cpu"
-        if not _cuda():
-            pytest.skip("needs a CUDA device to prove the invalidation")
+
+    @pytest.mark.gpu(reason="proving the invalidation needs a CUDA quantisation")
+    def test_quant_device_change_invalidates_on_cuda(self, tmp_path):
+        """#833: the CUDA half of the test above, split out so ``-m gpu`` selects it
+        and the CPU half above still runs on every machine."""
+        from soup_cli.utils.layer_shard import QUANT_NF4, shard_checkpoint
+
+        src = _fake_weights_dir(tmp_path)
+        out = str(tmp_path / "shards")
+        first = shard_checkpoint(
+            src,
+            out,
+            dtype="float32",
+            quant=QUANT_NF4,
+            quant_suffixes=QUANT_SUFFIXES,
+            quant_device="cpu",
+        )
+        assert first.quant_device == "cpu"
         second = shard_checkpoint(
             src,
             out,
@@ -1174,8 +1181,8 @@ class TestNF4StreamedModel:
         assert meta, "no decoder weights left on meta"
         assert all(
             ".layers." in name
-            or name.endswith("embed_tokens.inner.weight")
-            or name.endswith("lm_head.inner.weight")
+            or name.endswith("embed_tokens.weight")
+            or name.endswith("lm_head.weight")
             for name in meta
         )
 
@@ -1451,12 +1458,18 @@ class TestSchemaAcceptsNF4:
         cfg = load_config_from_string(_stream_yaml(quantization="none"))
         assert cfg.training.quantization == "none"
 
-    @pytest.mark.parametrize("quant", ["8bit", "gptq", "bitnet_1.58"])
+    @pytest.mark.parametrize("quant", ["8bit", "gptq"])
     def test_other_quantisations_are_refused_naming_the_supported_set(self, quant):
         from soup_cli.config.loader import load_config_from_string
 
         with pytest.raises(Exception, match="4bit"):
             load_config_from_string(_stream_yaml(quantization=quant))
+
+    def test_bitnet_streaming_is_refused_by_the_global_training_gate(self):
+        from soup_cli.config.loader import load_config_from_string
+
+        with pytest.raises(ValueError, match="training is not implemented yet"):
+            load_config_from_string(_stream_yaml(quantization="bitnet_1.58"))
 
     def test_refusal_names_stream_layers_not_something_else(self):
         """A pre-existing validator could reject 8bit for an unrelated reason
@@ -1816,7 +1829,7 @@ class TestNF4EndToEndSetup:
                 for _ in range(4)
             ]
         }
-        device = "cuda" if _cuda() else "cpu"
+        device = "cuda" if cuda_available() else "cpu"
         return SFTTrainerWrapper(cfg, device=device), dataset
 
     def test_setup_builds_a_real_trl_trainer_under_nf4(self, tmp_path, monkeypatch):
@@ -1883,7 +1896,7 @@ class TestTheWindowsCiSkipStaysNarrow:
         assert _windows_ci() is False
 
 
-@requires_cuda
+@pytest.mark.gpu
 class TestNF4ParityOnCuda:
     """The CPU tests above prove the mechanism; this proves it on the device
     the feature actually ships for, where bitsandbytes uses different kernels."""

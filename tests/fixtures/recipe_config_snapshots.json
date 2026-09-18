@@ -22,7 +22,7 @@
     "data.prompt_strategy": null,
     "data.raft_epoch_shuffle": false,
     "data.raft_shuffle_seed": null,
-    "data.remove_unused_columns": true,
+    "data.remove_unused_columns": false,
     "data.replay": null,
     "data.replay_ratio": 0.1,
     "data.replay_seed": null,
@@ -249,6 +249,7 @@
     "training.reward_hack_smoothing_window": 8,
     "training.reward_hack_trip_band": 0.3,
     "training.reward_model": null,
+    "training.rewind_log": true,
     "training.rl_checkpoint_include_optimizer": true,
     "training.rl_checkpoint_include_ref_model": false,
     "training.rl_checkpoint_include_rollout_buffer": false,
@@ -552,15 +553,6 @@
       "task": "embedding",
       "training.embedding_loss": "cosine",
       "training.lora.r": 8
-    },
-    "falcon-e-bitnet-sft": {
-      "base": "tiiuae/Falcon-E-1B-Instruct",
-      "data.format": "auto",
-      "data.train": "./data/train.jsonl",
-      "training.lora.alpha": 32,
-      "training.lora.r": 16,
-      "training.lr": 0.0001,
-      "training.quantization": "bitnet_1.58"
     },
     "gemma2-2b-sft": {
       "base": "google/gemma-2-2b-it",
@@ -1893,6 +1885,28 @@
       "training.lora.alpha": 32,
       "training.lora.r": 16,
       "training.lr": 0.0002
+    },
+    "qwen3.6-27b-dpo": {
+      "base": "Qwen/Qwen3.6-27B",
+      "data.format": "dpo",
+      "data.max_length": 4096,
+      "data.train": "./data/preference_train.jsonl",
+      "task": "dpo",
+      "training.gradient_accumulation_steps": 8,
+      "training.lora.alpha": 32,
+      "training.lora.r": 16,
+      "training.lr": 5e-06
+    },
+    "qwen3.6-27b-grpo": {
+      "base": "Qwen/Qwen3.6-27B",
+      "data.format": "auto",
+      "data.max_length": 4096,
+      "data.train": "./data/reasoning_train.jsonl",
+      "task": "grpo",
+      "training.gradient_accumulation_steps": 8,
+      "training.lora.alpha": 32,
+      "training.lora.r": 16,
+      "training.lr": 1e-05
     },
     "qwen3.6-27b-sft": {
       "base": "Qwen/Qwen3.6-27B",

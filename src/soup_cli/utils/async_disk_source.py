@@ -36,16 +36,23 @@ NO top-level torch: this module is imported by the trainer path only.
 """
 
 import logging
+import math
+import queue
 import threading
 import time
+from dataclasses import dataclass
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple, Union
 
 from soup_cli.utils.safetensors_reader import (
+    SECTOR_BYTES,
     ShardIdentity,
     TensorRange,
+    aligned_span,
     identity_of,
+    open_direct,
+    plan_ranges,
     read_header_with_identity,
-    read_into,
+    read_range_into,
 )
 
 logger = logging.getLogger(__name__)
@@ -53,6 +60,19 @@ logger = logging.getLogger(__name__)
 MIN_STREAM_READ_AHEAD = 1
 MAX_STREAM_READ_AHEAD = 8
 DEFAULT_STREAM_READ_AHEAD = 2
+
+#: How many byte ranges a layer's data section is read as, each by its own
+#: worker thread through its own direct-I/O handle. Measured cold on the
+#: 70B-shaped NF4 store (#974; fresh layers per configuration, Samsung PM9B1
+#: NVMe, Windows 11): unbuffered 3.9-4.2 GB/s at one range, 5.1-5.65 GB/s at
+#: two to four, no better at eight; the buffered per-tensor reads this replaced
+#: managed 1.5-2.2 GB/s at any width, and the async source was already there
+#: (gate-971 §10: 1.46-2.32 GB/s, 84.7% of a cold 70B step inside the read).
+#: A range is one sector-aligned request into a sector-aligned slice of the
+#: slot's region.
+MIN_STREAM_READ_RANGES = 1
+MAX_STREAM_READ_RANGES = 16
+DEFAULT_STREAM_READ_RANGES = 4
 
 # How long ONE layer's read may be in flight before `get` calls it a wedge.
 #
@@ -85,6 +105,17 @@ _MAX_SPEC_GROUPS = 8
 # consumer parked on a 40 s cold read wakes ~80 times to look at two fields.
 _LIVENESS_POLL_SECONDS = 0.5
 
+# How many times the reader thread is STARTED before a start failure is final.
+#
+# On CPython <= 3.11 a thread that starts while another thread is inside
+# `sys.settrace` dies in `Thread._bootstrap_inner` ("Cannot install a trace
+# function while another trace function is being installed") before its target
+# runs — a tracer's `threading.settrace` hook plus any audit hook is enough
+# (#1056; #1030 is the same race in the test helper). That reader did no work,
+# so starting another is exact rather than a retry. Bounded, because a thread
+# that can NEVER start must still end in an error instead of a restart loop.
+_MAX_READER_STARTS = 3
+
 
 def _spec_key(layer_spec: Mapping[str, Tuple[Tuple[int, ...], str]]) -> tuple:
     """A hashable identity for one layer's tensor names, shapes and dtypes.
@@ -97,6 +128,171 @@ def _spec_key(layer_spec: Mapping[str, Tuple[Tuple[int, ...], str]]) -> tuple:
         (name, tuple(shape), dtype)
         for name, (shape, dtype) in sorted(layer_spec.items())
     )
+
+
+@dataclass(frozen=True)
+class _LayerPlan:
+    """One layer's wanted tensors, relative to the sector-aligned start of its read.
+
+    ``start``/``end`` bound the aligned superset of the wanted tensors' byte
+    range (the last sector runs past EOF; each range reads what the file holds
+    of it); ``tensors`` is ``(name, offset from start, bytes, shape, dtype)``.
+    Per LAYER rather than per spec group: a sibling whose header is longer, or
+    which carries a tensor the spec does not want, keeps the same tensors at
+    different offsets.
+    """
+
+    start: int
+    end: int
+    tensors: Tuple[Tuple[str, int, int, Tuple[int, ...], str], ...]
+
+    @property
+    def span(self) -> int:
+        return self.end - self.start
+
+
+class _RangeJob:
+    __slots__ = ("done", "error")
+
+    def __init__(self) -> None:
+        self.done = threading.Event()
+        self.error: Optional[BaseException] = None
+
+
+class _RangeReaders:
+    """``count`` daemon threads that read byte ranges on request.
+
+    Daemon, deliberately: a range read wedged inside the kernel must not keep
+    the interpreter from exiting once ``get``'s progress check has refused the
+    run — the single reader thread this widens is daemon for the same reason,
+    which is why this is not a ``ThreadPoolExecutor`` (its workers are joined
+    at interpreter exit). ``run`` hands every job out and waits for all of
+    them, then re-raises the first failure, so a layer read is either whole
+    or an error.
+    """
+
+    def __init__(self, count: int, name: str = "soup-layer-range"):
+        self._jobs: "queue.Queue[Optional[Tuple[Any, _RangeJob]]]" = queue.Queue()
+        self._name = name
+        # Guards `_threads` / `_starts` / `_closed`: `run` restarts workers on
+        # the reader thread while `close` may run on the consumer's.
+        self._lock = threading.Lock()
+        self._closed = False
+        # Per worker SLOT, set as the worker's first statement: a slot whose
+        # thread is dead and never entered died in bootstrap (#1056) and took
+        # no job, so it is restarted rather than read as a closed pool.
+        self._entered = [threading.Event() for _ in range(count)]
+        self._starts = [0] * count
+        self._threads: List[threading.Thread] = []
+        with self._lock:
+            for index in range(count):
+                self._threads.append(self._new_worker(index))
+                self._threads[index].start()
+
+    def _new_worker(self, index: int) -> threading.Thread:
+        """A worker thread for slot ``index``, not started. Lock held."""
+        self._starts[index] += 1
+        return threading.Thread(
+            target=self._enter_and_loop,
+            args=(index,),
+            name=f"{self._name}-{index}",
+            daemon=True,
+        )
+
+    def _enter_and_loop(self, index: int) -> None:
+        self._entered[index].set()
+        self._loop()
+
+    def _check_workers(self) -> None:
+        """Restart workers that died before entering; raise if none can serve.
+
+        A closed pool stays "closed" whatever else happened to its workers —
+        that was the owner's decision, and the reader reports it as such.
+        """
+        with self._lock:
+            if not self._closed:
+                for index, thread in enumerate(self._threads):
+                    if thread.is_alive() or self._entered[index].is_set():
+                        continue
+                    if self._starts[index] < _MAX_READER_STARTS:
+                        logger.warning(
+                            "layer-stream range worker %d died before it started "
+                            "(start %d of %d); starting another",
+                            index,
+                            self._starts[index],
+                            _MAX_READER_STARTS,
+                        )
+                        self._threads[index] = self._new_worker(index)
+                        self._threads[index].start()
+            if any(thread.is_alive() for thread in self._threads):
+                return
+            never_entered = [
+                index for index, event in enumerate(self._entered) if not event.is_set()
+            ]
+            if not self._closed and never_entered:
+                # A worker started just above can already be dead again; it
+                # gets its next poll unless its slot has used every start.
+                if any(self._starts[index] < _MAX_READER_STARTS for index in never_entered):
+                    return
+                raise RuntimeError(
+                    f"layer-stream range reader threads failed to start "
+                    f"{_MAX_READER_STARTS} times (worker(s) {never_entered}): each "
+                    f"died before running (on CPython <= 3.11 a tracer's "
+                    f"threading.settrace hook can kill a starting thread). Refusing "
+                    f"rather than blocking."
+                )
+            if not self._closed:
+                # Every worker ran and left, yet nobody sent a sentinel. No path
+                # in `_loop` does that; a backstop like the reader's, and not
+                # restarted, because a worker that ran may have taken a job.
+                raise RuntimeError(
+                    "layer-stream range reader threads exited without the source "
+                    "being closed. Refusing rather than blocking."
+                )
+        raise RuntimeError("layer-stream disk source is closed")
+
+    def _loop(self) -> None:
+        while True:
+            job = self._jobs.get()
+            if job is None:
+                return
+            work, outcome = job
+            try:
+                work()
+            except BaseException as exc:  # noqa: BLE001 — handed back to the reader
+                outcome.error = exc
+            finally:
+                outcome.done.set()
+
+    def run(self, works: Sequence[Any]) -> None:
+        outcomes = [_RangeJob() for _ in works]
+        for work, outcome in zip(works, outcomes):
+            self._jobs.put((work, outcome))
+        for outcome in outcomes:
+            # A job queued behind the close sentinels is never taken; polling
+            # the workers' liveness is what turns that into an error rather
+            # than a reader parked forever. The same poll restarts a worker
+            # that died in bootstrap, which would otherwise read as "closed".
+            while not outcome.done.wait(timeout=1.0):
+                self._check_workers()
+        for outcome in outcomes:
+            if outcome.error is not None:
+                raise outcome.error
+
+    def close(self, timeout: float = 10.0) -> None:
+        """Send every worker its sentinel and wait for them, up to ``timeout`` in
+        total — a worker still inside a read outlives it, as the reader thread
+        outlives its own bounded join."""
+        # Under the lock, so `run` cannot start a worker after this snapshot;
+        # one sentinel per slot covers a restarted worker as well.
+        with self._lock:
+            self._closed = True
+            threads = list(self._threads)
+        for _ in threads:
+            self._jobs.put(None)
+        deadline = time.monotonic() + timeout
+        for thread in threads:
+            thread.join(timeout=max(0.0, deadline - time.monotonic()))
 
 
 class AsyncDiskSource:
@@ -122,9 +318,8 @@ class AsyncDiskSource:
         shard_paths: Optional[Sequence[str]] = None,
         read_ahead: int = DEFAULT_STREAM_READ_AHEAD,
         pin: bool = True,
+        read_ranges: int = DEFAULT_STREAM_READ_RANGES,
     ):
-        import torch
-
         from soup_cli.utils.layer_stream_runtime import RamSource
 
         if isinstance(read_ahead, bool):
@@ -136,11 +331,21 @@ class AsyncDiskSource:
                 f"and {MAX_STREAM_READ_AHEAD}; got {read_ahead}. Each level costs one "
                 f"layer of pinned host memory."
             )
+        if isinstance(read_ranges, bool):
+            raise ValueError("read_ranges must be an int, not bool")
+        read_ranges = int(read_ranges)
+        if read_ranges < MIN_STREAM_READ_RANGES or read_ranges > MAX_STREAM_READ_RANGES:
+            raise ValueError(
+                f"read_ranges must be between {MIN_STREAM_READ_RANGES} and "
+                f"{MAX_STREAM_READ_RANGES}; got {read_ranges}. Each is one worker "
+                f"thread and one direct-I/O request per layer read."
+            )
 
         self._layer_specs = RamSource._normalize_layer_specs(spec, n_layers)
         self._paths = RamSource._normalize_shard_paths(shard_dir, n_layers, shard_paths)
         self.n_layers = int(n_layers)
         self.read_ahead = read_ahead
+        self.read_ranges = read_ranges
         self.pinned = bool(pin)
 
         # Headers once, up front: a shard that disagrees with the index would
@@ -178,6 +383,55 @@ class AsyncDiskSource:
             for idx in range(self.n_layers)
             for name in self._layer_specs[idx]
         )
+
+        # Each layer's read, planned once: the wanted tensors' byte range,
+        # widened to sector boundaries (direct I/O reads whole sectors), and
+        # where each tensor lands relative to that start. Per layer, because
+        # the header length — and so the data section's offset — can differ
+        # between siblings, and a shard may carry tensors the spec does not
+        # want, sorted among the ones it does.
+        self._plans: List[_LayerPlan] = []
+        for idx in range(self.n_layers):
+            header = self._ranges[idx]
+            wanted = [header[name] for name in self._layer_specs[idx]]
+            if not wanted:
+                raise ValueError(f"{self._paths[idx]}: layer {idx} wants no tensors")
+            lo = min(entry.start for entry in wanted)
+            hi = max(entry.end for entry in wanted)
+            if hi <= lo:
+                raise ValueError(
+                    f"{self._paths[idx]}: layer {idx}'s wanted tensors hold no bytes"
+                )
+            start, end = aligned_span(lo, hi)
+            # Staging reads the whole span, foreign tensors between the wanted
+            # ones included. A small one is the cost of the design; a large one
+            # is host memory — page-locked when the box allows — that the spec
+            # never asked for, and a hand-built shard can make the gap anything
+            # (security review of #974: two 16-byte tensors 8 MiB apart).
+            wanted_bytes = sum(entry.nbytes for entry in wanted)
+            if end - start > 2 * wanted_bytes + 2 * SECTOR_BYTES:
+                raise ValueError(
+                    f"{self._paths[idx]}: layer {idx}'s {wanted_bytes} wanted bytes are "
+                    f"spread over a {end - start}-byte span of the shard, and staging "
+                    f"reads the whole span. Refusing to hold that gap in host memory; "
+                    f"re-shard the base with Soup's sharder, which writes a layer's "
+                    f"tensors contiguously."
+                )
+            tensors = []
+            for name, (shape, dtype) in self._layer_specs[idx].items():
+                entry = header[name]
+                offset = entry.start - start
+                elements = math.prod(shape)
+                itemsize = entry.nbytes // elements if elements else 0
+                if itemsize and offset % itemsize:
+                    raise ValueError(
+                        f"{self._paths[idx]}: tensor {name!r} starts at byte "
+                        f"{entry.start}, which is not aligned to its {itemsize}-byte "
+                        f"elements; a staged view cannot be placed there. Soup's own "
+                        f"sharder writes every tensor aligned — re-shard the base."
+                    )
+                tensors.append((name, offset, entry.nbytes, tuple(shape), dtype))
+            self._plans.append(_LayerPlan(start=start, end=end, tensors=tuple(tensors)))
 
         # Staging is allocated per DISTINCT layer spec, NOT from layer 0's.
         # `_build_source` hands this source the decoder layers followed by the
@@ -224,42 +478,62 @@ class AsyncDiskSource:
             ]
             self._group_bounds.append((min(indices), max(indices)))
 
-        self._slots: List[Dict[str, Any]] = []
+        # Staging is ONE region per slot — the layer's whole data section,
+        # widened to sector boundaries — with every tensor a view at its file
+        # offset from the region's start. Pinned, the regions are packed into
+        # the same power-of-two arenas as the RAM store (#901): pinning one
+        # tensor at a time cost 1.7-1.9x, one region at a time would still
+        # round each layer up (441 MB -> 512 MiB), and the packer puts the
+        # 70B store's four slots into one 2 GiB arena for 1.96 GB.
+        region_sizes: List[int] = []
+        first_member: List[int] = []
         self._group_slots: List[List[int]] = []
-        self.nbytes = 0
-        for group, layer_spec in enumerate(specs_by_group):
+        for group in range(len(specs_by_group)):
+            members_of_group = [
+                idx for idx in range(self.n_layers) if self._group_of[idx] == group
+            ]
+            span = max(self._plans[idx].span for idx in members_of_group)
             # Depth beyond the number of layers sharing a spec buys nothing and
             # costs a whole vocabulary matrix of pinned host memory: embed and
             # an untied lm_head are one layer each.
             flat: List[int] = []
             for _ in range(min(read_ahead, members[group])):
-                slot: Dict[str, Any] = {}
-                for name, (shape, dtype) in layer_spec.items():
-                    dst = torch.empty(
-                        tuple(shape),
-                        dtype=getattr(torch, dtype),
-                        device="cpu",
-                        pin_memory=self.pinned,
-                    )
-                    if dst.device.type != "cpu":
-                        raise RuntimeError(
-                            "layer streaming's async disk source requested a CPU "
-                            f"tensor, but torch returned {dst.device}."
-                        )
-                    # Mirrors RamSource: a box that hands back pageable memory
-                    # would otherwise report pinned=True while silently paying
-                    # the ~97% -> ~79% GPU-utilisation cost of a synchronous
-                    # host-to-device copy.
-                    if self.pinned and not dst.is_pinned():
-                        raise RuntimeError(
-                            "layer streaming requested pinned CPU RAM, but torch "
-                            "returned pageable memory; retry with pin=False."
-                        )
-                    slot[name] = dst
-                    self.nbytes += dst.numel() * dst.element_size()
-                flat.append(len(self._slots))
-                self._slots.append(slot)
+                flat.append(len(region_sizes))
+                region_sizes.append(span)
+                first_member.append(members_of_group[0])
             self._group_slots.append(flat)
+        self._arenas, self._regions = self._allocate_staging(region_sizes)
+        self._slots: List[Dict[str, Any]] = [
+            self._views(self._plans[first_member[slot]], self._regions[slot])
+            for slot in range(len(region_sizes))
+        ]
+        self.staging_bytes = sum(region_sizes)
+        self.nbytes = sum(
+            dst.numel() * dst.element_size() for slot in self._slots for dst in slot.values()
+        )
+
+        # Direct I/O when the platform and the volume allow it, decided once
+        # and said out loud: the two paths differ 2.4x cold (#974).
+        self.direct_io = False
+        aligned = all(region.data_ptr() % SECTOR_BYTES == 0 for region in self._regions)
+        if not aligned:  # pragma: no cover — cudaHostAlloc hands out page-aligned blocks
+            logger.warning(
+                "layer streaming's staging is not sector-aligned on this box; the "
+                "disk tier reads through the page cache instead of direct I/O"
+            )
+        elif self.n_layers:
+            try:
+                open_direct(self._paths[0]).close()
+            except OSError as exc:
+                logger.info(
+                    "layer streaming's disk tier reads through the page cache: direct "
+                    "I/O is unavailable here (%s)",
+                    exc,
+                )
+            else:
+                self.direct_io = True
+        self._open = open_direct if self.direct_io else self._open_buffered
+        self._readers = _RangeReaders(self.read_ranges)
 
         self._lock = threading.Lock()
         self._ready = threading.Condition(self._lock)
@@ -298,12 +572,121 @@ class AsyncDiskSource:
         self._direction: Dict[int, int] = {}
         self._error: Optional[BaseException] = None
         self._closed = False
+        # Set by the reader as its first statement and never cleared: the
+        # liveness check needs to tell a reader that ran and left from one that
+        # died before running, and only the second may be restarted.
+        self._reader_entered = threading.Event()
+        self._reader_starts = 0
+        self._start_reader()
+
+    def _start_reader(self) -> None:
+        """Start a reader thread. Lock held, or no other thread exists yet."""
         self._thread = threading.Thread(
-            target=self._run, name="soup-layer-reader", daemon=True
+            target=self._enter_and_run, name="soup-layer-reader", daemon=True
         )
+        self._reader_starts += 1
         self._thread.start()
 
+    def _enter_and_run(self) -> None:
+        # A wrapper rather than a line in `_run`, so a replaced `_run` (the
+        # backstop tests) still counts as a reader that entered.
+        self._reader_entered.set()
+        self._run()
+
+    # -- staging ---------------------------------------------------------
+    def _allocate_staging(self, region_sizes: Sequence[int]) -> Tuple[List[Any], List[Any]]:
+        """Regions on sector boundaries; pinned ones as views of power-of-two arenas."""
+        import torch
+
+        from soup_cli.utils.layer_stream_runtime import plan_pinned_arenas
+
+        arenas: List[Any] = []
+        regions: List[Any] = []
+        if self.pinned:
+            plan = plan_pinned_arenas(region_sizes, align=SECTOR_BYTES)
+            for size in plan.arena_sizes:
+                arena = torch.empty(size, dtype=torch.uint8, device="cpu", pin_memory=True)
+                if arena.device.type != "cpu":
+                    raise RuntimeError(
+                        "layer streaming's async disk source requested a CPU "
+                        f"tensor, but torch returned {arena.device}."
+                    )
+                # Mirrors RamSource: a box that hands back pageable memory
+                # would otherwise report pinned=True while silently paying
+                # the ~97% -> ~79% GPU-utilisation cost of a synchronous
+                # host-to-device copy.
+                if not arena.is_pinned():
+                    raise RuntimeError(
+                        "layer streaming requested pinned CPU RAM, but torch "
+                        "returned pageable memory; retry with pin=False."
+                    )
+                arenas.append(arena)
+            for (arena_index, offset), size in zip(plan.placements, region_sizes):
+                regions.append(arenas[arena_index][offset : offset + size])
+            self.pinned_bytes = plan.pinned_bytes
+        else:
+            # The CPU allocator neither rounds nor aligns: a sector of slack
+            # per region buys the alignment direct I/O needs.
+            for size in region_sizes:
+                buffer = torch.empty(size + SECTOR_BYTES, dtype=torch.uint8, device="cpu")
+                pad = (-buffer.data_ptr()) % SECTOR_BYTES
+                arenas.append(buffer)
+                regions.append(buffer[pad : pad + size])
+            self.pinned_bytes = 0
+        return arenas, regions
+
+    @staticmethod
+    def _views(plan: _LayerPlan, region: Any) -> Dict[str, Any]:
+        """The layer's tensors as views into ``region``, at the plan's offsets."""
+        import torch
+
+        return {
+            name: region[offset : offset + nbytes].view(getattr(torch, dtype)).view(shape)
+            for name, offset, nbytes, shape, dtype in plan.tensors
+        }
+
+    @staticmethod
+    def _open_buffered(path: str) -> Any:
+        return open(path, "rb")
+
     # -- the reader ------------------------------------------------------
+    def _read_layer(self, idx: int, region: Any) -> None:
+        """Read layer ``idx``'s data section into ``region`` as parallel ranges.
+
+        The one seam a profiler should time: one call per layer read, whatever
+        the ranges do inside it. Every worker opens its own handle — the ranges
+        were taken minutes or hours ago off a file this source deliberately
+        does not keep open — and re-checks the file's identity before reading
+        at those offsets (see ShardIdentity): a same-size replacement would
+        otherwise be read at stale offsets and trained on with no error
+        anywhere; only a SHORTER one surfaces, as a short read.
+        """
+        plan = self._plans[idx]
+        path = self._paths[idx]
+        expected_identity = self._identities[idx]
+
+        def read_range(start: int, end: int):
+            def work() -> None:
+                with self._open(path) as handle:
+                    if identity_of(handle) != expected_identity:
+                        raise RuntimeError(
+                            f"{path}: layer {idx}'s shard changed on disk since its "
+                            f"header was read — the byte ranges this source holds no "
+                            f"longer describe it. Refusing rather than reading at "
+                            f"stale offsets, which would train on whatever is now at "
+                            f"those bytes. Re-shard and restart, and do not re-shard "
+                            f"a base while a run is reading it."
+                        )
+                    view = region[start - plan.start : end - plan.start]
+                    read_range_into(
+                        handle, start, view, min(end, expected_identity.size) - start
+                    )
+
+            return work
+
+        ranges = plan_ranges(plan.start, plan.end, self.read_ranges)
+        self._readers.run([read_range(start, end) for start, end in ranges])
+
     def _window_span(self, group: int) -> int:
         """How many of ``group``'s layers its staging can hold at once.
 
@@ -521,12 +904,12 @@ class AsyncDiskSource:
                     self._in_flight = idx
                     self._read_started_at = time.monotonic()
                     # Resolved HERE, under the lock that claimed it: `close()`
-                    # empties `_slots` after a join that can time out, and the
-                    # reader must not index a list the closer has cleared —
+                    # empties `_regions` after a join that can time out, and
+                    # the reader must not index a list the closer has cleared —
                     # the IndexError lands in `_error` and a later `get`
                     # reports "list index out of range" instead of "closed".
-                    # The dict stays alive through this local reference.
-                    slot = self._slots[slot_index]
+                    # The tensor stays alive through this local reference.
+                    region = self._regions[slot_index]
                 # OUTSIDE the lock: the compute thread must be able to call
                 # get() while this waits. The event was recorded on a stream
                 # that already waited on the compute stream, so it depends only
@@ -535,25 +918,7 @@ class AsyncDiskSource:
                 # safe rather than a deadlock.
                 if draining is not None:
                     draining.synchronize()
-                with open(self._paths[idx], "rb") as handle:
-                    # The ranges were taken minutes or hours ago off a file this
-                    # source deliberately does not keep open. A same-size
-                    # replacement would otherwise be read at stale offsets and
-                    # trained on with no error anywhere; only a SHORTER one
-                    # surfaces, as a short read.
-                    found = identity_of(handle)
-                    if found != self._identities[idx]:
-                        raise RuntimeError(
-                            f"{self._paths[idx]}: layer {idx}'s shard changed on "
-                            f"disk since its header was read — the byte ranges "
-                            f"this source holds no longer describe it. Refusing "
-                            f"rather than reading at stale offsets, which would "
-                            f"train on whatever is now at those bytes. Re-shard "
-                            f"and restart, and do not re-shard a base while a "
-                            f"run is reading it."
-                        )
-                    for name, dst in slot.items():
-                        read_into(handle, self._ranges[idx][name], dst)
+                self._read_layer(idx, region)
                 with self._ready:
                     self._in_flight = None
                     self._read_started_at = None
@@ -561,6 +926,9 @@ class AsyncDiskSource:
                     # same lock once the join returns, and re-populating it
                     # would resurrect a slot whose buffers are gone.
                     if not self._closed:
+                        # Views are per LAYER: where each tensor sits in the
+                        # region follows this layer's own header length.
+                        self._slots[slot_index] = self._views(self._plans[idx], region)
                         self._slot_of[idx] = slot_index
                     self._ready.notify_all()
         except BaseException as exc:  # noqa: BLE001 — handed to the consumer
@@ -711,8 +1079,30 @@ class AsyncDiskSource:
           time the consumer spends unable to proceed, and charging the wider
           window errs towards firing, which is the safe direction for a
           hang detector carrying a 15x margin.
+
+        A reader that is gone WITHOUT having entered is neither: it died in
+        thread bootstrap before ``_run`` began (#1056), so it holds no request,
+        no slot and no in-flight read, and starting a fresh one is exact. That
+        is bounded by ``_MAX_READER_STARTS`` and ends in its own error, so a
+        thread that can never start is still refused rather than looped on.
         """
         if self._error is None and not self._closed and not self._thread.is_alive():
+            if not self._reader_entered.is_set():
+                if self._reader_starts < _MAX_READER_STARTS:
+                    logger.warning(
+                        "layer-stream reader thread died before it started "
+                        "(start %d of %d); starting another",
+                        self._reader_starts,
+                        _MAX_READER_STARTS,
+                    )
+                    self._start_reader()
+                    return
+                raise RuntimeError(
+                    f"layer-stream reader thread failed to start {self._reader_starts} "
+                    f"times, with layer {idx} still wanted: each died before running "
+                    f"(on CPython <= 3.11 a tracer's threading.settrace hook can kill "
+                    f"a starting thread). Refusing rather than blocking."
+                )
             raise RuntimeError(
                 f"layer-stream reader thread exited without recording an error, "
                 f"with layer {idx} still wanted. Refusing rather than blocking: a "
@@ -780,9 +1170,12 @@ class AsyncDiskSource:
             self._thread.join(timeout=10.0)
         with self._ready:
             self._slots = []
+            self._regions = []
+            self._arenas = []
             self._slot_of = {}
             self._live = []
             self._drain = []
+        self._readers.close()
 
     def __del__(self) -> None:
         try:

@@ -338,13 +338,13 @@ class TestFailuresAreLoudAndNeverHang:
         import soup_cli.utils.async_disk_source as mod
 
         gate = threading.Event()
-        real = mod.read_into
+        real = mod.read_range_into
 
-        def held(handle, entry, dst):
+        def held(handle, start, view, expected):
             assert gate.wait(timeout=10.0), "the test never released the reader"
-            real(handle, entry, dst)
+            real(handle, start, view, expected)
 
-        monkeypatch.setattr(mod, "read_into", held)
+        monkeypatch.setattr(mod, "read_range_into", held)
         shard_dir = _shards(tmp_path)
         source = AsyncDiskSource(
             shard_dir, N_LAYERS, _spec(shard_dir), read_ahead=1, pin=False
@@ -434,29 +434,52 @@ class TestFailuresAreLoudAndNeverHang:
             AsyncDiskSource(shard_dir, N_LAYERS, spec, read_ahead=True, pin=False)
 
 
-def _get_on_a_thread(source, idx, name, timeout=20.0):
+def _get_on_a_thread(source, idx, name, timeout=20.0, attempts=3):
     """Call ``get`` where a REGRESSION fails the test instead of hanging it.
 
     Every test below drives a reader that is deliberately wedged or dead. If
     the liveness checks stop working, a direct ``get`` would block the whole
     suite forever; on a worker thread it times out and the assertion names it.
+
+    A helper that never ENTERED ``call`` is not that regression, and is not
+    reported as one. On CPython <= 3.11 ``_PyEval_SetTrace`` guards itself with
+    a process-wide ``static int reentrant``; with coverage's
+    ``threading.settrace`` hook installed and any Python audit hook registered
+    (filelock adds one on every POSIX box), a thread starting while another
+    thread is inside ``sys.settrace`` dies in ``Thread._bootstrap_inner`` with
+    "Cannot install a trace function while another trace function is being
+    installed" -- before its target runs. ``get`` was never called, so starting
+    a fresh helper is exact, not a retry of the thing under test.
     """
-    done = threading.Event()
-    captured = {}
+    for _ in range(attempts):
+        entered = threading.Event()
+        done = threading.Event()
+        captured = {}
 
-    def call():
-        try:
-            captured["value"] = source.get(idx, name)
-        except BaseException as exc:  # noqa: BLE001 — recorded for the assert
-            captured["exc"] = exc
-        done.set()
+        def call(entered=entered, done=done, captured=captured):
+            entered.set()
+            try:
+                captured["value"] = source.get(idx, name)
+            except BaseException as exc:  # noqa: BLE001 — recorded for the assert
+                captured["exc"] = exc
+            done.set()
 
-    threading.Thread(target=call, daemon=True).start()
-    assert done.wait(timeout=timeout), (
-        f"get({idx}, {name!r}) never returned — the liveness checks in "
-        f"AsyncDiskSource.get did not fire"
+        helper = threading.Thread(target=call, daemon=True)
+        helper.start()
+        deadline = time.monotonic() + timeout
+        while not done.wait(timeout=0.05):
+            if not entered.is_set() and not helper.is_alive():
+                break  # died in bootstrap: get() never ran
+            assert time.monotonic() < deadline, (
+                f"get({idx}, {name!r}) never returned — the liveness checks in "
+                f"AsyncDiskSource.get did not fire"
+            )
+        else:
+            return captured
+    raise AssertionError(
+        f"the helper thread for get({idx}, {name!r}) died before running "
+        f"{attempts} times — a thread-start failure, not the liveness checks"
     )
-    return captured
 
 
 class TestTheLivenessChecksCanActuallyFire:
@@ -473,17 +496,18 @@ class TestTheLivenessChecksCanActuallyFire:
     def test_a_read_that_never_returns_is_refused_by_the_limit(
         self, tmp_path, monkeypatch
     ):
-        """The reachable wedge. A reader blocked inside ``read_into`` keeps the
-        layer legitimately in flight, so no amount of state-inspection can tell
-        it from a slow read — only elapsed time can."""
+        """The reachable wedge. A range worker blocked inside ``read_range_into``
+        keeps the layer legitimately in flight (the reader thread is waiting on
+        it), so no amount of state-inspection can tell it from a slow read —
+        only elapsed time can."""
         import soup_cli.utils.async_disk_source as mod
 
         blocked = threading.Event()
 
-        def never_returns(handle, entry, dst):
+        def never_returns(handle, start, view, expected):
             blocked.wait(timeout=30.0)
 
-        monkeypatch.setattr(mod, "read_into", never_returns)
+        monkeypatch.setattr(mod, "read_range_into", never_returns)
         monkeypatch.setattr(mod, "_MAX_READ_SECONDS", 0.25)
 
         shard_dir = _shards(tmp_path)
@@ -505,13 +529,13 @@ class TestTheLivenessChecksCanActuallyFire:
         timeout: a read that is slow but finishes must still be served."""
         import soup_cli.utils.async_disk_source as mod
 
-        real = mod.read_into
+        real = mod.read_range_into
 
-        def slow(handle, entry, dst):
+        def slow(handle, start, view, expected):
             time.sleep(0.2)
-            real(handle, entry, dst)
+            real(handle, start, view, expected)
 
-        monkeypatch.setattr(mod, "read_into", slow)
+        monkeypatch.setattr(mod, "read_range_into", slow)
         monkeypatch.setattr(mod, "_MAX_READ_SECONDS", 5.0)
 
         shard_dir = _shards(tmp_path)
@@ -721,9 +745,6 @@ class TestPinnedStagingRefusesAnUnreleasedBorrowWithoutAGpu:
 # ==========================================================================
 # the hazards pin=False cannot express
 # ==========================================================================
-_NO_CUDA = not torch.cuda.is_available()
-
-
 def _uniform_shards(tmp_path: Path, n_layers: int, size: int) -> str:
     """One tensor per layer, every byte equal to the layer index.
 
@@ -743,7 +764,7 @@ def _uniform_shards(tmp_path: Path, n_layers: int, size: int) -> str:
     return str(out)
 
 
-@pytest.mark.skipif(_NO_CUDA, reason="the hazard is a CUDA copy draining out of pinned host memory")
+@pytest.mark.gpu(reason="the hazard is a CUDA copy draining out of pinned host memory")
 class TestTheDeviceGetsTheLayerItAskedFor:
     """THE gate for the recycle-under-an-in-flight-copy defect.
 
@@ -879,13 +900,13 @@ class TestTheReadHappensAhead:
         shard_dir = _shards(tmp_path)
         spec = _spec(shard_dir)
         threads = []
-        real = module.read_into
+        real = module.read_range_into
 
-        def recording(handle, entry, tensor):
+        def recording(handle, start, view, expected):
             threads.append(threading.current_thread())
-            return real(handle, entry, tensor)
+            return real(handle, start, view, expected)
 
-        monkeypatch.setattr(module, "read_into", recording)
+        monkeypatch.setattr(module, "read_range_into", recording)
         source = AsyncDiskSource(shard_dir, N_LAYERS, spec, read_ahead=2, pin=False)
         try:
             source.get(0, "input_layernorm.weight")
@@ -896,7 +917,10 @@ class TestTheReadHappensAhead:
                 f"the read ran on the calling thread ({offenders}) — this source "
                 f"exists to keep it off the compute thread"
             )
-            assert {t.name for t in threads} == {"soup-layer-reader"}
+            # Since #974 the bytes move on the source's range workers, which the
+            # reader thread dispatches and waits for; either way it is the
+            # source's own threads, never the consumer's.
+            assert {t.name.rsplit("-", 1)[0] for t in threads} == {"soup-layer-range"}
         finally:
             source.close()
 
@@ -1021,8 +1045,14 @@ def _settle(source, timeout: float = 10.0) -> None:
     """
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        if not source._queue and source._in_flight is None:
-            return
+        # Under the reader's own lock: ``_run`` pops the queue and sets
+        # ``_in_flight`` as two statements inside one critical section, so an
+        # unlocked observer can land between them, see "nothing queued, nothing
+        # in flight", and measure the depth BEFORE the read it just missed —
+        # a flake that read as "sustains 2 of 3" (#974).
+        with source._ready:
+            if not source._queue and source._in_flight is None:
+                return
         time.sleep(0.002)
     raise AssertionError("the reader never went idle")
 
@@ -1436,7 +1466,7 @@ class TestTheSettingReachesTheSource:
         finally:
             source.close()
 
-    @pytest.mark.skipif(_NO_CUDA, reason="pinned staging needs a CUDA device")
+    @pytest.mark.gpu(reason="pinned staging needs a CUDA device")
     def test_the_disk_tier_pins_its_staging_when_asked(self, tmp_path):
         """The flag means page-locked on BOTH tiers, so the disk tier must be
         able to return True. Before pinned staging existed it was hardcoded
@@ -1586,7 +1616,7 @@ class TestEveryRuntimeConsumerReleases:
         )
 
 
-@pytest.mark.skipif(_NO_CUDA, reason="pinned staging needs a CUDA device")
+@pytest.mark.gpu(reason="pinned staging needs a CUDA device")
 class TestPinnedStagingRefusesAnUnreleasedBorrow:
     """The dynamic half of the contract (see the scan above).
 
@@ -1655,3 +1685,274 @@ class TestPinnedStagingRefusesAnUnreleasedBorrow:
             assert source.get(1, "input_layernorm.weight") is not None
         finally:
             source.close()
+
+
+class TestTheHelperDoesNotBlameTheDetectorForAThreadThatNeverRan:
+    """#971 CI flake: a helper killed in ``_bootstrap_inner`` read as 'the
+    liveness checks did not fire'. Injected deterministically here: a trace
+    hook that raises on the helper's first frame, so ``call`` never runs."""
+
+    @staticmethod
+    def _kill_the_next_helper(monkeypatch):
+        killed = []
+
+        def killer(frame, event, arg):
+            if not killed and frame.f_code.co_name == "run":
+                killed.append(threading.current_thread().name)
+                raise RuntimeError("injected: thread died before its target ran")
+            return None
+
+        monkeypatch.setattr(threading, "_trace_hook", killer)
+        monkeypatch.setattr(threading, "excepthook", lambda args: None)
+        return killed
+
+    def test_a_helper_that_died_in_bootstrap_is_restarted(self, monkeypatch):
+        class _Instant:
+            def get(self, idx, name):
+                return "served"
+
+        killed = self._kill_the_next_helper(monkeypatch)
+        captured = _get_on_a_thread(_Instant(), 0, "w", timeout=2.0)
+        assert killed, "the injection never fired, so this proves nothing"
+        assert captured == {"value": "served"}, captured
+
+    def test_a_get_that_really_hangs_still_fails_as_the_detector(self):
+        gate = threading.Event()
+
+        class _Hangs:
+            def get(self, idx, name):
+                gate.wait(timeout=30.0)
+
+        try:
+            with pytest.raises(AssertionError, match="did not fire"):
+                _get_on_a_thread(_Hangs(), 0, "w", timeout=0.3)
+        finally:
+            gate.set()
+
+
+class TestTheReaderSurvivesDyingInBootstrap:
+    """#1056: the source's OWN reader thread hits the race #1030 fixed for the
+    test helper. On CPython <= 3.11 it can die in ``Thread._bootstrap_inner``
+    before ``_run`` executes, and the "exited without recording an error"
+    backstop then refused a run whose reader never ran. Injected
+    deterministically the way #1030 does it: a ``threading._trace_hook`` that
+    raises on the reader's first frame — targeted by thread NAME, because the
+    range workers and the ``_get_on_a_thread`` helper start threads too."""
+
+    @staticmethod
+    def _kill_the_reader(monkeypatch, times):
+        killed = []
+
+        def killer(frame, event, arg):
+            if (
+                len(killed) < times
+                and frame.f_code.co_name == "run"
+                and threading.current_thread().name == "soup-layer-reader"
+            ):
+                killed.append(threading.current_thread().ident)
+                raise RuntimeError("injected: reader died before its target ran")
+            return None
+
+        monkeypatch.setattr(threading, "_trace_hook", killer)
+        monkeypatch.setattr(threading, "excepthook", lambda args: None)
+        return killed
+
+    def test_a_reader_that_died_in_bootstrap_is_restarted_and_serves(
+        self, tmp_path, monkeypatch
+    ):
+        killed = self._kill_the_reader(monkeypatch, times=1)
+        shard_dir = _shards(tmp_path)
+        spec = _spec(shard_dir)
+        shipped = DiskSource(shard_dir, N_LAYERS, spec)
+        ours = AsyncDiskSource(shard_dir, N_LAYERS, spec, read_ahead=2, pin=False)
+        try:
+            first_name = next(iter(spec[0]))
+            captured = _get_on_a_thread(ours, 0, first_name)
+            assert killed, "the injection never fired, so this proves nothing"
+            assert "exc" not in captured, repr(captured["exc"])
+            assert torch.equal(
+                _raw_bytes(captured["value"]), _raw_bytes(shipped.get(0, first_name))
+            )
+            for idx in range(N_LAYERS):
+                for name in spec[idx]:
+                    theirs = shipped.get(idx, name)
+                    mine = ours.get(idx, name)
+                    assert mine.dtype == theirs.dtype, (idx, name)
+                    assert mine.shape == theirs.shape, (idx, name)
+                    assert torch.equal(_raw_bytes(mine), _raw_bytes(theirs)), (idx, name)
+            assert len(killed) == 1, killed
+        finally:
+            ours.close()
+            shipped.close()
+        assert not ours._thread.is_alive(), "close() must stop the restarted reader"
+
+    def test_a_reader_that_entered_and_exited_keeps_the_existing_message(
+        self, tmp_path, monkeypatch
+    ):
+        """The restart is for a reader that never ran. One that ran and then
+        left without ``_fail`` is the backstop's case, word for word."""
+        monkeypatch.setattr(AsyncDiskSource, "_run", lambda self: None)
+        shard_dir = _shards(tmp_path)
+        source = AsyncDiskSource(shard_dir, N_LAYERS, _spec(shard_dir), pin=False)
+        try:
+            captured = _get_on_a_thread(source, 0, "input_layernorm.weight")
+            exc = captured.get("exc")
+            assert isinstance(exc, RuntimeError), repr(captured)
+            assert str(exc) == (
+                "layer-stream reader thread exited without recording an error, "
+                "with layer 0 still wanted. Refusing rather than blocking: a "
+                "training run that stops without an error is worse than one that "
+                "fails."
+            )
+        finally:
+            source.close()
+
+    def test_a_reader_that_never_starts_is_refused_after_bounded_restarts(
+        self, tmp_path, monkeypatch
+    ):
+        import soup_cli.utils.async_disk_source as mod
+
+        monkeypatch.setattr(mod, "_LIVENESS_POLL_SECONDS", 0.05)
+        killed = self._kill_the_reader(monkeypatch, times=10**6)
+        shard_dir = _shards(tmp_path)
+        source = AsyncDiskSource(shard_dir, N_LAYERS, _spec(shard_dir), pin=False)
+        try:
+            captured = _get_on_a_thread(
+                source, 0, "input_layernorm.weight", timeout=10.0
+            )
+            exc = captured.get("exc")
+            assert isinstance(exc, RuntimeError), repr(captured)
+            message = str(exc)
+            assert "failed to start" in message, message
+            assert "exited without recording an error" not in message, message
+            assert len(killed) == getattr(mod, "_MAX_READER_STARTS", -1), killed
+        finally:
+            source.close()
+
+
+class TestTheRangeWorkersSurviveDyingInBootstrap:
+    """#1056, the same race one level down: the ``_RangeReaders`` workers the
+    reader hands byte ranges to are threads too. With every worker dead in
+    bootstrap, ``run`` saw no live worker and reported "layer-stream disk
+    source is closed" for a source nobody had closed."""
+
+    @staticmethod
+    def _kill_workers(monkeypatch, prefix, times):
+        killed = []
+
+        def killer(frame, event, arg):
+            if (
+                len(killed) < times
+                and frame.f_code.co_name == "run"
+                and threading.current_thread().name.startswith(prefix)
+            ):
+                killed.append(threading.current_thread().name)
+                raise RuntimeError("injected: range worker died before its target ran")
+            return None
+
+        monkeypatch.setattr(threading, "_trace_hook", killer)
+        monkeypatch.setattr(threading, "excepthook", lambda args: None)
+        return killed
+
+    def test_one_dead_worker_leaves_the_others_serving(self, tmp_path, monkeypatch):
+        killed = self._kill_workers(monkeypatch, "soup-layer-range-0", times=1)
+        shard_dir = _shards(tmp_path)
+        spec = _spec(shard_dir)
+        shipped = DiskSource(shard_dir, N_LAYERS, spec)
+        ours = AsyncDiskSource(
+            shard_dir, N_LAYERS, spec, read_ahead=2, pin=False, read_ranges=2
+        )
+        try:
+            first_name = next(iter(spec[0]))
+            captured = _get_on_a_thread(ours, 0, first_name)
+            assert killed == ["soup-layer-range-0"], killed
+            assert "exc" not in captured, repr(captured["exc"])
+            for idx in range(N_LAYERS):
+                for name in spec[idx]:
+                    theirs = shipped.get(idx, name)
+                    mine = ours.get(idx, name)
+                    assert mine.dtype == theirs.dtype, (idx, name)
+                    assert mine.shape == theirs.shape, (idx, name)
+                    assert torch.equal(_raw_bytes(mine), _raw_bytes(theirs)), (idx, name)
+        finally:
+            ours.close()
+            shipped.close()
+
+    def test_every_worker_dead_is_a_start_failure_not_closed(
+        self, tmp_path, monkeypatch
+    ):
+        import soup_cli.utils.async_disk_source as mod
+
+        killed = self._kill_workers(monkeypatch, "soup-layer-range-", times=10**6)
+        shard_dir = _shards(tmp_path)
+        source = AsyncDiskSource(
+            shard_dir, N_LAYERS, _spec(shard_dir), pin=False, read_ranges=1
+        )
+        try:
+            captured = _get_on_a_thread(
+                source, 0, "input_layernorm.weight", timeout=15.0
+            )
+            exc = captured.get("exc")
+            assert isinstance(exc, RuntimeError), repr(captured)
+            message = str(exc)
+            assert "failed to start" in message, message
+            assert "closed" not in message, message
+            assert len(killed) == getattr(mod, "_MAX_READER_STARTS", -1), killed
+        finally:
+            source.close()
+
+    @staticmethod
+    def _run_pool(pool, timeout=15.0):
+        """``pool.run`` on a thread with a deadline, so a regression that polls
+        forever FAILS here instead of hanging the suite."""
+        captured = {}
+
+        def call():
+            try:
+                pool.run([lambda: None])
+                captured["value"] = "ran"
+            except BaseException as exc:  # noqa: BLE001 — recorded for the assert
+                captured["exc"] = exc
+
+        helper = threading.Thread(target=call, daemon=True)
+        helper.start()
+        helper.join(timeout=timeout)
+        assert not helper.is_alive(), "pool.run never returned"
+        return captured
+
+    def test_a_closed_pool_still_says_closed(self, monkeypatch):
+        """Genuine close semantics are untouched, including when a worker had
+        also died in bootstrap: a pool the owner closed is closed."""
+        from soup_cli.utils.async_disk_source import _RangeReaders
+
+        pool = _RangeReaders(2)
+        pool.close()
+        captured = self._run_pool(pool)
+        assert str(captured.get("exc")) == "layer-stream disk source is closed", captured
+
+        killed = self._kill_workers(monkeypatch, "soup-layer-range-", times=10**6)
+        dead = _RangeReaders(1)
+        try:
+            dead._threads[0].join(timeout=5.0)
+            assert killed, "the injection never fired, so this proves nothing"
+        finally:
+            dead.close()
+        captured = self._run_pool(dead)
+        assert str(captured.get("exc")) == "layer-stream disk source is closed", captured
+
+    def test_a_worker_that_ran_and_left_is_not_restarted(self, monkeypatch):
+        """The restart is for a worker that never ran. One that entered and
+        exited without a sentinel may have taken a job, so it is refused, not
+        restarted — and not reported as closed, because nobody closed it."""
+        from soup_cli.utils.async_disk_source import _RangeReaders
+
+        monkeypatch.setattr(_RangeReaders, "_loop", lambda self: None)
+        pool = _RangeReaders(1)
+        try:
+            pool._threads[0].join(timeout=5.0)
+            captured = self._run_pool(pool)
+            message = str(captured.get("exc"))
+            assert "exited without the source being closed" in message, captured
+            assert pool._starts == [1], pool._starts
+        finally:
+            pool.close()

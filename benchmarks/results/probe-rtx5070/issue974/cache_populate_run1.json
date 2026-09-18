@@ -1,0 +1,287 @@
+{
+ "shard_dir": "C:\\Users\\user\\.soup\\layer-stream\\unsloth__mistral-7b-instruct-v0.3",
+ "layers": 32,
+ "pass_bytes": 3600941952,
+ "pinned": true,
+ "seq": "readinto,evict,readinto,readinto,mmap,readinto,evict,readinto_random,readinto_random,evict,readinto_seq,readinto_seq,evict,readinto_raw,readinto_raw,evict,mmap,mmap",
+ "evict_gb": 17.0,
+ "started": "2026-09-15T14:10:18",
+ "results": [
+  {
+   "step": 0,
+   "mode": "readinto",
+   "gb_per_s": 3.8522924793680398,
+   "seconds": 0.9347530000086408,
+   "host": {
+    "avail_phys_gb": 18.656428032,
+    "total_phys_gb": 34.070192128,
+    "commit_gb": 26.016673792,
+    "commit_limit_gb": 50.840752128
+   }
+  },
+  {
+   "step": 1,
+   "mode": "evict",
+   "gb": 16.656428032,
+   "seconds": 9.26969439999084,
+   "before": {
+    "avail_phys_gb": 18.656428032,
+    "total_phys_gb": 34.070192128,
+    "commit_gb": 26.016673792,
+    "commit_limit_gb": 50.840752128
+   },
+   "during": {
+    "avail_phys_gb": 2.55619072,
+    "total_phys_gb": 34.070192128,
+    "commit_gb": 42.415685632,
+    "commit_limit_gb": 50.840752128
+   },
+   "after": {
+    "avail_phys_gb": 19.158962176,
+    "total_phys_gb": 34.070192128,
+    "commit_gb": 25.656958976,
+    "commit_limit_gb": 50.840752128
+   }
+  },
+  {
+   "step": 2,
+   "mode": "readinto",
+   "gb_per_s": 2.6046718859503577,
+   "seconds": 1.3824935000156984,
+   "host": {
+    "avail_phys_gb": 19.137957888,
+    "total_phys_gb": 34.070192128,
+    "commit_gb": 25.672486912,
+    "commit_limit_gb": 50.840752128
+   }
+  },
+  {
+   "step": 3,
+   "mode": "readinto",
+   "gb_per_s": 3.956563410508014,
+   "seconds": 0.9101186000043526,
+   "host": {
+    "avail_phys_gb": 19.158274048,
+    "total_phys_gb": 34.070192128,
+    "commit_gb": 25.658867712,
+    "commit_limit_gb": 50.840752128
+   }
+  },
+  {
+   "step": 4,
+   "mode": "mmap",
+   "gb_per_s": 2.561036800635998,
+   "seconds": 1.4060485000081826,
+   "host": {
+    "avail_phys_gb": 19.171753984,
+    "total_phys_gb": 34.070192128,
+    "commit_gb": 25.629294592,
+    "commit_limit_gb": 50.840752128
+   }
+  },
+  {
+   "step": 5,
+   "mode": "readinto",
+   "gb_per_s": 3.7283979827123512,
+   "seconds": 0.9658148000016809,
+   "host": {
+    "avail_phys_gb": 19.168546816,
+    "total_phys_gb": 34.070192128,
+    "commit_gb": 25.624301568,
+    "commit_limit_gb": 50.840752128
+   }
+  },
+  {
+   "step": 6,
+   "mode": "evict",
+   "gb": 17.0,
+   "seconds": 3.250523800001247,
+   "before": {
+    "avail_phys_gb": 19.168546816,
+    "total_phys_gb": 34.070192128,
+    "commit_gb": 25.624301568,
+    "commit_limit_gb": 50.840752128
+   },
+   "during": {
+    "avail_phys_gb": 2.322558976,
+    "total_phys_gb": 34.070192128,
+    "commit_gb": 42.647826432,
+    "commit_limit_gb": 50.840752128
+   },
+   "after": {
+    "avail_phys_gb": 19.328790528,
+    "total_phys_gb": 34.070192128,
+    "commit_gb": 25.602265088,
+    "commit_limit_gb": 50.840752128
+   }
+  },
+  {
+   "step": 7,
+   "mode": "readinto_random",
+   "gb_per_s": 2.4129167923958628,
+   "seconds": 1.4923605999792926,
+   "host": {
+    "avail_phys_gb": 19.318878208,
+    "total_phys_gb": 34.070192128,
+    "commit_gb": 25.593663488,
+    "commit_limit_gb": 50.840752128
+   }
+  },
+  {
+   "step": 8,
+   "mode": "readinto_random",
+   "gb_per_s": 3.9385983855364164,
+   "seconds": 0.9142698999785352,
+   "host": {
+    "avail_phys_gb": 19.325177856,
+    "total_phys_gb": 34.070192128,
+    "commit_gb": 25.606074368,
+    "commit_limit_gb": 50.840752128
+   }
+  },
+  {
+   "step": 9,
+   "mode": "evict",
+   "gb": 17.0,
+   "seconds": 3.155729499994777,
+   "before": {
+    "avail_phys_gb": 19.325177856,
+    "total_phys_gb": 34.070192128,
+    "commit_gb": 25.606074368,
+    "commit_limit_gb": 50.840752128
+   },
+   "during": {
+    "avail_phys_gb": 2.309988352,
+    "total_phys_gb": 34.070192128,
+    "commit_gb": 42.659274752,
+    "commit_limit_gb": 50.840752128
+   },
+   "after": {
+    "avail_phys_gb": 19.339943936,
+    "total_phys_gb": 34.070192128,
+    "commit_gb": 25.610891264,
+    "commit_limit_gb": 50.840752128
+   }
+  },
+  {
+   "step": 10,
+   "mode": "readinto_seq",
+   "gb_per_s": 2.850678447845156,
+   "seconds": 1.2631877000094391,
+   "host": {
+    "avail_phys_gb": 19.325222912,
+    "total_phys_gb": 34.070192128,
+    "commit_gb": 25.630748672,
+    "commit_limit_gb": 50.840752128
+   }
+  },
+  {
+   "step": 11,
+   "mode": "readinto_seq",
+   "gb_per_s": 3.6655393861239554,
+   "seconds": 0.9823770999792032,
+   "host": {
+    "avail_phys_gb": 19.324596224,
+    "total_phys_gb": 34.070192128,
+    "commit_gb": 25.623404544,
+    "commit_limit_gb": 50.840752128
+   }
+  },
+  {
+   "step": 12,
+   "mode": "evict",
+   "gb": 17.0,
+   "seconds": 3.134787500021048,
+   "before": {
+    "avail_phys_gb": 19.324596224,
+    "total_phys_gb": 34.070192128,
+    "commit_gb": 25.623404544,
+    "commit_limit_gb": 50.840752128
+   },
+   "during": {
+    "avail_phys_gb": 2.37029376,
+    "total_phys_gb": 34.070192128,
+    "commit_gb": 42.666336256,
+    "commit_limit_gb": 50.840752128
+   },
+   "after": {
+    "avail_phys_gb": 19.389952,
+    "total_phys_gb": 34.070192128,
+    "commit_gb": 25.608257536,
+    "commit_limit_gb": 50.840752128
+   }
+  },
+  {
+   "step": 13,
+   "mode": "readinto_raw",
+   "gb_per_s": 2.453524985273546,
+   "seconds": 1.4676605999993626,
+   "host": {
+    "avail_phys_gb": 19.392663552,
+    "total_phys_gb": 34.070192128,
+    "commit_gb": 25.606787072,
+    "commit_limit_gb": 50.840752128
+   }
+  },
+  {
+   "step": 14,
+   "mode": "readinto_raw",
+   "gb_per_s": 3.7217938073893113,
+   "seconds": 0.9675286000128835,
+   "host": {
+    "avail_phys_gb": 19.384827904,
+    "total_phys_gb": 34.070192128,
+    "commit_gb": 25.605742592,
+    "commit_limit_gb": 50.840752128
+   }
+  },
+  {
+   "step": 15,
+   "mode": "evict",
+   "gb": 17.0,
+   "seconds": 3.0682586999901105,
+   "before": {
+    "avail_phys_gb": 19.384827904,
+    "total_phys_gb": 34.070192128,
+    "commit_gb": 25.605742592,
+    "commit_limit_gb": 50.840752128
+   },
+   "during": {
+    "avail_phys_gb": 2.384756736,
+    "total_phys_gb": 34.070192128,
+    "commit_gb": 42.643382272,
+    "commit_limit_gb": 50.840752128
+   },
+   "after": {
+    "avail_phys_gb": 19.405242368,
+    "total_phys_gb": 34.070192128,
+    "commit_gb": 25.599778816,
+    "commit_limit_gb": 50.840752128
+   }
+  },
+  {
+   "step": 16,
+   "mode": "mmap",
+   "gb_per_s": 1.6763013817810353,
+   "seconds": 2.1481471000006422,
+   "host": {
+    "avail_phys_gb": 19.391369216,
+    "total_phys_gb": 34.070192128,
+    "commit_gb": 25.628499968,
+    "commit_limit_gb": 50.840752128
+   }
+  },
+  {
+   "step": 17,
+   "mode": "mmap",
+   "gb_per_s": 2.280295410996988,
+   "seconds": 1.579155899991747,
+   "host": {
+    "avail_phys_gb": 19.390636032,
+    "total_phys_gb": 34.070192128,
+    "commit_gb": 25.625903104,
+    "commit_limit_gb": 50.840752128
+   }
+  }
+ ]
+}

@@ -21,6 +21,7 @@ _WIRED_METHODS = {
         "_setup_transformers",
     ),
     "orpo": ("soup_cli.trainer.orpo", "ORPOTrainerWrapper", "setup"),
+    "ppo": ("soup_cli.trainer.ppo", "PPOTrainerWrapper", "setup"),
     "reward_model": (
         "soup_cli.trainer.reward_model",
         "RewardModelTrainerWrapper",
@@ -156,6 +157,84 @@ class TestDpoUsesTheOverrideForLiveRendering:
         assert "OVERRIDE" in reloaded.chat_template
 
 
+class TestPpoUsesTheOverrideForLiveRendering:
+    def test_marker_reaches_prompt_ids_and_saved_tokenizer(self, tmp_path, monkeypatch):
+        _requires_train_extra()
+        from transformers import AutoTokenizer
+
+        from soup_cli.config.loader import load_config_from_string
+        from soup_cli.trainer import ppo
+        from soup_cli.trainer.ppo import PPOTrainerWrapper
+
+        weights = _tiny_llama_dir(tmp_path)
+        marker_template = (
+            "{% for message in messages %}OVERRIDE {{ message['role'] }} "
+            "{{ message['content'] }} {% endfor %}"
+        )
+        cfg = load_config_from_string(
+            f"base: {weights}\n"
+            "task: ppo\n"
+            "backend: transformers\n"
+            "data:\n"
+            "  train: train.jsonl\n"
+            "  max_length: 64\n"
+            f"  chat_template: \"{marker_template}\"\n"
+            "training:\n"
+            "  batch_size: 1\n"
+            "  quantization: none\n"
+            "  epochs: 1\n"
+            "  lora:\n"
+            "    r: 4\n"
+            "    alpha: 8\n"
+            "    target_modules: [q_proj, v_proj]\n"
+            f"output: {tmp_path / 'out'}\n"
+        )
+        monkeypatch.chdir(tmp_path)
+
+        captured = {}
+
+        class StopAfterDatasetError(RuntimeError):
+            pass
+
+        orig_import = ppo._import_ppo_classes
+
+        def fake_import():
+            _orig_trainer, orig_config, _exp = orig_import()
+
+            class FakeTrainer:
+                def __init__(self, train_dataset=None, **kwargs):
+                    captured["train_dataset"] = train_dataset or kwargs.get("dataset")
+                    raise StopAfterDatasetError
+
+            return FakeTrainer, orig_config, False
+
+        monkeypatch.setattr(ppo, "_import_ppo_classes", fake_import)
+
+        wrapper = PPOTrainerWrapper(cfg, device="cpu")
+        rows = [
+            {
+                "messages": [
+                    {"role": "user", "content": "hi"},
+                    {"role": "assistant", "content": "good answer"},
+                ]
+            }
+            for _ in range(4)
+        ]
+        with pytest.raises(StopAfterDatasetError):
+            wrapper.setup({"train": rows})
+
+        prepared = captured["train_dataset"][0]
+        prompt_ids = prepared["input_ids"]
+        rendered = wrapper.tokenizer.decode(prompt_ids)
+        assert "OVERRIDE user hi" in rendered
+        assert "SHIPPED" not in rendered
+
+        saved = tmp_path / "saved-tokenizer"
+        wrapper.tokenizer.save_pretrained(saved)
+        reloaded = AutoTokenizer.from_pretrained(saved)
+        assert "OVERRIDE" in reloaded.chat_template
+
+
 class TestEveryConversationalTrainerIsWired:
     @pytest.mark.parametrize("task", tuple(_WIRED_METHODS))
     def test_override_is_applied_after_tokenizer_setup(self, task):
@@ -238,13 +317,34 @@ class TestEveryConversationalTrainerIsWired:
 
 class TestNonChatTasksRejectTheField:
     @pytest.mark.parametrize(
-        "task", ("pretrain", "embedding", "classifier", "reranker", "cross_encoder")
+        "task",
+        (
+            "pretrain",
+            "embedding",
+            "classifier",
+            "reranker",
+            "cross_encoder",
+            "prm",
+            "asr",
+            "moe_lora_routing",
+            "unlearn",
+        ),
     )
     def test_task_is_named_in_error(self, task):
         from soup_cli.config.schema import SoupConfig
 
-        training = {"num_labels": 2} if task in {"classifier", "reranker", "cross_encoder"} else {}
-        with pytest.raises(ValidationError, match=rf"task='{task}'"):
+        training = {}
+        if task in {"classifier", "reranker", "cross_encoder"}:
+            training["num_labels"] = 2
+        elif task == "moe_lora_routing":
+            training["mole_task_adapters"] = ["task_a", "task_b"]
+        elif task == "unlearn":
+            training["unlearn_method"] = "npo"
+
+        with pytest.raises(
+            ValidationError,
+            match=rf"data\.chat_template is not used by task='{task}'",
+        ):
             SoupConfig(
                 base="model",
                 task=task,

@@ -26,6 +26,8 @@ EXPECTED_QWEN35_TEXT_RECIPES = {
     "qwen3.5-397b-a17b-sft",
     # Qwen3.6 exposes the same qwen3_5 / qwen3_5_moe architecture on the Hub.
     "qwen3.6-27b-sft",
+    "qwen3.6-27b-dpo",
+    "qwen3.6-27b-grpo",
     "qwen3.6-35b-a3b-sft",
     "qwen3.6-35b-a3b-dpo",
     "qwen3.6-35b-a3b-grpo",

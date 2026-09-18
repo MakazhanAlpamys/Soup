@@ -153,8 +153,8 @@ _MLX_SFT: tuple[SupportEntry, ...] = (
         "training.use_fsdp2_compile",
         IGNORED,
         "torch.compile on FSDP2 requires CUDA and the transformers backend "
-        "(and validate_fsdp2_compile_config refuses backend=mlx at "
-        "commands/train.py:1235 before resolve_trainer)",
+        "(and `soup train` refuses backend=mlx in validate_fsdp2_compile_config, "
+        "before resolve_trainer)",
         trainer_reads=True,
     ),
 )
@@ -178,6 +178,7 @@ TRAINER_MODULES: dict[tuple[str, str], tuple[str, ...]] = {
         "soup_cli/trainer/mlx_sft.py",
         "soup_cli/trainer/mlx_optim.py",
         "soup_cli/trainer/mlx_masking.py",
+        "soup_cli/trainer/rewind_mlx.py",
     ),
 }
 
