@@ -35,6 +35,9 @@ _TASK_YAML = {
     "orpo": ("dpo", ""),
     "simpo": ("dpo", ""),
     "grpo": ("alpaca", "  reward_fn: length\n"),
+    # sft is not in _MOE_TASKS (it always read the flag); it is here so the
+    # dropout refusal can be driven through the path #798 assumed worked.
+    "sft": ("alpaca", ""),
 }
 
 
@@ -60,7 +63,7 @@ def _tiny_moe():
     )
 
 
-def _config(task: str, *, moe_lora: bool, extra: str = "") -> object:
+def _config(task: str, *, moe_lora: bool, extra: str = "", dropout: float = 0.0) -> object:
     data_format, training_extra = _TASK_YAML[task]
     return load_config_from_string(
         f"base: org/tiny-moe\n"
@@ -70,7 +73,7 @@ def _config(task: str, *, moe_lora: bool, extra: str = "") -> object:
         f"training:\n"
         f"  quantization: none\n"
         f"  moe_lora: {'true' if moe_lora else 'false'}\n"
-        f"  lora:\n    r: 4\n    alpha: 8\n    dropout: 0.0\n"
+        f"  lora:\n    r: 4\n    alpha: 8\n    dropout: {dropout}\n"
         f"{training_extra}{extra}"
     )
 
@@ -81,6 +84,7 @@ _WRAPPERS = {
     "orpo": ("soup_cli.trainer.orpo", "ORPOTrainerWrapper"),
     "simpo": ("soup_cli.trainer.simpo", "SimPOTrainerWrapper"),
     "grpo": ("soup_cli.trainer.grpo", "GRPOTrainerWrapper"),
+    "sft": ("soup_cli.trainer.sft", "SFTTrainerWrapper"),
 }
 
 
@@ -101,7 +105,10 @@ def _tiny_dense():
     )
 
 
-def _attach_lora(task: str, monkeypatch, *, moe_lora: bool, dense=False, expect_failure=False):
+def _attach_lora(
+    task: str, monkeypatch, *, moe_lora: bool, dense=False, expect_failure=False,
+    dropout: float = 0.0,
+):
     """Run the trainer's own ``_setup_transformers`` far enough to attach LoRA.
 
     The model loader and tokenizer are stubbed; ``get_peft_model`` and the
@@ -121,7 +128,7 @@ def _attach_lora(task: str, monkeypatch, *, moe_lora: bool, dense=False, expect_
         transformers.AutoModelForCausalLM, "from_pretrained", lambda *_a, **_k: build()
     )
 
-    cfg = _config(task, moe_lora=moe_lora)
+    cfg = _config(task, moe_lora=moe_lora, dropout=dropout)
     wrapper = object.__new__(wrapper_cls)
     wrapper.config = cfg
     wrapper.device = "cpu"
@@ -261,38 +268,83 @@ class TestShippedConfigs:
 
 
 class TestTheDropoutConstraint:
-    """peft's ParamWrapper refuses dropout on fused MoE experts, so moe_lora
-    could not attach on ANY task -- including sft, which #798 assumed worked."""
+    """peft's ParamWrapper refuses dropout on FUSED MoE experts.
 
-    @pytest.mark.parametrize("task", ["sft", "pretrain", "dpo", "grpo"])
-    def test_moe_lora_with_the_default_dropout_is_refused(self, task):
-        extra = "  reward_fn: length\n" if task == "grpo" else ""
-        data_format = _TASK_YAML.get(task, ("alpaca", ""))[0]
+    Checked against the model, not at config load. The first version of this
+    branch refused ``moe_lora`` + non-zero dropout in the schema, which is wrong
+    in two directions: it fired for a dense base, where the flag is a documented
+    no-op and nothing would have broken, and it fired ahead of more specific
+    validators, so ``stream_layers`` conflicts started reporting a dropout
+    problem instead (tests/test_v07200.py::TestStreamMutualExclusions). At load
+    time the model is a string; whether its experts are fused is not knowable.
+    """
+
+    def _tcfg(self, dropout):
+        return SimpleNamespace(moe_lora=True, lora=SimpleNamespace(dropout=dropout))
+
+    def test_fused_experts_plus_dropout_is_refused(self):
+        from soup_cli.utils.moe import resolve_moe_lora_targets
+
         with pytest.raises(ValueError) as excinfo:
-            load_config_from_string(
-                f"base: org/m\ntask: {task}\n"
-                f"data:\n  train: x.jsonl\n  format: {data_format}\n"
-                f"training:\n  moe_lora: true\n{extra}"
-            )
+            resolve_moe_lora_targets(_tiny_moe(), self._tcfg(0.05), ["q_proj"])
         message = str(excinfo.value)
         assert "lora.dropout: 0.0" in message
-        # The reason must be peft's own words, or the rule reads as arbitrary and
-        # the first thing a user does is set the dropout back (#798 ruling).
+        # peft's own words, or the rule reads as arbitrary and the first thing a
+        # user does is set the dropout back (#798 ruling).
         assert "lora.ParamWrapper does not work with lora_dropout != 0" in message
 
-    @pytest.mark.parametrize("task", ["sft", "dpo"])
-    def test_dropout_zero_loads(self, task):
-        extra = "" if task == "sft" else ""
-        data_format = _TASK_YAML.get(task, ("alpaca", ""))[0]
+    def test_the_same_model_with_dropout_zero_gets_the_expert_targets(self):
+        from soup_cli.utils.moe import resolve_moe_lora_targets
+
+        targets = resolve_moe_lora_targets(_tiny_moe(), self._tcfg(0.0), ["q_proj"])
+        assert any("proj" in t for t in targets) and targets != ["q_proj"]
+
+    def test_a_dense_model_with_dropout_is_not_refused(self):
+        """The control: a dense base has no fused experts, peft is happy, and
+        refusing it was the bug in the first version of this branch."""
+        from soup_cli.utils.moe import resolve_moe_lora_targets
+
+        assert resolve_moe_lora_targets(
+            _tiny_dense(), self._tcfg(0.05), ["q_proj"]
+        ) == ["q_proj"]
+
+    def test_fused_detection_is_about_rank_not_the_name(self):
+        """``has_fused_expert_params`` keys on a 3-D parameter under an
+        expert-named path; a per-expert-module MoE takes dropout fine."""
+        from soup_cli.utils.moe import has_fused_expert_params
+
+        assert has_fused_expert_params(_tiny_moe()) is True
+        assert has_fused_expert_params(_tiny_dense()) is False
+
+    @pytest.mark.parametrize("task", ["dpo", "sft"] )
+    def test_the_refusal_reaches_a_real_trainer_setup(self, task, monkeypatch):
+        """End to end through the trainer's own setup, not just the helper.
+
+        Asserts SOUP's wording, not peft's: with the helper's refusal removed,
+        peft raises its own ParamWrapper error from the same line, so matching
+        on "ParamWrapper" alone passes whether or not the wiring is there.
+        Found by mutation N2.
+        """
+        if task == "sft":
+            pytest.importorskip("trl")
+        with pytest.raises(ValueError) as excinfo:
+            _attach_lora(task, monkeypatch, moe_lora=True, dropout=0.05,
+                         expect_failure=True)
+        message = str(excinfo.value)
+        assert "training.moe_lora=true needs training.lora.dropout: 0.0" in message
+        assert "lora.ParamWrapper does not work with lora_dropout != 0" in message
+
+    def test_the_config_itself_still_loads(self):
+        """Deliberate: no load-time refusal. If someone re-adds one, this fails
+        and the trade-off above gets read again rather than rediscovered."""
         cfg = load_config_from_string(
-            f"base: org/m\ntask: {task}\n"
-            f"data:\n  train: x.jsonl\n  format: {data_format}\n"
-            f"training:\n  moe_lora: true\n  lora:\n    dropout: 0.0\n{extra}"
+            "base: org/m\ntask: sft\ndata: {train: x.jsonl}\n"
+            "training: {moe_lora: true, lora: {dropout: 0.05}}\n"
         )
-        assert cfg.training.lora.dropout == 0.0
+        assert cfg.training.lora.dropout == 0.05
 
     def test_dropout_is_untouched_without_moe_lora(self):
-        """The control: the rule is about moe_lora, not about dropout."""
+        """The rule is about moe_lora, not about dropout."""
         cfg = load_config_from_string(
             "base: org/m\ntask: sft\ndata: {train: x.jsonl}\n"
             "training: {lora: {dropout: 0.05}}\n"

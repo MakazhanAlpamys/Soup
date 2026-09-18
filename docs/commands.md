@@ -354,7 +354,7 @@ soup train  # task=classifier|reranker|cross_encoder + lora  LoRA-adapter classi
 soup train  # use_mod | expand_layers | use_longlora  Mixture-of-Depths / LLaMA Pro / LongLoRA S² (Llama/Qwen/Mistral[/Phi]) — LIVE (v0.71.12)
 soup train  # task='tts' + tts_family + modality='audio_out'  TTS fine-tune via SFT CE over pre-encoded codec tokens; emotion templating; live-codec hw-gated — LIVE (v0.71.20)
 soup train  # task in {sft,tts} + moe_expert_quant=nf4|int8_rowwise [+moe_lora]  bnb per-expert quant of fused-MoE experts (CUDA); refused on other tasks, which never applied it (#798) — LIVE (v0.71.20)
-soup train  # task in {sft,tts} + train_router_only=true [+moe_lora]  Freeze MoE experts, train only the gating router; refused on other tasks (#798). moe_lora needs lora.dropout: 0.0 — LIVE (v0.71.20)
+soup train  # task in {sft,tts} + train_router_only=true [+moe_lora]  Freeze MoE experts, train only the gating router; refused on other tasks (#798). moe_lora needs lora.dropout: 0.0 on fused-expert MoEs — LIVE (v0.71.20)
 soup train  # quantization='bitnet_1.58'  BitNet 1.58 training is not implemented; config load refuses it
 soup export --model ./output --format bitnet|tq1_0  BitNet 1.58 TQ1_0 ternary GGUF via llama.cpp — LIVE (v0.71.20)
 soup version [--full] [--json]                Show version (--full: system info, --json: JSON output)
