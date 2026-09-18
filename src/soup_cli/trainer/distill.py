@@ -373,7 +373,7 @@ class DistillNonfiniteTracker:
                     border_style="yellow",
                 )
                 self.console.print(panel)
-            except Exception:
+            except (RuntimeError, ValueError, TypeError):
                 pass
 
 
