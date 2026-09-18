@@ -109,6 +109,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--input-seed", type=int, default=17)
     parser.add_argument("--ceiling", action="store_true")
     parser.add_argument("--step", action="store_true")
+    parser.add_argument(
+        "--skip-events",
+        action="store_true",
+        help=(
+            "run only the uninstrumented `step_plain` block of --step. Added for the "
+            "#974 A/B, where one arm reads 3x faster than the other and the CUDA-event "
+            "brackets cost each of them a different fraction of its step: measured free "
+            "on the fast arm (16.71 -> 16.84 s/step), not measured to completion on the "
+            "slow one. Halves a cold 70B block and keeps the two arms comparable"
+        ),
+    )
     parser.add_argument("--sweep", nargs="?", const=SWEEP_DEFAULT, default=None)
     parser.add_argument("--ablate", action="store_true")
     parser.add_argument("--rounds", type=int, default=2, help="interleaved ablation rounds")
@@ -658,12 +669,16 @@ def gpu_facts(device: str) -> Dict[str, Any]:
 
     import torch
 
+    import soup_cli
     from soup_cli.utils.layer_stream import _resolve_tool
 
     facts: Dict[str, Any] = {
         "gpu": torch.cuda.get_device_name(0),
         "torch": torch.__version__,
         "vram_total_gb": round(torch.cuda.mem_get_info()[1] / 1e9, 3),
+        # Which source tree this run actually imported. An arm that claims to be
+        # "the old code" is only evidence if the JSON says where it came from.
+        "soup_cli_file": soup_cli.__file__,
     }
     tool = _resolve_tool("nvidia-smi")
     if tool is not None:
@@ -1016,14 +1031,21 @@ def main() -> int:
         )
         sink.add("step", plain)
         print(describe(plain, flop_per_token, ceiling_tflops))
-        inst.events_on = True
-        evict_page_cache(args.evict_gb)
-        timed = run_steps(
-            model, optimizer, inst, ids, steps=args.steps, warmup=args.warmup, label="step_events"
-        )
-        inst.events_on = False
-        sink.add("step", timed)
-        print(describe(timed, flop_per_token, ceiling_tflops))
+        if not args.skip_events:
+            inst.events_on = True
+            evict_page_cache(args.evict_gb)
+            timed = run_steps(
+                model,
+                optimizer,
+                inst,
+                ids,
+                steps=args.steps,
+                warmup=args.warmup,
+                label="step_events",
+            )
+            inst.events_on = False
+            sink.add("step", timed)
+            print(describe(timed, flop_per_token, ceiling_tflops))
 
     if args.sweep:
         seqs = [int(part) for part in args.sweep.split(",") if part.strip()]

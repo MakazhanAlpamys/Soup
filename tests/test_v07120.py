@@ -24,6 +24,7 @@ from types import SimpleNamespace
 import pytest
 
 from soup_cli import __version__
+from tests.conftest import cuda_available
 
 _SRC = Path(__file__).resolve().parent.parent / "src" / "soup_cli"
 
@@ -367,10 +368,8 @@ class TestBuildBitnetTrainer:
         with pytest.raises(TypeError):
             build_bitnet_trainer()
 
-    def test_returns_wrapper(self):
+    def test_config_refuses_unwired_training(self):
         from soup_cli.config.loader import load_config_from_string
-        from soup_cli.trainer.bitnet import BitNetTrainerWrapper
-        from soup_cli.utils.bitnet import build_bitnet_trainer
 
         yaml_str = (
             "base: hf-internal-testing/tiny-random-gpt2\n"
@@ -381,9 +380,8 @@ class TestBuildBitnetTrainer:
             "training:\n"
             "  quantization: bitnet_1.58\n"
         )
-        cfg = load_config_from_string(yaml_str)
-        wrapper = build_bitnet_trainer(cfg, device="cpu")
-        assert isinstance(wrapper, BitNetTrainerWrapper)
+        with pytest.raises(ValueError, match="training is not implemented yet"):
+            load_config_from_string(yaml_str)
 
     def test_setup_gates_on_onebitllms(self):
         from soup_cli.trainer.bitnet import BitNetTrainerWrapper
@@ -650,21 +648,22 @@ class TestApplyMoeExpertQuant:
         return Model()
 
     def test_gates_without_bnb_or_cuda(self):
-        torch = pytest.importorskip("torch")
-        if torch.cuda.is_available() and _spec("bitsandbytes"):
+        pytest.importorskip("torch")
+        if cuda_available() and _spec("bitsandbytes"):
             pytest.skip("CUDA + bitsandbytes present; real quant path used")
         from soup_cli.utils.moe_quant import apply_moe_expert_quant
 
         with pytest.raises(RuntimeError, match="bitsandbytes|CUDA"):
             apply_moe_expert_quant(self._moe_with_experts(), "nf4")
 
+    @pytest.mark.gpu(reason="the real per-expert NF4 quant needs bitsandbytes' CUDA kernels")
     def test_real_nf4_quant_swaps_experts(self):
         """When CUDA + bitsandbytes are present (dev box; skipped on CI),
         the real per-expert quant replaces each expert Linear with a bnb
         Linear4bit. Validated live on an RTX 3050 (Step 6)."""
-        torch = pytest.importorskip("torch")
-        if not (torch.cuda.is_available() and _spec("bitsandbytes")):
-            pytest.skip("requires CUDA + bitsandbytes")
+        pytest.importorskip("torch")
+        if not _spec("bitsandbytes"):
+            pytest.skip("requires bitsandbytes")
         import bitsandbytes as bnb  # noqa: PLC0415
 
         from soup_cli.utils.moe_quant import apply_moe_expert_quant

@@ -20,7 +20,7 @@
 - [Performance + Long-Context](#performance--long-context)
 - [Live CUDA Batch-Size Probe](#live-cuda-batch-size-probe)
 - [FSDP Shard Consolidation](#fsdp-shard-consolidation)
-- [BitNet 1.58-Bit Fine-Tuning (BETA, live in v0.71.20)](#bitnet-158-bit-fine-tuning-beta-live-in-v07120)
+- [BitNet 1.58-Bit Export](#bitnet-158-bit-export)
 - [MoE Expert Quantization + Router-Only Training (live in v0.71.20)](#moe-expert-quantization--router-only-training-live-in-v07120)
 - [Unsloth Dynamic 2.0 GGUF Ladder (v0.53.0)](#unsloth-dynamic-20-gguf-ladder-v0530)
 - [KV Cache Types (v0.53.0)](#kv-cache-types-v0530)
@@ -356,8 +356,9 @@ The 3.32 GB 8B row above predates large-layer streaming: its untied, unquantised
 **Honest scope:**
 - **RAM tier + disk overflow (v0.72.3).** `stream_source: auto` picks RAM when the store fits both dynamic free-RAM headroom and a physical-host ceiling, falls back to NVMe disk when not; SATA/HDD rejected. Correctness verified. **The read is off the compute thread**: a background reader parses each shard's header itself (no memory map) and stages `training.stream_read_ahead` layers in host RAM (page-locked where the box allows — see `stream_pin` below), so the GPU is fed while the next layer is still arriving. **Measured cold and warm against a same-day control of the source it replaces** (RTX 5070 Laptop, 2026-09-14, [record](../benchmarks/gate-971-async-nvme-source.md)).
   - **Cold — a store larger than RAM, which is what this tier is for — is 2.1–3.1x faster.** On a 36 GB 70B-shaped NF4 store at batch 1 x seq 512 a step went from 92–100 s to **30–48 s**, each pair position-matched (5.1–5.6 -> **10.6–16.9 tok/s**; 0.70–0.76 -> **1.46–2.32 GB/s** at the source), against 124.5 s / 4.1 tok/s / 0.57 GB/s for the old synchronous path measured 2026-09-12 ([earlier record](../benchmarks/probe-rtx5070-what-bounds-streaming.md)). The range is position in the run, not depth — see below. Peak VRAM is unchanged at 4.38 GB.
-  - **Warm — the whole store in the page cache — it is a REGRESSION**, 1.03–1.20x slower than the synchronous source depending on run order (1.84 s against 1.54 s with the async arm first, 2.09 s against 2.02 s with the order reversed, at batch 1 x 512 on a 4.1 GB Mistral-7B NF4 store). With the store cached a synchronous read is close to a `memcpy`, so there is nothing for a background reader to hide and the handoff is pure overhead. **If the store fits RAM, use the RAM tier** — 0.82 s in the same session, 1.8–2.3x faster than either disk arm.
-  - **It is still bound by the read**: per-layer read brackets are 82.6–84.9% of the cold step. There is no measured read-free floor at this sequence to compare that against — the ~14 s figure is at a shorter one — so no headroom ratio is quoted.
+  - **Since #974 the reader bypasses the page cache.** Each layer's data section is read as sector-aligned byte ranges through direct I/O (`FILE_FLAG_NO_BUFFERING` on Windows, `O_DIRECT` on Linux, `F_NOCACHE` on macOS; a buffered `open` where a filesystem refuses, e.g. tmpfs — the pre-flight log says which), four ranges in parallel, into **one staging region per slot** packed into the same power-of-two pinned arenas as the RAM store. The reason is a measurement, not a preference: on that same 36 GB store, cold, every *buffered* read primitive — per-tensor `readinto` (the path this replaces), one `readinto` per byte range, any thread count — topped out at **1.2–2.9 GB/s** on the dev box's NVMe, while unbuffered reads of the same fresh layers reached **3.5–5.65 GB/s**, best at 2–4 ranges ([record](../benchmarks/gate-974-disk-tier-direct-io.md)). The earlier 1.46–2.32 GB/s at the source was that buffered ceiling. Two consequences worth knowing: the staging no longer pays the per-tensor power-of-two rounding (#901's mechanism, 1.7–1.9x measured — the 70B store's four slots page-lock as one 2 GiB arena for 1.96 GB, and the ready line prints the figure on this tier too), and a disk-tier run no longer warms the page cache for anything that runs after it. Through the same cold protocol as the bullet above (36 GB 70B-shaped NF4 store, batch 1 x seq 512), the step is now **16.2–17.3 s at both run positions** — 6.4x the synchronous path measured in the same slot (110.5 s), 2.0–2.8x the reader this replaces (34.8–45.6 s) — with the read at 62–64% of the step at 6.0–7.0 GB/s; the new reader's two positions differ by 1.07x where the old one's differed by 1.31x, because a reader that bypasses the cache gives the same number wherever it runs ([record](../benchmarks/gate-974-disk-tier-direct-io.md) §8).
+  - **Warm — the whole store in the page cache — was reported as a 1.03–1.20x REGRESSION** against the synchronous source (gate-971 §5). Position-matched in both run orders it is **0.91–0.97x**, i.e. not one: the bracket was the run-order effect that record had already named for the cold fixture (#974). After the change, in one session against the reader it replaces, the new reader is 0.76x of it warm (1.58 vs 2.09 s) and 2.25x faster right after a page-cache eviction (1.79 vs 4.02 s). **If the store fits RAM, use the RAM tier** — 1.1 s against 1.8–2.0 s for either disk arm in the same session; the disk tier exists for a store that does not.
+  - **It is still bound by the read, less so since #974**: per-layer read brackets were 82.6–84.9% of the cold step in gate-971 and are 62–64% after the direct-I/O reader. There is no measured read-free floor at this sequence to compare that against — the ~14 s figure is at a shorter one — so no headroom ratio is quoted.
   - **`stream_read_ahead` did not change throughput** in that record. Depths 1, 2 and 4 were indistinguishable once run order was controlled for — the same configuration measured 48.09 s run first and 30.28 s run last, as the page cache warmed across blocks, which is larger than the whole spread across depths. Treat it as a **host-memory knob**: 1.5 GB of pinned staging at depth 1, 2.0 GB at 2, 2.8 GB at 4 on a 70B. The pre-flight prints that figure on the disk tier (`host staging read_ahead N -> X MB`) and **refuses the run** when it plus the resident extras will not fit the free-RAM headroom, naming `stream_read_ahead` as the knob to lower — the embedding and an untied `lm_head` take one slot each at any depth, because they are one layer each.
   - **Disk-kind detection.** A paravirtual (virtio) disk reports `rotational=1` with no media hint, so a genuinely NVMe-backed cloud disk was misread as an HDD and refused (#365); detection now measures a bounded O_DIRECT sequential read when the rotational flag is unreliable and admits NVMe-class throughput (>= 1 GB/s), while a genuinely slow disk stays rejected. Set `training.stream_disk_kind: nvme` (or `ssd`/`hdd`) to override when detection is still wrong — the resolved value is printed beside what was detected.
 - **Apple APFS disk detection.** On macOS, an APFS volume may report `Apple Fabric`
@@ -388,6 +389,9 @@ page-locked, and on the disk tier whether the async reader's host *staging* is.
   staging on the disk tier. The fallback names what it costs: host→device copies become
   synchronous, and measured GPU utilisation drops from **~97% to ~79%**. On the disk tier it
   also names `stream_read_ahead`, because the depth is what decides how much gets page-locked.
+  Since #974 that staging is packed into the same power-of-two arenas as the RAM store (one
+  region per slot, tensors as views), so it page-locks at close to its own size instead of
+  the per-tensor 1.7–1.9x, and the ready line prints the figure on this tier too.
 - **`stream_pin: false`** forces pageable host memory on either tier — the base store on the
   RAM tier, the reader's staging on the disk tier. The pre-flight states the throughput this
   costs rather than absorbing it silently: up to **6.56×** measured (Qwen2.5-32B NF4),
@@ -713,10 +717,10 @@ data:
 ```
 
 The override is installed before conversational SFT, preference, reward-model,
-GRPO, or Online DPO data is rendered. The saved tokenizer keeps the same template
+PPO, GRPO, or Online DPO data is rendered. The saved tokenizer keeps the same template
 for inference. Tasks that do not render chat (`pretrain`, `embedding`, `classifier`,
-`reranker`, and `cross_encoder`) reject `data.chat_template` instead of silently
-ignoring it.
+`reranker`, `cross_encoder`, `prm`, `asr`, `moe_lora_routing`, and `unlearn`) reject
+`data.chat_template` instead of silently ignoring it.
 
 Raw Jinja strings are validated: null bytes / >64KB / filesystem-touching directives (`{% include %}`, `{% import %}`, `{% from %}`, `{% macro %}`, `{% extends %}`) are rejected at config-load.
 
@@ -796,19 +800,68 @@ trainable LoRA tensor is 2-D, so the no-decay group comes out empty, DeepSpeed
 drops it while the scheduler keeps two `base_lrs`, and torch's strict `zip`
 raises. Full fine-tuning populates both groups, so nothing is pruned there.
 
-### `--gpus` flag — topology-aware launch
+### `--gpus` flag: topology-aware launch
 
 ```bash
-# Auto-detect GPU count; print the exact accelerate command
+# Auto-detect local GPU count and launch under Accelerate
 soup train --config soup.yaml --gpus auto
 
-# Explicit GPU count
+# Explicit local GPU count
 soup train --config soup.yaml --gpus 4
+
+# Print the launch command without starting training
+soup train --config soup.yaml --gpus 4 --no-reexec
 ```
 
-`soup` detects NVLink / PCIe interconnect and prints the correct
-`accelerate launch` command. Copy-paste to start distributed training
-(auto-reexec ships in v0.27.1).
+With more than one GPU, Soup detects the local NVLink / PCIe topology and
+replaces itself with `accelerate launch`. Use `--no-reexec` to print a command
+for manual execution instead; this advisory mode exits with status 1.
+`--dry-run` validates the configuration and data without launching training.
+
+### Multi-node launch
+
+Run Soup on **each node**, with a different `--node-rank`. For two machines
+with eight GPUs each:
+
+```bash
+# On rank 0 (replace 10.0.0.10 with its reachable private hostname or IP)
+soup train --config soup.yaml --gpus 8 --nodes 2 \
+  --node-rank 0 --master-addr 10.0.0.10 --master-port 29500
+
+# On rank 1
+soup train --config soup.yaml --gpus 8 --nodes 2 \
+  --node-rank 1 --master-addr 10.0.0.10 --master-port 29500
+```
+
+`--gpus` is the number of GPUs **per node**. Both commands pass
+`--num_processes 16 --num_machines 2` to Accelerate, which starts eight workers
+on each machine. One GPU per node is also supported. `--gpus auto` detects the
+local count, so use it only when every node has the same number of visible GPUs.
+
+`--nodes` defaults to 1. With multiple nodes, `--master-addr` is required;
+`--node-rank` defaults to 0 and `--master-port` to 29500. Ranks must be distinct
+and between 0 and `nodes - 1`. Use the same node count, coordinator address,
+and port on every machine. Soup uses static rendezvous; it does not provision
+machines, copy files, or run the command on other nodes.
+
+`--master-addr` takes an address only: an IPv4 or IPv6 literal, or a hostname.
+The port belongs in `--master-port`, so `--master-addr head:29500` is rejected
+rather than exported as an unreachable `MASTER_ADDR` on every node.
+
+Install the same Soup and training dependencies on all nodes, and make the
+model, configuration, and data available at the paths used by each command.
+All nodes need network access to rank 0's coordinator port and to the peer
+connections used by NCCL. Configure the cluster's private network and firewall
+accordingly; opening only the coordinator port may not be sufficient.
+
+Multi-node launches default to `NCCL_IB_DISABLE=0` to allow InfiniBand. On a
+TCP-only cluster, set `NCCL_IB_DISABLE=1` before launching on every node.
+Soup preserves existing NCCL environment settings. `--no-reexec` prints the
+launch command and this advice without setting environment variables.
+`--dry-run` also prints the multi-node command, then validates locally without
+starting workers or changing NCCL settings. Neither mode tests peer connectivity.
+
+Multi-node options cannot be combined with `--cloud` or `--find-lr`.
 
 ### FSDP2 + `torch.compile`
 
@@ -894,30 +947,22 @@ soup merge-sharded-fsdp-weights ./fsdp-checkpoint -o ./merged.safetensors
 Consolidates `pytorch_model_fsdp_*.bin` shard files into a single `.safetensors`. Each shard is loaded one at a time (streaming, not all-at-once) with `torch.load(weights_only=True)`, tensor shapes validated (a duplicate key with a conflicting shape is rejected; a same-shape duplicate keeps the first and warns), and the merged dict written atomically. cwd-containment + symlink rejection apply to the output path and every shard; per-shard 16 GiB cap; `_MAX_SHARDS=1024`. `--plan-only` prints the plan and exits 0. Live torch-side consolidation shipped in v0.71.14.
 
 
-## BitNet 1.58-Bit Fine-Tuning (BETA, live in v0.71.20)
+## BitNet 1.58-Bit Export
 
-`training.quantization: bitnet_1.58` routes to a live `BitNetTrainerWrapper`
-(an SFT subclass) for ternary-weight training. It is gated on the upstream
-`onebitllms` package — when absent, training fails fast with a friendly
-`RuntimeError` naming it (`onebitllms` is CUDA/Linux-only). The export targets
-run a **real llama.cpp TQ1_0 ternary GGUF** export (reusing the v0.53.1
-convert→quantize pipeline) instead of a stub:
+BitNet 1.58 training is not implemented yet. Setting
+`training.quantization: bitnet_1.58` is rejected at config load with an
+actionable error instead of falling through to the ordinary SFT path.
+
+Export of an existing BitNet checkpoint remains live through llama.cpp's
+TQ1_0 ternary GGUF pipeline:
 
 ```bash
 soup export --model ./output --format bitnet   # → TQ1_0 ternary GGUF
 soup export --model ./output --format tq1_0     # same flavour, explicit name
 ```
 
-The export requires a built llama.cpp toolchain (the convert/quantize binaries
-raise a friendly `FileNotFoundError` when missing). A ready-made
-`falcon-e-bitnet-sft` recipe is shipped:
-
-```bash
-soup recipes use falcon-e-bitnet-sft
-soup train --config soup.yaml
-```
-
-Restricted to `task ∈ {sft, pretrain, dpo}` on `backend ∈ {transformers, unsloth}` with text modality; the cross-validator rejects MLX and vision/audio configurations loudly at config load.
+The export requires a built llama.cpp toolchain; the convert/quantize binaries
+raise a friendly `FileNotFoundError` when missing.
 
 
 ## MoE Expert Quantization + Router-Only Training (live in v0.71.20)

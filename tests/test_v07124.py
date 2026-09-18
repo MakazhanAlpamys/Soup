@@ -274,11 +274,13 @@ class TestCatalogCount:
 
         It had drifted through 116 -> 134 -> 137 -> 158 -> 162 without the name
         following, so the one thing a reader saw first was the one thing that
-        was false. The count itself is pinned by `test_catalog_size_is_174` in
-        `test_recipes.py` and by `test_recipe_count_is_synced.py`; this row is
+        was false. The count itself is pinned in `test_recipes.py` and by
+        `test_recipe_count_is_synced.py`; this row is
         the milestone file's own copy and does not need the number twice.
         """
-        assert len(RECIPES) == 174
+        from tests.recipe_count import EXPECTED_RECIPE_COUNT, recipe_count_hint
+
+        assert len(RECIPES) == EXPECTED_RECIPE_COUNT, recipe_count_hint(len(RECIPES))
 
     def test_list_recipes_matches_dict(self) -> None:
         assert len(list_recipes()) == len(RECIPES)

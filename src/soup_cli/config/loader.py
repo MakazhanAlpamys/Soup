@@ -1,11 +1,13 @@
 """Load and validate soup.yaml configs."""
 
+import warnings
 from pathlib import Path
 
 import yaml
 from pydantic import ValidationError
 from rich.console import Console
 
+from soup_cli.config.deprecation import SoupConfigDeprecationWarning
 from soup_cli.config.schema import SoupConfig
 from soup_cli.config.unknown_keys import find_unknown_config_keys, format_unknown_keys
 from soup_cli.utils.terminal import for_terminal
@@ -59,6 +61,34 @@ def _report_unknown_keys(raw: dict) -> "str | None":
     return None
 
 
+def _build_config(raw: dict) -> SoupConfig:
+    """Construct ``SoupConfig``, printing each deprecated value once (#759).
+
+    Validators report a value that will be refused in a later release as a
+    :class:`SoupConfigDeprecationWarning`. Recorded here rather than left to the
+    ``warnings`` filters, which print a source line, may show a message once
+    per process rather than once per load, or hide it entirely. Any other
+    warning raised while building is passed on unchanged.
+    """
+    try:
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            config = SoupConfig(**raw)
+    finally:
+        # Outside the ``catch_warnings`` block: re-raising a warning inside it
+        # would record it again into the list being walked.
+        printed: set = set()
+        for item in caught:
+            if issubclass(item.category, SoupConfigDeprecationWarning):
+                message = str(item.message)
+                if message not in printed:
+                    printed.add(message)
+                    console.print(f"[yellow]Warning:[/] {for_terminal(message)}")
+            else:
+                warnings.warn_explicit(item.message, item.category, item.filename, item.lineno)
+    return config
+
+
 def load_config(
     path: "Path | str",
     *,
@@ -97,7 +127,7 @@ def load_config(
         raise SystemExit(1)
 
     try:
-        config = SoupConfig(**raw)
+        config = _build_config(raw)
     except ValidationError as e:
         console.print("[red bold]Config validation error:[/]\n")
         for err in e.errors():
@@ -130,7 +160,7 @@ def load_config_from_string(yaml_str: str) -> SoupConfig:
         raise ValueError(unknown_error)
 
     try:
-        return SoupConfig(**raw)
+        return _build_config(raw)
     except ValidationError as exc:
         errors = []
         for err in exc.errors():
