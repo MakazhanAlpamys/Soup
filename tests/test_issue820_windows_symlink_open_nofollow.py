@@ -113,17 +113,7 @@ class TestOpenNoFollow:
         real_file = tmp_path / "reparse_candidate.txt"
         real_file.write_text("content", encoding="utf-8")
 
-        # Mock lstat to simulate a Windows reparse point (e.g. junction)
-        orig_lstat = os.lstat
         fake_reparse = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
-
-        def mock_lstat(path):
-            st = orig_lstat(path)
-            # Add FILE_ATTRIBUTE_REPARSE_POINT to st_file_attributes
-            return os.stat_result(
-                (st.st_mode, st.st_ino, st.st_dev, st.st_nlink, st.st_uid,
-                 st.st_gid, st.st_size, st.st_atime, st.st_mtime, st.st_ctime)
-            )
 
         class MockStatWithReparse:
             st_mode = stat.S_IFREG | 0o644
@@ -138,6 +128,57 @@ class TestOpenNoFollow:
             open_no_follow(real_file, os.O_RDONLY)
         assert exc_info.value.errno == errno.ELOOP
         assert "Reparse point not allowed" in str(exc_info.value)
+
+    def test_post_open_toctou_swap_detected_on_windows(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        real_file = tmp_path / "swap_candidate.txt"
+        real_file.write_text("content", encoding="utf-8")
+
+        monkeypatch.setattr(os, "name", "nt")
+
+        class MockSwappedFstat:
+            st_mode = stat.S_IFREG | 0o644
+            st_ino = 99999
+            st_dev = 88888
+
+        # fstat returns different ino/dev than lstat on existing file
+        monkeypatch.setattr(os, "fstat", lambda fd: MockSwappedFstat())
+
+        with pytest.raises(OSError) as exc_info:
+            open_no_follow(real_file, os.O_RDONLY)
+        assert exc_info.value.errno == errno.ELOOP
+        assert "File swapped during open" in str(exc_info.value)
+
+    def test_post_open_symlink_swap_on_create_windows(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        target = tmp_path / "new_target.txt"
+
+        monkeypatch.setattr(os, "name", "nt")
+        calls = 0
+
+        class MockStatSymlink:
+            st_mode = stat.S_IFLNK | 0o777
+            st_ino = 123
+            st_dev = 456
+            st_file_attributes = 0
+
+        def fake_lstat(path):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                # pre_st: file does not exist initially
+                raise FileNotFoundError()
+            # post_lst: someone swapped in a symlink right after open
+            return MockStatSymlink()
+
+        monkeypatch.setattr(os, "lstat", fake_lstat)
+
+        with pytest.raises(OSError) as exc_info:
+            open_no_follow(target, os.O_CREAT | os.O_WRONLY, 0o600)
+        assert exc_info.value.errno == errno.ELOOP
+        assert "Symbolic link created during open" in str(exc_info.value)
 
 
 # ===========================================================================

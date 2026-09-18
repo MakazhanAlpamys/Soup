@@ -322,8 +322,8 @@ def open_no_follow(
     On POSIX, applies ``O_NOFOLLOW`` at open time. On Windows (where
     ``os.O_NOFOLLOW`` is absent from the OS open flags), performs pre-open
     ``os.lstat`` inspection for ``S_ISLNK`` and reparse points, and post-open
-    ``os.fstat`` cross-validation against the opened file descriptor to close
-    the TOCTOU swap window.
+    ``os.fstat`` cross-validation against the opened file descriptor to detect
+    a TOCTOU swap.
 
     Raises :exc:`OSError` with :data:`errno.ELOOP` if ``path`` is a symlink or
     reparse point.
@@ -341,8 +341,6 @@ def open_no_follow(
         pre_st = os.lstat(p)
     except FileNotFoundError:
         pre_st = None
-    except OSError:
-        raise
 
     if pre_st is not None:
         if stat.S_ISLNK(pre_st.st_mode):
