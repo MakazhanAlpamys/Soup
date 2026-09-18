@@ -717,6 +717,12 @@ def _detect_gpu_arch_mismatch_advisory() -> str:
         )
 
     wheel = _torch_cuda_wheel_tag(driver_cuda)
+    if wheel is None:
+        return (
+            "Try reinstalling a CUDA-enabled PyTorch build that supports "
+            "your GPU architecture."
+        )
+
     index_url = f"https://download.pytorch.org/whl/{wheel}"
     return (
         "Reinstall a CUDA-enabled PyTorch build for your driver: "
