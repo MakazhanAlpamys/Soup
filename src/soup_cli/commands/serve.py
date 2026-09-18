@@ -193,7 +193,10 @@ def serve(
     auto_quant: bool = typer.Option(
         False,
         "--auto-quant",
-        help="Try GGUF/AWQ/GPTQ/FP8 on a tiny eval, pick fastest-at-acceptable-quality.",
+        help=(
+            "Unavailable until Soup can measure each loaded candidate; "
+            "the command refuses instead of guessing a format."
+        ),
     ),
     trust_remote_code: bool = typer.Option(
         False,
@@ -488,6 +491,21 @@ def serve(
         )
         raise typer.Exit(1)
 
+    # #816 — the old path timed three calls to a constant-returning stub and
+    # described the fastest few hundred nanoseconds as a quality-gated model
+    # evaluation. On vLLM that random result could then force AWQ/GPTQ/FP8 on
+    # a checkpoint which did not declare that format. Refuse until candidate
+    # models are really loaded and evaluated; ``quantization=None`` lets each
+    # backend honour the checkpoint's own metadata instead of inventing it.
+    if auto_quant:
+        console.print(
+            "[red]--auto-quant is unavailable:[/] Soup cannot measure quantization "
+            "candidates before the serving engine is loaded. Refusing instead of "
+            "guessing GGUF/AWQ/GPTQ/FP8 from timer noise. Serve the checkpoint as-is "
+            "or quantize it explicitly first."
+        )
+        raise typer.Exit(2)
+
     # #333 — --dashboard used to be accepted and then do nothing on backends
     # whose app has no /metrics route. Say so instead of no-opping.
     if dashboard:
@@ -722,63 +740,6 @@ def serve(
         )
         raise typer.Exit(1)
 
-    # v0.33.0 #54 / v0.35.0 #61 — Auto-quant live picker. Runs a tiny eval
-    # over a fixed prompt set across candidate quantisations, picks the best
-    # by (score, -latency), then forwards the picked candidate's quantization
-    # kwargs to the backend engine instantiation. Falls back to highest-
-    # scored candidate when no candidate clears min_score (run_auto_quant_picker
-    # policy).
-    auto_quant_kwargs: dict = {}
-    if auto_quant:
-        from soup_cli.utils.auto_quant import (
-            default_candidate_order,
-            quant_name_to_vllm_kwargs,
-            run_auto_quant_picker,
-        )
-
-        prompts = [
-            "What is 2 + 2?",
-            "Translate 'hello' to French.",
-            "Name one prime number greater than 10.",
-        ]
-
-        def _make_eval_fn(_name):
-            def _fn(_prompt):
-                # Pre-bind eval still uses a heuristic — the engine isn't up
-                # yet. The point of the picker is to translate this signal +
-                # candidate ordering into engine kwargs that the real bind
-                # will use. A live in-engine eval refresh remains future work.
-                return ("", True)
-            return _fn
-
-        candidate_specs = [
-            (name, _make_eval_fn(name)) for name in default_candidate_order()
-        ]
-        try:
-            picked = run_auto_quant_picker(
-                candidate_specs=candidate_specs, prompts=prompts,
-            )
-            console.print(
-                f"[green]--auto-quant picked:[/] {picked.name} "
-                f"(score={picked.score:.2f}, latency={picked.latency_ms:.1f}ms)"
-            )
-            # Forward the chosen quant into the backend engine. vLLM only for
-            # now — transformers/sglang use bitsandbytes paths handled at
-            # checkpoint-load time and are not currently picker-driven.
-            if backend == "vllm":
-                from rich.markup import escape
-
-                auto_quant_kwargs = quant_name_to_vllm_kwargs(picked.name)
-                if auto_quant_kwargs:
-                    console.print(
-                        "[green]--auto-quant binding vLLM with:[/] "
-                        + escape(repr(auto_quant_kwargs))
-                    )
-        except ValueError as exc:
-            from rich.markup import escape as _esc
-
-            console.print(f"[yellow]--auto-quant: {_esc(str(exc))}[/]")
-
     # Validate trace endpoint early
     if trace and trace_endpoint:
         from soup_cli.utils.tracing import validate_otlp_endpoint
@@ -826,7 +787,7 @@ def serve(
             speculative_model=speculative_model,
             num_speculative_tokens=num_speculative_tokens,
             enable_prefix_caching=prefix_cache,
-            quantization=auto_quant_kwargs.get("quantization"),
+            quantization=None,
             trust_remote_code=resolved_trust,
             max_model_len=max_model_len,
             enable_dashboard=dashboard,

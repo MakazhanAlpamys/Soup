@@ -473,6 +473,7 @@ def _maybe_load_pretokenized(
     from soup_cli.utils.data_pipeline import (
         load_pretokenized_dataset,
         make_preprocess_cache_key,
+        preprocess_dataset_key_input,
     )
 
     tokenized_path = dcfg.tokenized_path
@@ -486,11 +487,20 @@ def _maybe_load_pretokenized(
                 f"pre_tokenized metadata.json is unreadable: {exc}"
             ) from exc
         stored_key = metadata.get("cache_key")
+        # #1038: preprocess hashed the SOURCE format (chatml, alpaca, ...), which a
+        # ``pre_tokenized`` config cannot restate -- ``dcfg.format`` is always
+        # ``pre_tokenized`` here, so hashing it rejected every real cache. Use the
+        # format preprocess recorded as an input to the recomputed key: it is not
+        # trusted on its own, since editing it without the key still mismatches.
+        # Metadata without the field (older hand-written caches) keeps the old input.
+        source_format = metadata.get("format")
+        if not isinstance(source_format, str) or not source_format:
+            source_format = dcfg.format
         current_key = make_preprocess_cache_key(
-            dataset_path=dcfg.train,
+            dataset_path=preprocess_dataset_key_input(dcfg),
             tokenizer_name=base,
             max_length=dcfg.max_length,
-            format_name=dcfg.format,
+            format_name=source_format,
         )
         if stored_key != current_key:
             raise ValueError(

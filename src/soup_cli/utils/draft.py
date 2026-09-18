@@ -39,6 +39,8 @@ from typing import TYPE_CHECKING, Optional, Sequence
 from rich.panel import Panel
 from rich.table import Table
 
+from soup_cli.utils.terminal import for_terminal
+
 if TYPE_CHECKING:  # pragma: no cover — typing only; torch stays lazy at runtime
     from transformers import PreTrainedModel, PreTrainedTokenizerBase
 
@@ -286,8 +288,8 @@ def render_draft_panel(report: AcceptanceReport) -> Panel:
     table = Table.grid(padding=(0, 2))
     table.add_column(style="dim")
     table.add_column()
-    table.add_row("Target", report.target)
-    table.add_row("Draft", report.draft)
+    table.add_row("Target", for_terminal(report.target))
+    table.add_row("Draft", for_terminal(report.draft))
     table.add_row(
         "Acceptance",
         f"[bold {colour}]{report.acceptance_rate * 100:.1f}%[/] "

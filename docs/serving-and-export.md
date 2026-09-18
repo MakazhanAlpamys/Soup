@@ -212,6 +212,12 @@ This acts as a built-in "speedometer," outputting Tokens-Per-Second (TPS), Total
 
 ## Inference Server
 
+`--auto-quant` currently refuses with exit code 2. Soup cannot compare GGUF, AWQ,
+GPTQ, FP8, and an unquantized baseline before a serving engine has loaded them;
+timing an unevaluated stub would make the result depend on timer noise and could
+force a format the checkpoint does not contain. Quantize the checkpoint explicitly,
+then serve that checkpoint without `--auto-quant`.
+
 Start a local OpenAI-compatible inference server:
 
 ```bash
@@ -607,7 +613,15 @@ soup llama --help                  # list supported subcommands
 soup llama cli -m model.gguf -p "Hello"
 soup llama gguf-split --merge a.gguf b.gguf out.gguf
 soup llama server -m model.gguf
+soup llama quantize model.gguf model-q4_k_m.gguf q4_K_M
 ```
+
+### `soup llama quantize`
+
+Forwards every trailing argument to the `llama-quantize` binary on `PATH` (same
+closed allowlist / filtered-env rules as the other `soup llama` subcommands). Use
+it when you already have a GGUF and want llama.cpp's quantizer directly, rather
+than going through `soup export --format gguf` / `soup quantize`.
 
 Closed allowlist: `cli` / `mtmd-cli` / `gguf-split` / `server` / `quantize`. Forwards to `llama-*` binary on PATH (`shutil.which`) with **filtered child env** — `HF_TOKEN` / `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` and other secrets are dropped before exec; only `PATH` / `HOME` / `USER` / locale + llama.cpp-recognised `LLAMA_CPP_HOME` / `GGML_*` / `OMP_NUM_THREADS` are forwarded.
 

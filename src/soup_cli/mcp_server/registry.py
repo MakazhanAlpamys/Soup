@@ -19,7 +19,7 @@ import shlex
 import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Mapping
+from typing import TYPE_CHECKING, Any, Callable, Iterable, Mapping
 
 from soup_cli.mcp_server.execution import (
     ExecutionError,
@@ -131,6 +131,18 @@ def _read_json_under_cwd(path: str, field: str, *, max_bytes: int = _MAX_JSON_BY
 # Generous cap on free-text string args (paths, ids, goals, queries). Bounds a
 # pathological input without constraining any legitimate value (security-review).
 _MAX_STR_LEN = 4096
+
+
+def _unknown_choice(
+    field: str, value: str, choices: Iterable[str], *, preserve_order: bool = False
+) -> McpToolError:
+    """Describe a rejected choice using the live allowlist and an escaped value.
+
+    Callers apply the string length guard first. Only the choice is echoed,
+    never related model/config paths or an underlying exception's message.
+    """
+    accepted = choices if preserve_order else sorted(choices)
+    return McpToolError(f"unknown {field} {value!r}; accepted: " + ", ".join(accepted))
 
 
 def _require_str(args: dict, key: str) -> str:
@@ -251,9 +263,8 @@ def tool_data_validate(args: dict) -> dict:
     fmt = _opt_str(args, "format")
     fmt = "auto" if fmt is None else fmt
     if fmt != "auto" and fmt not in _formats.VALID_FORMATS:
-        raise McpToolError(
-            f"unknown format {fmt!r}; accepted: auto, "
-            + ", ".join(sorted(_formats.VALID_FORMATS))
+        raise _unknown_choice(
+            "format", fmt, ("auto", *_formats.VALID_FORMATS), preserve_order=True
         )
     if fmt == "auto":
         try:
@@ -295,9 +306,8 @@ def tool_data_doctor(args: dict) -> dict:
     fmt = _opt_str(args, "format")
     fmt = "auto" if fmt is None else fmt
     if fmt != "auto" and fmt not in _formats.VALID_FORMATS:
-        raise McpToolError(
-            f"unknown format {fmt!r}; accepted: auto, "
-            + ", ".join(sorted(_formats.VALID_FORMATS))
+        raise _unknown_choice(
+            "format", fmt, ("auto", *_formats.VALID_FORMATS), preserve_order=True
         )
     max_length = _opt_int(args, "max_length", 2048, lo=64, hi=1_048_576)
     sample_size = _opt_int(args, "sample_size", 200, lo=1, hi=2000)
@@ -430,7 +440,7 @@ def _resolve_gpu_memory_mcp(gpu: str | None) -> tuple[float, str]:
     if gpu is not None:
         gpu_key = normalize_gpu_key(gpu)
         if gpu_key not in GPU_MEMORY:
-            raise McpToolError("unknown gpu (see 'soup profile --help' for valid options)")
+            raise _unknown_choice("gpu", gpu, GPU_MEMORY)
         return float(GPU_MEMORY[gpu_key]), "flag"
     try:
         from soup_cli.utils.gpu import get_gpu_info
@@ -719,7 +729,7 @@ def tool_export(args: dict, execution: ExecutionManager | None = None) -> dict:
     model = _require_str(args, "model")
     fmt = _require_str(args, "format")
     if fmt not in SUPPORTED_FORMATS:
-        raise McpToolError("unsupported export format (see 'soup export --help')")
+        raise _unknown_choice("export format", fmt, SUPPORTED_FORMATS)
     output = _opt_str(args, "output")
     try:
         enforce_under_cwd_and_no_symlink(model, "model")

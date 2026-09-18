@@ -105,6 +105,17 @@ _MAX_SPEC_GROUPS = 8
 # consumer parked on a 40 s cold read wakes ~80 times to look at two fields.
 _LIVENESS_POLL_SECONDS = 0.5
 
+# How many times the reader thread is STARTED before a start failure is final.
+#
+# On CPython <= 3.11 a thread that starts while another thread is inside
+# `sys.settrace` dies in `Thread._bootstrap_inner` ("Cannot install a trace
+# function while another trace function is being installed") before its target
+# runs — a tracer's `threading.settrace` hook plus any audit hook is enough
+# (#1056; #1030 is the same race in the test helper). That reader did no work,
+# so starting another is exact rather than a retry. Bounded, because a thread
+# that can NEVER start must still end in an error instead of a restart loop.
+_MAX_READER_STARTS = 3
+
 
 def _spec_key(layer_spec: Mapping[str, Tuple[Tuple[int, ...], str]]) -> tuple:
     """A hashable identity for one layer's tensor names, shapes and dtypes.
@@ -162,12 +173,83 @@ class _RangeReaders:
 
     def __init__(self, count: int, name: str = "soup-layer-range"):
         self._jobs: "queue.Queue[Optional[Tuple[Any, _RangeJob]]]" = queue.Queue()
-        self._threads = [
-            threading.Thread(target=self._loop, name=f"{name}-{index}", daemon=True)
-            for index in range(count)
-        ]
-        for thread in self._threads:
-            thread.start()
+        self._name = name
+        # Guards `_threads` / `_starts` / `_closed`: `run` restarts workers on
+        # the reader thread while `close` may run on the consumer's.
+        self._lock = threading.Lock()
+        self._closed = False
+        # Per worker SLOT, set as the worker's first statement: a slot whose
+        # thread is dead and never entered died in bootstrap (#1056) and took
+        # no job, so it is restarted rather than read as a closed pool.
+        self._entered = [threading.Event() for _ in range(count)]
+        self._starts = [0] * count
+        self._threads: List[threading.Thread] = []
+        with self._lock:
+            for index in range(count):
+                self._threads.append(self._new_worker(index))
+                self._threads[index].start()
+
+    def _new_worker(self, index: int) -> threading.Thread:
+        """A worker thread for slot ``index``, not started. Lock held."""
+        self._starts[index] += 1
+        return threading.Thread(
+            target=self._enter_and_loop,
+            args=(index,),
+            name=f"{self._name}-{index}",
+            daemon=True,
+        )
+
+    def _enter_and_loop(self, index: int) -> None:
+        self._entered[index].set()
+        self._loop()
+
+    def _check_workers(self) -> None:
+        """Restart workers that died before entering; raise if none can serve.
+
+        A closed pool stays "closed" whatever else happened to its workers —
+        that was the owner's decision, and the reader reports it as such.
+        """
+        with self._lock:
+            if not self._closed:
+                for index, thread in enumerate(self._threads):
+                    if thread.is_alive() or self._entered[index].is_set():
+                        continue
+                    if self._starts[index] < _MAX_READER_STARTS:
+                        logger.warning(
+                            "layer-stream range worker %d died before it started "
+                            "(start %d of %d); starting another",
+                            index,
+                            self._starts[index],
+                            _MAX_READER_STARTS,
+                        )
+                        self._threads[index] = self._new_worker(index)
+                        self._threads[index].start()
+            if any(thread.is_alive() for thread in self._threads):
+                return
+            never_entered = [
+                index for index, event in enumerate(self._entered) if not event.is_set()
+            ]
+            if not self._closed and never_entered:
+                # A worker started just above can already be dead again; it
+                # gets its next poll unless its slot has used every start.
+                if any(self._starts[index] < _MAX_READER_STARTS for index in never_entered):
+                    return
+                raise RuntimeError(
+                    f"layer-stream range reader threads failed to start "
+                    f"{_MAX_READER_STARTS} times (worker(s) {never_entered}): each "
+                    f"died before running (on CPython <= 3.11 a tracer's "
+                    f"threading.settrace hook can kill a starting thread). Refusing "
+                    f"rather than blocking."
+                )
+            if not self._closed:
+                # Every worker ran and left, yet nobody sent a sentinel. No path
+                # in `_loop` does that; a backstop like the reader's, and not
+                # restarted, because a worker that ran may have taken a job.
+                raise RuntimeError(
+                    "layer-stream range reader threads exited without the source "
+                    "being closed. Refusing rather than blocking."
+                )
+        raise RuntimeError("layer-stream disk source is closed")
 
     def _loop(self) -> None:
         while True:
@@ -189,10 +271,10 @@ class _RangeReaders:
         for outcome in outcomes:
             # A job queued behind the close sentinels is never taken; polling
             # the workers' liveness is what turns that into an error rather
-            # than a reader parked forever.
+            # than a reader parked forever. The same poll restarts a worker
+            # that died in bootstrap, which would otherwise read as "closed".
             while not outcome.done.wait(timeout=1.0):
-                if not any(thread.is_alive() for thread in self._threads):
-                    raise RuntimeError("layer-stream disk source is closed")
+                self._check_workers()
         for outcome in outcomes:
             if outcome.error is not None:
                 raise outcome.error
@@ -201,10 +283,15 @@ class _RangeReaders:
         """Send every worker its sentinel and wait for them, up to ``timeout`` in
         total — a worker still inside a read outlives it, as the reader thread
         outlives its own bounded join."""
-        for _ in self._threads:
+        # Under the lock, so `run` cannot start a worker after this snapshot;
+        # one sentinel per slot covers a restarted worker as well.
+        with self._lock:
+            self._closed = True
+            threads = list(self._threads)
+        for _ in threads:
             self._jobs.put(None)
         deadline = time.monotonic() + timeout
-        for thread in self._threads:
+        for thread in threads:
             thread.join(timeout=max(0.0, deadline - time.monotonic()))
 
 
@@ -485,10 +572,26 @@ class AsyncDiskSource:
         self._direction: Dict[int, int] = {}
         self._error: Optional[BaseException] = None
         self._closed = False
+        # Set by the reader as its first statement and never cleared: the
+        # liveness check needs to tell a reader that ran and left from one that
+        # died before running, and only the second may be restarted.
+        self._reader_entered = threading.Event()
+        self._reader_starts = 0
+        self._start_reader()
+
+    def _start_reader(self) -> None:
+        """Start a reader thread. Lock held, or no other thread exists yet."""
         self._thread = threading.Thread(
-            target=self._run, name="soup-layer-reader", daemon=True
+            target=self._enter_and_run, name="soup-layer-reader", daemon=True
         )
+        self._reader_starts += 1
         self._thread.start()
+
+    def _enter_and_run(self) -> None:
+        # A wrapper rather than a line in `_run`, so a replaced `_run` (the
+        # backstop tests) still counts as a reader that entered.
+        self._reader_entered.set()
+        self._run()
 
     # -- staging ---------------------------------------------------------
     def _allocate_staging(self, region_sizes: Sequence[int]) -> Tuple[List[Any], List[Any]]:
@@ -976,8 +1079,30 @@ class AsyncDiskSource:
           time the consumer spends unable to proceed, and charging the wider
           window errs towards firing, which is the safe direction for a
           hang detector carrying a 15x margin.
+
+        A reader that is gone WITHOUT having entered is neither: it died in
+        thread bootstrap before ``_run`` began (#1056), so it holds no request,
+        no slot and no in-flight read, and starting a fresh one is exact. That
+        is bounded by ``_MAX_READER_STARTS`` and ends in its own error, so a
+        thread that can never start is still refused rather than looped on.
         """
         if self._error is None and not self._closed and not self._thread.is_alive():
+            if not self._reader_entered.is_set():
+                if self._reader_starts < _MAX_READER_STARTS:
+                    logger.warning(
+                        "layer-stream reader thread died before it started "
+                        "(start %d of %d); starting another",
+                        self._reader_starts,
+                        _MAX_READER_STARTS,
+                    )
+                    self._start_reader()
+                    return
+                raise RuntimeError(
+                    f"layer-stream reader thread failed to start {self._reader_starts} "
+                    f"times, with layer {idx} still wanted: each died before running "
+                    f"(on CPython <= 3.11 a tracer's threading.settrace hook can kill "
+                    f"a starting thread). Refusing rather than blocking."
+                )
             raise RuntimeError(
                 f"layer-stream reader thread exited without recording an error, "
                 f"with layer {idx} still wanted. Refusing rather than blocking: a "

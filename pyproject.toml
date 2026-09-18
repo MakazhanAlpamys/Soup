@@ -260,5 +260,6 @@ markers = [
     "smoke: slow smoke tests that download models and run training (run with: pytest -m smoke)",
     "unit: fast isolated tests — no subprocess, network, filesystem, or real model load",
     "integration: tests that touch real subprocess, SQLite, filesystem, or HTTP",
+    "gpu: needs a CUDA device; skipped without one (see tests/conftest.py, #833). Run: pytest -m gpu --no-cov",
 ]
 addopts = "-m 'not smoke' --cov=soup_cli --cov-fail-under=77 --cov-report=term-missing:skip-covered"

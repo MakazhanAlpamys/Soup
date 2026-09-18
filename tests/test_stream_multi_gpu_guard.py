@@ -103,6 +103,7 @@ class TestDistributedDetection:
         assert _distributed_launch() is False
 
 
+@pytest.mark.gpu(reason="needs more than one CUDA device")
 @pytest.mark.skipif(
     not os.environ.get("SOUP_TEST_MULTI_GPU"),
     reason="needs >1 real CUDA device; set SOUP_TEST_MULTI_GPU=1 to run",

@@ -564,9 +564,88 @@ class TestPartEVocabExpansion:
         cfg = DataConfig(train="d.jsonl")
         assert cfg.skip_prepare_dataset is False
 
-    def test_remove_unused_columns_default_true(self):
+    def test_remove_unused_columns_default_false(self):
+        """#759: the declared default said True while every trainer passed
+        False, so the default was a false statement about what happens."""
         cfg = DataConfig(train="d.jsonl")
-        assert cfg.remove_unused_columns is True
+        assert cfg.remove_unused_columns is False
+
+    def test_remove_unused_columns_true_loads_with_a_warning_and_is_ignored(self):
+        """#759 revised ruling: `true` never took effect, and refusing it would
+        break configs Soup wrote itself, so it loads, warns, and is ignored."""
+        from soup_cli.config.deprecation import SoupConfigDeprecationWarning
+
+        with pytest.warns(
+            SoupConfigDeprecationWarning, match=r"data\.remove_unused_columns: true"
+        ) as record:
+            cfg = DataConfig(train="d.jsonl", remove_unused_columns=True)
+        assert cfg.remove_unused_columns is False, "the run must see what the trainers pass"
+        message = str(record[0].message)
+        assert "ignored" in message
+        assert "will refuse it" in message
+
+    def test_remove_unused_columns_false_loads_without_a_warning(self):
+        """The control: only `true` warns. Without this, a validator that warned
+        on every value would pass the test above."""
+        import warnings
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            cfg = DataConfig(train="d.jsonl", remove_unused_columns=False)
+            default = DataConfig(train="d.jsonl")
+        assert cfg.remove_unused_columns is False
+        assert default.remove_unused_columns is False
+
+    def test_remove_unused_columns_true_warns_through_the_yaml_path(self, monkeypatch):
+        """The user-facing path: `soup train` loads YAML, so the warning has to be
+        printed there, once, and the value the run sees is False."""
+        import io
+
+        from rich.console import Console
+
+        from soup_cli.config import loader
+
+        buffer = io.StringIO()
+        monkeypatch.setattr(
+            loader,
+            "console",
+            Console(file=buffer, width=500, force_terminal=False, color_system=None),
+        )
+        yaml_str = (
+            "base: sshleifer/tiny-gpt2\n"
+            "task: sft\n"
+            "data:\n"
+            "  train: d.jsonl\n"
+            "  remove_unused_columns: true\n"
+        )
+        cfg = load_config_from_string(yaml_str)
+        assert cfg.data.remove_unused_columns is False
+        out = buffer.getvalue()
+        assert out.count("data.remove_unused_columns: true") == 1, out
+        assert "Delete the line" in out
+
+    def test_a_config_autopilot_wrote_on_the_old_default_still_loads(self, tmp_path):
+        """The regression that revised the ruling: `soup autopilot` dumps the whole
+        model (`write_yaml`, `exclude_none` only), so on the old default every
+        config it wrote carries `remove_unused_columns: true`."""
+        import yaml
+
+        from soup_cli.autopilot.generate_config import write_yaml
+        from soup_cli.config.deprecation import SoupConfigDeprecationWarning
+        from soup_cli.config.loader import load_config
+        from soup_cli.config.schema import SoupConfig
+
+        written = tmp_path / "soup.yaml"
+        write_yaml(SoupConfig(base="sshleifer/tiny-gpt2", data={"train": "d.jsonl"}), written)
+        dumped = yaml.safe_load(written.read_text(encoding="utf-8"))
+        # What the v0.75.0-and-earlier writer produced: the old default, literally.
+        dumped["data"]["remove_unused_columns"] = True
+        written.write_text(yaml.safe_dump(dumped, sort_keys=False), encoding="utf-8")
+
+        with pytest.warns(SoupConfigDeprecationWarning):
+            SoupConfig(**dumped)
+        cfg = load_config(written)
+        assert cfg.data.remove_unused_columns is False
 
     def test_prompt_strategy_happy(self):
         cfg = DataConfig(

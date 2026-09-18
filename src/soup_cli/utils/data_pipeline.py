@@ -23,6 +23,7 @@ from __future__ import annotations
 import functools
 import hashlib
 import inspect
+import json
 import logging
 import math
 import os
@@ -198,6 +199,23 @@ def validate_shards(value: Optional[int]) -> Optional[int]:
 # the EOS gets one appended — so a cache built before this no longer trains without a
 # stop token on templates that render none (the Qwen shape). A v2 cache is rejected.
 _PREPROCESS_TOKENIZE_SCHEMA = "v3"
+
+
+def preprocess_dataset_key_input(data_cfg: Any) -> str:
+    """The ``dataset_path`` input both sides of the preprocess cache hash (#443, #1038).
+
+    A list ``data.train`` folds ``data.interleave``'s strategy/probs into the key,
+    since the same file set under a different mixture must not collide on a stale,
+    mis-mixed cache entry. ``soup data preprocess`` and the ``pre_tokenized``
+    training gate both call this, so they cannot hash a list differently: the gate
+    once passed the raw list and ``make_preprocess_cache_key`` raised.
+    """
+    if isinstance(data_cfg.train, list):
+        return json.dumps(
+            {"train": data_cfg.train, "interleave": data_cfg.interleave},
+            sort_keys=True,
+        )
+    return data_cfg.train
 
 
 def make_preprocess_cache_key(
