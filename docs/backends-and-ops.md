@@ -221,6 +221,12 @@ soup train --config soup.yaml --cloud modal --gpu a100 --cloud-submit
 `soup_modal_app.py` builds an image with `soup-cli[train]` pinned to your running version, writes
 the embedded config inside the container, and runs `soup train` on the chosen GPU.
 
+Run outputs are written to the `soup-outputs` Modal volume (created on first use), in a directory
+named after the run (`soup-<12 hex>`), so checkpoints outlive the container. When the run ends,
+including after a failed run, the app downloads every file in that directory into your local
+output directory and prints a `modal volume get soup-outputs /<run name> <output dir> --force`
+command that retries the download; that command places the files under `<output dir>/<run name>`.
+
 ### RunPod (Planned)
 
 RunPod support is currently in development and descoped from live CLI dispatch pending automated
@@ -233,6 +239,10 @@ Lambda uses an instance rather than a serverless function. The generated local c
 secret-free cloud-init script as API `user_data`, waits for it over SSH, copies the configured
 output back, and requests instance termination in a `finally` block. Keep the controller running
 until it reports that termination succeeded; shutting down the guest does not terminate billing.
+Pressing Ctrl+C during `--cloud-submit` interrupts the controller, which still runs that `finally`
+block, and `soup` waits for it to terminate the instance and exit rather than killing it; the only
+way to skip that cleanup is to kill the controller process itself (for example with `kill` from
+another terminal), which can leave the instance running.
 
 Register the public half of an SSH key with Lambda first, then set:
 
@@ -373,7 +383,7 @@ soup runs clean run_202611...
 soup runs clean --all --dry-run
 ```
 
-By default, the `clean` command operates in "surgical mode" (`--keep-weights`), deleting huge optimizer state files (`optimizer.pt`) from lesser checkpoints to save gigabytes, but keeping their lightweight evaluation weights just in case you want to load them later.
+By default, the `clean` command operates in "surgical mode" (`--keep-weights`), deleting huge optimizer state files (`optimizer.pt`) from lesser checkpoints to save gigabytes, but keeping their lightweight evaluation weights just in case you want to load them later. Pass `--no-keep-weights` to delete whole non-best checkpoints instead (the checkpoint with the lowest loss is always kept); combine it with `--dry-run` to see what would go first.
 
 
 ## Alternative Model Hubs

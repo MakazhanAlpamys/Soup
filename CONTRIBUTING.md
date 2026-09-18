@@ -163,6 +163,34 @@ pytest tests/test_data.py::test_detect_alpaca_format -v
 pytest tests/ --cov=soup_cli --cov-report=html
 ```
 
+### GPU Tests
+
+Every CI runner is GPU-less, so the tests that need a CUDA device skip there and
+only mean something on a real card. They carry the `gpu` marker (#833):
+
+```bash
+pytest tests/ -m gpu --no-cov -v
+```
+
+`--no-cov` matters: the default `--cov-fail-under` gate is computed over the whole
+package and fails a subset run. To gate a new test on CUDA, decorate it with
+`@pytest.mark.gpu` (or `@pytest.mark.gpu(reason="...")`); do not write your own
+`torch.cuda.is_available()` check. `tests/conftest.py` holds the one probe, and
+`tests/test_issue833_gpu_marker.py` fails on a private one. Use
+`tests.conftest.cuda_available()` only to pick a device, never to skip.
+
+If you have a card, a run is a real contribution: both recorded runs so far found
+defects CI could not see. Open an issue (or comment on #833) with:
+
+- the card, its compute capability (`torch.cuda.get_device_capability()`), and VRAM
+- the driver version, and the torch build (`torch.__version__`, `torch.version.cuda`)
+- the `bitsandbytes` version, if installed
+- the commit you ran (`git rev-parse HEAD`)
+- the summary line (`N passed, N failed, N skipped`), and the name and first error
+  line of every failure
+
+Accepted runs are recorded in [`benchmarks/gpu-test-runs.md`](benchmarks/gpu-test-runs.md).
+
 ### Test Files
 
 > A representative sample of the suite below. Run `pytest tests/ -v` for the complete list.
