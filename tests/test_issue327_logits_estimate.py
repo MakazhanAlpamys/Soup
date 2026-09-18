@@ -19,18 +19,6 @@ memory — so a test that only checks accuracy would have let that through.
 
 import pytest
 
-
-def _cuda() -> bool:
-    try:
-        import torch
-    except ImportError:  # pragma: no cover - torch is a [train] extra
-        return False
-    return torch.cuda.is_available()
-
-
-requires_cuda = pytest.mark.skipif(not _cuda(), reason="needs a CUDA device")
-
-
 #: The v0.72.3 GATE 2 grid, re-stated here so this file can pin the
 #: counterfactual without importing (or being able to perturb)
 #: ``tests/test_v07203.py``, which is the estimator's standing guard.
@@ -242,7 +230,7 @@ class TestTheModuleStaysOnTheLightCliPath:
         assert out.stdout.strip() == "False", out.stdout + out.stderr
 
 
-@requires_cuda
+@pytest.mark.gpu
 class TestTheStackIsRemeasuredWhereverTheSuiteRuns:
     """The point of the calibration hook. v0.72.3's 14 was measured once on one
     box and frozen; these run the instrument against whatever stack is executing

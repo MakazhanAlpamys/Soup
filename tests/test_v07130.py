@@ -737,10 +737,11 @@ class TestRecipes:
         assert cfg.training.rollout_backend == "openenv"
         assert cfg.training.rollout_func.startswith("soup_cli.envs.")
 
-    def test_catalog_size_is_175(self):
+    def test_catalog_size_matches_the_pinned_count(self):
         from soup_cli.recipes.catalog import RECIPES
+        from tests.recipe_count import EXPECTED_RECIPE_COUNT, recipe_count_hint
 
-        assert len(RECIPES) == 175
+        assert len(RECIPES) == EXPECTED_RECIPE_COUNT, recipe_count_hint(len(RECIPES))
 
 
 # ---------------------------------------------------------------------------
