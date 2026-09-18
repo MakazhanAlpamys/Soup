@@ -85,6 +85,7 @@ task: sft
 data:
   train: {tiny_train_data}
   format: chatml
+  chat_template: chatml
   val_split: 0.0
   max_length: 128
 
