@@ -56,10 +56,9 @@ resolves one for a consumer.
 *A read inside a function nothing references is not consumption* (#807), and
 the gate that enforces it has limits in both directions. A field is dropped
 only when EVERY read sits in such a function; one live read anywhere rescues
-it, which is what keeps the impact small -- on this tree it drops exactly four
-declared fields, `init_strategy`, `use_olora`, `use_vera` and `warmup_auto`,
-all allowlisted and pinned by
-`test_the_real_tree_has_exactly_the_four_known_escapes`.
+it, which is what keeps the impact small -- on this tree it drops exactly one
+declared field, `warmup_auto`, pinned by
+`test_the_real_tree_has_exactly_one_known_escape`.
 
 "Referenced" is a syntactic question, not a reachability one, and it errs
 toward *referenced* -- so distrust a pass more than a failure. Two leaks
@@ -349,16 +348,6 @@ KNOWN_UNCONSUMED = {
                             "which nothing in src/ calls; and that line reads "
                             "the decisions dict and WRITES the value into a "
                             "config, so it is not a read of the field either",
-    "training.lora.use_vera": "#794 via #807 -- read only in "
-                              "utils/peft_builder.build_peft_config, which has "
-                              "no caller in src/",
-    "training.lora.use_olora": "#794 via #807 -- same uncalled builder",
-    "training.lora.init_strategy": "#794 via #807 -- same uncalled builder; "
-                                   "PiSSA/LoftQ selection never reaches a trainer",
-    # -- #807: LoraConfig came into the guard's scope with the dead-function
-    #    gate, and these two have no read anywhere at all.
-    "training.lora.loftq_iter": "#794 -- no read anywhere; LoftQ is unreachable",
-    "training.lora.loftq_bits": "#794 -- no read anywhere; LoftQ is unreachable",
     # -- declared, and an explicit value is IGNORED with a warning naming the
     #    release that refuses it, so having no consumer is correct. Not refused
     #    yet, because Soup's own writers put the old default into saved configs.
@@ -366,6 +355,9 @@ KNOWN_UNCONSUMED = {
                                   "HF argument pass False so a custom collator still sees "
                                   "the extra columns. The default is now False, and an "
                                   "explicit true loads with a warning and is ignored",
+    # -- declared and deliberately REFUSED, so having no consumer is correct.
+    #    A distinct category from the two below: the user is told, loudly, at
+    #    config load. Found by this guard rather than by hand.
     "training.packing_cross_doc_attn_mask": "no issue needed: rejected at config load "
                                             "(schema.py:3495) because it never "
                                             "mapped to a valid TRL packing_strategy; "
@@ -668,8 +660,8 @@ def test_the_allowlist_size_is_pinned_exactly():
     half: it names WHICH entry went stale, where this one only says the count
     moved.
     """
-    assert len(KNOWN_UNCONSUMED) == 42, (
-        f"KNOWN_UNCONSUMED is {len(KNOWN_UNCONSUMED)}, pinned at 42. Going UP "
+    assert len(KNOWN_UNCONSUMED) == 37, (
+        f"KNOWN_UNCONSUMED is {len(KNOWN_UNCONSUMED)}, pinned at 37. Going UP "
         "means a field was allowlisted rather than wired; going DOWN means an "
         "entry was retired, which is the good direction -- lower this number "
         "in the same commit."
@@ -992,12 +984,8 @@ class TestTheDeadFunctionGate:
             "a read inside a method must be attributed to that method, not lost"
         )
 
-    def test_the_real_tree_has_exactly_the_four_known_escapes(self):
-        """Measured, and pinned so the number cannot drift unnoticed.
-
-        Reproduced on current main: `training.warmup_auto` plus three LoRA
-        variants, each read only inside a function nothing references.
-        """
+    def test_the_real_tree_has_exactly_one_known_escape(self):
+        """Measured, and pinned so the number cannot drift unnoticed."""
         modules = _consumer_modules()
         scoped = function_scoped_reads(modules)
         referenced = referenced_names(modules)
@@ -1009,18 +997,17 @@ class TestTheDeadFunctionGate:
             schema_property_reads(SCHEMA_PATH),
         )
         dropped = sorted(ungated - drop_dead_function_reads(ungated, scoped, referenced))
-        for expected in ("warmup_auto", "use_vera", "use_olora", "init_strategy"):
-            assert expected in dropped, (
-                f"{expected} is read only inside a function nothing references, "
-                "so the gate should drop it"
-            )
-        # The name says EXACTLY four, and membership alone would pass a gate that
+        assert "warmup_auto" in dropped, (
+            "warmup_auto is read only inside a function nothing references, "
+            "so the gate should drop it"
+        )
+        # The name says EXACTLY one, and membership alone would pass a gate that
         # dropped more (#906 review). `dropped` spans every consumed identifier,
         # not just config fields, so the exact claim is over declared leaves.
         declared_leaves = set(_declared().values())
         dropped_fields = sorted(set(dropped) & declared_leaves)
-        assert dropped_fields == ["init_strategy", "use_olora", "use_vera", "warmup_auto"], (
-            f"expected exactly the four known escapes, got {dropped_fields}"
+        assert dropped_fields == ["warmup_auto"], (
+            f"expected exactly the one known escape, got {dropped_fields}"
         )
 
     def test_consumed_in_src_applies_the_gate_independently_of_the_allowlist(self):
@@ -1035,12 +1022,13 @@ class TestTheDeadFunctionGate:
             schema_property_reads(SCHEMA_PATH),
         )
         consumed = _consumed_in_src()
-        for name in ("warmup_auto", "use_vera", "use_olora", "init_strategy"):
-            assert name in ungated, f"{name} is not read at all, so this check is vacuous"
-            assert name not in consumed, (
-                f"{name} is read only inside a dead function, yet _consumed_in_src() "
-                "counts it: the gate is not composed into the scan"
-            )
+        assert "warmup_auto" in ungated, (
+            "warmup_auto is not read at all, so this check is vacuous"
+        )
+        assert "warmup_auto" not in consumed, (
+            "warmup_auto is read only inside a dead function, yet _consumed_in_src() "
+            "counts it: the gate is not composed into the scan"
+        )
 
 
 class TestTheTreeMismatchCheck:

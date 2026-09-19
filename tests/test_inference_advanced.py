@@ -196,7 +196,7 @@ class TestLoRAHotSwap:
                 max_tokens_default=512,
                 adapter_map={"chat": str(adapter_dir)},
             )
-            client = TestClient(app)
+            client = TestClient(app, base_url="http://127.0.0.1")
             # List route should include activate
             routes = [r.path for r in app.routes]
             assert "/v1/adapters/activate/{name}" in routes or any(
@@ -225,7 +225,7 @@ class TestLoRAHotSwap:
             max_tokens_default=512,
             adapter_map={"chat": "./x"},
         )
-        client = TestClient(app)
+        client = TestClient(app, base_url="http://127.0.0.1")
         resp = client.post("/v1/adapters/activate/unknown")
         assert resp.status_code == 404
 
@@ -244,7 +244,7 @@ class TestLoRAHotSwap:
             max_tokens_default=512,
             adapter_map={"chat": "./x"},
         )
-        client = TestClient(app)
+        client = TestClient(app, base_url="http://127.0.0.1")
         # Path-traversal style names
         resp = client.post("/v1/adapters/activate/..%2Fetc")
         assert resp.status_code in (400, 404, 422)
@@ -717,7 +717,7 @@ class TestLoRADeactivate:
             max_tokens_default=512,
             adapter_map={"chat": "./x"},
         )
-        client = TestClient(app)
+        client = TestClient(app, base_url="http://127.0.0.1")
         activate_resp = client.post("/v1/adapters/activate/chat")
         assert activate_resp.status_code == 200
         assert activate_resp.json()["active"] == "chat"
@@ -743,7 +743,7 @@ class TestLoRADeactivate:
             max_tokens_default=512,
             adapter_map=None,
         )
-        client = TestClient(app)
+        client = TestClient(app, base_url="http://127.0.0.1")
         resp = client.post("/v1/adapters/activate/chat")
         assert resp.status_code == 404
 

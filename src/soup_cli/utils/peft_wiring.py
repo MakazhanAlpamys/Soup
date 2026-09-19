@@ -127,7 +127,59 @@ def build_lora_config_kwargs(
         kwargs["rank_pattern"] = dict(rank_pattern)
     if alpha_pattern:
         kwargs["alpha_pattern"] = dict(alpha_pattern)
+    # ``use_olora`` is the legacy spelling. Schema validation aligns it to
+    # init_strategy='olora'; retain this defensive read so callers that build a
+    # schema-like config double cannot silently lose the requested method.
+    init_strategy = (
+        "olora"
+        if getattr(lora_cfg, "use_olora", False)
+        else getattr(lora_cfg, "init_strategy", "random")
+    )
+    if init_strategy != "random":
+        kwargs["init_lora_weights"] = init_strategy
+    if init_strategy == "loftq":
+        from soup_cli.utils.loftq_init import build_loftq_config
+
+        kwargs["loftq_config"] = build_loftq_config(
+            loftq_iter=lora_cfg.loftq_iter,
+            loftq_bits=lora_cfg.loftq_bits,
+        )
     return kwargs
+
+
+def build_peft_config_spec(
+    lora_cfg: Any,
+    *,
+    target_modules: Any,
+    task_type: Any,
+    target_parameters: Any = None,
+) -> dict[str, Any]:
+    """Return the PEFT class name and kwargs for the configured adapter.
+
+    VeRA is a distinct PEFT tuner, not a LoRA option. Keeping this branch next
+    to the shared LoRA kwargs is what makes every trainer consume the same
+    method choice instead of silently constructing ordinary LoRA.
+    """
+    if getattr(lora_cfg, "use_vera", False):
+        return {
+            "peft_cls": "VeraConfig",
+            "init_kwargs": {
+                "r": lora_cfg.r,
+                "target_modules": target_modules,
+                "task_type": task_type,
+                "vera_dropout": lora_cfg.dropout,
+                "bias": "none",
+            },
+        }
+    return {
+        "peft_cls": "LoraConfig",
+        "init_kwargs": build_lora_config_kwargs(
+            lora_cfg,
+            target_modules=target_modules,
+            target_parameters=target_parameters,
+            task_type=task_type,
+        ),
+    }
 
 
 def build_lora_config(
@@ -137,22 +189,22 @@ def build_lora_config(
     task_type: Any,
     target_parameters: Any = None,
 ) -> Any:
-    """Build a PEFT ``LoraConfig`` through the single shared kwargs path.
+    """Build the configured PEFT adapter through the single shared path.
 
     Keeping the PEFT import inside this function preserves Soup's lazy-import
     boundary while ensuring every trainer consumes new shared LoRA fields such
     as ``rank_pattern`` and ``alpha_pattern`` automatically.
     """
-    from peft import LoraConfig
+    import peft
 
-    return LoraConfig(
-        **build_lora_config_kwargs(
-            lora_cfg,
-            target_modules=target_modules,
-            target_parameters=target_parameters,
-            task_type=task_type,
-        )
+    spec = build_peft_config_spec(
+        lora_cfg,
+        target_modules=target_modules,
+        target_parameters=target_parameters,
+        task_type=task_type,
     )
+    config_cls = getattr(peft, spec["peft_cls"])
+    return config_cls(**spec["init_kwargs"])
 
 
 def apply_pre_lora_patches(model: Any, base: str) -> None:

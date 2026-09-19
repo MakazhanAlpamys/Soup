@@ -27,47 +27,13 @@ def build_peft_config(
     Trainers can use this spec to instantiate the right peft config without
     duplicating the branching logic for DoRA / VeRA / OLoRA.
     """
-    if lora_cfg.use_vera:
-        return {
-            "peft_cls": "VeraConfig",
-            "init_kwargs": {
-                "r": lora_cfg.r,
-                "target_modules": target_modules,
-                "task_type": task_type,
-                "vera_dropout": lora_cfg.dropout,
-                "bias": "none",
-            },
-        }
+    from soup_cli.utils.peft_wiring import build_peft_config_spec
 
-    init_kwargs: dict = {
-        "r": lora_cfg.r,
-        "lora_alpha": lora_cfg.alpha,
-        "lora_dropout": lora_cfg.dropout,
-        "target_modules": target_modules,
-        "task_type": task_type,
-        "bias": "none",
-        "use_dora": lora_cfg.use_dora,
-        "use_rslora": lora_cfg.use_rslora,
-    }
-
-    # v0.39.0 Part C — per-pattern rank/alpha (peft natively supports these)
-    if lora_cfg.rank_pattern:
-        init_kwargs["rank_pattern"] = dict(lora_cfg.rank_pattern)
-    if lora_cfg.alpha_pattern:
-        init_kwargs["alpha_pattern"] = dict(lora_cfg.alpha_pattern)
-
-    # init_strategy is the canonical source; use_olora is back-compat (validator
-    # aligns init_strategy='olora' when use_olora=True).
-    if lora_cfg.init_strategy in ("pissa", "olora"):
-        init_kwargs["init_lora_weights"] = lora_cfg.init_strategy
-    elif lora_cfg.use_olora:
-        # Defensive fallback if init_strategy alignment was bypassed.
-        init_kwargs["init_lora_weights"] = "olora"
-
-    return {
-        "peft_cls": "LoraConfig",
-        "init_kwargs": init_kwargs,
-    }
+    return build_peft_config_spec(
+        lora_cfg,
+        target_modules=target_modules,
+        task_type=task_type,
+    )
 
 
 def instantiate_peft_config(spec: dict[str, Any]) -> Any:

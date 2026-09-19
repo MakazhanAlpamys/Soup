@@ -138,6 +138,29 @@ class TestFP8RecipeRequiresFP8:
 class TestFP8RecipeDispatch:
     """apply_fp8_training passes recipe to Float8LinearConfig.from_recipe_name."""
 
+    @pytest.fixture(autouse=True)
+    def _hopper_card(self, monkeypatch):
+        """#835: apply_fp8_training now asks the hardware gate before converting.
+
+        These tests are about recipe dispatch, so they run on a Hopper card
+        (SM 9.0, every recipe admitted); ``tests/test_issue835_fp8_gate.py``
+        covers the gate. torch is patched, not the gate, because each test
+        reloads ``soup_cli.utils.fp8``.
+
+        The OS and torch's CUDA build are pinned with it: the rowwise recipes
+        need a build that has the kernel, and torch never builds it on Windows,
+        so the three Windows CI cells would otherwise fail these dispatch tests
+        (#1044 review).
+        """
+        import sys
+
+        import torch
+
+        monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+        monkeypatch.setattr(torch.cuda, "get_device_capability", lambda *_a, **_k: (9, 0))
+        monkeypatch.setattr(sys, "platform", "linux")
+        monkeypatch.setattr(torch.version, "cuda", "12.4")
+
     def test_apply_fp8_dispatches_tensorwise(self):
         """Default recipe passes 'tensorwise' to from_recipe_name."""
         mock_config = MagicMock()
@@ -402,6 +425,10 @@ class TestFP8RecipeViaV028Features:
         tcfg.fp8_recipe = recipe
         tcfg.use_cut_ce = False
         tcfg.kernel_auto_compose = False
+        # A MagicMock attribute is truthy, so this test enabled fp8_attention by
+        # accident; harmless while that path degraded, but it now refuses on a
+        # card that cannot run the recipe (#1044 review).
+        tcfg.fp8_attention = False
 
         with patch("soup_cli.utils.fp8.apply_fp8_training", return_value=True) as m:
             from soup_cli.utils.v028_features import apply_v028_speed_memory
@@ -438,6 +465,7 @@ class TestFP8RecipeViaV028Features:
         tcfg.fp8_recipe = "rowwise"
         tcfg.use_cut_ce = False
         tcfg.kernel_auto_compose = False
+        tcfg.fp8_attention = False  # a MagicMock attribute is truthy (#1044 review)
 
         with patch("soup_cli.utils.fp8.apply_fp8_training") as m:
             from soup_cli.utils.v028_features import apply_v028_speed_memory

@@ -96,38 +96,6 @@ def is_bitnet_model(model_name: object) -> bool:
     return False
 
 
-def validate_bitnet_compat(*, task: str, backend: str, modality: str) -> None:
-    """Schema-time gate for ``quantization='bitnet_1.58'``.
-
-    Rejects:
-    - non-string / bool args (defence-in-depth).
-    - ``backend == 'mlx'`` — onebitllms is CUDA-only in v0.52.0.
-    - ``modality != 'text'`` — vision/audio BitNet not modelled.
-    - ``task`` outside {sft, pretrain, dpo} — BitNet wiring is text-LM
-      training only this release.
-    """
-    for name, value in (("task", task), ("backend", backend), ("modality", modality)):
-        if isinstance(value, bool):
-            raise TypeError(f"{name} must not be bool, got {value!r}")
-        if not isinstance(value, str) or not value:
-            raise ValueError(f"{name} must be a non-empty string")
-    if backend == "mlx":
-        raise ValueError(
-            "quantization='bitnet_1.58' is not supported on backend=mlx "
-            "(onebitllms is CUDA-only). Use backend='transformers'."
-        )
-    if modality != "text":
-        raise ValueError(
-            f"quantization='bitnet_1.58' is wired for modality='text' only; "
-            f"got modality={modality!r}"
-        )
-    if task not in ("sft", "pretrain", "dpo"):
-        raise ValueError(
-            f"quantization='bitnet_1.58' is only wired for "
-            f"task in (sft, pretrain, dpo); got task={task!r}"
-        )
-
-
 def validate_bitnet_export(format_name: object) -> str:
     """Validate a BitNet export-format string. Returns canonical form."""
     if isinstance(format_name, bool):
@@ -162,22 +130,6 @@ _BITNET_GGUF_QUANT_ARG: Mapping[str, str] = MappingProxyType({
     "bitnet": "TQ1_0",
     "tq1_0": "TQ1_0",
 })
-
-
-def build_bitnet_trainer(config: object, **kwargs: object):
-    """Live BitNet 1.58-bit trainer factory (v0.71.20 #134).
-
-    Returns a :class:`~soup_cli.trainer.bitnet.BitNetTrainerWrapper`. BitNet
-    1.58 fine-tuning trains an SFT-style next-token CE objective on a model
-    whose ``BitLinear`` layers carry ternary weights. The faithful training
-    path needs the upstream ``onebitllms`` package (CUDA / Linux only); the
-    wrapper surfaces a friendly ``RuntimeError`` naming it when absent.
-
-    Lazy import keeps ``soup_cli.utils.bitnet`` torch-free.
-    """
-    from soup_cli.trainer.bitnet import BitNetTrainerWrapper
-
-    return BitNetTrainerWrapper(config, **kwargs)
 
 
 def export_bitnet_gguf(

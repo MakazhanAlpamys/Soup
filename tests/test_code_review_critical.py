@@ -137,7 +137,7 @@ def test_tool_python_endpoint_requires_bearer_when_token_set():
     pytest.importorskip("fastapi")
     from fastapi.testclient import TestClient
 
-    client = TestClient(_build_tool_app("secret"))
+    client = TestClient(_build_tool_app("secret"), base_url="http://127.0.0.1")
     # Auth is checked before body inspection, so an empty body still 401s.
     assert client.post("/v1/tools/python", json={}).status_code == 401
     assert (
@@ -152,7 +152,7 @@ def test_tool_python_gate_is_noop_without_token():
     pytest.importorskip("fastapi")
     from fastapi.testclient import TestClient
 
-    client = TestClient(_build_tool_app(None))
+    client = TestClient(_build_tool_app(None), base_url="http://127.0.0.1")
     # No token configured -> auth passes -> empty body fails the code check
     # with 400 (NOT 401). Proves the gate is opt-in, and reachable.
     assert client.post("/v1/tools/python", json={}).status_code == 400

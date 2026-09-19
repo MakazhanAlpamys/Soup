@@ -7,7 +7,7 @@
 **Contents:**
 
 - [Quantization-Aware Training (QAT)](#quantization-aware-training-qat)
-- [FP8 Training (Hopper+)](#fp8-training-hopper)
+- [FP8 Training (Ada+)](#fp8-training-ada)
 - [Cut Cross-Entropy (Large-Vocab Models)](#cut-cross-entropy-large-vocab-models)
 - [Gradient Checkpointing Tiers](#gradient-checkpointing-tiers)
 - [Kernel Auto-Composition](#kernel-auto-composition)
@@ -67,9 +67,9 @@ output: ./output
 QAT works with all training tasks (SFT, DPO, GRPO, PPO, KTO, ORPO, SimPO, IPO, Pretrain) and vision modality. Not compatible with the unsloth backend. After QAT training, export to GGUF normally with `soup export`.
 
 
-## FP8 Training (Hopper+)
+## FP8 Training (Ada+)
 
-For H100 / H200 / B100 / B200 GPUs, train with float8 matmuls for ~2x speedup vs bf16 at comparable quality. This extends QAT infrastructure via `torchao.float8`:
+For Ada, Hopper and Blackwell GPUs (RTX 40/50-series, L4, L40S, RTX 6000 Ada, H100 / H200, B100 / B200), train with float8 matmuls for ~2x speedup vs bf16 at comparable quality. This extends QAT infrastructure via `torchao.float8`:
 
 ```bash
 pip install "soup-cli[qat]"   # torchao >= 0.5.0 includes torchao.float8
@@ -99,7 +99,7 @@ training:
 
 Omitting `fp8_recipe` defaults to `tensorwise` (identical to v0.28.0 behavior).
 
-Bool `true` stays on the int8 QAT path for backward compatibility. FP8 requires CUDA + Hopper+ (compute capability ≥ 9.0) and is rejected on unsloth/mlx backends. Wired across every transformer-backend trainer (SFT, DPO, GRPO, KTO, ORPO, SimPO, IPO, PPO, Reward-Model, Embedding, Pretrain).
+Bool `true` stays on the int8 QAT path for backward compatibility. FP8 requires CUDA + an Ada or newer GPU (compute capability ≥ 8.9) and is rejected on unsloth/mlx backends. The `rowwise` and `rowwise_with_gw_hp` recipes run a separate torch kernel with its own limits: it needs a torch that dispatches it on the card (Ada 8.9: torch ≥ 2.7; Hopper 9.x and Blackwell datacenter 10.x: any supported torch; RTX 50-series 12.x: torch ≥ 2.8; 11.x: torch ≥ 2.10; no release through 2.14 runs it on 13.x), it is **never built on Windows**, and before torch 2.11 it is only built against CUDA 12 or newer. `tensorwise` has none of these limits. When FP8 is requested and this card, OS or torch build cannot run it, **the run stops at setup** with the reason (`FP8HardwareUnsupportedError`), before any layer is converted, on every trainer that reaches the converter; it never trains on without FP8. (SFT's audio, layer-streaming and unsloth setup branches do not call the converter at all, so they still accept the flag without applying it — pre-existing, tracked separately.) `fp8_attention` asks the same gate (#835). Wired across every transformer-backend trainer (SFT, DPO, GRPO, KTO, ORPO, SimPO, IPO, PPO, Reward-Model, Embedding, Pretrain).
 
 
 ## Cut Cross-Entropy (Large-Vocab Models)
@@ -133,7 +133,13 @@ training:
 - **`selective`** — attention only (~10% slowdown, modest save).
 - **`auto`** — pick based on detected VRAM: < 24 GB → full, 24-80 GB → medium, > 80 GB → selective.
 
-Legacy boolean configs continue to work unchanged.
+On SFT, `medium` uses Transformers' native `every_n_layers=2` path, while
+`selective` wraps each decoder block's direct attention module and leaves HF's
+full-model checkpointing off to avoid double recomputation. If an architecture
+does not expose a direct attention child, Soup reports and applies a `full`
+fallback instead of claiming an inactive selective tier. Other task wrappers
+currently treat any enabled tier as full checkpointing. Legacy boolean configs
+continue to work unchanged.
 
 
 ## Kernel Auto-Composition
@@ -1010,7 +1016,7 @@ soup serve --model ./output --kv-cache-type q8_0     # 8-bit quantized KV cache 
 Three TrainingConfig bools extend the v0.28.0 FP8 menu. `fp8_attention` and `nvfp4` are LIVE
 torchao converters as of v0.71.21 (hardware-gated):
 
-- `fp8_attention: true` — requires `quantization_aware: fp8` AND a non-MLX backend. Converts the attention projections (q/k/v/o and fused variants) to torchao float8 training on Hopper+ GPUs. Missing torchao or a pre-Hopper GPU degrades to a clear advisory; a conversion-phase failure raises an honest "model may be PARTIALLY converted" error instead of training on a half-converted model.
+- `fp8_attention: true` — requires `quantization_aware: fp8` AND a non-MLX backend. Converts the attention projections (q/k/v/o and fused variants) to torchao float8 training on Ada or newer GPUs (the same gate as `quantization_aware: fp8`). A card, OS or torch build the gate refuses stops the run at setup; missing torchao degrades to a clear advisory; a conversion-phase failure raises an honest "model may be PARTIALLY converted" error instead of training on a half-converted model.
 - `nvfp4: true` — Blackwell-only FP4 training via torchao `NVFP4Config` + `quantize_`. Gated to non-MLX + `modality: text`; the SM ≥ 10 runtime check fires at trainer construction.
 - `unsloth_bnb_4bit: true` — promotes "Unsloth Dynamic 4-bit" from an implicit `backend=unsloth + quantization=4bit` combo to a named flag. Mutual rejection of inconsistent combos at config load.
 

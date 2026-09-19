@@ -14,7 +14,7 @@ Three TrainingConfig surfaces ship here:
 v0.71.21 #141 lifts the two ``apply_*`` stubs to live, BETA hw-gated code:
 
 * :func:`apply_fp8_attention` converts the attention-projection linears to
-  torchao ``Float8Linear`` training modules (Hopper+ gate, SM >= 9.0).
+  torchao ``Float8Linear`` training modules (the shared FP8 gate, SM >= 8.9; #835).
 * :func:`apply_nvfp4` routes the model through torchao's ``NVFP4Config``
   quantisation (Blackwell gate — SM 10.0 datacenter B100/B200/GB200 or
   SM 12.0 consumer RTX 50-series).
@@ -227,7 +227,7 @@ def apply_fp8_attention(model: object, *, recipe: str = "tensorwise") -> int:
         TypeError: ``model`` is None or ``recipe`` is not a string.
         ValueError: ``recipe`` is empty, or the model has no attention
             projections at all (silent-no-op footgun).
-        RuntimeError: torchao is missing or the GPU is not Hopper+
+        RuntimeError: torchao is missing or the GPU fails the FP8 gate
             (BETA hw gate — friendly message, never a silent no-op).
     """
     if model is None:
@@ -239,6 +239,17 @@ def apply_fp8_attention(model: object, *, recipe: str = "tensorwise") -> int:
     if "\x00" in recipe:
         raise ValueError("recipe must not contain null bytes")
 
+    # The hardware gate runs FIRST, for the same reason as apply_fp8_training
+    # (#1044 review): torchao is not a default dependency, so "absent" is the
+    # common case, and a card that cannot run this recipe must be named as the
+    # reason rather than hidden behind "install torchao" -- which would send the
+    # user to fix the wrong thing and, worse, let the run continue.
+    from soup_cli.utils import fp8
+
+    ok, reason = fp8.fp8_training_supported(recipe)
+    if not ok:
+        raise fp8.FP8HardwareUnsupportedError(f"fp8_attention: {reason}")
+
     # Probe the torchao float8 path SPECIFICALLY — fp8.is_fp8_available()
     # also accepts transformer_engine, which cannot serve this converter
     # (review fix: an NGC container with TE but no torchao must hit the
@@ -247,14 +258,6 @@ def apply_fp8_attention(model: object, *, recipe: str = "tensorwise") -> int:
         raise RuntimeError(
             "fp8_attention requires torchao's float8 recipe "
             "(pip install 'torchao>=0.5.0')."
-        )
-
-    from soup_cli.utils.fp8 import is_fp8_gpu_supported
-
-    if not is_fp8_gpu_supported():
-        raise RuntimeError(
-            "fp8_attention requires a Hopper+ GPU (H100/H200/B100/B200, "
-            "compute capability >= 9.0)."
         )
 
     import torch.nn as nn

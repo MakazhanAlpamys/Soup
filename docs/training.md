@@ -779,6 +779,8 @@ The judge is Soup's own OpenAI-compatible `JudgeEvaluator` adapted to TRL's
 `BasePairwiseJudge` (swap-debiased: a winner is only recorded when both A,B and
 B,A orders agree). Recipe: `online-dpo-smollm2-135m`. Proof-of-mechanism was
 validated on SmolLM2-135M with a synthetic judge (not a production RLHF claim; #286).
+An `https://` judge URL uses `OPENAI_API_KEY` only when its host is `api.openai.com`; other
+hosts are called as an OpenAI-compatible server without that key.
 
 
 ## Weighted Multi-Objective Preference Loss

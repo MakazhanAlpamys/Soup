@@ -932,8 +932,7 @@ class SFTTrainerWrapper(StreamingSetupMixin):
         if hf_grad_ckpt:
             from soup_cli.utils.gpu import get_gpu_info
             from soup_cli.utils.gradient_ckpt import (
-                describe_tier,
-                resolve_gradient_checkpointing,
+                plan_gradient_checkpointing,
             )
 
             gpu_memory_gb: Optional[float] = None
@@ -944,14 +943,16 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             except (KeyError, TypeError, ZeroDivisionError):
                 gpu_memory_gb = None
 
-            ckpt_kwargs = resolve_gradient_checkpointing(
-                tcfg.gradient_checkpointing, gpu_memory_gb=gpu_memory_gb,
+            ckpt_plan = plan_gradient_checkpointing(
+                self.model,
+                tcfg.gradient_checkpointing,
+                gpu_memory_gb=gpu_memory_gb,
             )
-            training_kwargs.update(ckpt_kwargs)
-            if ckpt_kwargs:
+            training_kwargs.update(ckpt_plan.kwargs)
+            if ckpt_plan.kwargs:
                 console.print(
                     f"[green]Gradient checkpointing:[/] "
-                    f"{describe_tier(tcfg.gradient_checkpointing, gpu_memory_gb)}"
+                    f"{ckpt_plan.description}"
                 )
 
         # NEFTune — noisy embeddings for better fine-tuning quality
@@ -1716,9 +1717,12 @@ class SFTTrainerWrapper(StreamingSetupMixin):
                     f"converted linears to Float8Linear (recipe={tcfg.fp8_recipe})"
                 )
             else:
+                # A card the gate refuses raises FP8HardwareUnsupportedError and
+                # stops the run (#835), so this branch is now the dependency case
+                # only.
                 console.print(
                     "[yellow]FP8 training requested but unavailable "
-                    "(no Hopper+ GPU or torchao.float8 missing)[/]"
+                    "(torchao.float8 missing)[/]"
                 )
         elif tcfg.quantization_aware is True:
             from soup_cli.utils.qat import prepare_model_for_qat

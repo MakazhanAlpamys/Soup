@@ -195,6 +195,7 @@ class TestSoupConfigIntegration:
             base="meta-llama/Llama-3.1-8B",
             data=_base_data(),
             training={
+                "quantization": "none",
                 "lora": {"init_strategy": "loftq", "loftq_iter": 2, "loftq_bits": 4},
                 "optimizer": "badam",
                 "lr_groups": {"q_proj": 1e-4},
