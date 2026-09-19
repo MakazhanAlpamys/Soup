@@ -60,3 +60,13 @@ docs/superpowers/
 
 # Layer-streaming disk-throughput probe scratch file (soup doctor --disk / training pre-flight)
 .soup-diskprobe-*
+
+# Auto-added by github-engineer
+*.pyc
+*.pyd
+*.obj
+*.so
+*.whl
+nem_stats.c
+*.exp
+*.lib

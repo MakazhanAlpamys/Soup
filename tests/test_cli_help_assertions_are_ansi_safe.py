@@ -186,6 +186,125 @@ def find_raw_help_assertions(source: str) -> list[tuple[int, str]]:
     return offenders
 
 
+# ---------------------------------------------------------------------------
+# #1068 — ReprHighlighter-styled literals in general CLI output
+# ---------------------------------------------------------------------------
+#: Rich's ``ReprHighlighter`` styles numbers, so on a colour-capable terminal
+#: a number followed by adjacent text arrives with ANSI escapes between the
+#: number and the text (e.g. ``60.0%`` becomes ``\x1b[...m60.0\x1b[0m%``).
+#: A standalone number like ``16`` is safe (escapes wrap it), but mixed text
+#: breaks substring assertions.
+_REPR_NUMBER = re.compile(r"(?<!\w)\-?[0-9]+\.?[0-9]*(e[-+]?\d+?)?\b")
+
+
+def _is_repr_vulnerable(literal: str) -> bool:
+    """True if ReprHighlighter would split this literal by styling a number inside it.
+
+    A standalone number like ``16`` is safe: escapes wrap it without splitting,
+    so the literal is still a substring of the rendered output. A number with
+    adjacent characters like ``60.0%`` is unsafe: escapes land between the number
+    and the trailing ``%``.
+    """
+    m = _REPR_NUMBER.search(literal)
+    if not m:
+        return False
+    # If the number covers the whole literal, escapes wrap rather than split.
+    if m.start() == 0 and m.end() == len(literal):
+        return False
+    return True
+
+
+def find_raw_output_assertions(source: str) -> list[tuple[int, str]]:
+    """Return ``(lineno, text)`` for assertions reading raw CLI output where
+    Rich's ReprHighlighter would split a number token (#1068).
+
+    Tracks variable indirection: a variable assigned from CLI output without
+    ANSI stripping is followed.
+    """
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return []
+    lines = source.splitlines()
+    literal_lines = _multiline_literal_lines(tree)
+    assert_lines = _assert_statement_lines(tree)
+    offenders: list[tuple[int, str]] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        if not node.name.startswith("test"):
+            continue
+        end = node.end_lineno or node.lineno
+        body = lines[node.lineno - 1 : end]
+        joined = "\n".join(body)
+
+        # Look for CLI runner invocation or output capture
+        if not re.search(r"runner\.invoke|\.invoke\(|capsys|capfd|readouterr", joined):
+            continue
+
+        tainted: set[str] = set()
+        for offset, line in enumerate(body):
+            stripped = line.strip()
+            lineno = node.lineno + offset
+            if lineno in literal_lines:
+                continue
+
+            if _looks_normalised(stripped):
+                match = _ASSIGN_RE.match(line)
+                if match:
+                    tainted.discard(match.group(1))
+                continue
+
+            match = _ASSIGN_RE.match(line)
+            if match and not stripped.startswith("assert"):
+                name, rhs = match.group(1), match.group(2)
+                derived = _ANY_RAW_OUTPUT_RE.search(rhs) or any(
+                    re.search(rf"\b{re.escape(var)}\b", rhs) for var in tainted
+                )
+                if derived and not _looks_normalised(rhs):
+                    tainted.add(name)
+                elif derived:
+                    tainted.discard(name)
+                continue
+
+            reads_raw = _ANY_RAW_OUTPUT_RE.search(stripped)
+            reads_tainted = any(
+                re.search(rf"\b{re.escape(var)}\b", stripped) for var in tainted
+            )
+            if not (reads_raw or reads_tainted):
+                continue
+
+            is_assert_head = stripped.startswith("assert")
+            if not (is_assert_head or lineno in assert_lines):
+                continue
+
+            # Negative assertions ("not in") are safe against token-splitting:
+            # if the clean substring was absent, adding escapes never makes it appear.
+            if " not in " in stripped:
+                continue
+
+            expression = (
+                _assert_expression(stripped) if is_assert_head else stripped
+            )
+            if not (
+                _ANY_RAW_OUTPUT_RE.search(expression)
+                or any(re.search(rf"\b{re.escape(var)}\b", expression) for var in tainted)
+            ):
+                continue
+
+            found = _STRING_LITERAL.search(expression)
+            if not found:
+                continue
+            literal = (found.group(1) or found.group(2)) if found else ""
+            # OSC escape tests (title/clipboard sanitisation) are not
+            # ReprHighlighter targets.
+            if literal and (literal.startswith("]") or _is_repr_vulnerable(literal)):
+                if literal.startswith("]"):
+                    continue
+                offenders.append((lineno, stripped[:100]))
+    return offenders
+
+
 class TestNoRawHelpAssertionsInTheSuite:
     def test_every_test_file_normalises_help_output(self):
         offenders: list[str] = []
@@ -291,6 +410,147 @@ def test_help_renders():
 
     def test_unparseable_source_does_not_explode(self):
         assert find_raw_help_assertions("def broken(:\n") == []
+
+
+# ---------------------------------------------------------------------------
+# #1068 — Test coverage and suite-wide ratchet for general raw-output assertions
+# ---------------------------------------------------------------------------
+
+
+class TestRawOutputScannerCanActuallyFail:
+    """Coverage for the #1068 widened guard. A guard that finds zero offenders
+    is only trustworthy if its own can-it-fail test is load-bearing."""
+
+    REAL_BROKEN = """
+    def test_below_min_acceptance_exits_two(self, runner):
+        result = runner.invoke(app, ["measure", "--min-acceptance", "0.6"])
+        assert result.exit_code == 2
+        assert "60.0%" in result.output
+    """
+
+    INDIRECTION_BROKEN = """
+    def test_below_min_acceptance_exits_two(self, runner):
+        result = runner.invoke(app, ["measure", "--min-acceptance", "0.6"])
+        plain = " ".join(result.output.split())
+        assert "60.0%" in plain
+    """
+
+    def test_it_catches_the_real_commit_that_broke_ci(self):
+        found = find_raw_output_assertions(textwrap.dedent(self.REAL_BROKEN))
+        assert len(found) == 1, found
+        assert "60.0%" in found[0][1]
+
+    def test_it_catches_variable_indirection(self):
+        found = find_raw_output_assertions(textwrap.dedent(self.INDIRECTION_BROKEN))
+        assert len(found) == 1, found
+        assert "60.0%" in found[0][1]
+
+    def test_the_actual_repaired_version_is_accepted(self):
+        fixed = textwrap.dedent(self.REAL_BROKEN).replace(
+            'assert "60.0%" in result.output',
+            'assert "60.0%" in _plain(result.output)',
+        )
+        assert find_raw_output_assertions(fixed) == []
+
+    def test_a_standalone_number_is_not_flagged(self):
+        source = """
+        def test_lora_r(self, runner):
+            result = runner.invoke(app, ["train"])
+            assert "16" in result.output
+        """
+        assert find_raw_output_assertions(textwrap.dedent(source)) == []
+
+    def test_a_plain_string_is_not_flagged(self):
+        source = """
+        def test_status(self, runner):
+            result = runner.invoke(app, ["status"])
+            assert "STRONG" in result.output
+        """
+        assert find_raw_output_assertions(textwrap.dedent(source)) == []
+
+    def test_negative_assertions_are_not_flagged(self):
+        source = """
+        def test_absent(self, runner):
+            result = runner.invoke(app, ["measure"])
+            assert "60.0%" not in result.output
+        """
+        assert find_raw_output_assertions(textwrap.dedent(source)) == []
+
+    def test_unparseable_source_does_not_explode(self):
+        assert find_raw_output_assertions("def broken(:\n") == []
+
+
+#: Pre-existing raw-output assertions in the suite that contain number tokens.
+#: These pass today because CI runners have no TTY and do not set FORCE_COLOR,
+#: so Rich disables colour. They are explicitly listed per #1068 acceptance
+#: criterion 4 rather than mass-editing 25+ test files with invasive normalisers.
+#: Any NEW offender outside this set will fail the guard.
+_KNOWN_PREEXISTING_RAW_OUTPUT_OFFENDERS = {
+    "test_adapters.py:42",
+    "test_adapters.py:43",
+    "test_adapters.py:64",
+    "test_adapters.py:80",
+    "test_adapters.py:146",
+    "test_adapters.py:147",
+    "test_bench.py:47",
+    "test_bench.py:61",
+    "test_bench.py:109",
+    "test_bench.py:111",
+    "test_bugfixes.py:1129",
+    "test_bugfixes.py:1149",
+    "test_bugfixes.py:1173",
+    "test_data_tools.py:203",
+    "test_dataset_hub.py:34",
+    "test_dataset_hub.py:124",
+    "test_dataset_hub.py:349",
+    "test_issue23_mlx_harness_bridge.py:142",
+    "test_issue23_mlx_harness_bridge.py:143",
+    "test_issue477_qwen38_catalog.py:48",
+    "test_issue549_bon_resume.py:87",
+    "test_issue549_bon_resume.py:167",
+    "test_issue555_bon_stream_resume.py:95",
+    "test_issue716_harness_step_guard.py:124",
+    "test_issue721_ppo_config_forwarding.py:208",
+    "test_issue721_ppo_config_forwarding.py:209",
+    "test_issue721_ppo_config_forwarding.py:210",
+    "test_issue830_profile_gpu.py:98",
+    "test_issue885_langfuse_error_ansi.py:46",
+    "test_mlx_backend.py:382",
+    "test_modal_stub_outputs.py:234",
+    "test_recipes.py:123",
+    "test_recipes.py:243",
+    "test_recipes.py:328",
+    "test_recipes.py:452",
+    "test_recipes.py:870",
+    "test_recipes.py:996",
+    "test_recipes.py:1837",
+    "test_semantic_split.py:163",
+    "test_v0440_part_d.py:82",
+    "test_v0450.py:290",
+    "test_v0460_part_a.py:405",
+    "test_v0480_part_a.py:734",
+    "test_v0580.py:1081",
+    "test_v0620_part_c.py:360",
+    "test_v07131.py:1355",
+    "test_v0714.py:1391",
+}
+
+
+class TestNoRawOutputAssertionsInTheSuite:
+    def test_no_new_unexempted_raw_output_assertions(self):
+        unexpected: list[str] = []
+        for path in sorted(TESTS_DIR.glob("test_*.py")):
+            source = path.read_text(encoding="utf-8", errors="replace")
+            for lineno, text in find_raw_output_assertions(source):
+                key = f"{path.name}:{lineno}"
+                if key not in _KNOWN_PREEXISTING_RAW_OUTPUT_OFFENDERS:
+                    unexpected.append(f"{key}: {text}")
+        assert not unexpected, (
+            "A CLI output assertion reads raw output containing a number that "
+            "Rich's ReprHighlighter would split with ANSI escapes on Linux/macOS (#1068). "
+            "Route the output through _plain() or strip_ansi():\n  "
+            + "\n  ".join(unexpected)
+        )
 
 
 # ---------------------------------------------------------------------------

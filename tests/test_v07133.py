@@ -1876,8 +1876,8 @@ class TestDraftMeasureCli:
              "--prompts", prompts, "--min-acceptance", "0.6"],
         )
         assert result.exit_code == 2
-        assert "60.0%" in result.output
-        assert "below" in result.output.lower()
+        assert "60.0%" in _plain(result.output)
+        assert "below" in _plain(result.output).lower()
 
     def test_mismatched_tokenizer_measures_cross_tokenizer(
         self, runner, in_tmp_cwd, monkeypatch
@@ -1906,7 +1906,7 @@ class TestDraftMeasureCli:
         )
         assert result.exit_code == 0
         assert "Cross-tokenizer draft detected" in result.output
-        assert "60.0%" in result.output
+        assert "60.0%" in _plain(result.output)
 
         assisted_calls = [kw for kw in captured_kwargs if "assistant_model" in kw]
         assert len(assisted_calls) == 1
