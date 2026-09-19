@@ -217,6 +217,26 @@ class TestTheRefusal:
             is None
         )
 
+    def test_a_model_with_no_declared_model_type_is_delegated(self):
+        """The refusal needs a name to put in the message. A config that declares
+        no ``model_type`` -- or a test double standing in for a model, which is
+        how several suites drive this -- is not an architecture we know to be
+        unmappable, so it is delegated exactly as before #1070."""
+        pytest.importorskip("peft")
+        nameless = types.SimpleNamespace(
+            config=types.SimpleNamespace(model_type=None, text_config=None)
+        )
+
+        assert resolve_lora_target_modules(nameless, "auto") is None
+
+    def test_a_non_string_model_type_is_delegated(self):
+        """`test_embedding.py` and `test_pretrain.py` drive the resolver with
+        MagicMock models, whose ``model_type`` is a Mock, not a name."""
+        pytest.importorskip("peft")
+        from unittest.mock import MagicMock
+
+        assert resolve_lora_target_modules(MagicMock(), "auto") is None
+
     def test_an_explicit_list_is_never_refused(self):
         assert resolve_lora_target_modules(_model("not_a_real_arch_9000"), ["q_proj"]) == [
             "q_proj"

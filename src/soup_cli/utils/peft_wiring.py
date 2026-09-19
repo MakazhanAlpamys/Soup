@@ -186,9 +186,12 @@ def resolve_lora_target_modules(
         if value in MOE_TEXT_LORA_TARGETS:
             return _as_targets(MOE_TEXT_LORA_TARGETS[value])
 
-    if has_target_parameters or _peft_has_a_default_for(model_types):
+    named = sorted(value for value in model_types if isinstance(value, str))
+    if not named or has_target_parameters or _peft_has_a_default_for(model_types):
+        # No ``model_type`` string to name is not the same as an architecture we
+        # know to be unmappable -- a config that does not declare one, or a test
+        # double standing in for a model, is delegated exactly as before #1070.
         return None
-    named = sorted(str(value) for value in model_types if value is not None)
     raise ValueError(
         "training.lora.target_modules='auto' has no mapping for model_type="
         f"{named!r}, and PEFT has no default for it either, so the LoRA attach "
