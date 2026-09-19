@@ -1,8 +1,11 @@
-"""Auto-quant picker: try multiple quant formats, pick fastest-at-acceptable-quality.
+"""Dormant auto-quant decision helpers retained for import compatibility.
 
-Pure-Python decision engine. Actual model loading + eval is delegated to the
-caller (v0.30.0 ships the picker + schema, trainer-side eval loop deferred
-to v0.30.1 following the same pattern as v0.28.0 kernel_picker).
+There is deliberately no caller under :mod:`soup_cli`: ``soup serve
+--auto-quant`` refuses before loading a backend because Soup cannot compare
+quantization candidates until it has loaded and measured each candidate. Do
+not reconnect these timer-based helpers to serving; they remain only so older
+third-party imports keep working through v0.75.x. The compatibility module is
+scheduled for removal in v0.76.0.
 """
 
 from __future__ import annotations
