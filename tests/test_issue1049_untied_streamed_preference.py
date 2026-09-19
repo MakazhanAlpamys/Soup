@@ -15,7 +15,8 @@ untied, which is the common real-world shape.
 from __future__ import annotations
 
 import pytest
-from test_v07204 import (
+
+from tests.test_v07204 import (
     _ALL_PREFERENCE,
     _batch_on,
     _build_streamed_wrapper,
@@ -30,10 +31,13 @@ pytestmark = pytest.mark.filterwarnings("ignore::DeprecationWarning")
 
 @pytest.mark.parametrize("task", [*_ALL_PREFERENCE, "sft"])
 def test_an_untied_streamed_train_step_completes(tmp_path, monkeypatch, task):
-    """dpo and kto raise on main; orpo, simpo and sft pass there and must keep passing."""
-    wrapper, _, _ = _build_streamed_wrapper(
-        tmp_path, monkeypatch, task=task, device="cpu", tie=False
-    )
+    """dpo and kto raise on main; orpo, simpo and sft pass there and must keep passing.
+
+    No ``device=``: the helper's own docstring warns that pinning the model to the CPU
+    while ``TrainingArguments`` still picks the accelerator splits the graph, and this
+    test only needs the step to complete, not to be bit-exact.
+    """
+    wrapper, _, _ = _build_streamed_wrapper(tmp_path, monkeypatch, task=task, tie=False)
     wrapper.trainer.args.max_steps = 1
     try:
         wrapper.trainer.train()
@@ -41,7 +45,14 @@ def test_an_untied_streamed_train_step_completes(tmp_path, monkeypatch, task):
         wrapper._close_stream_runtime()
 
 
-@pytest.mark.parametrize("task", _ALL_PREFERENCE)
+# dpo only, deliberately. The exactness needs the model pinned to the CPU in float32, and
+# TRL's orpo/simpo/kto losses move the batch to ``accelerator.device`` from inside the loss,
+# where ``_batch_on`` cannot reach it -- so on any accelerator box those three fail on the
+# device split rather than on anything this PR does (measured with ``tie=True`` too: same
+# three fail, dpo passes). ``test_v07204`` bit-compares dpo for the same reason. The other
+# three tasks are still exercised end to end by the train-step test above, which is the
+# test that actually reproduces #1049.
+@pytest.mark.parametrize("task", ["dpo"])
 def test_an_untied_streamed_loss_and_gradients_match_a_resident_run(tmp_path, monkeypatch, task):
     """The private copy must not change what is computed: loss and every adapter
     gradient are bit-identical to a resident run of the same loss."""
@@ -165,3 +176,71 @@ def test_the_private_copy_is_taken_only_when_it_is_needed():
     assert embedding.data_ptr() == untied.buffer.data_ptr(), (
         "embedding_backward reads the indices, not the weight values: no copy"
     )
+
+
+def test_a_peft_wrapped_embedding_is_still_exempt_from_the_private_copy():
+    """The embedding exemption has to survive a peft tuner wrapper.
+
+    get_peft_model() runs before install_streaming(), so a LoRA target on the input
+    embedding replaces it with a tuner layer holding the real module at
+    ``.base_layer`` (#1012). ``isinstance(self.inner, nn.Embedding)`` is then False
+    and the exemption silently stops applying -- a vocab x hidden ``clone()`` on
+    every forward, which is the exact cost the exemption exists to avoid.
+    ``_unwrap_tuner_base`` is what prevents that, and nothing pinned it: replacing
+    its body with ``return module`` passed the whole streaming suite.
+
+    This is also the only place untied streaming and LoRA-on-the-large-layer meet.
+    """
+    import torch
+    import torch.nn as nn
+
+    from soup_cli.utils.layer_stream_runtime import _streamed_large_layer_class
+
+    class _Pool:
+        def __init__(self, keys):
+            self.specs = dict.fromkeys(keys, ((4, 3), "float32"))
+            self.buffer = torch.arange(12.0).view(4, 3)
+
+        def wait(self, key):
+            return self.buffer
+
+    cls = _streamed_large_layer_class()
+    untied = _Pool(["embed_tokens", "lm_head"])
+
+    class _Tuner(nn.Module):
+        """The one thing peft's tuner layers all share: the real module at .base_layer."""
+
+        def __init__(self, base):
+            super().__init__()
+            self.base_layer = base
+
+    # One wrapper, and a nested pair -- peft can stack them, and the unwrap loop caps at 8.
+    for inner in (_Tuner(nn.Embedding(4, 3)), _Tuner(_Tuner(nn.Embedding(4, 3)))):
+        assert cls(inner, "embed_tokens", untied)._needs_a_private_weight() is False, (
+            "a tuner-wrapped embedding must keep the exemption"
+        )
+    # and the wrapper must not hand the exemption to a projection
+    projection = cls(_Tuner(nn.Linear(3, 4, bias=False)), "lm_head", untied)
+    assert projection._needs_a_private_weight() is True
+
+
+def test_a_real_lora_wrapped_embedding_is_still_exempt_from_the_private_copy():
+    """The same claim through peft's own tuner layer, not a stand-in for one."""
+    lora = pytest.importorskip("peft.tuners.lora")
+    import torch
+    import torch.nn as nn
+
+    from soup_cli.utils.layer_stream_runtime import _streamed_large_layer_class
+
+    class _Pool:
+        def __init__(self, keys):
+            self.specs = dict.fromkeys(keys, ((4, 3), "float32"))
+            self.buffer = torch.arange(12.0).view(4, 3)
+
+        def wait(self, key):
+            return self.buffer
+
+    untied = _Pool(["embed_tokens", "lm_head"])
+    wrapped = lora.Embedding(nn.Embedding(4, 3), adapter_name="default", r=2, lora_alpha=4)
+    layer = _streamed_large_layer_class()(wrapped, "embed_tokens", untied)
+    assert layer._needs_a_private_weight() is False
