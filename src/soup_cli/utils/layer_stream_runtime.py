@@ -2185,6 +2185,91 @@ def assert_trainable_adapters_materialized(model: Any) -> None:
     )
 
 
+#: The file every PEFT adapter save writes, final and ``checkpoint-*`` alike.
+_ADAPTER_WEIGHTS_FILE = "adapter_model.safetensors"
+
+#: The child segment of ``StreamedDecoderLayer``. A saved key carrying it is the
+#: v0.72.0 spelling of an adapter that reloads as zero tensors.
+_WRAPPER_KEY_SEGMENT = ".inner."
+
+
+def assert_streamed_adapter_saved(model: Any, output_dir: str) -> None:
+    """Refuse a streamed save that wrote an adapter which reloads as nothing.
+
+    #1011 — twice a streamed LoRA run has reported success and written an
+    ``adapter_model.safetensors`` that held nothing loadable: v0.72.0's
+    ``.inner.`` keys, and #1005's 40-byte, 0-tensor file under peft 0.21. Both
+    times the only signal was a ``UserWarning`` at some later load, after the
+    GPU hours were spent. :func:`assert_trainable_adapters_materialized` asks
+    "will this train?" before training; this asks "did anything get written?"
+    after each save, by reading back the file's header (keys only, no tensor
+    data).
+
+    The reference is the model's own trainable ``lora_*`` parameters, one saved
+    key each, not a bare ``> 0``. There is no legitimately empty streamed save:
+    streaming always trains a LoRA adapter, and its trainable tensors exist from
+    construction, so a save before the first optimizer step still writes all of
+    them. Non-``lora_`` keys (``modules_to_save``) are not counted on either
+    side.
+    """
+    path = os.path.join(output_dir, _ADAPTER_WEIGHTS_FILE)
+    expected = sum(
+        1 for name, param in model.named_parameters() if param.requires_grad and "lora_" in name
+    )
+    if not os.path.isfile(path):
+        raise RuntimeError(
+            f"the streamed run saved no {_ADAPTER_WEIGHTS_FILE} in {output_dir}; "
+            f"expected {expected} LoRA tensors. Refusing to report a run whose "
+            "adapter was not written."
+        )
+
+    from safetensors import safe_open
+
+    with safe_open(path, framework="pt") as handle:
+        keys = list(handle.keys())
+    wrapped = [key for key in keys if _WRAPPER_KEY_SEGMENT in key]
+    if wrapped:
+        raise RuntimeError(
+            f"{path} carries the streaming wrapper's '{_WRAPPER_KEY_SEGMENT}' segment "
+            f"in {len(wrapped)} keys (first: {wrapped[0]}). Those keys match no "
+            "module of a normal model, so the adapter would reload as zero tensors."
+        )
+    saved = sum(1 for key in keys if "lora_" in key)
+    if saved == 0 or saved != expected:
+        raise RuntimeError(
+            f"{path} holds {saved} LoRA tensors, but the streamed model trained "
+            f"{expected}. The adapter on disk does not hold the adapter that was "
+            "trained, and would reload as "
+            + ("zero tensors." if saved == 0 else "a partial adapter.")
+        )
+
+
+def build_streamed_save_guard_callback() -> Any:
+    """Return a callback that runs :func:`assert_streamed_adapter_saved` on
+    every ``checkpoint-*`` the Trainer writes.
+
+    The HF Trainer writes periodic checkpoints through the same ``save_model``
+    as the final save, so #1005's empty file appeared in every ``save_steps``
+    checkpoint too. The final save dispatches no ``on_save``, which is why the
+    trainers also call the check after it. Built here rather than at module
+    scope so importing this module stays free of transformers.
+    """
+    from transformers import TrainerCallback
+
+    class StreamedSaveGuardCallback(TrainerCallback):
+        def on_save(self, args, state, control, model=None, **kwargs) -> None:
+            # the same rank condition save_model gates its write on
+            if not getattr(args, "should_save", True) or model is None:
+                return
+            step = int(getattr(state, "global_step", 0) or 0)
+            output_dir = getattr(args, "output_dir", None)
+            if step <= 0 or not output_dir:
+                return
+            assert_streamed_adapter_saved(model, os.path.join(output_dir, f"checkpoint-{step}"))
+
+    return StreamedSaveGuardCallback()
+
+
 def materialize_meta_adapter_copy(
     model: Any, *, source_adapter: str = "default", target_adapter: str = "ref"
 ) -> int:
