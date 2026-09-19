@@ -1429,7 +1429,7 @@ class SFTTrainerWrapper(StreamingSetupMixin):
         from peft import TaskType, get_peft_model, prepare_model_for_kbit_training
         from transformers import AutoModelForCausalLM, AutoTokenizer
 
-        from soup_cli.utils.moe import detect_moe_model, get_moe_target_modules
+        from soup_cli.utils.moe import detect_moe_model
 
         # Liger Kernel — apply fused ops BEFORE model loading
         if tcfg.use_liger:
@@ -1659,14 +1659,15 @@ class SFTTrainerWrapper(StreamingSetupMixin):
                 self.model, tcfg.lora.target_parameters
             )
 
-            if tcfg.moe_lora and is_moe:
-                moe_targets = get_moe_target_modules(self.model)
-                if moe_targets:
-                    target_modules = moe_targets
-                    console.print(
-                        f"[green]ScatterMoE LoRA:[/] targeting "
-                        f"{len(moe_targets)} module patterns"
-                    )
+            # #798: one helper for every trainer. This block used to live here
+            # and in pretrain.py, and nowhere else, so moe_lora was accepted and
+            # ignored by the five preference/RL trainers. The helper also stops
+            # a dropout LoRA over FUSED experts, which peft refuses.
+            from soup_cli.utils.moe import resolve_moe_lora_targets
+
+            target_modules = resolve_moe_lora_targets(
+                self.model, tcfg, target_modules, console
+            )
 
             lora_config = build_lora_config(
                 tcfg.lora,

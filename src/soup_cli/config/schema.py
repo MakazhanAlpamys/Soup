@@ -4395,6 +4395,15 @@ _QUANTIZATION_UNHONOURED_TASKS = frozenset({
     "moe_lora_routing", "unlearn", "asr",
 })
 
+#: #798 — the tasks whose trainers actually read each MoE flag, mapped from the
+#: readers rather than from the docs: ``moe_expert_quant`` and
+#: ``train_router_only`` are applied only by ``trainer/sft.py`` (``tts`` inherits
+#: its setup through ``super()``), and ``moe_aux_loss_coeff`` is read by
+#: ``sft.py`` and ``pretrain.py``. Everywhere else the field was accepted and
+#: never applied.
+_MOE_EXPERT_KNOB_TASKS = frozenset({"sft", "tts"})
+_MOE_AUX_LOSS_TASKS = frozenset({"sft", "tts", "pretrain"})
+
 #: The bitsandbytes values: ``4bit`` was the default, so every config Soup dumped
 #: for these tasks carries one of them literally (#795 review).
 _BNB_QUANTIZATION_VALUES = frozenset({"4bit", "8bit"})
@@ -5161,6 +5170,46 @@ class SoupConfig(BaseModel):
                 f"training.use_flash_attn=true requires task in "
                 f"{sorted(SFT_KERNEL_AWARE_TASKS)}; got task={self.task!r}"
             )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_moe_flags_reach_a_trainer(self) -> "SoupConfig":
+        """#798 — refuse MoE flags on tasks whose trainer never reads them.
+
+        ``moe_expert_quant`` and ``train_router_only`` are applied in
+        ``trainer/sft.py`` only; ``moe_aux_loss_coeff`` in ``sft.py`` and
+        ``pretrain.py``. On every other task they were accepted, stored in the
+        run's config, and silently not applied -- the defect class this release
+        cycle spent its time removing. (The version is deliberately not spelled
+        out here: ``config/unknown_keys.py`` is the one file allowed to hold it,
+        and ``test_issue627...::test_the_version_is_written_out_in_exactly_one_source_file``
+        fails on a second copy.)
+
+        ``moe_aux_loss_coeff``'s default is ``0.01``, and a dumped config writes
+        it out, so only a NON-DEFAULT value is refused: refusing the default
+        would break every stored config and the eleven shipped recipes that
+        write it explicitly.
+        """
+        tcfg = self.training
+        if self.task not in _MOE_EXPERT_KNOB_TASKS:
+            for field in ("moe_expert_quant", "train_router_only"):
+                value = getattr(tcfg, field, None)
+                if value:
+                    raise ValueError(
+                        f"training.{field} is not applied by task={self.task!r}: "
+                        f"only {sorted(_MOE_EXPERT_KNOB_TASKS)} read it "
+                        f"(trainer/sft.py), so it would be stored and never take "
+                        f"effect. Remove it, or use one of those tasks."
+                    )
+        if self.task not in _MOE_AUX_LOSS_TASKS:
+            default = type(tcfg).model_fields["moe_aux_loss_coeff"].default
+            if tcfg.moe_aux_loss_coeff != default:
+                raise ValueError(
+                    f"training.moe_aux_loss_coeff={tcfg.moe_aux_loss_coeff!r} is "
+                    f"not applied by task={self.task!r}: only "
+                    f"{sorted(_MOE_AUX_LOSS_TASKS)} read it (sft.py, "
+                    f"pretrain.py). Remove it, or use one of those tasks."
+                )
         return self
 
     @model_validator(mode="after")
