@@ -466,17 +466,38 @@ def ensure_grpo_stability_callback(trainer: Any) -> bool:
     stability knobs are set.  This function is a no-op if the callback is
     already attached; otherwise it attaches with all stability knobs at
     their defaults (inactive) so only the gradient watchdog hooks fire.
+
+    The public ``add_callback`` API is the primary capability gate.
+    ``callback_handler`` is treated as optional because it is an internal
+    ``Trainer`` implementation detail and may be absent on test doubles or
+    future TRL versions.
     """
     from soup_cli.monitoring.grpo_stability_callback import (
         GRPOStabilityCallback,
     )
 
-    # Check if already attached by the stability-knob path.
-    for cb in trainer.callback_handler.callbacks:
-        if isinstance(cb, GRPOStabilityCallback):
-            return False  # already wired — watchdog will fire
+    add_callback = getattr(trainer, "add_callback", None)
+    if not callable(add_callback):
+        return False
+
+    # Optional duplicate-detection via the private callback list.
+    handler = getattr(trainer, "callback_handler", None)
+    callbacks = getattr(handler, "callbacks", None) if handler is not None else None
+    if callbacks is not None:
+        try:
+            for cb in callbacks:
+                if isinstance(cb, GRPOStabilityCallback):
+                    return False  # already wired — watchdog will fire
+        except TypeError:
+            pass
+
     # Attach with defaults: all stability knobs inactive, watchdog active.
-    trainer.add_callback(GRPOStabilityCallback())
+    callback = GRPOStabilityCallback()
+    try:
+        add_callback(callback)
+    except Exception as exc:  # noqa: BLE001 — best-effort callback attachment
+        logger.debug("ensure_grpo_stability_callback add_callback failed: %s", exc)
+        return False
     return True
 
 

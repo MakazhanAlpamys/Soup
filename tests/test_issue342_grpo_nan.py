@@ -1,6 +1,6 @@
 """Tests for #342 — GRPO numerical stability (log-ratio overflow + gradient watchdog).
 
-CPU-only, no model, no GPU.  Six test groups:
+CPU-only, no model, no GPU.  Seven test groups:
 
 1. Reproduction — exact STEP 27 signature (finite loss + NaN grad)
 2. Bit-exactness — ``torch.equal`` for normal-range tokens  [C7.2]
@@ -8,6 +8,7 @@ CPU-only, no model, no GPU.  Six test groups:
 4. Watchdog behavior — detect NaN, zero grads, track count    [C7.5-C7.9]
 5. Microbatch placement — on_pre_optimizer_step vs training_step [C7.4]
 6. Mutation controls — removing fix re-exposes the bug
+7. Defensive callback wiring — ensure_grpo_stability_callback contract
 """
 
 from __future__ import annotations
@@ -517,3 +518,166 @@ class TestGuardHasTeeth:
         assert not torch.isfinite(param).all(), (
             "Without the watchdog, NaN grads corrupt the parameters"
         )
+
+
+# ---------------------------------------------------------------------------
+# Group 7 — ensure_grpo_stability_callback defensive contract
+# ---------------------------------------------------------------------------
+# Concrete test doubles (NOT MagicMock) so missing attributes surface as
+# AttributeError rather than silently auto-generating child mocks.
+# ---------------------------------------------------------------------------
+
+class _CallbackHandler:
+    """Minimal callback_handler stand-in with a mutable callbacks list."""
+
+    def __init__(self):
+        self.callbacks: list = []
+
+
+class _TrainerWithCallbacks:
+    """Has both add_callback and callback_handler (normal HF Trainer)."""
+
+    def __init__(self):
+        self.callback_handler = _CallbackHandler()
+
+    def add_callback(self, cb):
+        self.callback_handler.callbacks.append(cb)
+
+
+class _TrainerWithoutCallbackHandler:
+    """Has add_callback but NO callback_handler (future TRL / slim mock)."""
+
+    def __init__(self):
+        self._attached: list = []
+
+    def add_callback(self, cb):
+        self._attached.append(cb)
+
+
+class _BareTrainer:
+    """Has neither add_callback nor callback_handler (FakeGRPOTrainer)."""
+
+    def __init__(self, **kwargs):
+        pass
+
+
+class TestEnsureGRPOStabilityCallback:
+    """Group 7 — defensive callback wiring for issue #342."""
+
+    def test_attaches_when_callback_handler_present(self):
+        """Normal path: trainer with both add_callback and handler."""
+        from soup_cli.monitoring.grpo_stability_callback import (
+            GRPOStabilityCallback,
+        )
+        from soup_cli.utils.peft_wiring import (
+            ensure_grpo_stability_callback,
+        )
+
+        trainer = _TrainerWithCallbacks()
+        result = ensure_grpo_stability_callback(trainer)
+
+        assert result is True, "Must attach on first call"
+        assert any(
+            isinstance(cb, GRPOStabilityCallback)
+            for cb in trainer.callback_handler.callbacks
+        ), "Callback must be in the handler's list"
+
+    def test_skips_duplicate_when_already_attached(self):
+        """Duplicate detection via callback_handler.callbacks."""
+        from soup_cli.monitoring.grpo_stability_callback import (
+            GRPOStabilityCallback,
+        )
+        from soup_cli.utils.peft_wiring import (
+            ensure_grpo_stability_callback,
+        )
+
+        trainer = _TrainerWithCallbacks()
+        ensure_grpo_stability_callback(trainer)
+        result = ensure_grpo_stability_callback(trainer)
+
+        assert result is False, "Second call must be no-op"
+        count = sum(
+            1
+            for cb in trainer.callback_handler.callbacks
+            if isinstance(cb, GRPOStabilityCallback)
+        )
+        assert count == 1, f"Expected exactly 1 callback, got {count}"
+
+    def test_attaches_without_callback_handler(self):
+        """Trainer with add_callback but no callback_handler."""
+        from soup_cli.monitoring.grpo_stability_callback import (
+            GRPOStabilityCallback,
+        )
+        from soup_cli.utils.peft_wiring import (
+            ensure_grpo_stability_callback,
+        )
+
+        trainer = _TrainerWithoutCallbackHandler()
+        result = ensure_grpo_stability_callback(trainer)
+
+        assert result is True, (
+            "Must attach even without callback_handler"
+        )
+        assert any(
+            isinstance(cb, GRPOStabilityCallback)
+            for cb in trainer._attached
+        ), "Callback must be in the trainer's internal list"
+
+    def test_returns_false_for_bare_trainer(self):
+        """Bare trainer without add_callback must not crash."""
+        from soup_cli.utils.peft_wiring import (
+            ensure_grpo_stability_callback,
+        )
+
+        trainer = _BareTrainer()
+        result = ensure_grpo_stability_callback(trainer)
+
+        assert result is False, (
+            "Must return False for trainers without add_callback"
+        )
+
+    def test_returns_false_for_none_and_non_trainer(self):
+        """Degenerate inputs (None, string, int) must degrade safely."""
+        from soup_cli.utils.peft_wiring import (
+            ensure_grpo_stability_callback,
+        )
+
+        for degenerate in (None, "trainer", 42, [], object()):
+            result = ensure_grpo_stability_callback(degenerate)
+            assert result is False, f"Expected False for {degenerate!r}, got {result!r}"
+
+    def test_attaches_when_callbacks_attribute_is_non_iterable(self):
+        """Non-iterable callback_handler.callbacks must not crash."""
+        from soup_cli.monitoring.grpo_stability_callback import (
+            GRPOStabilityCallback,
+        )
+        from soup_cli.utils.peft_wiring import (
+            ensure_grpo_stability_callback,
+        )
+
+        class _BrokenHandlerTrainer:
+            def __init__(self):
+                self.callback_handler = type("Handler", (), {"callbacks": 123})()
+                self._attached = []
+
+            def add_callback(self, cb):
+                self._attached.append(cb)
+
+        trainer = _BrokenHandlerTrainer()
+        result = ensure_grpo_stability_callback(trainer)
+        assert result is True
+        assert any(isinstance(cb, GRPOStabilityCallback) for cb in trainer._attached)
+
+    def test_returns_false_when_add_callback_raises(self):
+        """Failing add_callback degrades to False without crashing."""
+        from soup_cli.utils.peft_wiring import (
+            ensure_grpo_stability_callback,
+        )
+
+        class _FailingTrainer:
+            def add_callback(self, cb):
+                raise RuntimeError("Trainer rejects callback")
+
+        trainer = _FailingTrainer()
+        result = ensure_grpo_stability_callback(trainer)
+        assert result is False
