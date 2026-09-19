@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -169,3 +169,139 @@ def test_token_compare_is_constant_time():
     src = inspect.getsource(serve._create_app)
     assert "compare_digest" in src
     assert "authorization != expected" not in src
+
+
+# ----------------------------------------------------------------------
+# The generation routes: Origin-only, because a reverse proxy legitimately
+# fronts them under its own hostname while a browser always sends Origin on
+# a cross-site request.
+# ----------------------------------------------------------------------
+
+
+class TestCheckBrowserOrigin:
+    """Unit level: the narrow decision function itself."""
+
+    @pytest.mark.parametrize("bind", ["127.0.0.1", "localhost", "::1", "0.0.0.0", "192.168.1.5"])
+    def test_no_origin_is_allowed_on_any_bind(self, bind):
+        from soup_cli.utils.local_request_guard import check_browser_origin
+
+        assert check_browser_origin(bind, "proxy.example:8000", None) is None
+
+    @pytest.mark.parametrize("host", ["proxy.example:443", "evil.example", "", None])
+    def test_host_alone_never_refuses(self, host):
+        """Deliberately NOT a Host check — that is what would break a proxy."""
+        from soup_cli.utils.local_request_guard import check_browser_origin
+
+        assert check_browser_origin("127.0.0.1", host, None) is None
+
+    @pytest.mark.parametrize(
+        "origin",
+        ["http://evil.example", "null", "file://x", "http://127.0.0.1.evil.example"],
+    )
+    def test_foreign_origin_403(self, origin):
+        from soup_cli.utils.local_request_guard import check_browser_origin
+
+        assert check_browser_origin("127.0.0.1", "127.0.0.1:8000", origin) == (
+            403,
+            "Origin not allowed",
+        )
+
+    def test_loopback_origin_allowed(self):
+        from soup_cli.utils.local_request_guard import check_browser_origin
+
+        assert check_browser_origin("127.0.0.1", "127.0.0.1:8000", "http://localhost:5173") is None
+
+    def test_wildcard_bind_compares_origin_to_host(self):
+        from soup_cli.utils.local_request_guard import check_browser_origin
+
+        assert check_browser_origin("0.0.0.0", "10.0.0.2:8000", "http://10.0.0.2:8000") is None
+        assert check_browser_origin("0.0.0.0", "10.0.0.2:8000", "http://evil.example") == (
+            403,
+            "Origin not allowed",
+        )
+
+
+CHAT_BODY = {"model": "test-model", "messages": [{"role": "user", "content": "hi"}]}
+MESSAGES_BODY = {
+    "model": "test-model",
+    "messages": [{"role": "user", "content": "hi"}],
+    "max_tokens": 16,
+}
+GENERATION = [
+    ("/v1/chat/completions", CHAT_BODY),
+    ("/v1/messages", MESSAGES_BODY),
+]
+
+
+def _generation_client(base_url="http://127.0.0.1:8000", **kwargs):
+    return TestClient(_app(**kwargs), base_url=base_url)
+
+
+@pytest.mark.parametrize(("path", "body"), GENERATION)
+def test_generation_routes_refuse_foreign_origin(path, body):
+    """A page the operator merely visits must not be able to drive generation."""
+    with patch("soup_cli.commands.serve._generate_response") as mock_gen:
+        mock_gen.return_value = ("hello world", 3, 2)
+        resp = _generation_client().post(
+            path, json=body, headers={"Origin": "http://evil.example"}
+        )
+    assert resp.status_code == 403, (path, resp.status_code, resp.text)
+    assert mock_gen.call_count == 0, f"{path} generated before the Origin was checked"
+
+
+@pytest.mark.parametrize(("path", "body"), GENERATION)
+def test_generation_routes_allow_loopback_origin(path, body):
+    with patch("soup_cli.commands.serve._generate_response") as mock_gen:
+        mock_gen.return_value = ("hello world", 3, 2)
+        resp = _generation_client().post(
+            path, json=body, headers={"Origin": "http://localhost:5173"}
+        )
+    assert resp.status_code == 200, (path, resp.status_code, resp.text)
+
+
+@pytest.mark.parametrize(("path", "body"), GENERATION)
+def test_generation_routes_allow_missing_origin(path, body):
+    with patch("soup_cli.commands.serve._generate_response") as mock_gen:
+        mock_gen.return_value = ("hello world", 3, 2)
+        resp = _generation_client().post(path, json=body)
+    assert resp.status_code == 200, (path, resp.status_code, resp.text)
+
+
+@pytest.mark.parametrize(("path", "body"), GENERATION)
+def test_generation_routes_allow_reverse_proxy_shape(path, body):
+    """Foreign Host, no Origin: a reverse proxy in front of the server.
+
+    This is the property the Origin-only check exists to preserve — a Host
+    check here would refuse every proxied deployment.
+    """
+    with patch("soup_cli.commands.serve._generate_response") as mock_gen:
+        mock_gen.return_value = ("hello world", 3, 2)
+        resp = _generation_client(base_url="http://proxy.example").post(path, json=body)
+    assert resp.status_code == 200, (path, resp.status_code, resp.text)
+
+
+def test_adapter_listing_refuses_foreign_origin_on_tokenless_loopback():
+    client = TestClient(_app(), base_url="http://127.0.0.1:8000")
+    resp = client.get("/v1/adapters", headers={"Origin": "http://evil.example"})
+    assert resp.status_code == 403, resp.text
+
+
+def test_adapter_listing_without_origin_still_works():
+    client = TestClient(_app(), base_url="http://127.0.0.1:8000")
+    resp = client.get("/v1/adapters")
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["adapters"][0]["name"] == "chat"
+
+
+def test_adapter_listing_not_host_checked():
+    """The adapters route gains Origin, not Host — the proxy shape survives."""
+    client = TestClient(_app(), base_url="http://proxy.example")
+    assert client.get("/v1/adapters").status_code == 200
+
+
+@pytest.mark.parametrize("path", ["/health", "/metrics", "/v1/models"])
+def test_unguarded_routes_stay_unguarded(path):
+    """These carry no generation cost and no adapter names."""
+    client = TestClient(_app(), base_url="http://proxy.example")
+    resp = client.get(path, headers={"Origin": "http://evil.example"})
+    assert resp.status_code == 200, (path, resp.status_code, resp.text)
