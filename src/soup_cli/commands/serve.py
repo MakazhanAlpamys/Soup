@@ -1655,11 +1655,30 @@ def _create_app(
     from pydantic import BaseModel as PydanticBaseModel
     from pydantic import Field
 
-    from soup_cli.utils.local_request_guard import check_local_request
+    from soup_cli.utils.local_request_guard import (
+        check_browser_origin,
+        check_local_request,
+    )
 
     def _check_local_request(request: Request) -> None:
         """Refuse tool / state-changing calls whose Host or Origin names another site."""
         refusal = check_local_request(
+            host, request.headers.get("host"), request.headers.get("origin")
+        )
+        if refusal is not None:
+            status_code, detail = refusal
+            raise HTTPException(status_code=status_code, detail=detail)
+
+    def _check_browser_origin(request: Request) -> None:
+        """Refuse a cross-site BROWSER request to a generation / adapter-listing route.
+
+        CORS stops such a page reading the response, not sending the request:
+        a ``text/plain`` body is a simple request, so it is never preflighted,
+        and Starlette parses it as JSON anyway. Origin only — these routes are
+        the ones a reverse proxy fronts under its own hostname, so a Host check
+        would refuse every proxied deployment for no added protection.
+        """
+        refusal = check_browser_origin(
             host, request.headers.get("host"), request.headers.get("origin")
         )
         if refusal is not None:
@@ -1687,13 +1706,20 @@ def _create_app(
 
     app = FastAPI(title="Soup Inference Server", version="1.0.0")
 
-    # Loopback-only CORS: CORS limits which browser pages can read responses,
-    # and the Host/Origin guard on the tool and adapter routes refuses
-    # BROWSER-DRIVEN cross-site requests. Neither covers a non-browser client
-    # (curl, requests, any script), which sends no Origin at all and can name
-    # the bind address in Host — for those, on a non-loopback bind, the bearer
-    # token checked by `_check_tool_auth` is the only thing protecting these
-    # routes. Loopback origins cover the curl / same-host IDE extension cases.
+    # Loopback-only CORS, and three layers behind it:
+    #   * CORS limits which browser pages may READ a response. It does not stop
+    #     one being SENT: a `text/plain` body is a simple request, so it is
+    #     never preflighted, and Starlette parses it as JSON regardless.
+    #   * `_check_browser_origin` (Origin only) refuses cross-site BROWSER
+    #     requests to the generation routes and the adapter listing, so a page
+    #     the operator merely visits cannot burn GPU time or enumerate loaded
+    #     adapters. No Origin means no browser, so a proxy / curl / SDK passes.
+    #   * `_check_local_request` (Host AND Origin) covers the tool, thumbs and
+    #     adapter-mutation routes, which no reverse proxy needs to rename.
+    # None of the three covers a non-browser client, which sends no Origin at
+    # all and can name the bind address in Host — for those, on a non-loopback
+    # bind, the bearer token checked by `_check_tool_auth` is the only thing
+    # protecting these routes.
     app.add_middleware(
         CORSMiddleware,
         allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$",
@@ -1761,7 +1787,7 @@ def _create_app(
         """Dashboard + Prometheus-style JSON scrape."""
         return metrics.snapshot()
 
-    @app.get("/v1/adapters")
+    @app.get("/v1/adapters", dependencies=[Depends(_check_browser_origin)])
     def list_adapters(authorization: Optional[str] = Header(default=None)):
         """List loaded LoRA adapters (names only, no paths for security)."""
         _check_tool_auth(authorization)
@@ -1817,7 +1843,7 @@ def _create_app(
             ],
         }
 
-    @app.post("/v1/chat/completions")
+    @app.post("/v1/chat/completions", dependencies=[Depends(_check_browser_origin)])
     def chat_completions(
         request: ChatCompletionRequest,
         x_user_id: Optional[str] = Header(default=None, alias="X-User-Id"),
@@ -1994,7 +2020,7 @@ def _create_app(
     # Reuses the v0.45.0 utils/anthropic_messages converter + the existing
     # chat_completions handler. Live on transformers backend only this
     # release (vLLM /v1/messages tracked for v0.53.7).
-    @app.post("/v1/messages")
+    @app.post("/v1/messages", dependencies=[Depends(_check_browser_origin)])
     def anthropic_messages(payload: dict) -> dict:
         from soup_cli.utils.anthropic_messages import (
             from_anthropic,

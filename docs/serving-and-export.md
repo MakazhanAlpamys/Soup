@@ -819,5 +819,12 @@ Three POST routes are now available on `soup serve`:
 
 Tool routes, `/v1/thumbs` and adapter activate/deactivate accept requests only when the
 `Host` header names the bound address (any loopback name for a loopback bind) and any
-`Origin` header names the same; otherwise they answer 421 or 403. Inference routes are not
-restricted, so a reverse proxy can still front them.
+`Origin` header names the same; otherwise they answer 421 or 403.
+
+The generation routes (`/v1/chat/completions`, `/v1/messages`) and the adapter listing
+(`GET /v1/adapters`) carry the narrower half of that check: a request whose `Origin` names
+another site is refused with 403, so a page the operator merely visits cannot drive
+generation on their server or enumerate the loaded adapters — CORS alone would only stop
+that page *reading* the reply, not sending the request. Requests that carry no `Origin` at
+all — curl, the OpenAI/Anthropic SDKs, a reverse proxy — are unaffected, and `Host` is not
+checked on these routes, so a proxy can still front them under its own hostname.
