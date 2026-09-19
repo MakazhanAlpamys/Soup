@@ -125,3 +125,70 @@ class TestRealPageLockFailureIsDrainedBeforeTheProbeRuns:
         assert peak is not None
         assert peak.oom is False
         assert peak.failed is False
+
+
+class TestAsyncDiskPageLockFailureIsDrainedBeforeTheProbeRuns:
+    """The disk-tier fallback owes the next CUDA launch the same recovery as RAM.
+
+    Only the source constructor and CUDA operations are simulated. The real
+    ``_build_source`` disk branch must perform the drain before it returns the
+    pageable source; otherwise the following probe sees the stale error as OOM.
+    """
+
+    def test_disk_staging_fallback_drains_before_vram_probe(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _, accelerator_error = _get_torch_and_accelerator_error()
+        import torch
+
+        from soup_cli.utils import async_disk_source
+
+        attempts: list[tuple[bool, int]] = []
+
+        class _FailsOncePinnedDiskSource:
+            def __init__(
+                self,
+                shard_dir: str,
+                n_layers: int,
+                spec: object,
+                *,
+                pin: bool,
+                read_ahead: int,
+            ) -> None:
+                attempts.append((pin, read_ahead))
+                if pin:
+                    raise RuntimeError("simulated disk-staging page-lock failure")
+                self.pinned = False
+
+        monkeypatch.setattr(async_disk_source, "AsyncDiskSource", _FailsOncePinnedDiskSource)
+        monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+        monkeypatch.setattr(torch, "ones", lambda *args, **kwargs: None)
+        launches = {"count": 0}
+
+        def stale_once(*args: object, **kwargs: object) -> None:
+            launches["count"] += 1
+            if launches["count"] == 1:
+                raise accelerator_error("CUDA error: out of memory")
+
+        monkeypatch.setattr(torch.cuda, "synchronize", stale_once)
+
+        source, pinned = lsr._build_source(
+            "ignored-shard-dir", 1, {}, True, None, tier="disk", read_ahead=3
+        )
+        assert source.pinned is False
+        assert pinned is False
+        assert attempts == [(True, 3), (False, 3)]
+
+        monkeypatch.setattr(torch.cuda, "reset_peak_memory_stats", lambda *_: None)
+        monkeypatch.setattr(torch.cuda, "max_memory_allocated", lambda *_: 123)
+        monkeypatch.setattr(torch.cuda, "max_memory_reserved", lambda *_: 456)
+        monkeypatch.setattr(torch, "randint", lambda *args, **kwargs: object())
+        monkeypatch.setattr(torch.cuda, "empty_cache", lambda: None)
+        monkeypatch.setattr(lsr, "_zero_probe_grads", lambda *_: None)
+
+        peak = lsr.measure_step_peak_bytes(MagicMock(), rows=1, seq_len=4, vocab_size=8)
+
+        assert peak is not None
+        assert peak.oom is False
+        assert peak.failed is False
+        assert launches["count"] == 4  # two drain launches, then two probe synchronizations
