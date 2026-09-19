@@ -59,7 +59,10 @@ def _config(tiny_model, task, **training):
             "max_grad_norm": 0.3, "optimizer": "adafactor", "lr": 0.001,
             "quantization": "none", "gradient_checkpointing": False,
             "logging_steps": 1, "save_steps": 100,
-            "lora": {"r": 2, "alpha": 4, "dropout": 0.0, "target_modules": ["q_proj"]},
+            "lora": {
+                "r": 0 if task == "prm" else 2,
+                "alpha": 4, "dropout": 0.0, "target_modules": ["q_proj"],
+            },
             **training,
         },
     )
@@ -155,17 +158,24 @@ def _unlearn_wrapper(tiny_model, **training):
     (tiny_model.parent / "forget.jsonl").write_text(
         (json.dumps({"prompt": "one ", "completion": "two three"}) + "\n") * 5
     )
-    config = _config(tiny_model, "unlearn", epochs=1, unlearn_method="simnpo", **training)
+    training = {"epochs": 1, "unlearn_method": "simnpo", **training}
+    config = _config(tiny_model, "unlearn", **training)
     wrapper = UnlearnTrainerWrapper(config, device="cpu")
     wrapper.setup()
     return wrapper
 
 
-def test_unlearn_default_auto_reaches_real_training(tiny_model, monkeypatch):
-    from soup_cli.utils import gpu
+@pytest.mark.parametrize(("method", "model_loads"), [("simnpo", 1), ("npo", 2)])
+def test_unlearn_default_auto_reaches_real_training(tiny_model, monkeypatch, method, model_loads):
+    from soup_cli.utils import gpu, live_eval
 
     monkeypatch.setattr(gpu, "estimate_batch_size", lambda **kwargs: 2)
-    wrapper = _unlearn_wrapper(tiny_model, batch_size="auto")
+    with patch.object(
+        live_eval, "load_model_and_tokenizer", wraps=live_eval.load_model_and_tokenizer
+    ) as load_model:
+        wrapper = _unlearn_wrapper(tiny_model, batch_size="auto", unlearn_method=method)
+    assert load_model.call_count == model_loads
+    assert all("quantization" not in call.kwargs for call in load_model.call_args_list)
     assert wrapper._batch_size == 2
     assert wrapper.train()["total_steps"] == 5
 

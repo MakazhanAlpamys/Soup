@@ -338,9 +338,19 @@ def submit_lambda_run(plan: CloudPlan, *, env: Optional[Mapping] = None) -> int:
         )
     import subprocess
 
-    proc = subprocess.run(  # noqa: S603 — argv list, no shell
+    # Not subprocess.run: on KeyboardInterrupt it kills the child 0.25 s later,
+    # and the child is the controller that terminates the paid instance.
+    proc = subprocess.Popen(  # noqa: S603 — argv list, no shell
         [sys.executable, plan.stub_path],
-        check=False,
         env=dict(environ),
     )
-    return proc.returncode
+    while True:
+        try:
+            return proc.wait()
+        except KeyboardInterrupt:
+            # The controller received the same Ctrl+C and is terminating the
+            # instance in its finally block; killing it here would leave the
+            # instance running. Keep waiting until it exits.
+            sys.stderr.write(
+                "Interrupted: waiting for the Lambda controller to terminate the instance...\n"
+            )

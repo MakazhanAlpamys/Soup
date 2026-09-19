@@ -39,7 +39,10 @@ Four locks, each answering a different question:
    not a translation of stable fact, and 28 of the last 62 commits touching
    ``README.md`` touched nothing else (#1013). A translation is free to run a
    release behind there; every other section is still policed exactly as
-   strictly as before.
+   strictly as before. The relief is partial, on purpose: it does nothing for
+   an edit confined to any other section -- #853 (``Common Commands``) and
+   #1014 (the pre-heading banner and ``Citing Soup``) both reddened this gate
+   on sections the exemption does not touch.
 4. **The banner links exactly the READMEs that exist.** The language banner above
    the logo in every README links every other README and nothing else, so a new
    language cannot land unlinked and no banner can point at a missing file.
@@ -100,15 +103,21 @@ def _without_exempt_bodies(data: bytes) -> bytes:
     """``data`` with each ``EXEMPT_SECTIONS`` heading's body dropped, heading kept.
 
     A README.md byte change confined to an exempt section must not move the
-    stamp -- that is the whole point of exempting it (#1013).
+    stamp -- that is the whole point of exempting it (#1013). A ``## `` line
+    inside a fenced code block is body content, not a heading (mirrors
+    ``_sections``) -- otherwise it would start the skip early and drop the
+    rest of that section, headings included, from the stamp.
     """
     out: list[str] = []
     skipping = False
+    in_fence = False
     for line in data.decode("utf-8").splitlines(keepends=True):
-        if line.startswith("## "):
+        if line.startswith("```"):
+            in_fence = not in_fence
+        is_heading = not in_fence and line.startswith("## ")
+        if is_heading:
             skipping = line[3:].strip() in EXEMPT_SECTIONS
-            out.append(line)
-        elif not skipping:
+        if is_heading or not skipping:
             out.append(line)
     return "".join(out).encode("utf-8")
 
@@ -560,6 +569,20 @@ class TestExemptSectionsDoNotGateOnTranslation:
         _edit(tree / "README.tr.md", "## Yenilikler\n", "")
         problems = structure_problems(tree)
         assert "README.tr.md: 1 `## ` sections, README.md has 2" in problems, problems
+
+    def test_a_heading_line_inside_a_fence_does_not_start_the_skip(self, tree):
+        """A `## What's New` line inside a fenced code block in a non-exempt
+        section used to be read as a real heading regardless of fence state,
+        starting the exempt-body skip early and dropping the rest of that
+        section -- headings included -- from the stamp hash."""
+        readme = tree / "README.md"
+        _edit(
+            readme,
+            "## Support\n\nJoin the [Discord](https://discord.gg/x)",
+            "## Support\n\n```text\n## What's New\n```\n\nJoin the [Discord](https://discord.gg/x)",
+        )
+        data = readme.read_bytes().replace(b"\r\n", b"\n")
+        assert b"docs/commands.md" in _without_exempt_bodies(data)
 
     def test_widening_the_exemption_list_silences_a_real_drift(self, tree, monkeypatch):
         """#1013 review, the requested mutation: widening EXEMPT_SECTIONS by one

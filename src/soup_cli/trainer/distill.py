@@ -22,6 +22,7 @@ LoRA per the standard PEFT pipeline.
 
 from __future__ import annotations
 
+import logging
 import math
 import time
 from pathlib import Path
@@ -39,6 +40,7 @@ if TYPE_CHECKING:
 
 from soup_cli.utils.mixed_precision import align_trainable_dtype_for_fp16
 
+logger = logging.getLogger(__name__)
 console = Console()
 
 # 50/50 CE / distillation blend — matches Hinton et al. 2015.
@@ -227,6 +229,154 @@ def _require_uld_id_compatible_tokenizers(
         )
 
 
+class DistillNonfiniteTracker:
+    """Tracks consecutive non-finite distillation terms without per-step device sync (#887).
+
+    A broken teacher (e.g. corrupt weights, unsupported dtype underflow, or mismatched
+    tokenizer) produces inf/nan logits every step. GradScaler then skips every step,
+    allowing training to complete silently while learning nothing.
+
+    This tracker accumulates consecutive non-finite steps directly on device using
+    asynchronous PyTorch operations (``torch.isfinite``, ``torch.where``) with zero host
+    synchronization on the per-step path. It synchronizes to the host only periodically
+    (every ``check_interval`` steps) or at train end, and emits a single actionable
+    warning once the consecutive non-finite count reaches ``threshold``.
+    """
+
+    def __init__(
+        self,
+        teacher_name: str = "teacher",
+        temperature: float | None = None,
+        threshold: int = 3,
+        check_interval: int = 5,
+        console: Console | None = None,
+    ) -> None:
+        if isinstance(threshold, bool) or not isinstance(threshold, int) or threshold < 1:
+            raise ValueError(f"threshold must be an int >= 1, got {threshold!r}")
+        if (
+            isinstance(check_interval, bool)
+            or not isinstance(check_interval, int)
+            or check_interval < 1
+        ):
+            raise ValueError(f"check_interval must be an int >= 1, got {check_interval!r}")
+
+        self.teacher_name = str(teacher_name or "teacher")
+        self.temperature = temperature
+        self.threshold = threshold
+        self.check_interval = check_interval
+        self.console = console
+        self._device_counter: _torch_typ.Tensor | None = None
+        self._step_count: int = 0
+        self._warned: bool = False
+
+    @property
+    def warned(self) -> bool:
+        """Whether the diagnostic warning has been emitted."""
+        return self._warned
+
+    def record_step(self, distill_loss: "_torch_typ.Tensor") -> None:
+        """Record a step's distillation loss on device without per-step host sync.
+
+        Accumulates consecutive non-finite steps asynchronously. If the loss is
+        finite, the on-device counter is reset to 0 with no host sync.
+        Host sync occurs only every ``check_interval`` steps while not yet warned.
+        """
+        if self._warned:
+            return
+
+        import torch
+
+        with torch.no_grad():
+            if (
+                self._device_counter is None
+                or self._device_counter.device != distill_loss.device
+            ):
+                self._device_counter = torch.zeros(
+                    (), dtype=torch.int32, device=distill_loss.device
+                )
+
+            is_finite = torch.isfinite(distill_loss).all()
+            self._device_counter = torch.where(
+                is_finite,
+                torch.zeros_like(self._device_counter),
+                self._device_counter + 1,
+            )
+
+        self._step_count += 1
+        if self._step_count % self.check_interval == 0:
+            self.check_and_warn()
+
+    def check_and_warn(self) -> bool:
+        """Check the on-device counter and emit a diagnostic warning if threshold reached.
+
+        Returns True if a warning was emitted, False otherwise.
+        """
+        if self._warned or self._device_counter is None:
+            return False
+
+        count = int(self._device_counter.item())
+        if count >= self.threshold:
+            self._warn(count)
+            self._warned = True
+            return True
+        return False
+
+    def _warn(self, consecutive_count: int) -> None:
+        import warnings
+
+        from rich.markup import escape
+        from rich.panel import Panel
+
+        temp_str = (
+            f" (distill_temperature={self.temperature})"
+            if self.temperature is not None
+            else ""
+        )
+        teacher_display = escape(str(self.teacher_name))
+        msg = (
+            f"Distillation teacher {self.teacher_name!r} produced non-finite logits "
+            f"({consecutive_count} consecutive non-finite steps detected{temp_str}). "
+            "GradScaler will skip optimizer steps and training may learn nothing. "
+            "Likely causes:\n"
+            "  1. Teacher model saved/loaded in an unsupported dtype (e.g. float16 underflow).\n"
+            "  2. Mismatched tokenizer between student and teacher producing garbage logits.\n"
+            "  3. training.distill_temperature is set too small."
+        )
+        logger.warning(
+            "Distillation teacher %r produced non-finite logits "
+            "(%d consecutive non-finite steps%s). "
+            "Likely causes: unsupported dtype underflow, mismatched tokenizer, "
+            "or distill_temperature too small.",
+            self.teacher_name,
+            consecutive_count,
+            temp_str,
+        )
+        warnings.warn(msg, UserWarning, stacklevel=2)
+
+        if self.console is not None:
+            try:
+                body = (
+                    "[bold yellow]Warning: Persistently non-finite distillation loss[/]\n\n"
+                    f"Teacher [bold cyan]{teacher_display}[/] produced non-finite logits "
+                    f"for [bold red]{consecutive_count}[/] consecutive steps{temp_str}.\n"
+                    "Training will skip optimizer steps and may learn nothing.\n\n"
+                    "[bold]Likely causes:[/]\n"
+                    "  1. Teacher model saved/loaded in an unsupported dtype "
+                    "(e.g. float16 underflow)\n"
+                    "  2. Mismatched tokenizer between student and teacher producing "
+                    "garbage logits\n"
+                    "  3. training.distill_temperature is set too small"
+                )
+                panel = Panel(
+                    body,
+                    title="[bold red]Distillation Warning[/bold red]",
+                    border_style="yellow",
+                )
+                self.console.print(panel)
+            except (RuntimeError, ValueError, TypeError):
+                pass
+
+
 class DistillTrainerWrapper:
     """High-level wrapper for student/teacher distillation.
 
@@ -272,6 +422,7 @@ class DistillTrainerWrapper:
         self.teacher: Any = None
         self.tokenizer: Any = None
         self.trainer: Any = None
+        self.nonfinite_tracker: DistillNonfiniteTracker | None = None
         self._output_dir: str | None = None
 
     def setup(self, dataset: dict) -> None:
@@ -588,14 +739,31 @@ class DistillTrainerWrapper:
         _distill_chunk_size = tcfg.distill_chunk_size
         _distill_checkpoint = bool(tcfg.distill_checkpoint)
 
+        # #887: Track persistently non-finite distillation loss without per-step sync.
+        nonfinite_tracker = (
+            DistillNonfiniteTracker(
+                teacher_name=str(tcfg.teacher_model or "teacher"),
+                temperature=temperature,
+                threshold=3,
+                check_interval=5,
+                console=console,
+            )
+            if not sequence_mode
+            else None
+        )
+        self.nonfinite_tracker = nonfinite_tracker
+
         class _DistillTrainer(Trainer):
-            def __init__(self, *args, **kwargs):
+            def __init__(
+                self, *args, tracker: DistillNonfiniteTracker | None = None, **kwargs
+            ):
                 super().__init__(*args, **kwargs)
                 # compute_loss consumes Trainer's full accumulation-window
                 # target count. Keeping this True makes Trainer collect that
                 # count and skip its fixed 1 / gradient_accumulation_steps
                 # fallback, which would weight unequal microbatches equally.
                 self.model_accepts_loss_kwargs = True
+                self.nonfinite_tracker = tracker
 
             def compute_loss(
                 self,
@@ -664,6 +832,9 @@ class DistillTrainerWrapper:
                         inputs["input_ids"],
                         inputs.get("attention_mask"),
                     )
+                    _tracker = getattr(self, "nonfinite_tracker", None)
+                    if _tracker is not None:
+                        _tracker.record_step(rollout_loss)
                     anchor = _minillm_cb.anchor_term(model)
                     total = _CE_WEIGHT * ce_loss + _DISTILL_WEIGHT * rollout_loss
                     if anchor is not None:
@@ -733,6 +904,9 @@ class DistillTrainerWrapper:
                         attention_mask=s_mask,
                         labels=labels,
                     )
+                    _tracker = getattr(self, "nonfinite_tracker", None)
+                    if _tracker is not None:
+                        _tracker.record_step(distill_loss)
                     total = _CE_WEIGHT * ce_loss + _DISTILL_WEIGHT * distill_loss
                     total = _token_weighted_accumulation(total)
                     return (total, outputs) if return_outputs else total
@@ -783,6 +957,9 @@ class DistillTrainerWrapper:
                         chunk_size=_distill_chunk_size,
                         use_checkpoint=_distill_checkpoint,
                     )
+                _tracker = getattr(self, "nonfinite_tracker", None)
+                if _tracker is not None:
+                    _tracker.record_step(distill_loss)
                 total = _CE_WEIGHT * ce_loss + _DISTILL_WEIGHT * distill_loss
                 if anchor is not None:
                     total = total + anchor
@@ -793,7 +970,7 @@ class DistillTrainerWrapper:
         # via the tokenizer AND pads ``labels`` with ``label_pad_token_id``
         # (-100 = IGNORE_INDEX). ``DataCollatorForLanguageModeling`` does
         # NOT pad labels — incorrect for our pre-tokenised loss-masked rows.
-        from transformers import DataCollatorForSeq2Seq
+        from transformers import DataCollatorForSeq2Seq, TrainerCallback
 
         self.trainer = _DistillTrainer(
             model=self.model,
@@ -806,7 +983,19 @@ class DistillTrainerWrapper:
                 label_pad_token_id=-100,
                 padding=True,
             ),
+            tracker=nonfinite_tracker,
         )
+
+        class _NonfiniteTrackerCallback(TrainerCallback):
+            def __init__(self, tracker: DistillNonfiniteTracker | None = None) -> None:
+                super().__init__()
+                self.tracker = tracker
+
+            def on_train_end(self, args, state, control, **kwargs):
+                if self.tracker is not None:
+                    self.tracker.check_and_warn()
+
+        self.trainer.add_callback(_NonfiniteTrackerCallback(tracker=nonfinite_tracker))
 
         # #359 - the same exposure #336 fixed in sft.py: with LoRA the
         # no-decay optimizer group is empty, DeepSpeed drops it, and the LR
@@ -837,6 +1026,7 @@ class DistillTrainerWrapper:
         attach_plugin_callback(self.trainer, console)
 
         self._output_dir = str(output_dir)
+        self._batch_size = batch_size
 
     def train(
         self,
@@ -852,15 +1042,23 @@ class DistillTrainerWrapper:
             )
         start = time.time()
         if display is not None:
-            from soup_cli.monitoring.callback import SoupTrainerCallback
+            from soup_cli.monitoring.callback import (
+                SoupTrainerCallback,
+                soup_callback_kwargs,
+            )
 
             self.trainer.add_callback(
                 SoupTrainerCallback(
-                    display, tracker=tracker, run_id=run_id,
-                    loss_watchdog=self.config.training.loss_watchdog,
-                    loss_watchdog_threshold=self.config.training.loss_watchdog_threshold,
-                    loss_watchdog_patience=self.config.training.loss_watchdog_patience,
+                    display,
+                    tracker=tracker,
+                    run_id=run_id,
                     eval_gate_config=self.config.training.eval_gate,
+                    **soup_callback_kwargs(
+                        self.config.training,
+                        batch_size=self._batch_size,
+                        output_dir=self._output_dir,
+                        include_eval_gate=False,
+                    ),
                 )
             )
         align_trainable_dtype_for_fp16(
@@ -869,6 +1067,8 @@ class DistillTrainerWrapper:
             bf16=getattr(self.trainer.args, "bf16", False),
         )
         self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)
+        if getattr(self, "nonfinite_tracker", None) is not None:
+            self.nonfinite_tracker.check_and_warn()
         duration = time.time() - start
 
         self.trainer.save_model(self._output_dir)

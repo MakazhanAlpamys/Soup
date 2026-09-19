@@ -14,6 +14,7 @@
 
 **Contents:**
 
+- [Which tasks apply `training.quantization`](#which-tasks-apply-trainingquantization)
 - [Continual-learning rehearsal (`--replay`)](#continual-learning-rehearsal---replay)
 - [Loop Hardening](#loop-hardening)
 - [Unlearning (`task='unlearn'`, NPO / SimNPO / RMU)](#unlearning-taskunlearn-npo--simnpo--rmu)
@@ -258,6 +259,32 @@ above.
 
 ---
 
+## Which tasks apply `training.quantization`
+
+`quantization` defaults to `4bit`, but not every trainer reads it. These eight load the base
+(and, for `distill`, the teacher) at checkpoint precision whatever the field says:
+
+| task | quantization | notes |
+|---|---|---|
+| `distill` | `none` only | student and frozen teacher both load unquantised |
+| `classifier`, `reranker`, `cross_encoder` | `none` only | full fine-tune unless `classifier_lora: true` |
+| `prm` | `none` only | always a full fine-tune; a `lora` block is refused (`lora.r: 0` is allowed) |
+| `moe_lora_routing` | `none` only | base frozen, only the router trains |
+| `unlearn` | `none` only | policy and reference copy both load unquantised |
+| `asr` | `none` only | full fine-tune unless `asr_lora: true` |
+
+For these tasks an unset `quantization` resolves to `none`, so the stored config and the VRAM
+pre-flight describe the run that actually happens (#795).
+
+An explicit `4bit` or `8bit` (or `load_in_8bit: true`) **loads with a warning and resolves to
+`none`**, because every config Soup dumped while `4bit` was the default carries it literally.
+The warning names the task and the release that will refuse it; set `quantization: none` to
+silence it. A Quant Menu value (`gptq`, `awq`, ...) or a 4-bit-only setting such as
+`bnb_4bit_quant_storage` is refused at config load, naming the task. Every other task applies
+the field as documented in [Performance & Quantization](performance-and-quantization.md).
+
+---
+
 ## Continual-learning rehearsal (`--replay`)
 
 Fine-tuning on a new task can erase the old one. Rehearsal is the standard
@@ -498,7 +525,6 @@ training:
   distill_checkpoint: true         # non-reentrant activation checkpointing
   epochs: 3
   lr: 5e-5
-  quantization: 4bit               # quantizes student only
 ```
 
 Loss = student CE + (T**2) × KL(teacher_logits / T  ||  student_logits / T).

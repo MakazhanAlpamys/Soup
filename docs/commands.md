@@ -19,7 +19,9 @@ soup train --config soup.yaml --tensorboard   Train with TensorBoard logging
 soup train --config soup.yaml --replay old.jsonl --replay-ratio 0.1  Continual-learning rehearsal: interleave old data so the new task doesn't erase it (sft/pretrain)
 soup train --config soup.yaml --fsdp full_shard  Train with FSDP2
 soup train --config soup.yaml --deepspeed zero++  DeepSpeed ZeRO++ (quantized comms)
-soup train --config soup.yaml --gpus auto|N      Multi-GPU launch hint
+soup train --config soup.yaml --gpus auto|N      Launch on local GPUs through Accelerate
+soup train --config soup.yaml --gpus 8 --nodes 2 --node-rank 0 --master-addr 10.0.0.10 --master-port 29500  Multi-node launch; run on each node with its own rank
+soup train --config soup.yaml --gpus 4 --no-reexec  Print the launch command without running it
 soup train --config soup.yaml --gate evals/gate.yaml  Eval-gated training
 soup train --config soup.yaml --push-as user/repo  Auto-push each checkpoint to HF as branch
 soup train --config soup.yaml --push-as user/repo --hf-resume  Resume from latest HF checkpoint branch
@@ -98,6 +100,7 @@ soup data validate <path>                     Check format (auto-detect)
 soup data doctor <path> --model <id>          Chat-template compat report: 8 checks, OK/MINOR/MAJOR
 soup data doctor <path> --model <id> --show-mask N  Per-token trained/masked colouring via the real collator
 soup data lint <path>                         Preference-data linter: length bias, near-dups, chosen==rejected
+soup data clean <path> [-o out]               Sanitize dataset: control chars, zero-width spaces, empty turns
 soup data convert <path> --to chatml          Convert between formats
 soup data merge data1.jsonl data2.jsonl       Combine datasets
 soup data dedup <path> --threshold 0.8        Remove duplicates (MinHash)

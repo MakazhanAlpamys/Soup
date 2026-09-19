@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 from rich.console import Console
 
@@ -14,6 +14,58 @@ from soup_cli.monitoring.display import TrainingDisplay
 
 logger = logging.getLogger(__name__)
 console = Console()
+
+
+def soup_callback_kwargs(
+    tcfg: Any,
+    *,
+    batch_size: Optional[int] = None,
+    output_dir: Optional[str] = None,
+    include_eval_gate: bool = True,
+) -> dict[str, Any]:
+    """Shared kwargs for :class:`SoupTrainerCallback` across all trainers (#802).
+
+    Unifies watchdog, spike recovery, and grad-accum parameters so they cannot
+    drift across trainer implementations.
+    """
+    resolved_batch = 1
+    if batch_size is not None and not isinstance(batch_size, bool):
+        try:
+            resolved_batch = max(1, int(batch_size))
+        except (TypeError, ValueError):
+            resolved_batch = 1
+    elif (
+        hasattr(tcfg, "batch_size")
+        and isinstance(tcfg.batch_size, int)
+        and not isinstance(tcfg.batch_size, bool)
+    ):
+        resolved_batch = max(1, tcfg.batch_size)
+
+    kwargs: dict[str, Any] = {
+        "loss_watchdog": getattr(tcfg, "loss_watchdog", False),
+        "loss_watchdog_threshold": getattr(tcfg, "loss_watchdog_threshold", 3.0),
+        "loss_watchdog_patience": getattr(tcfg, "loss_watchdog_patience", 5),
+        "spike_recovery": getattr(tcfg, "loss_spike_recovery", False),
+        "spike_recovery_max_attempts": getattr(
+            tcfg, "loss_spike_recovery_max_attempts", 3
+        ),
+        "spike_recovery_lr_decay": getattr(
+            tcfg, "loss_spike_recovery_lr_decay", 0.5
+        ),
+        "grad_accum_auto_tune": getattr(tcfg, "grad_accum_auto_tune", False),
+        "grad_accum_pressure_threshold": getattr(
+            tcfg, "grad_accum_pressure_threshold", 0.9
+        ),
+        "grad_accum_current_steps": getattr(
+            tcfg, "gradient_accumulation_steps", 1
+        ),
+        "grad_accum_current_batch": resolved_batch,
+    }
+    if include_eval_gate:
+        kwargs["eval_gate_config"] = getattr(tcfg, "eval_gate", None)
+    if output_dir is not None:
+        kwargs["output_dir"] = output_dir
+    return kwargs
 
 
 def _get_trainer_callback_base():

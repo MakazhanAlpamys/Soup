@@ -560,7 +560,7 @@ Picks `bf16` on Ampere+, `fp16` on Turing or known fp16-stable models (Qwen2 / Q
 
 ### Loss Spike Auto-Recovery
 
-Extends the watchdog: instead of stopping on a spike, decay LR and resume. Capped at 3 attempts by default.
+Extends the watchdog: instead of stopping on a spike, writes `<output>/spike_recovery.json` with decayed LR and attempt count for re-launch. Capped at 3 attempts by default.
 
 ```yaml
 training:
