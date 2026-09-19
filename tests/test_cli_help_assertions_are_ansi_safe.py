@@ -504,3 +504,187 @@ def find_unsafe_highlighted_assertions(source: str) -> list[tuple[int, str]]:
             if literal and _is_multi_token(literal):
                 offenders.append((node.lineno + offset, stripped[:100]))
     return offenders
+
+
+# ---------------------------------------------------------------------------
+# #1068 — Rich ReprHighlighter splits percentage / number tokens in raw output
+# ---------------------------------------------------------------------------
+
+_PERCENT_LITERAL_RE = re.compile(
+    r"""(?:["'][^"']*[0-9]+(?:\.[0-9]+)?%[^"']*["']|f["'][^"']*\{[^"']*\}%[^"']*["'])"""
+)
+
+
+def find_raw_cli_output_assertions(source: str) -> list[tuple[int, str]]:
+    """Return ``(lineno, text)`` for unsafe percentage assertions on CLI output.
+
+    Rich's default ``ReprHighlighter`` styles numbers inside console output
+    (such as ``60.0%``), styling the numeric part with SGR escapes and leaving
+    the ``%`` unstyled (or splitting tokens). On colour-capable terminals,
+    the escape sequences land inside the substring, so ``"60.0%" in result.output``
+    fails under ``FORCE_COLOR=1 TERM=xterm-256color`` while passing on Windows
+    where colour is disabled.
+
+    This scanner follows variable derivations: if a variable is assigned from
+    CLI output without ANSI normalisation, assertions reading that variable
+    are flagged just like direct reads on ``result.output``.
+    """
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:  # pragma: no cover — a broken file fails its own tests
+        return []
+    lines = source.splitlines()
+    literal_lines = _multiline_literal_lines(tree)
+    assert_lines = _assert_statement_lines(tree)
+    offenders: list[tuple[int, str]] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        if not node.name.startswith("test"):
+            continue
+        end = node.end_lineno or node.lineno
+        body = lines[node.lineno - 1 : end]
+
+        tainted: set[str] = set()
+        for offset, line in enumerate(body):
+            stripped = line.strip()
+            line_no = node.lineno + offset
+            if line_no in literal_lines:
+                continue
+
+            if _looks_normalised(stripped):
+                match = _ASSIGN_RE.match(line)
+                if match:
+                    tainted.discard(match.group(1))
+                continue
+
+            match = _ASSIGN_RE.match(line)
+            if match and not stripped.startswith("assert"):
+                name, rhs = match.group(1), match.group(2)
+                derived = _ANY_RAW_OUTPUT_RE.search(rhs) or any(
+                    re.search(rf"\b{re.escape(var)}\b", rhs) for var in tainted
+                )
+                if derived:
+                    tainted.add(name)
+                continue
+
+            reads_raw = _ANY_RAW_OUTPUT_RE.search(stripped)
+            reads_tainted = any(
+                re.search(rf"\b{re.escape(var)}\b", stripped) for var in tainted
+            )
+            if not (reads_raw or reads_tainted):
+                continue
+
+            is_assert_head = stripped.startswith("assert")
+            if not (is_assert_head or line_no in assert_lines):
+                continue
+
+            expression = (
+                _assert_expression(stripped) if is_assert_head else stripped
+            )
+            if not (
+                _ANY_RAW_OUTPUT_RE.search(expression)
+                or any(re.search(rf"\b{re.escape(var)}\b", expression) for var in tainted)
+            ):
+                continue
+
+            if _PERCENT_LITERAL_RE.search(expression):
+                offenders.append((line_no, stripped[:100]))
+    return offenders
+
+
+class TestNoRawCliOutputAssertionsInTheSuite:
+    def test_every_test_file_normalises_cli_output_percentages(self):
+        offenders: list[str] = []
+        scanned = 0
+        for path in sorted(TESTS_DIR.glob("test_*.py")):
+            source = path.read_text(encoding="utf-8", errors="replace")
+            scanned += 1
+            for lineno, text in find_raw_cli_output_assertions(source):
+                offenders.append(f"{path.name}:{lineno}: {text}")
+        assert scanned > 0, "no test files scanned"
+        assert not offenders, (
+            "An assertion on CLI output reads numbers/percentages from raw "
+            "output without ANSI stripping. Rich's ReprHighlighter styles numbers "
+            "and splits them with ANSI escapes on Linux/macOS, so this passes on "
+            "Windows and turns CI red on colour terminals (issue #1068). Route the "
+            "output through an ANSI-strip helper (e.g. _plain or strip_ansi):\n  "
+            + "\n  ".join(offenders)
+        )
+
+
+class TestTheCliOutputScannerCanActuallyFail:
+    """A scanner that finds zero offenders in the active suite is only trustworthy
+    if it is proven capable of finding both direct and indirect unsafe assertions."""
+
+    DIRECT_BAD = '''
+def test_draft_acceptance():
+    result = runner.invoke(app, ["measure", "--target", "org/target"])
+    assert "60.0%" in result.output
+'''
+
+    INDIRECT_BAD = '''
+def test_draft_acceptance_indirect():
+    result = runner.invoke(app, ["measure", "--target", "org/target"])
+    plain = " ".join(result.output.split())
+    assert "60.0%" in plain
+'''
+
+    REAL_PRE_FIX = '''
+def test_below_min_acceptance_exits_two(self, runner, in_tmp_cwd, monkeypatch):
+    result = runner.invoke(
+        app,
+        ["measure", "--target", "org/target", "--draft", "org/tiny",
+         "--prompts", prompts, "--min-acceptance", "0.6"],
+    )
+    assert result.exit_code == 2
+    assert "60.0%" in result.output
+    assert "below" in result.output.lower()
+'''
+
+    def test_it_catches_direct_raw_output_assertion(self):
+        found = find_raw_cli_output_assertions(textwrap.dedent(self.DIRECT_BAD))
+        assert len(found) == 1, found
+        assert "60.0%" in found[0][1]
+
+    def test_it_catches_indirect_whitespace_collapsed_assertion(self):
+        found = find_raw_cli_output_assertions(textwrap.dedent(self.INDIRECT_BAD))
+        assert len(found) == 1, found
+        assert "60.0%" in found[0][1]
+
+    def test_it_catches_the_real_pre_fix_pattern_from_issue1068(self):
+        found = find_raw_cli_output_assertions(textwrap.dedent(self.REAL_PRE_FIX))
+        assert len(found) == 1, found
+        assert "60.0%" in found[0][1]
+
+    def test_a_normalised_direct_assertion_is_accepted(self):
+        good = self.DIRECT_BAD.replace("in result.output", "in _plain(result.output)")
+        assert find_raw_cli_output_assertions(textwrap.dedent(good)) == []
+
+    def test_a_normalised_indirect_assertion_is_accepted(self):
+        good = self.INDIRECT_BAD.replace(
+            'plain = " ".join(result.output.split())',
+            "plain = _plain(result.output)",
+        )
+        assert find_raw_cli_output_assertions(textwrap.dedent(good)) == []
+
+    def test_plain_non_percentage_assertion_is_not_flagged(self):
+        plain = '''
+def test_draft_measure():
+    result = runner.invoke(app, ["measure", "--target", "org/target"])
+    assert "STRONG" in result.output
+'''
+        assert find_raw_cli_output_assertions(textwrap.dedent(plain)) == []
+
+    def test_failure_message_reading_raw_output_is_not_flagged(self):
+        msg_only = '''
+def test_draft_acceptance_msg():
+    result = runner.invoke(app, ["measure", "--target", "org/target"])
+    plain = _plain(result.output)
+    assert "60.0%" in plain, result.output
+'''
+        assert find_raw_cli_output_assertions(textwrap.dedent(msg_only)) == []
+
+    def test_unparseable_source_does_not_explode(self):
+        assert find_raw_cli_output_assertions("def broken(:\n") == []
+
