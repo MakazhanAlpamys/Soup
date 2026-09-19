@@ -5,6 +5,8 @@ from unittest.mock import MagicMock, PropertyMock
 
 import pytest
 
+from tests.conftest import strip_ansi
+
 
 class _BatchTokenizer:
     def __init__(self, *, templated: bool):
@@ -251,7 +253,7 @@ class TestInferCLI:
         result = runner.invoke(app, ["infer", "--help"])
         assert result.exit_code == 0
         assert "batch inference" in result.output.lower()
-        assert "--batch-size" in result.output
+        assert "--batch-size" in strip_ansi(result.output)
 
     @pytest.mark.parametrize("batch_size", [0, -1])
     def test_batch_size_must_be_positive(self, tmp_path, batch_size):
