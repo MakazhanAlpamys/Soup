@@ -1058,10 +1058,7 @@ class TestLoadAudioMono:
         with pytest.raises(ValueError):
             load_audio_mono("")
 
-    @pytest.mark.skipif(
-        not hasattr(__import__("os"), "symlink"),
-        reason="symlink rejection needs os.symlink",
-    )
+    @pytest.mark.requires_symlink
     def test_symlink_rejected(self, tmp_path):
         import os
 
@@ -1071,10 +1068,7 @@ class TestLoadAudioMono:
         real = tmp_path / "real.wav"
         _write_wav(real, sr=24_000, seconds=0.05)
         link = tmp_path / "link.wav"
-        try:
-            os.symlink(real, link)
-        except (OSError, NotImplementedError):
-            pytest.skip("symlink creation unavailable (needs privilege)")
+        os.symlink(real, link)
         with pytest.raises(ValueError, match="symlink"):
             load_audio_mono(str(link))
 

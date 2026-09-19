@@ -458,7 +458,7 @@ class TestExportBitnetGguf:
                 llama_cpp_dir="missing_llama",
             )
 
-    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX symlink")
+    @pytest.mark.requires_symlink
     def test_symlink_model_rejected(self, monkeypatch, tmp_path):
         import os
 

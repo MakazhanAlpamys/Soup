@@ -6,7 +6,6 @@ Expectation) tests rendered from a YAML DSL, with per-test pass/fail.
 from __future__ import annotations
 
 import os
-import platform
 
 import pytest
 import yaml
@@ -228,7 +227,7 @@ class TestLoadChecklistSpec:
         with pytest.raises(ValueError, match="too large"):
             load_checklist_spec(str(p))
 
-    @pytest.mark.skipif(platform.system() == "Windows", reason="POSIX symlink")
+    @pytest.mark.requires_symlink
     def test_symlink_rejected(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         target = tmp_path / "real.yaml"

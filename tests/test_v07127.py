@@ -2186,7 +2186,7 @@ class TestDiagnoseEvidenceHardening:
         with pytest.raises(Exception, match="unreadable"):
             _load_evidence(str(tmp_path / "missing.json"))
 
-    @pytest.mark.skipif(os.name == "nt", reason="POSIX symlink semantics")
+    @pytest.mark.requires_symlink
     def test_symlink_still_rejected(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         target = tmp_path / "real.json"

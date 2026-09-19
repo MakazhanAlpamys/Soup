@@ -48,8 +48,6 @@ from soup_cli.utils.eval_lock_coverage import (
     lock_suite,
 )
 
-POSIX_ONLY = pytest.mark.skipif(os.name == "nt", reason="POSIX-only symlink test")
-
 # Rich wraps option names with ANSI escapes when the terminal is narrow
 # (macOS CI runners default to a smaller width than Linux/Windows), so
 # substring searches like `"--goal" in output` fail without stripping.
@@ -191,7 +189,7 @@ class TestEvalDesignIO:
         with pytest.raises(TypeError):
             load_eval_design(123)  # type: ignore[arg-type]
 
-    @POSIX_ONLY
+    @pytest.mark.requires_symlink
     def test_load_symlink_rejected(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         real = tmp_path / "real.json"
@@ -701,7 +699,7 @@ class TestPrePushHookWrite:
         body = Path(hook).read_text()
         assert "run-2" in body
 
-    @POSIX_ONLY
+    @pytest.mark.requires_symlink
     def test_symlink_target_rejected(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         (tmp_path / "evals").mkdir()

@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import json
 import os
-import sys
 from types import SimpleNamespace
 
 import pytest
@@ -987,7 +986,7 @@ class TestLoadCovCorpus:
         f.write_text("a\nb\nc\nd\n", encoding="utf-8")
         assert _load_cov_corpus("many.txt") == ["a", "b"]
 
-    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX symlink")
+    @pytest.mark.requires_symlink
     def test_symlink_rejected(self, tmp_path, monkeypatch):
         from soup_cli.commands.edit import _load_cov_corpus
 

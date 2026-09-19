@@ -299,7 +299,7 @@ class TestReadAdapterBase:
         d.mkdir()
         assert read_adapter_base("ad") is None
 
-    @pytest.mark.skipif(os.name == "nt", reason="symlink needs admin on Windows")
+    @pytest.mark.requires_symlink
     def test_symlinked_config_rejected(self, tmp_path, monkeypatch):
         from soup_cli.utils.adapter_arithmetic import read_adapter_base
 

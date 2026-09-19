@@ -261,5 +261,6 @@ markers = [
     "unit: fast isolated tests — no subprocess, network, filesystem, or real model load",
     "integration: tests that touch real subprocess, SQLite, filesystem, or HTTP",
     "gpu: needs a CUDA device; skipped without one (see tests/conftest.py, #833). Run: pytest -m gpu --no-cov",
+    "requires_symlink: creates a symlink; skipped when this account cannot (see tests/conftest.py, #832)",
 ]
 addopts = "-m 'not smoke' --cov=soup_cli --cov-fail-under=77 --cov-report=term-missing:skip-covered"

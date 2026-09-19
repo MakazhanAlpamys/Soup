@@ -426,6 +426,7 @@ def test_discover_documents_only_known_extensions(tmp_path):
     assert "ignore.bin" not in names
 
 
+@pytest.mark.requires_symlink
 def test_discover_documents_rejects_symlink_dir(tmp_path):
     from soup_cli.utils.data_forge import discover_documents
 
@@ -433,10 +434,7 @@ def test_discover_documents_rejects_symlink_dir(tmp_path):
     real.mkdir()
     (real / "a.txt").write_text("x", encoding="utf-8")
     link = tmp_path / "link"
-    try:
-        link.symlink_to(real, target_is_directory=True)
-    except (OSError, NotImplementedError):
-        pytest.skip("symlinks not supported on this platform")
+    link.symlink_to(real, target_is_directory=True)
     os.chdir(tmp_path)
     with pytest.raises(ValueError, match="symlink"):
         discover_documents(str(link))
@@ -607,6 +605,7 @@ def test_write_forge_dataset_non_string_rejected(tmp_path):
         write_forge_dataset([], 123)  # type: ignore[arg-type]
 
 
+@pytest.mark.requires_symlink
 def test_write_forge_dataset_symlink_target_rejected(tmp_path):
     from soup_cli.utils.data_forge import (
         ForgeRow,
@@ -614,8 +613,6 @@ def test_write_forge_dataset_symlink_target_rejected(tmp_path):
         write_forge_dataset,
     )
 
-    if os.name == "nt":
-        pytest.skip("symlink test POSIX-only")
     os.chdir(tmp_path)
     target = tmp_path / "out.jsonl"
     real = tmp_path / "decoy"

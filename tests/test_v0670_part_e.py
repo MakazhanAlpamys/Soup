@@ -189,7 +189,7 @@ class TestWriteReadLock:
         with pytest.raises(FileNotFoundError):
             read_lock(str(tmp_path / "missing.lock"))
 
-    @pytest.mark.skipif(os.name == "nt", reason="POSIX-only symlink test")
+    @pytest.mark.requires_symlink
     def test_read_symlink_rejected(self, tmp_path, monkeypatch) -> None:
         from soup_cli.utils.soup_lock import read_lock
 

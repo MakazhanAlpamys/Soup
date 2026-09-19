@@ -29,21 +29,10 @@ from __future__ import annotations
 import dataclasses
 import os
 import sqlite3
-import sys
 from pathlib import Path
 
 import pytest
 from typer.testing import CliRunner
-
-# ---------------------------------------------------------------------------
-# Cross-platform symlink test gate (HIGH H4)
-# ---------------------------------------------------------------------------
-
-
-def _symlinks_available() -> bool:
-    """``os.symlink`` exists on Windows but needs elevation. Use platform."""
-    return sys.platform != "win32"
-
 
 # ---------------------------------------------------------------------------
 # Part B — validate_student_id rejection-matrix parity (HIGH H1)
@@ -245,7 +234,7 @@ class TestCompileResultBoundaries:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.skipif(not _symlinks_available(), reason="POSIX symlink only")
+@pytest.mark.requires_symlink
 class TestEvalSuitePathSymlink:
     def test_symlink_rejected(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -256,10 +245,7 @@ class TestEvalSuitePathSymlink:
         real = tmp_path / "suite.json"
         real.write_text("[]", encoding="utf-8")
         link = tmp_path / "link.json"
-        try:
-            os.symlink(real, link)
-        except (OSError, NotImplementedError):
-            pytest.skip("symlinks not creatable on this filesystem")
+        os.symlink(real, link)
         with pytest.raises(ValueError, match="symlink"):
             validate_eval_suite_path(str(link))
 
@@ -295,7 +281,7 @@ class TestValidateSpecPathExtras:
         with pytest.raises(ValueError):
             validate_spec_path("spec\x00.json")
 
-    @pytest.mark.skipif(not _symlinks_available(), reason="POSIX symlink only")
+    @pytest.mark.requires_symlink
     def test_symlink_rejected(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -305,10 +291,7 @@ class TestValidateSpecPathExtras:
         real = tmp_path / "real.json"
         real.write_text("{}", encoding="utf-8")
         link = tmp_path / "link.json"
-        try:
-            os.symlink(real, link)
-        except (OSError, NotImplementedError):
-            pytest.skip("symlinks not creatable on this filesystem")
+        os.symlink(real, link)
         with pytest.raises(ValueError, match="symlink"):
             validate_spec_path(str(link))
 

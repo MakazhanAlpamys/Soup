@@ -372,6 +372,7 @@ def test_checkpoint_rejects_duplicate_or_reordered_indexes(tmp_path, monkeypatch
         raise AssertionError("non-sequential checkpoint must fail closed")
 
 
+@pytest.mark.requires_symlink
 def test_checkpoint_symlink_is_rejected(tmp_path, monkeypatch):
     import pytest
 
@@ -381,10 +382,7 @@ def test_checkpoint_symlink_is_rejected(tmp_path, monkeypatch):
     target = tmp_path / "target.jsonl"
     target.write_text("{}\n", encoding="utf-8")
     link = tmp_path / "checkpoint.jsonl"
-    try:
-        link.symlink_to(target)
-    except OSError:
-        pytest.skip("symlink creation is unavailable")
+    link.symlink_to(target)
     with pytest.raises(ValueError, match="symlink"):
         load_checkpoint(str(link), digest="d", total=1)
 
