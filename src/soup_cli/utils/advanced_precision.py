@@ -302,6 +302,16 @@ def apply_fp8_attention(model: object, *, recipe: str = "tensorwise") -> int:
     return len(already_converted) + len(pending)
 
 
+def is_nvfp4_software_supported() -> bool:
+    """Return True when the installed torchao exposes the NVFP4 runtime."""
+    try:
+        from torchao import quantization as ao_q
+    except ImportError:
+        return False
+
+    return hasattr(ao_q, "NVFP4Config") and hasattr(ao_q, "quantize_")
+
+
 def apply_nvfp4(model: object) -> int:
     """Quantise ``model`` with torchao's NVFP4 scheme (Blackwell-only).
 
@@ -332,7 +342,7 @@ def apply_nvfp4(model: object) -> int:
         raise RuntimeError(
             "NVFP4 requires torchao (pip install 'torchao>=0.7.0')."
         ) from exc
-    if not hasattr(ao_q, "NVFP4Config") or not hasattr(ao_q, "quantize_"):
+    if not is_nvfp4_software_supported():
         raise RuntimeError(
             "torchao does not expose NVFP4Config / quantize_; upgrade "
             "torchao (pip install -U torchao)."
