@@ -552,6 +552,11 @@ output: ./output
 > `0` means the adapter is lost. Fixed on `main` by PR #1010 (the wrapper now reports canonical names, so peft 0.20 and 0.21 both save every tensor; no `peft<0.21` pin); the next release carries it. Until you run a Soup with that fix, `pip install "peft<0.21"` is the workaround.
 
 **Troubleshooting:**
+- **"Streamed adapter save verification failed"** — post-save assertion (#1011)
+  caught an empty adapter (0 tensors), tensor count mismatch, or wrapper leakage
+  (`.inner.`) in `adapter_model.safetensors` immediately after saving. Protects
+  against upstream enumeration divergences before GPU hours end with an unreloadable
+  checkpoint.
 - **"trainable LoRA parameters remain on the meta device"** — PEFT attached an
   adapter without real storage and Soup refused the run before installing the
   streaming runtime. This guard is deliberately based on the final parameter

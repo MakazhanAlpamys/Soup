@@ -2185,6 +2185,138 @@ def assert_trainable_adapters_materialized(model: Any) -> None:
     )
 
 
+def assert_streamed_adapter_saved(
+    save_directory: Union[str, os.PathLike[str]],
+    model: Any,
+    *,
+    selected_adapters: Optional[Sequence[str]] = None,
+) -> None:
+    """Assert that a saved layer-streamed LoRA adapter is non-empty and uncorrupted (#1011).
+
+    Guards against enumeration divergences between ``named_modules()`` and
+    ``state_dict()`` (e.g. #1005 under PEFT 0.21) or module wrapper leakage
+    (e.g. v0.72.0 ``.inner.`` keys).
+
+    Verifies:
+    1. ``adapter_model.safetensors`` exists in the target output directory.
+    2. The safetensors header declares > 0 tensors.
+    3. The tensor count matches the number of trainable ``lora_*`` parameters
+       the run actually had.
+    4. No saved tensor key carries a wrapper segment (``.inner.``).
+
+    Raises ``RuntimeError`` with clear diagnostics if any check fails.
+    """
+    save_dir_str = os.fspath(save_directory)
+
+    # Trainable LoRA parameters expected on the model
+    trainable_lora = [
+        name
+        for name, param in model.named_parameters()
+        if param.requires_grad and "lora_" in name
+    ]
+
+    expected_count = len(trainable_lora)
+    if selected_adapters is not None and len(selected_adapters) == 1:
+        adapter_marker = f".{selected_adapters[0]}."
+        filtered = [n for n in trainable_lora if adapter_marker in n]
+        if filtered:
+            expected_count = len(filtered)
+
+    if expected_count == 0:
+        # A legitimately empty save: the model has zero trainable LoRA parameters
+        # (e.g. an unadapted base model, fully frozen adapters, or evaluation mode).
+        # Excluded deliberately so the guard only asserts non-emptiness when the run
+        # actually configured trainable adapter parameters.
+        return
+
+    # Locate the adapter file: check root save_directory first, then subdirectories
+    # if a non-default adapter was selected.
+    adapter_path = os.path.join(save_dir_str, "adapter_model.safetensors")
+    if not os.path.isfile(adapter_path) and selected_adapters:
+        for ad_name in selected_adapters:
+            candidate = os.path.join(save_dir_str, str(ad_name), "adapter_model.safetensors")
+            if os.path.isfile(candidate):
+                adapter_path = candidate
+                break
+
+    if not os.path.isfile(adapter_path):
+        raise RuntimeError(
+            f"Streamed adapter save verification failed: expected adapter file at "
+            f"{adapter_path!r} does not exist (expected {expected_count} trainable "
+            f"LoRA parameter tensors). Output directory: {save_dir_str!r}."
+        )
+
+    from safetensors import safe_open
+
+    try:
+        with safe_open(adapter_path, framework="pt", device="cpu") as f:
+            keys = list(f.keys())
+    except Exception as exc:
+        raise RuntimeError(
+            f"Streamed adapter save verification failed: cannot read safetensors "
+            f"header at {adapter_path!r} (expected {expected_count} trainable "
+            f"LoRA parameter tensors): {exc}"
+        ) from exc
+
+    actual_count = len(keys)
+    if actual_count == 0:
+        raise RuntimeError(
+            f"Streamed adapter save verification failed for {adapter_path!r}: "
+            f"adapter file contains 0 tensors (expected {expected_count} trainable "
+            f"LoRA parameter tensors). This indicates an enumeration divergence "
+            "between named_modules() and state_dict()."
+        )
+
+    if actual_count != expected_count:
+        raise RuntimeError(
+            f"Streamed adapter save verification failed for {adapter_path!r}: "
+            f"expected {expected_count} trainable LoRA parameter tensors, but "
+            f"the saved adapter contains {actual_count} tensors."
+        )
+
+    inner_keys = [k for k in keys if ".inner." in k]
+    if inner_keys:
+        preview = ", ".join(inner_keys[:4])
+        remainder = len(inner_keys) - 4
+        if remainder > 0:
+            preview += f", ... (+{remainder} more)"
+        raise RuntimeError(
+            f"Streamed adapter save verification failed for {adapter_path!r}: "
+            f"saved adapter contains wrapper leakage keys: {preview}."
+        )
+
+
+def install_streamed_save_guard(model: Any) -> None:
+    """Install post-save verification on a streamed model's save_pretrained (#1011).
+
+    Ensures that any subsequent ``save_pretrained()`` (called directly, via
+    ``trainer.save_model()``, or at periodic checkpoint steps) asserts that
+    ``adapter_model.safetensors`` exists, contains > 0 tensors, matches the
+    expected trainable LoRA parameter count, and has no wrapper leakage.
+    """
+    if getattr(model, "_streamed_save_guard_installed", False):
+        return
+    if not hasattr(model, "save_pretrained"):
+        return
+
+    import functools
+
+    orig_save_pretrained = model.save_pretrained
+
+    @functools.wraps(orig_save_pretrained)
+    def wrapped_save_pretrained(save_directory: Any, *args: Any, **kwargs: Any) -> Any:
+        result = orig_save_pretrained(save_directory, *args, **kwargs)
+        # In distributed training, non-main ranks (is_main_process=False) do not
+        # write model files; skip verification when is_main_process is explicitly False.
+        if kwargs.get("is_main_process", True):
+            selected = kwargs.get("selected_adapters")
+            assert_streamed_adapter_saved(save_directory, model, selected_adapters=selected)
+        return result
+
+    model.save_pretrained = wrapped_save_pretrained
+    model._streamed_save_guard_installed = True
+
+
 def materialize_meta_adapter_copy(
     model: Any, *, source_adapter: str = "default", target_adapter: str = "ref"
 ) -> int:
@@ -2549,6 +2681,7 @@ def install_streaming(
     # manages its own placement — exactly the marker a device_map-sharded model
     # carries, and the one _move_model_to_device short-circuits on.
     model.hf_device_map = {"": _device_map_value(device)}
+    install_streamed_save_guard(model)
 
     return StreamRuntime(
         pool=pool,
@@ -2914,4 +3047,5 @@ def build_streamed_model(
             external.close()
         raise
     runtime.external_sources = external_sources
+    install_streamed_save_guard(model)
     return model, runtime
