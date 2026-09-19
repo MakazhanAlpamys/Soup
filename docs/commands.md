@@ -42,7 +42,7 @@ soup train --config sft.yaml  # training.stream_layers: true [stream_source stre
 soup export --model ./output --format gguf    Export to GGUF (Ollama)
 soup export --model ./output --deploy ollama  Export GGUF + auto-deploy to Ollama
 soup export --model ./output --format onnx    Export to ONNX
-soup export --model ./output --format tensorrt Export to TensorRT-LLM
+soup export --model ./output --format tensorrt  Export to TensorRT-LLM
 soup export --model ./output --format awq --calibration-data cal.jsonl  Export to AWQ (4-bit)
 soup export --model ./output --format gptq --calibration-data cal.jsonl  Export to GPTQ (4-bit)
 soup deploy ollama --model m.gguf --name x    Deploy GGUF to Ollama
@@ -109,7 +109,7 @@ soup data topics <path> [--clusters N|auto]   Cluster + c-TF-IDF labels + covera
 soup data canary insert <path> -o <out> --manifest <m>  Insert K secrets to later prove memorization (manifest = SECRET)
 soup data canary check --manifest <m> --base <model>    Rank each secret's loss vs never-inserted controls; exit 2 = leak
 soup data stats <path>                        Extended statistics
-soup data generate --prompt "..." --count 100 Generate synthetic data
+soup data generate --prompt "..." --count 100  Generate synthetic data
 soup data generate ... --provider ollama      Use local Ollama instance
 soup data generate ... --provider anthropic   Use Claude API
 soup data generate ... --provider vllm        Use local vLLM server
@@ -139,7 +139,7 @@ soup data push --input d.jsonl --hf-dataset user/name  Upload local JSONL as HF 
 soup data push --input d.jsonl --hf-dataset u/n --hub modelscope|modelers  Upload to an alternative hub
 soup data registry                           List all registered datasets
 soup data demo                                List bundled demo JSONL fixtures
-soup data demo alpaca_demo --output ./d.jsonl Copy a bundled demo JSONL fixture
+soup data demo alpaca_demo --output ./d.jsonl  Copy a bundled demo JSONL fixture
 soup data ingest <file>                         PDF/DOCX/MD/TXT -> JSONL (one row per page/heading)
 soup data preprocess <config>                   AOT-tokenize and cache for reuse across runs
 soup data recipe <path>                         Validate / execute a Data Recipe DAG
@@ -150,7 +150,7 @@ soup data score --input rows.jsonl            Composite quality scorecard (PII +
 soup data decontaminate --input rows.jsonl --benchmarks mmlu,gsm8k  Drop benchmark-overlap rows
 soup data toxicity --input rows.jsonl -o tox.jsonl  Flag abuse-keyword matches (heuristic)
 soup data langdetect --input rows.jsonl -o tagged.jsonl  Tag each row with language code
-soup data pii --input rows.jsonl -o pii.jsonl Flag rows containing email/phone/SSN/credit-card
+soup data pii --input rows.jsonl -o pii.jsonl  Flag rows containing email/phone/SSN/credit-card
 soup data educational --input rows.jsonl -o scored.jsonl  Score educational value per row
 soup train --config soup.yaml --tracker mlflow  MLflow / SwanLab / Trackio integration
 soup profile --config soup.yaml              Estimate memory/speed before training
@@ -168,7 +168,8 @@ soup adapters diff <a> <b>                      Per-layer ΔW Frobenius diff + e
 soup loop init <model> --eval <s> --baseline <b> [--pre-wired]  Create .soup/loop.yaml (data flywheel; --pre-wired = real stages)
 soup loop status                              Counters + status + pre_wired flag
 soup loop watch [--detach] [--max-iter N] [--pre-wired] [--pack-cans]  Harvest → train → gate → deploy daemon (pre-wired stages + Soup Can packing)
-soup loop pause / soup loop resume           Atomic status flip
+soup loop pause                              Atomic status flip: pause watch daemon at next iteration boundary
+soup loop resume                             Atomic status flip: resume a paused loop
 soup loop canary <adapter> --traffic 5%      Promote canary + auto-rollback on MAJOR
 soup loop replay [<iter-id>] [--extract <dir>]  Replay / unpack a recorded iteration manifest
 soup serve --model m --adapters chat=./c code=./d  Multi-adapter serving
@@ -254,7 +255,7 @@ soup doctor [--nccl] [--disk] [--config F]    Check environment (optionally chec
 soup monitor                                  NVIDIA / Apple Silicon GPU monitor: util / temp / VRAM / power
 soup quickstart [--dry-run]                   Full demo
 soup plugins list|install|enable|disable      Manage Soup plugins
-soup llama cli|mtmd-cli|gguf-split|server|quantize ... Proxy to the llama.cpp binaries
+soup llama cli|mtmd-cli|gguf-split|server|quantize ...  Proxy to the llama.cpp binaries
 soup quantize <model> --to <fmt>              Quantize a model — ergonomic alias for `soup export --format <fmt>`
 soup bom emit --name <n> --base-sha <hex> --config-sha <hex> --format cyclonedx|spdx|both  CycloneDX ML-BOM / SPDX AI bill of materials
 soup adapters scan <adapter>                  Spectral backdoor scan (rank-1 dominance + outlier detection)
@@ -281,7 +282,8 @@ soup train  # data.format='raft'  Answer-only span-mask RAFT training (golden+di
 soup ra-dit --retriever-config <r.yaml> --generator-config <g.yaml> [--retriever-model <m>] [--plan-only]  One-shot two-stage RA-DIT: train retriever → record pairing → train generator
 soup eval citation <data> [--style bracket|inline|footnote] [--shuffle-seed N] [--output o.json]  Citation precision/recall/F1 over predictions or RAFT rows
 soup steer train --base <m> --method caa|iti|repe --name <id> --pairs <jsonl>  Fit a CAA/ITI/RepE activation-steering vector from {positive, negative} pairs
-soup steer apply --name <id> --strength <s>  Preview a stored steering vector; soup steer list lists them
+soup steer apply --name <id> --strength <s>  Preview a stored steering vector
+soup steer list                              List locally-stored steering vectors
 soup serve --steer <name> [--steer-strength <s>]  Apply a steering vector at decode time via a forward hook (transformers backend)
 soup serve --bank <bank.json> [--bank-strength <s>]  Multi-tenant VeRA/VB-LoRA serving; active user per request via X-User-Id header, ContextVar-isolated (v0.71.12 / v0.71.17)
 soup serve --mole <dir>                              Serve a trained MoLE: base + N frozen task LoRAs + mole_gate.pt, blended per-token at decode (transformers-only) (v0.71.17)
@@ -323,7 +325,8 @@ soup adapters branch <name> --from-registry <id> | --attach-to-registry <id>  Br
 soup adapters bisect <ckpt>... --eval-command "..."  Binary search over training history (v0.67.0)
 soup lock write --base-sha <h> --dataset-sha <h> --env-hash <h>  Write soup.lock (v0.67.0)
 soup lock write --base-sha <h> --dataset-sha <h> --env-lock soup-env.lock  Auto-derive --env-hash from soup-env.lock (v0.71.1)
-soup lock show / soup lock check              Show + drift-check (exit 2 on drift, 3 on usage/missing lock)
+soup lock show                               Print tracked lock file
+soup lock check                              Refuse with exit 2 on drift, 3 on usage/missing lock
 soup compile <program.py> --eval <suite> [--optimizer mipro|gepa|textgrad|copro|bootstrap_fewshot] [--plan-only]  DSPy / GEPA / TextGrad prompt-program compiler — live (v0.71.13; pip install "soup-cli[compile]")
 soup distill-prompt --traces <jsonl> --teacher <m> --student <m> --strategy sft|preference|kl [--provider ollama|anthropic|vllm] [--base-url <url>] [--temperature F] [--max-rows N]  Distill prompt-heavy traces via a live teacher (v0.71.13)
 soup compile-tools <spec.json|yaml> --eval <jsonl> [--optimizer textgrad|gepa] [--plan-only]  TextGrad / GEPA tool-schema optimiser — live (v0.71.13; pip install "soup-cli[compile]")

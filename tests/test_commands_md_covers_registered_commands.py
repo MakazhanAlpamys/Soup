@@ -10,8 +10,10 @@ accepting the page's existing `a|b|c` / `a / b` shorthand and the
 Matching rules (mutation-tested):
 - Only lines that *start* with ``soup `` count as documentation (prose mentions
   do not).
-- A command needle must end on a token boundary ``(?![\\w-])`` so
-  ``soup eval gate-install`` cannot cover ``soup eval gate``.
+- Only the command column (pre-description separator) counts for coverage;
+  prose descriptions mentioning other commands cannot satisfy their requirement (#1046).
+- A command needle must end on a token boundary ``(?![\\w.-])`` so
+  ``soup eval gate-install`` or ``soup eval gate.v2`` cannot cover ``soup eval gate``.
 - Shorthand alternatives are one ``|``/``/``-connected group after the path
   prefix (not adjacent bare tokens), so ``soup llama …|quantize`` cannot cover
   top-level ``soup quantize``.
@@ -57,6 +59,15 @@ def iter_leaf_paths(cmd=None, prefix: tuple[str, ...] = ()) -> list[tuple[str, .
 def _entry_rows(doc: str) -> list[str]:
     """Return command-list rows: lines that start with ``soup ``."""
     return [line for line in doc.splitlines() if line.startswith("soup ")]
+
+
+def _command_column(line: str) -> str:
+    """Return the command portion of an entry row (before the description)."""
+    parts = re.split(r"\s{2,}", line, maxsplit=1)
+    cmd = parts[0].strip()
+    if " #" in cmd:
+        cmd = cmd.split(" #")[0].strip()
+    return cmd
 
 
 def _shorthand_alts(line: str, prefix: tuple[str, ...]) -> list[str]:
@@ -128,15 +139,20 @@ def is_documented(path: tuple[str, ...], doc: str) -> bool:
         # cli._rewrite_advise_argv turns documented `soup advise <data>` into
         # `soup advise run <data>`. Anchor on `<` so compare/explain rows cannot
         # satisfy the special case.
-        return any(line.startswith("soup advise <") for line in _entry_rows(doc))
+        return any(
+            _command_column(line).startswith("soup advise <")
+            for line in _entry_rows(doc)
+        )
     needle = "soup " + " ".join(path)
-    boundary = re.compile(re.escape(needle) + r"(?![\w-])")
+    boundary = re.compile(r"^" + re.escape(needle) + r"(?![\w.-])")
     leaf = path[-1]
     prefix = path[:-1]
     for line in _entry_rows(doc):
-        if boundary.search(line):
+        cmd = _command_column(line)
+        subcmds = [s.strip() for s in re.split(r"\s+/\s+", cmd)]
+        if any(boundary.search(c) for c in subcmds):
             return True
-        if leaf in _shorthand_alts(line, prefix):
+        if leaf in _shorthand_alts(cmd, prefix):
             return True
     return False
 
@@ -213,6 +229,25 @@ class TestCommandsMdCoverageGuardHasTeeth:
         missing = undocumented_commands(scrubbed, leaves=[("advise", "run")])
         assert missing == ["soup advise run"]
 
+    @pytest.mark.parametrize(
+        ("target", "cmd_path"),
+        [
+            ("soup serve", ("serve",)),
+            ("soup export", ("export",)),
+            ("soup train", ("train",)),
+            ("soup bom emit", ("bom", "emit")),
+        ],
+    )
+    def test_stripped_command_whose_name_appears_in_other_descriptions_is_reported(
+        self, target: str, cmd_path: tuple[str, ...]
+    ) -> None:
+        doc = COMMANDS_MD.read_text(encoding="utf-8")
+        scrubbed = "\n".join(
+            line for line in doc.splitlines() if not line.startswith(target)
+        )
+        missing = undocumented_commands(scrubbed, leaves=[cmd_path])
+        assert missing == [target]
+
 
 @pytest.mark.unit
 class TestCoverageRequiresARealEntry:
@@ -237,3 +272,34 @@ class TestCoverageRequiresARealEntry:
             "soup quantize"
         ]
         assert undocumented_commands(stub, leaves=[("llama", "quantize")]) == []
+
+    def test_mention_in_another_entry_row_description_does_not_credit_command(
+        self,
+    ) -> None:
+        stub = (
+            "soup draft list                               "
+            "List local drafts that soup serve --auto-spec will pick up\n"
+        )
+        assert undocumented_commands(stub, leaves=[("serve",)]) == ["soup serve"]
+        assert undocumented_commands(stub, leaves=[("draft", "list")]) == []
+
+    def test_shorthand_in_description_does_not_credit_command(self) -> None:
+        stub = (
+            "soup steer apply --name <id> --strength <s>  "
+            "Preview a stored steering vector; soup steer list lists them\n"
+        )
+        assert undocumented_commands(stub, leaves=[("steer", "list")]) == [
+            "soup steer list"
+        ]
+        assert undocumented_commands(stub, leaves=[("steer", "apply")]) == []
+
+    def test_dot_lookahead_prevents_prefix_credit(self) -> None:
+        stub = "soup eval gate.v2 --baseline X  Install gate v2\n"
+        assert undocumented_commands(stub, leaves=[("eval", "gate")]) == [
+            "soup eval gate"
+        ]
+
+    def test_slash_separated_commands_in_command_column(self) -> None:
+        stub = "soup loop pause / soup loop resume  Atomic status flip\n"
+        assert undocumented_commands(stub, leaves=[("loop", "pause")]) == []
+        assert undocumented_commands(stub, leaves=[("loop", "resume")]) == []
