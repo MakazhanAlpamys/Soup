@@ -16,6 +16,7 @@ tiny ``Qwen3MoeForCausalLM`` with real peft. Only the loaders are stubbed.
 
 from __future__ import annotations
 
+import pathlib
 from types import SimpleNamespace
 
 import pytest
@@ -231,6 +232,26 @@ class TestMoeLoraReachesTheExpertFfns:
         assert adapted_on, "the dense control adapted nothing"
 
 
+#: The tasks whose trainers read the expert knobs / the aux-loss coefficient.
+#: Written out rather than imported so a member silently leaving the schema's
+#: frozenset fails ``test_the_allowlists_are_the_ones_these_tests_cover``
+#: instead of quietly shrinking the parametrisations below.
+_EXPECTED_EXPERT_KNOB_TASKS = {"sft", "tts"}
+_EXPECTED_AUX_LOSS_TASKS = {"sft", "tts", "pretrain"}
+
+#: What each of those tasks needs on top of a bare config to load at all.
+_TASK_PREAMBLE = {
+    "sft": "data:\n  train: x.jsonl\n",
+    "pretrain": "data:\n  train: x.jsonl\n",
+    "tts": "modality: audio_out\ndata:\n  train: x.jsonl\n",
+}
+_TASK_TRAINING = {
+    "sft": "",
+    "pretrain": "",
+    "tts": "  tts_family: orpheus\n",
+}
+
+
 class TestTheFlagsNoTrainerReadsAreRefused:
     @pytest.mark.parametrize("task", ["dpo", "grpo", "kto", "pretrain"])
     @pytest.mark.parametrize(
@@ -251,12 +272,17 @@ class TestTheFlagsNoTrainerReadsAreRefused:
         assert "sft" in message
 
     @pytest.mark.parametrize("knob", ["moe_expert_quant: nf4", "train_router_only: true"])
-    def test_sft_still_accepts_them(self, knob):
+    @pytest.mark.parametrize("task", sorted(_EXPECTED_EXPERT_KNOB_TASKS))
+    def test_the_tasks_that_read_them_still_accept_them(self, task, knob):
+        """Every member of the allowlist, not just ``sft``. Dropping ``tts`` from
+        ``_MOE_EXPERT_KNOB_TASKS`` survived when this covered ``sft`` alone: the
+        refusal above only proves the tasks that are NOT on the list."""
         cfg = load_config_from_string(
-            "base: org/m\ntask: sft\ndata: {train: x.jsonl}\n"
-            f"training: {{moe_lora: true, lora: {{dropout: 0.0}}, {knob}}}\n"
+            f"base: org/m\ntask: {task}\n{_TASK_PREAMBLE[task]}"
+            f"training:\n  moe_lora: true\n  lora:\n    dropout: 0.0\n"
+            f"{_TASK_TRAINING[task]}  {knob}\n"
         )
-        assert cfg.task == "sft"
+        assert cfg.task == task
 
     @pytest.mark.parametrize("task", ["dpo", "grpo"])
     def test_a_non_default_aux_loss_coeff_is_refused(self, task):
@@ -280,13 +306,25 @@ class TestTheFlagsNoTrainerReadsAreRefused:
         )
         assert cfg.training.moe_aux_loss_coeff == 0.01
 
-    @pytest.mark.parametrize("task", ["sft", "pretrain"])
+    @pytest.mark.parametrize("task", sorted(_EXPECTED_AUX_LOSS_TASKS))
     def test_a_non_default_aux_loss_coeff_is_accepted_where_it_is_read(self, task):
+        """Every member of the allowlist. ``tts`` was unpinned here too -- removing
+        it from ``_MOE_AUX_LOSS_TASKS`` survived while this covered sft and
+        pretrain only."""
         cfg = load_config_from_string(
-            f"base: org/m\ntask: {task}\ndata: {{train: x.jsonl}}\n"
-            "training: {moe_aux_loss_coeff: 0.05}\n"
+            f"base: org/m\ntask: {task}\n{_TASK_PREAMBLE[task]}"
+            f"training:\n{_TASK_TRAINING[task]}  moe_aux_loss_coeff: 0.05\n"
         )
         assert cfg.training.moe_aux_loss_coeff == 0.05
+
+    def test_the_allowlists_are_the_ones_these_tests_cover(self):
+        """The parametrisations above read the schema's own frozensets, so they
+        would follow a member being removed instead of failing. These pin the
+        membership itself, in both directions."""
+        from soup_cli.config.schema import _MOE_AUX_LOSS_TASKS, _MOE_EXPERT_KNOB_TASKS
+
+        assert set(_MOE_EXPERT_KNOB_TASKS) == _EXPECTED_EXPERT_KNOB_TASKS
+        assert set(_MOE_AUX_LOSS_TASKS) == _EXPECTED_AUX_LOSS_TASKS
 
 
 class TestShippedConfigs:
@@ -499,6 +537,55 @@ class TestTheDropoutConstraint:
         assert [n for n in _adapted(model) if "experts" in n]
 
 
+def _stream_tcfg(dropout):
+    """A training config as the streamed setup path holds it."""
+    return SimpleNamespace(
+        moe_lora=True, lora=SimpleNamespace(dropout=dropout, target_modules="auto")
+    )
+
+
+class TestTheStreamedPathUsesTheSameHelper:
+    """``trainer/stream_setup.py`` kept its own copy of the moe_lora block, so the
+    streamed path was the one path with no dropout refusal -- "one helper for
+    every trainer" was not quite true. Flagged by the maintainer on #1074.
+
+    It builds a meta skeleton it then deletes, so the helper is called while that
+    probe is alive rather than at the attach; these pin that it is called at all,
+    with the probe, and that its answer is what reaches the LoRA config.
+    """
+
+    def test_the_source_has_no_second_copy_of_the_block(self):
+        """The mutation this guards is re-inlining ``get_moe_target_modules``
+        here, which reintroduces exactly the gap that was reported."""
+        import pathlib
+
+        source = (
+            pathlib.Path(__file__).resolve().parents[1]
+            / "src" / "soup_cli" / "trainer" / "stream_setup.py"
+        ).read_text(encoding="utf-8")
+
+        assert "resolve_moe_lora_targets" in source
+        assert "get_moe_target_modules" not in source, (
+            "the streamed path is resolving targets itself again"
+        )
+
+    def test_the_helper_refuses_the_streamed_config_too(self):
+        """The behaviour behind it: the helper the streamed path now calls is the
+        one that refuses a non-zero dropout on fused experts, so the streamed path
+        inherits the refusal rather than reaching peft's message."""
+        from soup_cli.utils.moe import resolve_moe_lora_targets
+
+        with pytest.raises(ValueError, match="lora.dropout"):
+            resolve_moe_lora_targets(_tiny_moe(), _stream_tcfg(0.05), None)
+
+    def test_and_still_resolves_targets_at_zero_dropout(self):
+        from soup_cli.utils.moe import resolve_moe_lora_targets
+
+        targets = resolve_moe_lora_targets(_tiny_moe(), _stream_tcfg(0.0), None)
+
+        assert targets, "the streamed path would get no MoE targets at all"
+
+
 class TestTheSweepInteraction:
     """`soup sweep` can generate the combination this PR refuses (#1074 ask 4).
 
@@ -592,6 +679,44 @@ class TestEveryMoeRecipeCanAttach:
         assert offenders == [], (
             "a recipe with moe_lora: true and a non-zero lora.dropout cannot "
             "attach LoRA at all (peft ParamWrapper): " + "; ".join(offenders)
+        )
+
+    def test_every_shipped_template_and_example_pins_dropout_zero(self):
+        """``RECIPES`` is not everything Soup ships. ``src/soup_cli/templates``
+        feeds ``soup init --template`` and ``examples/configs`` is copy-paste
+        material, so a MoE config there fails at attach exactly as a recipe would
+        -- found by the maintainer on ``templates/moe.yaml``, which set
+        ``moe_lora: true`` and inherited the 0.05 default."""
+        import yaml
+
+        root = pathlib.Path(__file__).resolve().parents[1]
+        roots = [
+            root / "src" / "soup_cli" / "templates",
+            root / "examples",
+        ]
+        checked, offenders = [], []
+        for base in roots:
+            for path in sorted(base.rglob("*.yaml")):
+                try:
+                    loaded = yaml.safe_load(path.read_text(encoding="utf-8"))
+                except yaml.YAMLError:
+                    continue
+                if not isinstance(loaded, dict):
+                    continue
+                training = loaded.get("training") or {}
+                if not isinstance(training, dict) or not training.get("moe_lora"):
+                    continue
+                checked.append(path.relative_to(root).as_posix())
+                dropout = (training.get("lora") or {}).get("dropout")
+                if dropout != 0.0:
+                    offenders.append(
+                        f"{path.relative_to(root).as_posix()}: lora.dropout={dropout!r}"
+                    )
+
+        assert checked, "no shipped template or example sets moe_lora -- the sweep broke"
+        assert offenders == [], (
+            "a shipped config with moe_lora: true and a non-zero lora.dropout "
+            "cannot attach LoRA at all (peft ParamWrapper): " + "; ".join(offenders)
         )
 
     def test_the_guard_sees_the_recipes_it_is_guarding(self):
