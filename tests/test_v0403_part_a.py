@@ -119,7 +119,7 @@ class TestProbeClosure:
         return torch
 
     def _build(self, monkeypatch, model, max_length=64):
-        torch = self._make_torch_stub(monkeypatch)
+        self._make_torch_stub(monkeypatch)
         tokenizer = SimpleNamespace(pad_token_id=0, eos_token_id=2, vocab_size=32000)
         # Run the test on whatever device torch is happy with — these tests
         # only assert behavioural branches, not actual GPU memory pressure.
@@ -129,36 +129,33 @@ class TestProbeClosure:
             model, tokenizer, max_length=max_length, device="cuda",
         )
         # NOTE: the fake model below ignores device placement — torch.full
-        # with device="cuda" requires CUDA. Skip if unavailable on this box.
-        if not torch.cuda.is_available():
-            pytest.skip("CUDA tensor allocation unavailable")
+        # with device="cuda" requires CUDA, which is why every caller is
+        # ``@pytest.mark.gpu`` (#833). A check here could not fire: the stub above
+        # has just patched ``torch.cuda.is_available`` to return True.
         return probe
 
+    @pytest.mark.gpu(reason="the probe closure allocates on the CUDA device")
     def test_probe_rejects_bool_batch_size(self, monkeypatch):
         try:
             import torch  # noqa: F401
         except ImportError:
             pytest.skip("torch not installed")
-        if not _has_cuda():
-            pytest.skip("CUDA not available — closure unreachable")
         probe = self._build(monkeypatch, model=lambda **kw: SimpleNamespace(loss=None))
         with pytest.raises(TypeError):
             probe(True)
 
+    @pytest.mark.gpu(reason="the probe closure allocates on the CUDA device")
     def test_probe_rejects_zero_batch_size(self, monkeypatch):
-        if not _has_cuda():
-            pytest.skip("CUDA not available — closure unreachable")
         probe = self._build(monkeypatch, model=lambda **kw: SimpleNamespace(loss=None))
         with pytest.raises(ValueError):
             probe(0)
 
+    @pytest.mark.gpu(reason="the probe closure allocates on the CUDA device")
     def test_probe_returns_false_on_oom(self, monkeypatch):
         try:
             import torch
         except ImportError:
             pytest.skip("torch not installed")
-        if not _has_cuda():
-            pytest.skip("CUDA not available — closure unreachable")
 
         def _oom_model(**_kw):
             raise torch.cuda.OutOfMemoryError("simulated OOM")
@@ -166,9 +163,8 @@ class TestProbeClosure:
         probe = self._build(monkeypatch, model=_oom_model)
         assert probe(8) is False
 
+    @pytest.mark.gpu(reason="the probe closure allocates on the CUDA device")
     def test_probe_propagates_non_oom_exceptions(self, monkeypatch):
-        if not _has_cuda():
-            pytest.skip("CUDA not available — closure unreachable")
 
         def _broken_model(**_kw):
             raise RuntimeError("not OOM")
@@ -176,15 +172,6 @@ class TestProbeClosure:
         probe = self._build(monkeypatch, model=_broken_model)
         with pytest.raises(RuntimeError, match="not OOM"):
             probe(8)
-
-
-def _has_cuda() -> bool:
-    try:
-        import torch
-
-        return torch.cuda.is_available()
-    except ImportError:
-        return False
 
 
 class TestSftWiring:

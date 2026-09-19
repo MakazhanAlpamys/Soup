@@ -22,7 +22,7 @@
     "data.prompt_strategy": null,
     "data.raft_epoch_shuffle": false,
     "data.raft_shuffle_seed": null,
-    "data.remove_unused_columns": true,
+    "data.remove_unused_columns": false,
     "data.replay": null,
     "data.replay_ratio": 0.1,
     "data.replay_seed": null,

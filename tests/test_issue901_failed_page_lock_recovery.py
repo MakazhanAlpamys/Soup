@@ -38,14 +38,6 @@ import pytest
 pytest.importorskip("torch")
 
 
-def _cuda() -> bool:
-    import torch
-
-    return torch.cuda.is_available()
-
-
-requires_cuda = pytest.mark.skipif(not _cuda(), reason="needs a CUDA device")
-
 #: Far beyond any box's RAM, so ``cuMemHostAlloc`` refuses it at once without
 #: touching memory — the fastest way to leave the stale error behind.
 _IMPOSSIBLE_PIN_BYTES = 2**40
@@ -276,7 +268,7 @@ class TestTheFallbackRecoversBeforeBuildingThePageableStore:
         assert events == [("ramsource", True), "recover"]
 
 
-@requires_cuda
+@pytest.mark.gpu
 class TestOnRealHardware:
     """The mechanism itself, on a real device. CI has no GPU, so these run on
     dev boxes; the first one is a characterisation of torch/CUDA behaviour and
@@ -385,7 +377,7 @@ class TestOnRealHardware:
         assert cached_bytes() < before
 
 
-@requires_cuda
+@pytest.mark.gpu
 class TestTheProbeCallsAnOutOfMemoryAcceleratorErrorAnOom:
     """#649's shape inside the #349 instrument. Under WDDM the allocator has often
     already spilled, so the out-of-memory surfaces later, at a synchronise, as

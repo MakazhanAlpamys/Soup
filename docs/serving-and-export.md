@@ -289,8 +289,8 @@ soup serve --model ./output --backend vllm --max-model-len 8192
 The vLLM backend applies the **model's own chat template**, exactly like the
 transformers backend, and encodes the rendered prompt itself so the engine
 receives the same token ids Soup trains on rather than re-tokenizing the string.
-(The SGLang and MII backends still hand the engine the rendered string; see
-#785.) A model that ships no chat template falls back to a generic `User:` /
+(The MII backend still hands the engine the rendered string; see #891.) A
+model that ships no chat template falls back to a generic `User:` /
 `Assistant:` prompt, and the server says so at startup. `finish_reason` reports `"length"` when a response
 hits `max_tokens` and `"stop"` otherwise (`/v1/messages` maps those to
 `max_tokens` / `end_turn`).
@@ -312,10 +312,14 @@ soup serve --model ./output --backend sglang --tensor-parallel 2
 
 Like the transformers and vLLM backends, the SGLang backend applies the
 **model's own chat template** via the same shared prompt builder (falling back
-to a generic `User:` / `Assistant:` prompt for template-less models), and
-`finish_reason` reports `"length"` when a response hits `max_tokens` and
-`"stop"` otherwise — so a client doing continue-on-length can tell a truncated
-answer from a completed one (#360).
+to a generic `User:` / `Assistant:` prompt for template-less models). When the
+template rendered the prompt, Soup encodes it itself and posts the token ids to
+the runtime's `/generate` endpoint, so the engine cannot add a second BOS to
+the one the template already rendered (#890); the template-less fallback is
+still sent as a string and tokenized by the engine as before. `finish_reason`
+reports `"length"` when a response hits `max_tokens` and `"stop"` otherwise, so
+a client doing continue-on-length can tell a truncated answer from a completed
+one (#360).
 
 It also honours `--trust-remote-code` like every other backend. **This changed:**
 the SGLang runtime and its tokenizer previously loaded with `trust_remote_code`

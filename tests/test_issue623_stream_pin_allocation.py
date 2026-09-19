@@ -91,17 +91,6 @@ def _ready_line(text: str) -> str:
     return plain.split(_READY_MARKER, 1)[1]
 
 
-def _cuda() -> bool:
-    try:
-        import torch
-    except ImportError:
-        return False
-    return torch.cuda.is_available()
-
-
-requires_cuda = pytest.mark.skipif(not _cuda(), reason="needs a CUDA device")
-
-
 def _write_tiny_tokenizer(weights_dir) -> None:
     import json as _json
     import os
@@ -347,7 +336,7 @@ class TestBuildSourceCpuOnlyPinFalse:
         assert source.get(0, "weight").is_pinned() is False
 
 
-@requires_cuda
+@pytest.mark.gpu
 class TestTheAllocationItself:
     """The measurement from the issue thread, committed: no stubs, real
     ``RamSource``, ``is_pinned()`` on every store tensor, both directions in

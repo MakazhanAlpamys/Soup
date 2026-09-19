@@ -17,6 +17,7 @@ runtime on Linux is a separate follow-up per the issue.
 """
 
 import json
+from unittest import mock
 from unittest.mock import MagicMock
 
 import pytest
@@ -80,6 +81,11 @@ class _FakeTokenizer:
         rendered = " ".join(f"{m['role']}={m['content']}" for m in messages)
         return f"<TPL>{rendered}<GEN>"
 
+    def __call__(self, text, add_special_tokens=True):
+        # Since #785 a templated prompt is encoded in process and sent as ids;
+        # one id per character keeps the rendered text readable from them.
+        return {"input_ids": [ord(c) for c in text]}
+
 
 # sglang 0.5.16's ``Runtime.generate`` ends with ``json.dumps(response.json())``
 # -- a string, not a dict (#76: every request 500'd with "string indices must be
@@ -110,6 +116,10 @@ class TestSglangUsesSharedPromptBuilder:
         return TestClient(app).post("/v1/chat/completions", json=body)
 
     def test_prompt_uses_chat_template_when_tokenizer_has_one(self):
+        """Since #785 a templated prompt reaches the server as the ids Soup
+        encoded, posted to ``/generate``, so its tokenizer cannot add a second
+        BOS. The #360 invariant is unchanged: those ids encode the model's own
+        template, not the hand-rolled prompt."""
         from soup_cli.utils.sglang import create_sglang_app
 
         runtime = _mock_runtime()
@@ -119,8 +129,12 @@ class TestSglangUsesSharedPromptBuilder:
             model_name="m",
             tokenizer=_FakeTokenizer(),
         )
-        self._post(app, {"messages": [{"role": "user", "content": "hello"}]})
-        sent_prompt = runtime.generate.call_args.args[0]
+        posted = MagicMock()
+        posted.json.return_value = {"text": "hi there", "meta_info": {}}
+        with mock.patch("httpx.post", return_value=posted) as post:
+            self._post(app, {"messages": [{"role": "user", "content": "hello"}]})
+        runtime.generate.assert_not_called()
+        sent_prompt = "".join(chr(i) for i in post.call_args.kwargs["json"]["input_ids"])
         assert sent_prompt.startswith("<TPL>")
         assert "user=hello" in sent_prompt
         # The hand-rolled format must be gone.

@@ -337,14 +337,9 @@ KNOWN_UNCONSUMED = {
                                     "docs/peft-and-efficiency.md:622",
     "training.citation_recall_threshold": "no issue yet -- validated by utils/citation_faithful.py "
                                           "and named in its error strings; never applied",
-    # -- found by the read/write fix, and the reason that fix exists. Both
-    #    are user settings that are OVERRIDDEN rather than merely unread, so
-    #    they are the strongest members of this list.
-    "data.remove_unused_columns": "#759 -- schema default True, documented 'set False "
-                                  "when feeding extra cols to a custom collator' "
-                                  "-- and sft.py:788 / pretrain.py:174 / "
-                                  "embedding.py:175 / grpo.py:468 each hardcode "
-                                  "False, so the setting never reaches HF",
+    # -- found by the read/write fix, and the reason that fix exists. A user
+    #    setting that is OVERRIDDEN rather than merely unread, so the strongest
+    #    kind of member this list has.
     "training.grace_codebook": "no issue yet -- the string appears as an artifact-kind name in "
                                "store.py:52 / edit.py:312, unrelated to this field",
     # -- #807: read ONLY inside a function nothing in src/ references, so the
@@ -364,9 +359,13 @@ KNOWN_UNCONSUMED = {
     #    gate, and these two have no read anywhere at all.
     "training.lora.loftq_iter": "#794 -- no read anywhere; LoftQ is unreachable",
     "training.lora.loftq_bits": "#794 -- no read anywhere; LoftQ is unreachable",
-    # -- declared and deliberately REFUSED, so having no consumer is correct.
-    #    A distinct category from the two below: the user is told, loudly, at
-    #    config load. Found by this guard rather than by hand.
+    # -- declared, and an explicit value is IGNORED with a warning naming the
+    #    release that refuses it, so having no consumer is correct. Not refused
+    #    yet, because Soup's own writers put the old default into saved configs.
+    "data.remove_unused_columns": "#759 -- no trainer reads it; the trainers that set the "
+                                  "HF argument pass False so a custom collator still sees "
+                                  "the extra columns. The default is now False, and an "
+                                  "explicit true loads with a warning and is ignored",
     "training.packing_cross_doc_attn_mask": "no issue needed: rejected at config load "
                                             "(schema.py:3495) because it never "
                                             "mapped to a valid TRL packing_strategy; "
