@@ -141,6 +141,49 @@ def test_lora_pattern_literal_keys_still_load(field):
     assert getattr(cfg.training.lora, field) == {"q_proj": 8}
 
 
+# --- one key's LENGTH, not the number of keys -------------------------------
+
+
+@pytest.mark.parametrize("field", ["rank_pattern", "alpha_pattern"])
+def test_lora_pattern_key_at_the_cap_still_loads(field):
+    from soup_cli.config.loader import load_config_from_string
+    from soup_cli.config.schema import _MAX_LORA_PATTERN_KEY_LEN
+
+    key = "q" * _MAX_LORA_PATTERN_KEY_LEN
+    cfg = load_config_from_string(_lora_yaml(field, key))
+    assert getattr(cfg.training.lora, field) == {key: 8}
+
+
+@pytest.mark.parametrize("field", ["rank_pattern", "alpha_pattern"])
+def test_lora_pattern_key_one_over_the_cap_is_refused(field):
+    from soup_cli.config.loader import load_config_from_string
+    from soup_cli.config.schema import _MAX_LORA_PATTERN_KEY_LEN
+
+    key = "q" * (_MAX_LORA_PATTERN_KEY_LEN + 1)
+    with pytest.raises(ValueError) as excinfo:
+        load_config_from_string(_lora_yaml(field, key))
+    message = str(excinfo.value)
+    assert f"lora.{field}" in message, message
+    assert str(_MAX_LORA_PATTERN_KEY_LEN) in message, message
+
+
+def test_lora_pattern_key_refusal_does_not_echo_the_whole_key():
+    """An over-long key belongs in the config, not in the terminal refusing it."""
+    from soup_cli.config.loader import load_config_from_string
+    from soup_cli.config.schema import _MAX_LORA_PATTERN_KEY_SHOWN
+
+    # 1000 and not more: PyYAML refuses a *simple* mapping key past 1024
+    # characters before the schema ever sees it.
+    key = "q" * 1000
+    with pytest.raises(ValueError) as excinfo:
+        load_config_from_string(_lora_yaml("rank_pattern", key))
+    message = str(excinfo.value)
+    assert key not in message, len(message)
+    # Exactly the documented prefix: 80 characters, not 81.
+    assert "q" * _MAX_LORA_PATTERN_KEY_SHOWN in message, message
+    assert "q" * (_MAX_LORA_PATTERN_KEY_SHOWN + 1) not in message, message
+
+
 # --- shipped configs -------------------------------------------------------
 
 

@@ -22,8 +22,8 @@ Only stdlib imports, so the config schema can use it without slowing the CLI.
 from __future__ import annotations
 
 try:  # Python 3.11+
-    from re import _constants as _c
-    from re import _parser as _p
+    from re import _constants as _c  # type: ignore[attr-defined]
+    from re import _parser as _p  # type: ignore[attr-defined]
 except ImportError:  # Python 3.10: importing these warns only on 3.11+
     import sre_constants as _c  # type: ignore[no-redef]
     import sre_parse as _p  # type: ignore[no-redef]

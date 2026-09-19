@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import secrets
 import stat
@@ -16,6 +17,8 @@ from pathlib import Path
 from soup_cli.experiment.tracker import ExperimentTracker, generate_run_id
 from soup_cli.utils.paths import atomic_write_text, enforce_under_cwd_and_no_symlink
 from soup_cli.utils.process_liveness import process_is_alive as _pid_is_alive
+
+logger = logging.getLogger(__name__)
 
 TOKEN_TTL_SECONDS = 5 * 60
 DEFAULT_MAX_TREE_FILES = 10_000
@@ -302,7 +305,7 @@ class ExecutionManager:
         except Exception as exc:
             # No record of a live pid and no watcher: stop the child rather
             # than leave it running unsupervised, then free the slot.
-            self._stop_child(process)
+            self._stop_child(process, run_id)
             try:
                 ExperimentTracker().finish_execution(run_id, status="spawn_failed", exit_code=None)
             except Exception:
@@ -316,27 +319,54 @@ class ExecutionManager:
         return {"run_id": run_id, "status": "running", "pid": process.pid, "log_path": log_path}
 
     @staticmethod
-    def _stop_child(process: subprocess.Popen) -> None:
-        """Terminate, then kill after 10 s; never raises."""
+    def _stop_child(process: subprocess.Popen, run_id: str | None = None) -> None:
+        """Terminate, then kill after 10 s; never raises.
+
+        Every failure here leaves a child running that nothing supervises any
+        more, so each swallowed exception is logged at debug with the run_id
+        and pid: the contract stays "never raises", but a leaked process is no
+        longer invisible to whoever reads the log afterwards.
+        """
+        pid = getattr(process, "pid", None)
         try:
             process.terminate()
         except Exception:
-            pass
+            logger.debug(
+                "mcp execution %s: terminate() failed for pid %s", run_id, pid, exc_info=True
+            )
         try:
             process.wait(timeout=10)
             return
         except subprocess.TimeoutExpired:
-            pass
+            logger.debug(
+                "mcp execution %s: pid %s still alive 10s after terminate(); killing",
+                run_id,
+                pid,
+            )
         except Exception:
+            logger.debug(
+                "mcp execution %s: wait() after terminate() failed for pid %s; "
+                "giving up without kill()",
+                run_id,
+                pid,
+                exc_info=True,
+            )
             return
         try:
             process.kill()
         except Exception:
-            pass
+            logger.debug(
+                "mcp execution %s: kill() failed for pid %s", run_id, pid, exc_info=True
+            )
         try:
             process.wait(timeout=10)
         except Exception:
-            pass
+            logger.debug(
+                "mcp execution %s: pid %s did not reap after kill(); it may still be running",
+                run_id,
+                pid,
+                exc_info=True,
+            )
 
     def _watch(self, process: subprocess.Popen, run_id: str) -> None:
         try:

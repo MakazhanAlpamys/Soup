@@ -38,6 +38,15 @@ _MAX_LORA_RANK_PATTERN_KEYS = 256
 _MAX_LORA_RANK_PATTERN_VALUE = 1024
 _MAX_LORA_TARGET_PARAMETERS = 256
 _MAX_LORA_TARGET_PARAMETER_LEN = 512
+# One rank_pattern/alpha_pattern KEY is a regex peft matches against every
+# module name, so its length is bounded for the same reason the sibling regex
+# fields bound theirs (training.unfrozen_parameters at 512 chars, lr_groups at
+# 256): soup.yaml is shareable config, and the key-count cap above says how
+# MANY patterns it may carry, not how long a single one may be.
+_MAX_LORA_PATTERN_KEY_LEN = 512
+# How much of an over-long key the refusal quotes back: enough to recognise
+# which key it was, not enough to paste kilobytes into a terminal or a log.
+_MAX_LORA_PATTERN_KEY_SHOWN = 80
 
 # v0.71.23 #266 — Spectrum targeted-training unfrozen-parameter caps
 _MAX_UNFROZEN_PARAMETERS = 50_000
@@ -229,6 +238,7 @@ class LoraConfig(BaseModel):
                 f"got {len(value)}"
             )
         cleaned: Dict[str, int] = {}
+        field = f"lora.{info.field_name}"
         for key, val in value.items():
             if not isinstance(key, str) or not key:
                 raise ValueError(
@@ -236,10 +246,15 @@ class LoraConfig(BaseModel):
                 )
             if "\x00" in key:
                 raise ValueError("rank_pattern/alpha_pattern keys cannot contain null bytes")
+            if len(key) > _MAX_LORA_PATTERN_KEY_LEN:
+                shown = key[:_MAX_LORA_PATTERN_KEY_SHOWN]
+                raise ValueError(
+                    f"{field}: pattern {shown!r}... is {len(key)} characters, "
+                    f"over the {_MAX_LORA_PATTERN_KEY_LEN}-character cap"
+                )
             # peft matches each key as a regex against every module name
             # (peft.utils.other.get_pattern_key), so the key is held to the
             # same complexity check as unfrozen_parameters / lr_groups.
-            field = f"lora.{info.field_name}"
             try:
                 re.compile(key)
             except re.error as exc:
