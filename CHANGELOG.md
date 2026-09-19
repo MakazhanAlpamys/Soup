@@ -16,6 +16,8 @@ reproducing 70+ versions of notes.
 
 ### Fixed
 
+- **A Ctrl+C arriving immediately after the Lambda controller started could still leave the instance running (#1073 in #1078).** `submit_lambda_run` spawned the controller outside the `try` that absorbs interrupts, so a SIGINT delivered between `Popen` returning and the waiting loop being entered — or one landing on the "still waiting" notice, which is written from the interrupt handler — unwound the parent while the controller was still terminating the paid instance in its `finally` block. The spawn and the notice now sit inside the guarded region: once the child exists, every path leads back to `proc.wait()` and the controller's exit code remains what the function returns. An interrupt raised before the child exists still propagates unchanged, and a `wait()` failure that is not an interrupt still surfaces rather than being retried.
+
 - `soup runs clean` now accepts `--no-keep-weights` to delete whole non-best checkpoints; `--keep-weights` (the default) keeps weights on every supported Click version — on Click 8.1 it previously deleted whole checkpoints (#1057)
 
 - **Cloud runs keep their outputs and their cleanup (#1058).** `soup train --cloud modal` now writes run outputs to the `soup-outputs` Modal volume and downloads them to the local output directory when the run ends (also after a failed run); previously checkpoints were lost with the container. `soup train --cloud lambda --cloud-submit`: pressing Ctrl+C now waits for the controller to terminate the Lambda instance; previously the controller was killed 0.25 s later and the instance could keep running (Linux/macOS).
