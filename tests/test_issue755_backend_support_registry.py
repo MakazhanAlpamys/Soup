@@ -581,7 +581,7 @@ def test_the_declared_modules_cover_every_helper_the_trainer_imports():
 def test_an_unfounded_gap_claim_is_caught():
     """@MakazhanAlpamys's mutation on #756, which the first version survived.
 
-    He fabricated an entry declaring ``data.mask_history`` ignored on
+    He fabricated an entry declaring a globally unconsumed field ignored on
     ``(sft, mlx)`` and the suite stayed green: the drift check only compared
     the entry against the declared modules, so an ``ignored`` claim about a
     field those modules never mention could not be contradicted.
@@ -593,8 +593,11 @@ def test_an_unfounded_gap_claim_is_caught():
     import soup_cli.config.backend_support as bs
 
     repo_root = pathlib.Path(__file__).resolve().parents[1]
+    # #761 wired data.mask_history, which used to stand in here; the claim only
+    # has to be about a field nothing consumes, and training.lr_groups is one
+    # (see #748's KNOWN_UNCONSUMED).
     fabricated = bs.SupportEntry(
-        "data.mask_history", bs.IGNORED, "fabricated, unfounded claim"
+        "training.lr_groups", bs.IGNORED, "fabricated, unfounded claim"
     )
     real = bs.REGISTRY[("sft", "mlx")]
     try:
@@ -604,7 +607,7 @@ def test_an_unfounded_gap_claim_is_caught():
         bs.REGISTRY[("sft", "mlx")] = real
 
     assert any(
-        "mask_history" in p and "globally unconsumed" in p for p in problems
+        "lr_groups" in p and "globally unconsumed" in p for p in problems
     ), problems
 
 

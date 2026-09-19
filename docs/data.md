@@ -759,7 +759,7 @@ data:
   add_new_tokens: ["<reasoning>", "</reasoning>"]
   new_special_tokens: ["<|tool_call|>"]
   resize_vocab: true
-  mask_history: true
+  mask_history: true              # train only on the LAST assistant turn
   split_thinking: true            # Qwen3-style <think> reasoning-block masking
   image_min_pixels: 256
   image_max_pixels: 4096
@@ -768,6 +768,22 @@ data:
   video_maxlen: 32
   video_dir: ./videos
 ```
+
+`mask_history: true` keeps only the **last** assistant turn in the loss: every
+earlier assistant turn is masked alongside the user and system turns the
+assistant-only path already excludes. It never adds tokens to the loss.
+
+It only means something for a **multi-turn chat shape** — `chatml`, `sharegpt`
+and the other message-list formats — where turns exist to mask. A single-turn
+conversation trains identically with it on or off, and a flat format such as
+`alpaca` or `plaintext` has no turns at all.
+
+It requires `train_on_responses_only: true`, which is the path that marks
+assistant spans; with `false` every token trains, including the history this
+field asks to exclude, so the combination is refused at config load. That also
+rules out `train_on_messages_with_train_field`, which is itself exclusive with
+`train_on_responses_only`: the per-message `train` field and `mask_history` can
+never both decide a run.
 
 **AOT preprocessing:**
 

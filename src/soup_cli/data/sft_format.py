@@ -87,7 +87,10 @@ def build_format_row(
         inner = _build_per_message_format_row(tokenizer, max_length)
     elif use_responses_only:
         inner = _build_assistant_only_format_row(
-            tokenizer, max_length, include_eot=include_eot
+            tokenizer,
+            max_length,
+            include_eot=include_eot,
+            mask_history=bool(data_cfg.mask_history),
         )
     else:
         inner = _build_full_sequence_format_row(tokenizer, max_length)
@@ -151,7 +154,10 @@ def _wrap_with_reasoning_effort(
 
 
 def _build_assistant_only_format_row(
-    tokenizer: Any, max_length: int, include_eot: bool = False
+    tokenizer: Any,
+    max_length: int,
+    include_eot: bool = False,
+    mask_history: bool = False,
 ) -> Callable[[dict], dict]:
     def format_row(example: dict) -> dict:
         return build_assistant_only_labels(
@@ -159,6 +165,7 @@ def _build_assistant_only_format_row(
             tokenizer,
             max_length=max_length,
             include_eot=include_eot,
+            mask_history=mask_history,
         )
 
     return format_row
