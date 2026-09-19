@@ -176,6 +176,173 @@ class TestTheOrderOfTheChecks:
             )
 
 
+class TestTheResolverLoop:
+    """The loop itself, with stub modules, so these run in the 3x3 matrix where
+    torchao is absent.
+
+    Both tests exist because the maintainer mutated ``resolve_torchao_class`` on
+    #1066 and the suite stayed green. On the real 0.18.0 every candidate imports
+    and the first hit is the answer, so neither the ORDER the loop walks nor the
+    ``continue`` on a failed import is exercised by anything the installed
+    package can show.
+    """
+
+    @staticmethod
+    def _install(monkeypatch, modules):
+        """Put a fake ``torchao`` and the given submodules in ``sys.modules``.
+
+        A value of ``None`` is how the import system spells "this import fails":
+        ``import_module`` raises ``ImportError`` on it, which is the branch a
+        future torchao that drops a prototype submodule would take.
+        """
+        import sys
+        import types
+
+        monkeypatch.setitem(sys.modules, "torchao", types.ModuleType("torchao"))
+        for name, value in modules.items():
+            monkeypatch.setitem(sys.modules, name, value)
+
+    def test_the_public_candidate_wins_when_both_modules_define_the_name(
+        self, monkeypatch
+    ):
+        """``test_the_public_candidate_is_tried_before_the_prototype_one`` checks
+        the order of the ``TORCHAO_CLASSES`` tuple, not that the resolver follows
+        it — reversing the loop leaves it green. Here the two modules define the
+        attribute as *different* objects, so only the returned identity can say
+        which was tried first.
+
+        This is the case that matters when a release graduates a prototype class:
+        both paths answer for a while, and Soup has to take the promised one.
+        """
+        import types
+
+        public_module = types.ModuleType("torchao.quantization")
+        prototype_module = types.ModuleType("torchao.prototype.stub")
+
+        class PublicConfig:
+            pass
+
+        class PrototypeConfig:
+            pass
+
+        public_module.TheConfig = PublicConfig
+        prototype_module.TheConfig = PrototypeConfig
+        self._install(
+            monkeypatch,
+            {
+                "torchao.quantization": public_module,
+                "torchao.prototype.stub": prototype_module,
+            },
+        )
+        monkeypatch.setitem(
+            TORCHAO_CLASSES,
+            "StubKey",
+            (
+                ("torchao.quantization", "TheConfig"),
+                ("torchao.prototype.stub", "TheConfig"),
+            ),
+        )
+
+        assert resolve_torchao_class("StubKey") is PublicConfig
+        assert PublicConfig is not PrototypeConfig, "sanity: distinguishable"
+
+    def test_a_candidate_that_fails_to_import_is_skipped_not_fatal(
+        self, monkeypatch
+    ):
+        """A failed candidate import must ``continue`` to the next one. Replacing
+        that ``continue`` with a raise or a break is green against 0.18.0, where
+        every candidate imports; it is the path a torchao that removed a
+        prototype submodule would take, and it would turn a working fallback into
+        a hard failure on upgrade.
+        """
+        import types
+
+        survivor = types.ModuleType("torchao.prototype.survivor")
+
+        class Survivor:
+            pass
+
+        survivor.Survivor = Survivor
+        self._install(
+            monkeypatch,
+            {
+                "torchao.quantization": None,  # ImportError on import_module
+                "torchao.prototype.survivor": survivor,
+            },
+        )
+        monkeypatch.setitem(
+            TORCHAO_CLASSES,
+            "StubKey",
+            (
+                ("torchao.quantization", "Survivor"),
+                ("torchao.prototype.survivor", "Survivor"),
+            ),
+        )
+
+        assert resolve_torchao_class("StubKey") is Survivor
+
+    def test_an_absent_root_is_fatal_even_with_a_candidate_cached(
+        self, monkeypatch
+    ):
+        """The stub twin of
+        ``test_absent_torchao_is_absent_even_with_its_submodules_cached``, which
+        needs the real package and therefore skips on the 3x3 matrix — where
+        torchao is absent and this branch is the whole point.
+
+        Dropping the root import leaves both green *there*: the cached submodule
+        answers and the resolver never notices torchao itself cannot be imported.
+        """
+        import types
+
+        cached = types.ModuleType("torchao.prototype.cached")
+
+        class Cached:
+            pass
+
+        cached.Cached = Cached
+        self._install(monkeypatch, {"torchao.prototype.cached": cached})
+        import sys
+
+        monkeypatch.setitem(sys.modules, "torchao", None)
+        monkeypatch.setitem(
+            TORCHAO_CLASSES, "StubKey", (("torchao.prototype.cached", "Cached"),)
+        )
+
+        with pytest.raises(RuntimeError, match="Could not import torchao"):
+            resolve_torchao_class("StubKey")
+
+    def test_the_message_names_every_candidate_when_none_answers(
+        self, monkeypatch
+    ):
+        """Control for the two above: when the loop really does run out, the error
+        carries both paths — so a passing fallback above cannot be a resolver that
+        silently returns something on any input."""
+        import types
+
+        empty = types.ModuleType("torchao.prototype.empty")
+        self._install(
+            monkeypatch,
+            {
+                "torchao.quantization": None,
+                "torchao.prototype.empty": empty,
+            },
+        )
+        monkeypatch.setitem(
+            TORCHAO_CLASSES,
+            "StubKey",
+            (
+                ("torchao.quantization", "Missing"),
+                ("torchao.prototype.empty", "Missing"),
+            ),
+        )
+
+        with pytest.raises(RuntimeError) as excinfo:
+            resolve_torchao_class("StubKey")
+        message = str(excinfo.value)
+        assert "torchao.quantization.Missing" in message
+        assert "torchao.prototype.empty.Missing (not defined there)" in message
+
+
 class TestTheExportSchemesAreCovered:
     def test_every_shipped_scheme_has_a_resolution(self):
         """A scheme the CLI advertises but the map cannot resolve is the defect."""
