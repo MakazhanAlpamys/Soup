@@ -91,6 +91,12 @@ def infer(
         "-t",
         help="Sampling temperature (0 = greedy)",
     ),
+    batch_size: int = typer.Option(
+        8,
+        "--batch-size",
+        min=1,
+        help="Number of causal-LM prompts to generate together (1-...)",
+    ),
     device: Optional[str] = typer.Option(
         None,
         "--device",
@@ -269,23 +275,48 @@ def infer(
     ):
         progress_task = progress.add_task("Generating...", total=len(prompts))
 
-        for prompt_text in prompts:
-            messages = [{"role": "user", "content": prompt_text}]
-            response, token_count = _generate(
-                model_obj, tokenizer, messages,
-                max_tokens=max_tokens, temperature=temperature,
-            )
+        if batch_size == 1:
+            prompt_batches = [[prompt] for prompt in prompts]
+        else:
+            prompt_batches = [
+                prompts[start : start + batch_size]
+                for start in range(0, len(prompts), batch_size)
+            ]
 
-            result = {
-                "prompt": prompt_text,
-                "response": response,
-                "tokens_generated": token_count,
-            }
-            out_f.write(json.dumps(result, ensure_ascii=False) + "\n")
-            out_f.flush()
-            total_tokens += token_count
-            num_results += 1
-            progress.update(progress_task, advance=1)
+        for prompt_batch in prompt_batches:
+            if batch_size == 1:
+                messages = [{"role": "user", "content": prompt_batch[0]}]
+                generated = [
+                    _generate(
+                        model_obj,
+                        tokenizer,
+                        messages,
+                        max_tokens=max_tokens,
+                        temperature=temperature,
+                    )
+                ]
+            else:
+                generated = _generate_batch(
+                    model_obj,
+                    tokenizer,
+                    prompt_batch,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                )
+
+            for prompt_text, (response, token_count) in zip(
+                prompt_batch, generated, strict=True
+            ):
+                result = {
+                    "prompt": prompt_text,
+                    "response": response,
+                    "tokens_generated": token_count,
+                }
+                out_f.write(json.dumps(result, ensure_ascii=False) + "\n")
+                out_f.flush()
+                total_tokens += token_count
+                num_results += 1
+                progress.update(progress_task, advance=1)
 
     elapsed = time.time() - start_time
     tokens_per_sec = total_tokens / elapsed if elapsed > 0 else 0
@@ -729,3 +760,66 @@ def _generate(
     token_count = new_tokens.shape[0]
     response_text = tokenizer.decode(new_tokens, skip_special_tokens=True).strip()
     return response_text, token_count
+
+
+def _generate_batch(
+    model, tokenizer, prompts, max_tokens=256, temperature=0.7,
+) -> list[tuple[str, int]]:
+    """Generate responses for a causal-LM prompt batch in input order."""
+    from soup_cli.utils.vllm import _render_chat_prompt, encode_rendered_prompt
+
+    rendered = []
+    templated = None
+    for prompt in prompts:
+        text, row_templated = _render_chat_prompt(
+            [{"role": "user", "content": prompt}],
+            tokenizer,
+            fallback_on_error=False,
+        )
+        if templated is None:
+            templated = row_templated
+        elif templated != row_templated:
+            raise ValueError("mixed chat-template rendering modes in one batch")
+        rendered.append(text)
+
+    original_padding_side = tokenizer.padding_side
+    tokenizer.padding_side = "left"
+    try:
+        inputs = encode_rendered_prompt(
+            tokenizer,
+            rendered,
+            templated=bool(templated),
+            padding=True,
+            return_tensors="pt",
+        )
+        input_ids = inputs["input_ids"].to(model.device)
+        attention_mask = inputs["attention_mask"].to(model.device)
+        input_width = input_ids.shape[1]
+
+        import torch
+
+        with torch.no_grad():
+            gen_kwargs = {
+                "input_ids": input_ids,
+                "attention_mask": attention_mask,
+                "max_new_tokens": max_tokens,
+                "do_sample": temperature > 0,
+                "pad_token_id": tokenizer.pad_token_id,
+            }
+            if temperature > 0:
+                gen_kwargs["temperature"] = temperature
+                gen_kwargs["top_p"] = 0.9
+            outputs = model.generate(**gen_kwargs)
+
+        results = []
+        for output in outputs:
+            new_tokens = output[input_width:]
+            results.append(
+                (
+                    tokenizer.decode(new_tokens, skip_special_tokens=True).strip(),
+                    new_tokens.shape[0],
+                )
+            )
+        return results
+    finally:
+        tokenizer.padding_side = original_padding_side
