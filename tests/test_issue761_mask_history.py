@@ -317,3 +317,28 @@ class TestTheLiveWiring:
         assert (len(_trained(off)), len(_trained(on))) == _EXPECTED[
             ("no_markers", "three")
         ], "data.mask_history reached the label builder through the factory"
+
+    def test_a_config_stand_in_without_the_field_still_builds(self):
+        """`build_format_row` is handed duck-typed stand-ins by several suites
+        (`test_v0532.py`, `test_issue532_supervised_token_guard.py`), carrying only
+        the fields that existed when they were written. Reading
+        `data_cfg.mask_history` directly turned six of those into
+        `AttributeError` at setup -- found by the full suite, not by any targeted
+        run. The read is a `getattr` with the schema default."""
+        import types
+
+        tok = _tokenizer(_BODY)
+        stand_in = types.SimpleNamespace(
+            train_on_responses_only=True,
+            train_on_messages_with_train_field=False,
+            max_length=2048,
+            chat_template=None,
+            prompt_strategy=None,
+        )
+        from soup_cli.data.sft_format import build_format_row
+
+        labels = build_format_row(tok, stand_in)({"messages": _THREE_TURN})["labels"]
+
+        assert len(_trained(labels)) == _EXPECTED[("no_markers", "three")][0], (
+            "absent field behaves as mask_history: false"
+        )
