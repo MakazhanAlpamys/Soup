@@ -1687,10 +1687,13 @@ def _create_app(
 
     app = FastAPI(title="Soup Inference Server", version="1.0.0")
 
-    # Loopback-only CORS: CORS limits which browser pages can read responses;
-    # the Host/Origin guard on tool and adapter routes is what refuses
-    # requests from other sites. Loopback origins cover the curl / same-host
-    # IDE extension cases.
+    # Loopback-only CORS: CORS limits which browser pages can read responses,
+    # and the Host/Origin guard on the tool and adapter routes refuses
+    # BROWSER-DRIVEN cross-site requests. Neither covers a non-browser client
+    # (curl, requests, any script), which sends no Origin at all and can name
+    # the bind address in Host — for those, on a non-loopback bind, the bearer
+    # token checked by `_check_tool_auth` is the only thing protecting these
+    # routes. Loopback origins cover the curl / same-host IDE extension cases.
     app.add_middleware(
         CORSMiddleware,
         allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$",
@@ -1759,8 +1762,9 @@ def _create_app(
         return metrics.snapshot()
 
     @app.get("/v1/adapters")
-    def list_adapters():
+    def list_adapters(authorization: Optional[str] = Header(default=None)):
         """List loaded LoRA adapters (names only, no paths for security)."""
+        _check_tool_auth(authorization)
         current = _active_snapshot()
         return {
             "adapters": [
@@ -1771,8 +1775,14 @@ def _create_app(
         }
 
     @app.post("/v1/adapters/activate/{name}", dependencies=[Depends(_check_local_request)])
-    def activate_adapter(name: str = FPath(..., pattern=r"^[a-zA-Z0-9][a-zA-Z0-9\-]*$")):
+    def activate_adapter(
+        name: str = FPath(..., pattern=r"^[a-zA-Z0-9][a-zA-Z0-9\-]*$"),
+        authorization: Optional[str] = Header(default=None),
+    ):
         """Hot-swap the active adapter. Name must be in the loaded map."""
+        # Before the 404s: an unauthenticated caller must not learn which
+        # adapter names are loaded by reading "unknown adapter" off a probe.
+        _check_tool_auth(authorization)
         if not _adapter_map:
             raise HTTPException(
                 status_code=404, detail="No adapters loaded."
@@ -1787,8 +1797,9 @@ def _create_app(
         return {"active": name, "status": "ok"}
 
     @app.post("/v1/adapters/deactivate", dependencies=[Depends(_check_local_request)])
-    def deactivate_adapter():
+    def deactivate_adapter(authorization: Optional[str] = Header(default=None)):
         """Return to base model (clear active adapter)."""
+        _check_tool_auth(authorization)
         with active_lock:
             active_state["active"] = None
         return {"active": None, "status": "ok"}
