@@ -18,6 +18,7 @@ from soup_cli.config.schema import SoupConfig
 from soup_cli.data.chat_templates import apply_chat_template_override
 from soup_cli.trainer.loss_summary import summarize_training_loss
 from soup_cli.utils.gpu import (
+    bf16_fp16_flags,
     estimate_batch_size,
     model_size_from_name,
     resolve_device_map,
@@ -33,6 +34,9 @@ def _set_ppo_training_kwargs(
     ppo_kwargs: dict[str, object],
     ppo_config_cls: type,
     tcfg: Any,
+    *,
+    total_steps: int | None = None,
+    device: str = "cpu",
 ) -> dict[str, str]:
     """Forward Soup's three PPO schedules across TRL parameter renames."""
     from soup_cli.trainer._trl_compat import config_accepts, kl_penalty_kwargs
@@ -54,6 +58,28 @@ def _set_ppo_training_kwargs(
     ppo_kwargs.update(kl_kwargs)
     for name in kl_kwargs:
         applied["kl_coef"] = name
+
+    if total_steps is not None:
+        from soup_cli.utils.layer_stream import should_enable_hf_gradient_checkpointing
+
+        use_bf16, use_fp16 = bf16_fp16_flags(device)
+        training_kwargs = {
+            "warmup_steps": int(total_steps * tcfg.warmup_ratio),
+            "weight_decay": tcfg.weight_decay,
+            "max_grad_norm": tcfg.max_grad_norm,
+            "optim": tcfg.optimizer,
+            "lr_scheduler_type": tcfg.scheduler,
+            "logging_steps": tcfg.logging_steps,
+            "save_steps": tcfg.save_steps,
+            "bf16": use_bf16,
+            "fp16": use_fp16,
+            "gradient_checkpointing": should_enable_hf_gradient_checkpointing(
+                tcfg.gradient_checkpointing, stream_layers=tcfg.stream_layers
+            ),
+        }
+        for name, value in training_kwargs.items():
+            if config_accepts(ppo_config_cls, name):
+                ppo_kwargs[name] = value
 
     return applied
 
@@ -216,8 +242,14 @@ class PPOTrainerWrapper:
 
         ppo_params = inspect.signature(ppo_config_cls).parameters
 
+        import math
+
+        total_steps = math.ceil(
+            len(train_ds) / batch_size / tcfg.gradient_accumulation_steps
+        ) * tcfg.epochs
         applied_ppo_fields = _set_ppo_training_kwargs(
-            ppo_kwargs, ppo_config_cls, tcfg
+            ppo_kwargs, ppo_config_cls, tcfg,
+            total_steps=total_steps, device=self.device,
         )
 
         if "cliprange" in ppo_params:

@@ -460,6 +460,20 @@ soup eval unlearning <run-id> --benchmark tofu --evidence evidence.json --output
 
 `task: unlearn` is live (v0.71.9): it loads a LoRA-wrapped policy, a frozen reference copy (NPO / RMU), and the forget / retain JSONL sets, then optimises the per-method loss — NPO's `(2/β)·mean(-logσ(-β·(π_logp − ref_logp)))` drives the policy's forget-set log-prob below the reference (= forgetting), while the retain set anchors capability. Run NPO/SimNPO **with** a `retain_set` — without one the policy has no utility anchor and Soup warns loudly.
 
+Unlearning honors `training.optimizer`, `scheduler`, `warmup_ratio`, `weight_decay`,
+`max_grad_norm`, `batch_size` and `gradient_accumulation_steps`. The default
+`batch_size: auto` uses the same memory estimate as the other trainers. This
+memory-constrained loop processes one example at a time and accumulates gradients
+for `batch_size * gradient_accumulation_steps` examples per optimizer update;
+a final partial group is averaged by its actual size. `initial_loss` and
+`final_loss` remain unscaled per-example losses, and `total_steps` and the 2,000-step
+budget continue to count examples rather than optimizer updates.
+
+`data.max_length` now controls forget and retain tokenization instead of the old
+256-token cap. Its default is 2,048, so existing configurations can use more memory
+and take longer. Set `data.max_length: 256` to retain the old sequence-length limit,
+or explicitly choose a value that fits the model and device.
+
 Three orthogonal axes: **Forget Quality** (pre/post forget-loss delta), **Model Utility** (retain-accuracy preserved), **PrivLeak** (membership-inference AUC distance from 0.5). Bundled mini-fixtures for all three benchmarks ship in the box (v0.71.1 added MUSE + WMDP alongside the existing TOFU set), so `--benchmark muse|wmdp` runs without supplying evidence. The WMDP forget-set probes ship **redacted** (placeholder prompts + `REFUSED` responses) — Soup never bundles verbatim hazardous-knowledge content.
 
 
