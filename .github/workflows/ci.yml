@@ -2,7 +2,11 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    # `release/**` is here so a release branch gets the matrix on the exact
+    # tree that will be tagged. A pull request builds the MERGE of head and
+    # main, which for a release cut from an older tag is not the tree that
+    # ships, so a PR run cannot stand in for this one.
+    branches: [main, 'release/**']
   pull_request:
     branches: [main]
 
