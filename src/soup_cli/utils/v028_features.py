@@ -33,6 +33,7 @@ def apply_v028_speed_memory(
     console: Optional["Console"] = None,
     device: str = "cpu",
     backend: str = "transformers",
+    skip_cut_ce: bool = False,
 ) -> dict[str, bool]:
     """Apply Cut-CE / FP8 features to ``model``.
 
@@ -54,18 +55,21 @@ def apply_v028_speed_memory(
 
     # --- Cut Cross-Entropy ---------------------------------------------------
     if getattr(tcfg, "use_cut_ce", False):
-        from soup_cli.utils.cut_ce import NO_MATCHING_ARCHITECTURE_MESSAGE
-
-        try:
-            from soup_cli.utils.cut_ce import apply_cut_ce
-            ok = bool(apply_cut_ce(base_model))
-        except Exception:  # noqa: BLE001 — degrade gracefully
-            ok = False
-        applied["cut_ce"] = ok
-        if ok:
-            _say("Cut Cross-Entropy enabled (chunked CCE kernel)")
+        if skip_cut_ce:
+            applied["cut_ce"] = True
         else:
-            _say(f"Cut Cross-Entropy: {NO_MATCHING_ARCHITECTURE_MESSAGE}", style="yellow")
+            from soup_cli.utils.cut_ce import NO_MATCHING_ARCHITECTURE_MESSAGE
+
+            try:
+                from soup_cli.utils.cut_ce import apply_cut_ce
+                ok = bool(apply_cut_ce(base_model))
+            except Exception:  # noqa: BLE001 — degrade gracefully
+                ok = False
+            applied["cut_ce"] = ok
+            if ok:
+                _say("Cut Cross-Entropy enabled (chunked CCE kernel)")
+            else:
+                _say(f"Cut Cross-Entropy: {NO_MATCHING_ARCHITECTURE_MESSAGE}", style="yellow")
 
     # --- FP8 training --------------------------------------------------------
     if getattr(tcfg, "quantization_aware", None) == "fp8":
@@ -80,8 +84,9 @@ def apply_v028_speed_memory(
             _say(f"FP8 training enabled (Float8Linear, recipe={recipe})")
         else:
             _say(
-                "FP8 training: torchao.float8 unavailable or no "
-                "compatible linears", style="yellow",
+                "FP8 training requested but unavailable "
+                "(no Hopper+ GPU or torchao.float8 missing)",
+                style="yellow",
             )
 
     # --- FP8 attention (v0.71.21 #141) ---------------------------------------
@@ -202,6 +207,10 @@ def warn_unsupported_features(
         issues.append('quantization_aware="fp8"')
     if getattr(tcfg, "activation_offloading", None) is not None:
         issues.append("activation_offloading")
+    if getattr(tcfg, "fp8_attention", False):
+        issues.append("fp8_attention")
+    if getattr(tcfg, "nvfp4", False):
+        issues.append("nvfp4")
     if not issues:
         return None
     return (
