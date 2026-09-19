@@ -87,39 +87,27 @@ infrastructure instead of improving models. Soup fixes that.
 
 ## What's New
 
-**v0.75.0 — the same `soup.yaml` trained a different recipe on MLX than on transformers,
-silently.** Six training options were validated, documented, accepted — and read by nothing
-on that backend. **All 60 pull requests in this release came from outside the maintainer**,
-by 22 people.
+**v0.75.1 — hardening, and cloud runs that keep what they produced.** A maintenance
+release on top of v0.75.0: no new training features, and a few defaults that change when
+you upgrade.
 
-- **Breaking: an unknown config key now refuses the load.** v0.74 warned and named this
-  release as the deadline. A typo like `quantizaton`, or a key that only exists on a newer
-  Soup, used to be dropped while the run proceeded with the setting not applied; it now
-  fails on the CLI (exit 1) and in the API (`ValueError`), naming the field you probably
-  meant. The detector applies the root-level `lora:` remap the schema has honoured
-  since v0.40.1, so that spelling is accepted, not refused; the two `soup fetch examples`
-  files using it moved to the canonical `training.lora`. Every recipe and template loads
-  clean, key names are escaped before they reach the terminal, and the scan is bounded.
-- **MLX honours the config it accepted.** `train_on_responses_only`, `warmup_ratio` /
-  `scheduler` / `weight_decay` / `optimizer`, `max_grad_norm`, `gradient_accumulation_steps`
-  and `gradient_checkpointing` were each validated and then dropped on `backend: mlx`. Only
-  8 of the 32 optimizer names have an MLX equivalent; the other 24 are refused by name
-  instead of silently becoming AdamW. MLX also drives the live dashboard, the tracker and
-  `soup ui`, and `soup doctor --config` lists the settings a backend does not read.
-- **Validation loss existed nowhere.** It was computed on every backend and thrown away:
-  no metrics column, no event field, nothing on the panel. It is now recorded, streamed
-  and displayed.
-- **Breaking: `grpo_variant: gspo` is the published sequence-level objective**
-  (arXiv:2507.18071), replacing a column-centering heuristic in which a padding token also
-  shifted the gradient of every row sharing its column. Existing gspo configs will not
-  reproduce prior runs.
-- **Web UI read endpoints and SSE require auth**, with short-lived single-use tickets
-  instead of a token in a query string; `--public` no longer serves `/docs` and
-  `/openapi.json` to the LAN; and a training subprocess no longer hangs when nothing
-  reads its output.
-- **`torch>=2.6.0`** closes v0.74.0's known limitation: at 2.5.1 `trl>=0.29` could not
-  import and every preference trainer was dead. Also fixed: `training.loraplus_lr_ratio`
-  crashed every run that set it, and `packing: true` raised on TRL 0.29.
+- **Hardening across the CLI, the inference server, the Web UI, MCP execution, config
+  parsing and `.can` handling.** Details in an advisory published with this release.
+- **`soup runs clean` gained `--no-keep-weights`**, which deletes whole non-best
+  checkpoints rather than only their optimizer and scheduler states. `--keep-weights`
+  stays the default and now means the same thing on every supported Click version — on
+  Click 8.1 it used to delete whole checkpoints anyway.
+- **Cloud runs keep their outputs.** `soup train --cloud modal` writes run outputs to the
+  `soup-outputs` Modal volume and downloads them into your local output directory when the
+  run ends, including after a failed run; checkpoints used to disappear with the container.
+- **Ctrl+C on `soup train --cloud lambda --cloud-submit` waits for the controller** to
+  terminate the Lambda instance. The controller was previously killed a quarter of a
+  second later, which could leave a paid instance running (Linux/macOS).
+- **Upgrading changes a few defaults.** `soup push --hub modelscope` and `--hub modelers`
+  read `MODELSCOPE_API_TOKEN` and `MODELERS_TOKEN` rather than `HF_TOKEN`, so one hub's
+  token is never offered to another; and an `https` judge URL whose host is not
+  `api.openai.com` is treated as an OpenAI-compatible server and called without
+  `OPENAI_API_KEY`.
 
 > Python **3.10–3.12** only. On 3.13+, pip used to resolve untested PyTorch wheels that
 > crash in the native extension before Soup runs at all.
