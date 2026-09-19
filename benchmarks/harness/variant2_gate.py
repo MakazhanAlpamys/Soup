@@ -13,6 +13,8 @@ The control is load-bearing. A repaired arm that passes while the control also
 passes does not demonstrate that the defect-triggering path was exercised.
 Likewise, an empty parameter or gradient intersection is a hard failure rather
 than a vacuous ``0 == 0`` success.
+The control's loss must also be exact: its forward pass cannot drift from the
+resident reference even when its backward gradients expose the defect.
 
 Requirements
 ------------
@@ -188,18 +190,48 @@ def _rewired_modules(model: Any) -> int:
 
 
 def _source_sha() -> str:
+    import soup_cli
+
+    package_file = getattr(soup_cli, "__file__", None)
+    if package_file is None:
+        return "unknown"
     try:
-        result = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
+        package_dir = Path(package_file).resolve().parent
+        root = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            cwd=package_dir,
             check=True,
             capture_output=True,
             text=True,
             timeout=5,
+        ).stdout.strip()
+        if not root:
+            return "unknown"
+        commit = (
+            subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=Path(root),
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            .stdout.strip()
+            .lower()
         )
+        dirty = subprocess.run(
+            ["git", "status", "--porcelain", "--untracked-files=normal"],
+            cwd=Path(root),
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        ).stdout
     except (OSError, subprocess.SubprocessError):
         return "unknown"
-    value = result.stdout.strip().lower()
-    return value if re.fullmatch(r"[0-9a-f]{40}", value) else "unknown"
+    if not re.fullmatch(r"[0-9a-f]{40}", commit):
+        return "unknown"
+    return f"{commit}-dirty" if dirty else commit
 
 
 def _versions() -> dict[str, str]:
@@ -343,6 +375,23 @@ def _paired_gradient_gate(control: dict[str, Any], repaired: dict[str, Any]) -> 
     )
 
 
+def verdict(
+    control: dict[str, Any], repaired: dict[str, Any]
+) -> tuple[bool, bool, bool, bool, bool]:
+    """Return the final verdict and its control, repair, loss, and wiring gates.
+
+    Both arms' losses must be exact against the resident reference. In particular,
+    the control may expose the backward defect but must not drift in its forward pass.
+    """
+    control_ok = _arm_gate_summary(control, expect_exact=False)
+    repaired_ok = _arm_gate_summary(repaired, expect_exact=True)
+    gradients_ok = _paired_gradient_gate(control, repaired)
+    losses_ok = bool(control["losses_exact"] and repaired["losses_exact"])
+    wiring_ok = control["rewired_modules"] == 0 and repaired["rewired_modules"] > 0
+    passed = control_ok and repaired_ok and gradients_ok and losses_ok and wiring_ok
+    return passed, control_ok, repaired_ok, losses_ok, wiring_ok
+
+
 def main() -> int:
     args = parse_args()
     if args.seq <= 0:
@@ -450,14 +499,9 @@ def main() -> int:
             repeats=args.repeats,
         )
 
-        control_ok = _arm_gate_summary(control_result, expect_exact=False)
-        repaired_ok = _arm_gate_summary(repaired_result, expect_exact=True)
-        gradients_ok = _paired_gradient_gate(control_result, repaired_result)
-        losses_ok = control_result["losses_exact"] and repaired_result["losses_exact"]
-        wiring_ok = (
-            control_result["rewired_modules"] == 0 and repaired_result["rewired_modules"] > 0
+        passed, control_ok, repaired_ok, losses_ok, wiring_ok = verdict(
+            control_result, repaired_result
         )
-        passed = gradients_ok and losses_ok and wiring_ok
         report = {
             "protocol": "step14-variant2-gate",
             "versions": _versions(),

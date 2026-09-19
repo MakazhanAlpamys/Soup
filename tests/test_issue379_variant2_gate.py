@@ -12,6 +12,7 @@ import importlib.util
 import sys
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
@@ -135,6 +136,171 @@ class TestGradientVerdict:
 
         assert exact == _harness.GradientSummary(1, 1, 0, 0.0)
         assert broken == _harness.GradientSummary(1, 0, 1, 2.0)
+
+
+def _gate_result(
+    *, exact: int, wrong_layers: int, rewired_modules: int, losses_exact: bool = True
+) -> dict[str, Any]:
+    return {
+        "gradients": [vars(_harness.GradientSummary(256, exact, wrong_layers, 0.0))],
+        "losses_exact": losses_exact,
+        "rewired_modules": rewired_modules,
+    }
+
+
+class TestWholeRunVerdict:
+    @pytest.mark.parametrize(
+        ("control", "repaired", "expected"),
+        [
+            ((8, 62, 0, True), (256, 0, 448, True), (True, True, True, True, True)),
+            ((256, 0, 0, True), (256, 0, 0, True), (False, False, True, True, False)),
+            ((8, 62, 0, True), (256, 0, 0, True), (False, True, True, True, False)),
+            ((8, 62, 7, True), (256, 0, 448, True), (False, True, True, True, False)),
+            ((8, 62, 0, False), (256, 0, 448, True), (False, False, True, False, True)),
+            ((8, 62, 0, True), (256, 0, 448, False), (False, True, False, False, True)),
+        ],
+    )
+    def test_verdict_pins_gradients_losses_and_wiring(
+        self,
+        control: tuple[int, int, int, bool],
+        repaired: tuple[int, int, int, bool],
+        expected: tuple[bool, bool, bool, bool, bool],
+    ) -> None:
+        control_result = _gate_result(
+            exact=control[0],
+            wrong_layers=control[1],
+            rewired_modules=control[2],
+            losses_exact=control[3],
+        )
+        repaired_result = _gate_result(
+            exact=repaired[0],
+            wrong_layers=repaired[1],
+            rewired_modules=repaired[2],
+            losses_exact=repaired[3],
+        )
+
+        assert _harness.verdict(control_result, repaired_result) == expected
+
+    @pytest.mark.parametrize(
+        ("control", "repaired", "exit_code"),
+        [
+            ((8, 62, 0, True), (256, 0, 448, True), 0),
+            ((256, 0, 0, True), (256, 0, 0, True), 1),
+            ((8, 62, 0, True), (256, 0, 0, True), 1),
+            ((8, 62, 7, True), (256, 0, 448, True), 1),
+            ((8, 62, 0, False), (256, 0, 448, True), 1),
+            ((8, 62, 0, True), (256, 0, 448, False), 1),
+        ],
+    )
+    def test_main_builds_a_real_control_and_reports_the_verdict(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+        control: tuple[int, int, int, bool],
+        repaired: tuple[int, int, int, bool],
+        exit_code: int,
+    ) -> None:
+        torch = pytest.importorskip("torch")
+        from soup_cli.utils import layer_shard, layer_stream_runtime, spectrum_scan
+
+        monkeypatch.setattr(
+            _harness,
+            "parse_args",
+            lambda: SimpleNamespace(
+                weights="fake",
+                shards=str(tmp_path / "shards"),
+                seq=128,
+                batch=1,
+                buffers=2,
+                repeats=1,
+                json=None,
+            ),
+        )
+        monkeypatch.setattr(_harness, "cuda_available", lambda: True)
+        monkeypatch.setattr(_harness, "_source_sha", lambda: "a" * 40)
+        monkeypatch.setattr(_harness, "_versions", lambda: {"commit": "a" * 40})
+        monkeypatch.setattr(layer_stream_runtime, "build_meta_skeleton", lambda *a, **k: object())
+        monkeypatch.setattr(layer_stream_runtime, "quantised_layer_suffixes", lambda *_: ())
+        monkeypatch.setattr(layer_shard, "shard_checkpoint", lambda *a, **k: object())
+        monkeypatch.setattr(spectrum_scan, "resolve_model_weights", lambda *_: "fake-weights")
+        monkeypatch.setattr(_harness.shared, "model_arch_name", lambda *_: "fake-arch")
+        monkeypatch.setattr(
+            _harness.shared,
+            "load_resident_reference",
+            lambda *a, **k: SimpleNamespace(config=SimpleNamespace(vocab_size=16)),
+        )
+        monkeypatch.setattr(_harness.shared, "make_non_vacuous_lora", lambda *_: None)
+        monkeypatch.setattr(_harness.shared, "copy_lora", lambda *a: None)
+        monkeypatch.setattr(
+            torch, "Generator", lambda **k: SimpleNamespace(manual_seed=lambda *_: object())
+        )
+        monkeypatch.setattr(torch, "randint", lambda *a, **k: object())
+        monkeypatch.setattr(torch.cuda, "get_device_name", lambda *_: "simulated CUDA")
+        monkeypatch.setattr(torch.cuda, "empty_cache", lambda: None)
+
+        build_flags: list[bool] = []
+
+        def fake_build_arm(*, repair_enabled: bool, **kwargs: object) -> tuple[object, Any]:
+            build_flags.append(repair_enabled)
+            return object(), SimpleNamespace(close=lambda: None)
+
+        results = {
+            "control": _gate_result(
+                exact=control[0],
+                wrong_layers=control[1],
+                rewired_modules=control[2],
+                losses_exact=control[3],
+            ),
+            "repaired": _gate_result(
+                exact=repaired[0],
+                wrong_layers=repaired[1],
+                rewired_modules=repaired[2],
+                losses_exact=repaired[3],
+            ),
+        }
+
+        def fake_run_arm(*, label: str, **kwargs: object) -> dict[str, Any]:
+            return results[label]
+
+        monkeypatch.setattr(_harness, "_build_arm", fake_build_arm)
+        monkeypatch.setattr(_harness, "_run_arm", fake_run_arm)
+
+        assert _harness.main() == exit_code
+        assert build_flags == [False, True]
+        assert f"RESULT: {'passed' if exit_code == 0 else 'failed'}" in capsys.readouterr().out
+
+
+class TestSourceCommit:
+    @pytest.mark.parametrize("status", ["", " M src/soup_cli/changed.py\n"])
+    def test_source_sha_uses_imported_package_tree_and_marks_dirty(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, status: str
+    ) -> None:
+        import soup_cli
+
+        package_file = soup_cli.__file__
+        assert package_file is not None
+        package_dir = Path(package_file).resolve().parent
+        expected_sha = "a" * 40
+        calls: list[tuple[list[str], Path]] = []
+
+        def fake_run(command: list[str], *, cwd: Path, **kwargs: object) -> Any:
+            calls.append((command, cwd))
+            if command == ["git", "rev-parse", "--show-toplevel"]:
+                return SimpleNamespace(stdout=f"{tmp_path}\n")
+            if command == ["git", "rev-parse", "HEAD"]:
+                return SimpleNamespace(stdout=f"{expected_sha}\n")
+            return SimpleNamespace(stdout=status)
+
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr(_harness.subprocess, "run", fake_run)
+
+        assert _harness._source_sha() == expected_sha + ("-dirty" if status else "")
+        assert calls == [
+            (["git", "rev-parse", "--show-toplevel"], package_dir),
+            (["git", "rev-parse", "HEAD"], tmp_path),
+            (["git", "status", "--porcelain", "--untracked-files=normal"], tmp_path),
+        ]
 
 
 class TestRepairToggle:
