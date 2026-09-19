@@ -72,6 +72,27 @@ class PendingPlan:
     consumed: bool = False
 
 
+def _open_binary_no_follow(path: str):
+    """Open ``path`` for binary reading, refusing a symlink at open time.
+
+    ``enforce_under_cwd_and_no_symlink`` is an ``lstat`` check, so a symlink
+    swapped in between that check and the read would silently redirect the
+    digest — the TOCTOU window the plan/execute split exists to close. Opening
+    with ``O_NOFOLLOW`` closes it; mirrors
+    ``mcp_server/registry.py::_read_text_under_cwd``.
+
+    NOTE: Windows has no ``os.O_NOFOLLOW`` (CI runs Windows too), so there the
+    flag is simply absent and the lstat check remains the only symlink guard —
+    the pre-existing behaviour. ``O_BINARY`` (Windows-only) keeps the read free
+    of CRLF translation, so a digest is the same on every platform.
+
+    ``OSError`` propagates to ``digest_file``'s handler, which maps it to the
+    path-free ``ExecutionError``.
+    """
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
+    return os.fdopen(os.open(path, flags), "rb")
+
+
 def digest_file(
     path: str,
     field: str,
@@ -109,7 +130,7 @@ def digest_file(
                     rel_posix = Path(rel_path).as_posix()
 
                     file_hasher = hashlib.sha256()
-                    with open(file_path, "rb") as handle:
+                    with _open_binary_no_follow(file_path) as handle:
                         while chunk := handle.read(65536):
                             total_bytes += len(chunk)
                             if total_bytes > max_bytes:
@@ -131,7 +152,7 @@ def digest_file(
                 raise ExecutionError(f"{field} is not a regular file")
             hasher = hashlib.sha256()
             total_bytes = 0
-            with open(real, "rb") as handle:
+            with _open_binary_no_follow(real) as handle:
                 while chunk := handle.read(65536):
                     total_bytes += len(chunk)
                     if total_bytes > max_bytes:
