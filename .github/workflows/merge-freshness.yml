@@ -1,0 +1,87 @@
+# #1017 — re-evaluate a PR against live main without writing to the fork.
+#
+# A pull_request run pins refs/pull/N/merge at creation. gh run rerun
+# replays that SHA; later movement of main is invisible. This workflow
+# rebuilds the merge with `git merge-tree --write-tree` (no committer
+# identity) and fails on conflict or ruff F821. Lag is reported as a
+# NEUTRAL check, not a failure: a 10-commit cap at ~27 commits/day is
+# strict:true with extra steps and would block ~40% of open PRs.
+#
+# The 13-job test matrix is deliberately not re-run here. A false-red
+# test cell still needs a contributor push; CONTRIBUTING says so.
+#
+# The reeval job holds checks:write and materialises untrusted fork heads
+# into trees. Nothing from those trees is executed — ruff only reads.
+# Do not add `pip install -e .` or pytest against that tree.
+#
+# Timeout-minutes on ci.yml's test matrix is #1025, not this PR.
+# The Checks API name is `merge-freshness`; the PR job id is `gate` so
+# the two check runs on one SHA are not the same required context.
+name: merge freshness
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  checks: write
+  pull-requests: read
+
+# PRs supersede themselves. Pushes to main share one group so only the
+# newest tip re-evaluates open PRs; a burst of merges should not fan out.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || 'main-reeval' }}
+  cancel-in-progress: true
+
+jobs:
+  gate:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      # Check out the PR HEAD, not GitHub's frozen merge commit. The whole
+      # point is to merge-tree that head against *current* origin/main.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
+      - name: Fetch current main
+        # Named refspec: checkout with an explicit SHA does not create
+        # origin/main, and merge-tree / merge-base would then raise instead
+        # of returning a verdict.
+        run: git fetch --no-tags origin main:refs/remotes/origin/main
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install ruff
+      - name: Gate the live merge
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: >
+          python scripts/merge_freshness.py --max-behind 10 --repo-root .
+          gate --base origin/main --head HEAD
+          --head-sha ${{ github.event.pull_request.head.sha }}
+          --post-check
+
+  reeval-open-prs:
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      # This job must run main's tree, never a PR's. The script then fetches
+      # pull/N/head as data and ruff's the merged result without executing it.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install ruff
+      - name: Re-evaluate open PRs against live main
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python scripts/merge_freshness.py --max-behind 10 --repo-root . reeval --base origin/main
