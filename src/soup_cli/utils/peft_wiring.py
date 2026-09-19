@@ -47,6 +47,70 @@ QWEN4_EXP_TEXT_LORA_TARGET_PARAMETERS = (
 )
 
 
+#: PEFT has no LoRA mapping for any MoE text architecture Soup ships a recipe
+#: for: every ``model_type`` below returns ``None`` from peft 0.20's
+#: ``TRANSFORMERS_MODELS_TO_LORA_TARGET_MODULES_MAPPING``, so
+#: ``target_modules: auto`` reached peft as ``None`` and the attach raised
+#: ``No target_modules passed but also no target_parameters found`` (#1070).
+#:
+#: Measured while building this table, and worth knowing before extending it:
+#: peft's default mapping is unreachable for a MoE model whether or not it has
+#: an entry. ``LoraModel._prepare_adapter_config`` applies the default only
+#: ``if peft_config.target_modules is None``, and peft's MoE config conversion
+#: has already replaced ``None`` with an empty ``set()`` by then. Traced on
+#: peft 0.20 / transformers 5.16.1 with tiny CPU models:
+#:
+#:     [llama]     before=None    after={'q_proj', 'v_proj'}  -> attach OK
+#:     [mixtral]   before=set()   after=set()                 -> ValueError
+#:     [qwen3_moe] before=set()   after=set()                 -> ValueError
+#:
+#: ``mixtral`` is the one MoE ``model_type`` peft DOES map, and it fails anyway.
+#: It is deliberately absent from this table -- Soup ships no ``mixtral`` recipe,
+#: and delegating keeps today's behaviour rather than widening #1070's fix into
+#: an architecture nobody reported.
+#:
+#: Each entry is the attention projections that architecture actually defines,
+#: enumerated by building the base's config from the Hub, shrinking it, and
+#: instantiating it on the meta device (see the PR for the probe). Routed
+#: experts are deliberately absent: on ``qwen3_moe``, ``deepseek_v3`` and
+#: ``deepseek_v4`` they are 3-D ``nn.Parameter`` tensors that ``target_modules``
+#: cannot address at all, and adapting them is ``target_parameters`` work
+#: (#798). This is the safe linear-module baseline, the same policy as
+#: :data:`QWEN35_TEXT_LORA_TARGETS`.
+_DEEPSEEK_V3_ATTENTION = (
+    "q_a_proj",
+    "q_b_proj",
+    "kv_a_proj_with_mqa",
+    "kv_b_proj",
+    "o_proj",
+)
+
+MOE_TEXT_LORA_TARGETS: dict[str, Any] = {
+    "qwen3_moe": ("q_proj", "k_proj", "v_proj", "o_proj"),
+    "deepseek_v3": _DEEPSEEK_V3_ATTENTION,
+    # V4 splits the output projection and drops the MQA compression on the
+    # key/value side, so its names are not V3's.
+    "deepseek_v4": ("q_a_proj", "q_b_proj", "kv_proj", "o_a_proj", "o_b_proj"),
+    # GLM-5.1 is V3-shaped attention plus a DSA indexer (``wq_b``, ``wk``,
+    # ``weights_proj``). The indexer is left alone: it selects which tokens
+    # attend, and adapting it is a different decision from adapting attention.
+    "glm_moe_dsa": _DEEPSEEK_V3_ATTENTION,
+    # Kimi K2.5/K2.6 declare ``architectures: ["DeepseekV3ForCausalLM"]`` and an
+    # ``auto_map`` onto ``modeling_deepseek.DeepseekV3ForCausalLM`` in their
+    # ``text_config``, so the text tower is V3's module layout. Taken from the
+    # config rather than enumerated, because the repo needs trust_remote_code
+    # and this table is not worth executing remote code for.
+    "kimi_k25": _DEEPSEEK_V3_ATTENTION,
+    "kimi_k2": _DEEPSEEK_V3_ATTENTION,
+    # A vision-language wrapper: ``vision_tower`` has its own ``q_proj`` /
+    # ``k_proj`` / ``v_proj``, so a suffix list would silently adapt the image
+    # encoder for a text fine-tune. peft treats a string as a regex, which is
+    # how the language tower is named without a name-match fallback.
+    "minimax_m3_vl": r"language_model\..*\.self_attn\.(q_proj|k_proj|v_proj|o_proj)",
+    "minimax_m3_vl_text": ("q_proj", "k_proj", "v_proj", "o_proj"),
+}
+
+
 def _model_types(model: Any) -> set[Any]:
     """Return outer/text model types without importing Transformers."""
     config = getattr(model, "config", model)
@@ -57,7 +121,33 @@ def _model_types(model: Any) -> set[Any]:
     }
 
 
-def resolve_lora_target_modules(model: Any, configured: Any) -> Any:
+def _peft_has_a_default_for(model_types: set[Any]) -> bool:
+    """Does PEFT map any of these ``model_type`` values to LoRA targets itself?
+
+    Asked rather than assumed, so an architecture PEFT knows is never refused
+    here: that over-refusal is the mistake #1074's review caught one axis over.
+    A PEFT too old or too new to expose the mapping is treated as "yes", which
+    keeps the old delegate-and-let-PEFT-decide behaviour.
+
+    Deliberately conservative rather than accurate. A mapped MoE architecture
+    (``mixtral``) still fails to attach, because peft's MoE conversion empties
+    ``target_modules`` before the default is consulted -- see the note on
+    :data:`MOE_TEXT_LORA_TARGETS`. Answering "yes" there means Soup delegates and
+    the user sees peft's error, exactly as before #1070, instead of Soup
+    refusing an architecture it was never asked about.
+    """
+    try:
+        from peft.utils.constants import (
+            TRANSFORMERS_MODELS_TO_LORA_TARGET_MODULES_MAPPING as PEFT_DEFAULTS,
+        )
+    except Exception:  # noqa: BLE001 — PEFT layout is not a promise
+        return True
+    return any(PEFT_DEFAULTS.get(value) for value in model_types if value is not None)
+
+
+def resolve_lora_target_modules(
+    model: Any, configured: Any, *, has_target_parameters: bool = False
+) -> Any:
     """Resolve ``target_modules: auto`` for models PEFT does not know yet.
 
     Existing architectures remain delegated to PEFT by returning ``None``.
@@ -65,6 +155,13 @@ def resolve_lora_target_modules(model: Any, configured: Any) -> Any:
     config (``qwen3_5``) around ``qwen3_5_text`` and its MoE counterpart, so
     inspect both configs without importing Transformers or PEFT at module load.
     Qwen4-Exp's causal-LM loader exposes ``qwen4_exp_text`` directly.
+
+    ``has_target_parameters`` says the caller is also supplying
+    ``target_parameters``, which PEFT accepts on its own. Only the two trainers
+    that resolve those (SFT and pretrain) pass it; everywhere else there is
+    nothing for PEFT to attach to and an unmappable architecture is refused
+    here, naming the ``model_type`` and this table, instead of reaching PEFT as
+    ``No target_modules passed`` (#1070).
     """
     if configured != "auto" and configured != ["auto"]:
         return configured
@@ -79,7 +176,31 @@ def resolve_lora_target_modules(model: Any, configured: Any) -> Any:
         return list(QWEN35_TEXT_LORA_TARGETS)
     if "qwen4_exp_text" in model_types:
         return QWEN4_EXP_TEXT_LORA_TARGETS
-    return None
+    # The MoE table. The wrapper ``model_type`` is preferred over the text one
+    # where both are present, because a vision-language wrapper names its
+    # language tower in the module path and the text-only entry does not.
+    for value in (getattr(getattr(model, "config", model), "model_type", None),):
+        if value in MOE_TEXT_LORA_TARGETS:
+            return _as_targets(MOE_TEXT_LORA_TARGETS[value])
+    for value in sorted(str(v) for v in model_types if v is not None):
+        if value in MOE_TEXT_LORA_TARGETS:
+            return _as_targets(MOE_TEXT_LORA_TARGETS[value])
+
+    if has_target_parameters or _peft_has_a_default_for(model_types):
+        return None
+    named = sorted(str(value) for value in model_types if value is not None)
+    raise ValueError(
+        "training.lora.target_modules='auto' has no mapping for model_type="
+        f"{named!r}, and PEFT has no default for it either, so the LoRA attach "
+        "would fail with 'No target_modules passed'. Give an explicit "
+        "target_modules list, or add this architecture to "
+        "MOE_TEXT_LORA_TARGETS in utils/peft_wiring.py (#1070)."
+    )
+
+
+def _as_targets(entry: Any) -> Any:
+    """A tuple becomes a fresh list; a string is a PEFT regex and stays one."""
+    return entry if isinstance(entry, str) else list(entry)
 
 
 def resolve_lora_target_parameters(model: Any, configured: Any) -> Any:
