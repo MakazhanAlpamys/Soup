@@ -336,6 +336,18 @@ class MLXSFTTrainerWrapper:
                 f"gradient_checkpointing tier {tcfg.gradient_checkpointing!r} "
                 "(MLX has a single on/off switch; enabling it)"
             )
+        if getattr(tcfg, "loss_watchdog", False):
+            unsupported.append(
+                "training.loss_watchdog (MLX does not attach a live training callback)"
+            )
+        if getattr(tcfg, "loss_spike_recovery", False):
+            unsupported.append(
+                "training.loss_spike_recovery (MLX does not attach a live training callback)"
+            )
+        if getattr(tcfg, "grad_accum_auto_tune", False):
+            unsupported.append(
+                "training.grad_accum_auto_tune (MLX does not attach a live training callback)"
+            )
         if unsupported:
             console.print(
                 "[yellow]MLX backend ignores: " + ", ".join(unsupported) + "[/]"
