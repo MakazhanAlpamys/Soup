@@ -88,6 +88,79 @@ def test_token_still_required_on_loopback_when_set():
     assert resp.status_code == 401
 
 
+TOKEN = "s3cret-token"
+
+# The three adapter routes: enumerating the loaded adapters and switching the
+# one every subsequent completion runs against. On a non-loopback bind these
+# carry no browser Origin (curl, requests, any script), so the Host/Origin
+# guard passes and the bearer token is the only thing left standing.
+ADAPTER_ROUTES = [
+    ("get", "/v1/adapters"),
+    ("post", "/v1/adapters/activate/chat"),
+    ("post", "/v1/adapters/deactivate"),
+]
+
+
+def _lan_client(**kwargs):
+    """A server bound to 0.0.0.0, reached over the LAN by a non-browser client."""
+    return TestClient(_app(host="0.0.0.0", **kwargs), base_url="http://10.0.0.7:8000")
+
+
+@pytest.mark.parametrize(("method", "path"), ADAPTER_ROUTES)
+def test_adapter_routes_refuse_missing_token_on_wildcard_bind(method, path):
+    client = _lan_client(auth_token=TOKEN)
+    resp = getattr(client, method)(path)
+    assert resp.status_code == 401, (path, resp.status_code, resp.text)
+
+
+@pytest.mark.parametrize(("method", "path"), ADAPTER_ROUTES)
+def test_adapter_routes_refuse_wrong_token_on_wildcard_bind(method, path):
+    client = _lan_client(auth_token=TOKEN)
+    resp = getattr(client, method)(path, headers={"Authorization": "Bearer wrong"})
+    assert resp.status_code == 401, (path, resp.status_code, resp.text)
+
+
+@pytest.mark.parametrize(("method", "path"), ADAPTER_ROUTES)
+def test_adapter_routes_accept_correct_token_on_wildcard_bind(method, path):
+    client = _lan_client(auth_token=TOKEN)
+    resp = getattr(client, method)(path, headers={"Authorization": f"Bearer {TOKEN}"})
+    assert resp.status_code == 200, (path, resp.status_code, resp.text)
+
+
+def test_authorised_activation_on_wildcard_bind_takes_effect():
+    client = _lan_client(auth_token=TOKEN)
+    auth = {"Authorization": f"Bearer {TOKEN}"}
+    resp = client.post("/v1/adapters/activate/chat", headers=auth)
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["active"] == "chat", resp.text
+
+    listing = client.get("/v1/adapters", headers=auth)
+    assert listing.status_code == 200, listing.text
+    assert listing.json()["active"] == "chat", listing.text
+
+    cleared = client.post("/v1/adapters/deactivate", headers=auth)
+    assert cleared.status_code == 200, cleared.text
+    assert cleared.json()["active"] is None, cleared.text
+
+
+def test_unauthorised_activation_on_wildcard_bind_does_not_take_effect():
+    client = _lan_client(auth_token=TOKEN)
+    refused = client.post("/v1/adapters/activate/chat")
+    assert refused.status_code == 401, refused.text
+
+    listing = client.get("/v1/adapters", headers={"Authorization": f"Bearer {TOKEN}"})
+    assert listing.status_code == 200, listing.text
+    assert listing.json()["active"] is None, listing.text
+
+
+@pytest.mark.parametrize(("method", "path"), ADAPTER_ROUTES)
+def test_adapter_routes_open_on_loopback_without_token(method, path):
+    """The default `soup serve` case: loopback bind, no --tool-auth-token."""
+    client = TestClient(_app(), base_url="http://127.0.0.1:8000")
+    resp = getattr(client, method)(path)
+    assert resp.status_code == 200, (path, resp.status_code, resp.text)
+
+
 def test_token_compare_is_constant_time():
     import inspect
 
