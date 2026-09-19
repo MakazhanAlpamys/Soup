@@ -226,6 +226,9 @@ class _GRPOStabilityCallback_body:  # type: ignore[misc, valid-type]  # noqa: N8
         # before the first event fires).
         self._policy_model: Any = None
         self._ref_model: Any = None
+        # #342 — gradient watchdog state.
+        self._nan_skip_count: int = 0
+        self._nan_model_ref: Any = None
 
     def push_rollout(self, rollout: Any) -> None:
         """Append a rollout to the bounded replay buffer (no-op if disabled)."""
@@ -269,6 +272,8 @@ class _GRPOStabilityCallback_body:  # type: ignore[misc, valid-type]  # noqa: N8
             if trainer is not None:
                 ref = getattr(trainer, "ref_model", None)
         self._ref_model = ref
+        # #342 — capture model reference for gradient watchdog.
+        self._nan_model_ref = model
         return control
 
     def on_step_end(self, args, state, control, model=None, **kwargs):
@@ -316,6 +321,94 @@ class _GRPOStabilityCallback_body:  # type: ignore[misc, valid-type]  # noqa: N8
                 entry["ema_alpha"] = float(self.ref_model_ema_alpha)
             if entry:
                 log_history.append(entry)
+        return control
+
+    # --- #342 gradient watchdog ---
+
+    def on_pre_optimizer_step(
+        self, args, state, control, model=None, **kwargs
+    ):
+        """Zero non-finite gradients before ``optimizer.step()``.
+
+        #342 — HF Trainer has no ``TrainerControl.should_skip_optimizer_step``
+        flag, so there is no way for a callback to skip the optimizer step.
+        Zeroing gradients is the pragmatic substitute: the step still runs
+        but updates nothing meaningful.
+
+        With Adam, this causes a small momentum decay
+        (``m_t = β1·m_{t-1}``, ``v_t = β2·v_{t-1}``) rather than a true
+        no-op, which is vastly better than applying NaN gradients and
+        actually dampens momentum after instability.
+
+        This hook fires once per optimizer step, AFTER all gradient
+        accumulation.  Placing this check in ``training_step`` (per-
+        microbatch) would call ``zero_grad()`` mid-accumulation, wiping
+        valid gradients from earlier microbatches and producing asymmetric
+        partial updates.
+        """
+        import torch
+
+        target = model if model is not None else self._nan_model_ref
+        if target is None:
+            return control
+        has_nan = False
+        for p in target.parameters():
+            if p.grad is not None and not torch.isfinite(p.grad).all():
+                has_nan = True
+                break
+        if has_nan:
+            self._nan_skip_count += 1
+            target.zero_grad()
+            logger.warning(
+                "step %d: non-finite gradients detected, zeroing "
+                "gradients so optimizer.step() is a no-op "
+                "(%d total skipped)",
+                state.global_step,
+                self._nan_skip_count,
+            )
+        return control
+
+    def on_train_end(self, args, state, control, **kwargs):
+        """Report cumulative NaN skip count at end of run.
+
+        #342 — the count is always reported at any fraction above zero
+        so a run that skipped steps does not end looking identical to a
+        clean one.  Loud warning at >= 5%.  The fraction is surfaced in
+        ``state.log_history`` so ``soup adapters audit`` can see it.
+        """
+        if self._nan_skip_count > 0:
+            total = max(state.global_step, 1)
+            fraction = self._nan_skip_count / total
+            msg = (
+                "%d of %d optimizer steps were skipped due to "
+                "non-finite gradients (%.1f%%)"
+            )
+            # Always report (logger.info at minimum).
+            if fraction >= 0.05:
+                logger.warning(
+                    msg, self._nan_skip_count, total, fraction * 100
+                )
+                from rich.console import Console
+
+                Console().print(
+                    f"[bold yellow]Gradient watchdog:[/] "
+                    f"{self._nan_skip_count} of {total} steps skipped "
+                    f"({fraction:.1%}) — this may indicate a systematic "
+                    f"numerical issue"
+                )
+            else:
+                logger.info(
+                    msg, self._nan_skip_count, total, fraction * 100
+                )
+            # Surface in run record for `soup adapters audit`.
+            log_history = getattr(state, "log_history", None)
+            if log_history is not None:
+                log_history.append(
+                    {
+                        "nan_skip_count": self._nan_skip_count,
+                        "nan_skip_fraction": round(fraction, 4),
+                    }
+                )
         return control
 
 

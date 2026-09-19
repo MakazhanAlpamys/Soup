@@ -301,6 +301,13 @@ class GRPOTrainerWrapper:
         from datasets import Dataset
         from trl import GRPOConfig, GRPOTrainer
 
+        # #342 — prevent exp(log_ratio) overflow at padding positions.
+        from soup_cli.utils.grpo_log_ratio_clamp import (
+            build_safe_grpo_trainer,
+        )
+
+        GRPOTrainer = build_safe_grpo_trainer(GRPOTrainer)  # noqa: N806
+
         # v0.53.11 #123 — variant subclass override
         variant = self.config.training.grpo_variant
         if variant is not None and variant != "standard":
@@ -548,6 +555,16 @@ class GRPOTrainerWrapper:
         from soup_cli.utils.peft_wiring import attach_grpo_stability_callback
 
         attach_grpo_stability_callback(self.trainer, tcfg)
+
+        # #342 — gradient watchdog (on_pre_optimizer_step) must be always-on.
+        # attach_grpo_stability_callback only fires when stability knobs
+        # are set.  ensure_grpo_stability_callback is a no-op if already
+        # attached, otherwise attaches with defaults (only watchdog fires).
+        from soup_cli.utils.peft_wiring import (
+            ensure_grpo_stability_callback,
+        )
+
+        ensure_grpo_stability_callback(self.trainer)
 
         # v0.71.11 #235/#238/#240 — wire the live RL callbacks (reward-hack,
         # echo-trap, mid-epoch RL checkpoint).
