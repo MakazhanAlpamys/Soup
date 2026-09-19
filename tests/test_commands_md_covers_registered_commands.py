@@ -64,10 +64,7 @@ def _entry_rows(doc: str) -> list[str]:
 def _command_column(line: str) -> str:
     """Return the command portion of an entry row (before the description)."""
     parts = re.split(r"\s{2,}", line, maxsplit=1)
-    cmd = parts[0].strip()
-    if " #" in cmd:
-        cmd = cmd.split(" #")[0].strip()
-    return cmd
+    return parts[0].strip()
 
 
 def _shorthand_alts(line: str, prefix: tuple[str, ...]) -> list[str]:
@@ -78,58 +75,53 @@ def _shorthand_alts(line: str, prefix: tuple[str, ...]) -> list[str]:
     without a separator — e.g. ``llama`` then ``cli|…|quantize`` — are *not*
     one group, so top-level ``soup quantize`` cannot ride a ``soup llama`` row.
     """
-    alts: list[str] = []
-    idx = 0
-    while True:
-        j = line.find("soup ", idx)
-        if j < 0:
-            break
-        toks = line[j + len("soup ") :].split()
-        if list(toks[: len(prefix)]) != list(prefix):
-            idx = j + 1
-            continue
-        rest = toks[len(prefix) :]
-        region: list[str] = []
-        expecting_name = True
-        for t in rest:
-            if expecting_name:
-                if t.startswith(("-", "<", "[", "./", '"', "'")):
-                    break
-                if _ARGISH.fullmatch(t):
-                    break
-                if any(
-                    t.endswith(suf)
-                    for suf in (
-                        ".jsonl",
-                        ".yaml",
-                        ".can",
-                        ".gguf",
-                        ".json",
-                        ".md",
-                        ".py",
-                    )
-                ):
-                    break
-                if t in ("|", "/"):
-                    break
-                cleaned = t.rstrip(".")
-                if not _CMDISH.fullmatch(cleaned):
-                    break
-                region.append(cleaned)
-                expecting_name = False
-            else:
-                if t in ("|", "/"):
-                    region.append(t)
-                    expecting_name = True
-                    continue
+    if not line.startswith("soup "):
+        return []
+    toks = line[len("soup ") :].split()
+    if list(toks[: len(prefix)]) != list(prefix):
+        return []
+    rest = toks[len(prefix) :]
+    region: list[str] = []
+    expecting_name = True
+    for t in rest:
+        if expecting_name:
+            if t.startswith(("-", "<", "[", "./", '"', "'")):
                 break
-        blob = " ".join(region).replace("...", "")
-        for piece in re.split(r"\s*[|/]\s*", blob):
-            piece = piece.strip()
-            if not piece or piece == "soup":
+            if _ARGISH.fullmatch(t):
+                break
+            if any(
+                t.endswith(suf)
+                for suf in (
+                    ".jsonl",
+                    ".yaml",
+                    ".can",
+                    ".gguf",
+                    ".json",
+                    ".md",
+                    ".py",
+                )
+            ):
+                break
+            if t in ("|", "/"):
+                break
+            cleaned = t.rstrip(".")
+            if not _CMDISH.fullmatch(cleaned):
+                break
+            region.append(cleaned)
+            expecting_name = False
+        else:
+            if t in ("|", "/"):
+                region.append(t)
+                expecting_name = True
                 continue
-            alts.append(piece.split()[0])
-        idx = j + 1
+            break
+    blob = " ".join(region).replace("...", "")
+    alts: list[str] = []
+    for piece in re.split(r"\s*[|/]\s*", blob):
+        piece = piece.strip()
+        if not piece or piece == "soup":
+            continue
+        alts.append(piece.split()[0])
     return alts
 
 
@@ -149,8 +141,7 @@ def is_documented(path: tuple[str, ...], doc: str) -> bool:
     prefix = path[:-1]
     for line in _entry_rows(doc):
         cmd = _command_column(line)
-        subcmds = [s.strip() for s in re.split(r"\s+/\s+", cmd)]
-        if any(boundary.search(c) for c in subcmds):
+        if boundary.search(cmd):
             return True
         if leaf in _shorthand_alts(cmd, prefix):
             return True
@@ -191,6 +182,23 @@ class TestCommandsMdCoversRegisteredCommands:
             "the live Typer tree no longer registers `soup advise run`, but "
             "is_documented() still special-cases it — delete the special case "
             "with the command"
+        )
+
+    def test_every_entry_row_has_two_or_more_space_separator(self) -> None:
+        """Entry rows must cleanly separate the command column from description."""
+        doc = COMMANDS_MD.read_text(encoding="utf-8")
+        allowlist = {
+            'soup mcp serve --transport sse --host 127.0.0.1 --port 8765 --auth-token "$TOKEN"',
+        }
+        violations = [
+            line
+            for line in _entry_rows(doc)
+            if len(re.split(r"\s{2,}", line, maxsplit=1)) == 1
+            and line not in allowlist
+        ]
+        assert not violations, (
+            "Entry rows must separate command column from description with 2+ spaces:\n  - "
+            + "\n  - ".join(violations)
         )
 
 
@@ -299,7 +307,7 @@ class TestCoverageRequiresARealEntry:
             "soup eval gate"
         ]
 
-    def test_slash_separated_commands_in_command_column(self) -> None:
-        stub = "soup loop pause / soup loop resume  Atomic status flip\n"
-        assert undocumented_commands(stub, leaves=[("loop", "pause")]) == []
-        assert undocumented_commands(stub, leaves=[("loop", "resume")]) == []
+    def test_single_space_row_does_not_credit_contained_command(self) -> None:
+        stub = "soup draft list List drafts that soup serve --auto-spec picks up\n"
+        assert undocumented_commands(stub, leaves=[("serve",)]) == ["soup serve"]
+        assert undocumented_commands(stub, leaves=[("draft", "list")]) == []
