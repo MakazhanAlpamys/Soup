@@ -6918,9 +6918,10 @@ class SoupConfig(BaseModel):
 
     @model_validator(mode="after")
     def _validate_callback_monitoring_task_compat(self) -> "SoupConfig":
-        """#802 — prm, moe_lora_routing, and unlearn attach no
-        SoupTrainerCallback, so reject loss_watchdog, loss_spike_recovery,
-        and grad_accum_auto_tune when set to True on these tasks.
+        """#802, #1069 — prm, moe_lora_routing, and unlearn attach no
+        SoupTrainerCallback, and backend=mlx attaches no live training callback,
+        so reject loss_watchdog, loss_spike_recovery, and grad_accum_auto_tune
+        when set to True on these tasks or on backend=mlx.
         """
         unsupported = ("prm", "moe_lora_routing", "unlearn")
         if self.task in unsupported:
@@ -6939,6 +6940,23 @@ class SoupConfig(BaseModel):
                 raise ValueError(
                     f"training.grad_accum_auto_tune is not supported for task={self.task!r} "
                     f"because {self.task!r} does not attach a live training callback"
+                )
+        if self.backend == "mlx":
+            tcfg = self.training
+            if getattr(tcfg, "loss_spike_recovery", False):
+                raise ValueError(
+                    f"training.loss_spike_recovery is not supported for backend={self.backend!r} "
+                    f"because {self.backend!r} does not attach a live training callback"
+                )
+            if getattr(tcfg, "loss_watchdog", False):
+                raise ValueError(
+                    f"training.loss_watchdog is not supported for backend={self.backend!r} "
+                    f"because {self.backend!r} does not attach a live training callback"
+                )
+            if getattr(tcfg, "grad_accum_auto_tune", False):
+                raise ValueError(
+                    f"training.grad_accum_auto_tune is not supported for backend={self.backend!r} "
+                    f"because {self.backend!r} does not attach a live training callback"
                 )
         return self
 
