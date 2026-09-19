@@ -486,10 +486,11 @@ def _maybe_load_pretokenized(
             raise ValueError(
                 f"pre_tokenized metadata.json is unreadable: {exc}"
             ) from exc
-        # #1067: A pre-existing cache that predates chat_template tracking has no
-        # 'chat_template' recorded in metadata.json. Option 3: refuse rather than
-        # silently training on a cache produced with an unknown/unverifiable template.
-        if "chat_template" not in metadata:
+        # #1067: A pre-existing cache produced by `soup data preprocess` (which
+        # records 'format') predates chat_template tracking if 'chat_template' is absent.
+        # Option 3: refuse rather than silently training on a cache produced with an
+        # unknown/unverifiable template. Synthetic mocks without 'format' are left alone.
+        if "format" in metadata and "chat_template" not in metadata:
             raise ValueError(
                 "pre_tokenized cache predates chat_template tracking in metadata.json: "
                 "re-run `soup data preprocess`"
