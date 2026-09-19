@@ -984,7 +984,7 @@ Pass `--live --base-yaml soup.yaml` to score each candidate with a short `soup t
 ## AOT Tokenization with `soup data preprocess`
 
 Pre-tokenize your dataset once and cache Arrow shards keyed by
-`(dataset, tokenizer, max_length, format)`:
+`(dataset, tokenizer, max_length, format, chat_template)`:
 
 ```bash
 soup data preprocess soup.yaml --output ./tokenized_cache
@@ -994,6 +994,12 @@ SFT and Pretrain trainers short-circuit at schema validation when
 `format: pre_tokenized` + `tokenized_path: ./tokenized_cache` is set, eliminating
 the per-epoch tokenization tax. Cache keys ensure resume safety; partial runs pick
 up from the last completed shard.
+
+Rows are rendered with `data.chat_template` when it is set, the same as live
+training. The `pre_tokenized` training config must name the same template, since
+training saves the tokenizer with it; a different one is refused with
+`cache hash mismatch`. A cache written before the template joined the key is
+refused the same way: re-run `soup data preprocess` to rebuild it.
 
 
 ## Data Recipe DAG Runner (`soup data recipe --execute`)

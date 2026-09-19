@@ -340,4 +340,4 @@ class TestCacheKey:
         current = make_preprocess_cache_key(**args)
         assert current != _blob_key("v2"), "a v2 (#785) cache must be rejected"
         assert current != _blob_key(""), "a pre-schema cache must be rejected"
-        assert current == _blob_key("v3"), "current schema is v3 (#791)"
+        assert current != _blob_key("v3"), "a v3 cache must be rejected too (#1067)"
