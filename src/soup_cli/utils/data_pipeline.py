@@ -198,7 +198,11 @@ def validate_shards(value: Optional[int]) -> Optional[int]:
 # now also applies TRL's ``add_eos`` rule — a chat row that does not already end on
 # the EOS gets one appended — so a cache built before this no longer trains without a
 # stop token on templates that render none (the Qwen shape). A v2 cache is rejected.
-_PREPROCESS_TOKENIZE_SCHEMA = "v3"
+# v4 (#876): the chat path keeps only the template's own leading BOS, so a
+# ``data.chat_template`` preset on a BOS-adding tokenizer no longer caches the
+# post-processor's BOS, and a truncated row no longer gains an EOS. A v3 cache is
+# rejected.
+_PREPROCESS_TOKENIZE_SCHEMA = "v4"
 
 
 def preprocess_dataset_key_input(data_cfg: Any) -> str:
