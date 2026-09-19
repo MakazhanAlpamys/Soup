@@ -157,6 +157,24 @@ _MLX_SFT: tuple[SupportEntry, ...] = (
         "before resolve_trainer)",
         trainer_reads=True,
     ),
+    SupportEntry(
+        "training.loss_watchdog",
+        IGNORED,
+        "MLX does not attach a live training callback",
+        trainer_reads=True,
+    ),
+    SupportEntry(
+        "training.loss_spike_recovery",
+        IGNORED,
+        "MLX does not attach a live training callback",
+        trainer_reads=True,
+    ),
+    SupportEntry(
+        "training.grad_accum_auto_tune",
+        IGNORED,
+        "MLX does not attach a live training callback",
+        trainer_reads=True,
+    ),
 )
 
 
