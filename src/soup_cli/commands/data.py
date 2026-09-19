@@ -2411,6 +2411,7 @@ def preprocess_dataset(
         tokenizer_name=cfg.base,
         max_length=cfg.data.max_length,
         format_name=cfg.data.format,
+        chat_template=cfg.data.chat_template,
     )
     target = Path(out_real) / cache_key
     console.print(f"[cyan]Dataset:[/] {train_display}")
@@ -2441,6 +2442,7 @@ def preprocess_dataset(
             "[red]datasets not installed.[/] Run: pip install datasets"
         )
         raise typer.Exit(1) from None
+    from soup_cli.data.chat_templates import apply_chat_template_override
     from soup_cli.data.loader import load_dataset
 
     # DoS cap (10M rows).
@@ -2448,6 +2450,9 @@ def preprocess_dataset(
 
     tokenizer = AutoTokenizer.from_pretrained(
         cfg.base, trust_remote_code=False
+    )
+    apply_chat_template_override(
+        tokenizer, cfg.data.chat_template, console=console
     )
 
     try:
@@ -2579,6 +2584,7 @@ def preprocess_dataset(
         "tokenizer_name": cfg.base,
         "max_length": max_length,
         "format": cfg.data.format,
+        "chat_template": cfg.data.chat_template,
         "task": cfg.task,
         "soup_version": _soup_version,
     }

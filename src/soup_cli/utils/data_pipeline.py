@@ -224,8 +224,9 @@ def make_preprocess_cache_key(
     tokenizer_name: str,
     max_length: int,
     format_name: str,
+    chat_template: Optional[str] = None,
 ) -> str:
-    """Return a 16-char hex cache key for AOT-tokenized output.
+    """Return a 16-char hex cache key for AOT-tokenized output (#1067).
 
     Defence-in-depth: every input is type-checked and bool-rejected so the
     SHA-256 input is always canonical. Mirrors v0.36.0 ``make_cache_key``.
@@ -244,9 +245,15 @@ def make_preprocess_cache_key(
         raise ValueError("max_length must be a positive int")
     if not isinstance(format_name, str) or not format_name:
         raise ValueError("format_name must be a non-empty string")
+    if chat_template is not None:
+        if isinstance(chat_template, bool) or not isinstance(chat_template, str):
+            raise ValueError("chat_template must be a string or None")
+        if "\x00" in chat_template:
+            raise ValueError("chat_template must not contain null bytes")
+    template_suffix = f"\x1f{chat_template}" if chat_template else ""
     blob = (
         f"{_PREPROCESS_TOKENIZE_SCHEMA}\x1f{dataset_path}\x1f{tokenizer_name}"
-        f"\x1f{max_length}\x1f{format_name}"
+        f"\x1f{max_length}\x1f{format_name}{template_suffix}"
     )
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:16]
 
