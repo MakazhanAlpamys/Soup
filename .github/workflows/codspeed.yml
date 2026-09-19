@@ -1,0 +1,60 @@
+name: CodSpeed
+
+# Deliberately its own workflow, not a job in ci.yml (#1065): ci.yml's jobs
+# are this repo's required checks, and a third-party benchmarking service
+# must never be able to redden one. This workflow is not added to the
+# required set by this change, and shouldn't be without a separate decision.
+# If CodSpeed is slow, down, or changes its free-tier terms, this job can
+# still fail on a real pytest error, but nothing about it blocks a merge.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    # contents: read is checkout. id-token: write lets CodSpeedHQ/action mint
+    # a short-lived OIDC token for CodSpeed's backend -- public-repo auth,
+    # no CODSPEED_TOKEN secret stored here. Neither grants pull-requests:
+    # write: the PR comment is posted by the separately installed CodSpeed
+    # GitHub App using its own permissions, not by this workflow's token.
+    #
+    # GitHub does not grant id-token: write to a pull_request run triggered
+    # from a fork, regardless of what this file requests -- a platform
+    # restriction, not a CodSpeed one. Observed on #1086 itself, a fork PR:
+    # the job's GITHUB_TOKEN listed only `Contents: read` and `Metadata: read`,
+    # and the upload failed 401. So a PR from a branch of this repository
+    # gets a CodSpeed comment; a fork PR cannot. Most contributions here come
+    # from forks, so this gate is live for maintainer-branch PRs only, until
+    # someone decides a CODSPEED_TOKEN secret (and the trust it implies for a
+    # fork's workflow run) is worth it.
+    #
+    # The two steps below make that visible instead of red: on a fork PR the
+    # CodSpeed step is skipped and the test runs as plain pytest, so the job
+    # stays green and its step name says why nothing was reported.
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # Core dependencies only, no torch/transformers/[dev]'s heavier extras
+      # -- the import this benchmarks is paid on every install, ML or not.
+      - run: pip install -e . pytest pytest-codspeed
+      - name: Benchmark and report to CodSpeed
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        uses: CodSpeedHQ/action@v5
+        with:
+          mode: simulation
+          run: pytest tests/test_cli_import_benchmark.py --codspeed -o addopts=""
+      - name: Fork PR -- no OIDC token, run the test without reporting to CodSpeed
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository
+        run: pytest tests/test_cli_import_benchmark.py -o addopts=""
