@@ -191,6 +191,7 @@ def _single_projection_function() -> Any:
             return out
 
         @staticmethod
+        @torch.autograd.function.once_differentiable
         def backward(ctx, grad_out):
             scaling = ctx.scaling
             x, weight, lora_a, lora_b, h = ctx.saved_tensors[:5]
@@ -202,25 +203,32 @@ def _single_projection_function() -> Any:
             grad_h = torch.matmul(_as_dtype(grad_out, lora_b.dtype), lora_b) * scaling
             grad_a = _flatten(grad_h).t() @ _as_dtype(_flatten(x), grad_h.dtype)
 
-            if ctx.qmeta is None:
-                dense = weight
-            else:
-                from bitsandbytes.functional import dequantize_4bit
+            grad_x = None
+            if ctx.needs_input_grad[0]:
+                if ctx.qmeta is None:
+                    dense = weight
+                else:
+                    from bitsandbytes.functional import dequantize_4bit
 
-                quant_state = _rebuild_quant_state(ctx.qmeta, list(ctx.saved_tensors[5:]))
-                dense = dequantize_4bit(weight, quant_state).to(x.dtype)
+                    quant_state = _rebuild_quant_state(ctx.qmeta, list(ctx.saved_tensors[5:]))
+                    dense = dequantize_4bit(weight, quant_state).to(x.dtype)
 
-            # dX = dY @ W, plus the LoRA term accumulated into the same result:
-            # one add instead of separate dH @ A and sum allocations.
-            grad_x = torch.matmul(grad_out, _as_dtype(dense, grad_out.dtype))
-            grad_x = torch.add(
-                grad_x,
-                torch.matmul(_as_dtype(grad_h, grad_x.dtype), _as_dtype(lora_a, grad_x.dtype)),
-            )
+                # dX = dY @ W, plus the LoRA term accumulated into the same
+                # result: one add instead of separate dH @ A and sum
+                # allocations. Skipped entirely when X needs no grad, which is
+                # the measured 2x on a layer-0 projection.
+                grad_x = torch.matmul(grad_out, _as_dtype(dense, grad_out.dtype))
+                grad_x = torch.add(
+                    grad_x,
+                    torch.matmul(
+                        _as_dtype(grad_h, grad_x.dtype), _as_dtype(lora_a, grad_x.dtype)
+                    ),
+                )
             return grad_x, None, None, grad_a, grad_b, None, None
 
     _FUNCTION = _FastLoraSingleProjection
     return _FUNCTION
+
 
 
 def _make_patched_forward(original_forward: Any) -> Any:
@@ -245,6 +253,24 @@ def _make_patched_forward(original_forward: Any) -> Any:
         if float(getattr(dropout, "p", 0.0)) != 0.0:
             # The validators refuse dropout with the flag on; a direct caller
             # gets peft's own path rather than silently unregularised math.
+            return original_forward(x)
+
+        # ``fan_in_fan_out`` means the base weight is stored transposed (GPT-2's
+        # ``Conv1D``), so ``dY @ W`` and the LoRA term are both computed against
+        # the wrong layout: on a square ``attn.c_proj`` that is silently wrong
+        # and on a non-square ``mlp.c_proj`` it raises. #839 scopes Conv1D out,
+        # so hand it back to peft.
+        #
+        # This is the only structural exclusion the kernel needs. peft decides
+        # the flag from the base type and overrides a caller who sets it the
+        # other way (its own warning names the module), so on a matched target
+        # ``fan_in_fan_out`` is True exactly for a ``Conv1D`` base. A separate
+        # "is the base nn.Linear" check would be unreachable.
+        if getattr(self, "fan_in_fan_out", False):
+            return original_forward(x)
+        # ``lora_bias=True`` adds a bias on ``lora_B`` that the kernel does not
+        # carry; dropping it would silently change the output.
+        if getattr(self.lora_B[adapter], "bias", None) is not None:
             return original_forward(x)
 
         lora_a = self.lora_A[adapter].weight

@@ -51,6 +51,29 @@ def _requires_train_extra():
         pytest.importorskip(mod, reason=f"{mod} is only in the [train] extra")
 
 
+def _spy(real_forward, calls, *args, **kwargs):
+    """A stand-in forward that records that it was called, then behaves normally."""
+    calls.append("delegated")
+    return real_forward(*args, **kwargs)
+
+
+def _randomise_lora_b(module):
+    """Give ``lora_B`` a non-zero weight so the LoRA term is actually exercised.
+
+    peft initialises ``lora_B`` to zeros, which makes ``h @ B^T`` vanish: every
+    comparison then holds trivially, ``dA`` is compared zero against zero, and a
+    kernel that drops the dropout, ``disable_adapters``, ``merged`` or DoRA guard
+    still passes. Randomising B is what makes those tests mean anything.
+    """
+    import torch
+
+    with torch.no_grad():
+        for _name, param in module.named_parameters():
+            if "lora_B" in _name:
+                torch.nn.init.normal_(param, std=0.5)
+    return module
+
+
 def _make_adapted_linear(in_f=8, out_f=6, r=2, alpha=4, bias=True, dropout=0.0, dora=False):
     """A minimal peft-adapted module: one ``nn.Linear`` named ``linear``."""
     import torch.nn as nn
@@ -71,6 +94,7 @@ def _make_adapted_linear(in_f=8, out_f=6, r=2, alpha=4, bias=True, dropout=0.0, 
         use_dora=dora,
     )
     inject_adapter_in_model(config, model)
+    _randomise_lora_b(model)
     return model, model.linear
 
 
@@ -117,6 +141,77 @@ class TestGradcheckFloat64:
             return fn.apply(x_, w, b, a_, b_, 0.5, None)
 
         assert torch.autograd.gradcheck(f, (x, a, bb))
+
+    def test_double_backward_is_refused_rather_than_silently_wrong(self):
+        """#792 marks ``backward`` once-differentiable, and the refusal must be real.
+
+        Not ``gradgradcheck``: that numerically differentiates and compares
+        Jacobians, and it reports a mismatch for this Function with or without
+        the decorator (measured on torch 2.14 both ways), so it cannot tell the
+        two apart. What a caller can actually observe is that a second
+        differentiation of the same graph raises instead of returning a number,
+        which is the behaviour ``@once_differentiable`` provides.
+        """
+        _requires_train_extra()
+        import torch
+
+        from soup_cli.utils.fast_lora import _single_projection_function
+
+        fn = _single_projection_function()
+        torch.manual_seed(0)
+        n, in_f, out_f, r = 4, 6, 5, 2
+        w = torch.randn(out_f, in_f, dtype=torch.float64)
+        x = torch.randn(n, in_f, dtype=torch.float64, requires_grad=True)
+        a = torch.randn(r, in_f, dtype=torch.float64, requires_grad=True)
+        bb = torch.randn(out_f, r, dtype=torch.float64, requires_grad=True)
+
+        out = fn.apply(x, w, None, a, bb, 0.5, None)
+        first = torch.autograd.grad(out.sum(), (x, a, bb), create_graph=True)
+
+        with pytest.raises(RuntimeError) as caught:
+            torch.autograd.grad(first[0].sum(), x)
+        # The refusal, rather than a silently wrong second derivative. torch
+        # reports it as the backward outputs carrying no graph, which is what
+        # ``once_differentiable`` does by running backward under no_grad.
+        assert "does not require grad" in str(caught.value) or "once_differentiable" in str(
+            caught.value
+        ), f"unexpected refusal: {caught.value}"
+
+    def test_x_that_needs_no_grad_still_gets_correct_parameter_grads(self):
+        """``needs_input_grad[0]`` false is the layer-0 case, and the measured 2x.
+
+        The dX GEMM is skipped there; dA and dB must still be right, because the
+        adapter is what is being trained.
+        """
+        _requires_train_extra()
+        import torch
+
+        from soup_cli.utils.fast_lora import patch_fast_lora_single_projection
+
+        torch.manual_seed(0)
+        model, layer = _make_adapted_linear()
+        x = torch.randn(5, 8)  # no requires_grad: this is the skip path
+
+        before = layer(x)
+        before.sum().backward()
+        expected = {
+            name: p.grad.detach().clone()
+            for name, p in layer.named_parameters()
+            if p.grad is not None
+        }
+        assert expected, "fixture produced no gradients at all"
+        for p in layer.parameters():
+            p.grad = None
+
+        assert patch_fast_lora_single_projection(model) == 1
+        after = layer(x)
+        torch.testing.assert_close(after, before)
+        after.sum().backward()
+
+        for name, p in layer.named_parameters():
+            if p.grad is None or name not in expected:
+                continue
+            torch.testing.assert_close(p.grad, expected[name])
 
 
 class TestPeftParity:
@@ -311,6 +406,188 @@ class TestDelegation:
         else:
             torch.testing.assert_close(before[1], after[1])
 
+    def test_fan_in_fan_out_base_delegates(self):
+        """A ``Conv1D``-shaped base is peft's, not the kernel's.
+
+        ``fan_in_fan_out`` stores the weight transposed, so the kernel's
+        ``x @ W^T`` and ``dY @ W`` are computed against the wrong layout: on a
+        square projection that is silently wrong and on a non-square one it
+        raises. #839 scopes Conv1D out, so the patched forward must return
+        peft's own result.
+        """
+        _requires_train_extra()
+        import pytest as _pytest
+        import torch
+        import torch.nn as nn
+        from peft import LoraConfig, inject_adapter_in_model
+
+        from soup_cli.utils.fast_lora import patch_fast_lora_single_projection
+
+        conv1d_cls = _pytest.importorskip(
+            "transformers.pytorch_utils", reason="the Conv1D fixture is transformers'"
+        ).Conv1D
+
+        class _Wrapper(nn.Module):
+            def __init__(self, layer):
+                super().__init__()
+                self.proj = layer
+
+        def _build(in_f, out_f):
+            torch.manual_seed(0)
+            model = _Wrapper(conv1d_cls(in_f, out_f))
+            inject_adapter_in_model(
+                LoraConfig(
+                    r=2, lora_alpha=4, lora_dropout=0.0, bias="none", target_modules=["proj"]
+                ),
+                model,
+            )
+            layer = model.proj
+            assert getattr(layer, "fan_in_fan_out", False) is True
+            _randomise_lora_b(model)
+            return model, layer
+
+        # Both shapes, because they fail differently. A ``Conv1D`` stores
+        # ``[in, out]``, so a "non-square" one is ``Conv1D(out_f, in_f)``: on the
+        # square case the kernel's wrong layout happens to agree, and only the
+        # non-square case can tell "delegated" from "computed the other way
+        # round" - which is the one that raises rather than drifts.
+        for in_f, out_f in ((8, 8), (8, 6)):
+            model, layer = _build(out_f, in_f)
+            torch.manual_seed(5)
+            x = torch.randn(3, in_f, requires_grad=True)
+            torch.manual_seed(9)
+            expected = layer(x)
+            expected.sum().backward()
+            expected_grads = {
+                name: p.grad.detach().clone()
+                for name, p in layer.named_parameters()
+                if p.grad is not None
+            }
+            expected_x_grad = x.grad.detach().clone()
+
+            for p in layer.parameters():
+                p.grad = None
+            x.grad = None
+
+            assert patch_fast_lora_single_projection(model) == 1
+            torch.manual_seed(9)
+            got = layer(x)
+            torch.testing.assert_close(got, expected)
+            got.sum().backward()
+
+            # Backward too, where ``dY @ W`` is the term whose layout a
+            # transposed weight would get wrong.
+            torch.testing.assert_close(x.grad, expected_x_grad)
+            for name, p in layer.named_parameters():
+                if p.grad is None or name not in expected_grads:
+                    continue
+                torch.testing.assert_close(p.grad, expected_grads[name])
+
+    def test_delegation_is_what_happens_not_merely_what_agrees(self):
+        """Assert the guard ran, not just that the output happened to match.
+
+        Output alone cannot prove the guard ran: a square ``Conv1D`` gives the
+        right answer whether the kernel handled it or peft did. So the original
+        forward is captured and spied on, and the test asserts the delegate was
+        the thing that ran.
+        """
+        _requires_train_extra()
+        import functools
+
+        import pytest as _pytest
+        import torch
+        import torch.nn as nn
+        from peft import LoraConfig, inject_adapter_in_model
+
+        from soup_cli.utils.fast_lora import patch_fast_lora_single_projection
+
+        conv1d_cls = _pytest.importorskip(
+            "transformers.pytorch_utils", reason="the Conv1D fixture is transformers'"
+        ).Conv1D
+
+        class _Wrapper(nn.Module):
+            def __init__(self, layer):
+                super().__init__()
+                self.proj = layer
+
+        # peft wraps a ``Conv1D`` base in its own ``lora.Linear``, which this
+        # patch does match, and sets ``fan_in_fan_out`` for exactly that case.
+        # ``torch.nn.Conv1d`` is wrapped in ``lora.Conv1d``, a type the patch
+        # deliberately does not match, so it is not a case the guard sees.
+        cases = (("fan_in_fan_out", lambda: conv1d_cls(8, 8), True),)
+        for label, make_layer, expected_fifo in cases:
+            torch.manual_seed(0)
+            model = _Wrapper(make_layer())
+            inject_adapter_in_model(
+                LoraConfig(
+                    r=2, lora_alpha=4, lora_dropout=0.0, bias="none", target_modules=["proj"]
+                ),
+                model,
+            )
+            layer = model.proj
+            assert getattr(layer, "fan_in_fan_out", None) is expected_fifo, label
+            _randomise_lora_b(model)
+
+            # Capture-and-spy: the patch takes ``child.forward`` at patch time,
+            # so the spy becomes the delegate the guard falls back to.
+            real_forward = layer.forward
+            calls = []
+            layer.forward = functools.partial(_spy, real_forward, calls)
+
+            assert patch_fast_lora_single_projection(model) == 1
+            torch.manual_seed(5)
+            x = torch.randn(3, 8)
+            layer(x)
+
+            assert calls == ["delegated"], (
+                f"{label}: the patched forward should have delegated to peft's own "
+                f"path, but the kernel ran instead (delegations seen: {calls})"
+            )
+
+    def test_lora_bias_delegates(self):
+        """``lora_bias=True`` puts a bias on ``lora_B`` the kernel does not carry."""
+        _requires_train_extra()
+        import torch
+        import torch.nn as nn
+        from peft import LoraConfig, inject_adapter_in_model
+
+        from soup_cli.utils.fast_lora import patch_fast_lora_single_projection
+
+        class _Wrapper(nn.Module):
+            def __init__(self, layer):
+                super().__init__()
+                self.linear = layer
+
+        torch.manual_seed(0)
+        model = _Wrapper(nn.Linear(8, 6))
+        inject_adapter_in_model(
+            LoraConfig(
+                r=2,
+                lora_alpha=4,
+                lora_dropout=0.0,
+                bias="none",
+                lora_bias=True,
+                target_modules=["linear"],
+            ),
+            model,
+        )
+        layer = model.linear
+        assert layer.lora_B["default"].bias is not None, "fixture needs lora_bias=True to hold"
+        _randomise_lora_b(model)
+        with torch.no_grad():
+            layer.lora_B["default"].bias.copy_(torch.randn(6) * 0.1)
+
+        torch.manual_seed(5)
+        x = torch.randn(4, 8)
+        torch.manual_seed(9)
+        expected = layer(x)
+
+        assert patch_fast_lora_single_projection(model) == 1
+        torch.manual_seed(9)
+        got = layer(x)
+        # The bias would change the output if the kernel ran instead of peft.
+        torch.testing.assert_close(got, expected)
+
 
 class TestPatchPlumbing:
     """#839: instance-level patching, counting, reversibility, call-time reads."""
@@ -471,6 +748,11 @@ class TestStreamedModel:
         # q_proj + v_proj on each of the 4 layers, all single projections.
         assert patch_fast_lora_single_projection(model) == 8
 
+        # peft leaves lora_B at zeros, so the resident twin would be compared
+        # LoRA-term-against-LoRA-term with the term equal to zero. Randomise
+        # before the copy so both twins carry a live adapter.
+        _randomise_lora_b(model)
+
         resident = get_peft_model(
             AutoModelForCausalLM.from_pretrained(str(weights), dtype=torch.float32),
             lora_config(),
@@ -543,6 +825,8 @@ class TestNf4Parity:
             LoraConfig(r=4, lora_alpha=8, lora_dropout=0.0, bias="none", target_modules=["linear"]),
             model,
         )
+        # As elsewhere: zeros in lora_B would make the parity comparison vacuous.
+        _randomise_lora_b(model)
         layer = model.linear
 
         x = torch.randn(5, 32, device="cuda", dtype=torch.bfloat16, requires_grad=True)
