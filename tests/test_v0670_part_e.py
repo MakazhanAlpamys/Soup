@@ -435,7 +435,7 @@ class TestCliSmoke:
 
         monkeypatch.chdir(tmp_path)
         result = CliRunner().invoke(app, ["show", "nonexistent.lock"])
-        assert result.exit_code == 2
+        assert result.exit_code == 3
 
     def test_lock_check_no_drift(self, tmp_path, monkeypatch) -> None:
         from typer.testing import CliRunner
@@ -458,7 +458,7 @@ class TestCliSmoke:
         assert result.exit_code == 0, (result.output, repr(result.exception))
         assert "OK" in result.output
 
-    def test_lock_check_drift_exits_3(self, tmp_path, monkeypatch) -> None:
+    def test_lock_check_drift_exits_2(self, tmp_path, monkeypatch) -> None:
         from typer.testing import CliRunner
 
         from soup_cli.commands.lock import app
@@ -477,7 +477,7 @@ class TestCliSmoke:
                 "--env-hash", "c" * 64,
             ],
         )
-        assert result.exit_code == 3
+        assert result.exit_code == 2
         assert "DRIFT" in result.output
 
     def test_lock_check_missing_file(self, tmp_path, monkeypatch) -> None:
@@ -496,7 +496,7 @@ class TestCliSmoke:
                 "--env-hash", "c" * 64,
             ],
         )
-        assert result.exit_code == 2
+        assert result.exit_code == 3
 
 
 class TestSourceWiring:

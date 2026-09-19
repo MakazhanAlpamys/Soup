@@ -258,7 +258,7 @@ def test_all_readers_refuse_the_same_malformed_corpus(
     cli_result, cli_output = _cli_verdict(
         tmp_path, monkeypatch, copy.deepcopy(evidence)
     )
-    assert cli_result.exit_code == 1, (
+    assert cli_result.exit_code == 3, (
         cli_result.output,
         repr(cli_result.exception),
     )
@@ -309,7 +309,7 @@ def test_mcp_refusals_do_not_echo_evidence_content(tmp_path, monkeypatch, payloa
     # The CLI keeps the rich message: the convention is MCP-side, not a
     # downgrade of the operator-facing diagnostic.
     cli_result, cli_output = _cli_verdict(tmp_path, monkeypatch, copy.deepcopy(payload))
-    assert cli_result.exit_code == 1
+    assert cli_result.exit_code == 3
     assert cli_output is None
     assert "PWNED-BY-EVIDENCE" in cli_result.output
 
@@ -380,7 +380,7 @@ def test_all_readers_refuse_the_same_invalid_threshold(
 
     with pytest.raises(typer.Exit) as cli_error:
         _verdict_from_evidence(evidence, forgetting_threshold=threshold)
-    assert cli_error.value.exit_code == 1
+    assert cli_error.value.exit_code == 3
 
     monkeypatch.chdir(tmp_path)
     _write_evidence(tmp_path, evidence)
