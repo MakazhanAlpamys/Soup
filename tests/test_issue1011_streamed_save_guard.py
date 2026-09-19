@@ -300,7 +300,7 @@ def test_a_real_streamed_train_checks_every_checkpoint_and_the_final_save(
     ``wrapper.train()`` with ``save_steps=1`` runs the check on
     ``checkpoint-1``, ``checkpoint-2`` and the final output directory."""
     _requires_train_extra()
-    from test_v07204 import _build_streamed_wrapper
+    from tests.test_v07204 import _build_streamed_wrapper
 
     try:
         from transformers.trainer_utils import SaveStrategy
@@ -309,7 +309,7 @@ def test_a_real_streamed_train_checks_every_checkpoint_and_the_final_save(
 
     from soup_cli.utils import layer_stream_runtime
 
-    wrapper, _, _ = _build_streamed_wrapper(tmp_path, monkeypatch, task=task, device="cpu")
+    wrapper, _, _ = _build_streamed_wrapper(tmp_path, monkeypatch, task=task)
     args = wrapper.trainer.args
     args.max_steps = 2
     args.save_steps = 1
