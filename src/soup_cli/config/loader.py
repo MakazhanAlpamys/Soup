@@ -9,6 +9,7 @@ from rich.console import Console
 
 from soup_cli.config.deprecation import SoupConfigDeprecationWarning
 from soup_cli.config.schema import SoupConfig
+from soup_cli.config.staged_fields import find_staged_config_fields, format_staged_fields
 from soup_cli.config.unknown_keys import find_unknown_config_keys, format_unknown_keys
 from soup_cli.utils.terminal import for_terminal
 
@@ -34,6 +35,15 @@ console = Console()
 #: flipped early.
 UNKNOWN_KEY_SEVERITY = "error"
 
+#: What to do about a declared config field that is read by nothing (#808).
+#:
+#: The decision was warn-then-forbid. Shipped ``"warn"`` with a deadline named
+#: by :data:`~soup_cli.config.staged_fields.STAGED_FIELD_REJECTION_VERSION` -- by
+#: reference, not by number, because the warning stated that version in
+#: exactly one place -- and the release that reaches it flips this to
+#: ``"error"``.
+STAGED_FIELD_SEVERITY = "warn"
+
 
 def _report_unknown_keys(raw: dict) -> "str | None":
     """Return an error string when unknown keys must stop the load.
@@ -58,6 +68,25 @@ def _report_unknown_keys(raw: dict) -> "str | None":
         "[dim]An unapplied key is ignored, not defaulted -- the run proceeds as "
         "if you had not written it.[/]"
     )
+    return None
+
+
+def _report_staged_fields(raw: dict) -> "str | None":
+    """Return an error string when staged fields must stop the load (#808).
+
+    Silence is the thing being fixed: under ``"warn"`` it is printed and
+    ``None`` is returned; under ``"error"`` the message is handed back for the
+    caller to raise in its own contract (``SystemExit`` for the CLI,
+    ``ValueError`` for the API/UI).
+    """
+    staged = find_staged_config_fields(raw)
+    if not staged:
+        return None
+    warning = STAGED_FIELD_SEVERITY != "error"
+    message = format_staged_fields(staged, include_deadline=warning)
+    if not warning:
+        return message
+    console.print(f"[yellow]Warning:[/] {for_terminal(message)}")
     return None
 
 
@@ -126,6 +155,12 @@ def load_config(
         console.print(f"  [red]{for_terminal(unknown_error)}[/]")
         raise SystemExit(1)
 
+    staged_error = _report_staged_fields(raw)
+    if staged_error is not None:
+        console.print("[red bold]Config validation error:[/]\n")
+        console.print(f"  [red]{for_terminal(staged_error)}[/]")
+        raise SystemExit(1)
+
     try:
         config = _build_config(raw)
     except ValidationError as e:
@@ -158,6 +193,10 @@ def load_config_from_string(yaml_str: str) -> SoupConfig:
     unknown_error = _report_unknown_keys(raw)
     if unknown_error is not None:
         raise ValueError(unknown_error)
+
+    staged_error = _report_staged_fields(raw)
+    if staged_error is not None:
+        raise ValueError(staged_error)
 
     try:
         return _build_config(raw)
