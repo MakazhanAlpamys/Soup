@@ -1,0 +1,319 @@
+"""Can a shipped config attach a LoRA adapter at all? (#1116)
+
+A config can parse through the schema, name a repo that resolves on the Hub, and
+still be untrainable: ``target_modules: auto`` resolves to nothing for an
+architecture neither Soup nor peft maps, and ``get_peft_model`` raises. Nothing
+checked that until now --- ``validate-recipes`` (#330) parses YAML,
+``check_recipe_repo_ids`` (#677) resolves repo ids, ``soup doctor --config``
+(#903) reads a declared table, and ``soup adapters audit`` (#763) runs after
+training. #1070 (every shipped MoE recipe), #798's dropout refusal and #1074's
+``templates/moe.yaml`` blocker were each found by a person reading code.
+
+The check builds the architecture on the **meta device** from ``config.json``
+alone --- no weights, no download of a checkpoint, no GPU --- and then runs
+Soup's own target resolution and the real ``get_peft_model``. The verdict is
+therefore the trainer's verdict rather than a re-implementation of it.
+
+Two disciplines carried over from #677, because without them a guard becomes
+noise and gets muted:
+
+**A failure to load the architecture is not a failure to attach.** A gated repo,
+a repo needing ``trust_remote_code``, and a config this ``transformers`` cannot
+read are all :data:`Verdict.UNVERIFIED` --- "could not check" --- never
+:data:`Verdict.CANNOT_ATTACH`. Whether such a repo is missing is #677's
+question, and answering it here in a second voice is how two guards disagree.
+
+**Remote code is never executed.** ``trust_remote_code`` stays off, and a repo
+that needs it reports as unverifiable. A preflight that runs arbitrary code from
+the Hub to decide whether a recipe is healthy is a worse problem than the one it
+solves.
+"""
+
+from __future__ import annotations
+
+import enum
+from dataclasses import dataclass, field
+from typing import Any, Callable, Optional
+
+#: Layers are cut to this many before the model is built. Every module peft
+#: matches on is per-layer and identically named in layer 0 and layer 40, so the
+#: attach is unchanged --- and a 671B config becomes a skeleton that builds in
+#: milliseconds.
+PREFLIGHT_LAYERS = 2
+
+
+class Verdict(enum.Enum):
+    """Four outcomes, not two. Collapsing UNVERIFIED into CANNOT_ATTACH reports
+    every gated repo as a broken recipe, which is how a guard gets muted."""
+
+    ATTACHES = "attaches"
+    NO_ADAPTER = "no_adapter"
+    CANNOT_ATTACH = "cannot_attach"
+    UNVERIFIED = "unverified"
+
+
+@dataclass(frozen=True)
+class AttachCheck:
+    """One config's result. ``detail`` always says *why* for a non-ATTACHES
+    verdict, because a bare verdict sends the reader back to the code."""
+
+    name: str
+    base: str
+    task: str
+    verdict: Verdict
+    detail: str = ""
+    model_type: Optional[str] = None
+    adapted: int = 0
+    expert_modules: int = 0
+    vision_modules: int = 0
+    targets: Any = None
+    stage: str = ""
+
+
+#: Substrings that mean "this config could not be loaded", mapped to the reason.
+#: Matched against the exception text because ``transformers`` raises plain
+#: ``ValueError``/``OSError`` for all of them; the gated case is matched by
+#: exception type first, which is the #677 ordering lesson.
+_UNVERIFIABLE_MARKERS: tuple[tuple[str, str], ...] = (
+    ("trust_remote_code", "needs trust_remote_code, which this check never enables"),
+    ("custom code", "needs trust_remote_code, which this check never enables"),
+    ("Unrecognized model", "this transformers cannot read the config"),
+    ("does not appear to have a file named config.json", "no config.json in the repo"),
+    ("is not a local folder", "repo id does not resolve anonymously (see #677)"),
+    ("gated repo", "gated repo; set HF_TOKEN to check it"),
+)
+
+
+def classify_load_failure(exc: BaseException) -> str:
+    """Why a base's config could not be loaded, in words, or "" if unrecognised.
+
+    Kept separate from the check so the mapping is testable without a model, and
+    so an unrecognised failure is visible as an empty string rather than being
+    silently filed under the last branch.
+    """
+    for marker, reason in _UNVERIFIABLE_MARKERS:
+        if marker in str(exc):
+            return reason
+    return ""
+
+
+def shrink_for_preflight(hf_config: Any, layers: int = PREFLIGHT_LAYERS) -> Any:
+    """Cut every sub-config's layer count, in place, and return the config.
+
+    Sub-configs matter: a vision-language wrapper keeps the text tower's depth in
+    ``text_config``, and leaving that at 61 builds 61 layers of a model whose
+    module names repeat after the first.
+    """
+    targets = [hf_config]
+    for attribute in ("text_config", "vision_config", "audio_config"):
+        sub = getattr(hf_config, attribute, None)
+        if sub is not None:
+            targets.append(sub)
+    for target in targets:
+        current = getattr(target, "num_hidden_layers", None)
+        if isinstance(current, int) and current > layers:
+            target.num_hidden_layers = layers
+    return hf_config
+
+
+def count_adapted(model: Any) -> tuple[int, int, int]:
+    """``(adapted, expert modules, vision modules)`` for an attached model.
+
+    The two breakdowns are what make the report say something a bare count
+    cannot: whether a MoE config reached its experts, and whether a
+    vision-language config quietly adapted its image encoder during a text
+    fine-tune.
+    """
+    # ``.lora_A`` is the ModuleDict peft inserts once per adapted base module.
+    # Counting ``lora_A.default`` as well double-counts every one of them, and
+    # counting ONLY ``lora_A.default`` silently misses a non-default adapter
+    # name -- peft names the inner Linear after the adapter.
+    names = [name for name, _ in model.named_modules() if name.endswith(".lora_A")]
+    experts = sum(1 for name in names if "expert" in name)
+    vision = sum(1 for name in names if "vision" in name or "visual" in name)
+    return len(names), experts, vision
+
+
+def plan_adapter(cfg: Any) -> tuple[bool, str]:
+    """``(has an adapter to attach, why not)``, without touching the network.
+
+    ``lora.r: 0`` is full fine-tuning (#700) and MLX attaches through a different
+    path entirely, so neither is a failure --- and reporting them as one would
+    put 3 permanent red rows in a report meant to be all green.
+    """
+    if getattr(cfg, "backend", None) == "mlx":
+        return False, "mlx backend attaches through a different path"
+    lora = getattr(getattr(cfg, "training", None), "lora", None)
+    if lora is None or not getattr(lora, "r", 0):
+        return False, "lora.r: 0 --- full fine-tuning, no adapter"
+    return True, ""
+
+
+def check_attach(
+    name: str,
+    cfg: Any,
+    *,
+    load_hf_config: Callable[[str], Any],
+    build_model: Callable[[Any, str], Any],
+    resolve_targets: Optional[Callable[[Any, Any], Any]] = None,
+    attach: Optional[Callable[[Any, Any], Any]] = None,
+) -> AttachCheck:
+    """Run one config through resolution and attach; never raise.
+
+    ``load_hf_config`` and ``build_model`` are injected so the decision logic is
+    testable without the Hub. ``resolve_targets`` and ``attach`` default to the
+    real ones on purpose --- stubbing those would make this check assert its own
+    beliefs about peft rather than peft's behaviour, which is the #826 mistake.
+    """
+    base = getattr(cfg, "base", "")
+    task = getattr(cfg, "task", "")
+    row = dict(name=name, base=base, task=task)
+
+    wanted, why_not = plan_adapter(cfg)
+    if not wanted:
+        return AttachCheck(**row, verdict=Verdict.NO_ADAPTER, detail=why_not)
+
+    try:
+        hf_config = load_hf_config(base)
+    except Exception as exc:  # noqa: BLE001 --- every loader failure is a verdict
+        reason = classify_load_failure(exc) or f"{type(exc).__name__}: {exc}"
+        return AttachCheck(
+            **row, verdict=Verdict.UNVERIFIED, detail=reason, stage="config"
+        )
+
+    model_type = getattr(hf_config, "model_type", None)
+    row["model_type"] = model_type
+    try:
+        model = build_model(shrink_for_preflight(hf_config), task)
+    except Exception as exc:  # noqa: BLE001
+        reason = classify_load_failure(exc)
+        return AttachCheck(
+            **row,
+            verdict=Verdict.UNVERIFIED if reason else Verdict.CANNOT_ATTACH,
+            detail=reason or f"{type(exc).__name__}: {exc}",
+            stage="build",
+        )
+
+    if resolve_targets is None:
+        from soup_cli.utils.peft_wiring import resolve_lora_target_modules as resolve_targets
+    lora = cfg.training.lora
+    try:
+        targets = resolve_targets(model, lora.target_modules)
+    except Exception as exc:  # noqa: BLE001 --- Soup's own refusal lands here
+        return AttachCheck(
+            **row,
+            verdict=Verdict.CANNOT_ATTACH,
+            detail=f"{type(exc).__name__}: {exc}",
+            stage="resolve",
+        )
+
+    if attach is None:
+        attach = _attach_with_peft
+    try:
+        attached = attach(model, _lora_kwargs(lora, targets))
+    except Exception as exc:  # noqa: BLE001
+        return AttachCheck(
+            **row,
+            verdict=Verdict.CANNOT_ATTACH,
+            detail=f"{type(exc).__name__}: {exc}",
+            targets=targets,
+            stage="attach",
+        )
+
+    adapted, experts, vision = count_adapted(attached)
+    return AttachCheck(
+        **row,
+        verdict=Verdict.ATTACHES if adapted else Verdict.CANNOT_ATTACH,
+        detail="" if adapted else "peft attached, but no module carries an adapter",
+        adapted=adapted,
+        expert_modules=experts,
+        vision_modules=vision,
+        targets=targets,
+        stage="attach",
+    )
+
+
+def _lora_kwargs(lora: Any, targets: Any) -> dict:
+    """The config's OWN LoRA settings, so the check answers for this recipe.
+
+    Substituting a tidy ``r=8, dropout=0.0`` would have hidden #798 entirely: the
+    dropout that made every MoE recipe unattachable was the schema default the
+    recipes inherited.
+    """
+    return {
+        "r": lora.r,
+        "lora_alpha": lora.alpha,
+        "lora_dropout": lora.dropout,
+        "target_modules": targets,
+    }
+
+
+def _attach_with_peft(model: Any, kwargs: dict) -> Any:
+    """The real ``get_peft_model``. ``task_type`` is deliberately left unset: the
+    task heads want a loaded model (``prepare_inputs_for_generation`` and
+    friends), and what is under test is the adapter injection, not the head."""
+    from peft import LoraConfig, get_peft_model
+
+    return get_peft_model(model, LoraConfig(**kwargs))
+
+
+@dataclass
+class PreflightReport:
+    """Every row, plus the one question CI asks: did anything fail to attach?"""
+
+    checks: list[AttachCheck] = field(default_factory=list)
+
+    def by_verdict(self, verdict: Verdict) -> list[AttachCheck]:
+        return [check for check in self.checks if check.verdict is verdict]
+
+    @property
+    def failures(self) -> list[AttachCheck]:
+        return self.by_verdict(Verdict.CANNOT_ATTACH)
+
+    @property
+    def exit_code(self) -> int:
+        """1 only for CANNOT_ATTACH. An unverifiable config is not a failure ---
+        it is a config this machine could not answer for."""
+        return 1 if self.failures else 0
+
+
+#: Which auto-class each task's trainer loads. Read off the trainers rather than
+#: guessed: ``embedding`` uses ``AutoModel`` (``trainer/embedding.py``),
+#: ``reward_model`` uses ``AutoModelForSequenceClassification``, and everything
+#: else loads a causal LM. A task whose real loader is not one of these belongs
+#: here explicitly rather than falling through to a guess.
+_TASK_AUTO_CLASS = {
+    "embedding": ("AutoModel",),
+    "reward_model": ("AutoModelForSequenceClassification", "AutoModel"),
+}
+_DEFAULT_AUTO_CLASS = ("AutoModelForCausalLM", "AutoModel")
+
+
+def load_hf_config(base: str) -> Any:
+    """``config.json`` alone, anonymously, with remote code refused."""
+    from transformers import AutoConfig
+
+    return AutoConfig.from_pretrained(base, trust_remote_code=False)
+
+
+def build_on_meta(hf_config: Any, task: str) -> Any:
+    """Instantiate the architecture with no storage behind any parameter.
+
+    The auto-classes are tried in the order the task's trainer would; the last
+    error is raised if none works, so the report says which class refused rather
+    than "could not build".
+    """
+    import torch
+    import transformers
+
+    last: Optional[BaseException] = None
+    for class_name in _TASK_AUTO_CLASS.get(task, _DEFAULT_AUTO_CLASS):
+        factory = getattr(transformers, class_name, None)
+        if factory is None:
+            continue
+        try:
+            with torch.device("meta"):
+                return factory.from_config(hf_config)
+        except Exception as exc:  # noqa: BLE001 --- try the next class
+            last = exc
+    raise last if last is not None else RuntimeError("no auto-class available")

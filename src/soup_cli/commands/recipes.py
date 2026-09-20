@@ -135,6 +135,146 @@ def search(
     console.print(table)
 
 
+@app.command()
+def verify(
+    config: Optional[str] = typer.Option(
+        None, "--config", "-c",
+        help="Verify one config instead of the whole catalogue.",
+    ),
+    json_out: bool = typer.Option(
+        False, "--json", help="Machine-readable rows on stdout."
+    ),
+    templates: bool = typer.Option(
+        True, "--templates/--no-templates",
+        help="Also verify src/soup_cli/templates and examples/ (catalogue mode).",
+    ),
+):
+    """Check that a config can attach a LoRA adapter, without downloading weights.
+
+    Builds each base's architecture on the meta device from ``config.json`` alone,
+    then runs Soup's own target resolution and the real peft attach. Exits 1 only
+    when something cannot attach: a gated repo, or one needing trust_remote_code,
+    is reported as unverified rather than broken (#1116).
+    """
+    import json as _json
+
+    from soup_cli.utils.attach_preflight import (
+        PreflightReport,
+        Verdict,
+        build_on_meta,
+        check_attach,
+        load_hf_config,
+    )
+
+    configs = _configs_to_verify(config, templates)
+    if not configs:
+        console.print("[red]Nothing to verify.[/]")
+        raise typer.Exit(1)
+
+    report = PreflightReport()
+    for name, cfg in configs:
+        report.checks.append(
+            check_attach(
+                name, cfg, load_hf_config=load_hf_config, build_model=build_on_meta
+            )
+        )
+
+    if json_out:
+        console.print_json(
+            _json.dumps(
+                [
+                    {
+                        "name": c.name, "base": c.base, "task": c.task,
+                        "verdict": c.verdict.value, "model_type": c.model_type,
+                        "adapted": c.adapted, "expert_modules": c.expert_modules,
+                        "vision_modules": c.vision_modules, "detail": c.detail,
+                    }
+                    for c in report.checks
+                ]
+            )
+        )
+    else:
+        _print_preflight(report, Verdict)
+    raise typer.Exit(report.exit_code)
+
+
+def _configs_to_verify(config: Optional[str], templates: bool):
+    """``(name, SoupConfig)`` for everything in scope; a config that will not
+    parse is surfaced here rather than counted as an attach failure."""
+    from soup_cli.config.loader import load_config_from_string
+
+    pairs: list[tuple[str, str]] = []
+    if config:
+        path = Path(config)
+        if not path.is_file():
+            console.print(f"[red]Config not found:[/] {config}")
+            raise typer.Exit(1)
+        pairs.append((path.name, path.read_text(encoding="utf-8")))
+    else:
+        from soup_cli.recipes.catalog import RECIPES
+
+        pairs.extend((name, recipe.yaml_str) for name, recipe in RECIPES.items())
+        if templates:
+            root = Path(__file__).resolve().parents[1]
+            for base in (root / "templates", root.parents[1] / "examples"):
+                if base.is_dir():
+                    pairs.extend(
+                        (str(p.relative_to(base.parent)), p.read_text(encoding="utf-8"))
+                        for p in sorted(base.rglob("*.yaml"))
+                    )
+
+    loaded = []
+    for name, text in pairs:
+        try:
+            loaded.append((name, load_config_from_string(text)))
+        except Exception as exc:  # noqa: BLE001 --- a parse failure is #330's job
+            console.print(f"[dim]skipped {name}: does not parse ({type(exc).__name__})[/]")
+    return loaded
+
+
+def _print_preflight(report, verdict_cls) -> None:
+    """One row per config that did not simply attach, then the counts.
+
+    Printing 91 green rows buries the 42 that matter, so ATTACHES is summarised
+    and everything else is listed.
+    """
+    failures = report.failures
+    unverified = report.by_verdict(verdict_cls.UNVERIFIED)
+
+    if failures:
+        table = Table(title="Cannot attach")
+        table.add_column("Config", style="bold cyan")
+        table.add_column("model_type", style="magenta")
+        table.add_column("Stage", style="yellow")
+        table.add_column("Why")
+        for check in failures:
+            table.add_row(
+                check.name, str(check.model_type), check.stage, check.detail[:90]
+            )
+        console.print(table)
+
+    if unverified:
+        console.print(
+            f"[yellow]{len(unverified)} config(s) could not be checked here[/] "
+            "[dim](gated, remote code, or unreadable by this transformers) — "
+            "not counted as failures.[/]"
+        )
+
+    attaches = report.by_verdict(verdict_cls.ATTACHES)
+    experts = sum(1 for c in attaches if c.expert_modules)
+    vision = [c.name for c in attaches if c.vision_modules]
+    console.print(
+        f"[green]{len(attaches)} attach[/], "
+        f"[red]{len(failures)} cannot[/], "
+        f"{len(report.by_verdict(verdict_cls.NO_ADAPTER))} have no adapter, "
+        f"{len(unverified)} unverified."
+    )
+    if experts:
+        console.print(f"[dim]{experts} adapted expert modules.[/]")
+    if vision:
+        console.print(f"[yellow]adapted a vision tower:[/] {', '.join(vision)}")
+
+
 def _suggest_recipes(query: str, n: int = 3) -> list[str]:
     """v0.40.1 Part E / M3 — return up to ``n`` close-matching recipe ids."""
     from difflib import get_close_matches
