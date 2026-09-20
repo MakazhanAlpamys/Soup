@@ -492,7 +492,7 @@ class TestShrinkCli:
             ["shrink", "--model", "x", "--drop-layers", "2", "--calib", str(outside)],
         )
         assert r.exit_code == 1, (r.output, repr(r.exception))
-        assert "cwd" in r.output.lower()
+        assert "must stay under cwd" in " ".join(r.output.split())
 
     def test_rejects_bad_tolerance(self, tmp_path, monkeypatch):
         from typer.testing import CliRunner
@@ -762,15 +762,14 @@ class TestReviewFixes:
         model_dir.mkdir()
         monkeypatch.setenv("HF_HUB_OFFLINE", "1")
 
-        def _hub_must_not_run(*_a, **_k):
+        def _from_pretrained_must_not_run(*_a, **_k):
             raise AssertionError(
-                "list_repo_tree must not run for an output-dir containment check"
+                "AutoConfig.from_pretrained must not run before the output-dir refusal"
             )
 
         monkeypatch.setattr(
-            "huggingface_hub.hf_api.HfApi.list_repo_tree",
-            _hub_must_not_run,
-            raising=False,
+            "soup_cli.commands.shrink.AutoConfig.from_pretrained",
+            _from_pretrained_must_not_run,
         )
         r = CliRunner().invoke(
             app,
@@ -779,7 +778,7 @@ class TestReviewFixes:
              "--output-dir", str(tmp_path / "escape")],
         )
         assert r.exit_code == 1, (r.output, repr(r.exception))
-        assert "cwd" in r.output.lower()
+        assert "must stay under cwd" in " ".join(r.output.split())
 
     def test_heal_epochs_clamp_rejects_absurd_combo(self):
         """Huge --heal-steps over a tiny heal set is refused, not silently run."""
