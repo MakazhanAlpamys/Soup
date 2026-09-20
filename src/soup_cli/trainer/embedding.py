@@ -296,6 +296,14 @@ class EmbeddingTrainerWrapper:
             )
 
             target_modules = resolve_lora_target_modules(self.model, tcfg.lora.target_modules)
+            # #1099: moe_lora picks the expert-FFN targets. Only reachable with
+            # lora.r >= 1 -- at r == 0 this trainer full-fine-tunes and builds no
+            # adapter at all, so there is nothing for the flag to select.
+            from soup_cli.utils.moe import resolve_moe_lora_targets
+
+            target_modules = resolve_moe_lora_targets(
+                self.model, tcfg, target_modules, console
+            )
 
             lora_config = build_lora_config(
                 tcfg.lora,
