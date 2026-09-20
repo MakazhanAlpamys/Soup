@@ -248,12 +248,13 @@ def _evaluate_active_canary(
     state: LoopState, config: WatchConfig
 ) -> "tuple[Optional[str], Optional[CanaryPolicy]]":
     """Read live bucket outcomes and return a sticky rollback policy if needed."""
-    if state.canary_active is None:
+    active_canary = state.canary_active
+    if active_canary is None:
         return None, None
     try:
         policy = CanaryPolicy(
             stable=state.served_model,
-            canary=state.canary_active,
+            canary=active_canary,
             traffic_pct=float(state.canary_traffic_pct or 0.0),
         )
         stats = read_bucket_stats(
