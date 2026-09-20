@@ -10,6 +10,8 @@ from types import SimpleNamespace
 import pytest
 from typer.testing import CliRunner
 
+from tests.conftest import strip_ansi
+
 
 def _args(tmp_path, *extra: str) -> list[str]:
     return [
@@ -84,7 +86,7 @@ def test_late_failure_resumes_without_replaying_completed_prefix(tmp_path, monke
 
     first = CliRunner().invoke(app, _args(tmp_path))
     assert first.exit_code == 1, (first.output, repr(first.exception))
-    assert "1/3 prompts" in first.output
+    assert "1/3 prompts" in strip_ansi(first.output)
     assert "--resume" in first.output
     assert "simulated late" not in first.output
     assert not (tmp_path / "sft.jsonl").exists()
@@ -164,7 +166,7 @@ def test_late_value_error_reports_checkpoint_recovery(
     result = CliRunner().invoke(app, _args(tmp_path))
 
     assert result.exit_code == 1, (result.output, repr(result.exception))
-    assert "1/2 prompts" in result.output
+    assert "1/2 prompts" in strip_ansi(result.output)
     assert "--resume" in result.output
     assert "sft.jsonl.checkpoint.jsonl" in result.output
     assert "private" not in result.output
