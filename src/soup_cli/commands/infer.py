@@ -92,10 +92,14 @@ def infer(
         help="Sampling temperature (0 = greedy)",
     ),
     batch_size: int = typer.Option(
-        8,
+        1,
         "--batch-size",
         min=1,
-        help="Number of causal-LM prompts to generate together (1-...)",
+        help=(
+            "Number of causal-LM prompts to generate together "
+            "(default: 1; batching is opt-in; fp16/bf16 batching "
+            "may not be bit-exact with batch size 1)"
+        ),
     ),
     device: Optional[str] = typer.Option(
         None,
@@ -812,12 +816,35 @@ def _generate_batch(
             outputs = model.generate(**gen_kwargs)
 
         results = []
+        eos_token_ids = getattr(tokenizer, "eos_token_id", None)
+        if eos_token_ids is None:
+            eos_token_ids = set()
+        elif isinstance(eos_token_ids, (list, tuple, set)):
+            eos_token_ids = set(eos_token_ids)
+        else:
+            eos_token_ids = {int(eos_token_ids)}
+
         for output in outputs:
             new_tokens = output[input_width:]
+            token_count = new_tokens.shape[0]
+            pad_token_id = tokenizer.pad_token_id
+
+            for index, token in enumerate(new_tokens):
+                token_id = int(token)
+                if token_id in eos_token_ids:
+                    token_count = index + 1
+                    break
+                if token_id == pad_token_id:
+                    token_count = index
+                    break
+
+            actual_tokens = new_tokens[:token_count]
             results.append(
                 (
-                    tokenizer.decode(new_tokens, skip_special_tokens=True).strip(),
-                    new_tokens.shape[0],
+                    tokenizer.decode(
+                        actual_tokens, skip_special_tokens=True
+                    ).strip(),
+                    token_count,
                 )
             )
         return results
