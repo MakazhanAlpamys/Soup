@@ -2,11 +2,12 @@
 
 [← Back to the Soup README](../README.md)
 
-> QAT, FP8, the Quant Menu (I + II), KV-cache, NVFP4, save formats, Cut Cross-Entropy, gradient checkpointing, kernel auto-composition, activation offloading, and multi-GPU / DeepSpeed / FSDP.
+> QAT, experimental QuEST, FP8, the Quant Menu (I + II), KV-cache, NVFP4, save formats, Cut Cross-Entropy, gradient checkpointing, kernel auto-composition, activation offloading, and multi-GPU / DeepSpeed / FSDP.
 
 **Contents:**
 
 - [Quantization-Aware Training (QAT)](#quantization-aware-training-qat)
+- [Experimental QuEST mixed W4/A4+A16 route](#experimental-quest-mixed-w4a4a16-route)
 - [FP8 Training (Ada+)](#fp8-training-ada)
 - [Cut Cross-Entropy (Large-Vocab Models)](#cut-cross-entropy-large-vocab-models)
 - [Gradient Checkpointing Tiers](#gradient-checkpointing-tiers)
@@ -65,6 +66,77 @@ output: ./output
 - **Post-training quantization** (default): Faster training, good enough for most use cases. Quantize after training with `soup export --quant q4_k_m`.
 
 QAT works with all training tasks (SFT, DPO, GRPO, PPO, KTO, ORPO, SimPO, IPO, Pretrain) and vision modality. Not compatible with the unsloth backend. After QAT training, export to GGUF normally with `soup export`.
+
+
+## Experimental QuEST mixed W4/A4+A16 route
+
+`quantization_aware: quest` enables the exact experimental route retained for
+[#674](https://github.com/MakazhanAlpamys/Soup/issues/674): all 168 transformer
+linear weights use group-128 fake W4; 161 activations use group-128 fake A4;
+and the seven attention/MLP linears in decoder block 23 keep A16 activations.
+Both operands use a full-width normalized Hadamard transform. Activation clips
+are selected from five fixed candidates on the first 32 tokenized **training**
+rows only.
+
+```yaml
+base: ahxt/LiteLlama-460M-1T
+task: sft
+backend: transformers
+modality: text
+
+data:
+  train: ./data/train.jsonl
+
+training:
+  quantization_aware: quest
+  quantization: none
+  batch_size: 2
+  lora:
+    r: 0
+
+output: ./output
+```
+
+This first slice fails closed unless the loaded model has the measured 24-block
+Llama topology with exactly those 168 linears, compatible power-of-two input
+widths, and FP32 master weights. It also requires one visible Ampere-or-newer
+CUDA GPU. DDP, DataParallel, DeepSpeed, FSDP, layer streaming, LoRA, other
+backends/tasks/modalities, and pre-quantized loading are not accepted. On a
+multi-GPU host, expose one card to the process, for example:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 soup train --config soup.yaml
+```
+
+The final artifact and each periodic checkpoint contain
+`quest_mixed_precision.json`. The closed, versioned sidecar records every A4
+and A16 route, clipping scale, calibration-row digest, transform, grid,
+surrogate, and the evidence binding. Resume is refused if that metadata differs.
+Because generic Transformers cannot infer fake-quant execution from the master
+weights, load the executable route explicitly:
+
+```python
+from soup_cli.utils.quest import load_mixed_quest_artifact
+
+model = load_mixed_quest_artifact("./output")
+```
+
+### Evidence boundary
+
+This is an engineering integration of an **evaluation-only** result, not a
+validated training recipe. The [mixed-route record](../benchmarks/gate-674-quest-mixed-route.md)
+used one model and no backward passes or optimizer updates. Its seven-A16 route
+measured a 0.086344 nat/target gap to fixed FP, with a paired 95% interval of
+[0.080241, 0.093190], over 704 examples / 25,017 targets. It is therefore:
+
+- not pure W4A4;
+- not evidence of mixed-route training quality or cross-model generality;
+- not upstream QuEST numerical parity;
+- not packed INT4, and not a speed or memory-efficiency claim.
+
+The implementation keeps FP32 masters and performs dense fake quantization and
+Hadamard arithmetic during execution. Treat it as a reproducible research path,
+not as a cheaper deployment format.
 
 
 ## FP8 Training (Ada+)
@@ -212,8 +284,8 @@ the model. This avoids both FSDP failure modes: integer storage and mixed
 adapter/storage dtypes.
 
 **Pre-quantized + QAT.** `gptq` / `awq` / `hqq:*` / `aqlm` / `eetq` / `mxfp4` /
-`fp8` all carry their own scale; combining with `quantization_aware` (int8 QAT or
-`'fp8'`) is rejected at config-load.
+`fp8` all carry their own scale; combining with `quantization_aware` (int8 QAT,
+`'fp8'`, or the experimental `'quest'` route) is rejected at config-load.
 
 **Multi-trainer support.** Quant Menu is wired across all 12 transformer-backend
 trainers (SFT / DPO / GRPO / KTO / ORPO / SimPO / IPO / PPO / RewardModel /

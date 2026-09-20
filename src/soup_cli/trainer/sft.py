@@ -585,6 +585,7 @@ class SFTTrainerWrapper(StreamingSetupMixin):
         self.tokenizer = None
         self.trainer = None
         self._is_raft = False  # set in setup() when data.format == 'raft'
+        self._quest_metadata: Optional[dict[str, Any]] = None
         # Resolve once — raises ValueError if model needs custom code but
         # the user did not opt in. Result is cached on the wrapper for use
         # by every from_pretrained() call below.
@@ -859,6 +860,13 @@ class SFTTrainerWrapper(StreamingSetupMixin):
         if cfg.experiment_name:
             output_dir = output_dir / cfg.experiment_name
         output_dir.mkdir(parents=True, exist_ok=True)
+
+        # #674 — QuEST calibration needs the actual tokenized training rows,
+        # so this route is installed here rather than in _setup_transformers.
+        # The schema requires an explicit batch size, therefore the earlier
+        # auto-probe cannot silently size the unconverted model.
+        if tcfg.quantization_aware == "quest":
+            self._setup_quest(train_ds)
 
         # --- Calculate warmup steps from ratio ---
         import math
@@ -1198,6 +1206,63 @@ class SFTTrainerWrapper(StreamingSetupMixin):
         from soup_cli.utils.peft_wiring import attach_compile_prefix_callback
 
         attach_compile_prefix_callback(self.trainer, tcfg, self._output_dir, console)
+        if self._quest_metadata is not None:
+            from soup_cli.utils.quest import QuestMetadataCallback
+
+            self.trainer.add_callback(
+                QuestMetadataCallback(self._output_dir, self._quest_metadata)
+            )
+
+    def _setup_quest(self, train_ds: Any) -> None:
+        """Calibrate and install #674's explicit mixed fake-quant route."""
+        from soup_cli.trainer.stream_setup import _distributed_launch
+
+        if self.deepspeed_config or self.fsdp_config or _distributed_launch():
+            raise ValueError(
+                "quantization_aware='quest' first slice is single-GPU only; "
+                "DDP, DeepSpeed and FSDP have not been measured"
+            )
+        from soup_cli.utils.quest import (
+            CALIBRATION_EXAMPLES,
+            calibrate_activation_scales,
+            calibration_rows_sha256,
+            install_mixed_quest,
+            validate_cuda_hardware,
+        )
+
+        gpu_name, capability = validate_cuda_hardware()
+        console.print(
+            "[cyan]QuEST calibration:[/] selecting fixed activation clips on "
+            "the first 32 tokenized training rows"
+        )
+        if len(train_ds) < CALIBRATION_EXAMPLES:
+            raise ValueError(
+                f"QuEST calibration requires at least {CALIBRATION_EXAMPLES} "
+                f"training rows; got {len(train_ds)}"
+            )
+        # Snapshot once. A lazy/custom dataset must not be able to return one
+        # set of rows for scale selection and another for the persisted digest.
+        calibration_rows = [
+            train_ds[index] for index in range(CALIBRATION_EXAMPLES)
+        ]
+        calibration_sha256 = calibration_rows_sha256(calibration_rows)
+        scales = calibrate_activation_scales(self.model, calibration_rows)
+        self._quest_metadata = install_mixed_quest(
+            self.model,
+            activation_scales=scales,
+            base_model=self.config.base,
+            calibration_sha256=calibration_sha256,
+        )
+        # Store a second copy in HF config so generic artifact inspection says
+        # what ran even before a Soup-aware loader reads the full sidecar.
+        self.model.config.soup_quest = self._quest_metadata
+        console.print(
+            "[green]QuEST mixed route enabled:[/] 168 W4 weights; 161 A4 + "
+            f"7 A16 activations; group=128 on {gpu_name} "
+            f"(SM {capability[0]}.{capability[1]})\n"
+            "[yellow]Experimental:[/] quality evidence is evaluation-only; "
+            "this is not pure W4A4 or packed INT4"
+        )
 
     def _prepare_raft_dataset(self, dataset: dict, cfg, tcfg):
         """v0.71.10 #199 — build pre-tokenised RAFT rows (answer-only mask).
@@ -1436,6 +1501,15 @@ class SFTTrainerWrapper(StreamingSetupMixin):
         from transformers import AutoModelForCausalLM, AutoTokenizer
 
         from soup_cli.utils.moe import detect_moe_model
+
+        if tcfg.quantization_aware == "quest":
+            # Fail before ``device_map='auto'`` can shard the model across
+            # several visible cards; this first engineering slice is explicitly
+            # single-GPU and its dense Hadamard route has not been measured
+            # under DDP, DataParallel, DeepSpeed or FSDP.
+            from soup_cli.utils.quest import validate_cuda_hardware
+
+            validate_cuda_hardware()
 
         # Liger Kernel — apply fused ops BEFORE model loading
         if tcfg.use_liger:
@@ -1723,6 +1797,10 @@ class SFTTrainerWrapper(StreamingSetupMixin):
         - ``nvfp4=True``                → NVFP4 quantization (v0.71.21 #141)
         - ``False`` / None              → no-op
         """
+        if tcfg.quantization_aware == "quest":
+            # Installed by _setup_quest after train_ds exists. Doing anything
+            # here would either calibrate against no data or quantize twice.
+            return
         if tcfg.quantization_aware and tcfg.quantization_aware != "fp8":
             from soup_cli.utils.qat import prepare_model_for_qat
 
@@ -2092,6 +2170,15 @@ class SFTTrainerWrapper(StreamingSetupMixin):
         from soup_cli.utils.paths import is_under_cwd
 
         tcfg = self.config.training
+        if self._quest_metadata is not None:
+            from soup_cli.utils.quest import validate_resume_metadata, write_metadata
+
+            if resume_from_checkpoint is not None:
+                validate_resume_metadata(resume_from_checkpoint, self._quest_metadata)
+            # Write only after a resumed checkpoint has proved compatible. A
+            # rejected resume must not overwrite the root artifact's previous
+            # route declaration during setup.
+            write_metadata(self._output_dir, self._quest_metadata)
         offload_save_dir: Optional[str] = None
         if tcfg.activation_offloading == "disk":
             candidate = str(Path(self._output_dir) / "_activation_offload")
@@ -2143,6 +2230,10 @@ class SFTTrainerWrapper(StreamingSetupMixin):
 
         # Save final model (LoRA adapter)
         self.trainer.save_model(self._output_dir)
+        if self._quest_metadata is not None:
+            from soup_cli.utils.quest import write_metadata
+
+            write_metadata(self._output_dir, self._quest_metadata)
         # #335 — under torch.compile the Trainer saves THROUGH the wrapper, so
         # every key gains `_orig_mod.` and PeftModel.from_pretrained then matches
         # none of them: it warns and leaves lora_B at zero init, i.e. the run
@@ -2186,6 +2277,11 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             "duration_secs": duration,
             "output_dir": self._output_dir,
             "total_steps": self.trainer.state.global_step,
+            **(
+                {"quest_mixed_precision": self._quest_metadata}
+                if self._quest_metadata is not None
+                else {}
+            ),
         }
 
 
