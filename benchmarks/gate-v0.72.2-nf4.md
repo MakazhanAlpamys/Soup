@@ -340,7 +340,39 @@ have printed ~52 B.
 
 ---
 
-## Post-#331 re-measurement — PENDING ([#361](https://github.com/MakazhanAlpamys/Soup/issues/361))
+## Post-#331 re-measurement — MEASURED 2026-09-20 ([#361](https://github.com/MakazhanAlpamys/Soup/issues/361))
+
+Measured post-#331 row, added — the rows above stay verbatim:
+
+| Model | Quant | Store | tok/s | GPU util | Peak VRAM | SM clock | eff TFLOPS | % of same-session ceiling |
+|---|---|---|---|---|---|---|---|---|
+| **Llama-3.1-8B-Instruct** | NF4 | **5.70 GB pinned** | **208.6** | 100% | **2.40 GB** | 1935 MHz / 59 C | 9.17 | 59% |
+
+Machine row: `results/issue361-post-repair-8b-nf4.json` (`--json` output of
+[`harness/issue361_nf4_throughput.py`](harness/issue361_nf4_throughput.py),
+committed as written, run from `9635673` on the RTX 3050 Laptop 4 GB @umran666
+used for every number in this record).
+
+**Read this row with its clock.** The pre-repair row ran at 952 MHz / 70 C, this
+one at 1935–1957 MHz / 59 C — the same card at roughly half its clock, running
+hotter, i.e. the original operating point is consistent with a throttled or
+power-limited session (AC/power plan not recorded for the old row). The 1.74x
+raw gain (208.6 / 119.6) is therefore a clock, not a speedup: per unit clock
+the new code is ~14% slower (1.744 / 2.033 = 0.858), matching the same-session
+ceiling fraction moving 68% -> 59% to within 1% (59/68 = 0.868). Do not compare
+the two tok/s figures directly.
+
+**Large-layer-streaming asterisk, kept attached to the 68% -> 59% number.**
+The memory pattern changed between the rows: large-layer streaming moved
+`embed_tokens` + `lm_head` into the pinned store, so the store grew by exactly
+two 0.525B bf16 tensors (2 x 0.525e9 x 2B = 2.10 GB, matching the 5.70 - 3.60
+GB delta) while peak VRAM *fell* (3.32 GB reserved on the old row, 2.40 GB
+allocated / 2.66 GB reserved on this one). Even the ceiling-fraction
+comparison is therefore not like-for-like on efficiency — stated here, not
+only in the issue thread.
+
+The rest of this section (the PENDING text, the owed-by line, the expected
+direction) stays as it was written:
 
 The 119.6 tok/s / 3.32 GB row above predates the #331 repair and has not been
 re-run on repaired code. The protocol to repeat is
@@ -361,3 +393,10 @@ figure above it is not impossible, but it needs its own explanation before it
 is recorded rather than after. The 3.32 GB peak is re-measured rather than
 carried over, because large-layer streaming moved `embed_tokens` and `lm_head`
 out of the resident allocation (see `docs/performance-and-quantization.md`).
+
+**Outcome vs the expected direction, recorded rather than edited away.** The
+figure came in *above* 119.6 tok/s, and it has its explanation before it, as
+required: a 952 → 1935 MHz clock change accounts for the whole excess and then
+some. Per unit clock the repair direction holds (about −14%, vs −4.8% at 32B
+— different clocks, different memory patterns, so read that as same-direction,
+not same-size).
