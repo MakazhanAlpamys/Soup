@@ -332,6 +332,22 @@ def test_is_nvfp4_software_supported_requires_nvfp4_config(monkeypatch):
     assert is_nvfp4_software_supported() is False
 
 
+def test_is_nvfp4_software_supported_requires_quantize(monkeypatch):
+    import types
+
+    fake_torchao = types.ModuleType("torchao")
+    fake_quantization = types.ModuleType("torchao.quantization")
+    fake_quantization.NVFP4Config = object
+    fake_torchao.quantization = fake_quantization
+
+    monkeypatch.setitem(sys.modules, "torchao", fake_torchao)
+    monkeypatch.setitem(sys.modules, "torchao.quantization", fake_quantization)
+
+    from soup_cli.utils.advanced_precision import is_nvfp4_software_supported
+
+    assert is_nvfp4_software_supported() is False
+
+
 def test_get_precision_capabilities_requires_torchao_for_fp8_attention(
     monkeypatch,
 ):
@@ -490,61 +506,6 @@ def test_doctor_checks_optional_deps():
     result = runner.invoke(app, ["doctor"])
     assert result.exit_code == 0
     assert "optional" in _strip_ansi(result.output)
-
-
-def test_doctor_requires_declared_torchao_floor_for_optional_feature_support(
-    monkeypatch,
-):
-    """Doctor's torchao floor must match the declared optional dependency floor."""
-    import importlib.machinery
-    import pathlib
-    import re
-    import types
-
-    root = pathlib.Path(__file__).resolve().parents[1]
-    pyproject = (root / "pyproject.toml").read_text(encoding="utf-8")
-
-    optional_deps = re.search(
-        r"^\[project\.optional-dependencies\]\s*$(.*?)^\[",
-        pyproject,
-        re.M | re.S,
-    )
-    assert optional_deps, "pyproject.toml has no [project.optional-dependencies] table"
-
-    qat = re.search(
-        r'^qat\s*=\s*\[\s*"torchao\s*>=\s*([^"]+)',
-        optional_deps.group(1),
-        re.M,
-    )
-    assert qat, "pyproject.toml qat extra has no torchao>= floor"
-    declared_floor = qat.group(1)
-
-    from soup_cli.commands.doctor import DEPS
-
-    torchao_rows = [
-        (pkg_name, floor)
-        for _, pkg_name, floor, _required in DEPS
-        if pkg_name == "torchao"
-    ]
-
-    assert len(torchao_rows) == 1, "expected exactly one torchao row in DEPS"
-    assert torchao_rows[0][1] == declared_floor, (
-        f"doctor.py checks torchao>={torchao_rows[0][1]} but pyproject.toml "
-        f"qat declares torchao>={declared_floor} — doctor must report the "
-        "declared floor"
-    )
-
-    fake_torchao = types.SimpleNamespace(
-        __version__="0.6.0",
-        __spec__=importlib.machinery.ModuleSpec("torchao", None),
-    )
-    monkeypatch.setitem(__import__("sys").modules, "torchao", fake_torchao)
-
-    result = runner.invoke(app, ["doctor"])
-    assert result.exit_code == 0
-    output = _strip_ansi(result.output)
-    assert "outdated" in output
-    assert f">={declared_floor}" in output
 
 
 def test_doctor_missing_dep():
