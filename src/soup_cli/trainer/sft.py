@@ -1706,28 +1706,28 @@ class SFTTrainerWrapper(StreamingSetupMixin):
 
         - ``quantization_aware=True``   → int8 QAT via torchao (legacy path)
         - ``quantization_aware="fp8"``  → FP8 training via torchao.float8 (v0.28.0)
+        - ``fp8_attention=True``        → FP8 attention projections (v0.71.21 #141)
+        - ``nvfp4=True``                → NVFP4 quantization (v0.71.21 #141)
         - ``False`` / None              → no-op
         """
-        if tcfg.quantization_aware == "fp8":
-            from soup_cli.utils.fp8 import apply_fp8_training
-
-            if apply_fp8_training(self.model, recipe=tcfg.fp8_recipe):
-                console.print(
-                    f"[green]FP8 training enabled:[/] "
-                    f"converted linears to Float8Linear (recipe={tcfg.fp8_recipe})"
-                )
-            else:
-                # A card the gate refuses raises FP8HardwareUnsupportedError and
-                # stops the run (#835), so this branch is now the dependency case
-                # only.
-                console.print(
-                    "[yellow]FP8 training requested but unavailable "
-                    "(torchao.float8 missing)[/]"
-                )
-        elif tcfg.quantization_aware is True:
+        if tcfg.quantization_aware and tcfg.quantization_aware != "fp8":
             from soup_cli.utils.qat import prepare_model_for_qat
 
             self.model = prepare_model_for_qat(self.model)
+
+        # v0.33.0 / #800 — multi-trainer wiring of v0.28.0 / v0.71.21 speed/memory
+        # features on SFT. Cut-CE is patched pre-load, so skip it here.
+        from soup_cli.utils.v028_features import apply_v028_speed_memory
+
+        apply_v028_speed_memory(
+            model=self.model,
+            tcfg=tcfg,
+            base_model=getattr(getattr(self, "config", None), "base", ""),
+            console=console,
+            device=getattr(self, "device", "cuda"),
+            backend=getattr(getattr(self, "config", None), "backend", "transformers"),
+            skip_cut_ce=True,
+        )
 
     def _setup_unsloth(self, cfg, tcfg):
         """Load model via unsloth FastLanguageModel (2-5x faster)."""

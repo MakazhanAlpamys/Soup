@@ -367,18 +367,11 @@ def test_trainer_module_calls_apply_v028_speed_memory(module_path: str) -> None:
 
     mod = importlib.import_module(module_path)
     src = inspect.getsource(mod)
-    # SFT predates the shared helper extraction (v0.33.0 #43) and inlines
-    # apply_cut_ce / apply_fp8_training / kernel_picker directly; the other
-    # 10 trainers all delegate to apply_v028_speed_memory.
-    has_helper = "apply_v028_speed_memory" in src
-    has_inline_features = (
-        "apply_cut_ce" in src
-        and "apply_fp8_training" in src
-    )
-    assert has_helper or has_inline_features, (
-        f"{module_path} does not call apply_v028_speed_memory or the "
-        "underlying feature patchers directly — v0.28.0 features will "
-        "silently no-op for this trainer."
+    # v0.33.0 #43 / #800 — all 11 transformer-backend trainers delegate
+    # to apply_v028_speed_memory.
+    assert "apply_v028_speed_memory" in src, (
+        f"{module_path} does not call apply_v028_speed_memory — "
+        "v0.28.0 features will silently no-op for this trainer."
     )
 
 

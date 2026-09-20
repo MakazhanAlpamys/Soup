@@ -470,6 +470,8 @@ class TestTheRunStops:
     def test_sft_stops_at_setup(self, monkeypatch, converts):
         """``SFTTrainerWrapper._apply_quantization_aware`` on an 8.6 card. Wrapping
         its call in ``try/except RuntimeError`` used to leave every test green."""
+        from types import SimpleNamespace
+
         from soup_cli.config.schema import TrainingConfig
         from soup_cli.trainer.sft import SFTTrainerWrapper
         from soup_cli.utils.fp8 import FP8HardwareUnsupportedError
@@ -477,6 +479,8 @@ class TestTheRunStops:
         _card(monkeypatch, (8, 6))
         wrapper = object.__new__(SFTTrainerWrapper)
         wrapper.model = _Attn()
+        wrapper.config = SimpleNamespace(base="org/model", backend="transformers")
+        wrapper.device = "cuda:0"
         with pytest.raises(FP8HardwareUnsupportedError, match="8.9"):
             wrapper._apply_quantization_aware(TrainingConfig(quantization_aware="fp8"))
         assert converts == []
