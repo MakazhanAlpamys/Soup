@@ -27,13 +27,16 @@ from scripts.merge_freshness import (
     CHECK_NAME,
     MAX_BEHIND,
     Conclusion,
+    MergeStatus,
     commits_behind,
     decide,
     evaluate_refs,
     list_open_pr_heads,
     main,
     post_check_run,
+    reeval_open_prs,
     run_f821,
+    write_merge_tree,
 )
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -225,6 +228,34 @@ class TestThe763Shape:
         assert verdict.conclusion is Conclusion.FAILURE
         assert "conflict" not in verdict.title
 
+    def test_conflicting_edits_are_a_conflict(self, tmp_path):
+        repo = _init_repo(tmp_path)
+        _git(repo, "checkout", "-b", "pr")
+        _commit_file(
+            repo,
+            "src/soup_cli/commands/adapters.py",
+            "pr-side\n",
+            "pr edits the same file",
+        )
+        _git(repo, "checkout", "main")
+        _commit_file(
+            repo,
+            "src/soup_cli/commands/adapters.py",
+            "main-side\n",
+            "main edits the same file",
+        )
+        verdict = evaluate_refs(repo, "main", "pr", f821_runner=_clean_ruff)
+        assert verdict.conclusion is Conclusion.FAILURE
+        assert "conflicts" in verdict.title
+
+    def test_invalid_treeish_is_a_merge_tree_error_not_a_conflict(self, tmp_path):
+        repo = _init_repo(tmp_path)
+        head = _git(repo, "rev-parse", "HEAD").stdout.strip()
+        # Unknown names exit 1 ("not something we can merge") on current git,
+        # the same code as a conflict. An unknown option is a real error.
+        build = write_merge_tree(repo, "--no-such-flag", head)
+        assert build.status is MergeStatus.ERROR
+
 
 class TestRunF821:
     def test_injected_ruff_output_is_parsed(self, tmp_path):
@@ -232,6 +263,7 @@ class TestRunF821:
 
         def runner(argv, *, cwd):
             assert "--select" in argv and "F821" in argv
+            assert "--isolated" in argv
             return subprocess.CompletedProcess(
                 argv,
                 1,
@@ -248,6 +280,50 @@ class TestRunF821:
 
     def test_no_targets_means_clean(self, tmp_path):
         assert run_f821(tmp_path) == ()
+
+    def test_planted_ruff_package_does_not_run(self, tmp_path, monkeypatch):
+        """python -m ruff with cwd=the PR tree would execute ruff/__main__.py."""
+        import scripts.merge_freshness as mf
+
+        tree = tmp_path / "tree"
+        (tree / "ruff").mkdir(parents=True)
+        (tree / "src" / "soup_cli").mkdir(parents=True)
+        (tree / "ruff" / "__init__.py").write_text("", encoding="utf-8")
+        (tree / "ruff" / "__main__.py").write_text(
+            "from pathlib import Path\nPath('PLANTED').write_text('hijacked')\n",
+            encoding="utf-8",
+        )
+        (tree / "pyproject.toml").write_text(
+            '[tool.ruff.lint]\nignore = ["F821"]\n',
+            encoding="utf-8",
+        )
+        (tree / "src" / "soup_cli" / "bad.py").write_text(
+            "def f():\n    return not_defined\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("GITHUB_TOKEN", "secret-token")
+        monkeypatch.setenv("GH_TOKEN", "gh-secret")
+        monkeypatch.setenv("ACTIONS_RUNTIME_TOKEN", "actions-secret")
+        captured: dict[str, object] = {}
+        real_run = mf.subprocess.run
+
+        def spy(*args, **kwargs):
+            captured["env"] = kwargs.get("env")
+            captured["cmd"] = args[0] if args else kwargs.get("args")
+            return real_run(*args, **kwargs)
+
+        monkeypatch.setattr(mf.subprocess, "run", spy)
+        hits = run_f821(tree)
+        assert not (tree / "PLANTED").exists()
+        env = captured["env"]
+        assert isinstance(env, dict)
+        assert "GITHUB_TOKEN" not in env
+        assert "GH_TOKEN" not in env
+        assert "ACTIONS_RUNTIME_TOKEN" not in env
+        cmd = captured["cmd"]
+        assert isinstance(cmd, list)
+        assert "--isolated" in cmd
+        assert any("F821" in hit and "not_defined" in hit for hit in hits)
 
 
 class TestChecksApi:
@@ -327,6 +403,99 @@ class TestChecksApi:
             )
 
 
+class _JsonResp:
+    def __init__(self, payload):
+        self._payload = json.dumps(payload).encode("utf-8")
+
+    def read(self):
+        return self._payload
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+
+class TestReeval:
+    def test_posts_one_check_per_pr_with_that_prs_conclusion(self, tmp_path):
+        posts: list[dict] = []
+
+        def opener(request, timeout=30):
+            if request.data is None:
+                return _JsonResp(
+                    [
+                        {"number": 11, "head": {"sha": "aaa111"}},
+                        {"number": 22, "head": {"sha": "bbb222"}},
+                    ]
+                )
+            posts.append(json.loads(request.data.decode("utf-8")))
+            return _JsonResp({})
+
+        def fetch(_repo, sha):
+            return f"refs/{sha}"
+
+        def evaluate(_repo, _base, ref, max_behind=MAX_BEHIND):
+            if "aaa" in ref:
+                return decide(behind=0)
+            return decide(behind=0, merge_conflict=True)
+
+        assert (
+            reeval_open_prs(
+                repo_root=tmp_path,
+                base="main",
+                token="t",
+                repo_slug="MakazhanAlpamys/Soup",
+                opener=opener,
+                fetch_commit=fetch,
+                evaluate=evaluate,
+            )
+            == 0
+        )
+        assert len(posts) == 2
+        by_sha = {item["head_sha"]: item["conclusion"] for item in posts}
+        assert by_sha["aaa111"] == "success"
+        assert by_sha["bbb222"] == "failure"
+        assert all(item["name"] == CHECK_NAME for item in posts)
+
+    def test_http_error_on_one_pr_does_not_abandon_the_rest(self, tmp_path):
+        posts: list[dict] = []
+
+        def opener(request, timeout=30):
+            if request.data is None:
+                return _JsonResp(
+                    [
+                        {"number": 1, "head": {"sha": "deadbeef"}},
+                        {"number": 2, "head": {"sha": "cafebabe"}},
+                    ]
+                )
+            body = json.loads(request.data.decode("utf-8"))
+            if body["head_sha"] == "deadbeef":
+                raise HTTPError(request.full_url, 403, "Forbidden", {}, None)
+            posts.append(body)
+            return _JsonResp({})
+
+        def fetch(_repo, sha):
+            return f"refs/{sha}"
+
+        def evaluate(_repo, _base, _ref, max_behind=MAX_BEHIND):
+            return decide(behind=0)
+
+        assert (
+            reeval_open_prs(
+                repo_root=tmp_path,
+                base="main",
+                token="t",
+                repo_slug="MakazhanAlpamys/Soup",
+                opener=opener,
+                fetch_commit=fetch,
+                evaluate=evaluate,
+            )
+            == 0
+        )
+        assert [item["head_sha"] for item in posts] == ["cafebabe"]
+
+
 class TestWorkflowPins:
     def _loaded(self):
         # PyYAML 1.1 treats `on:` as boolean True.
@@ -398,6 +567,38 @@ class TestWorkflowPins:
         assert "merge-tree" in src and "--write-tree" in src
         assert "merge --no-edit --no-ff" not in src
 
+    def test_ruff_is_pinned(self):
+        jobs = self._loaded()["jobs"]
+        pinned = 0
+        for job in jobs.values():
+            for step in job["steps"]:
+                run = step.get("run", "")
+                if "pip install" in run and "ruff" in run:
+                    assert "ruff==" in run
+                    pinned += 1
+        assert pinned == 2
+
+    def test_job_if_conditions_are_pinned(self):
+        jobs = self._loaded()["jobs"]
+        assert jobs["gate"]["if"] == "github.event_name == 'pull_request'"
+        reeval_if = jobs["reeval-open-prs"]["if"]
+        assert "push" in reeval_if
+        assert "pull_request" not in reeval_if
+
+    def test_concurrency_cancels_in_progress_on_main_reeval(self):
+        conc = self._loaded()["concurrency"]
+        assert conc["cancel-in-progress"] is True
+        assert "main-reeval" in conc["group"]
+
+    def test_extractall_uses_the_data_filter(self):
+        src = SCRIPT.read_text(encoding="utf-8")
+        assert 'filter="data"' in src
+
+    def test_reeval_fetches_the_listed_sha_not_the_moving_ref(self):
+        src = SCRIPT.read_text(encoding="utf-8")
+        assert "pull/{number}/head" not in src
+        assert "{sha}:{ref}" in src
+
 
 class TestContributingDocumentsTheTrap:
     def test_the_frozen_merge_sha_is_named(self):
@@ -407,6 +608,8 @@ class TestContributingDocumentsTheTrap:
         assert "frozen" in text.lower() or "pins" in text.lower()
         assert CHECK_NAME in text
         assert "strict" in text.lower()
+        assert "self-graded" in text
+        assert "trustworthy" in text
 
     def test_the_script_module_is_the_one_definition_of_the_cap(self):
         src = SCRIPT.read_text(encoding="utf-8")

@@ -11,7 +11,8 @@
 # test cell still needs a contributor push; CONTRIBUTING says so.
 #
 # The reeval job holds checks:write and materialises untrusted fork heads
-# into trees. Nothing from those trees is executed — ruff only reads.
+# into trees. ruff is resolved before cwd, run --isolated, and tokens are
+# stripped so a planted ruff/ package cannot run with GITHUB_TOKEN.
 # Do not add `pip install -e .` or pytest against that tree.
 #
 # Timeout-minutes on ci.yml's test matrix is #1025, not this PR.
@@ -57,7 +58,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: pip install ruff
+      - run: pip install ruff==0.16.0
       - name: Gate the live merge
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -73,14 +74,14 @@ jobs:
     timeout-minutes: 30
     steps:
       # This job must run main's tree, never a PR's. The script then fetches
-      # pull/N/head as data and ruff's the merged result without executing it.
+      # each listed head SHA (not pull/N/head) and ruffs the merged result.
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: pip install ruff
+      - run: pip install ruff==0.16.0
       - name: Re-evaluate open PRs against live main
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

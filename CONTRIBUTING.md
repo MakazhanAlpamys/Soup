@@ -542,7 +542,10 @@ steps. It does not re-run the 13-job test matrix.
 every merge. A docs-only pre-merge procedure is what maintainers already do by
 hand and is not a control — GitHub will still merge a CLEAN PR on stale marks.
 Ask a maintainer to add `merge-freshness` to the required checks on `main` so
-the GitHub merge button honours it.
+the GitHub merge button honours it. The `gate` job on a pull_request event runs
+the PR's own copy of `scripts/merge_freshness.py`, so it is self-graded. Only the
+`merge-freshness` check posted by the `reeval` job from `main`'s copy is
+trustworthy.
 
 Before merging anything, `gh pr checks` returning all-green is necessary and not
 sufficient. Compare the newest run's `created_at` against `main`'s commits since,

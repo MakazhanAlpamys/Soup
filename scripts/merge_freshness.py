@@ -113,7 +113,7 @@ def decide(
         return Verdict(
             Conclusion.FAILURE,
             "could not fetch PR head",
-            "GitHub did not expose pull/N/head for this PR. "
+            "Could not fetch the listed head SHA for this PR. "
             "A required check must not pass on a skipped evaluation.\n\n" + remedy,
         )
     if git_error:
@@ -204,7 +204,10 @@ def materialize_tree(repo: Path, tree: str, dest: Path) -> None:
         env=_git_env(),
     )
     with tarfile.open(fileobj=io.BytesIO(archive.stdout), mode="r:") as bundle:
-        bundle.extractall(dest)
+        try:
+            bundle.extractall(dest, filter="data")
+        except TypeError:
+            bundle.extractall(dest)
 
 
 def rebuild_merge(repo: Path, base: str, head: str, dest: Path) -> MergeBuild:
@@ -229,6 +232,7 @@ def run_f821(
         [
             "ruff",
             "check",
+            "--isolated",
             "--select",
             RUFF_SELECT,
             "--output-format",
@@ -359,18 +363,72 @@ def _git_env() -> dict[str, str]:
     return env
 
 
+def _scrub_token_env(env: dict[str, str]) -> dict[str, str]:
+    """Drop credentials so a planted module cannot post check runs."""
+    cleaned: dict[str, str] = {}
+    for key, value in env.items():
+        if key == "GITHUB_TOKEN" or key.startswith("GH_"):
+            continue
+        if key.startswith("ACTIONS_") and "TOKEN" in key:
+            continue
+        cleaned[key] = value
+    return cleaned
+
+
+def _ruff_invocation(argv: list[str], *, tree: Path) -> tuple[list[str], Path]:
+    """Resolve ruff before cwd changes, and isolate it from the tree.
+
+    ``python -m ruff`` with cwd=the PR tree puts that tree first on
+    ``sys.path``, so a top-level ``ruff/`` package runs instead of ruff,
+    with ``GITHUB_TOKEN`` still in the environment. Prefer the binary from
+    ``PATH``. If it is missing (a user-site install with no Scripts dir),
+    run ``python -m ruff`` from this trusted directory with absolute paths
+    so the tree is never ``sys.path[0]``. ``python -I -m ruff`` would also
+    isolate cwd, but it ignores user site and cannot see that install.
+    ``--isolated`` so the tree's ``[tool.ruff]`` cannot ignore F821.
+    """
+    rest = list(argv[1:])
+    if "--isolated" not in rest:
+        if rest[:1] == ["check"]:
+            rest = ["check", "--isolated", *rest[1:]]
+        else:
+            rest = ["--isolated", *rest]
+    resolved = shutil.which("ruff")
+    if resolved:
+        return [resolved, *rest], tree
+    abs_rest: list[str] = []
+    for item in rest:
+        candidate = tree / item
+        if item.startswith("-") or item == "check" or not candidate.exists():
+            abs_rest.append(item)
+        else:
+            abs_rest.append(str(candidate.resolve()))
+    cmd = [sys.executable]
+    if sys.version_info >= (3, 11):
+        cmd.append("-P")
+    cmd.extend(["-m", "ruff", *abs_rest])
+    return cmd, Path(__file__).resolve().parent
+
+
 def _run_ruff(argv: list[str], *, cwd: Path) -> subprocess.CompletedProcess[str]:
-    # ``python -m ruff`` survives a venv whose Scripts dir is not on PATH.
-    cmd = [sys.executable, "-m", "ruff", *argv[1:]]
+    cmd, run_cwd = _ruff_invocation(argv, tree=cwd)
+    env = _scrub_token_env(_git_env())
+    env["PYTHONSAFEPATH"] = "1"
     return subprocess.run(
-        cmd, cwd=cwd, check=False, capture_output=True, text=True
+        cmd,
+        cwd=run_cwd,
+        check=False,
+        capture_output=True,
+        text=True,
+        env=env,
     )
 
 
-def _fetch_pr_head(repo: Path, number: int) -> str | None:
-    ref = f"refs/pr/{number}"
+def _fetch_commit(repo: Path, sha: str) -> str | None:
+    """Fetch the listed head SHA, not ``pull/N/head`` which can move."""
+    ref = f"refs/pr-sha/{sha}"
     fetch = subprocess.run(
-        ["git", "fetch", "--no-tags", "origin", f"pull/{number}/head:{ref}"],
+        ["git", "fetch", "--no-tags", "origin", f"{sha}:{ref}"],
         cwd=repo,
         check=False,
         capture_output=True,
@@ -378,6 +436,9 @@ def _fetch_pr_head(repo: Path, number: int) -> str | None:
         env=_git_env(),
     )
     if fetch.returncode != 0:
+        return None
+    got = _git(repo, "rev-parse", ref).stdout.strip()
+    if got != sha:
         return None
     return ref
 
@@ -417,6 +478,57 @@ def _cmd_gate(args: argparse.Namespace) -> int:
     return verdict.exit_code
 
 
+def reeval_open_prs(
+    *,
+    repo_root: Path,
+    base: str,
+    token: str,
+    repo_slug: str,
+    api_url: str = "https://api.github.com",
+    max_behind: int = MAX_BEHIND,
+    opener: Callable[..., Any] | None = None,
+    fetch_commit: Callable[[Path, str], str | None] | None = None,
+    evaluate: Callable[..., Verdict] | None = None,
+) -> int:
+    """Evaluate every open PR and post ``merge-freshness`` on its listed SHA.
+
+    Continues after a Checks API HTTPError so one 403 does not abandon the rest.
+    """
+    heads = list_open_pr_heads(
+        repo=repo_slug, token=token, api_url=api_url, opener=opener
+    )
+    print(f"reevaluating {len(heads)} open PR(s) against {base}")
+    fetch = fetch_commit or _fetch_commit
+    measure = evaluate or evaluate_refs
+    posted = 0
+    for number, sha in heads:
+        ref = fetch(repo_root, sha)
+        if ref is None:
+            verdict = decide(behind=0, fetch_failed=True)
+        else:
+            verdict = measure(
+                repo_root, base, ref, max_behind=max_behind
+            )
+        print(f"#{number} {sha[:12]} {verdict.conclusion.value}: {verdict.title}")
+        try:
+            post_check_run(
+                repo=repo_slug,
+                sha=sha,
+                verdict=verdict,
+                token=token,
+                api_url=api_url,
+                opener=opener,
+            )
+            posted += 1
+        except urllib.error.HTTPError as exc:
+            print(
+                f"#{number} check run failed ({exc.code}): {exc.reason}",
+                file=sys.stderr,
+            )
+    print(f"posted {posted} check run(s)")
+    return 0
+
+
 def _cmd_reeval(args: argparse.Namespace) -> int:
     token = os.environ.get("GITHUB_TOKEN", "")
     repo_slug = os.environ.get("GITHUB_REPOSITORY", "")
@@ -427,36 +539,14 @@ def _cmd_reeval(args: argparse.Namespace) -> int:
         )
         return 1
     api_url = os.environ.get("GITHUB_API_URL", "https://api.github.com")
-    root = Path(args.repo_root).resolve()
-    heads = list_open_pr_heads(repo=repo_slug, token=token, api_url=api_url)
-    print(f"reevaluating {len(heads)} open PR(s) against {args.base}")
-    posted = 0
-    for number, sha in heads:
-        ref = _fetch_pr_head(root, number)
-        if ref is None:
-            verdict = decide(behind=0, fetch_failed=True)
-        else:
-            verdict = evaluate_refs(
-                root, args.base, ref, max_behind=args.max_behind
-            )
-        print(f"#{number} {sha[:12]} {verdict.conclusion.value}: {verdict.title}")
-        try:
-            post_check_run(
-                repo=repo_slug,
-                sha=sha,
-                verdict=verdict,
-                token=token,
-                api_url=api_url,
-            )
-            posted += 1
-        except urllib.error.HTTPError as exc:
-            print(
-                f"#{number} check run failed ({exc.code}): {exc.reason}",
-                file=sys.stderr,
-            )
-            return 1
-    print(f"posted {posted} check run(s)")
-    return 0
+    return reeval_open_prs(
+        repo_root=Path(args.repo_root).resolve(),
+        base=args.base,
+        token=token,
+        repo_slug=repo_slug,
+        api_url=api_url,
+        max_behind=args.max_behind,
+    )
 
 
 def _cmd_decide(args: argparse.Namespace) -> int:
