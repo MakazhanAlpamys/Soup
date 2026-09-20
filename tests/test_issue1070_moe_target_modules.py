@@ -262,6 +262,23 @@ MOE_RECIPE_BASE_MODEL_TYPES = {
     "moonshotai/Kimi-K2.5": "kimi_k25",
     "moonshotai/Kimi-K2.6": "kimi_k25",
     "zai-org/GLM-5.1": "glm_moe_dsa",
+    # The three below set NO MoE flag in their recipe, so a sweep that finds
+    # MoE recipes by flag never saw them. Their configs declare experts all the
+    # same (measured: 32, 128 and 256 routed experts), and on ``main`` all three
+    # fail at attach exactly as the flagged ones do.
+    "openai/gpt-oss-20b": "gpt_oss",
+    "openai/gpt-oss-120b": "gpt_oss",
+    "MiniMaxAI/MiniMax-M2": "minimax_m2",
+}
+
+#: Recipe bases that are MoE by architecture but set no MoE flag, with the
+#: routed-expert count read from each config.json. A MoE recipe is one whose
+#: base declares experts, not one that sets ``moe_lora`` -- the first version
+#: of this ratchet conflated the two and was blind to these three.
+MOE_RECIPE_BASES_WITHOUT_FLAGS = {
+    "openai/gpt-oss-20b": 32,
+    "openai/gpt-oss-120b": 128,
+    "MiniMaxAI/MiniMax-M2": 256,
 }
 
 #: Bases whose ``model_type`` cannot be read, so the table cannot cover them and
@@ -282,7 +299,12 @@ _ALREADY_MAPPED = {"qwen3_5", "qwen3_5_text", "qwen3_5_moe", "qwen3_5_moe_text"}
 
 
 def _moe_recipe_bases():
-    """Every shipped recipe that sets a MoE knob, by base."""
+    """Every shipped recipe that sets a MoE knob, by base.
+
+    This is one of two ways a recipe counts as MoE; the other is its base being
+    in :data:`MOE_RECIPE_BASES_WITHOUT_FLAGS`. Neither alone is complete -- see
+    :func:`_all_moe_recipe_bases`.
+    """
     bases = {}
     for recipe in list_recipes():
         config = yaml.safe_load(recipe.yaml_str)
@@ -300,6 +322,19 @@ def _moe_recipe_bases():
     return bases
 
 
+def _all_moe_recipe_bases():
+    """Flagged recipes, plus recipes whose base is MoE by architecture."""
+    bases = _moe_recipe_bases()
+    for recipe in list_recipes():
+        config = yaml.safe_load(recipe.yaml_str)
+        base = config.get("base")
+        if base in MOE_RECIPE_BASES_WITHOUT_FLAGS:
+            models = bases.setdefault(base, [])
+            if recipe.model not in models:
+                models.append(recipe.model)
+    return bases
+
+
 class TestTheRatchet:
     """Fails when MoE recipe 32 arrives with a ``model_type`` the table does not
     cover -- the shape the maintainer asked for, one level up from #798's dropout
@@ -307,7 +342,7 @@ class TestTheRatchet:
 
     def test_every_moe_recipe_base_has_a_recorded_model_type(self):
         known = set(MOE_RECIPE_BASE_MODEL_TYPES) | set(UNRESOLVABLE_MOE_RECIPE_BASES)
-        unrecorded = sorted(set(_moe_recipe_bases()) - known)
+        unrecorded = sorted(set(_all_moe_recipe_bases()) - known)
 
         assert unrecorded == [], (
             "A MoE recipe names a base whose model_type is not recorded:\n  "
@@ -345,9 +380,24 @@ class TestTheRatchet:
         assert len(UNRESOLVABLE_MOE_RECIPE_BASES) == 2
 
     def test_the_recipe_sweep_finds_the_expected_shape(self):
-        """Sanity for the two tests above: if the sweep silently found nothing,
-        they would both pass while checking nothing at all."""
-        bases = _moe_recipe_bases()
+        """Sanity for the tests above: if the sweep silently found nothing, they
+        would pass while checking nothing at all. Both selectors are pinned."""
+        flagged = _moe_recipe_bases()
+        everything = _all_moe_recipe_bases()
 
-        assert len(bases) == 16, sorted(bases)
-        assert sum(len(models) for models in bases.values()) == 31
+        assert len(flagged) == 16, sorted(flagged)
+        assert sum(len(models) for models in flagged.values()) == 31
+        assert len(everything) == 19, sorted(everything)
+        assert sum(len(models) for models in everything.values()) == 34
+
+    def test_the_unflagged_moe_bases_are_used_and_unflagged(self):
+        """Each entry must name a base a shipped recipe uses (no stale rows), and
+        one that really sets no MoE flag -- otherwise it belongs in the flagged
+        sweep and this table is padding."""
+        flagged = _moe_recipe_bases()
+        used = {yaml.safe_load(r.yaml_str).get("base") for r in list_recipes()}
+
+        for base, experts in MOE_RECIPE_BASES_WITHOUT_FLAGS.items():
+            assert base in used, f"{base}: no recipe uses it any more"
+            assert base not in flagged, f"{base}: sets a MoE flag, move it"
+            assert experts > 1, base

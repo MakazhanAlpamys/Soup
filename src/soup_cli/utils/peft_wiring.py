@@ -87,6 +87,12 @@ _DEEPSEEK_V3_ATTENTION = (
 
 MOE_TEXT_LORA_TARGETS: dict[str, Any] = {
     "qwen3_moe": ("q_proj", "k_proj", "v_proj", "o_proj"),
+    # Two MoE bases whose recipes set no MoE flag at all, so the flag-based
+    # sizing of this table missed them; found by attaching every shipped config
+    # on the meta device. Both keep their experts as fused 3-D parameters, like
+    # qwen3_moe, and expose the same four attention projections.
+    "gpt_oss": ("q_proj", "k_proj", "v_proj", "o_proj"),
+    "minimax_m2": ("q_proj", "k_proj", "v_proj", "o_proj"),
     "deepseek_v3": _DEEPSEEK_V3_ATTENTION,
     # V4 splits the output projection and drops the MQA compression on the
     # key/value side, so its names are not V3's.
