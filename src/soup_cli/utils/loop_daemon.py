@@ -27,7 +27,12 @@ from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from typing import Callable, Mapping, Optional
 
-from soup_cli.utils.canary_router import BucketStats, CanaryPolicy, rollback
+from soup_cli.utils.canary_router import (
+    BucketStats,
+    CanaryPolicy,
+    read_bucket_stats,
+    rollback,
+)
 from soup_cli.utils.loop_budget import (
     BudgetDecision,
     check_budget,
@@ -98,6 +103,7 @@ class WatchConfig:
     poll_interval_sec: float = 60.0
     max_iterations: Optional[int] = None  # None = unbounded (real daemon)
     state_path: Optional[str] = None
+    canary_stats_path: Optional[str] = None
     iteration_dir: Optional[str] = None
     harvest_fn: HarvestFn = default_harvest
     train_fn: TrainFn = default_train
@@ -157,6 +163,15 @@ def run_once(
         state.runs_today, state.last_run_date
     )
     state = _state_with(state, runs_today=runs_today, last_run_date=today)
+    canary_verdict, rollback_policy = _evaluate_active_canary(state, config)
+    rolled_back = rollback_policy is not None
+    if rollback_policy is not None:
+        state = _state_with(
+            state,
+            canary_active=rollback_policy.canary,
+            canary_traffic_pct=rollback_policy.traffic_pct,
+            canary_rollout_id=None,
+        )
     estimated = float(config.cost_fn(state))
     decision = check_budget(
         estimated_run_usd=estimated,
@@ -175,9 +190,9 @@ def run_once(
             pairs_harvested=0,
             run_id=None,
             gate_verdict="SKIPPED",
-            canary_verdict=None,
+            canary_verdict=canary_verdict,
             shipped=False,
-            rolled_back=False,
+            rolled_back=rolled_back,
             estimated_cost_usd=estimated,
             notes=f"budget-skip: {decision.reason}",
         )
@@ -187,11 +202,11 @@ def run_once(
     gate_out = dict(config.gate_fn(state, train_out))
     deploy_out = dict(config.deploy_fn(state, {**train_out, **gate_out}))
     gate_verdict = str(gate_out.get("gate_verdict", "SKIPPED"))
-    canary_verdict = deploy_out.get("canary_verdict")
-    if canary_verdict is not None:
-        canary_verdict = str(canary_verdict)
+    deploy_verdict = deploy_out.get("canary_verdict")
+    if canary_verdict is None and deploy_verdict is not None:
+        canary_verdict = str(deploy_verdict)
     shipped = bool(deploy_out.get("deployed", False))
-    rolled_back = bool(deploy_out.get("rolled_back", False))
+    rolled_back = rolled_back or bool(deploy_out.get("rolled_back", False))
     pairs = int(harvest_out.get("pairs_harvested", 0) or 0)
     if pairs < 0:
         pairs = 0
@@ -227,6 +242,33 @@ def run_once(
         last_run_date=today,
     )
     return new_state, record, decision
+
+
+def _evaluate_active_canary(
+    state: LoopState, config: WatchConfig
+) -> "tuple[Optional[str], Optional[CanaryPolicy]]":
+    """Read live bucket outcomes and return a sticky rollback policy if needed."""
+    if state.canary_active is None:
+        return None, None
+    try:
+        policy = CanaryPolicy(
+            stable=state.served_model,
+            canary=state.canary_active,
+            traffic_pct=float(state.canary_traffic_pct or 0.0),
+        )
+        stats = read_bucket_stats(
+            stable=policy.stable,
+            canary=policy.canary,
+            rollout_id=state.canary_rollout_id,
+            path=config.canary_stats_path,
+        )
+        verdict = evaluate_canary_verdict(stats)
+    except (OSError, TypeError, ValueError):
+        _LOG.warning("canary stats read failed", exc_info=True)
+        return None, None
+    if verdict == "MAJOR" and state.canary_autoroll_on_regress:
+        return verdict, maybe_rollback(policy, verdict)
+    return verdict, None
 
 
 def watch(config: WatchConfig) -> "tuple[LoopState, int]":

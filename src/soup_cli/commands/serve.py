@@ -1630,6 +1630,8 @@ def _create_app(
     loaded_bank: Any = None,
     mole_runtime: Any = None,
     kv_cache_generate_kwargs: Optional[Dict[str, Any]] = None,
+    canary_state_path: Optional[str] = None,
+    canary_stats_path: Optional[str] = None,
 ):
     """Create the FastAPI application with OpenAI-compatible endpoints.
 
@@ -1718,6 +1720,12 @@ def _create_app(
             default=None,
             description="Adapter name to use (from --adapters flag).",
         )
+        conversation_id: Optional[str] = Field(
+            default=None,
+            min_length=1,
+            max_length=512,
+            description="Stable key used by the soup loop canary router.",
+        )
 
     # Resolved adapter map (name → path)
     _adapter_map = adapter_map or {}
@@ -1738,6 +1746,55 @@ def _create_app(
     def _active_snapshot() -> Optional[str]:
         with active_lock:
             return active_state["active"]
+
+    def _canary_adapter(conversation_id: Optional[str]):
+        """Resolve one automatic canary route, or preserve normal activation."""
+        if not conversation_id or _mole_runtime is not None or not _peft_adapter_names:
+            return None, None
+        from soup_cli.utils.canary_router import CanaryPolicy, route
+        from soup_cli.utils.loop_state import read_state
+
+        try:
+            state = read_state(canary_state_path)
+            if state.canary_active is None or not state.canary_traffic_pct:
+                return None, None
+            policy = CanaryPolicy(
+                stable=state.served_model,
+                canary=state.canary_active,
+                traffic_pct=float(state.canary_traffic_pct),
+            )
+            decision = route(policy, conversation_id)
+        except (FileNotFoundError, OSError, TypeError, ValueError):
+            logger.debug("canary policy unavailable", exc_info=True)
+            return None, None
+        if decision.bucket == "canary":
+            if decision.adapter not in _peft_adapter_names:
+                logger.warning("canary adapter %r is not loaded", decision.adapter)
+                return None, None
+            return decision.adapter, (policy, decision.bucket, state.canary_rollout_id)
+        if decision.adapter in _peft_adapter_names:
+            return decision.adapter, (policy, decision.bucket, state.canary_rollout_id)
+        # The stable model normally is the unadapted base. An empty explicit
+        # selection makes _adapter_scope disable adapters even if a manual
+        # full-cutover adapter is active.
+        return "", (policy, decision.bucket, state.canary_rollout_id)
+
+    def _record_canary_outcome(tracking, ok: bool) -> None:
+        if tracking is None:
+            return
+        from soup_cli.utils.canary_router import record_bucket_outcome
+
+        policy, bucket, rollout_id = tracking
+        try:
+            record_bucket_outcome(
+                policy,
+                bucket,
+                ok,
+                rollout_id=rollout_id,
+                path=canary_stats_path,
+            )
+        except (OSError, TypeError, ValueError):
+            logger.warning("canary outcome write failed", exc_info=True)
 
     @app.get("/health")
     def health():
@@ -1805,6 +1862,9 @@ def _create_app(
     def chat_completions(
         request: ChatCompletionRequest,
         x_user_id: Optional[str] = Header(default=None, alias="X-User-Id"),
+        x_conversation_id: Optional[str] = Header(
+            default=None, alias="X-Conversation-Id"
+        ),
     ):
         # Check adapter selection (from request body)
         requested_adapter = request.adapter
@@ -1819,6 +1879,13 @@ def _create_app(
                 status_code=404,
                 detail="No adapters loaded.",
             )
+        canary_tracking = None
+        if requested_adapter is None:
+            routed_adapter, canary_tracking = _canary_adapter(
+                request.conversation_id or x_conversation_id
+            )
+            if canary_tracking is not None:
+                requested_adapter = routed_adapter
 
         # v0.71.12 #221 — select the active VeRA / VB-LoRA user for this
         # request. set_active_user(None) (or an unknown id) self-clears, so
@@ -1852,6 +1919,9 @@ def _create_app(
                     adapter_names=_peft_adapter_names,
                     requested_adapter=requested_adapter,
                     active_adapter=_active_snapshot(),
+                    canary_outcome=(
+                        lambda ok: _record_canary_outcome(canary_tracking, ok)
+                    ),
                 ),
                 media_type="text/event-stream",
             )
@@ -1914,6 +1984,7 @@ def _create_app(
                                 kv_cache_generate_kwargs=kv_cache_generate_kwargs,
                             )
                 except Exception:
+                    _record_canary_outcome(canary_tracking, False)
                     logger.exception("Generation error")
                     raise HTTPException(status_code=500, detail="Internal server error")
 
@@ -1948,7 +2019,7 @@ def _create_app(
                         tokens=completion_tokens,
                     )
 
-                return {
+                result = {
                     "id": f"chatcmpl-{uuid.uuid4().hex[:8]}",
                     "object": "chat.completion",
                     "created": int(time.time()),
@@ -1969,6 +2040,8 @@ def _create_app(
                         "total_tokens": prompt_tokens + completion_tokens,
                     },
                 }
+                _record_canary_outcome(canary_tracking, True)
+                return result
             finally:
                 # Always record latency so tail-latency percentiles include
                 # error paths (prevents blind spots on the dashboard).
@@ -2355,6 +2428,7 @@ def _stream_response(
     loaded_bank=None, x_user_id=None,
     adapter_lock=None, adapter_names=None,
     requested_adapter=None, active_adapter=None,
+    canary_outcome=None,
 ):
     """Generator that yields SSE chunks for streaming responses."""
     chat_id = f"chatcmpl-{uuid.uuid4().hex[:8]}"
@@ -2399,9 +2473,14 @@ def _stream_response(
                     kv_cache_generate_kwargs=kv_cache_generate_kwargs,
                 )
     except Exception:
+        if canary_outcome is not None:
+            canary_outcome(False)
         logger.exception("Stream generation error")
         yield 'data: {"error": "Internal server error"}\n\n'
         return
+
+    if canary_outcome is not None:
+        canary_outcome(True)
 
     # Simulate streaming by sending word-by-word
     words = response_text.split(" ")

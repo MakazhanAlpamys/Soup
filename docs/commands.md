@@ -169,7 +169,7 @@ soup loop init <model> --eval <s> --baseline <b> [--pre-wired]  Create .soup/loo
 soup loop status                              Counters + status + pre_wired flag
 soup loop watch [--detach] [--max-iter N] [--pre-wired] [--pack-cans]  Harvest → train → gate → deploy daemon (pre-wired stages + Soup Can packing)
 soup loop pause / soup loop resume           Atomic status flip
-soup loop canary <adapter> --traffic 5%      Promote canary + auto-rollback on MAJOR
+soup loop canary <adapter> --traffic 5%      Route keyed serve traffic to a loaded adapter; watch auto-rolls back on MAJOR
 soup loop replay [<iter-id>] [--extract <dir>]  Replay / unpack a recorded iteration manifest
 soup serve --model m --adapters chat=./c code=./d  Multi-adapter serving
 soup migrate --from llamafactory config.yaml  Import config from LLaMA-Factory
