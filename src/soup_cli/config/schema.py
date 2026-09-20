@@ -3926,7 +3926,7 @@ class TrainingConfig(BaseModel):
 
     @model_validator(mode="after")
     def _validate_lorafa_compat(self) -> "TrainingConfig":
-        """#725 — LoRA-FA mutual exclusion with LoRA+ and GaLore."""
+        """#725 — LoRA-FA mutual exclusion with LoRA+, GaLore, and VeRA."""
         if self.use_lorafa and self.loraplus_lr_ratio is not None:
             raise ValueError(
                 "training.use_lorafa and training.loraplus_lr_ratio are mutually exclusive: "
@@ -3938,6 +3938,13 @@ class TrainingConfig(BaseModel):
                 "training.use_lorafa and training.use_galore are mutually exclusive: "
                 "LoRA-FA tunes LoRA B matrices while GaLore projects full-parameter gradients. "
                 "Enable one, not both."
+            )
+        if self.use_lorafa and getattr(self.lora, "use_vera", False):
+            raise ValueError(
+                "training.use_lorafa and training.lora.use_vera are mutually exclusive: "
+                "VeRA freezes random projection matrices and trains scaling vectors, "
+                "so peft's create_lorafa_optimizer finds no trainable lora_* matrices "
+                "and silently degrades to plain AdamW."
             )
         if self.use_lorafa and self.optimizer is not None and self.optimizer not in (
             "adamw_torch",

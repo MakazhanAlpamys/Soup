@@ -359,3 +359,92 @@ def test_soup_config_lorafa_task_and_backend_gating(tmp_path):
             data={"train": str(data_file), "format": "alpaca"},
             training=TrainingConfig(use_lorafa=True),
         )
+
+
+def test_lorafa_conflicts_with_lisa_spectrum_and_fullft(tmp_path):
+    from pydantic import ValidationError
+
+    from soup_cli.config.schema import SoupConfig, TrainingConfig
+
+    data_file = tmp_path / "train.jsonl"
+    data_file.write_text('{"instruction": "a", "output": "b"}\n', encoding="utf-8")
+
+    # 1. LISA conflict
+    with pytest.raises(ValidationError, match="use_lorafa"):
+        SoupConfig(
+            base="some-model",
+            task="sft",
+            backend="transformers",
+            data={"train": str(data_file), "format": "alpaca"},
+            training=TrainingConfig(
+                lisa_enabled=True,
+                use_lorafa=True,
+                quantization="none",
+            ),
+        )
+
+    # 2. Spectrum conflict (unfrozen_parameters)
+    with pytest.raises(ValidationError, match="use_lorafa"):
+        SoupConfig(
+            base="some-model",
+            task="sft",
+            backend="transformers",
+            data={"train": str(data_file), "format": "alpaca"},
+            training=TrainingConfig(
+                unfrozen_parameters=["layers.0.*"],
+                use_lorafa=True,
+                quantization="none",
+            ),
+        )
+
+    # 3. Full fine-tuning (lora.r: 0) conflict
+    with pytest.raises(ValidationError, match="use_lorafa"):
+        SoupConfig(
+            base="some-model",
+            task="sft",
+            backend="transformers",
+            data={"train": str(data_file), "format": "alpaca"},
+            training=TrainingConfig(
+                lora={"r": 0},
+                use_lorafa=True,
+                quantization="none",
+            ),
+        )
+
+
+def test_lorafa_conflicts_with_vera(tmp_path):
+    from pydantic import ValidationError
+
+    from soup_cli.config.schema import LoraConfig, TrainingConfig
+
+    # Parse-time refusal
+    with pytest.raises(ValidationError, match="mutually exclusive.*use_vera"):
+        TrainingConfig(use_lorafa=True, lora={"r": 16, "alpha": 16, "use_vera": True})
+
+    # Runtime refusal in attach_lorafa_optimizer
+    model = _tiny_peft_model()
+    trainer = _trainer(model, tmp_path)
+    with pytest.raises(ValueError, match="mutually exclusive.*use_vera"):
+        attach_lorafa_optimizer(
+            trainer,
+            _TCfg(use_lorafa=True, lora=LoraConfig(r=16, alpha=16, use_vera=True)),
+        )
+
+
+def test_lorafa_preserves_custom_betas_and_eps(tmp_path):
+    from transformers import Trainer, TrainingArguments
+
+    model = _tiny_peft_model()
+    args = TrainingArguments(
+        output_dir=str(tmp_path),
+        learning_rate=1e-4,
+        adam_beta1=0.88,
+        adam_beta2=0.95,
+        adam_epsilon=1e-7,
+    )
+    trainer = Trainer(model=model, args=args)
+    attach_lorafa_optimizer(trainer, _TCfg(use_lorafa=True))
+    for group in trainer.optimizer.param_groups:
+        assert group["betas"] == (0.88, 0.95)
+        assert group["eps"] == 1e-7
+

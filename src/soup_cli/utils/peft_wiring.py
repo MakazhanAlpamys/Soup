@@ -381,6 +381,16 @@ def attach_lorafa_optimizer(trainer: Any, tcfg: Any) -> bool:
             "LoRA+ tunes them with separate learning rates. Enable one, not both."
         )
 
+    # VeRA trains scaling vectors, not LoRA B matrices; create_lorafa_optimizer
+    # finds no trainable lora_* parameters and silently degrades to plain AdamW.
+    if getattr(getattr(tcfg, "lora", None), "use_vera", False):
+        raise ValueError(
+            "training.use_lorafa is mutually exclusive with training.lora.use_vera: "
+            "VeRA freezes random projection matrices and trains scaling vectors, "
+            "so peft's create_lorafa_optimizer finds no trainable lora_* matrices "
+            "and silently degrades to plain AdamW."
+        )
+
     # LoRA-FA optimizes gradients using an AdamW projection in LoraFAOptimizer.
     # An explicitly configured non-AdamW optimizer would be silently overridden.
     opt_name = getattr(tcfg, "optimizer", None)
