@@ -259,7 +259,7 @@ def _evaluate_active_canary(
         )
         stats = read_bucket_stats(
             stable=policy.stable,
-            canary=policy.canary,
+            canary=active_canary,
             rollout_id=state.canary_rollout_id,
             path=config.canary_stats_path,
         )
