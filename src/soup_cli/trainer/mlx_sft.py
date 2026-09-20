@@ -338,15 +338,18 @@ class MLXSFTTrainerWrapper:
             )
         if getattr(tcfg, "loss_watchdog", False):
             unsupported.append(
-                "training.loss_watchdog (MLX does not attach a live training callback)"
+                "training.loss_watchdog (Soup does not implement the watchdog "
+                "on the MLX callback, which has no stop control)"
             )
         if getattr(tcfg, "loss_spike_recovery", False):
             unsupported.append(
-                "training.loss_spike_recovery (MLX does not attach a live training callback)"
+                "training.loss_spike_recovery "
+                "(there is no checkpoint rollback or LR decay on MLX)"
             )
         if getattr(tcfg, "grad_accum_auto_tune", False):
             unsupported.append(
-                "training.grad_accum_auto_tune (MLX does not attach a live training callback)"
+                "training.grad_accum_auto_tune "
+                "(there is no VRAM-pressure signal on unified memory)"
             )
         if unsupported:
             console.print(

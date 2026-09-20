@@ -4,30 +4,44 @@ are rejected and reported as unread on backend: mlx.
 
 from __future__ import annotations
 
+import re
 from types import SimpleNamespace
 
 import pytest
 
-from soup_cli.config.backend_support import check_config, unsupported_for
+from soup_cli.config.backend_support import REJECTED, check_config, unsupported_for
 from soup_cli.config.schema import SoupConfig, TrainingConfig
 from tests.conftest import strip_ansi
 
 
 class TestSchemaRejectionOnMlxBackend:
     """Validate that backend: mlx rejects watchdog, spike recovery,
-    and grad_accum_auto_tune at config validation time.
+    and grad_accum_auto_tune at config validation time with exact reasons.
     """
 
     @pytest.mark.parametrize(
-        ("field", "training_payload"),
+        ("field", "training_payload", "reason"),
         [
-            ("loss_watchdog", {"loss_watchdog": True}),
-            ("loss_spike_recovery", {"loss_watchdog": True, "loss_spike_recovery": True}),
-            ("grad_accum_auto_tune", {"grad_accum_auto_tune": True}),
+            (
+                "loss_watchdog",
+                {"loss_watchdog": True},
+                "Soup does not implement the watchdog on the MLX callback, "
+                "which has no stop control",
+            ),
+            (
+                "loss_spike_recovery",
+                {"loss_watchdog": True, "loss_spike_recovery": True},
+                "there is no checkpoint rollback or LR decay on MLX",
+            ),
+            (
+                "grad_accum_auto_tune",
+                {"grad_accum_auto_tune": True},
+                "there is no VRAM-pressure signal on unified memory",
+            ),
         ],
     )
     def test_mlx_backend_rejects_monitoring_flags(
-        self, field: str, training_payload: dict
+        self, field: str, training_payload: dict, reason: str
     ) -> None:
         cfg_kwargs = {
             "base": "sshleifer/tiny-gpt2",
@@ -38,7 +52,7 @@ class TestSchemaRejectionOnMlxBackend:
         }
         pattern = (
             rf"training\.{field} is not supported for backend='mlx' "
-            r"because 'mlx' does not attach a live training callback"
+            rf"because {re.escape(reason)}"
         )
         with pytest.raises(ValueError, match=pattern):
             SoupConfig(**cfg_kwargs)
@@ -62,19 +76,22 @@ class TestSchemaRejectionOnMlxBackend:
 
 class TestBackendSupportRegistryAndDoctor:
     """Verify backend_support registry and check_config declare and report
-    all three unread monitoring fields for (sft, mlx).
+    all three unread monitoring fields for (sft, mlx) as REJECTED.
     """
 
-    def test_registry_contains_all_three_monitoring_fields(self) -> None:
+    def test_registry_contains_all_three_monitoring_fields_as_rejected(self) -> None:
         entries = {e.field: e for e in unsupported_for("sft", "mlx")}
-        for field in (
-            "training.loss_watchdog",
-            "training.loss_spike_recovery",
-            "training.grad_accum_auto_tune",
-        ):
-            assert field in entries
-            assert entries[field].trainer_reads is True
-            assert "live training callback" in entries[field].reason
+        assert entries["training.loss_watchdog"].status == REJECTED
+        assert "watchdog on the MLX callback" in entries["training.loss_watchdog"].reason
+        assert entries["training.loss_watchdog"].trainer_reads is True
+
+        assert entries["training.loss_spike_recovery"].status == REJECTED
+        assert "checkpoint rollback" in entries["training.loss_spike_recovery"].reason
+        assert entries["training.loss_spike_recovery"].trainer_reads is True
+
+        assert entries["training.grad_accum_auto_tune"].status == REJECTED
+        assert "VRAM-pressure" in entries["training.grad_accum_auto_tune"].reason
+        assert entries["training.grad_accum_auto_tune"].trainer_reads is True
 
     def test_check_config_reports_declared_gaps(self) -> None:
         cfg = SoupConfig.model_construct(
@@ -88,7 +105,6 @@ class TestBackendSupportRegistryAndDoctor:
                 grad_accum_auto_tune=True,
             ),
         )
-        # model_fields_set on TrainingConfig marks what was explicitly written
         reported = {e.field for e in check_config(cfg)}
         assert "training.loss_watchdog" in reported
         assert "training.loss_spike_recovery" in reported
@@ -114,35 +130,19 @@ class TestMlxTrainerCheckUnsupported:
         wrapper._check_unsupported()
         out = " ".join(strip_ansi(capsys.readouterr().out).split())
 
-        assert "training.loss_watchdog" in out
-        assert "training.loss_spike_recovery" in out
-        assert "training.grad_accum_auto_tune" in out
-        assert "MLX does not attach a live training callback" in out
-
-
-class TestMutationChecks:
-    """Mutation checks guaranteeing that removing the refusal or warnings fails tests."""
-
-    def test_mutation_removing_backend_refusal_fails_rejection(self) -> None:
-        # A config without backend check would pass instantiation
-        # Test that SoupConfig explicitly refuses it
-        with pytest.raises(ValueError, match="backend='mlx'"):
-            SoupConfig(
-                base="sshleifer/tiny-gpt2",
-                task="sft",
-                backend="mlx",
-                data={"train": "train.jsonl"},
-                training={"loss_watchdog": True},
-            )
-
-    def test_mutation_missing_warning_in_check_unsupported_fails(self, capsys) -> None:
-        from soup_cli.trainer.mlx_sft import MLXSFTTrainerWrapper
-
-        wrapper = object.__new__(MLXSFTTrainerWrapper)
-        wrapper.config = SimpleNamespace(
-            training=TrainingConfig(loss_watchdog=False),
-            data=SimpleNamespace(),
+        expected_watchdog = (
+            "training.loss_watchdog (Soup does not implement the watchdog "
+            "on the MLX callback, which has no stop control)"
         )
-        wrapper._check_unsupported()
-        out = strip_ansi(capsys.readouterr().out)
-        assert "training.loss_watchdog" not in out
+        expected_spike = (
+            "training.loss_spike_recovery "
+            "(there is no checkpoint rollback or LR decay on MLX)"
+        )
+        expected_tune = (
+            "training.grad_accum_auto_tune "
+            "(there is no VRAM-pressure signal on unified memory)"
+        )
+
+        assert expected_watchdog in out
+        assert expected_spike in out
+        assert expected_tune in out

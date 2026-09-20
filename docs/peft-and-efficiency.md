@@ -529,6 +529,9 @@ training:
   loss_watchdog_patience: 5     # Consecutive steps above threshold before stopping
 ```
 
+> **Backend Note:** Setting `loss_watchdog: true` is refused on `backend: mlx` at config validation (Soup does not implement the watchdog on the MLX callback, which has no stop control).
+
+
 
 ## Training Stability & Auto-Tuning
 
@@ -580,6 +583,8 @@ training:
   loss_spike_recovery_lr_decay: 0.5     # halve LR each recovery
 ```
 
+> **Backend Note:** Setting `loss_spike_recovery: true` is refused on `backend: mlx` at config validation (there is no checkpoint rollback or LR decay on MLX).
+
 ### Convergence Detector
 
 ```yaml
@@ -600,6 +605,8 @@ training:
   grad_accum_auto_tune: true
   grad_accum_pressure_threshold: 0.92
 ```
+
+> **Backend Note:** Setting `grad_accum_auto_tune: true` is refused on `backend: mlx` at config validation (there is no VRAM-pressure signal on unified memory).
 
 Records peak memory each step. When pressure crosses the threshold, recommends a new `(batch, accum)` pair preserving effective batch (capped at `accum=1024`).
 

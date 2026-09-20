@@ -7047,17 +7047,18 @@ class SoupConfig(BaseModel):
             if getattr(tcfg, "loss_spike_recovery", False):
                 raise ValueError(
                     f"training.loss_spike_recovery is not supported for backend={self.backend!r} "
-                    f"because {self.backend!r} does not attach a live training callback"
+                    "because there is no checkpoint rollback or LR decay on MLX"
                 )
             if getattr(tcfg, "loss_watchdog", False):
                 raise ValueError(
                     f"training.loss_watchdog is not supported for backend={self.backend!r} "
-                    f"because {self.backend!r} does not attach a live training callback"
+                    "because Soup does not implement the watchdog on the MLX callback, "
+                    "which has no stop control"
                 )
             if getattr(tcfg, "grad_accum_auto_tune", False):
                 raise ValueError(
                     f"training.grad_accum_auto_tune is not supported for backend={self.backend!r} "
-                    f"because {self.backend!r} does not attach a live training callback"
+                    "because there is no VRAM-pressure signal on unified memory"
                 )
         return self
 
