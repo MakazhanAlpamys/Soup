@@ -178,7 +178,7 @@ class TestGradcheckFloat64:
         ), f"unexpected refusal: {caught.value}"
 
     def test_x_that_needs_no_grad_still_gets_correct_parameter_grads(self):
-        """``needs_input_grad[0]`` false is the layer-0 case, and the measured 2x.
+        """``needs_input_grad[0]`` false is the layer-0 case, and where the skip pays.
 
         The dX GEMM is skipped there; dA and dB must still be right, because the
         adapter is what is being trained.
@@ -698,7 +698,10 @@ class TestStreamedModel:
         from safetensors.torch import save_file
         from transformers import AutoModelForCausalLM, LlamaConfig, LlamaForCausalLM
 
-        from soup_cli.utils.fast_lora import patch_fast_lora_single_projection
+        from soup_cli.utils.fast_lora import (
+            patch_fast_lora_single_projection,
+            unpatch_fast_lora_single_projection,
+        )
         from soup_cli.utils.layer_shard import shard_checkpoint
         from soup_cli.utils.layer_stream_runtime import build_streamed_model
 
@@ -768,7 +771,14 @@ class TestStreamedModel:
                 dst[name].copy_(param)
             copied += 1
         assert copied == 16
+        # The resident twin is a matchable target, but it is left UNPATCHED so
+        # the comparison below is kernel against peft rather than kernel against
+        # kernel. The kernel is the streamed side on purpose: #331 is a claim
+        # about the kernel's saved references surviving the streamed pools, so
+        # the kernel is what has to run there. patch+unpatch is the control that
+        # this twin was patchable in the first place.
         assert patch_fast_lora_single_projection(resident) == 8
+        assert unpatch_fast_lora_single_projection(resident) == 8
 
         torch.manual_seed(11)
         input_ids = torch.randint(0, 64, (1, 8))
@@ -920,3 +930,83 @@ class TestMicroBenchmark:
         nf4_fast_ms = self._time_fwd_bwd(nf4.linear, x)
         assert torch.isfinite(nf4.linear(x)).all()
         print(f"#839 o_proj bf16 nf4: peft={nf4_plain_ms:.2f}ms fast={nf4_fast_ms:.2f}ms")
+
+
+class TestTheFastPathIsActuallyTaken:
+    """#839 review: nothing pinned that the kernel runs at all.
+
+    Every other parity test is a "matches unpatched peft" assertion, which is
+    trivially true when the patched forward delegates to peft. The suite could
+    not tell "correct" from "absent": make ``_fast_lora_single_forward``
+    delegate unconditionally and the whole file stays green.
+
+    These two tests assert the kernel was TAKEN, from the two sides that only
+    the kernel can satisfy.
+    """
+
+    def test_the_output_carries_the_kernels_own_grad_fn(self):
+        """The kernel's Function node, not peft's, is what built this output.
+
+        ``grad_fn`` is the positive edge: the name is produced by the autograd
+        Function that ran, so it cannot hold when the kernel was skipped. The
+        unpatched forward yields ``AddBackward0`` for the same input.
+        """
+        _requires_train_extra()
+        import torch
+
+        from soup_cli.utils.fast_lora import patch_fast_lora_single_projection
+
+        torch.manual_seed(0)
+        model, layer = _make_adapted_linear()
+        x = torch.randn(3, 8, requires_grad=True)
+
+        before = layer(x)
+        assert type(before.grad_fn).__name__ != "_FastLoraSingleProjectionBackward", (
+            "the fixture must not start patched, or the assertion below proves nothing"
+        )
+
+        assert patch_fast_lora_single_projection(model) == 1
+        after = layer(x)
+
+        assert type(after.grad_fn).__name__ == "_FastLoraSingleProjectionBackward", (
+            f"the kernel did not run: grad_fn is {type(after.grad_fn).__name__}, "
+            "which is the delegate's node"
+        )
+        # and the delegate really was not the thing that ran
+        assert layer.forward.__func__.__name__ == "_fast_lora_single_forward"
+
+    def test_the_delegate_is_not_called_when_the_kernel_applies(self):
+        """The spy inverts: an eligible layer must reach the kernel with no delegation.
+
+        ``test_delegation_is_what_happens_not_merely_what_agrees`` proves the
+        guard fires for the cases that must bail. This is its other half for the
+        happy path, and it is the arm that dies when the kernel is made to
+        delegate unconditionally.
+        """
+        _requires_train_extra()
+        import functools
+
+        import torch
+
+        from soup_cli.utils.fast_lora import patch_fast_lora_single_projection
+
+        torch.manual_seed(0)
+        model, layer = _make_adapted_linear()
+
+        real_forward = layer.forward
+        calls = []
+        layer.forward = functools.partial(_spy, real_forward, calls)
+
+        assert patch_fast_lora_single_projection(model) == 1
+        x = torch.randn(4, 8, requires_grad=True)
+        out = layer(x)
+        out.sum().backward()
+
+        assert calls == [], (
+            "the patched forward delegated on an eligible layer, so the kernel "
+            f"did not run (delegations seen: {calls})"
+        )
+        # both directions of the backward are live, so this is a real step
+        assert x.grad is not None
+        assert layer.lora_A["default"].weight.grad is not None
+        assert layer.lora_B["default"].weight.grad is not None

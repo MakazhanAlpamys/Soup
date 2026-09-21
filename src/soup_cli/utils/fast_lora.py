@@ -215,8 +215,9 @@ def _single_projection_function() -> Any:
 
                 # dX = dY @ W, plus the LoRA term accumulated into the same
                 # result: one add instead of separate dH @ A and sum
-                # allocations. Skipped entirely when X needs no grad, which is
-                # the measured 2x on a layer-0 projection.
+                # allocations. Skipped entirely when X needs no grad, which
+                # recovers the 2x the unskipped dX GEMM costs on a layer-0
+                # projection.
                 grad_x = torch.matmul(grad_out, _as_dtype(dense, grad_out.dtype))
                 grad_x = torch.add(
                     grad_x,
@@ -251,8 +252,9 @@ def _make_patched_forward(original_forward: Any) -> Any:
             return original_forward(x)
         dropout = self.lora_dropout[adapter]
         if float(getattr(dropout, "p", 0.0)) != 0.0:
-            # The validators refuse dropout with the flag on; a direct caller
-            # gets peft's own path rather than silently unregularised math.
+            # The trainer will refuse dropout alongside this flag once the
+            # follow-up in #839 lands; until then a direct caller gets peft's
+            # own path rather than silently unregularised math.
             return original_forward(x)
 
         # ``fan_in_fan_out`` means the base weight is stored transposed (GPT-2's
