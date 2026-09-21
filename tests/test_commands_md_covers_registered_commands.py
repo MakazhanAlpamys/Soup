@@ -311,3 +311,13 @@ class TestCoverageRequiresARealEntry:
         stub = "soup draft list List drafts that soup serve --auto-spec picks up\n"
         assert undocumented_commands(stub, leaves=[("serve",)]) == ["soup serve"]
         assert undocumented_commands(stub, leaves=[("draft", "list")]) == []
+
+    def test_column_isolation_stops_a_description_continuing_the_shorthand_group(
+        self,
+    ) -> None:
+        # The description's first token is `/`, so without _command_column the shorthand
+        # scanner reads `show / check` as one group and credits `soup lock check` to a row
+        # documenting only `soup lock show`.
+        stub = "soup lock show  / check the lock file\n"
+        assert undocumented_commands(stub, leaves=[("lock", "check")]) == ["soup lock check"]
+        assert undocumented_commands(stub, leaves=[("lock", "show")]) == []
