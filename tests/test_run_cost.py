@@ -42,6 +42,9 @@ REAL_DEVICE_NAMES = [
     ("NVIDIA A100-SXM4-40GB", "A100 40GB"),
     ("NVIDIA A10G", "A10G"),
     ("Tesla T4", "T4"),
+    ("Tesla V100-SXM2-16GB", "V100"),
+    # Priced as V100 on main; the anchored pattern must not drop the "S" variant.
+    ("Tesla V100S-PCIE-32GB", "V100"),
     ("NVIDIA GeForce RTX 4070 Ti", "RTX 4070 Ti"),
     ("NVIDIA RTX PRO 6000 Blackwell Workstation Edition", "RTX PRO 6000"),
 ]
@@ -97,10 +100,51 @@ class TestRealDeviceNames:
             "NVIDIA GH200 480GB",
             "NVIDIA GB200",
             "NVIDIA B100",
+            # Real Turing card (NVIDIA list). Without the \bada\b discriminator it
+            # would be priced as an RTX 6000 Ada.
+            "Quadro RTX 6000",
+            # Trailing-boundary guards: a row must not match a longer model number.
+            "NVIDIA GeForce RTX 40900",
+            "NVIDIA RTX A40000",
+            # Synthetic near-misses that the old unanchored patterns priced as
+            # A100 / A100 / T4. They now (correctly) resolve to unknown.
+            "NVIDIA A100X",
+            "NVIDIA A1000",
+            "NVIDIA RTX A1000 Laptop GPU",
+            "NVIDIA T400",
         ],
     )
     def test_unknown_names_stay_none(self, name):
         assert lookup_gpu_rate(name) is None
+
+    def test_80g_without_b_is_not_the_80gb_row(self):
+        # "80G" is not a name any driver reports; only "80GB" selects the 80 GB row.
+        assert lookup_gpu_rate("NVIDIA A100 80G") == ("A100 40GB", 1.10)
+
+    def test_overlong_name_is_unknown_and_fast(self):
+        import time
+
+        pathological = "a100 " * 20_000  # ~100 KB, quadratic on the A100 80GB pattern
+        start = time.perf_counter()
+        assert lookup_gpu_rate(pathological) is None
+        assert time.perf_counter() - start < 1.0
+
+    @pytest.mark.parametrize(
+        ("name", "label"),
+        [
+            # NVIDIA list: laptop dies report the desktop model number plus "Laptop GPU".
+            ("NVIDIA GeForce RTX 4090 Laptop GPU", "RTX 4090"),
+            ("NVIDIA GeForce RTX 5070 Laptop GPU", "RTX 5070"),
+        ],
+    )
+    def test_laptop_parts_price_as_the_desktop_card(self, name, label):
+        # Deliberate and reviewable: there is no laptop rental market, so the desktop
+        # rate is a rough stand-in that overstates a laptop run. Pinned so a change
+        # to this behaviour is a conscious one (see changelog fragment for #1081).
+        assert lookup_gpu_rate(name)[0] == label
+
+    def test_normal_length_name_unaffected_by_cap(self):
+        assert lookup_gpu_rate("NVIDIA A100-SXM4-80GB") == ("A100 80GB", 2.05)
 
 
 class TestTableHygiene:
@@ -108,7 +152,9 @@ class TestTableHygiene:
         import re
 
         for pattern, label, rate in run_cost._GPU_RATE_TABLE:
-            assert "\\b" in pattern.pattern, label
+            # Leading AND trailing boundary: dropping either lets "4090" match "40900".
+            assert pattern.pattern.startswith("\\b"), label
+            assert pattern.pattern.endswith("\\b"), label
             assert pattern.flags & re.IGNORECASE, label
             assert rate > 0, label
 

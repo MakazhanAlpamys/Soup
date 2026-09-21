@@ -20,6 +20,8 @@ from typing import Optional, Tuple
 # nothing about SXM/PCIe, so they stay on the generic "H100" row. The "H100 SXM" row
 # only fires on provider-supplied labels and must stay above "H100".
 # Known limitation: MIG slices report the parent card's name and take its full rate.
+# Every pattern must start and end with \b (tests enforce this): a missing trailing
+# boundary would let "rtx 4090" match "RTX 40900".
 # Each entry is (compiled_regex, label, usd_per_hour).
 #
 # Rates for rows marked (v0.34.0) are unchanged from the original table. Rows below
@@ -29,25 +31,27 @@ from typing import Optional, Tuple
 #   computeprices.com, Runpod Community tier (no Secure listing found): RTX A4000
 #     https://computeprices.com/gpus/rtxa4000; RTX A4500 is the Runpod Secure listing
 #     https://computeprices.com/gpus/rtxa4500.
-#   getdeploying.com: A10G is the AWS on-demand per-GPU price and includes the host
-#     (upper bound; cf. g5.xlarge $1.006/hr); RTX 4070 Ti / 4080 / 5080 are the Runpod
-#     price; RTX 4070 / 5070 / 5070 Ti have no RunPod listing so the cross-provider
-#     median is used.
+#   getdeploying.com: A10G is the AWS on-demand whole-instance price (g5.xlarge,
+#     $1.006/hr, host included: an upper bound, not a per-GPU rental rate);
+#     RTX 4070 Ti / 4080 / 5080 are the Runpod price; RTX 4070 / 5070 / 5070 Ti have
+#     no RunPod listing so the cross-provider median is used.
 _GPU_RATE_TABLE: Tuple[Tuple[re.Pattern[str], str, float], ...] = (
     # Blackwell / Hopper datacentre
     (re.compile(r"\bb200\b", re.IGNORECASE), "B200", 6.79),
     (re.compile(r"\bh200\b", re.IGNORECASE), "H200", 4.59),
-    (re.compile(r"\bh100\b[\s-]*sxm", re.IGNORECASE), "H100 SXM", 4.50),  # (v0.34.0)
+    (re.compile(r"\bh100\b[\s-]*sxm\d*\b", re.IGNORECASE), "H100 SXM", 4.50),  # (v0.34.0)
     (re.compile(r"\bh100\b", re.IGNORECASE), "H100", 4.11),  # (v0.34.0)
-    (re.compile(r"\ba100\b.*\b80\s*gb?\b", re.IGNORECASE), "A100 80GB", 2.05),  # (v0.34.0)
+    (re.compile(r"\ba100\b.*\b80\s*gb\b", re.IGNORECASE), "A100 80GB", 2.05),  # (v0.34.0)
     (re.compile(r"\ba100\b", re.IGNORECASE), "A100 40GB", 1.10),  # (v0.34.0)
     # Ada / Ampere datacentre
     (re.compile(r"\bl40s\b", re.IGNORECASE), "L40S", 1.19),  # (v0.34.0)
     (re.compile(r"\bl40\b", re.IGNORECASE), "L40", 0.99),  # (v0.34.0)
     (re.compile(r"\bl4\b", re.IGNORECASE), "L4", 0.49),
     (re.compile(r"\ba40\b", re.IGNORECASE), "A40", 0.55),  # (v0.34.0)
+    # $1.01 is a whole AWS g5.xlarge instance (host included), not a per-GPU rental
+    # price like the other rows, so treat it as an upper bound.
     (re.compile(r"\ba10g\b", re.IGNORECASE), "A10G", 1.01),
-    (re.compile(r"\bv100\b", re.IGNORECASE), "V100", 0.49),  # (v0.34.0)
+    (re.compile(r"\bv100s?\b", re.IGNORECASE), "V100", 0.49),  # (v0.34.0)
     (re.compile(r"\bt4\b", re.IGNORECASE), "T4", 0.20),  # (v0.34.0)
     # Workstation RTX
     (re.compile(r"\brtx[\s-]*pro[\s-]*6000\b", re.IGNORECASE), "RTX PRO 6000", 2.09),
@@ -73,6 +77,10 @@ _GPU_RATE_TABLE: Tuple[Tuple[re.Pattern[str], str, float], ...] = (
 # negative duration or an absurdly long one (> 1 year) is a bug elsewhere.
 MAX_DURATION_SECS = 60 * 60 * 24 * 365
 
+# Real device names are well under 100 characters. The A100 80GB pattern uses `.*`,
+# which is quadratic on a pathological input, so longer names are treated as unknown.
+MAX_DEVICE_NAME_LEN = 256
+
 
 def lookup_gpu_rate(device_name: Optional[str]) -> Optional[Tuple[str, float]]:
     """Return (canonical_label, usd_per_hour) for a device name, or None.
@@ -82,7 +90,7 @@ def lookup_gpu_rate(device_name: Optional[str]) -> Optional[Tuple[str, float]]:
     """
     if not device_name or not isinstance(device_name, str):
         return None
-    if "\x00" in device_name:
+    if "\x00" in device_name or len(device_name) > MAX_DEVICE_NAME_LEN:
         return None
     for pattern, label, rate in _GPU_RATE_TABLE:
         if pattern.search(device_name):
