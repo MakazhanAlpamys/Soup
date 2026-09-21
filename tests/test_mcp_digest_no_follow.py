@@ -10,6 +10,12 @@ opens with ``os.O_RDONLY | os.O_NOFOLLOW`` for exactly this reason.
 Windows has no ``os.O_NOFOLLOW``, so there the lstat check is all there is and
 the behaviour is unchanged; the flag test below asserts the real flag where the
 platform has it and the fallback where it does not.
+
+Passing the flag is only half of it: the single-file branch used to open
+``os.path.realpath(path)``, i.e. a path with the symlink ALREADY RESOLVED, so
+``O_NOFOLLOW`` had nothing left to refuse and the swapped-in link's target was
+digested. It opens the path as given now, and the recorded ``ProtectedFile.path``
+stays the resolved one, because that is what ``_revalidate`` compares.
 """
 
 from __future__ import annotations
@@ -45,6 +51,26 @@ def _spy_on_os_open(monkeypatch) -> list[int]:
 
     monkeypatch.setattr(execution_mod.os, "open", _recording_open)
     return seen
+
+
+def _record_os_open_attempts(monkeypatch) -> list[dict]:
+    """Record the path of every ``os.open`` and whether it yielded a descriptor."""
+    attempts: list[dict] = []
+    real_open = os.open
+
+    def _recording_open(path, flags, *args, **kwargs):
+        attempt: dict = {"path": os.fspath(path), "fd": None, "error": None}
+        attempts.append(attempt)
+        try:
+            fd = real_open(path, flags, *args, **kwargs)
+        except OSError as exc:
+            attempt["error"] = exc
+            raise
+        attempt["fd"] = fd
+        return fd
+
+    monkeypatch.setattr(execution_mod.os, "open", _recording_open)
+    return attempts
 
 
 class TestTheOpenIsNoFollow:
@@ -93,6 +119,33 @@ class TestTheOpenIsNoFollow:
             assert flags & os.O_BINARY, "digests must not go through CRLF translation"
 
 
+class TestTheSingleFileOpenUsesThePathAsGiven:
+    """Runs everywhere, including Windows, where symlinks cannot be created.
+
+    The regression this pins was invisible to the POSIX-only symlink tests on
+    the one platform the maintainer develops on, which is how it reached CI:
+    ``O_NOFOLLOW`` was passed, but to a path ``os.path.realpath`` had already
+    resolved, so the flag had nothing left to refuse. Checking WHICH path is
+    opened needs no symlink and therefore no platform.
+    """
+
+    def test_the_opened_path_is_not_the_resolved_one(self, cwd, monkeypatch):
+        (cwd / "model.bin").write_bytes(b"weights")
+        given = os.path.join(".", "model.bin")
+        resolved = os.path.realpath(str(cwd / "model.bin"))
+        assert given != resolved, "the fixture must make the two spellings differ"
+        attempts = _record_os_open_attempts(monkeypatch)
+
+        result = digest_file(given, "model")
+
+        assert [attempt["path"] for attempt in attempts] == [given], (
+            "digest_file must open the path as given, not its realpath"
+        )
+        # The RESOLVED path is still what is recorded: _revalidate compares it.
+        assert result.path == resolved
+        assert result.digest == hashlib.sha256(b"weights").hexdigest()
+
+
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX symlink semantics")
 class TestSymlinkRefusedAtReadTime:
     """Simulate the TOCTOU window: the lstat guard passed, then the path became
@@ -113,13 +166,71 @@ class TestSymlinkRefusedAtReadTime:
             digest_file("swapped.bin", "model")
 
     def test_tree_member_symlink_is_refused(self, cwd, monkeypatch):
+        """Two layers can refuse here; the test pins the refusal, not the layer.
+
+        The walk ``lstat``s every member and rejects anything that is not a
+        regular file, so on the shipped code that per-member ``S_ISREG`` check
+        is what fires first — before the member is ever opened — and the
+        message is ``<field> contains non-regular file: <path>``. Were that
+        check removed, ``_open_binary_no_follow``'s ``O_NOFOLLOW`` would still
+        refuse, with the path-free ``unavailable for execution``. Either is the
+        property under test; matching only one of them turns a defence in depth
+        into a brittle assertion about which layer got there first.
+        """
         (cwd / "real.bin").write_bytes(b"weights")
         (cwd / "tree").mkdir()
         os.symlink(str(cwd / "real.bin"), str(cwd / "tree" / "member.bin"))
         self._disable_the_lstat_guard(monkeypatch)
 
-        with pytest.raises(ExecutionError, match="unavailable for execution"):
+        with pytest.raises(
+            ExecutionError, match="non-regular file|unavailable for execution"
+        ):
             digest_file("tree", "model")
+
+    def test_single_file_symlink_is_refused_before_the_target_is_read(
+        self, cwd, monkeypatch
+    ):
+        """The refusal must come from the open, with no byte of the target read.
+
+        ``digest_file`` used to open ``os.path.realpath(path)`` — a path with
+        the symlink already RESOLVED — so ``O_NOFOLLOW`` could never fire and
+        the swapped-in link's target was digested happily. Opening the path as
+        given is what makes the flag reachable, so this pins both halves: the
+        refusal, and that it happens before any read.
+        """
+        target = cwd / "real.bin"
+        target.write_bytes(b"weights")
+        os.symlink(str(target), str(cwd / "swapped.bin"))
+        self._disable_the_lstat_guard(monkeypatch)
+        attempts = _record_os_open_attempts(monkeypatch)
+
+        with pytest.raises(ExecutionError, match="unavailable for execution") as excinfo:
+            digest_file("swapped.bin", "model")
+
+        assert len(attempts) == 1, f"expected exactly one open attempt, got {attempts}"
+        only = attempts[0]
+        assert os.path.basename(only["path"]) == "swapped.bin", (
+            "digest_file must open the path AS GIVEN; opening the resolved "
+            f"target defeats O_NOFOLLOW (opened {only['path']!r})"
+        )
+        assert only["fd"] is None and isinstance(only["error"], OSError), (
+            "the open must fail, so not a byte of the symlink's target is read"
+        )
+        # Nothing about the target leaks out: no digest was produced at all, and
+        # the message names no path.
+        message = str(excinfo.value)
+        assert hashlib.sha256(b"weights").hexdigest() not in message
+        assert "real.bin" not in message and "swapped.bin" not in message
+
+    def test_a_plain_file_still_digests_under_the_same_conditions(self, cwd, monkeypatch):
+        """Control for the test above: the refusal is the symlink, not the setup."""
+        (cwd / "plain.bin").write_bytes(b"weights")
+        self._disable_the_lstat_guard(monkeypatch)
+
+        result = digest_file("plain.bin", "model")
+
+        assert result.digest == hashlib.sha256(b"weights").hexdigest()
+        assert result.path == os.path.realpath(str(cwd / "plain.bin"))
 
 
 class TestTheNormalPathIsUnchanged:
