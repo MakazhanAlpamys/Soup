@@ -541,7 +541,7 @@ class StreamingSetupMixin:
             large_layer_store_bytes,
             quantised_layer_suffixes,
         )
-        from soup_cli.utils.moe import detect_moe_model, get_moe_target_modules
+        from soup_cli.utils.moe import resolve_moe_lora_targets
         from soup_cli.utils.qwen4_ple import external_tensor_bytes
         from soup_cli.utils.spectrum_scan import resolve_model_weights
 
@@ -672,7 +672,11 @@ class StreamingSetupMixin:
         # construction for no memory saving.
         quant_suffixes = ()
         moe_targets = None
-        is_moe = False
+        # #798: the ONE helper that turns moe_lora into targets, and refuses a
+        # dropout peft cannot honour on fused experts. This path kept its own
+        # copy of the block, which is why it was the one path with no refusal.
+        # The probe is a meta skeleton and is the only model available here, so
+        # the call happens while it is alive rather than at the attach below.
         if quant == QUANT_NF4:
             probe = build_meta_skeleton(
                 cfg.base,
@@ -680,9 +684,7 @@ class StreamingSetupMixin:
                 quant=quant,
                 trust_remote_code=self._trust_remote_code,
             )
-            is_moe = detect_moe_model(probe)
-            if tcfg.moe_lora and is_moe:
-                moe_targets = get_moe_target_modules(probe)
+            moe_targets = resolve_moe_lora_targets(probe, tcfg, None, console=console)
             quant_suffixes = quantised_layer_suffixes(probe)
             del probe
         elif tcfg.moe_lora:
@@ -692,9 +694,7 @@ class StreamingSetupMixin:
                 quant=quant,
                 trust_remote_code=self._trust_remote_code,
             )
-            is_moe = detect_moe_model(probe)
-            if is_moe:
-                moe_targets = get_moe_target_modules(probe)
+            moe_targets = resolve_moe_lora_targets(probe, tcfg, None, console=console)
             del probe
 
         console.print(f"[dim]Preparing layer shards -> {shard_dir}[/]")
@@ -910,11 +910,9 @@ class StreamingSetupMixin:
         )
 
         target_modules = resolve_lora_target_modules(model_config, tcfg.lora.target_modules)
-        if tcfg.moe_lora and is_moe and moe_targets:
+        if moe_targets:
+            # Already announced by resolve_moe_lora_targets when the probe ran.
             target_modules = moe_targets
-            console.print(
-                f"[green]ScatterMoE LoRA:[/] targeting {len(moe_targets)} module patterns"
-            )
         lora_config = build_lora_config(
             tcfg.lora,
             target_modules=target_modules,

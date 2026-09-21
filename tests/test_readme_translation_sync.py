@@ -52,7 +52,7 @@ Files are found with ``glob("README.*.md")``, never a hand-written list: a
 also names who maintains it in ``MAINTAINERS``; a red ``main`` says whom to ping,
 and a language nobody maintains is removed rather than left to lie (#769).
 
-**Maintainers:** tr — @Ercaner1988.
+**Maintainers:** tr, ar, ja — @Ercaner1988.
 
 **After changing README.md:** update each translation, then replace its stamp with
 the line the stale-stamp failure prints.
@@ -71,7 +71,11 @@ import pytest
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 #: Who re-syncs each translation when README.md changes.
-MAINTAINERS = {"README.tr.md": "@Ercaner1988"}
+MAINTAINERS = {
+    "README.tr.md": "@Ercaner1988",
+    "README.ar.md": "@Ercaner1988",
+    "README.ja.md": "@Ercaner1988",
+}
 
 #: README.md section titles exempt from the stamp hash and the structural
 #: comparison -- see the class docstring, lock 3. Matched on README.md's own

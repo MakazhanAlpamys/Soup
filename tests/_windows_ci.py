@@ -2,7 +2,7 @@
 
 Imported by every test file that reaches a real ``trainer.train()``. It lives
 here rather than in one of those files because the guard has now been needed in
-two of them, and this repo has been bitten three times by a predicate that was
+four of them, and this repo has been bitten three times by a predicate that was
 copied instead of shared (#372, #392, #424). ``test_windows_ci_guard_is_not_
 duplicated`` fails if a second copy appears.
 """

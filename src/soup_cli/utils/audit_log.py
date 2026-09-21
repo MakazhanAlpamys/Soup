@@ -5,7 +5,10 @@ via ``SOUP_AUDIT_LOG_PATH``). Lines are JSON objects with a fixed set of
 keys so Splunk / ELK can ingest them without a custom parser.
 
 PII redaction reuses the v0.40.3 #33 ``_SECRET_RE`` policy: ``hf_*`` /
-``sk-*`` / ``Bearer …`` tokens are masked as ``<redacted>``. Rotation at
+``sk-*`` / ``Bearer …`` tokens are masked as ``<redacted>``. Before a record
+reaches this module, ``cli._emit_audit_event`` masks the values of credential
+options by option name (``utils/argv_redaction.py``); this value-pattern layer
+applies on top of that. Rotation at
 100 MiB by default — operators wanting longer retention should run
 ``logrotate``.
 """
@@ -20,6 +23,8 @@ import stat
 import tempfile
 from dataclasses import dataclass, replace
 from typing import Optional, Tuple
+
+from soup_cli.utils.paths import open_no_follow
 
 _LOG = logging.getLogger(__name__)
 
@@ -271,13 +276,8 @@ def append_audit_event(
     rotate_if_needed(target, cap_bytes=cap_bytes)
     line = json.dumps((redact_event(ev) if redact else ev).to_dict()) + "\n"
     flags = os.O_WRONLY | os.O_CREAT | os.O_APPEND
-    # O_NOFOLLOW: refuse to follow a symlink at the target path.
-    # Not available on Windows.
-    nofollow = getattr(os, "O_NOFOLLOW", 0)
-    if nofollow:
-        flags |= nofollow
     mode = 0o600
-    fd = os.open(target, flags, mode)
+    fd = open_no_follow(target, flags, mode)
     try:
         os.write(fd, line.encode("utf-8"))
     finally:

@@ -47,6 +47,16 @@ _HUB_ENDPOINT_ENV: Mapping[str, str] = MappingProxyType({
     "modelers": "MODELERS_ENDPOINT",
 })
 
+# Per-hub credential env var. Each hub authenticates with its OWN token; a
+# token for one hub is never offered to another. MODELSCOPE_API_TOKEN is the
+# ModelScope SDK's own variable; openMind has none, so MODELERS_TOKEN mirrors
+# MODELERS_ENDPOINT.
+_HUB_TOKEN_ENV: Mapping[str, str] = MappingProxyType({
+    "hf": "HF_TOKEN",
+    "modelscope": "MODELSCOPE_API_TOKEN",
+    "modelers": "MODELERS_TOKEN",
+})
+
 # Per-hub pip-install hint, surfaced when the live downloader complains.
 _HUB_PACKAGE: Mapping[str, str] = MappingProxyType({
     "hf": "huggingface-hub",
@@ -108,6 +118,27 @@ def endpoint_env_var(hub: str) -> str:
     """Return the env-var name that overrides the default endpoint."""
     canonical = validate_hub_name(hub)
     return _HUB_ENDPOINT_ENV[canonical]
+
+
+def hub_token_env_var(hub: str) -> str:
+    """Env var holding ``hub``'s own upload credential."""
+    canonical = validate_hub_name(hub)
+    return _HUB_TOKEN_ENV[canonical]
+
+
+def resolve_hub_token(hub: str, explicit: str | None = None) -> str | None:
+    """Credential for a non-HF hub: ``explicit`` or the hub's own env var.
+
+    Never consults Hugging Face credentials. HF resolution stays in
+    :func:`soup_cli.utils.hf.resolve_token`.
+    """
+    canonical = validate_hub_name(hub)
+    if canonical == "hf":
+        raise ValueError("use soup_cli.utils.hf.resolve_token for the hf hub")
+    if explicit and explicit.strip():
+        return explicit.strip()
+    value = os.environ.get(_HUB_TOKEN_ENV[canonical], "").strip()
+    return value or None
 
 
 def validate_hub_endpoint(endpoint: str, *, hub: str | None = None) -> str:

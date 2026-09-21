@@ -797,9 +797,7 @@ class TestGradientCheckpointingResolver:
         )
 
         kwargs = resolve_gradient_checkpointing("selective", gpu_memory_gb=80)
-        assert kwargs["gradient_checkpointing"] is True
-        # No private markers leak into HF TrainingArguments kwargs.
-        assert kwargs["gradient_checkpointing_kwargs"] == {"use_reentrant": False}
+        assert kwargs == {"gradient_checkpointing": False}
         # Granularity is exposed via a separate helper for the wrapper.
         assert resolve_granularity("selective", gpu_memory_gb=80) == "selective"
 
@@ -808,6 +806,10 @@ class TestGradientCheckpointingResolver:
 
         kwargs = resolve_gradient_checkpointing("medium", gpu_memory_gb=80)
         assert kwargs["gradient_checkpointing"] is True
+        assert kwargs["gradient_checkpointing_kwargs"] == {
+            "use_reentrant": False,
+            "every_n_layers": 2,
+        }
 
     def test_resolve_auto_low_memory_selects_full(self):
         from soup_cli.utils.gradient_ckpt import resolve_gradient_checkpointing
@@ -816,12 +818,13 @@ class TestGradientCheckpointingResolver:
         # Low VRAM → full checkpointing
         assert kwargs["gradient_checkpointing"] is True
 
-    def test_resolve_auto_high_memory_selects_selective(self):
+    def test_resolve_auto_80gb_selects_medium(self):
         from soup_cli.utils.gradient_ckpt import resolve_gradient_checkpointing
 
-        # 80GB+ → selective only (attention), saving speed
+        # 80GB resolves to medium (the selective threshold is strictly > 80).
         kwargs = resolve_gradient_checkpointing("auto", gpu_memory_gb=80)
         assert kwargs["gradient_checkpointing"] is True
+        assert kwargs["gradient_checkpointing_kwargs"]["every_n_layers"] == 2
 
     def test_resolve_auto_very_high_memory_selects_selective(self):
         from soup_cli.utils.gradient_ckpt import (

@@ -234,16 +234,12 @@ class UnlearnTrainerWrapper:
 
         batch_size = tcfg.batch_size
         if batch_size == "auto":
-            from soup_cli.utils.gpu import estimate_batch_size, get_gpu_info, model_size_from_name
-
-            batch_size = estimate_batch_size(
-                model_params_b=model_size_from_name(cfg.base),
-                seq_length=cfg.data.max_length,
-                gpu_memory_bytes=get_gpu_info()["memory_total_bytes"],
-                quantization=tcfg.quantization,
-                lora_r=tcfg.lora.r,
-            )
-            console.print(f"[green]Auto batch size (unlearn):[/] {batch_size}")
+            # This loop processes one example per forward/backward pass.  The
+            # configured batch size only controls gradient accumulation, so
+            # the memory estimator used by the Trainer-based paths would
+            # silently change the number of updates for the unlearn task.
+            batch_size = 1
+            console.print("[green]Auto batch size (unlearn):[/] 1")
         self._batch_size = int(batch_size)
         effective_batch = self._batch_size * int(tcfg.gradient_accumulation_steps)
         # Keep the pre-existing sample budget and reported total_steps scale.

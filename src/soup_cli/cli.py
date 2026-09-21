@@ -69,6 +69,7 @@ from soup_cli.commands import (  # noqa: E402
     why as why_cmd,
 )
 from soup_cli.utils.constants import GITHUB_URL  # noqa: E402
+from soup_cli.utils.exit_codes import GateCommand  # noqa: E402
 
 console = Console()
 
@@ -497,6 +498,7 @@ from soup_cli.commands import expect as _expect_cmd  # noqa: E402
 
 app.command(
     name="expect",
+    cls=GateCommand,
     help="Run an expectations suite against a JSONL dataset.",
 )(_expect_cmd.expect_cmd)
 
@@ -523,7 +525,7 @@ app.add_typer(
 from soup_cli.commands import data_doctor as _data_doctor_cmd  # noqa: E402
 
 data.app.command(name="doctor")(_data_doctor_cmd.doctor)
-data.app.command(name="lint")(_data_doctor_cmd.lint)
+data.app.command(name="lint", cls=GateCommand)(_data_doctor_cmd.lint)
 
 # v0.71.36 — Data Moat II: topic map + Secret-Sharer canaries.
 from soup_cli.commands import data_topics as _data_topics_cmd  # noqa: E402
@@ -814,6 +816,44 @@ def _audit_env_opt_out() -> bool:
     return val in {"1", "true", "yes", "on"}
 
 
+_ALL_SECRET_OPTION_STRINGS: frozenset[str] | None = None
+
+
+def _mask_audit_args(command: str, args: list[str]) -> tuple[str, ...]:
+    """Mask credential option values in ``args`` by option name.
+
+    Long credential option names are masked app-wide; short aliases (``-t``)
+    only for the command they belong to, since the same letter means
+    something else elsewhere. If the command does not resolve to a leaf,
+    every credential option string of the app is masked. A resolution
+    failure falls back to that widest set, never to the unmasked args.
+    """
+    global _ALL_SECRET_OPTION_STRINGS
+    import click
+
+    from soup_cli.utils.argv_redaction import (
+        all_secret_option_strings,
+        mask_secret_args,
+        resolve_command,
+        secret_option_strings,
+    )
+
+    root = typer.main.get_command(app)
+    if _ALL_SECRET_OPTION_STRINGS is None:
+        _ALL_SECRET_OPTION_STRINGS = all_secret_option_strings(root)
+    everything = _ALL_SECRET_OPTION_STRINGS
+    try:
+        resolved = resolve_command(root, [command, *args])
+        if isinstance(resolved, click.Group):
+            secret_opts = everything
+        else:
+            app_wide_longs = frozenset(o for o in everything if o.startswith("--"))
+            secret_opts = secret_option_strings(resolved) | app_wide_longs
+    except Exception:  # noqa: BLE001 — fall back to the widest mask
+        secret_opts = everything
+    return mask_secret_args(args, secret_opts)
+
+
 def _emit_audit_event(argv: list[str], exit_code: int) -> None:
     """Append one HIPAA/SOC2 audit record for this command. Best-effort.
 
@@ -830,7 +870,10 @@ def _emit_audit_event(argv: list[str], exit_code: int) -> None:
 
         from soup_cli.utils.audit_log import AuditEvent, append_audit_event
 
-        command, args = _split_command_args(argv)
+        command, raw_args = _split_command_args(argv)
+        # Credential option values are masked by option name here; the
+        # value-pattern layer in utils/audit_log.py still applies afterwards.
+        args = _mask_audit_args(command, raw_args)
         command = (command or "(root)")[:64] or "(root)"
         try:
             operator = getpass.getuser() or "unknown"

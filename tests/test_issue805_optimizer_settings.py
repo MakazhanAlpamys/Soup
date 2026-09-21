@@ -167,16 +167,15 @@ def _unlearn_wrapper(tiny_model, **training):
 
 @pytest.mark.parametrize(("method", "model_loads"), [("simnpo", 1), ("npo", 2)])
 def test_unlearn_default_auto_reaches_real_training(tiny_model, monkeypatch, method, model_loads):
-    from soup_cli.utils import gpu, live_eval
+    from soup_cli.utils import live_eval
 
-    monkeypatch.setattr(gpu, "estimate_batch_size", lambda **kwargs: 2)
     with patch.object(
         live_eval, "load_model_and_tokenizer", wraps=live_eval.load_model_and_tokenizer
     ) as load_model:
         wrapper = _unlearn_wrapper(tiny_model, batch_size="auto", unlearn_method=method)
     assert load_model.call_count == model_loads
     assert all("quantization" not in call.kwargs for call in load_model.call_args_list)
-    assert wrapper._batch_size == 2
+    assert wrapper._batch_size == 1
     assert wrapper.train()["total_steps"] == 5
 
 
