@@ -3067,12 +3067,15 @@ class TrainingConfig(BaseModel):
         default=0.5, gt=0.0, lt=1.0,
         description="Multiply LR by this factor on each spike recovery (0.5 = halve)",
     )
-    # ReLoRA (v0.39.0 Part B)
+    # ReLoRA (v0.39.0 Part B / #693 paper-faithful restart)
     relora_steps: Optional[int] = Field(
         default=None, ge=1, le=10**7,
         description=(
-            "Fire ReLoRA magnitude-prune + optimizer reset every N global steps. "
-            "None disables. Requires a LoRA-style PEFT (not VeRA)."
+            "Fire a paper-faithful ReLoRA restart every N global steps: merge the "
+            "LoRA update into the base weight, reinitialize lora_A/lora_B, and "
+            "optionally clear optimizer state. None disables. Requires float LoRA "
+            "(quantization='none'; incompatible with VeRA, DoRA, layer streaming, "
+            "and FSDP2 compile)."
         ),
     )
     relora_warmup_ratio: float = Field(
@@ -3081,13 +3084,17 @@ class TrainingConfig(BaseModel):
     )
     relora_reset_optimizer: bool = Field(
         default=True,
-        description="Clear optimizer state for pruned LoRA params on each ReLoRA fire",
+        description=(
+            "Clear optimizer state for lora_A/lora_B parameters after each "
+            "ReLoRA merge+reinit restart"
+        ),
     )
     relora_prune_ratio: float = Field(
         default=0.9, gt=0.0, lt=1.0,
         description=(
-            "Fraction of LoRA weights to zero out by magnitude on each fire "
-            "(0.9 keeps the top 10%). Must be < 1.0."
+            "Deprecated: kept so older YAML still loads. Restarts no longer "
+            "magnitude-prune adapter weights; relora_reset_optimizer controls "
+            "optimizer clearing instead."
         ),
     )
     # Convergence detection (v0.32.0 Part F)
@@ -6405,7 +6412,9 @@ class SoupConfig(BaseModel):
         trainer (sft / dpo / grpo / kto / orpo / simpo / ipo / ppo /
         reward_model / pretrain / embedding / bco).
 
-        MLX backend still rejected: the callback is HF Trainer-specific.
+        #693 — paper-faithful restart merges into the base weight, so reject
+        combos where the base is not a writable float tensor or where the
+        adapter is not standard LoRA A/B.
         """
         if self.training.relora_steps is None:
             return self
@@ -6414,6 +6423,36 @@ class SoupConfig(BaseModel):
                 "relora_steps is not supported on the mlx backend "
                 "(callback is HF Trainer-specific). "
                 "Use backend='transformers' or remove relora_steps."
+            )
+        tcfg = self.training
+        lcfg = tcfg.lora
+        if tcfg.quantization != "none":
+            raise ValueError(
+                f"relora_steps requires quantization='none' "
+                f"(got {tcfg.quantization!r}); ReLoRA restart merges into the "
+                f"base weight, which requires a writable float base."
+            )
+        if tcfg.stream_layers:
+            raise ValueError(
+                "relora_steps is incompatible with training.stream_layers=True: "
+                "layer streaming loads weights ephemerally and cannot accept "
+                "in-place base merges."
+            )
+        if lcfg.use_vera:
+            raise ValueError(
+                "relora_steps is incompatible with lora.use_vera=True: ReLoRA "
+                "restart merges B@A into the base; VeRA uses shared vectors, "
+                "not standard LoRA A/B matrices."
+            )
+        if lcfg.use_dora:
+            raise ValueError(
+                "relora_steps is incompatible with lora.use_dora=True: ReLoRA "
+                "restart merges B@A; DoRA decomposes magnitude separately."
+            )
+        if tcfg.use_fsdp2_compile:
+            raise ValueError(
+                "relora_steps is incompatible with training.use_fsdp2_compile=True: "
+                "compiled FSDP2 wraps parameters and prevents in-place base merges."
             )
         return self
 
