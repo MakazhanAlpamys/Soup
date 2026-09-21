@@ -486,7 +486,11 @@ Soup gate and verdict commands follow a unified, CI-friendly exit-code contract:
 
 The taxonomy applies consistently across `soup ship`, `soup eval gate`, `soup eval against`, `soup eval checklist`, `soup eval behavior`, `soup eval quant-check`, `soup lock check`, `soup expect`, `soup data validate`, and `soup data lint`.
 
+`soup eval checklist` requires `--evidence`. `soup eval behavior` also requires
+`--evidence` unless `--base-model` selects the live path. Omitting the required
+evidence exits `3` and names the JSON input to provide; it never reports a neutral
+pass for a gate that measured nothing.
+
 ### Gate Verdict Drift vs. Operational Drift
 
 `soup lock check` operates as a CI gate command where exit `2` (`EXIT_GATE_FAILED`) indicates that the lock closure has drifted from the configuration (requiring regeneration via `soup lock write`), and exit `3` (`EXIT_USAGE_ERROR`) indicates an unparseable or missing lock file. In contrast, operational and environment commands (`soup env check`, `soup apply`, and `soup drift-alarm`) belong to the operational drift family where runtime divergence or ABI mismatch signals exit `3` (with exit `2` reserved for invalid arguments or path errors in those commands). Operational inspection tools such as `soup adapters audit` deliberately reside outside the gate taxonomy, exiting `1` on usage errors so CI can distinguish an agreement (`0`) or diverged (`2`) verdict from invocation errors.
-

@@ -5,6 +5,7 @@ Expectation) tests rendered from a YAML DSL, with per-test pass/fail.
 """
 from __future__ import annotations
 
+import json
 import os
 import platform
 
@@ -396,8 +397,12 @@ class TestChecklistCli:
             "tests": [{"name": "t1", "kind": "mft",
                        "prompts": ["p"], "expected": ["a"]}]
         }))
+        evidence = tmp_path / "evidence.json"
+        evidence.write_text(json.dumps({"t1": ["a"]}))
         runner = CliRunner()
-        result = runner.invoke(app, ["checklist", str(p)])
+        result = runner.invoke(app, [
+            "checklist", str(p), "--evidence", str(evidence),
+        ])
         assert result.exit_code == 0, (result.output, repr(result.exception))
 
 

@@ -836,6 +836,10 @@ soup eval behavior my_run --battery xstest \
 # Harmful prompts ship REDACTED — pull real sets from upstream papers.
 ```
 
+Without the live `--base-model` path, `--evidence` is required. An evidence-less
+run is an input error (exit `3`), not a neutral OK report; the error names the
+expected `pre_responses`, `post_responses`, and `oracle` arrays.
+
 Word-boundary regex agreement (no `"safe" in "unsafe"` false positives); OK/MINOR/MAJOR thresholds match the v0.26 / v0.56 taxonomy.
 
 **Capability auto-suite** — pre-bundled profile selector with friendly `lm-eval-harness` task ids:
@@ -872,6 +876,10 @@ tests:
 ```bash
 soup eval checklist tests.yaml --evidence responses.json
 ```
+
+`--evidence` is required and maps each CheckList test name to its response
+strings. Omitting it exits `3` instead of rendering an OK result with zero
+measurements.
 
 `mft` = response must contain a keyword as a whole word (`"sand"` won't pass for `"and"`); `inv` = all paraphrases must agree; `dir` = directional expectation under perturbation.
 

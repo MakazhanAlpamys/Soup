@@ -414,7 +414,7 @@ def test_gate_commands_follow_unified_exit_code_taxonomy(
     )
 
 
-def test_eval_checklist_missing_evidence_neutral_ok(
+def test_eval_checklist_missing_evidence_exits_3(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from tests.conftest import strip_ansi
@@ -431,12 +431,13 @@ def test_eval_checklist_missing_evidence_neutral_ok(
     )
     runner = CliRunner()
     res = runner.invoke(app, ["eval", "checklist", str(spec_file)])
-    assert res.exit_code == EXIT_OK
+    assert res.exit_code == EXIT_USAGE_ERROR
     clean_out = strip_ansi(res.output).lower()
-    assert "checklist tests" in clean_out
+    assert "--evidence is required" in clean_out
+    assert "checklist test name" in clean_out
 
 
-def test_eval_behavior_missing_evidence_neutral_ok(
+def test_eval_behavior_missing_evidence_exits_3(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from tests.conftest import strip_ansi
@@ -444,9 +445,10 @@ def test_eval_behavior_missing_evidence_neutral_ok(
     monkeypatch.chdir(tmp_path)
     runner = CliRunner()
     res = runner.invoke(app, ["eval", "behavior", "run1", "--battery", "xstest"])
-    assert res.exit_code == EXIT_OK
+    assert res.exit_code == EXIT_USAGE_ERROR
     clean_out = strip_ansi(res.output).lower()
-    assert "no --evidence supplied" in clean_out
+    assert "--evidence is required" in clean_out
+    assert "pre_responses" in clean_out
 
 
 def test_eval_quant_check_missing_model_exits_3(
@@ -581,4 +583,3 @@ def test_non_gate_command_invalid_flag_exits_2(cmd: list[str]) -> None:
     runner = CliRunner()
     result = runner.invoke(app, cmd)
     assert result.exit_code == 2
-
