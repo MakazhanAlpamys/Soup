@@ -1,10 +1,11 @@
 """Detect config fields staged for features that have not landed (#808).
 
 Warn-then-refuse across two releases following the #627 pattern:
-In v0.76 each of the staged fields prints:
+While warning, each of the staged fields prints:
     <field> is accepted but read by nothing; v<STAGED_FIELD_REJECTION_VERSION> will refuse it
 
-The rejection version lives in ONE constant (:data:`STAGED_FIELD_REJECTION_VERSION`),
+The rejection version is derived from
+:data:`soup_cli.config.deprecation.DEPRECATED_VALUE_REJECTION_VERSION`,
 asserted against ``soup_cli.__version__`` in both directions by TestTheDeadline.
 """
 
@@ -12,6 +13,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any
+
+# ponytail: derive single source of truth from deprecation constant (#808)
+from soup_cli.config.deprecation import (
+    DEPRECATED_VALUE_REJECTION_VERSION as STAGED_FIELD_REJECTION_VERSION,
+)
 
 __all__ = [
     "STAGED_FIELDS",
@@ -21,11 +27,6 @@ __all__ = [
     "find_staged_config_fields",
     "format_staged_fields",
 ]
-
-#: The release that stops warning about staged fields and starts refusing them.
-#:
-#: Written out ONCE, here.
-STAGED_FIELD_REJECTION_VERSION = "0.77"
 
 
 @dataclass(frozen=True)
@@ -109,7 +110,7 @@ def format_staged_fields(
     """Format staged fields warning or refusal message.
 
     Per maintainer directive on #808:
-    In v0.76 each staged field prints:
+    While warning, each staged field prints:
         <field> is accepted but read by nothing; v<STAGED_FIELD_REJECTION_VERSION> will refuse it
     """
     lines = []

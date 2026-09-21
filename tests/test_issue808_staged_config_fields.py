@@ -1,11 +1,11 @@
-"""Staged config fields must warn in v0.76 and refuse in v0.77 (#808).
+"""Staged config fields must warn in v0.75 and refuse in v0.76 (#808).
 
 28 config fields are declared in schema.py for features that have not landed,
 accepted silently, and read by nothing. Following the #627 warn-then-refuse
 pattern across two releases:
-- In v0.76 each staged field prints:
-    <field> is accepted but read by nothing; v0.77 will refuse it
-- The deadline version lives in ONE constant (STAGED_FIELD_REJECTION_VERSION).
+- While warning, each staged field prints:
+    <field> is accepted but read by nothing; v<STAGED_FIELD_REJECTION_VERSION> will refuse it
+- The deadline version is derived from DEPRECATED_VALUE_REJECTION_VERSION.
 - TestTheDeadline asserts against soup_cli.__version__ in both directions.
 """
 
@@ -34,6 +34,14 @@ data:
 output: ./o
 """
 
+# ponytail: canonical ANSI-strip + whitespace-collapse helper (#808 / #627)
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _plain(text: str) -> str:
+    """ANSI-stripped, whitespace-collapsed CLI output, safe to substring-match."""
+    return " ".join(_ANSI_RE.sub("", text).split())
+
 
 def _raw(extra_data: str = "", extra_training: str = "") -> dict:
     import yaml
@@ -51,7 +59,7 @@ class TestTheDeadline:
 
     Mirrors the #627 pattern:
     - Named in the message
-    - Stated in ONE constant
+    - Derived from ONE constant
     - Enforced against soup_cli.__version__ in both directions
     """
 
@@ -64,6 +72,10 @@ class TestTheDeadline:
 
     def test_the_version_is_written_out_in_exactly_one_source_file(self) -> None:
         """Derived, not duplicated: a second copy is what falls out of step."""
+        from soup_cli.config.deprecation import DEPRECATED_VALUE_REJECTION_VERSION
+
+        assert STAGED_FIELD_REJECTION_VERSION is DEPRECATED_VALUE_REJECTION_VERSION
+
         version = re.escape(STAGED_FIELD_REJECTION_VERSION)
         pattern = re.compile(rf"""v{version}\b|["']{version}["']""")
         src = Path(__file__).parents[1] / "src" / "soup_cli"
@@ -72,7 +84,7 @@ class TestTheDeadline:
             for p in src.rglob("*.py")
             if p.name != "__init__.py" and pattern.search(p.read_text(encoding="utf-8"))
         )
-        assert holders == ["config/staged_fields.py"], (
+        assert holders == ["config/deprecation.py"], (
             f"the deadline version is written out in more than one place: {holders}"
         )
 
@@ -168,11 +180,11 @@ class TestLoaderStagedFieldIntegration:
         yaml_str = _VALID + "\ntraining:\n  convergence_window: 100\n"
         cfg = loader.load_config_from_string(yaml_str)
         assert cfg.training.convergence_window == 100
-        captured = capsys.readouterr()
-        assert "training.convergence_window" in captured.out
-        assert "accepted but read by nothing" in captured.out
-        assert STAGED_FIELD_REJECTION_VERSION in captured.out
-        assert "will refuse it" in captured.out
+        plain_out = _plain(capsys.readouterr().out)
+        assert "training.convergence_window" in plain_out
+        assert "accepted but read by nothing" in plain_out
+        assert STAGED_FIELD_REJECTION_VERSION in plain_out
+        assert "will refuse it" in plain_out
 
     def test_staged_field_refuses_under_error_severity(self, monkeypatch) -> None:
         monkeypatch.setattr(loader, "STAGED_FIELD_SEVERITY", "error")
@@ -200,11 +212,11 @@ class TestLoaderStagedFieldIntegration:
         cfg_file.write_text(_VALID + "\ntraining:\n  convergence_window: 100\n")
         cfg = loader.load_config(cfg_file)
         assert cfg.training.convergence_window == 100
-        captured = capsys.readouterr()
-        assert "training.convergence_window" in captured.out
-        assert "accepted but read by nothing" in captured.out
-        assert STAGED_FIELD_REJECTION_VERSION in captured.out
-        assert "will refuse it" in captured.out
+        plain_out = _plain(capsys.readouterr().out)
+        assert "training.convergence_window" in plain_out
+        assert "accepted but read by nothing" in plain_out
+        assert STAGED_FIELD_REJECTION_VERSION in plain_out
+        assert "will refuse it" in plain_out
 
     def test_load_config_file_refuses_under_error(self, tmp_path, monkeypatch) -> None:
         monkeypatch.setattr(loader, "STAGED_FIELD_SEVERITY", "error")
