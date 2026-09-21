@@ -184,7 +184,7 @@ def check_attach(
     model_type = getattr(hf_config, "model_type", None)
     row["model_type"] = model_type
     try:
-        model = build_model(shrink_for_preflight(hf_config), task)
+        model = build_model(shrink_for_preflight(hf_config), loader_for(cfg))
     except Exception as exc:  # noqa: BLE001
         reason = classify_load_failure(exc)
         return AttachCheck(
@@ -277,16 +277,32 @@ class PreflightReport:
         return 1 if self.failures else 0
 
 
-#: Which auto-class each task's trainer loads. Read off the trainers rather than
-#: guessed: ``embedding`` uses ``AutoModel`` (``trainer/embedding.py``),
-#: ``reward_model`` uses ``AutoModelForSequenceClassification``, and everything
-#: else loads a causal LM. A task whose real loader is not one of these belongs
-#: here explicitly rather than falling through to a guess.
+#: The auto-class each trainer loads, read off the trainers rather than guessed.
+#: SFT chooses by MODALITY, not task -- ``trainer/sft.py`` loads a causal LM for
+#: text, ``AutoModelForImageTextToText`` for vision and ``AutoModel`` for audio --
+#: so keying this on the task alone built every vision recipe as a causal LM.
+_MODALITY_AUTO_CLASS = {
+    "vision": ("AutoModelForImageTextToText",),
+    "audio": ("AutoModel",),
+}
 _TASK_AUTO_CLASS = {
     "embedding": ("AutoModel",),
     "reward_model": ("AutoModelForSequenceClassification", "AutoModel"),
 }
 _DEFAULT_AUTO_CLASS = ("AutoModelForCausalLM", "AutoModel")
+
+
+def loader_for(cfg: Any) -> tuple[str, ...]:
+    """The auto-classes to try, in the order the config's trainer would.
+
+    A task with its own head (embedding, reward_model) wins over modality; after
+    that the modality decides, as it does in SFT. The fallback is causal LM,
+    which is what every text task loads.
+    """
+    task = getattr(cfg, "task", "")
+    if task in _TASK_AUTO_CLASS:
+        return _TASK_AUTO_CLASS[task]
+    return _MODALITY_AUTO_CLASS.get(getattr(cfg, "modality", "text"), _DEFAULT_AUTO_CLASS)
 
 
 def load_hf_config(base: str) -> Any:
@@ -296,18 +312,18 @@ def load_hf_config(base: str) -> Any:
     return AutoConfig.from_pretrained(base, trust_remote_code=False)
 
 
-def build_on_meta(hf_config: Any, task: str) -> Any:
+def build_on_meta(hf_config: Any, classes: tuple[str, ...]) -> Any:
     """Instantiate the architecture with no storage behind any parameter.
 
-    The auto-classes are tried in the order the task's trainer would; the last
-    error is raised if none works, so the report says which class refused rather
-    than "could not build".
+    ``classes`` comes from :func:`loader_for`, tried in order; the last error is
+    raised if none works, so the report says which class refused rather than
+    "could not build".
     """
     import torch
     import transformers
 
     last: Optional[BaseException] = None
-    for class_name in _TASK_AUTO_CLASS.get(task, _DEFAULT_AUTO_CLASS):
+    for class_name in classes:
         factory = getattr(transformers, class_name, None)
         if factory is None:
             continue

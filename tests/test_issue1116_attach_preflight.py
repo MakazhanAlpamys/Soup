@@ -43,11 +43,15 @@ pytest.importorskip("peft")
 torch = pytest.importorskip("torch")
 
 
-def _cfg(base="org/m", task="sft", r=8, dropout=0.0, backend=None, targets="auto"):
+def _cfg(
+    base="org/m", task="sft", r=8, dropout=0.0, backend=None, targets="auto",
+    modality="text",
+):
     """A stand-in for the loaded SoupConfig, carrying only what the check reads."""
     return SimpleNamespace(
         base=base,
         task=task,
+        modality=modality,
         backend=backend,
         training=SimpleNamespace(
             lora=SimpleNamespace(r=r, alpha=16, dropout=dropout, target_modules=targets)
@@ -180,6 +184,41 @@ def _unreachable(*_args, **_kwargs):
     raise AssertionError("the check reached the network for a config with no adapter")
 
 
+class TestTheLoaderMatchesTheTrainer:
+    """The class a config is built with has to be the one its trainer loads, or
+    the verdict is about a different model. SFT picks by MODALITY
+    (``trainer/sft.py``: causal LM for text, ``AutoModelForImageTextToText`` for
+    vision, ``AutoModel`` for audio); my first version keyed on the task and
+    built every vision recipe as a causal LM. It was caught by re-verifying the
+    multimodal rows of #1116 against the real loaders, not by these tests --
+    which is why these now exist."""
+
+    def test_vision_sft_uses_the_image_text_class(self):
+        from soup_cli.utils.attach_preflight import loader_for
+
+        assert loader_for(_cfg(modality="vision")) == ("AutoModelForImageTextToText",)
+
+    def test_audio_sft_uses_the_bare_model(self):
+        from soup_cli.utils.attach_preflight import loader_for
+
+        assert loader_for(_cfg(modality="audio")) == ("AutoModel",)
+
+    def test_text_sft_uses_a_causal_lm(self):
+        from soup_cli.utils.attach_preflight import loader_for
+
+        assert loader_for(_cfg())[0] == "AutoModelForCausalLM"
+
+    def test_a_task_with_its_own_head_wins_over_modality(self):
+        """An embedding run is ``AutoModel`` whatever the modality says --
+        ``trainer/embedding.py`` never loads a causal LM."""
+        from soup_cli.utils.attach_preflight import loader_for
+
+        assert loader_for(_cfg(task="embedding")) == ("AutoModel",)
+        assert loader_for(_cfg(task="reward_model"))[0] == (
+            "AutoModelForSequenceClassification"
+        )
+
+
 class TestShrinking:
     def test_sub_configs_are_cut_too(self):
         """A vision-language wrapper keeps the text tower's depth in
@@ -221,10 +260,10 @@ class TestTheRealAttach:
         return lambda _base: config
 
     @staticmethod
-    def _meta(config, _task):
+    def _meta(config, classes):
         from soup_cli.utils.attach_preflight import build_on_meta
 
-        return build_on_meta(config, _task)
+        return build_on_meta(config, classes)
 
     def test_a_dense_llama_attaches(self):
         from transformers import LlamaConfig
