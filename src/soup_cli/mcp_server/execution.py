@@ -152,7 +152,15 @@ def digest_file(
                 raise ExecutionError(f"{field} is not a regular file")
             hasher = hashlib.sha256()
             total_bytes = 0
-            with _open_binary_no_follow(real) as handle:
+            # Open ``path`` AS GIVEN, never ``real``: ``os.path.realpath``
+            # RESOLVES a symlink, so opening the resolved path means
+            # ``O_NOFOLLOW`` can never fire and a link swapped in at ``path``
+            # after the lstat guard would be silently followed and its target
+            # digested — the very TOCTOU window this reader exists to close.
+            # The digest of an ordinary file is unaffected (same inode, same
+            # bytes), and the RESOLVED path is still what gets recorded below,
+            # because that is what ``_revalidate`` compares against.
+            with _open_binary_no_follow(path) as handle:
                 while chunk := handle.read(65536):
                     total_bytes += len(chunk)
                     if total_bytes > max_bytes:
