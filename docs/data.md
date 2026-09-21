@@ -1022,6 +1022,9 @@ Ollama, Anthropic, or vLLM), **code** (execution via RLVR sandbox), **judge** (b
 **validator** (regex or JSON schema), **sampler** (deterministic selection). Checkpoint
 written per node; resume rehydrates from per-node sidecars. Failed rows logged with
 redacted reasons (paths stripped, capped at 256 chars).
+Regex validator nodes reject structurally unsafe patterns before matching rows;
+the error identifies the node's `config.regex` field. Simple alternations remain
+valid.
 
 
 ## Fine-tune Doctor (`soup data doctor`)

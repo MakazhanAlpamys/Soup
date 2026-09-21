@@ -880,19 +880,20 @@ class TestReviewFixCoverage:
             with pytest.raises(ValueError, match="exceeds 16 MiB"):
                 _run_diagnose_gate(str(ev), "run1", "base", "adapter")
 
-    # security-review MEDIUM — ReDoS probe in matches_regex.
+    # Issue #1137 — structural validation replaces the runtime ReDoS probe.
     def test_matches_regex_invalid_pattern_rejected(self) -> None:
-        # Invalid regex syntax → False (probe wrapped in try/except).
+        # Invalid regex syntax remains a non-match.
         assert not matches_regex("abc", "(?:")
         # Sane patterns still pass.
         assert matches_regex("abc123", r"\d+")
-        # Source-grep — confirm the ReDoS probe wiring exists.
+        # Source-grep — confirm the structural guard replaced the risky probe.
         source = (
             _PROJECT_ROOT / "src" / "soup_cli" / "utils" / "diagnose" / "format.py"
         ).read_text(
             encoding="utf-8"
         )
-        assert 'compiled.search("a" * 128)' in source
+        assert 'check_config_regex(pattern, "diagnose.regex_pattern")' in source
+        assert 'compiled.search("a" * 128)' not in source
 
     # security-review MEDIUM — looks_like_refusal caps input length.
     def test_refusal_input_capped(self) -> None:

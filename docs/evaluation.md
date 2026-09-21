@@ -764,6 +764,12 @@ Paths are containment-checked, and `registry://` refs are resolved with an optio
 
 ### Custom Eval Format
 
+Regex-scored custom tasks reject structurally unsafe patterns before matching
+model output and name `eval.custom.expected` in the error. The diagnose
+`format` probe applies the same check to `regex_pattern` without running a
+canary search. Ordinary patterns, including single-character alternation,
+remain valid.
+
 ```jsonl
 {"prompt": "What is 2+2?", "expected": "4", "category": "math", "scoring": "exact"}
 {"prompt": "Explain gravity", "expected": "force.*attraction", "scoring": "regex"}
