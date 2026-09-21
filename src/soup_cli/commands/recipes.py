@@ -10,6 +10,9 @@ from rich.syntax import Syntax
 from rich.table import Table
 
 console = Console()
+#: Diagnostics for ``verify``. They go to stderr so that ``--json`` leaves stdout
+#: as nothing but the JSON document -- a skipped config is a note, not a result.
+err_console = Console(stderr=True)
 
 app = typer.Typer(no_args_is_help=True)
 
@@ -168,7 +171,7 @@ def verify(
 
     configs = _configs_to_verify(config, templates)
     if not configs:
-        console.print("[red]Nothing to verify.[/]")
+        err_console.print("[red]Nothing to verify.[/]")
         raise typer.Exit(1)
 
     report = PreflightReport()
@@ -180,7 +183,10 @@ def verify(
         )
 
     if json_out:
-        console.print_json(
+        # Plain stdout, not console.print_json: Rich syntax-colours JSON, and
+        # under FORCE_COLOR (set by many CI runners) the escape codes make the
+        # document unparseable. Same reason as ``soup adapters audit --json``.
+        typer.echo(
             _json.dumps(
                 [
                     {
@@ -190,7 +196,8 @@ def verify(
                         "vision_modules": c.vision_modules, "detail": c.detail,
                     }
                     for c in report.checks
-                ]
+                ],
+                indent=2,
             )
         )
     else:
@@ -207,7 +214,7 @@ def _configs_to_verify(config: Optional[str], templates: bool):
     if config:
         path = Path(config)
         if not path.is_file():
-            console.print(f"[red]Config not found:[/] {config}")
+            err_console.print(f"[red]Config not found:[/] {config}")
             raise typer.Exit(1)
         pairs.append((path.name, path.read_text(encoding="utf-8")))
     else:
@@ -228,7 +235,9 @@ def _configs_to_verify(config: Optional[str], templates: bool):
         try:
             loaded.append((name, load_config_from_string(text)))
         except Exception as exc:  # noqa: BLE001 --- a parse failure is #330's job
-            console.print(f"[dim]skipped {name}: does not parse ({type(exc).__name__})[/]")
+            err_console.print(
+                f"[dim]skipped {name}: does not parse ({type(exc).__name__})[/]"
+            )
     return loaded
 
 

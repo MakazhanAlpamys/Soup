@@ -219,6 +219,104 @@ class TestTheLoaderMatchesTheTrainer:
         )
 
 
+class TestRemoteCodeIsNeverOffered:
+    """The module promises remote code is never executed. The first version kept
+    that promise for the config and broke it for the model: ``from_config`` was
+    called without ``trust_remote_code``, and for a custom-code architecture
+    transformers does not refuse -- it PROMPTS on stdin, "Do you wish to run the
+    custom code? [y/N]". That hangs a terminal, corrupts ``--json``, and runs
+    remote code for anyone who types y. Kimi-K2.5 is the live case: its config
+    loads with ``trust_remote_code=False`` while its modeling code is remote.
+    Found by running the real command end to end, not by any test here."""
+
+    def test_every_build_passes_trust_remote_code_false(self, monkeypatch):
+        from soup_cli.utils import attach_preflight
+
+        seen = []
+
+        def _spy(_config, **kwargs):
+            seen.append(kwargs)
+            return SimpleNamespace()
+
+        # Patch the method on the real class: ``build_on_meta`` resolves the
+        # class through transformers' lazy module, which a module-level setattr
+        # does not reliably intercept.
+        monkeypatch.setattr(transformers.AutoModelForCausalLM, "from_config", _spy)
+        attach_preflight.build_on_meta(SimpleNamespace(), ("AutoModelForCausalLM",))
+
+        assert seen == [{"trust_remote_code": False}], (
+            "from_config was called without trust_remote_code=False; transformers "
+            "will prompt on stdin for a custom-code architecture"
+        )
+
+    def test_the_config_load_refuses_remote_code_too(self, monkeypatch):
+        seen = []
+        monkeypatch.setattr(
+            transformers.AutoConfig, "from_pretrained",
+            lambda base, **kwargs: seen.append(kwargs) or SimpleNamespace(),
+        )
+        from soup_cli.utils.attach_preflight import load_hf_config
+
+        load_hf_config("org/m")
+
+        assert seen == [{"trust_remote_code": False}]
+
+
+class TestJsonIsParseable:
+    """``--json`` exists for a program to read, so stdout must be the document
+    and nothing else."""
+
+    def _invoke(self, tmp_path, monkeypatch, *, force_colour):
+        import json as _json
+
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        monkeypatch.setattr(
+            "soup_cli.utils.attach_preflight.check_attach",
+            lambda name, cfg, **_k: AttachCheck(
+                name, cfg.base, cfg.task, Verdict.ATTACHES, adapted=4
+            ),
+        )
+        if force_colour:
+            # The module-level Console is built at import time, so FORCE_COLOR set
+            # here would never reach it and the assertion below would pass
+            # without testing anything -- which is exactly what my first version
+            # did (the print_json mutant survived). Pin a colour-forced console
+            # into the module instead; it resolves sys.stdout at write time, so
+            # CliRunner still captures it.
+            from rich.console import Console
+
+            import soup_cli.commands.recipes as recipes_cmd
+
+            monkeypatch.setattr(recipes_cmd, "console", Console(force_terminal=True))
+        good = tmp_path / "soup.yaml"
+        good.write_text(
+            "base: org/m\ntask: sft\ndata:\n  train: ./x.jsonl\n  format: alpaca\n"
+            "training:\n  lora:\n    r: 8\n",
+            encoding="utf-8",
+        )
+        result = CliRunner().invoke(app, ["recipes", "verify", "--config", str(good), "--json"])
+        return result, _json
+
+    def test_stdout_parses_as_json(self, tmp_path, monkeypatch):
+        result, json_mod = self._invoke(tmp_path, monkeypatch, force_colour=False)
+
+        rows = json_mod.loads(result.stdout)
+        assert rows[0]["verdict"] == "attaches"
+
+    def test_it_still_parses_when_colour_is_forced(self, tmp_path, monkeypatch):
+        """Rich's ``print_json`` syntax-colours its output, and under
+        ``FORCE_COLOR`` -- which many CI runners set -- the escape codes make the
+        document unparseable. Measured: ``json.loads`` raised JSONDecodeError on
+        ``print_json`` output with a forced terminal."""
+        result, json_mod = self._invoke(tmp_path, monkeypatch, force_colour=True)
+
+        assert "\x1b[" not in result.stdout, "ANSI colour codes in --json output"
+        json_mod.loads(result.stdout)
+
+
 class TestShrinking:
     def test_sub_configs_are_cut_too(self):
         """A vision-language wrapper keeps the text tower's depth in

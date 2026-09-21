@@ -329,7 +329,14 @@ def build_on_meta(hf_config: Any, classes: tuple[str, ...]) -> Any:
             continue
         try:
             with torch.device("meta"):
-                return factory.from_config(hf_config)
+                # trust_remote_code=False explicitly. Omitted, transformers does
+                # not refuse a custom-code architecture -- it PROMPTS on stdin
+                # ("Do you wish to run the custom code? [y/N]"), which hangs a
+                # terminal, corrupts --json on stdout, and runs remote code for
+                # anyone who answers y. load_hf_config passing False is not
+                # enough: a config can load while its modeling code is remote
+                # (Kimi-K2.5 does exactly this).
+                return factory.from_config(hf_config, trust_remote_code=False)
         except Exception as exc:  # noqa: BLE001 --- try the next class
             last = exc
     raise last if last is not None else RuntimeError("no auto-class available")
