@@ -26,6 +26,9 @@ The five arms are:
 - clone_quantstate: private quantization state, pooled packed weights
 - clone_packed: private packed weights, pooled quantization state
 
+The ``clone`` arm is the comparison baseline within this harness; it is not
+an independent resident NF4 reference.
+
 Expected result
 ---------------
 The mechanism is an aliasing problem, not a missing CUDA synchronization:
@@ -72,6 +75,7 @@ INTERMEDIATE = 27648
 TOKENS = 128
 POOL_SLOTS = 2
 LORA_RANK = 16
+CORRECTNESS_REPEATS = 3
 
 SEED_WEIGHTS = 11
 SEED_INPUT = 23
@@ -152,7 +156,7 @@ class BundlePool:
             offset.copy_(source.state.offset)
 
             nested_absmax = self.state2_absmax[slot]
-            nested_absmax.copy_(source.state2.absmax)
+            nested_absmax.copy_(source.state.state2.absmax)
 
             state2 = QuantState(
                 absmax=nested_absmax,
@@ -293,7 +297,7 @@ def project(
 
     return bnb.matmul_4bit(
         x,
-        bundle.packed.t(),
+        bundle.packed,
         quant_state=bundle.state,
     )
 
@@ -401,7 +405,7 @@ def run_once(
             o = project(hidden, bundles["o"])
             gate = project(hidden, bundles["gate"])
             up = project(hidden, bundles["up"])
-            down = project(hidden, bundles["down"])
+            down = project(gate, bundles["down"])
 
             q_lora = functional.linear(
                 functional.linear(hidden, q_a),
@@ -543,89 +547,85 @@ def main() -> int:
     initial_parameters = make_lora_parameters()
 
     print("built         synthetic NF4 source set")
-    print("running       control")
-    control = run_once(
-        sources,
-        initial_parameters,
+
+    arm_names = (
         "control",
-        bypass_pool=args.bypass_pool,
-    )
-
-    print("running       sync")
-    sync = run_once(
-        sources,
-        initial_parameters,
         "sync",
-        bypass_pool=args.bypass_pool,
-    )
-
-    print("running       clone")
-    clone = run_once(
-        sources,
-        initial_parameters,
-        "clone",
-        bypass_pool=False,
-    )
-
-    print("running       clone_quantstate")
-    clone_quantstate = run_once(
-        sources,
-        initial_parameters,
         "clone_quantstate",
-        bypass_pool=False,
-    )
-
-    print("running       clone_packed")
-    clone_packed = run_once(
-        sources,
-        initial_parameters,
         "clone_packed",
-        bypass_pool=False,
+    )
+    all_arms = (
+        "control",
+        "sync",
+        "clone",
+        "clone_quantstate",
+        "clone_packed",
     )
 
-    print()
-    print(f"{'arm':>18}  {'exact':>12}  {'max_abs_diff':>15}")
+    exact_results = {name: [] for name in all_arms}
+    diff_results = {name: [] for name in all_arms}
 
-    results = {
-        "control": control,
-        "sync": sync,
-        "clone": clone,
-        "clone_quantstate": clone_quantstate,
-        "clone_packed": clone_packed,
-    }
-
-    for name, gradients in results.items():
-        exact, total = exact_gradient_count(clone, gradients)
-        diff = max_gradient_diff(clone, gradients)
-
+    for repetition in range(CORRECTNESS_REPEATS):
         print(
-            f"{name:>18}  "
-            f"{exact:>5}/{total:<6}  "
-            f"{diff:>15.6e}"
+            f"correctness  {repetition + 1}/{CORRECTNESS_REPEATS}"
         )
 
-    control_diff = max_gradient_diff(clone, control)
-    sync_diff = max_gradient_diff(clone, sync)
-    quantstate_diff = max_gradient_diff(
-        clone,
-        clone_quantstate,
-    )
-    packed_diff = max_gradient_diff(
-        clone,
-        clone_packed,
-    )
+        print("running       clone")
+        clone = run_once(
+            sources,
+            initial_parameters,
+            "clone",
+            bypass_pool=False,
+        )
+
+        clone_exact, clone_total = exact_gradient_count(
+            clone,
+            clone,
+        )
+        clone_diff = max_gradient_diff(clone, clone)
+        exact_results["clone"].append(
+            f"{clone_exact}/{clone_total}"
+        )
+        diff_results["clone"].append(clone_diff)
+
+        for arm in arm_names:
+            print(f"running       {arm}")
+            candidate = run_once(
+                sources,
+                initial_parameters,
+                arm,
+                bypass_pool=args.bypass_pool if arm == "control" else False,
+            )
+
+            exact, total = exact_gradient_count(clone, candidate)
+            diff = max_gradient_diff(clone, candidate)
+
+            exact_results[arm].append(f"{exact}/{total}")
+            diff_results[arm].append(diff)
+
+            del candidate
+
+        del clone
+
+    print()
+    print(f"{'arm':>18}  {'exact':>28}  {'max_abs_diff':>45}")
+
+    for name in all_arms:
+        print(
+            f"{name:>18}  "
+            f"{', '.join(exact_results[name]):>28}  "
+            f"{', '.join(f'{diff:.6e}' for diff in diff_results[name]):>45}"
+        )
 
     print()
 
     if args.bypass_pool:
-        if control_diff != 0.0:
+        if any(diff != 0.0 for diff in diff_results["control"]):
             print(
                 "ERROR: bypassing the pool did not remove the "
                 "control mismatch."
             )
-            print(
-                "RESULT: negative control was NOT caught."
-            )
+            print("RESULT: negative control was NOT caught.")
             return 2
 
         print(
@@ -635,35 +635,42 @@ def main() -> int:
         print("RESULT: mutation detected; exiting non-zero.")
         return 1
 
-    if control_diff == 0.0:
+    if all(diff == 0.0 for diff in diff_results["control"]):
         print(
             "ERROR: control did not reproduce the NF4 "
             "pooled-buffer mismatch."
         )
         return 1
 
-    if sync_diff == 0.0:
+    if diff_results["control"][-1] == 0.0:
+        print(
+            "ERROR: control ended exact; expected the historical "
+            "stale-buffer mismatch after repeated backwards."
+        )
+        return 1
+
+    if any(diff == 0.0 for diff in diff_results["sync"]):
         print(
             "ERROR: synchronize() removed the mismatch; "
             "the aliasing mechanism was not reproduced."
         )
         return 1
 
-    if quantstate_diff == 0.0:
+    if any(diff == 0.0 for diff in diff_results["clone_quantstate"]):
         print(
             "ERROR: cloning quantization state alone removed "
             "the mismatch."
         )
         return 1
 
-    if packed_diff == 0.0:
+    if any(diff == 0.0 for diff in diff_results["clone_packed"]):
         print(
             "ERROR: cloning packed weights alone removed "
             "the mismatch."
         )
         return 1
 
-    if max_gradient_diff(clone, clone) != 0.0:
+    if any(diff != 0.0 for diff in diff_results["clone"]):
         print("ERROR: clone reference is not self-consistent.")
         return 1
 
