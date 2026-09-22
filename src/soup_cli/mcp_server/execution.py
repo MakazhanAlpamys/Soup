@@ -14,7 +14,11 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from soup_cli.experiment.tracker import ExperimentTracker, generate_run_id
-from soup_cli.utils.paths import atomic_write_text, enforce_under_cwd_and_no_symlink
+from soup_cli.utils.paths import (
+    atomic_write_text,
+    enforce_under_cwd_and_no_symlink,
+    open_no_follow,
+)
 from soup_cli.utils.process_liveness import process_is_alive as _pid_is_alive
 
 TOKEN_TTL_SECONDS = 5 * 60
@@ -267,7 +271,19 @@ class ExecutionManager:
                 log_path=log_path,
             )
             try:
-                log_handle = open(log_path, "ab")
+                # open_no_follow (#820): a symlink planted at the run-log path
+                # must be refused rather than followed, so the child's output
+                # can never be redirected outside .soup/mcp-runs/. Mode 0o666
+                # keeps plain open()'s permissions (umask still applies); the
+                # OSError on refusal maps to the path-free ExecutionError below.
+                log_handle = os.fdopen(
+                    open_no_follow(
+                        log_path,
+                        os.O_WRONLY | os.O_CREAT | os.O_APPEND,
+                        0o666,
+                    ),
+                    "ab",
+                )
                 process = subprocess.Popen(  # noqa: S603 - internal argv, no shell
                     list(plan.argv),
                     cwd=plan.cwd,
