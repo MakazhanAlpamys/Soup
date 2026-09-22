@@ -71,16 +71,18 @@ class AttachCheck:
 
 
 #: Substrings that mean "this config could not be loaded", mapped to the reason.
-#: Matched against the exception text because ``transformers`` raises plain
-#: ``ValueError``/``OSError`` for all of them; the gated case is matched by
-#: exception type first, which is the #677 ordering lesson.
+#: Matched against the exception text only (``transformers`` raises plain
+#: ``ValueError``/``OSError`` for all of them), first match wins, so the ORDER is
+#: the #677 lesson: "gated repo" goes first, ahead of "is not a local folder",
+#: so a gated repo is never filed as an unresolvable id if one message ever
+#: carries both.
 _UNVERIFIABLE_MARKERS: tuple[tuple[str, str], ...] = (
+    ("gated repo", "gated repo; set HF_TOKEN to check it"),
     ("trust_remote_code", "needs trust_remote_code, which this check never enables"),
     ("custom code", "needs trust_remote_code, which this check never enables"),
     ("Unrecognized model", "this transformers cannot read the config"),
     ("does not appear to have a file named config.json", "no config.json in the repo"),
     ("is not a local folder", "repo id does not resolve anonymously (see #677)"),
-    ("gated repo", "gated repo; set HF_TOKEN to check it"),
 )
 
 
@@ -253,7 +255,11 @@ def trainer_lora_config(model: Any, cfg: Any) -> tuple[Any, Any]:
 
     ``moe_lora`` is applied for every task, which is exact for the shipped
     catalogue -- no recipe sets it on a task whose trainer ignores it -- and exact
-    for any config once every LoRA trainer reads it (#1099).
+    for any config once every LoRA trainer reads it (#1099). The one split by
+    modality is SFT's: its vision and audio branches (``_setup_vision_transformers``,
+    ``_setup_audio_transformers``) call only ``resolve_lora_target_modules`` and
+    ``build_lora_config``, so for those the MoE and ``target_parameters`` steps are
+    skipped here too -- the same split :func:`loader_for` makes for the class.
     """
     from soup_cli.utils.moe import resolve_moe_lora_targets
     from soup_cli.utils.peft_wiring import (
@@ -265,6 +271,13 @@ def trainer_lora_config(model: Any, cfg: Any) -> tuple[Any, Any]:
     tcfg = cfg.training
     lora = tcfg.lora
     targets = resolve_lora_target_modules(model, lora.target_modules)
+    if getattr(cfg, "task", "") == "sft" and getattr(cfg, "modality", "text") in (
+        "vision", "audio",
+    ):
+        # SFT's vision and audio branches make only these two calls: no MoE
+        # rescue and no target_parameters. Report what that path attaches.
+        peft_config = build_lora_config(lora, target_modules=targets, task_type=None)
+        return peft_config, targets
     target_parameters = resolve_lora_target_parameters(
         model, getattr(lora, "target_parameters", None)
     )

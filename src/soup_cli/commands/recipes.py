@@ -154,7 +154,7 @@ def verify(
 ):
     """Check that a config can attach a LoRA adapter, without downloading weights.
 
-    Builds each base's architecture on the meta device from ``config.json`` alone,
+    Builds each base's architecture on the meta device from config.json alone,
     then runs Soup's own target resolution and the real peft attach. Exits 1 only
     when something cannot attach: a gated repo, or one needing trust_remote_code,
     is reported as unverified rather than broken (#1116).
@@ -226,7 +226,7 @@ def _configs_to_verify(config: Optional[str], templates: bool):
             for base in (root / "templates", root.parents[1] / "examples"):
                 if base.is_dir():
                     pairs.extend(
-                        (str(p.relative_to(base.parent)), p.read_text(encoding="utf-8"))
+                        (p.relative_to(base.parent).as_posix(), p.read_text(encoding="utf-8"))
                         for p in sorted(base.rglob("*.yaml"))
                     )
 

@@ -599,7 +599,9 @@ class TestTheCommand:
         )
 
         assert result.exit_code == 1
-        assert "not found" in result.output.lower()
+        from tests.conftest import strip_ansi
+
+        assert "not found" in strip_ansi(result.output).lower()
 
 
 class TestTheVerdictIsTheTrainers:
@@ -738,3 +740,78 @@ class TestTheVerdictIsTheTrainers:
             "the trainer never uses"
         )
         assert check.stage == "build"
+
+
+class TestReviewFollowUps:
+    """The #1117 review's follow-ups, each pinned."""
+
+    def test_a_gated_message_that_also_says_not_a_local_folder_is_gated(self):
+        """First match wins, so the order is the #677 lesson: a 401 folded into
+        "is not a local folder" text must still read as gated, not unresolvable."""
+        exc = OSError(
+            "org/m is not a local folder and is not a valid model identifier. "
+            "Cannot access gated repo for url https://huggingface.co/org/m."
+        )
+        assert "gated" in classify_load_failure(exc)
+
+    def test_catalogue_row_names_use_forward_slashes(self):
+        """``--json`` keys must not depend on the OS: Windows printed
+        ``templates\\audio.yaml``. Only the Windows cells can see a regression."""
+        from soup_cli.commands.recipes import _configs_to_verify
+
+        names = [name for name, _cfg in _configs_to_verify(None, True)]
+        nested = [n for n in names if "/" in n]
+        assert any(n.startswith("templates/") for n in nested), names[:5]
+        assert any(n.startswith("examples/") for n in nested), names[:5]
+        assert not [n for n in names if "\\" in n]
+
+    @staticmethod
+    def _cfg(modality):
+        from soup_cli.config.loader import load_config_from_string
+
+        fmt = {"text": "alpaca", "vision": "llava", "audio": "audio"}[modality]
+        return load_config_from_string(
+            f"base: org/m\ntask: sft\nmodality: {modality}\n"
+            f"data:\n  train: ./x.jsonl\n  format: {fmt}\n"
+            "training:\n  moe_lora: true\n"
+            "  lora:\n    r: 8\n    alpha: 16\n    dropout: 0.0\n"
+            '    target_modules: ["q_proj"]\n'
+        )
+
+    @pytest.mark.parametrize(
+        ("modality", "full_sequence"),
+        [("text", True), ("vision", False), ("audio", False)],
+    )
+    def test_sft_vision_and_audio_skip_the_moe_and_parameter_steps(
+        self, monkeypatch, modality, full_sequence
+    ):
+        """SFT's vision and audio branches call only ``resolve_lora_target_modules``
+        and ``build_lora_config``, so a ``moe_lora: true`` vision config must not be
+        reported through the MoE rescue the trainer never runs there."""
+        import torch
+
+        import soup_cli.utils.moe as moe
+        import soup_cli.utils.peft_wiring as wiring
+        from soup_cli.utils.attach_preflight import trainer_lora_config
+
+        seen = []
+        real_moe, real_params = moe.resolve_moe_lora_targets, wiring.resolve_lora_target_parameters
+
+        def spy_moe(*a, **k):
+            seen.append("moe")
+            return real_moe(*a, **k)
+
+        def spy_params(*a, **k):
+            seen.append("params")
+            return real_params(*a, **k)
+
+        monkeypatch.setattr(moe, "resolve_moe_lora_targets", spy_moe)
+        monkeypatch.setattr(wiring, "resolve_lora_target_parameters", spy_params)
+
+        model = torch.nn.Sequential()
+        model.add_module("q_proj", torch.nn.Linear(4, 4))
+        _peft_config, targets = trainer_lora_config(model, self._cfg(modality))
+
+        assert targets == ["q_proj"]
+        assert (seen == ["params", "moe"]) is full_sequence, seen
+        assert (seen == []) is (not full_sequence), seen
