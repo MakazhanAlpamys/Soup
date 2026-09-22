@@ -591,6 +591,11 @@ soup ui
 - **Chat Upgrade** — SSE streaming via proxy, typing indicator, cancel button, markdown renderer (bold, italic, code blocks), chat export as JSON
 - **Config Builder** — recipe dropdown (175 recipes), config schema API for dynamic form generation
 
+Gradient norm is nullable: backends or steps that do not report it store and
+stream `null`, and the Web UI chart leaves a gap instead of drawing a false
+zero. An actually logged `0.0` remains a measured value and appears in the
+terminal panel.
+
 **Security:** The Web UI generates a random auth token at startup (printed to console). Every private endpoint — mutating (start/stop training, delete runs, inspect data, validate config) and reading (runs, metrics, system, recipes, SSE streams) — requires an `Authorization: Bearer <token>` header. `/` and `/api/health` stay open so the dashboard can load. CORS is restricted to the served origin. Data inspection is sandboxed to the working directory.
 
 YAML-entry request bodies are capped at 1 MiB on `/api/config/validate`,
