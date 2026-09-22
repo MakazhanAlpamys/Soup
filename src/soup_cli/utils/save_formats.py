@@ -42,7 +42,7 @@ TORCHAO_PTQ_SCHEMES: frozenset[str] = frozenset({
 #: ``inner_k_tiles`` is absent on purpose: ``Int4WeightOnlyConfig(inner_k_tiles=8)``
 #: raises ``TypeError`` on torchao 0.18.0, so advertising it promised a knob that
 #: cannot be passed.
-TORCHAO_SCHEME_KWARGS: dict[str, frozenset] = {
+TORCHAO_SCHEME_KWARGS: dict[str, frozenset[str]] = {
     "Int4WeightOnly": frozenset({"group_size"}),
     "Int8DynActInt4": frozenset({"group_size"}),
     "Float8DynActFloat8": frozenset(),
