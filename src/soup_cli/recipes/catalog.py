@@ -2771,7 +2771,7 @@ output: ./output
         model="zai-org/GLM-4.6",
         task="sft",
         size="9B",
-        tags=("glm", "thudm", "chat", "instruction"),
+        tags=("glm", "zai-org", "chat", "instruction"),
         description="GLM 4.6 instruction tuning with LoRA",
         yaml_str="""\
 base: zai-org/GLM-4.6
@@ -2986,7 +2986,7 @@ output: ./output
     "granite-4-sft": RecipeMeta(
         model="ibm-granite/granite-4.0-tiny-base-preview",
         task="sft",
-        size="3B",
+        size="7B",
         tags=("granite", "ibm", "small", "instruction"),
         description="IBM Granite 4.0 tiny SFT",
         yaml_str="""\
