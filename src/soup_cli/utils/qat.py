@@ -56,13 +56,23 @@ def prepare_model_for_qat(model):
     return model
 
 
-def validate_qat_config(quantization: str, backend: str, modality: str) -> list[str]:
+def validate_qat_config(
+    quantization: str,
+    backend: str,
+    modality: str,
+    quantization_aware: "bool | str" = True,
+    fp8_recipe: str = "tensorwise",
+) -> list[str]:
     """Validate QAT configuration and return warnings/errors.
 
     Args:
         quantization: The quantization setting (4bit, 8bit, none).
         backend: Training backend (transformers, unsloth).
         modality: Training modality (text, vision).
+        quantization_aware: ``True`` (int8 QAT) or ``"fp8"``. FP8 needs torchao's
+            float8 training, not the int8 ``quantize_`` this module probes, so its
+            dependency check is the FP8 one (#835 review of #1154).
+        fp8_recipe: The FP8 scaling recipe, for the FP8 card gate.
 
     Returns:
         List of warning/error messages. Empty list means valid.
@@ -81,7 +91,22 @@ def validate_qat_config(quantization: str, backend: str, modality: str) -> list[
             "Consider using quantization: 4bit for QLoRA + QAT."
         )
 
-    if not is_qat_available():
+    if quantization_aware == "fp8":
+        from soup_cli.utils.fp8 import (
+            FP8_TORCHAO_MISSING,
+            fp8_training_supported,
+            is_fp8_available,
+        )
+
+        # Same order as apply_fp8_training (#1044): the card first, so a card that
+        # cannot run FP8 is named as the reason rather than a package that would
+        # not help. Checked here so the run stops before the model is loaded.
+        supported, reason = fp8_training_supported(fp8_recipe)
+        if not supported:
+            errors.append(reason)
+        elif not is_fp8_available():
+            errors.append(FP8_TORCHAO_MISSING)
+    elif not is_qat_available():
         errors.append(
             "torchao is not installed. "
             "Install it with: pip install torchao"

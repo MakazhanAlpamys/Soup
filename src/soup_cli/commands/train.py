@@ -1263,9 +1263,11 @@ def train(
 
         qat_errors = validate_qat_config(
             cfg.training.quantization, cfg.backend, cfg.modality,
+            quantization_aware=cfg.training.quantization_aware,
+            fp8_recipe=cfg.training.fp8_recipe,
         )
         for err in qat_errors:
-            console.print(f"[red]QAT error:[/] {err}")
+            console.print(f"[red]QAT error:[/] {markup_escape(err)}")
         if qat_errors:
             raise typer.Exit(1)
 

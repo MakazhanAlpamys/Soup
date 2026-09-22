@@ -561,3 +561,87 @@ class TestTheRunStops:
         else:
             wrapper._setup_transformers(cfg, cfg.training)
             assert converts == ["tensorwise"]
+
+
+class TestSoupTrainReachesTheStop:
+    """#1154 review: ``soup train`` ran the int8 QAT validator for ``quantization_aware:
+    fp8`` too, so the run stopped on "pip install torchao" before the FP8 path could
+    name ``soup-cli[qat]``. These drive the real command; the run stops in pre-flight,
+    before any model is fetched, so the base need not exist."""
+
+    def _train(self, tmp_path, monkeypatch, *, quantization_aware, card_ok, torchao):
+        import yaml
+        from typer.testing import CliRunner
+
+        import soup_cli.utils.fp8 as fp8
+        import soup_cli.utils.qat as qat
+        from soup_cli.cli import app
+        from tests.conftest import strip_ansi
+
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("HF_HUB_OFFLINE", "1")
+        (tmp_path / "train.jsonl").write_text(
+            '{"messages": [{"role": "user", "content": "hi"}, '
+            '{"role": "assistant", "content": "hello"}]}\n',
+            encoding="utf-8",
+        )
+        (tmp_path / "soup.yaml").write_text(
+            yaml.safe_dump({
+                "base": "nobody/not-a-real-model",
+                "task": "sft",
+                "data": {"train": "train.jsonl", "format": "chatml", "max_length": 64},
+                "training": {
+                    "epochs": 1,
+                    "quantization": "none",
+                    "quantization_aware": quantization_aware,
+                },
+                "output": "./out",
+            }),
+            encoding="utf-8",
+        )
+        reason = "FP8 training requires an Ada or newer GPU (compute capability >= 8.9)"
+        monkeypatch.setattr(
+            fp8, "fp8_training_supported",
+            lambda recipe="tensorwise": (True, "") if card_ok else (False, reason),
+        )
+        monkeypatch.setattr(fp8, "is_fp8_available", lambda: torchao)
+        monkeypatch.setattr(qat, "is_qat_available", lambda: torchao)
+        result = CliRunner().invoke(
+            app, ["train", "--config", "soup.yaml", "--allow-oom-attempt", "--yes"]
+        )
+        # Rich wraps long lines; compare on single-spaced plain text.
+        return result, " ".join(strip_ansi(result.output).split())
+
+    def test_a_supported_card_without_torchao_names_the_extra(self, tmp_path, monkeypatch):
+        result, out = self._train(
+            tmp_path, monkeypatch, quantization_aware="fp8", card_ok=True, torchao=False
+        )
+        assert result.exit_code == 1
+        # The brackets survive: Rich would otherwise read [qat] as a markup tag.
+        assert 'pip install "soup-cli[qat]"' in out
+        assert "pip install torchao" not in out
+
+    def test_an_unsupported_card_is_named_before_torchao(self, tmp_path, monkeypatch):
+        result, out = self._train(
+            tmp_path, monkeypatch, quantization_aware="fp8", card_ok=False, torchao=False
+        )
+        assert result.exit_code == 1
+        assert "compute capability >= 8.9" in out
+        assert "soup-cli[qat]" not in out
+        assert "pip install torchao" not in out
+
+    def test_int8_qat_still_asks_for_torchao(self, tmp_path, monkeypatch):
+        """Control: ``quantization_aware: true`` is the int8 path and keeps its hint."""
+        result, out = self._train(
+            tmp_path, monkeypatch, quantization_aware=True, card_ok=True, torchao=False
+        )
+        assert result.exit_code == 1
+        assert "pip install torchao" in out
+        assert "soup-cli[qat]" not in out
+
+    def test_fp8_with_card_and_torchao_passes_the_preflight(self, tmp_path, monkeypatch):
+        """Control: the pre-flight is not refusing every FP8 config."""
+        _result, out = self._train(
+            tmp_path, monkeypatch, quantization_aware="fp8", card_ok=True, torchao=True
+        )
+        assert "QAT error" not in out
