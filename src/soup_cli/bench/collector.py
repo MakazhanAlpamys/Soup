@@ -109,10 +109,12 @@ class _BenchCollector_body:  # noqa: N801
         self._fingerprint_first: Optional[str] = None
         self._fingerprint_last: Optional[str] = None
         self._step_started: Optional[float] = None
-        self._pending_grad_norm: Optional[float] = None
         self._pending_useful = 0
         self._pending_total = 0
         self._now = time.perf_counter
+        # Set to ``torch.cuda.synchronize`` on CUDA, so a step boundary is read
+        # after the kernels it launched have finished, not when they were queued.
+        self._sync = lambda: None
 
     # -- collection ------------------------------------------------------
     def observe_batch(self, batch: Any) -> None:
@@ -131,31 +133,42 @@ class _BenchCollector_body:  # noqa: N801
         return control
 
     def on_step_begin(self, args=None, state=None, control=None, **kwargs):
-        self._step_started = self._now()
-        return control
-
-    def on_log(self, args=None, state=None, control=None, logs=None, **kwargs):
-        # Only a norm the backend actually reported. MLX reports none, and
-        # defaulting to 0.0 is the bug this contract exists to catch.
-        if logs and logs.get("grad_norm") is not None:
-            self._pending_grad_norm = float(logs["grad_norm"])
+        # Only the first step starts here. Every later one starts where the
+        # previous one ended: the Trainer fetches and collates a step's batches
+        # BEFORE it calls on_step_begin, so timing begin-to-end would leave data
+        # loading out of the step and flatter tok/s.
+        if self._step_started is None:
+            self._sync()
+            self._step_started = self._now()
         return control
 
     def on_step_end(self, args=None, state=None, control=None, **kwargs):
-        started = self._step_started if self._step_started is not None else self._now()
+        self._sync()
+        ended = self._now()
+        started = self._step_started if self._step_started is not None else ended
         self.steps.append(
             StepRecord(
                 index=len(self.steps),
-                wall_seconds=self._now() - started,
-                grad_norm=self._pending_grad_norm,
+                wall_seconds=ended - started,
+                grad_norm=None,
                 useful_tokens=self._pending_useful,
                 total_tokens=self._pending_total,
             )
         )
-        self._pending_grad_norm = None
         self._pending_useful = 0
         self._pending_total = 0
-        self._step_started = None
+        self._step_started = ended
+        return control
+
+    def on_log(self, args=None, state=None, control=None, logs=None, **kwargs):
+        # The Trainer logs a step AFTER its on_step_end (transformers
+        # trainer.py: on_step_end, then _maybe_log_save_evaluate), so the norm
+        # belongs to the step just recorded. Only a norm the backend actually
+        # reported: MLX reports none, and defaulting to 0.0 is the bug this
+        # contract exists to catch.
+        if logs and logs.get("grad_norm") is not None and self.steps:
+            if self.steps[-1].grad_norm is None:
+                self.steps[-1].grad_norm = float(logs["grad_norm"])
         return control
 
     def on_train_end(self, args=None, state=None, control=None, **kwargs):

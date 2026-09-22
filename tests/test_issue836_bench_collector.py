@@ -105,10 +105,11 @@ class TestTheCollector:
         collector._now = lambda: next(clock)
         collector.on_train_begin(None, None, None, model=model)
         for index in range(steps):
+            # transformers' own order: on_step_end, THEN the step's log.
             collector.on_step_begin(None, None, None)
+            collector.on_step_end(None, None, None)
             if grad_norms is not None and grad_norms[index] is not None:
                 collector.on_log(None, None, None, logs={"grad_norm": grad_norms[index]})
-            collector.on_step_end(None, None, None)
         collector.on_train_end(None, None, None, model=model)
         return collector
 
@@ -127,13 +128,31 @@ class TestTheCollector:
         collector = self._run(BenchCollector(), _model(), steps=2, grad_norms=[0.5, 0.0])
         assert [s.grad_norm for s in collector.steps] == [0.5, 0.0]
 
-    def test_step_time_is_the_gap_between_begin_and_end(self):
-        # The clock is read twice per step (begin, end) and not at all in
-        # on_train_begin, so these four ticks are two steps.
-        collector = self._run(
-            BenchCollector(), _model(), steps=2, seconds=[0.0, 2.5, 100.0, 103.0]
-        )
+    def test_the_last_steps_norm_is_not_lost(self):
+        """The norm the Trainer logs after the final on_step_end still lands --
+        a zero there is exactly the one a begin-side attach would drop."""
+        collector = self._run(BenchCollector(), _model(), steps=3, grad_norms=[1.0, 1.0, 0.0])
+        assert collector.steps[-1].grad_norm == 0.0
+
+    def test_a_second_log_for_the_same_step_does_not_overwrite(self):
+        collector = self._run(BenchCollector(), _model(), steps=1, grad_norms=[0.0])
+        collector.on_log(None, None, None, logs={"grad_norm": 5.0})
+        assert collector.steps[0].grad_norm == 0.0
+
+    def test_step_time_runs_from_one_step_end_to_the_next(self):
+        """The Trainer collates a step's batches before on_step_begin, so a
+        later step starts where the previous one ended. The clock is read at
+        the first begin and at every end: three ticks, two steps."""
+        collector = self._run(BenchCollector(), _model(), steps=2, seconds=[0.0, 2.5, 5.5])
         assert [s.wall_seconds for s in collector.steps] == [2.5, 3.0]
+
+    def test_every_boundary_is_synchronised(self):
+        collector = BenchCollector()
+        calls = []
+        collector._sync = lambda: calls.append(len(collector.steps))
+        self._run(collector, _model(), steps=2)
+        # first begin, then each end -- before the clock is read.
+        assert calls == [0, 0, 1]
 
     def test_it_fingerprints_before_the_first_step_and_after_the_last(self):
         model = _model()
