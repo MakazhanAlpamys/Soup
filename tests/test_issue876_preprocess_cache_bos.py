@@ -272,12 +272,15 @@ class TestCacheKey:
         )
 
         def _blob_key(schema):
+            # Six fields: #1067 appended the resolved chat template (empty for the
+            # tokenizer's shipped one) after format_name.
             blob = (
                 f"{schema}\x1f{args['dataset_path']}\x1f{args['tokenizer_name']}"
-                f"\x1f{args['max_length']}\x1f{args['format_name']}"
+                f"\x1f{args['max_length']}\x1f{args['format_name']}\x1f"
             )
             return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:16]
 
         current = make_preprocess_cache_key(**args)
         assert current != _blob_key("v3"), "a v3 (#791) cache must be rejected"
-        assert current == _blob_key("v4"), "current schema is v4 (#876)"
+        assert current != _blob_key("v4"), "a v4 (#1067) cache must be rejected"
+        assert current == _blob_key("v5"), "current schema is v5 (#876)"
