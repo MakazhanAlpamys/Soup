@@ -17,6 +17,9 @@ that runs inside it leaves the probe clean.
 
 from __future__ import annotations
 
+import json
+import struct
+from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
@@ -130,9 +133,10 @@ class TestRealPageLockFailureIsDrainedBeforeTheProbeRuns:
 class TestAsyncDiskPageLockFailureIsDrainedBeforeTheProbeRuns:
     """The disk-tier fallback owes the next CUDA launch the same recovery as RAM.
 
-    Only the source constructor and CUDA operations are simulated. The real
-    ``_build_source`` disk branch must perform the drain before it returns the
-    pageable source; otherwise the following probe sees the stale error as OOM.
+    One case replaces the source constructor; the other builds ``AsyncDiskSource``
+    from a real shard and fails only its pinned allocation. Both use
+    simulated CUDA operations to prove ``_build_source`` drains before the
+    pageable retry and the following probe.
     """
 
     def test_disk_staging_fallback_drains_before_vram_probe(
@@ -192,3 +196,76 @@ class TestAsyncDiskPageLockFailureIsDrainedBeforeTheProbeRuns:
         assert peak.oom is False
         assert peak.failed is False
         assert launches["count"] == 4  # two drain launches, then two probe synchronizations
+
+    def test_real_disk_source_page_lock_refusal_drains_before_probe(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Use the real disk source and fail only its pinned staging allocation."""
+        torch = pytest.importorskip("torch", reason="torch is not installed in this environment")
+
+        from soup_cli.utils.async_disk_source import AsyncDiskSource
+        from soup_cli.utils.layer_shard import layer_shard_path
+
+        shard_dir = tmp_path / "shards"
+        shard_dir.mkdir()
+        header = {
+            "weight": {"dtype": "U8", "shape": [4], "data_offsets": [0, 4]},
+        }
+        body = json.dumps(header).encode("utf-8")
+        Path(layer_shard_path(str(shard_dir), 0)).write_bytes(
+            struct.pack("<Q", len(body)) + body + bytes(4)
+        )
+
+        real_empty = torch.empty
+        allocations: list[bool] = []
+
+        def fail_pinned_staging(*args: object, **kwargs: object) -> object:
+            pinned = bool(kwargs.get("pin_memory", False))
+            allocations.append(pinned)
+            if pinned:
+                raise RuntimeError("simulated disk-staging page-lock refusal")
+            return real_empty(*args, **kwargs)
+
+        monkeypatch.setattr(torch, "empty", fail_pinned_staging)
+        monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+        monkeypatch.setattr(torch, "ones", lambda *args, **kwargs: None)
+        monkeypatch.setattr(lsr, "release_cached_pinned_memory", lambda: 0)
+        launches = {"count": 0}
+
+        def stale_once(*args: object, **kwargs: object) -> None:
+            launches["count"] += 1
+            if launches["count"] == 1:
+                raise RuntimeError("CUDA error: out of memory")
+
+        monkeypatch.setattr(torch.cuda, "synchronize", stale_once)
+        source, pinned = lsr._build_source(
+            str(shard_dir),
+            1,
+            {"weight": ((4,), "uint8")},
+            True,
+            None,
+            tier="disk",
+            read_ahead=3,
+        )
+        try:
+            assert isinstance(source, AsyncDiskSource)
+            assert source.read_ahead == 3
+            assert source.pinned is False
+            assert pinned is False
+            assert allocations == [True, False]
+
+            monkeypatch.setattr(torch.cuda, "reset_peak_memory_stats", lambda *_: None)
+            monkeypatch.setattr(torch.cuda, "max_memory_allocated", lambda *_: 123)
+            monkeypatch.setattr(torch.cuda, "max_memory_reserved", lambda *_: 456)
+            monkeypatch.setattr(torch, "randint", lambda *args, **kwargs: object())
+            monkeypatch.setattr(torch.cuda, "empty_cache", lambda: None)
+            monkeypatch.setattr(lsr, "_zero_probe_grads", lambda *_: None)
+
+            peak = lsr.measure_step_peak_bytes(MagicMock(), rows=1, seq_len=4, vocab_size=8)
+
+            assert peak is not None
+            assert peak.oom is False
+            assert peak.failed is False
+            assert launches["count"] == 4
+        finally:
+            source.close()
