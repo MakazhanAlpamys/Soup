@@ -1660,16 +1660,11 @@ class SFTTrainerWrapper(StreamingSetupMixin):
                 resolve_lora_target_parameters,
             )
 
-            # #1070: parameters first, because target_modules='auto' on an
-            # architecture neither Soup nor PEFT maps is only a refusal when
-            # nothing else gives PEFT something to attach to.
+            target_modules = resolve_lora_target_modules(
+                self.model, tcfg.lora.target_modules
+            )
             target_parameters = resolve_lora_target_parameters(
                 self.model, tcfg.lora.target_parameters
-            )
-            target_modules = resolve_lora_target_modules(
-                self.model,
-                tcfg.lora.target_modules,
-                has_target_parameters=bool(target_parameters),
             )
 
             # #798: one helper for every trainer. This block used to live here

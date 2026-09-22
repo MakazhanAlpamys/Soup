@@ -219,11 +219,30 @@ than silently substituting ordinary LoRA. PiSSA and LoftQ additionally require
 LoftQ performs the low-bit conversion itself, so an already quantized base is
 invalid for either initializer.
 
-On the Transformers backend, `target_modules: auto` has an explicit Qwen3.5-family
-fallback because PEFT does not yet map `qwen3_5_text`. Soup targets `q_proj` and
-`v_proj` in full-attention layers plus `in_proj_qkv` and `out_proj` in the fused
-linear-attention layers. Explicit target lists still win unchanged. The MLX backend
-keeps its separate full-key default (`self_attn.q_proj`, `self_attn.v_proj`).
+On the Transformers backend, `target_modules: auto` is resolved in this order, and
+an explicit target list always wins unchanged:
+
+1. **Architectures PEFT maps itself** (`llama`, `mistral`, `qwen2`, …) are left to
+   PEFT's own default.
+2. **Architectures Soup maps** are resolved from `utils/peft_wiring.py`. The Qwen3.5
+   family targets `q_proj` and `v_proj` in full-attention layers plus `in_proj_qkv`
+   and `out_proj` in the fused linear-attention layers, because PEFT does not map
+   `qwen3_5_text`. The MoE architectures Soup ships recipes for (`qwen3_moe`,
+   `deepseek_v3`, `deepseek_v4`, `glm_moe_dsa`, `kimi_k2`/`kimi_k25`, `gpt_oss`,
+   `minimax_m2`, `minimax_m3_vl`) target their attention projections; PEFT maps none
+   of them (#1070). MiniMax-M3 uses a regex scoped to its language tower, so a text
+   fine-tune does not adapt the vision encoder.
+3. **Anything else fails closed.** `auto` on an architecture neither PEFT nor Soup
+   maps is refused at setup, naming the `model_type`, rather than reaching PEFT's
+   `No target_modules passed`. This is not new behaviour — PEFT refused those too —
+   only a clearer message. It covers dense models as well as MoE ones: at the time of
+   writing `phi3`, `smollm3`, `lfm2` and several vision/audio architectures in the
+   catalogue land here. Give an explicit `target_modules` list, or for a MoE model set
+   `training.moe_lora: true`, which supplies expert targets and is checked *before*
+   the refusal. `training.lora.target_parameters` on its own also suffices.
+
+The MLX backend keeps its separate full-key default (`self_attn.q_proj`,
+`self_attn.v_proj`).
 
 Qwen4-Exp routed experts are raw 3-D parameters rather than `nn.Linear` modules, so
 `target_modules: auto` / `all-linear` deliberately does not include them. Opt into

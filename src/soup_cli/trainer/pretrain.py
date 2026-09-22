@@ -390,14 +390,9 @@ class PretrainTrainerWrapper:
 
         if not apply_lisa_setup(self.model, tcfg, console):
             # LoRA — with MoE-aware target modules if moe_lora is enabled
-            # #1070: parameters first — see the same note in trainer/sft.py.
+            target_modules = resolve_lora_target_modules(self.model, tcfg.lora.target_modules)
             target_parameters = resolve_lora_target_parameters(
                 self.model, tcfg.lora.target_parameters
-            )
-            target_modules = resolve_lora_target_modules(
-                self.model,
-                tcfg.lora.target_modules,
-                has_target_parameters=bool(target_parameters),
             )
 
             # #798: the same helper every other trainer uses (see sft.py).

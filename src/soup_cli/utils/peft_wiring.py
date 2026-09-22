@@ -107,12 +107,25 @@ MOE_TEXT_LORA_TARGETS: dict[str, Any] = {
     # config rather than enumerated, because the repo needs trust_remote_code
     # and this table is not worth executing remote code for.
     "kimi_k25": _DEEPSEEK_V3_ATTENTION,
+    # ``kimi_k2`` is both the text tower of K2.5/K2.6 and the OUTER type of
+    # Kimi-K2-Thinking, a shipped base with no MoE flag in its recipe -- so it is
+    # sweep-derived, not only defensive. (The first version of this table had it
+    # for the text tower and covered Kimi-K2-Thinking by luck; #1102 review, F3.)
     "kimi_k2": _DEEPSEEK_V3_ATTENTION,
     # A vision-language wrapper: ``vision_tower`` has its own ``q_proj`` /
     # ``k_proj`` / ``v_proj``, so a suffix list would silently adapt the image
     # encoder for a text fine-tune. peft treats a string as a regex, which is
     # how the language tower is named without a name-match fallback.
-    "minimax_m3_vl": r"language_model\..*\.self_attn\.(q_proj|k_proj|v_proj|o_proj)",
+    # ``.*`` in front, because peft fullmatches a STRING target against the whole
+    # module key, and the key under the class vision SFT loads
+    # (``AutoModelForImageTextToText``) is ``model.language_model...``. My first
+    # version anchored at ``language_model`` and matched nothing (#1102 review,
+    # F2); its tests passed because they used hand-written keys without the
+    # ``model.`` prefix, not keys read off the model.
+    "minimax_m3_vl": r".*language_model\..*\.self_attn\.(q_proj|k_proj|v_proj|o_proj)",
+    # Defensive, not sweep-derived: no shipped base reports this type. It is the
+    # text tower MiniMax-M3's wrapper exposes, and a config loaded without the
+    # wrapper reaches the resolver as this type instead of ``minimax_m3_vl``.
     "minimax_m3_vl_text": ("q_proj", "k_proj", "v_proj", "o_proj"),
 }
 
@@ -151,9 +164,35 @@ def _peft_has_a_default_for(model_types: set[Any]) -> bool:
     return any(PEFT_DEFAULTS.get(value) for value in model_types if value is not None)
 
 
-def resolve_lora_target_modules(
-    model: Any, configured: Any, *, has_target_parameters: bool = False
-) -> Any:
+class UnmappedTargets:
+    """``target_modules: auto`` mapped to nothing Soup or peft knows (#1070).
+
+    Returned by :func:`resolve_lora_target_modules` instead of raising, so the
+    refusal is decided by :func:`build_lora_config` -- the last step every
+    trainer takes before ``get_peft_model``. Deciding it in the resolver refused
+    before a later step could supply targets: ``moe_lora`` replaces
+    ``target_modules`` *after* the resolver at every MoE-wired call site, and
+    ``target_parameters`` alone is enough for peft. Measured on a real
+    ``qwen2_moe`` with ``moe_lora: true``: main attached 7 modules, and the
+    raise-in-the-resolver version refused it (#1102 review, F1).
+
+    Falsy, like the ``None`` it stands in for, so code that tests
+    ``if target_modules`` treats it as "no modules" rather than as a list.
+    """
+
+    __slots__ = ("model_types",)
+
+    def __init__(self, model_types: list[str]) -> None:
+        self.model_types = model_types
+
+    def __bool__(self) -> bool:
+        return False
+
+    def __repr__(self) -> str:
+        return f"UnmappedTargets({self.model_types!r})"
+
+
+def resolve_lora_target_modules(model: Any, configured: Any) -> Any:
     """Resolve ``target_modules: auto`` for models PEFT does not know yet.
 
     Existing architectures remain delegated to PEFT by returning ``None``.
@@ -162,12 +201,9 @@ def resolve_lora_target_modules(
     inspect both configs without importing Transformers or PEFT at module load.
     Qwen4-Exp's causal-LM loader exposes ``qwen4_exp_text`` directly.
 
-    ``has_target_parameters`` says the caller is also supplying
-    ``target_parameters``, which PEFT accepts on its own. Only the two trainers
-    that resolve those (SFT and pretrain) pass it; everywhere else there is
-    nothing for PEFT to attach to and an unmappable architecture is refused
-    here, naming the ``model_type`` and this table, instead of reaching PEFT as
-    ``No target_modules passed`` (#1070).
+    An architecture neither Soup nor peft maps returns :class:`UnmappedTargets`
+    rather than raising; :func:`build_lora_config` decides, once a ``moe_lora``
+    override and ``target_parameters`` have had their chance (#1070).
     """
     if configured != "auto" and configured != ["auto"]:
         return configured
@@ -193,18 +229,12 @@ def resolve_lora_target_modules(
             return _as_targets(MOE_TEXT_LORA_TARGETS[value])
 
     named = sorted(value for value in model_types if isinstance(value, str))
-    if not named or has_target_parameters or _peft_has_a_default_for(model_types):
+    if not named or _peft_has_a_default_for(model_types):
         # No ``model_type`` string to name is not the same as an architecture we
         # know to be unmappable -- a config that does not declare one, or a test
         # double standing in for a model, is delegated exactly as before #1070.
         return None
-    raise ValueError(
-        "training.lora.target_modules='auto' has no mapping for model_type="
-        f"{named!r}, and PEFT has no default for it either, so the LoRA attach "
-        "would fail with 'No target_modules passed'. Give an explicit "
-        "target_modules list, or add this architecture to "
-        "MOE_TEXT_LORA_TARGETS in utils/peft_wiring.py (#1070)."
-    )
+    return UnmappedTargets(named)
 
 
 def _as_targets(entry: Any) -> Any:
@@ -312,6 +342,30 @@ def build_peft_config_spec(
     }
 
 
+def _settle_unmapped(target_modules: Any, target_parameters: Any) -> Any:
+    """Refuse an unmappable ``auto`` here, where the final targets are known.
+
+    Reached only if no ``moe_lora`` override replaced the value. With
+    ``target_parameters`` peft has something to attach to, so the modules half
+    is simply empty. Without them, refuse by name -- a better message than
+    peft's ``No target_modules passed``, and one that no longer points a dense
+    model at a MoE-only table (#1102 review, F5).
+    """
+    if not isinstance(target_modules, UnmappedTargets):
+        return target_modules
+    if target_parameters:
+        return None
+    raise ValueError(
+        "training.lora.target_modules='auto' has no mapping for model_type="
+        f"{target_modules.model_types!r}: neither Soup's table nor peft's own "
+        "defaults cover it, so there is nothing to attach a LoRA adapter to. "
+        "Give an explicit training.lora.target_modules list -- the module "
+        "names are in model.named_modules() -- or, for a Mixture-of-Experts "
+        "model, set training.moe_lora: true. The architectures Soup maps are "
+        "in utils/peft_wiring.py (#1070)."
+    )
+
+
 def build_lora_config(
     lora_cfg: Any,
     *,
@@ -327,6 +381,7 @@ def build_lora_config(
     """
     import peft
 
+    target_modules = _settle_unmapped(target_modules, target_parameters)
     spec = build_peft_config_spec(
         lora_cfg,
         target_modules=target_modules,
