@@ -785,7 +785,7 @@ rules out `train_on_messages_with_train_field`, which is itself exclusive with
 `train_on_responses_only`: the per-message `train` field and `mask_history` can
 never both decide a run.
 
-It is honoured by the transformers backend, for `task: sft` and `task: distill`.
+It is honoured by the transformers backend for `task: sft` and `task: distill`, and by the unsloth backend for `task: sft`, whose text path runs the same `SFTTrainerWrapper.setup()` row builder.
 **`backend: mlx` ignores it:** MLX SFT builds its own mask and supervises every
 assistant turn, so the same config trains the last turn on transformers and every
 turn on MLX. `soup train` says so on its "MLX backend ignores:" line, and
