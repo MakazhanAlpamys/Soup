@@ -835,17 +835,25 @@ def run_self_test() -> int:
                 torch.nn.Parameter(torch.ones(1)),
             )
 
-    left = Tiny("left_only")
-    right = Tiny("right_only")
+    # Use LoRA-shaped parameter names so that, if the canonical-intersection
+    # assertion is removed, the comparison proceeds far enough to hit the
+    # separate gradient requirement instead of accidentally passing.
+    left = Tiny("lora_A")
+    right = Tiny("lora_B")
 
     try:
         assert_gradient_parity(left, right)
-    except Exception as exc:
+    except ValueError as exc:
         print(
             "PASS: empty canonical parameter intersection was rejected "
-            f"({type(exc).__name__})"
+            f"({type(exc).__name__}: {exc})"
         )
         return 0
+    except Exception as exc:
+        raise RuntimeError(
+            "negative acceptance test failed: unexpected exception "
+            f"{type(exc).__name__}: {exc}"
+        ) from exc
 
     raise RuntimeError(
         "negative acceptance test failed: empty canonical parameter "
