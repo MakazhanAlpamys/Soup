@@ -32,9 +32,10 @@ Typical invocation
 
 The historical protocol uses batch 1, sequence length 128, two pinned stream
 buffers, and five repetitions. Flags expose the recorded configuration
-variations, but changing them changes the protocol. In particular, seq 32 uses
-a different bitsandbytes kernel path and is expected to fail this script's
-bit-exact STEP 14 verdict. This script publishes no new number by itself; it
+variations, but changing them changes the protocol. In the historical H100
+record, seq 32 took a different bitsandbytes kernel path and failed the
+bit-exact STEP 14 verdict; that result is not a prediction for other GPUs.
+This script publishes no new number by itself; it
 reports the tree, runtime versions, parameters, and raw per-repeat results. A
 machine without CUDA is an intentional skip and exits zero.
 """
@@ -186,7 +187,25 @@ def build_streamed_arm(
 
 
 def _rewired_modules(model: Any) -> int:
-    return sum(int(getattr(module, "n_dequant_forward", 0)) for module in model.modules())
+    """Count repair wiring through registered children, not ``named_modules``.
+
+    ``StreamedDecoderLayer.named_modules`` exposes its inner tree but hides the
+    wrapper that owns ``n_dequant_forward``. Walk ``_modules`` structurally so
+    that naming override cannot make a live counter look like zero.
+    """
+    total = 0
+    pending = [model]
+    seen: set[int] = set()
+    while pending:
+        module = pending.pop()
+        if id(module) in seen:
+            continue
+        seen.add(id(module))
+        total += int(vars(module).get("n_dequant_forward", 0))
+        pending.extend(
+            child for child in vars(module).get("_modules", {}).values() if child is not None
+        )
+    return total
 
 
 def _source_sha() -> str:
@@ -303,6 +322,13 @@ def _run_arm(
     input_ids: Any,
     repeats: int,
 ) -> dict[str, Any]:
+    rewired_modules = _rewired_modules(model)
+    if label == "repaired" and rewired_modules <= 0:
+        raise RuntimeError(
+            "repaired arm has no rewired modules; the wiring counter is dead "
+            "or the repair was not installed, so this gate cannot measure the repair"
+        )
+
     import torch
 
     model.train()
@@ -345,7 +371,7 @@ def _run_arm(
         "losses_exact": all(value == 0.0 for value in loss_differences),
         "median_tokens_per_second": statistics.median(rates),
         "peak_memory_mib": max(peaks),
-        "rewired_modules": _rewired_modules(model),
+        "rewired_modules": rewired_modules,
     }
 
 

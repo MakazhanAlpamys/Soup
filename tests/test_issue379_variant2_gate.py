@@ -338,6 +338,47 @@ class TestRepairToggle:
         assert calls == ["repair"]
 
 
+class TestRewiringCounter:
+    def test_real_torch_wrapper_hidden_by_named_modules_is_counted(self) -> None:
+        torch = pytest.importorskip("torch")
+
+        class HiddenWrapper(torch.nn.Module):
+            def __init__(self) -> None:
+                super().__init__()
+                self.inner = torch.nn.Identity()
+                self.n_dequant_forward = 7
+
+            def named_modules(self, memo=None, prefix="", remove_duplicate=True):
+                yield from self.inner.named_modules(memo, prefix, remove_duplicate)
+
+        wrapper = HiddenWrapper()
+        model = torch.nn.Sequential(wrapper)
+        assert all(module is not wrapper for module in model.modules())
+        assert _harness._rewired_modules(model) == 7
+
+    def test_walks_structural_children_hidden_by_named_modules(self) -> None:
+        inner = SimpleNamespace(_modules={})
+        wrapper = SimpleNamespace(_modules={"inner": inner}, n_dequant_forward=7)
+        root = SimpleNamespace(_modules={"first": wrapper, "alias": wrapper})
+        # Model.modules() delegates to the overridden named_modules() and
+        # hides StreamedDecoderLayer itself after #1010.
+        root.modules = lambda: iter((root, inner))
+
+        assert _harness._rewired_modules(root) == 7
+
+    def test_repaired_arm_fails_loudly_before_measurement_when_counter_is_dead(self) -> None:
+        model = SimpleNamespace(_modules={}, train=lambda: pytest.fail("entered training"))
+
+        with pytest.raises(RuntimeError, match="repaired arm.*no rewired modules"):
+            _harness._run_arm(
+                label="repaired",
+                model=model,
+                reference=object(),
+                input_ids=object(),
+                repeats=1,
+            )
+
+
 def test_harness_is_indexed() -> None:
     readme = (_REPO_ROOT / "benchmarks" / "README.md").read_text(encoding="utf-8")
     assert "harness/variant2_gate.py" in readme
