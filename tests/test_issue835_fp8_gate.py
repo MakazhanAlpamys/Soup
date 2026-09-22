@@ -312,18 +312,29 @@ class TestQuantizationAwareFp8:
         with pytest.raises(FP8HardwareUnsupportedError, match="8.9"):
             apply_fp8_attention(_Attn())
 
-    def test_missing_torchao_still_returns_false(self, monkeypatch):
-        """The dependency answer is unchanged: False, not a refusal.
-
-        On a card that CAN run FP8 -- (8, 6) before the #1044 review, when the
-        dependency probe ran first and hid the hardware refusal. The reorder must
-        not swallow this answer: a supported card with no torchao still reports
-        the missing package rather than raising."""
-        from soup_cli.utils.fp8 import apply_fp8_training
+    def test_missing_torchao_now_stops_the_run(self, monkeypatch):
+        """INVERTED by the #835 ruling (2026-09-19); this test used to pin
+        ``False``. On a card that CAN run FP8, a missing torchao no longer lets
+        the run go on in bf16: FP8 was asked for, and whether the reason is the
+        card or a package does not change what the user asked for. The message
+        names the fix."""
+        from soup_cli.utils.fp8 import FP8DependencyMissingError, apply_fp8_training
 
         _card(monkeypatch, (9, 0))
         monkeypatch.setattr("soup_cli.utils.fp8.is_fp8_available", lambda: False)
-        assert apply_fp8_training(_Attn()) is False
+        with pytest.raises(FP8DependencyMissingError, match=r"soup-cli\[qat\]"):
+            apply_fp8_training(_Attn())
+
+    def test_transformer_engine_alone_is_still_missing_torchao(self, monkeypatch):
+        """``is_fp8_available()`` also accepts transformer-engine, but this
+        converter is torchao's, so a box with TE and no torchao stops too."""
+        from soup_cli.utils.fp8 import FP8DependencyMissingError, apply_fp8_training
+
+        _card(monkeypatch, (9, 0))
+        monkeypatch.setattr("soup_cli.utils.fp8.is_fp8_available", lambda: True)
+        monkeypatch.setitem(sys.modules, "torchao", None)
+        with pytest.raises(FP8DependencyMissingError):
+            apply_fp8_training(_Attn())
 
 
 class TestOneGate:
@@ -443,29 +454,46 @@ class TestTheRunStops:
             )
         assert converts == []
 
-    def test_missing_torchao_still_only_warns(self, monkeypatch):
-        """Control: the ruling is about what the CARD can run. On a card that can,
-        a missing optional dependency keeps its existing advisory, so the stop is
-        not a catch-everything raise.
+    def test_missing_torchao_now_stops_instead_of_warning(self, monkeypatch):
+        """INVERTED by the #835 ruling (2026-09-19); this test used to pin the
+        yellow advisory. On a Hopper card with no torchao, both explicitly
+        requested FP8 settings now end the run at setup, and neither is reported
+        as applied."""
+        from soup_cli.config.schema import TrainingConfig
+        from soup_cli.utils.fp8 import FP8DependencyMissingError
+        from soup_cli.utils.v028_features import apply_v028_speed_memory
 
-        On a Hopper card, not Ampere: since the #1044 review the gate runs before
-        the dependency probe, so an Ampere card refuses whether or not torchao is
-        installed."""
+        _card(monkeypatch, (9, 0))
+        monkeypatch.setattr("soup_cli.utils.fp8.is_fp8_available", lambda: False)
+        monkeypatch.setitem(sys.modules, "torchao", None)
+        for settings in ({"quantization_aware": "fp8"}, {"fp8_attention": True}):
+            out, console = self._console()
+            with pytest.raises(FP8DependencyMissingError, match=r"soup-cli\[qat\]"):
+                apply_v028_speed_memory(
+                    model=_Attn(),
+                    tcfg=TrainingConfig(**settings),
+                    base_model="m",
+                    console=console,
+                    device="cuda",
+                )
+            assert "unavailable" not in out.getvalue(), settings
+
+    def test_a_config_that_asked_for_no_fp8_is_untouched(self, monkeypatch):
+        """Control: the stop is scoped to an explicit request. The same box, no
+        torchao, a config without FP8 -- nothing raises, nothing is printed."""
         from soup_cli.config.schema import TrainingConfig
         from soup_cli.utils.v028_features import apply_v028_speed_memory
 
         _card(monkeypatch, (9, 0))
         monkeypatch.setattr("soup_cli.utils.fp8.is_fp8_available", lambda: False)
+        monkeypatch.setitem(sys.modules, "torchao", None)
         out, console = self._console()
         applied = apply_v028_speed_memory(
-            model=_Attn(),
-            tcfg=TrainingConfig(quantization_aware="fp8"),
-            base_model="m",
-            console=console,
-            device="cuda",
+            model=_Attn(), tcfg=TrainingConfig(), base_model="m",
+            console=console, device="cuda",
         )
-        assert applied["fp8"] is False
-        assert "unavailable" in out.getvalue()
+        assert applied["fp8"] is False and "fp8_attention" not in applied
+        assert out.getvalue() == ""
 
     def test_sft_stops_at_setup(self, monkeypatch, converts):
         """``SFTTrainerWrapper._apply_quantization_aware`` on an 8.6 card. Wrapping
