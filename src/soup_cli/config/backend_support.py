@@ -26,7 +26,7 @@ reviewed for them.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from soup_cli.config.schema import SoupConfig
@@ -46,6 +46,7 @@ REJECTED = "rejected"
 STATUSES = frozenset({IGNORED, REJECTED})
 
 DEFAULT_BACKEND = "transformers"
+DEFAULT_MODALITY = "text"
 
 
 @dataclass(frozen=True)
@@ -190,33 +191,109 @@ _MLX_SFT: tuple[SupportEntry, ...] = (
 )
 
 
-#: ``(task, backend)`` -> the settings that pair does not honour.
-REGISTRY: dict[tuple[str, str], tuple[SupportEntry, ...]] = {
-    ("sft", "mlx"): _MLX_SFT,
-}
+_TRANSFORMERS_VISION_SFT: tuple[SupportEntry, ...] = (
+    SupportEntry(
+        "data.train_on_responses_only",
+        IGNORED,
+        "multimodal vision collator supervises all tokens; assistant-only masking "
+        "is not implemented for vision datasets",
+        issue=1156,
+        trainer_reads=False,
+    ),
+    SupportEntry(
+        "data.mask_history",
+        IGNORED,
+        "multimodal vision collator supervises all tokens; mask_history is applied "
+        "only by the transformers text label builder",
+        issue=1156,
+        trainer_reads=False,
+    ),
+)
 
-#: Every module a reviewed pair can read config through -- the trainer plus the
+_TRANSFORMERS_AUDIO_SFT: tuple[SupportEntry, ...] = (
+    SupportEntry(
+        "data.train_on_responses_only",
+        IGNORED,
+        "audio training supervises all tokens; assistant-only masking "
+        "is not implemented for audio datasets",
+        issue=1156,
+        trainer_reads=False,
+    ),
+    SupportEntry(
+        "data.mask_history",
+        IGNORED,
+        "audio training supervises all tokens; mask_history is applied "
+        "only by the transformers text label builder",
+        issue=1156,
+        trainer_reads=False,
+    ),
+)
+
+
+class _RegistryDict(dict):
+    """Registry supporting 3-tuple (task, backend, modality) with 2-tuple fallback."""
+
+    def __getitem__(self, key: tuple[str, ...]) -> tuple[Any, ...]:
+        if isinstance(key, tuple) and len(key) == 2:
+            val = super().get(key)
+            if val is not None:
+                return val
+            val = super().get((key[0], key[1], DEFAULT_MODALITY))
+            if val is not None:
+                return val
+            raise KeyError(key)
+        return super().__getitem__(key)
+
+    def get(self, key: tuple[str, ...], default=None):
+        try:
+            val = self[key]
+            return default if val is None else val
+        except KeyError:
+            return default
+
+    def __contains__(self, key: object) -> bool:
+        if isinstance(key, tuple) and len(key) == 2:
+            return super().__contains__(key) or super().__contains__(
+                (key[0], key[1], DEFAULT_MODALITY)
+            )
+        return super().__contains__(key)
+
+
+#: ``(task, backend, modality)`` -> the settings that combination does not honour.
+REGISTRY: dict[tuple[str, ...], tuple[SupportEntry, ...]] = _RegistryDict({
+    ("sft", "mlx", "text"): _MLX_SFT,
+    ("sft", "transformers", "vision"): _TRANSFORMERS_VISION_SFT,
+    ("sft", "transformers", "audio"): _TRANSFORMERS_AUDIO_SFT,
+})
+
+_TRANSFORMERS_SFT_MODULES = (
+    "soup_cli/trainer/sft.py",
+    "soup_cli/trainer/loss_summary.py",
+    "soup_cli/trainer/stream_setup.py",
+    "soup_cli/trainer/rewind_hf.py",
+    "soup_cli/trainer/raft.py",
+)
+
+#: Every module a reviewed combination can read config through -- the trainer plus the
 #: helpers it delegates to. The guard scans the **union**.
-#:
-#: Naming only the trainer was a real hole, found by mutation on #756: the
-#: schedule fields #734 wired appear 7-12 times in ``mlx_optim.py`` and twice in
-#: ``mlx_sft.py``. The guard caught that drift only because #734 happened to
-#: leave ``warmup_ratio=`` and ``weight_decay=`` visible at the call site. A
-#: field wired entirely inside a helper would have passed.
-TRAINER_MODULES: dict[tuple[str, str], tuple[str, ...]] = {
-    ("sft", "mlx"): (
+TRAINER_MODULES: dict[tuple[str, ...], tuple[str, ...]] = _RegistryDict({
+    ("sft", "mlx", "text"): (
         "soup_cli/trainer/mlx_sft.py",
         "soup_cli/trainer/mlx_optim.py",
         "soup_cli/trainer/mlx_masking.py",
         "soup_cli/trainer/rewind_mlx.py",
         "soup_cli/trainer/loss_summary.py",
     ),
-}
+    ("sft", "transformers", "vision"): _TRANSFORMERS_SFT_MODULES,
+    ("sft", "transformers", "audio"): _TRANSFORMERS_SFT_MODULES,
+})
 
 
-def unsupported_for(task: str, backend: str) -> tuple[SupportEntry, ...]:
-    """Every declared gap for a task/backend pair, or ``()`` if unreviewed."""
-    return REGISTRY.get((task, backend), ())
+def unsupported_for(
+    task: str, backend: str, modality: str = DEFAULT_MODALITY
+) -> tuple[SupportEntry, ...]:
+    """Every declared gap for a task/backend/modality combination, or ``()`` if unreviewed."""
+    return REGISTRY.get((task, backend, modality), ())
 
 
 def check_config(cfg: "SoupConfig") -> list[SupportEntry]:
@@ -226,7 +303,9 @@ def check_config(cfg: "SoupConfig") -> list[SupportEntry]:
     distinguishes those from the ones sitting at their schema default, which is
     the difference between a useful pre-flight check and a wall of 275 rows.
     """
-    entries = unsupported_for(cfg.task, getattr(cfg, "backend", DEFAULT_BACKEND))
+    backend = getattr(cfg, "backend", DEFAULT_BACKEND)
+    modality = getattr(cfg, "modality", DEFAULT_MODALITY)
+    entries = unsupported_for(cfg.task, backend, modality)
     if not entries:
         return []
 
