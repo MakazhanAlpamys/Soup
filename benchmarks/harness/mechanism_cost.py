@@ -591,6 +591,9 @@ def correctness_gate(
 
     import torch
 
+    if repetitions <= 0:
+        raise ValueError("repetitions must be positive")
+
     vocab_size = int(streamed.config.vocab_size)
     generator = torch.Generator(device=DEVICE).manual_seed(INPUT_SEED)
 
@@ -625,13 +628,11 @@ def correctness_gate(
             f"worst_abs={worst:.6e}"
         )
 
-    if total <= 0:
-        raise RuntimeError("gradient comparison was vacuous")
-
     if arm == "control":
         if all(count == total for count in exact_counts):
             raise RuntimeError(
-                "control never reproduced a gradient mismatch"
+                "control never reproduced a gradient mismatch; the historical "
+                "defect is bracketed at 163.8-171.5 MiB per NF4 layer"
             )
 
         if exact_counts[-1] == total:
@@ -887,8 +888,8 @@ def main() -> int:
         print("ERROR: --repeats must be positive")
         return 2
 
-    if args.warmup < 0:
-        print("ERROR: --warmup must be non-negative")
+    if args.warmup <= 0:
+        print("ERROR: --warmup must be positive")
         return 2
 
     if args.steps <= 0:
@@ -988,14 +989,25 @@ def main() -> int:
             return 1
 
         print()
+        clone_fwd_ratio = clone_rate / control_rate
+        clone_ratio = full_clone_rate / control_rate
+
         print(
             "clone_fwd_quant/control throughput ratio: "
-            f"{clone_rate / control_rate:.3f}x"
+            f"{clone_fwd_ratio:.3f}x"
+        )
+        print(
+            "control/clone_fwd_quant ratio (record convention): "
+            f"{1.0 / clone_fwd_ratio:.3f}x"
         )
 
         print(
             "clone/control throughput ratio: "
-            f"{full_clone_rate / control_rate:.3f}x"
+            f"{clone_ratio:.3f}x"
+        )
+        print(
+            "control/clone ratio (record convention): "
+            f"{1.0 / clone_ratio:.3f}x"
         )
 
         print(
