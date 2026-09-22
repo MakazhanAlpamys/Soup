@@ -992,11 +992,11 @@ Both reject silently-no-op combinations: setting either flag without `moe_lora=t
 
 | flag | applied by | elsewhere |
 |---|---|---|
-| `moe_lora` | `sft`, `pretrain`, `tts`, (since #798) `dpo`, `kto`, `orpo`, `simpo`, `grpo`, and (since #1099) `ipo`, `bco`, `reward_model`, `ppo`, `embedding` | — |
+| `moe_lora` | `sft`, `pretrain`, `tts`, (since #798) `dpo`, `kto`, `orpo`, `simpo`, `grpo`, and (since #1099) `ipo`, `bco`, `reward_model`, `ppo`, `embedding`, `online_dpo` | — |
 | `moe_expert_quant`, `train_router_only` | `sft`, `tts` | refused at config load, naming the task |
 | `moe_aux_loss_coeff` | `sft`, `tts`, `pretrain` | a **non-default** value is refused; the default `0.01` still loads, because every stored config and eleven shipped recipes write it |
 
-**Every LoRA task now reads `moe_lora` (#1099).** #798 left it loading but unread on `ipo`, `bco`, `reward_model`, `ppo` and `embedding`. All five build their adapter through the same `build_lora_config` path, so they were wired to the same helper rather than refused; there is no task left where the flag is accepted and ignored. On `embedding` it applies only with `lora.r >= 1` — at `r: 0` that trainer full-fine-tunes and builds no adapter for the flag to select.
+**`moe_lora` on the remaining LoRA tasks (#1099).** #798 left it loading but unread on `ipo`, `bco`, `reward_model`, `ppo` and `embedding`, and `online_dpo` had the same gap. All six build their adapter through the same `build_lora_config` path, so they were wired to the same helper rather than refused. On `embedding` it applies only with `lora.r >= 1`; at `r: 0` that trainer full-fine-tunes and builds no adapter for the flag to select. `task: asr` still accepts the flag without reading it. It only ever trains Whisper, which has no experts, so the flag has nothing to select there.
 
 **`moe_lora` requires `lora.dropout: 0.0` on a fused-expert MoE.** transformers 5.x keeps a Qwen3-MoE's experts as fused 3-D parameters (`mlp.experts.gate_up_proj`), which peft adapts through `lora.ParamWrapper`, and that wrapper raises `lora.ParamWrapper does not work with lora_dropout != 0.` With the schema default of `0.05` the LoRA attach failed outright, so `moe_lora` did not work on any task — including `sft`. Soup now stops at the attach with a message naming the flag, instead of letting peft's reach the user, and all 31 shipped MoE recipes pin `lora.dropout: 0.0`. The check is made against the loaded model, not at config load: whether the experts are fused depends on the checkpoint and the transformers version, and a model with one module per expert takes dropout normally. A dense base is untouched — there the flag is a no-op.
 

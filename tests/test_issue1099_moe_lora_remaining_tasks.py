@@ -37,6 +37,14 @@ _TASKS = {
         "dpo",
     ),
     "ppo": ("soup_cli.trainer.ppo", "PPOTrainerWrapper", "AutoModelForCausalLM", "dpo"),
+    # Found beyond the issue's five: it too builds through build_lora_config and
+    # accepted the flag unread. TRL attaches its config later, so _attach does.
+    "online_dpo": (
+        "soup_cli.trainer.online_dpo",
+        "OnlineDPOTrainerWrapper",
+        "AutoModelForCausalLM",
+        "auto",
+    ),
     "embedding": (
         "soup_cli.trainer.embedding",
         "EmbeddingTrainerWrapper",
@@ -113,7 +121,8 @@ def _config(task: str, *, moe_lora: bool, dropout: float = 0.0):
         "  train: ./x.jsonl\n"
         f"  format: {data_format}\n"
         "training:\n"
-        f"  moe_lora: {'true' if moe_lora else 'false'}\n"
+        + ('  online_dpo_judge: "ollama://llama3.1"\n' if task == "online_dpo" else "")
+        + f"  moe_lora: {'true' if moe_lora else 'false'}\n"
         "  lora:\n"
         "    r: 4\n"
         f"    dropout: {dropout}\n"
@@ -128,7 +137,9 @@ def _attach(task: str, monkeypatch, *, moe_lora: bool, dense: bool = False):
     module = importlib.import_module(module_path)
     wrapper_cls = getattr(module, class_name)
 
-    tokenizer = SimpleNamespace(pad_token=None, eos_token="</s>", pad_token_id=0)
+    tokenizer = SimpleNamespace(
+        pad_token=None, eos_token="</s>", pad_token_id=0, chat_template="{{ x }}"
+    )
     monkeypatch.setattr(
         transformers.AutoTokenizer, "from_pretrained", lambda *_a, **_k: tokenizer
     )
@@ -155,6 +166,11 @@ def _attach(task: str, monkeypatch, *, moe_lora: bool, dense: bool = False):
             raise AssertionError(
                 f"{task}: setup failed before the LoRA attach: {exc!r}"
             ) from exc
+    if getattr(wrapper, "peft_config", None) is not None and not _adapted(wrapper.model):
+        # online_dpo hands its config to TRL, which attaches it; do the same.
+        from peft import get_peft_model
+
+        return get_peft_model(wrapper.model, wrapper.peft_config)
     return wrapper.model
 
 
