@@ -314,7 +314,7 @@ def is_nvfp4_software_supported() -> bool:
 
         resolve_torchao_class("NVFP4Training")
         resolve_torchao_class("quantize_")
-    except RuntimeError:
+    except Exception:  # noqa: BLE001 — diagnostic probe must not crash
         return False
 
     return True

@@ -321,31 +321,33 @@ def test_get_precision_capabilities_reports_negative_nvfp4_software(
     assert result["NVFP4"] == (True, False)
 
 
-def test_is_nvfp4_software_supported_requires_nvfp4_config(monkeypatch):
-    import types
+def test_is_nvfp4_software_supported_requires_nvfp4_training_config(monkeypatch):
+    from tests.test_v07121 import _install_fake_torchao_quant
 
-    fake_torchao = types.ModuleType("torchao")
-    fake_quantization = types.ModuleType("torchao.quantization")
-    fake_quantization.quantize_ = lambda *args, **kwargs: None
-    fake_torchao.quantization = fake_quantization
-    monkeypatch.setitem(sys.modules, "torchao", fake_torchao)
-    monkeypatch.setitem(sys.modules, "torchao.quantization", fake_quantization)
+    _install_fake_torchao_quant(monkeypatch, {}, with_nvfp4=False)
 
     from soup_cli.utils.advanced_precision import is_nvfp4_software_supported
 
     assert is_nvfp4_software_supported() is False
 
 
+def test_is_nvfp4_software_supported_accepts_nvfp4_training_config(monkeypatch):
+    from tests.test_v07121 import _install_fake_torchao_quant
+
+    _install_fake_torchao_quant(monkeypatch, {})
+
+    from soup_cli.utils.advanced_precision import is_nvfp4_software_supported
+
+    assert is_nvfp4_software_supported() is True
+
+
 def test_is_nvfp4_software_supported_requires_quantize(monkeypatch):
-    import types
+    from tests.test_v07121 import _install_fake_torchao_quant
 
-    fake_torchao = types.ModuleType("torchao")
-    fake_quantization = types.ModuleType("torchao.quantization")
-    fake_quantization.NVFP4Config = object
-    fake_torchao.quantization = fake_quantization
+    _install_fake_torchao_quant(monkeypatch, {})
 
-    monkeypatch.setitem(sys.modules, "torchao", fake_torchao)
-    monkeypatch.setitem(sys.modules, "torchao.quantization", fake_quantization)
+    fake_quantization = sys.modules["torchao.quantization"]
+    del fake_quantization.quantize_
 
     from soup_cli.utils.advanced_precision import is_nvfp4_software_supported
 
