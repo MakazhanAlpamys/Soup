@@ -63,12 +63,12 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--weights",
-        required=True,
+        required=False,
         help="checkpoint path or model id resolvable by Soup's weight resolver",
     )
     parser.add_argument(
         "--shards",
-        required=True,
+        required=False,
         help="directory in which Soup should create or reuse layer shards",
     )
     parser.add_argument(
@@ -106,6 +106,11 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=DEFAULT_REPEATS,
         help=f"timing repeats per arm (default: {DEFAULT_REPEATS})",
+    )
+    parser.add_argument(
+        "--self-test",
+        action="store_true",
+        help="run the CPU-only acceptance self-test and exit",
     )
     return parser.parse_args()
 
@@ -162,7 +167,16 @@ def run_correctness(
     *,
     pin: bool,
 ) -> None:
-    """Require exact loss and LoRA gradients before timing an arm."""
+    """Require canonical overlap, exact loss, and LoRA gradients before timing."""
+    from soup_cli.utils.layer_stream_runtime import (
+        assert_canonical_parameters_intersect,
+    )
+
+    assert_canonical_parameters_intersect(
+        streamed,
+        reference,
+    )
+
     streamed.zero_grad(set_to_none=True)
     reference.zero_grad(set_to_none=True)
 
@@ -261,6 +275,47 @@ def time_arm(
     return float(tok_per_s), float(median_step)
 
 
+def run_self_test() -> int:
+    """Exercise the production correctness guard without CUDA."""
+    import torch
+
+    class Tiny(torch.nn.Module):
+        def __init__(self, parameter_name: str) -> None:
+            super().__init__()
+            self.register_parameter(
+                parameter_name,
+                torch.nn.Parameter(torch.ones(1)),
+            )
+
+    left = Tiny("lora_A")
+    right = Tiny("lora_B")
+
+    try:
+        # This calls the same production correctness path used before timing.
+        run_correctness(
+            left,
+            right,
+            None,
+            pin=False,
+        )
+    except ValueError as exc:
+        print(
+            "PASS: empty canonical parameter intersection was rejected "
+            f"({type(exc).__name__}: {exc})"
+        )
+        return 0
+    except Exception as exc:
+        raise RuntimeError(
+            "negative acceptance test failed: unexpected exception "
+            f"{type(exc).__name__}: {exc}"
+        ) from exc
+
+    raise RuntimeError(
+        "negative acceptance test failed: empty canonical parameter "
+        "intersection was accepted"
+    )
+
+
 def build_shards_and_input(
     args: argparse.Namespace,
 ):
@@ -322,6 +377,14 @@ def run_measurement(args: argparse.Namespace) -> int:
     from peft import LoraConfig, TaskType
 
     from soup_cli.utils.layer_stream_runtime import build_streamed_model
+
+    if not args.weights:
+        print("ERROR: --weights is required unless --self-test is used")
+        return 2
+
+    if not args.shards:
+        print("ERROR: --shards is required unless --self-test is used")
+        return 2
 
     if args.seq <= 0:
         print("ERROR: --seq must be positive")
@@ -388,18 +451,26 @@ def run_measurement(args: argparse.Namespace) -> int:
             f"repeat        {repetition + 1}/{args.repeats}"
         )
 
-        reference = None
+        lora_state = None
 
-        try:
-            reference = bitexact.load_resident_reference(
-                weights_dir,
-                "nf4",
-            )
+        for pin in (True, False):
+            reference = None
+            streamed = None
+            runtime = None
 
-            bitexact.make_non_vacuous_lora(reference)
-            lora_state = capture_lora_state(reference)
+            try:
+                reference = bitexact.load_resident_reference(
+                    weights_dir,
+                    "nf4",
+                )
 
-            for pin in (True, False):
+                bitexact.make_non_vacuous_lora(reference)
+
+                if lora_state is None:
+                    lora_state = capture_lora_state(reference)
+                else:
+                    restore_lora_state(reference, lora_state)
+
                 print(f"correctness   pin={pin}")
 
                 streamed, runtime = build_streamed_model(
@@ -424,7 +495,6 @@ def run_measurement(args: argparse.Namespace) -> int:
                 )
 
                 if actual_pinned is not pin:
-                    runtime.close()
                     raise RuntimeError(
                         f"requested pin={pin}, but runtime reports "
                         f"pinned={actual_pinned!r}"
@@ -442,7 +512,6 @@ def run_measurement(args: argparse.Namespace) -> int:
                 )
 
                 if not store_bytes or store_bytes <= 0:
-                    runtime.close()
                     raise RuntimeError(
                         f"pin={pin} reported an empty streaming store"
                     )
@@ -459,51 +528,14 @@ def run_measurement(args: argparse.Namespace) -> int:
                     pin=pin,
                 )
 
-                runtime.close()
-                del streamed
+                # Correctness and timing use the same streamed instance.
+                # Remove the resident reference before timing so it does not
+                # inflate the timed arm's memory footprint.
+                del reference
+                reference = None
 
                 gc.collect()
                 torch.cuda.empty_cache()
-
-            del reference
-            reference = None
-
-            gc.collect()
-            torch.cuda.empty_cache()
-
-            for pin in (True, False):
-                streamed, runtime = build_streamed_model(
-                    model_id=weights_dir,
-                    shard_dir=shard_dir,
-                    index=index,
-                    lora_config=lora_config,
-                    device=DEVICE,
-                    dtype=DTYPE,
-                    buffers=args.buffers,
-                    pin=pin,
-                    seed=DEFAULT_SEED,
-                    quant="nf4",
-                    double_quant=True,
-                    tier="ram",
-                )
-
-                actual_pinned = getattr(
-                    runtime,
-                    "pinned",
-                    None,
-                )
-
-                if actual_pinned is not pin:
-                    runtime.close()
-                    raise RuntimeError(
-                        f"timing requested pin={pin}, but runtime reports "
-                        f"pinned={actual_pinned!r}"
-                    )
-
-                restore_lora_state(
-                    streamed,
-                    lora_state,
-                )
 
                 rate, median_step = time_arm(
                     streamed,
@@ -512,29 +544,29 @@ def run_measurement(args: argparse.Namespace) -> int:
                     steps=args.steps,
                 )
 
+                if pin:
+                    pinned_rates.append(rate)
+                else:
+                    pageable_rates.append(rate)
+
                 print(
                     f"timing        pin={pin} "
                     f"{rate:.2f} tok/s, "
                     f"median_step={median_step:.4f} s"
                 )
 
-                if pin:
-                    pinned_rates.append(rate)
-                else:
-                    pageable_rates.append(rate)
+            finally:
+                if reference is not None:
+                    del reference
 
-                runtime.close()
-                del streamed
+                if runtime is not None:
+                    runtime.close()
+
+                if streamed is not None:
+                    del streamed
 
                 gc.collect()
                 torch.cuda.empty_cache()
-
-        finally:
-            if reference is not None:
-                del reference
-
-            gc.collect()
-            torch.cuda.empty_cache()
 
     pinned_median = float(
         median(pinned_rates)
@@ -581,6 +613,9 @@ def main() -> int:
     args = parse_args()
 
     try:
+        if args.self_test:
+            return run_self_test()
+
         return run_measurement(args)
     except Exception as exc:
         print(
