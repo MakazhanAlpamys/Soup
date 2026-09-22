@@ -771,10 +771,7 @@ class TestDraftRegistry:
         assert "hf/target-5" in targets
         assert f"hf/target-{_MAX_REGISTRY_ENTRIES + 4}" in targets
 
-    @pytest.mark.skipif(
-        os.name == "nt",
-        reason="relies on O_NOFOLLOW, which Windows lacks, so the registry follows it (#820)",
-    )
+    @pytest.mark.requires_symlink
     def test_registry_symlink_is_not_followed_on_read(self, draft_registry, tmp_path):
         """O_NOFOLLOW: a symlink at the registry path must degrade to empty,
         not leak an arbitrary file's parsed content into serve --auto-spec."""

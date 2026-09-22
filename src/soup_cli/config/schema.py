@@ -22,6 +22,9 @@ from soup_cli.utils.layer_stream import (
     SUPPORTED_STREAM_TASKS as _STREAM_SUPPORTED_TASKS,
 )
 
+# Stdlib-only structural check shared by every regex a config can carry.
+from soup_cli.utils.safe_regex import check_config_regex
+
 # Noise-floor bounds live with the ship verdict so the schema bound and the
 # `--noise-floor` CLI validator can never disagree (ship_verdict has no torch,
 # same reasoning as stream_buffers importing its bounds from layer_stream).
@@ -39,11 +42,10 @@ _MAX_LORA_TARGET_PARAMETER_LEN = 512
 # v0.71.23 #266 — Spectrum targeted-training unfrozen-parameter caps
 _MAX_UNFROZEN_PARAMETERS = 50_000
 _MAX_UNFROZEN_PATTERN_LEN = 512
-# Reject nested-unbounded-quantifier regexes — e.g. ``(x+)+y`` / ``(a*)*`` —
-# which catastrophically backtrack (ReDoS) when re.search'd against parameter
-# names in apply_unfrozen_parameters. soup.yaml is shareable config, so the
-# pattern *class* is rejected at parse time, not just compile failures.
-_UNFROZEN_REDOS_RE = re.compile(r"\([^)]*[+*][^)]*\)\s*[+*]")
+# Patterns whose structure allows super-linear backtracking — e.g. ``(x+)+y`` /
+# ``(.+){2,}z`` / ``(?:.|.)+z`` — would stall re.search against parameter names
+# in apply_unfrozen_parameters. soup.yaml is shareable config, so the pattern
+# *class* is refused at parse time by utils/safe_regex, not just compile failures.
 
 # v0.71.34 #267 / #307 — tasks whose transformers trainer wires LisaCallback.
 # LISA is full-FT of a rotating set of decoder layers, so a task only belongs
@@ -216,7 +218,7 @@ class LoraConfig(BaseModel):
 
     @field_validator("rank_pattern", "alpha_pattern", mode="before")
     @classmethod
-    def _validate_pattern_dict(cls, value) -> Optional[Dict[str, int]]:
+    def _validate_pattern_dict(cls, value, info) -> Optional[Dict[str, int]]:
         if value is None:
             return None
         if not isinstance(value, dict):
@@ -234,6 +236,15 @@ class LoraConfig(BaseModel):
                 )
             if "\x00" in key:
                 raise ValueError("rank_pattern/alpha_pattern keys cannot contain null bytes")
+            # peft matches each key as a regex against every module name
+            # (peft.utils.other.get_pattern_key), so the key is held to the
+            # same complexity check as unfrozen_parameters / lr_groups.
+            field = f"lora.{info.field_name}"
+            try:
+                re.compile(key)
+            except re.error as exc:
+                raise ValueError(f"{field}: invalid regex {key!r}: {exc}") from None
+            check_config_regex(key, field)
             if isinstance(val, bool) or not isinstance(val, int):
                 raise ValueError(
                     f"rank_pattern/alpha_pattern values must be int, "
@@ -3174,13 +3185,13 @@ class TrainingConfig(BaseModel):
                 raise ValueError(
                     f"training.unfrozen_parameters: invalid regex {pat!r}: {exc}"
                 ) from exc
-            if _UNFROZEN_REDOS_RE.search(pat):
+            try:
+                check_config_regex(pat, "training.unfrozen_parameters")
+            except ValueError as exc:
                 raise ValueError(
-                    f"training.unfrozen_parameters: pattern {pat!r} has nested "
-                    f"unbounded quantifiers (ReDoS risk). Use a literal "
-                    f"parameter-name prefix such as "
-                    f"'model.layers.0.mlp.down_proj' (run `soup spectrum scan`)."
-                )
+                    f"{exc}, such as 'model.layers.0.mlp.down_proj' "
+                    f"(run `soup spectrum scan`). ReDoS risk otherwise."
+                ) from None
         return value
 
     # v0.71.34 #267 — LISA (Layerwise Importance Sampled AdamW,
@@ -4384,6 +4395,15 @@ _QUANTIZATION_UNHONOURED_TASKS = frozenset({
     "moe_lora_routing", "unlearn", "asr",
 })
 
+#: #798 — the tasks whose trainers actually read each MoE flag, mapped from the
+#: readers rather than from the docs: ``moe_expert_quant`` and
+#: ``train_router_only`` are applied only by ``trainer/sft.py`` (``tts`` inherits
+#: its setup through ``super()``), and ``moe_aux_loss_coeff`` is read by
+#: ``sft.py`` and ``pretrain.py``. Everywhere else the field was accepted and
+#: never applied.
+_MOE_EXPERT_KNOB_TASKS = frozenset({"sft", "tts"})
+_MOE_AUX_LOSS_TASKS = frozenset({"sft", "tts", "pretrain"})
+
 #: The bitsandbytes values: ``4bit`` was the default, so every config Soup dumped
 #: for these tasks carries one of them literally (#795 review).
 _BNB_QUANTIZATION_VALUES = frozenset({"4bit", "8bit"})
@@ -4531,6 +4551,43 @@ class SoupConfig(BaseModel):
         )
 
     @model_validator(mode="after")
+    def _validate_peft_variant_backend_and_quantization(self) -> "SoupConfig":
+        """Keep advertised PEFT variants on paths that actually implement them."""
+        lcfg = self.training.lora
+        variant = "vera" if lcfg.use_vera else lcfg.init_strategy
+        if variant == "random":
+            return self
+        if self.task == "moe_lora_routing":
+            raise ValueError(
+                f"training.lora variant {variant!r} is not applied by "
+                "task='moe_lora_routing': that trainer loads existing adapters "
+                "with PeftModel.from_pretrained instead of constructing a new "
+                "adapter. Choose plain defaults here and configure the adapters "
+                "through training.mole_task_adapters."
+            )
+        if self.backend != "transformers":
+            raise ValueError(
+                f"training.lora variant {variant!r} requires backend='transformers'; "
+                f"backend={self.backend!r} has its own adapter constructor and cannot "
+                "apply this PEFT method. Use backend='transformers' or choose plain LoRA."
+            )
+        if variant == "pissa" and self.training.quantization != "none":
+            raise ValueError(
+                "training.lora.init_strategy='pissa' requires "
+                "training.quantization='none': PEFT PiSSA computes an SVD of the "
+                "floating-point base weights during adapter initialization, so an "
+                f"already quantized base ({self.training.quantization!r}) is invalid."
+            )
+        if variant == "loftq" and self.training.quantization != "none":
+            raise ValueError(
+                "training.lora.init_strategy='loftq' requires "
+                "training.quantization='none': PEFT LoftQ quantizes the base model "
+                "during adapter initialization, so passing an already quantized model "
+                f"({self.training.quantization!r}) is invalid."
+            )
+        return self
+
+    @model_validator(mode="after")
     def _validate_chat_template_supported_tasks(self) -> "SoupConfig":
         """Reject chat-template overrides on trainers that never render chat."""
         unsupported = {
@@ -4591,6 +4648,10 @@ class SoupConfig(BaseModel):
             offenders.append('quantization_aware="fp8"')
         if tcfg.activation_offloading is not None:
             offenders.append("activation_offloading")
+        if tcfg.fp8_attention and self.backend != "mlx":
+            offenders.append("fp8_attention")
+        if tcfg.nvfp4 and self.backend != "mlx":
+            offenders.append("nvfp4")
         if not offenders:
             return self
         # Distinct reasons get distinct messages so users don't waste time
@@ -5150,6 +5211,46 @@ class SoupConfig(BaseModel):
                 f"training.use_flash_attn=true requires task in "
                 f"{sorted(SFT_KERNEL_AWARE_TASKS)}; got task={self.task!r}"
             )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_moe_flags_reach_a_trainer(self) -> "SoupConfig":
+        """#798 — refuse MoE flags on tasks whose trainer never reads them.
+
+        ``moe_expert_quant`` and ``train_router_only`` are applied in
+        ``trainer/sft.py`` only; ``moe_aux_loss_coeff`` in ``sft.py`` and
+        ``pretrain.py``. On every other task they were accepted, stored in the
+        run's config, and silently not applied -- the defect class this release
+        cycle spent its time removing. (The version is deliberately not spelled
+        out here: ``config/unknown_keys.py`` is the one file allowed to hold it,
+        and ``test_issue627...::test_the_version_is_written_out_in_exactly_one_source_file``
+        fails on a second copy.)
+
+        ``moe_aux_loss_coeff``'s default is ``0.01``, and a dumped config writes
+        it out, so only a NON-DEFAULT value is refused: refusing the default
+        would break every stored config and the eleven shipped recipes that
+        write it explicitly.
+        """
+        tcfg = self.training
+        if self.task not in _MOE_EXPERT_KNOB_TASKS:
+            for field in ("moe_expert_quant", "train_router_only"):
+                value = getattr(tcfg, field, None)
+                if value:
+                    raise ValueError(
+                        f"training.{field} is not applied by task={self.task!r}: "
+                        f"only {sorted(_MOE_EXPERT_KNOB_TASKS)} read it "
+                        f"(trainer/sft.py), so it would be stored and never take "
+                        f"effect. Remove it, or use one of those tasks."
+                    )
+        if self.task not in _MOE_AUX_LOSS_TASKS:
+            default = type(tcfg).model_fields["moe_aux_loss_coeff"].default
+            if tcfg.moe_aux_loss_coeff != default:
+                raise ValueError(
+                    f"training.moe_aux_loss_coeff={tcfg.moe_aux_loss_coeff!r} is "
+                    f"not applied by task={self.task!r}: only "
+                    f"{sorted(_MOE_AUX_LOSS_TASKS)} read it (sft.py, "
+                    f"pretrain.py). Remove it, or use one of those tasks."
+                )
         return self
 
     @model_validator(mode="after")
@@ -7290,6 +7391,10 @@ training:
     r: 64
     alpha: 16
     target_modules: auto
+    # peft adapts fused expert parameters through a ParamWrapper, which refuses a
+    # non-zero dropout, so moe_lora: true and the 0.05 default cannot both hold
+    # (#798). Every shipped MoE recipe pins this line for the same reason.
+    dropout: 0.0
   quantization: 4bit
   moe_lora: true
   moe_aux_loss_coeff: 0.01

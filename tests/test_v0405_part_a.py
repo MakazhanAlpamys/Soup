@@ -507,7 +507,7 @@ class TestRewardModelTaskQuantMenu:
         fake_peft.TaskType = _types.SimpleNamespace(SEQ_CLS="SEQ_CLS")
         fake_peft.get_peft_model = lambda model, _cfg: model
 
-        def _fake_kbit_prep(model):
+        def _fake_kbit_prep(model, **kwargs):
             kbit_called.append(True)
             return model
 

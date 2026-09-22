@@ -10,11 +10,9 @@ train``'s real options and fails if a doc names one that does not exist.
 Scoped to ``soup train`` and to ``docs/commands.md`` / ``docs/training.md``,
 the files #979 named — not the whole CLI surface. Building this turned up
 several more pre-existing mismatches (ULD strategy, RL mid-epoch checkpoint
-flags, echo-trap flags, ``--output``) that are a different bug in different
-subsystems; fixing them here would turn a doc fix for MiniLLM into an
-unreviewable diff across three unrelated features. They are named in
-``_PRE_EXISTING_TRAIN_FLAG_MISMATCHES`` below, tracked in #997, and excluded
-from the guard until #997 fixes them one way or the other.
+flags, echo-trap flags, ``--output``). #997 rewrote those sites to use the
+real YAML fields, so there are no grandfathered exceptions left: every flag
+found by this walker must exist in the live command tree.
 """
 
 from __future__ import annotations
@@ -22,17 +20,14 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+import pytest
 import typer
 
 from soup_cli.cli import app
 
 DOCS = Path(__file__).parents[1] / "docs"
 
-# soup train --flag documented in docs/*.md that is not a real Typer option
-# today, and is not #979's concern. Tracked in #997. If a flag here starts
-# passing (someone wires it) remove it -- test_allowlist_entries_are_still_
-# actually_missing below catches the alternative silent drift.
-_PRE_EXISTING_TRAIN_FLAG_MISMATCHES = {
+_ISSUE_997_NONEXISTENT_FLAGS = {
     "--uld-strategy",
     "--rl-checkpoint-save-every-steps",
     "--rl-checkpoint-keep-last",
@@ -41,6 +36,17 @@ _PRE_EXISTING_TRAIN_FLAG_MISMATCHES = {
     "--echo-trap-threshold",
     "--echo-trap-halt",
     "--output",
+}
+
+_ISSUE_997_SCHEMA_REPLACEMENTS = {
+    "uld_strategy": ("commands.md", "training.md"),
+    "rl_checkpoint_save_every_steps": ("commands.md", "training.md"),
+    "rl_checkpoint_keep_last": ("commands.md", "training.md"),
+    "rl_checkpoint_include_optimizer": ("commands.md", "training.md"),
+    "echo_trap_enabled": ("commands.md", "training.md"),
+    "echo_trap_threshold": ("commands.md", "training.md"),
+    "echo_trap_halt": ("commands.md", "training.md"),
+    "output": ("training.md",),
 }
 
 
@@ -92,7 +98,7 @@ def test_documented_train_flags_exist_in_the_live_typer_tree():
     for doc_name in ("commands.md", "training.md"):
         documented = _documented_train_flags((DOCS / doc_name).read_text(encoding="utf-8"))
         for flag, examples in documented.items():
-            if flag in live or flag in _PRE_EXISTING_TRAIN_FLAG_MISMATCHES:
+            if flag in live:
                 continue
             raise AssertionError(
                 f"{doc_name} documents `soup train {flag}` but the live Typer "
@@ -110,7 +116,7 @@ def test_guard_actually_fails_on_a_reintroduced_minillm_flag():
     offending = [
         flag
         for flag in documented
-        if flag not in live and flag not in _PRE_EXISTING_TRAIN_FLAG_MISMATCHES
+        if flag not in live
     ]
     assert offending == ["--minillm-enabled"]
 
@@ -123,17 +129,34 @@ def test_a_real_flag_does_not_trip_the_guard():
     offending = [
         flag
         for flag in documented
-        if flag not in live and flag not in _PRE_EXISTING_TRAIN_FLAG_MISMATCHES
+        if flag not in live
     ]
     assert offending == []
 
 
-def test_allowlist_entries_are_still_actually_missing():
-    """A grandfathered flag that gets wired without removing it from the
-    allowlist would silently stop being checked -- catch that drift too."""
+@pytest.mark.parametrize("flag", sorted(_ISSUE_997_NONEXISTENT_FLAGS))
+def test_issue997_nonexistent_flags_would_trip_the_guard(flag):
+    """Each old spelling is absent from ``train`` and rejected by the walker.
+
+    This is the mutation control for deleting one of #997's doc edits: the
+    main guard sees the same spelling and fails rather than grandfathering it.
+    """
     live = _train_command_options()
-    still_missing = _PRE_EXISTING_TRAIN_FLAG_MISMATCHES & live
-    assert not still_missing, (
-        f"{still_missing} now exist as real options -- remove from "
-        "_PRE_EXISTING_TRAIN_FLAG_MISMATCHES so the guard covers them again"
-    )
+    documented = _documented_train_flags(f"soup train --config soup.yaml {flag}\n")
+
+    assert flag not in live
+    assert [option for option in documented if option not in live] == [flag]
+
+
+@pytest.mark.parametrize(
+    "field,doc_names",
+    sorted(_ISSUE_997_SCHEMA_REPLACEMENTS.items()),
+)
+def test_issue997_replacements_are_real_schema_fields_and_stay_documented(field, doc_names):
+    """The fix must replace each fake flag with a real config field, not just delete it."""
+    from soup_cli.config.schema import SoupConfig, TrainingConfig
+
+    model = SoupConfig if field == "output" else TrainingConfig
+    assert field in model.model_fields
+    for doc_name in doc_names:
+        assert field in (DOCS / doc_name).read_text(encoding="utf-8")

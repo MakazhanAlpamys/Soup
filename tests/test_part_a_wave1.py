@@ -44,6 +44,25 @@ class TestParseJudgeURL:
         assert model == "gpt-4o-mini"
         assert base == "https://api.openai.com"
 
+    @pytest.mark.parametrize(
+        "url, base",
+        [
+            ("https://judge.example.com/m", "https://judge.example.com"),
+            ("https://api.openai.com.example.net/m", "https://api.openai.com.example.net"),
+            ("https://example.com/api.openai.com/m", "https://example.com/api.openai.com"),
+        ],
+    )
+    def test_https_other_host_is_server(self, url, base):
+        from soup_cli.eval.gate import _parse_judge_url
+
+        assert _parse_judge_url(url) == ("server", "m", base)
+
+    def test_https_openai_host_is_case_insensitive(self):
+        from soup_cli.eval.gate import _parse_judge_url
+
+        provider, _model, _base = _parse_judge_url("https://API.OpenAI.com/gpt-4o-mini")
+        assert provider == "openai"
+
     def test_http_localhost_server(self):
         from soup_cli.eval.gate import _parse_judge_url
 

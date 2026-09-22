@@ -256,6 +256,8 @@ tasks:
     judge_model: ollama://llama3.1        # SSRF-allowlisted scheme
 ```
 
+`judge_model` accepts `ollama://<model>`, `http://localhost:<port>/<model>` or `https://<host>/<model>`. An `https://` judge URL uses `OPENAI_API_KEY` only when its host is `api.openai.com`; other hosts are called as an OpenAI-compatible server without that key.
+
 Baselines may be a registry reference (`registry://<name-or-id>`), a file path, or omitted for the first run. Any structured exception (`ValueError`, `FileNotFoundError`, `OSError`) during the gate is treated as a regression under `on_regression: stop`.
 
 
@@ -355,7 +357,7 @@ SHIP  ⇔  task_tuned > task_base  AND  ∀ benchmark: base − tuned ≤ forget
 else DON'T SHIP — even if the task metric looks great.
 ```
 
-Exit codes are CI-gateable: **0 = SHIP, 2 = DON'T SHIP, 1 = runtime error**. A tie on leg 1, a
+Exit codes are CI-gateable: **0 = SHIP, 2 = DON'T SHIP, 3 = usage/flag error, 1 = runtime error**. A tie on leg 1, a
 single regressed benchmark, or a missing baseline all yield DON'T SHIP (a missing baseline
 *refuses* rather than silently shipping).
 

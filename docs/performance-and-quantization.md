@@ -7,7 +7,7 @@
 **Contents:**
 
 - [Quantization-Aware Training (QAT)](#quantization-aware-training-qat)
-- [FP8 Training (Hopper+)](#fp8-training-hopper)
+- [FP8 Training (Ada+)](#fp8-training-ada)
 - [Cut Cross-Entropy (Large-Vocab Models)](#cut-cross-entropy-large-vocab-models)
 - [Gradient Checkpointing Tiers](#gradient-checkpointing-tiers)
 - [Kernel Auto-Composition](#kernel-auto-composition)
@@ -67,9 +67,9 @@ output: ./output
 QAT works with all training tasks (SFT, DPO, GRPO, PPO, KTO, ORPO, SimPO, IPO, Pretrain) and vision modality. Not compatible with the unsloth backend. After QAT training, export to GGUF normally with `soup export`.
 
 
-## FP8 Training (Hopper+)
+## FP8 Training (Ada+)
 
-For H100 / H200 / B100 / B200 GPUs, train with float8 matmuls for ~2x speedup vs bf16 at comparable quality. This extends QAT infrastructure via `torchao.float8`:
+For Ada, Hopper and Blackwell GPUs (RTX 40/50-series, L4, L40S, RTX 6000 Ada, H100 / H200, B100 / B200), train with float8 matmuls for ~2x speedup vs bf16 at comparable quality. This extends QAT infrastructure via `torchao.float8`:
 
 ```bash
 pip install "soup-cli[qat]"   # torchao >= 0.5.0 includes torchao.float8
@@ -99,7 +99,7 @@ training:
 
 Omitting `fp8_recipe` defaults to `tensorwise` (identical to v0.28.0 behavior).
 
-Bool `true` stays on the int8 QAT path for backward compatibility. FP8 requires CUDA + Hopper+ (compute capability ≥ 9.0) and is rejected on unsloth/mlx backends. Wired across every transformer-backend trainer (SFT, DPO, GRPO, KTO, ORPO, SimPO, IPO, PPO, Reward-Model, Embedding, Pretrain).
+Bool `true` stays on the int8 QAT path for backward compatibility. FP8 requires CUDA + an Ada or newer GPU (compute capability ≥ 8.9) and is rejected on unsloth/mlx backends. The `rowwise` and `rowwise_with_gw_hp` recipes run a separate torch kernel with its own limits: it needs a torch that dispatches it on the card (Ada 8.9: torch ≥ 2.7; Hopper 9.x and Blackwell datacenter 10.x: any supported torch; RTX 50-series 12.x: torch ≥ 2.8; 11.x: torch ≥ 2.10; no release through 2.14 runs it on 13.x), it is **never built on Windows**, and before torch 2.11 it is only built against CUDA 12 or newer. `tensorwise` has none of these limits. When FP8 is requested and this card, OS or torch build cannot run it, **the run stops at setup** with the reason (`FP8HardwareUnsupportedError`), before any layer is converted, on every trainer that reaches the converter; it never trains on without FP8. (SFT's audio, layer-streaming and unsloth setup branches do not call the converter at all, so they still accept the flag without applying it — pre-existing, tracked separately.) `fp8_attention` asks the same gate (#835). Wired across every transformer-backend trainer (SFT, DPO, GRPO, KTO, ORPO, SimPO, IPO, PPO, Reward-Model, Embedding, Pretrain).
 
 
 ## Cut Cross-Entropy (Large-Vocab Models)
@@ -133,7 +133,13 @@ training:
 - **`selective`** — attention only (~10% slowdown, modest save).
 - **`auto`** — pick based on detected VRAM: < 24 GB → full, 24-80 GB → medium, > 80 GB → selective.
 
-Legacy boolean configs continue to work unchanged.
+On SFT, `medium` uses Transformers' native `every_n_layers=2` path, while
+`selective` wraps each decoder block's direct attention module and leaves HF's
+full-model checkpointing off to avoid double recomputation. If an architecture
+does not expose a direct attention child, Soup reports and applies a `full`
+fallback instead of claiming an inactive selective tier. Other task wrappers
+currently treat any enabled tier as full checkpointing. Legacy boolean configs
+continue to work unchanged.
 
 
 ## Kernel Auto-Composition
@@ -982,6 +988,31 @@ For fused-MoE models trained with `moe_lora: true`, two live toggles:
 
 Both reject silently-no-op combinations: setting either flag without `moe_lora=true` fails at config load with an actionable message.
 
+**Which tasks read which flag (#798).** These were accepted on every task and applied by only some, so the stored config claimed a run that never happened:
+
+| flag | applied by | elsewhere |
+|---|---|---|
+| `moe_lora` | `sft`, `pretrain`, `tts`, and (since #798) `dpo`, `kto`, `orpo`, `simpo`, `grpo` | — |
+| `moe_expert_quant`, `train_router_only` | `sft`, `tts` | refused at config load, naming the task |
+| `moe_aux_loss_coeff` | `sft`, `tts`, `pretrain` | a **non-default** value is refused; the default `0.01` still loads, because every stored config and eleven shipped recipes write it |
+
+**`moe_lora` requires `lora.dropout: 0.0` on a fused-expert MoE.** transformers 5.x keeps a Qwen3-MoE's experts as fused 3-D parameters (`mlp.experts.gate_up_proj`), which peft adapts through `lora.ParamWrapper`, and that wrapper raises `lora.ParamWrapper does not work with lora_dropout != 0.` With the schema default of `0.05` the LoRA attach failed outright, so `moe_lora` did not work on any task — including `sft`. Soup now stops at the attach with a message naming the flag, instead of letting peft's reach the user, and all 31 shipped MoE recipes pin `lora.dropout: 0.0`. The check is made against the loaded model, not at config load: whether the experts are fused depends on the checkpoint and the transformers version, and a model with one module per expert takes dropout normally. A dense base is untouched — there the flag is a no-op.
+
+**`moe_lora` does not reach every MoE family (measured, v0.75.0).** `get_moe_target_modules` picks module names, and whether peft turns those into adapters on the fused expert parameters depends on the architecture. On tiny stand-ins with transformers 5.16.1 / peft 0.20.0:
+
+| family | expert adapters attach | recipes |
+|---|---|---|
+| `qwen3_moe` | yes | 11 |
+| `deepseek_v3` | yes | 6 |
+| `glm4_moe` | yes | 3 |
+| `minimax` | **no — attention-only** | 2 (`minimax-m3-sft`, `minimax-m3-dpo`) |
+| `mixtral` | **no — attention-only** | — |
+| `kimi_k2`, `mistral-large-3` | **not measured** (no stand-in builds here) | 9 |
+
+So `minimax-m3-sft` and `minimax-m3-dpo` still train attention-only LoRA: peft has no v4→v5 conversion mapping for those model types, so their experts are never targeted and the attach succeeds quietly. Extending target resolution per architecture is #1070. The nine `kimi-k2.x` and `mistral-large-3` recipes are untested rather than known-good — no tiny stand-in for those configs exists in the installed transformers.
+
+**`target_modules: auto` on a MoE base.** `resolve_lora_target_modules` has no mapping for `qwen3_moe`, so `auto` resolved to `None` and peft refused with `No target_modules passed but also no target_parameters found`. With `moe_lora: true` the targets come from the model scan instead, which is what the 15 DPO/GRPO recipes needed.
+
 
 ## Unsloth Dynamic 2.0 GGUF Ladder (v0.53.0)
 
@@ -1010,11 +1041,11 @@ soup serve --model ./output --kv-cache-type q8_0     # 8-bit quantized KV cache 
 Three TrainingConfig bools extend the v0.28.0 FP8 menu. `fp8_attention` and `nvfp4` are LIVE
 torchao converters as of v0.71.21 (hardware-gated):
 
-- `fp8_attention: true` — requires `quantization_aware: fp8` AND a non-MLX backend. Converts the attention projections (q/k/v/o and fused variants) to torchao float8 training on Hopper+ GPUs. Missing torchao or a pre-Hopper GPU degrades to a clear advisory; a conversion-phase failure raises an honest "model may be PARTIALLY converted" error instead of training on a half-converted model.
-- `nvfp4: true` — Blackwell-only FP4 training via torchao `NVFP4Config` + `quantize_`. Gated to non-MLX + `modality: text`; the SM ≥ 10 runtime check fires at trainer construction.
+- `fp8_attention: true` — requires `quantization_aware: fp8` AND a non-MLX backend. Converts the attention projections (q/k/v/o and fused variants) to torchao float8 training on Ada or newer GPUs (the same gate as `quantization_aware: fp8`). A card, OS or torch build the gate refuses stops the run at setup; missing torchao degrades to a clear advisory; a conversion-phase failure raises an honest "model may be PARTIALLY converted" error instead of training on a half-converted model.
+- `nvfp4: true` — Blackwell-only FP4 training via torchao `NVFP4Config` + `quantize_`. Gated to supported tasks (rejected on `task: distill` and tasks without v0.28 speed/memory wiring) + non-MLX + `modality: text`; the SM ≥ 10 runtime check fires at trainer construction.
 - `unsloth_bnb_4bit: true` — promotes "Unsloth Dynamic 4-bit" from an implicit `backend=unsloth + quantization=4bit` combo to a named flag. Mutual rejection of inconsistent combos at config load.
 
-Cross-validator ordering picks the most actionable error: `quantization_aware='fp8'` prerequisite fires before the MLX rejection on `fp8_attention`, so a YAML missing both surfaces the deeper issue first.
+Cross-validator ordering picks the most actionable error: `quantization_aware='fp8'` prerequisite fires before the MLX rejection on `fp8_attention`, and task compatibility checks fire at config load before runtime trainer construction.
 
 
 ## LF / Axolotl Quant Parity (v0.53.0)

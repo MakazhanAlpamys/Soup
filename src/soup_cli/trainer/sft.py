@@ -932,8 +932,7 @@ class SFTTrainerWrapper(StreamingSetupMixin):
         if hf_grad_ckpt:
             from soup_cli.utils.gpu import get_gpu_info
             from soup_cli.utils.gradient_ckpt import (
-                describe_tier,
-                resolve_gradient_checkpointing,
+                plan_gradient_checkpointing,
             )
 
             gpu_memory_gb: Optional[float] = None
@@ -944,14 +943,16 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             except (KeyError, TypeError, ZeroDivisionError):
                 gpu_memory_gb = None
 
-            ckpt_kwargs = resolve_gradient_checkpointing(
-                tcfg.gradient_checkpointing, gpu_memory_gb=gpu_memory_gb,
+            ckpt_plan = plan_gradient_checkpointing(
+                self.model,
+                tcfg.gradient_checkpointing,
+                gpu_memory_gb=gpu_memory_gb,
             )
-            training_kwargs.update(ckpt_kwargs)
-            if ckpt_kwargs:
+            training_kwargs.update(ckpt_plan.kwargs)
+            if ckpt_plan.kwargs:
                 console.print(
                     f"[green]Gradient checkpointing:[/] "
-                    f"{describe_tier(tcfg.gradient_checkpointing, gpu_memory_gb)}"
+                    f"{ckpt_plan.description}"
                 )
 
         # NEFTune — noisy embeddings for better fine-tuning quality
@@ -1429,7 +1430,7 @@ class SFTTrainerWrapper(StreamingSetupMixin):
         from peft import TaskType, get_peft_model, prepare_model_for_kbit_training
         from transformers import AutoModelForCausalLM, AutoTokenizer
 
-        from soup_cli.utils.moe import detect_moe_model, get_moe_target_modules
+        from soup_cli.utils.moe import detect_moe_model
 
         # Liger Kernel — apply fused ops BEFORE model loading
         if tcfg.use_liger:
@@ -1546,7 +1547,14 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             )
 
         if tcfg.quantization in ("4bit", "8bit", "mxfp4"):
-            self.model = prepare_model_for_kbit_training(self.model)
+            from soup_cli.utils.layer_stream import should_enable_hf_gradient_checkpointing
+
+            self.model = prepare_model_for_kbit_training(
+                self.model,
+                use_gradient_checkpointing=should_enable_hf_gradient_checkpointing(
+                    tcfg.gradient_checkpointing, stream_layers=tcfg.stream_layers
+                ),
+            )
 
         # Freeze training — freeze bottom layers before LoRA
         if tcfg.freeze_layers is not None or tcfg.freeze_ratio is not None:
@@ -1659,14 +1667,15 @@ class SFTTrainerWrapper(StreamingSetupMixin):
                 self.model, tcfg.lora.target_parameters
             )
 
-            if tcfg.moe_lora and is_moe:
-                moe_targets = get_moe_target_modules(self.model)
-                if moe_targets:
-                    target_modules = moe_targets
-                    console.print(
-                        f"[green]ScatterMoE LoRA:[/] targeting "
-                        f"{len(moe_targets)} module patterns"
-                    )
+            # #798: one helper for every trainer. This block used to live here
+            # and in pretrain.py, and nowhere else, so moe_lora was accepted and
+            # ignored by the five preference/RL trainers. The helper also stops
+            # a dropout LoRA over FUSED experts, which peft refuses.
+            from soup_cli.utils.moe import resolve_moe_lora_targets
+
+            target_modules = resolve_moe_lora_targets(
+                self.model, tcfg, target_modules, console
+            )
 
             lora_config = build_lora_config(
                 tcfg.lora,
@@ -1705,25 +1714,28 @@ class SFTTrainerWrapper(StreamingSetupMixin):
 
         - ``quantization_aware=True``   → int8 QAT via torchao (legacy path)
         - ``quantization_aware="fp8"``  → FP8 training via torchao.float8 (v0.28.0)
+        - ``fp8_attention=True``        → FP8 attention projections (v0.71.21 #141)
+        - ``nvfp4=True``                → NVFP4 quantization (v0.71.21 #141)
         - ``False`` / None              → no-op
         """
-        if tcfg.quantization_aware == "fp8":
-            from soup_cli.utils.fp8 import apply_fp8_training
-
-            if apply_fp8_training(self.model, recipe=tcfg.fp8_recipe):
-                console.print(
-                    f"[green]FP8 training enabled:[/] "
-                    f"converted linears to Float8Linear (recipe={tcfg.fp8_recipe})"
-                )
-            else:
-                console.print(
-                    "[yellow]FP8 training requested but unavailable "
-                    "(no Hopper+ GPU or torchao.float8 missing)[/]"
-                )
-        elif tcfg.quantization_aware is True:
+        if tcfg.quantization_aware and tcfg.quantization_aware != "fp8":
             from soup_cli.utils.qat import prepare_model_for_qat
 
             self.model = prepare_model_for_qat(self.model)
+
+        # v0.33.0 / #800 — multi-trainer wiring of v0.28.0 / v0.71.21 speed/memory
+        # features on SFT. Cut-CE is patched pre-load, so skip it here.
+        from soup_cli.utils.v028_features import apply_v028_speed_memory
+
+        apply_v028_speed_memory(
+            model=self.model,
+            tcfg=tcfg,
+            base_model=getattr(getattr(self, "config", None), "base", ""),
+            console=console,
+            device=getattr(self, "device", "cuda"),
+            backend=getattr(getattr(self, "config", None), "backend", "transformers"),
+            skip_cut_ce=True,
+        )
 
     def _setup_unsloth(self, cfg, tcfg):
         """Load model via unsloth FastLanguageModel (2-5x faster)."""
@@ -1797,7 +1809,14 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             cfg.data,
         )
         if tcfg.quantization in ("4bit", "8bit", "mxfp4"):
-            self.model = prepare_model_for_kbit_training(self.model)
+            from soup_cli.utils.layer_stream import should_enable_hf_gradient_checkpointing
+
+            self.model = prepare_model_for_kbit_training(
+                self.model,
+                use_gradient_checkpointing=should_enable_hf_gradient_checkpointing(
+                    tcfg.gradient_checkpointing, stream_layers=tcfg.stream_layers
+                ),
+            )
 
         # LoRA — target language model layers only
         from soup_cli.utils.peft_wiring import (
@@ -1912,7 +1931,14 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             cfg.data,
         )
         if tcfg.quantization in ("4bit", "8bit", "mxfp4"):
-            self.model = prepare_model_for_kbit_training(self.model)
+            from soup_cli.utils.layer_stream import should_enable_hf_gradient_checkpointing
+
+            self.model = prepare_model_for_kbit_training(
+                self.model,
+                use_gradient_checkpointing=should_enable_hf_gradient_checkpointing(
+                    tcfg.gradient_checkpointing, stream_layers=tcfg.stream_layers
+                ),
+            )
 
         # LoRA — target language model layers only
         from soup_cli.utils.peft_wiring import (

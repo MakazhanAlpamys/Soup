@@ -195,8 +195,10 @@ training:
     mlp:    1e-5
 
   # Friendly aliases for users coming from LlamaFactory / Axolotl
-  load_in_8bit: true        # equivalent to quantization: 8bit
+  # load_in_8bit: true      # equivalent to quantization: 8bit
   # load_in_16bit: true     # equivalent to quantization: none
+
+  quantization: none        # required: PEFT LoftQ quantizes the base itself
 
   lora:
     init_strategy: loftq    # quantization-aware LoRA init (also: pissa / olora / random)
@@ -209,6 +211,13 @@ training:
 ```
 
 Catch-all friendly errors: typos in `optimizer:` are rejected at config-load with the v0.41.0 additions listed in the message; `lr_groups` patterns are validated as compilable regexes (length-capped + benign-string ReDoS probe); `load_in_8bit` mixed with `load_in_16bit` raises rather than picking one silently.
+
+PiSSA, OLoRA, LoftQ, and VeRA are applied through the shared PEFT constructor on
+the Transformers backend. Soup refuses these variants on MLX and Unsloth rather
+than silently substituting ordinary LoRA. PiSSA and LoftQ additionally require
+`quantization: none`: PiSSA needs floating-point base weights for its SVD, while
+LoftQ performs the low-bit conversion itself, so an already quantized base is
+invalid for either initializer.
 
 On the Transformers backend, `target_modules: auto` has an explicit Qwen3.5-family
 fallback because PEFT does not yet map `qwen3_5_text`. Soup targets `q_proj` and
@@ -251,6 +260,7 @@ Five PEFT-surface improvements that LlamaFactory and Axolotl maintain:
 
 ```yaml
 training:
+  quantization: none            # required: PiSSA initializes from float weights
   lora:
     init_strategy: pissa          # 'random' (default), 'pissa', 'olora'
     rank_pattern:                 # per-target-module rank override

@@ -84,7 +84,7 @@ def test_supports_v028_features_rejects_unknown_task() -> None:
 
 @pytest.mark.parametrize("task", ALL_TRAINER_TASKS)
 @pytest.mark.parametrize("feature", ("use_cut_ce", "fp8", "kernel_auto_compose"))
-def test_apply_v028_speed_memory_no_exception(task: str, feature: str) -> None:
+def test_apply_v028_speed_memory_no_exception(task: str, feature: str, monkeypatch) -> None:
     """For every trainer × apply-phase feature, the helper must not raise.
 
     cut_ce / fp8 degrade silently if the underlying lib isn't installed (CI
@@ -92,7 +92,20 @@ def test_apply_v028_speed_memory_no_exception(task: str, feature: str) -> None:
     helper returns a dict instead of crashing. kernel_auto_compose's picker
     raises when no candidates have finite times — also degrades silently.
     """
+    # A card that CAN run FP8 (#835/#1044): since the hardware gate moved ahead
+    # of the dependency probe, an explicit FP8 request on a machine without CUDA
+    # -- every CI runner here -- is refused rather than degraded, which is the
+    # ruling. This row is about the OTHER half: a missing torchao still degrades.
+    import sys
+
+    import torch
+
     from soup_cli.utils import v028_features as vf
+
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(torch.cuda, "get_device_capability", lambda *_a, **_k: (9, 0))
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(torch.version, "cuda", "12.4")
 
     tcfg = _make_tcfg(feature)
     result = vf.apply_v028_speed_memory(
@@ -354,18 +367,11 @@ def test_trainer_module_calls_apply_v028_speed_memory(module_path: str) -> None:
 
     mod = importlib.import_module(module_path)
     src = inspect.getsource(mod)
-    # SFT predates the shared helper extraction (v0.33.0 #43) and inlines
-    # apply_cut_ce / apply_fp8_training / kernel_picker directly; the other
-    # 10 trainers all delegate to apply_v028_speed_memory.
-    has_helper = "apply_v028_speed_memory" in src
-    has_inline_features = (
-        "apply_cut_ce" in src
-        and "apply_fp8_training" in src
-    )
-    assert has_helper or has_inline_features, (
-        f"{module_path} does not call apply_v028_speed_memory or the "
-        "underlying feature patchers directly — v0.28.0 features will "
-        "silently no-op for this trainer."
+    # v0.33.0 #43 / #800 — all 11 transformer-backend trainers delegate
+    # to apply_v028_speed_memory.
+    assert "apply_v028_speed_memory" in src, (
+        f"{module_path} does not call apply_v028_speed_memory — "
+        "v0.28.0 features will silently no-op for this trainer."
     )
 
 

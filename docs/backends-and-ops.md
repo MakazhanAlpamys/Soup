@@ -408,6 +408,9 @@ The endpoint validator follows the same SSRF rules as `HF_ENDPOINT`: only `http`
 ModelScope and Modelers downloads and uploads route through live, lazy-imported SDK adapters. The
 HF path remains the default, and MLX remains HF-only.
 
+`soup push --hub modelscope` authenticates with `--token` or `MODELSCOPE_API_TOKEN`; `--hub modelers`
+with `--token` or `MODELERS_TOKEN`. Neither reads `HF_TOKEN`.
+
 
 ## TensorBoard Integration
 
