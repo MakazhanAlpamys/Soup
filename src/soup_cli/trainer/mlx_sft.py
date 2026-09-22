@@ -344,12 +344,12 @@ class MLXSFTTrainerWrapper:
         if getattr(tcfg, "loss_spike_recovery", False):
             unsupported.append(
                 "training.loss_spike_recovery "
-                "(there is no checkpoint rollback or LR decay on MLX)"
+                "(spike recovery is driven by the watchdog and the watchdog cannot fire on MLX)"
             )
         if getattr(tcfg, "grad_accum_auto_tune", False):
             unsupported.append(
                 "training.grad_accum_auto_tune "
-                "(there is no VRAM-pressure signal on unified memory)"
+                "(there is no VRAM total to measure pressure against on unified memory)"
             )
         if unsupported:
             console.print(

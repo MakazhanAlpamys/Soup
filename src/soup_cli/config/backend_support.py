@@ -164,13 +164,13 @@ _MLX_SFT: tuple[SupportEntry, ...] = (
     SupportEntry(
         "training.loss_spike_recovery",
         REJECTED,
-        "there is no checkpoint rollback or LR decay on MLX",
+        "spike recovery is driven by the watchdog and the watchdog cannot fire on MLX",
         trainer_reads=True,
     ),
     SupportEntry(
         "training.grad_accum_auto_tune",
         REJECTED,
-        "there is no VRAM-pressure signal on unified memory",
+        "there is no VRAM total to measure pressure against on unified memory",
         trainer_reads=True,
     ),
 )

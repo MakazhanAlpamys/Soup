@@ -7020,9 +7020,10 @@ class SoupConfig(BaseModel):
     @model_validator(mode="after")
     def _validate_callback_monitoring_task_compat(self) -> "SoupConfig":
         """#802, #1069 — prm, moe_lora_routing, and unlearn attach no
-        SoupTrainerCallback, and backend=mlx attaches no live training callback,
-        so reject loss_watchdog, loss_spike_recovery, and grad_accum_auto_tune
-        when set to True on these tasks or on backend=mlx.
+        SoupTrainerCallback, and on backend=mlx the callback has no stop control,
+        no checkpoint-rollback path, and no VRAM budget, so reject loss_watchdog,
+        loss_spike_recovery, and grad_accum_auto_tune when set to True on these
+        tasks or on backend=mlx.
         """
         unsupported = ("prm", "moe_lora_routing", "unlearn")
         if self.task in unsupported:
@@ -7047,7 +7048,8 @@ class SoupConfig(BaseModel):
             if getattr(tcfg, "loss_spike_recovery", False):
                 raise ValueError(
                     f"training.loss_spike_recovery is not supported for backend={self.backend!r} "
-                    "because there is no checkpoint rollback or LR decay on MLX"
+                    "because spike recovery is driven by the watchdog and the watchdog "
+                    "cannot fire on MLX"
                 )
             if getattr(tcfg, "loss_watchdog", False):
                 raise ValueError(
@@ -7058,7 +7060,7 @@ class SoupConfig(BaseModel):
             if getattr(tcfg, "grad_accum_auto_tune", False):
                 raise ValueError(
                     f"training.grad_accum_auto_tune is not supported for backend={self.backend!r} "
-                    "because there is no VRAM-pressure signal on unified memory"
+                    "because there is no VRAM total to measure pressure against on unified memory"
                 )
         return self
 
