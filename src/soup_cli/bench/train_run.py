@@ -48,15 +48,50 @@ def _versions() -> dict:
     return found
 
 
+def _driver_and_sm_clock() -> tuple[Optional[str], Optional[int]]:
+    """``(driver version, current SM clock in MHz)``, or ``None`` for what cannot be read.
+
+    The same query ``utils/layer_stream_runtime.sm_clock_mhz`` makes, with the
+    driver added, so a driver update between two reports is visible (#716). Never
+    used for memory: that is torch's allocator counters, which measure a
+    different quantity from nvidia-smi's (#836).
+    """
+    import subprocess
+
+    from soup_cli.utils.layer_stream import _resolve_tool
+
+    tool = _resolve_tool("nvidia-smi")  # absolute path only (CWE-427)
+    if tool is None:
+        return None, None
+    try:
+        out = subprocess.run(
+            [tool, "--query-gpu=driver_version,clocks.sm", "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=20, check=False,
+        )
+        driver, clock = (part.strip() for part in out.stdout.splitlines()[0].split(","))
+        return driver or None, int(clock)
+    except (OSError, ValueError, IndexError, subprocess.SubprocessError):
+        return None, None
+
+
 def _device_provenance(torch: Any, device: str) -> dict:
+    empty = {
+        "device": device, "card": None, "cuda_runtime": None,
+        "compute_capability": None, "driver": None, "sm_clock_mhz_after_run": None,
+    }
     if device != "cuda" or not torch.cuda.is_available():
-        return {"device": device, "card": None, "cuda_runtime": None, "sm": None}
+        return empty
     props = torch.cuda.get_device_properties(0)
+    driver, clock = _driver_and_sm_clock()
     return {
         "device": "cuda",
         "card": props.name,
         "cuda_runtime": torch.version.cuda,
-        "sm": f"{props.major}.{props.minor}",
+        "compute_capability": f"{props.major}.{props.minor}",
+        "driver": driver,
+        # Read after the run: the boost clock moves a lot under load, so this is
+        # the clock the measured steps ended at, not a fixed property of the card.
+        "sm_clock_mhz_after_run": clock,
     }
 
 

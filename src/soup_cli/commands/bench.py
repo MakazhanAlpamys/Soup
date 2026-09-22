@@ -316,7 +316,8 @@ def train(
     ),
 ) -> None:
     """Train for a fixed number of steps and report timing, memory and tokens --
-    failing when the model was not actually training (#836)."""
+    failing when the model was not actually training."""
+    # The contract and why each check exists: #836.
     from rich.markup import escape
 
     from soup_cli.bench.train_run import bench_scope_error, run_bench_train

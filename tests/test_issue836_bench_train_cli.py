@@ -15,6 +15,7 @@ import yaml
 from typer.testing import CliRunner
 
 from soup_cli.cli import app
+from tests.conftest import strip_ansi
 
 runner = CliRunner()
 
@@ -76,18 +77,42 @@ def _failed(report):
 
 class TestTheCommand:
     def test_the_control_trains_and_writes_a_valid_report(self, workdir, monkeypatch):
+        import os
         import subprocess
+        import traceback
 
+        import soup_cli
+
+        soup_root = os.path.realpath(os.path.dirname(soup_cli.__file__))
         spawned = []
         real_popen = subprocess.Popen.__init__
 
+        def spawned_by_soup() -> bool:
+            # The innermost frame outside subprocess itself is the caller. Soup
+            # is on the stack of every spawn during training -- accelerate's
+            # own `nvidia-smi --query-gpu=count,name` (state.py -> get_gpu_info)
+            # runs inside trainer.train() -- so "somewhere on the stack" would
+            # blame Soup for a call it does not make, on any NVIDIA box.
+            frames = [
+                f for f in traceback.extract_stack()[:-2]
+                if os.path.basename(f.filename) != "subprocess.py"
+            ]
+            origin = os.path.realpath(frames[-1].filename) if frames else ""
+            try:
+                return os.path.commonpath([origin, soup_root]) == soup_root
+            except ValueError:  # different drives on Windows
+                return False
+
         def watching(self, args, *a, **k):
-            listed = isinstance(args, (list, tuple))
-            spawned.append(" ".join(map(str, args)) if listed else str(args))
+            if spawned_by_soup():
+                listed = isinstance(args, (list, tuple))
+                spawned.append(" ".join(map(str, args)) if listed else str(args))
             return real_popen(self, args, *a, **k)
 
         # Memory is torch's allocator counters, never nvidia-smi: watched on
-        # the real run rather than grepped out of the source.
+        # the real run rather than grepped out of the source. Provenance may
+        # ask nvidia-smi for the driver and SM clock; it must never ask for
+        # memory, which is a different quantity from the allocator's.
         monkeypatch.setattr(subprocess.Popen, "__init__", watching)
         result = runner.invoke(
             app, ["bench", "train", "--config", "soup.yaml", "--steps", "5",
@@ -107,7 +132,9 @@ class TestTheCommand:
         }
         assert len(report["config_hash"]) == 64
         assert report["resolved_config"]["training"]["logging_steps"] == 1
-        assert not [cmd for cmd in spawned if "nvidia-smi" in cmd], spawned
+        assert not [
+            cmd for cmd in spawned if "nvidia-smi" in cmd and "memory" in cmd
+        ], spawned
         assert "output" not in report["resolved_config"]
         # A benchmark never writes into the config's own output directory.
         assert not (workdir / "out").exists()
@@ -136,7 +163,7 @@ class TestTheCommand:
         report = json.loads((workdir / "r.json").read_text(encoding="utf-8"))
         assert report["valid"] is False
         assert _failed(report) == {"parameters_changed"}
-        assert "NOT valid" in result.output
+        assert "NOT valid" in strip_ansi(result.output)
 
     def test_a_task_it_does_not_measure_is_refused_by_name(self, workdir):
         cfg = yaml.safe_load((workdir / "soup.yaml").read_text(encoding="utf-8"))
@@ -145,14 +172,14 @@ class TestTheCommand:
         (workdir / "soup.yaml").write_text(yaml.safe_dump(cfg), encoding="utf-8")
         result = runner.invoke(app, ["bench", "train", "--config", "soup.yaml"])
         assert result.exit_code == 1
-        assert "task: dpo" in result.output
+        assert "task: dpo" in strip_ansi(result.output)
 
     def test_warmup_that_eats_every_step_is_refused(self, workdir):
         result = runner.invoke(
             app, ["bench", "train", "--config", "soup.yaml", "--steps", "2", "--warmup", "2"],
         )
         assert result.exit_code == 1
-        assert "--warmup" in result.output
+        assert "--warmup" in strip_ansi(result.output)
 
 
 class TestTheConfigHash:
@@ -242,4 +269,54 @@ class TestInferStillAnswersToTheOldForm:
     def test_the_group_help_lists_both(self):
         result = runner.invoke(app, ["bench", "--help"])
         assert result.exit_code == 0
-        assert "infer" in result.output and "train" in result.output
+        plain = strip_ansi(result.output)
+        assert "infer" in plain and "train" in plain
+
+
+class TestDriverAndClockProvenance:
+    """Driver and SM clock come from one nvidia-smi query. No GPU in CI reaches
+    it, so it is driven here with a fake tool."""
+
+    @staticmethod
+    def _fake_tool(tmp_path, monkeypatch, stdout):
+        import sys
+
+        script = tmp_path / "fake_nvidia_smi.py"
+        script.write_text(
+            "import sys\n"
+            "open(sys.argv[0] + '.args', 'w').write(' '.join(sys.argv[1:]))\n"
+            f"sys.stdout.write({stdout!r})\n",
+            encoding="utf-8",
+        )
+        windows = sys.platform == "win32"
+        runner_path = tmp_path / ("fake_nvidia_smi.cmd" if windows else "fake_nvidia_smi")
+        if windows:
+            runner_path.write_text(f'@"{sys.executable}" "{script}" %*\n', encoding="utf-8")
+        else:
+            runner_path.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{script}" "$@"\n')
+            runner_path.chmod(0o755)
+        monkeypatch.setattr(
+            "soup_cli.utils.layer_stream._resolve_tool", lambda *_a: str(runner_path)
+        )
+        return script
+
+    def test_it_reads_the_driver_and_the_sm_clock(self, tmp_path, monkeypatch):
+        from soup_cli.bench.train_run import _driver_and_sm_clock
+
+        script = self._fake_tool(tmp_path, monkeypatch, "580.95.05, 1890\n")
+        assert _driver_and_sm_clock() == ("580.95.05", 1890)
+        asked = (tmp_path / (script.name + ".args")).read_text(encoding="utf-8")
+        assert "driver_version" in asked and "clocks.sm" in asked
+        assert "memory" not in asked  # memory is torch's allocator counters, never this
+
+    def test_unreadable_output_is_none_not_a_guess(self, tmp_path, monkeypatch):
+        from soup_cli.bench.train_run import _driver_and_sm_clock
+
+        self._fake_tool(tmp_path, monkeypatch, "[N/A]\n")
+        assert _driver_and_sm_clock() == (None, None)
+
+    def test_no_tool_is_none(self, monkeypatch):
+        from soup_cli.bench.train_run import _driver_and_sm_clock
+
+        monkeypatch.setattr("soup_cli.utils.layer_stream._resolve_tool", lambda *_a: None)
+        assert _driver_and_sm_clock() == (None, None)

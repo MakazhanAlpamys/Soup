@@ -249,7 +249,7 @@ Report fields:
 | `tokens` | `useful` (supervised: `labels != -100`), `total`, and `utilisation` (`useful / total`), counted from the batches `training_step` received |
 | `throughput` | `useful_tokens_per_second` and `total_tokens_per_second` |
 | `memory` | `max_memory_allocated_bytes` and `max_memory_reserved_bytes`, kept separate and read after `reset_peak_memory_stats`. Both are `null` off CUDA. Never read from `nvidia-smi` |
-| `provenance` | device, card, CUDA runtime, SM, platform, Python, package versions (torch, transformers, peft, trl, bitsandbytes, accelerate), dtype, optimizer, seed, data seed |
+| `provenance` | device, card, CUDA runtime, compute capability, driver version, SM clock after the run (`sm_clock_mhz_after_run`, read with `nvidia-smi`; memory never is), platform, Python, package versions (torch, transformers, peft, trl, bitsandbytes, accelerate), dtype, optimizer, seed, data seed |
 | `config_hash`, `resolved_config` | sha256 of the fully resolved config, and the config itself, so a schema-default change that moves a run shows up (#716) |
 | `steps_requested`, `steps_measured` | what was asked for and what ran |
 

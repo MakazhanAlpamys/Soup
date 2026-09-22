@@ -179,14 +179,22 @@ class TestTheControl:
         assert report["memory"]["max_memory_allocated"] == 1
         assert report["memory"]["max_memory_reserved"] == 2
 
-    def test_the_report_never_shells_out_to_nvidia_smi(self):
+    def test_the_report_never_asks_nvidia_smi_for_memory(self):
         """Explicitly out of scope in the issue: nvidia-smi samples a different
-        quantity than torch's allocator counters."""
+        quantity than torch's allocator counters. Provenance does ask it for the
+        driver and SM clock, so the guard is on what is queried, and it proves it
+        found the query it inspects rather than passing on an empty scan."""
+        import re
         from pathlib import Path
 
         source = Path(__file__).resolve().parents[1] / "src" / "soup_cli" / "bench"
-        for path in source.rglob("*.py"):
-            assert "nvidia-smi" not in path.read_text(encoding="utf-8"), path
+        queries = [
+            query
+            for path in source.rglob("*.py")
+            for query in re.findall(r"--query-gpu=([\w.,]+)", path.read_text(encoding="utf-8"))
+        ]
+        assert queries, "no nvidia-smi query found -- the scan is not looking at bench/"
+        assert not [q for q in queries if "memory" in q], queries
 
 
 class TestStepCount:
