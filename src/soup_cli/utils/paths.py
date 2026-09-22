@@ -316,6 +316,8 @@ def open_no_follow(
     path: Union[str, Path],
     flags: int,
     mode: int = 0o600,
+    *,
+    check_parent: bool = False,
 ) -> int:
     """Open ``path`` refusing to follow symlinks across all platforms (#820).
 
@@ -325,8 +327,12 @@ def open_no_follow(
     ``os.fstat`` cross-validation against the opened file descriptor to detect
     a TOCTOU swap.
 
+    When ``check_parent`` is True (#1158), inspects parent directory components
+    for symlinks and reparse points. Rejects hardlinked regular files
+    (``st_nlink > 1``).
+
     Raises :exc:`OSError` with :data:`errno.ELOOP` if ``path`` is a symlink or
-    reparse point.
+    reparse point, or :data:`errno.EMLINK` if hardlinked.
     """
     if not isinstance(path, (str, Path)):
         raise TypeError(f"path must be str or Path, got {type(path).__name__}")
@@ -350,11 +356,41 @@ def open_no_follow(
             if getattr(pre_st, "st_file_attributes", 0) & reparse:
                 raise OSError(errno.ELOOP, f"Reparse point not allowed: {p!r}")
 
+    if check_parent:
+        try:
+            under_cwd = is_under_cwd(p)
+        except Exception:
+            under_cwd = False
+
+        curr = os.path.dirname(os.path.abspath(p))
+        while curr and curr != os.path.dirname(curr):
+            if os.path.lexists(curr):
+                st = os.lstat(curr)
+                if stat.S_ISLNK(st.st_mode):
+                    raise OSError(
+                        errno.ELOOP, f"Directory symbolic link not allowed: {curr!r}"
+                    )
+                if os.name == "nt":
+                    reparse = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+                    if getattr(st, "st_file_attributes", 0) & reparse:
+                        raise OSError(
+                            errno.ELOOP, f"Directory reparse point not allowed: {curr!r}"
+                        )
+            if under_cwd:
+                try:
+                    if os.path.samefile(curr, os.getcwd()):
+                        break
+                except OSError:
+                    pass
+            curr = os.path.dirname(curr)
+
     open_flags = flags | getattr(os, "O_NOFOLLOW", 0)
     fd = os.open(p, open_flags, mode)
     try:
+        post_fst = os.fstat(fd)
+        if stat.S_ISREG(post_fst.st_mode) and getattr(post_fst, "st_nlink", 1) > 1:
+            raise OSError(errno.EMLINK, f"Hard link not allowed: {p!r}")
         if os.name == "nt":
-            post_fst = os.fstat(fd)
             if pre_st is not None:
                 if (
                     pre_st.st_ino != 0

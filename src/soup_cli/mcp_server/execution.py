@@ -307,16 +307,17 @@ class ExecutionManager:
                 log_path=log_path,
             )
             try:
-                # open_no_follow (#820): a file symlink planted at the run-log
-                # path itself is refused rather than followed, so the child's
-                # output cannot be redirected to the link's target. Mode 0o666
-                # keeps plain open()'s permissions (umask still applies); the
-                # OSError on refusal maps to the path-free ExecutionError below.
+                # open_no_follow (#820, #1138, #1158): refuses a file symlink at
+                # the log path, a directory symlink in its parent hierarchy, or
+                # a pre-planted hardlink, so the child's output cannot be redirected
+                # outside .soup/mcp-runs/. Mode 0o666 keeps plain open()'s permissions
+                # (umask still applies); the OSError on refusal maps to ExecutionError.
                 log_handle = os.fdopen(
                     open_no_follow(
                         log_path,
                         os.O_WRONLY | os.O_CREAT | os.O_APPEND,
                         0o666,
+                        check_parent=True,
                     ),
                     "ab",
                 )
