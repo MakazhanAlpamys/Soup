@@ -59,7 +59,7 @@ def _cfg(
     )
 
 
-def _real_cfg(r=8, dropout=0.0, targets="auto", moe_lora=False):
+def _real_cfg(r=8, dropout=0.0, targets="auto", moe_lora=False, target_parameters=None):
     """A config loaded through the real schema, for every test that reaches the
     attach. The check now builds the adapter with the trainer's own
     ``build_lora_config``, which reads the whole LoRA block (``use_dora``,
@@ -75,6 +75,10 @@ def _real_cfg(r=8, dropout=0.0, targets="auto", moe_lora=False):
         f"training:\n  moe_lora: {'true' if moe_lora else 'false'}\n"
         f"  lora:\n    r: {r}\n    alpha: 16\n    dropout: {dropout}\n"
         f"    target_modules: {json.dumps(targets)}\n"
+        + (
+            f"    target_parameters: {json.dumps(target_parameters)}\n"
+            if target_parameters is not None else ""
+        )
     )
 
 
@@ -638,6 +642,28 @@ class TestTheVerdictIsTheTrainers:
         check = self._check(_real_cfg(moe_lora=False), self._qwen2_moe_config())
 
         assert check.verdict is Verdict.CANNOT_ATTACH, check
+
+    @staticmethod
+    def _qwen3_moe_config():
+        from transformers import Qwen3MoeConfig
+
+        return Qwen3MoeConfig(
+            vocab_size=64, hidden_size=16, intermediate_size=32,
+            moe_intermediate_size=16, num_hidden_layers=2, num_attention_heads=2,
+            num_key_value_heads=1, num_experts=4, num_experts_per_tok=2,
+        )
+
+    def test_explicit_target_parameters_reach_the_attach(self):
+        """``qwen3_moe``'s experts are fused 3-D parameters that no
+        ``target_modules`` entry can name; ``lora.target_parameters`` is how a
+        user reaches them, and the trainer hands them to ``build_lora_config``.
+        A check that dropped them would report such a config as unable to attach
+        -- or attach it without the experts it was written for."""
+        cfg = _real_cfg(target_parameters=["experts.gate_up_proj", "experts.down_proj"])
+        check = self._check(cfg, self._qwen3_moe_config())
+
+        assert check.verdict is Verdict.ATTACHES, check.detail
+        assert check.expert_modules > 0, check
 
     def test_the_attach_sees_the_keys_the_trainer_hands_peft(self):
         """The maintainer's review ask on #1116: run against the object the trainer
