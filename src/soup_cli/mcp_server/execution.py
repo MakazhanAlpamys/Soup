@@ -84,8 +84,8 @@ def _open_binary_no_follow(path: str):
     digest — the TOCTOU window the plan/execute split exists to close.
 
     This delegates to :func:`soup_cli.utils.paths.open_no_follow` (#820) rather
-    than passing ``O_NOFOLLOW`` itself. The v0.75.1 backport could not: that
-    helper landed after the ``v0.75.0`` tag the release was cut from, so the
+    than passing ``O_NOFOLLOW`` itself. The patch-release backport could not:
+    that helper landed after the tag the release was cut from, so the
     released copy carries a bare flag and is therefore UNGUARDED ON WINDOWS,
     where ``os.O_NOFOLLOW`` does not exist. The shared helper closes that half
     with a pre-open ``lstat`` and a post-open ``fstat`` cross-check, so this
