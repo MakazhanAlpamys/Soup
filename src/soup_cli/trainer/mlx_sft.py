@@ -340,6 +340,21 @@ class MLXSFTTrainerWrapper:
                 f"gradient_checkpointing tier {tcfg.gradient_checkpointing!r} "
                 "(MLX has a single on/off switch; enabling it)"
             )
+        if getattr(tcfg, "loss_watchdog", False):
+            unsupported.append(
+                "training.loss_watchdog (Soup does not implement the watchdog "
+                "on the MLX callback, which has no stop control)"
+            )
+        if getattr(tcfg, "loss_spike_recovery", False):
+            unsupported.append(
+                "training.loss_spike_recovery "
+                "(spike recovery is driven by the watchdog and the watchdog cannot fire on MLX)"
+            )
+        if getattr(tcfg, "grad_accum_auto_tune", False):
+            unsupported.append(
+                "training.grad_accum_auto_tune "
+                "(there is no VRAM total to measure pressure against on unified memory)"
+            )
         if unsupported:
             console.print(
                 "[yellow]MLX backend ignores: " + ", ".join(unsupported) + "[/]"

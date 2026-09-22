@@ -549,6 +549,7 @@ training:
   loss_watchdog_patience: 5     # Consecutive steps above threshold before stopping
 ```
 
+> **Backend Note:** Setting `loss_watchdog: true` is refused on `backend: mlx` at config validation (Soup does not implement the watchdog on the MLX callback, which has no stop control).
 
 ## Training Stability & Auto-Tuning
 
@@ -600,6 +601,8 @@ training:
   loss_spike_recovery_lr_decay: 0.5     # halve LR each recovery
 ```
 
+> **Backend Note:** Setting `loss_spike_recovery: true` is refused on `backend: mlx` at config validation (spike recovery is driven by the watchdog and the watchdog cannot fire on MLX).
+
 ### Convergence Detector
 
 ```yaml
@@ -622,6 +625,8 @@ training:
 ```
 
 Records peak memory each step. When pressure crosses the threshold, recommends a new `(batch, accum)` pair preserving effective batch (capped at `accum=1024`).
+
+> **Backend Note:** Setting `grad_accum_auto_tune: true` is refused on `backend: mlx` at config validation (there is no VRAM total to measure pressure against on unified memory).
 
 > **v0.33.0:** `--find-lr` now runs an in-process LR-sweep training loop (replaces the v0.32.0 stub curve), spike-recovery writes a `spike_recovery.json` hint with the decayed LR for re-launch, and the grad-accum advisory prints a recommended `(batch, accum)` pair when VRAM pressure crosses the threshold. Live optimizer-state rewind and live DataLoader rebuild remain follow-ups (HF Trainer / TRL upstream constraints).
 

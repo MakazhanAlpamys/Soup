@@ -39,10 +39,8 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 #: * ``honoured`` would mean enumerating 275 declared fields against every
 #:   reviewed pair -- a table nobody can review honestly, and the opposite of
 #:   this module's premise that a gap list is short enough to be checked;
-#: * ``rejected`` has no instance because ``mlx_sft.py`` only ever warns; it
-#:   raises for no config field. The constant stays because a backend that hard
-#:   errors is a real category, and ``STATUSES`` is what stops a typo'd status
-#:   reaching the table.
+#: * ``rejected`` covers settings rejected at the schema boundary for a
+#:   backend (e.g. callback monitoring flags on backend=mlx, #1069).
 IGNORED = "ignored"
 REJECTED = "rejected"
 STATUSES = frozenset({IGNORED, REJECTED})
@@ -162,6 +160,24 @@ _MLX_SFT: tuple[SupportEntry, ...] = (
         "torch.compile on FSDP2 requires CUDA and the transformers backend "
         "(and `soup train` refuses backend=mlx in validate_fsdp2_compile_config, "
         "before resolve_trainer)",
+        trainer_reads=True,
+    ),
+    SupportEntry(
+        "training.loss_watchdog",
+        REJECTED,
+        "Soup does not implement the watchdog on the MLX callback, which has no stop control",
+        trainer_reads=True,
+    ),
+    SupportEntry(
+        "training.loss_spike_recovery",
+        REJECTED,
+        "spike recovery is driven by the watchdog and the watchdog cannot fire on MLX",
+        trainer_reads=True,
+    ),
+    SupportEntry(
+        "training.grad_accum_auto_tune",
+        REJECTED,
+        "there is no VRAM total to measure pressure against on unified memory",
         trainer_reads=True,
     ),
 )

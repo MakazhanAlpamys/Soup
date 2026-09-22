@@ -137,7 +137,9 @@ generate = ["httpx>=0.24.0"]
 deepspeed = ["deepspeed>=0.12.0"]
 fast = ["unsloth>=2024.8"]
 vision = ["Pillow>=9.0.0"]
-qat = ["torchao>=0.4.0"]
+# The floor lives in TORCHAO_MIN_VERSION (src/soup_cli/utils/torchao_compat.py);
+# tests/test_issue826_torchao_class_names.py pins this line to it (#826).
+qat = ["torchao>=0.18.0"]
 liger = ["liger-kernel>=0.3.0"]
 ring-attn = ["ring-flash-attn>=0.1.0"]
 onnx = ["optimum[onnxruntime]>=1.16.0"]

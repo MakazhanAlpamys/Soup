@@ -21,6 +21,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from tests.conftest import strip_ansi
+
 
 # ---------------------------------------------------------------------------
 # Task A1 — expression parser
@@ -508,7 +510,7 @@ class TestArithmeticCli:
             tmp_path,
         )
         assert res.exit_code == 1
-        assert "name=path" in res.output
+        assert "name=path" in strip_ansi(res.output)
 
     def test_output_outside_cwd_exit_1(self, tmp_path):
         a = _make_adapter(tmp_path / "coder", "meta/x", {"w": self._rng_tensor((8, 16), 10)})

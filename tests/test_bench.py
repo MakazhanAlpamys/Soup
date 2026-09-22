@@ -3,6 +3,7 @@
 from typer.testing import CliRunner
 
 from soup_cli.cli import app
+from tests.conftest import strip_ansi
 
 runner = CliRunner()
 
@@ -44,7 +45,7 @@ def test_bench_custom_prompts(tmp_path, monkeypatch):
         # Test 1: TXT -- verify exit, output, and that actual prompts were passed to _generate
         result = runner.invoke(app, ["bench", str(dummy_model), "--prompts-file", "prompts.txt"])
         assert result.exit_code == 0, (result.output, repr(result.exception))
-        assert "Running 2 test inferences" in result.output
+        assert "Running 2 test inferences" in strip_ansi(result.output)
 
         used_contents = [
             call.args[2][0]["content"]
@@ -58,7 +59,7 @@ def test_bench_custom_prompts(tmp_path, monkeypatch):
         # Test 2: JSONL -- verify JSON prompt field was extracted and used
         result = runner.invoke(app, ["bench", str(dummy_model), "--prompts-file", "prompts.jsonl"])
         assert result.exit_code == 0, (result.output, repr(result.exception))
-        assert "Running 2 test inferences" in result.output
+        assert "Running 2 test inferences" in strip_ansi(result.output)
 
         used_contents = [
             call.args[2][0]["content"]
@@ -106,9 +107,10 @@ def test_bench_happy_path(tmp_path, monkeypatch):
         assert "Inference Benchmark Results" in result.output
         assert "TPS (Avg)" in result.output
         # Token count propagated from mocked _generate
-        assert "128 tokens" in result.output
+        plain = strip_ansi(result.output)
+        assert "128 tokens" in plain
         # VRAM value derived from mocked max_memory_allocated (4 GB)
-        assert "4.00 GB" in result.output
+        assert "4.00 GB" in plain
         # Warmup + main loop: mock_generate called (warmup + num_prompts=3)
         assert mock_generate.call_count == 1 + 3
 

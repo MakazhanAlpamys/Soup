@@ -7102,9 +7102,11 @@ class SoupConfig(BaseModel):
 
     @model_validator(mode="after")
     def _validate_callback_monitoring_task_compat(self) -> "SoupConfig":
-        """#802 — prm, moe_lora_routing, and unlearn attach no
-        SoupTrainerCallback, so reject loss_watchdog, loss_spike_recovery,
-        and grad_accum_auto_tune when set to True on these tasks.
+        """#802, #1069 — prm, moe_lora_routing, and unlearn attach no
+        SoupTrainerCallback, and on backend=mlx the callback has no stop control,
+        no checkpoint-rollback path, and no VRAM budget, so reject loss_watchdog,
+        loss_spike_recovery, and grad_accum_auto_tune when set to True on these
+        tasks or on backend=mlx.
         """
         unsupported = ("prm", "moe_lora_routing", "unlearn")
         if self.task in unsupported:
@@ -7123,6 +7125,25 @@ class SoupConfig(BaseModel):
                 raise ValueError(
                     f"training.grad_accum_auto_tune is not supported for task={self.task!r} "
                     f"because {self.task!r} does not attach a live training callback"
+                )
+        if self.backend == "mlx":
+            tcfg = self.training
+            if getattr(tcfg, "loss_spike_recovery", False):
+                raise ValueError(
+                    f"training.loss_spike_recovery is not supported for backend={self.backend!r} "
+                    "because spike recovery is driven by the watchdog and the watchdog "
+                    "cannot fire on MLX"
+                )
+            if getattr(tcfg, "loss_watchdog", False):
+                raise ValueError(
+                    f"training.loss_watchdog is not supported for backend={self.backend!r} "
+                    "because Soup does not implement the watchdog on the MLX callback, "
+                    "which has no stop control"
+                )
+            if getattr(tcfg, "grad_accum_auto_tune", False):
+                raise ValueError(
+                    f"training.grad_accum_auto_tune is not supported for backend={self.backend!r} "
+                    "because there is no VRAM total to measure pressure against on unified memory"
                 )
         return self
 

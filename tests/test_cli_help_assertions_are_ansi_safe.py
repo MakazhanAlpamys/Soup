@@ -75,6 +75,8 @@ import pathlib
 import re
 import textwrap
 
+import pytest
+
 TESTS_DIR = pathlib.Path(__file__).parent
 
 # A quoted CLI flag: "--noise-floor", '--gpus'.
@@ -98,6 +100,7 @@ _NORMALISERS = (
     "_clean_help(",
     "_ANSI_RE",
     "_ANSI_ESCAPE",
+    "_ANSI.",
     "no_color",
 )
 
@@ -504,3 +507,415 @@ def find_unsafe_highlighted_assertions(source: str) -> list[tuple[int, str]]:
             if literal and _is_multi_token(literal):
                 offenders.append((node.lineno + offset, stripped[:100]))
     return offenders
+
+
+# ---------------------------------------------------------------------------
+# #1068 — Rich ReprHighlighter splits percentage / number tokens in raw output
+# ---------------------------------------------------------------------------
+
+_IDENTIFIER_EXEMPT_RE = re.compile(
+    r"""^(?:
+        --?[a-zA-Z0-9_-]+                       # CLI flags: --min-acceptance, -v
+        |[A-Za-z0-9._-]+/[A-Za-z0-9._-]+        # Repo/model IDs: meta-llama/Llama-3.1-8B
+        |[A-Za-z0-9]+-[0-9.]+[A-Za-z0-9-]*      # Model names: Llama-3.1-8B, Qwen2.5-7B
+        # Versions: v0.71.26, 1.2.3
+        |(?:v[0-9]+\.[0-9]+(?:\.[0-9]+)?|[0-9]+\.[0-9]+\.[0-9]+[a-zA-Z0-9.-]*)
+        |[A-Z][0-9]{2,4}                        # Hardware names: H100, A100
+    )$""",
+    re.VERBOSE,
+)
+
+_PERCENT_LITERAL_RE = re.compile(r"""[0-9]+(?:\.[0-9]+)?%""")
+_DIGIT_TEXT_RE = re.compile(
+    r"""
+    (?:
+        \b\d+(?:/\d+|\.\d+)?\s+[a-zA-Z]+        # 5 rows, 128 tokens, 2/2 rows, 1/3 prompts
+        |
+        \b[a-zA-Z]+\s+\d+(?:/\d+|\.\d+)?\b        # Running 2, between 2, line 2
+    )
+""",
+    re.VERBOSE,
+)
+_QUOTED_SUBSTR_RE = re.compile(r"""(?<!\w)(?:'[^'\n]+'|"[^"\n]+")(?:(?!\w)|$)""")
+_KEY_EQUALS_RE = re.compile(r"""\b[a-zA-Z_][a-zA-Z0-9_]{1,30}=\S+""")
+_GROUPED_OR_DECIMAL_RE = re.compile(
+    r"""(?<![\w./-])(?:\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+\.\d+)(?![\w./-])"""
+)
+
+
+def _is_unsafe_cli_literal(s: str) -> bool:
+    """Return True if ``s`` contains tokens split by Rich's ReprHighlighter."""
+    s_strip = s.strip()
+    if not s_strip or _IDENTIFIER_EXEMPT_RE.match(s_strip):
+        return False
+    if _PERCENT_LITERAL_RE.search(s_strip):
+        return True
+    if _DIGIT_TEXT_RE.search(s_strip):
+        return True
+    if _KEY_EQUALS_RE.search(s_strip):
+        return True
+    if _GROUPED_OR_DECIMAL_RE.search(s_strip):
+        return True
+    m = _QUOTED_SUBSTR_RE.search(s_strip)
+    if m and m.group(0) != s_strip:
+        return True
+    return False
+
+
+#: Inline exemption marker for intentional uncoloured assertions (e.g. non-CLI harnesses,
+#: mock subprocesses, or tests with console explicitly pinned to no-color under #987).
+_ANSI_OK_RE = re.compile(r"#\s*ansi-ok\s*:\s*(.+)$")
+
+
+def _find_raw_cli_output_statements(
+    source: str,
+) -> list[tuple[int, int, str, bool]]:
+    """Return (start_line, end_line, first_line_text, has_ansi_ok) for raw output asserts."""
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:  # pragma: no cover — a broken file fails its own tests
+        return []
+    lines = source.splitlines()
+    literal_lines = _multiline_literal_lines(tree)
+    records: list[tuple[int, int, str, bool]] = []
+
+    for fn in ast.walk(tree):
+        if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        if not fn.name.startswith("test"):
+            continue
+
+        tainted: set[str] = set()
+        stmts = sorted(
+            [
+                s
+                for s in ast.walk(fn)
+                if isinstance(s, (ast.Assign, ast.AnnAssign, ast.AugAssign, ast.Assert))
+            ],
+            key=lambda s: s.lineno,
+        )
+
+        for stmt in stmts:
+            if stmt.lineno in literal_lines:
+                continue
+
+            if isinstance(stmt, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
+                end = stmt.end_lineno or stmt.lineno
+                rhs_text = "\n".join(lines[stmt.lineno - 1 : end])
+                derived = _ANY_RAW_OUTPUT_RE.search(rhs_text) or any(
+                    re.search(rf"\b{re.escape(var)}\b", rhs_text) for var in tainted
+                )
+                target_names: list[str] = []
+                if isinstance(stmt, ast.Assign):
+                    for t in stmt.targets:
+                        if isinstance(t, ast.Name):
+                            target_names.append(t.id)
+                elif isinstance(stmt, (ast.AnnAssign, ast.AugAssign)) and isinstance(
+                    stmt.target, ast.Name
+                ):
+                    target_names.append(stmt.target.id)
+
+                for name in target_names:
+                    if derived and not _looks_normalised(rhs_text):
+                        tainted.add(name)
+                    elif derived and _looks_normalised(rhs_text):
+                        tainted.discard(name)
+
+            elif isinstance(stmt, ast.Assert):
+                test = stmt.test
+                test_end = test.end_lineno or test.lineno
+                test_text = "\n".join(lines[test.lineno - 1 : test_end])
+                if stmt.msg:
+                    test_text = _assert_expression(test_text)
+
+                if _looks_normalised(test_text):
+                    continue
+
+                reads_raw = _ANY_RAW_OUTPUT_RE.search(test_text)
+                reads_tainted = any(
+                    re.search(rf"\b{re.escape(var)}\b", test_text) for var in tainted
+                )
+                if not (reads_raw or reads_tainted):
+                    continue
+
+                # Negative assertions ("not in") are unproblematic because missing
+                # text cannot be split by ANSI
+                if " not in " in test_text:
+                    continue
+
+                has_unsafe = False
+                for sub in ast.walk(test):
+                    if isinstance(sub, ast.Constant) and isinstance(sub.value, str):
+                        if _is_unsafe_cli_literal(sub.value):
+                            has_unsafe = True
+                            break
+
+                if has_unsafe:
+                    stmt_start = stmt.lineno
+                    stmt_end = stmt.end_lineno or stmt.lineno
+                    stmt_context = lines[max(0, stmt_start - 2) : stmt_end]
+                    has_ansi_ok = any(_ANSI_OK_RE.search(line) for line in stmt_context)
+                    first_line = lines[stmt_start - 1].strip()
+                    records.append((stmt_start, stmt_end, first_line[:100], has_ansi_ok))
+
+    return records
+
+
+def find_raw_cli_output_assertions(
+    source: str, ignore_exemptions: bool = False
+) -> list[tuple[int, str]]:
+    """Return ``(lineno, text)`` for unsafe token assertions on CLI output.
+
+    Rich's default ``ReprHighlighter`` styles numbers (such as ``60.0%``,
+    ``128 tokens``, ``2/2 rows valid``, ``1,000``, ``2.0``), quoted substrings,
+    and ``key=`` pairs inside console output. On colour-capable terminals, SGR
+    escape sequences land inside or between those tokens, causing assertions on
+    raw output to fail under ``FORCE_COLOR=1 TERM=xterm-256color`` while passing
+    on Windows.
+    """
+    records = _find_raw_cli_output_statements(source)
+    if ignore_exemptions:
+        return [(start, text) for start, _, text, _ in records]
+    return [(start, text) for start, _, text, has_ok in records if not has_ok]
+
+
+def find_stale_ansi_ok_markers(source: str) -> list[tuple[int, str]]:
+    """Return ``(lineno, line_text)`` for any ``# ansi-ok:`` marker that does not
+    actively suppress an otherwise-flagged raw CLI output assertion."""
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return []
+    lines = source.splitlines()
+    literal_lines = _multiline_literal_lines(tree)
+    marker_lines: list[tuple[int, str]] = []
+    for idx, line in enumerate(lines, 1):
+        if idx in literal_lines:
+            continue
+        if _ANSI_OK_RE.search(line):
+            marker_lines.append((idx, line.strip()))
+
+    if not marker_lines:
+        return []
+
+    records = _find_raw_cli_output_statements(source)
+    stale: list[tuple[int, str]] = []
+    for lineno, text in marker_lines:
+        matches_any = any(
+            start - 1 <= lineno <= end for start, end, _, _ in records
+        )
+        if not matches_any:
+            stale.append((lineno, text))
+
+    return stale
+
+
+class TestNoRawCliOutputAssertionsInTheSuite:
+    def test_every_test_file_normalises_cli_output_tokens(self):
+        offenders: list[str] = []
+        scanned = 0
+        for path in sorted(TESTS_DIR.glob("test_*.py")):
+            source = path.read_text(encoding="utf-8", errors="replace")
+            scanned += 1
+            for lineno, text in find_raw_cli_output_assertions(source):
+                offenders.append(f"{path.name}:{lineno}: {text}")
+        assert scanned >= 20, f"only {scanned} test files scanned"
+        assert not offenders, (
+            "An assertion on CLI output reads numbers/percentages/tokens from raw "
+            "output without ANSI stripping. Rich's ReprHighlighter styles numbers "
+            "and splits them with ANSI escapes on Linux/macOS, so this passes on "
+            "Windows and turns CI red on colour terminals (issue #1068). Route the "
+            "output through an ANSI-strip helper (e.g. _plain or strip_ansi):\n  "
+            + "\n  ".join(offenders)
+        )
+
+    def test_no_stale_ansi_ok_markers_in_the_suite(self):
+        """Every # ansi-ok: marker must actively suppress an otherwise-flagged
+        assertion. A stale marker on safe code is dead debt and must be deleted."""
+        stale: list[str] = []
+        total_markers = 0
+        this_file = pathlib.Path(__file__).resolve()
+        for path in sorted(TESTS_DIR.glob("test_*.py")):
+            if path.resolve() == this_file:
+                continue
+            source = path.read_text(encoding="utf-8", errors="replace")
+            markers = find_stale_ansi_ok_markers(source)
+            for lineno, text in markers:
+                stale.append(f"{path.name}:{lineno}: {text}")
+            tree = ast.parse(source)
+            lit_lines = _multiline_literal_lines(tree)
+            total_markers += sum(
+                1
+                for idx, line in enumerate(source.splitlines(), 1)
+                if idx not in lit_lines and _ANSI_OK_RE.search(line)
+            )
+
+        assert total_markers > 0, "no # ansi-ok: markers found in suite — scanner broken?"
+        assert not stale, (
+            "Found stale `# ansi-ok:` marker(s) that do not suppress any flagged "
+            "assertion:\n  " + "\n  ".join(stale)
+        )
+
+
+class TestTheCliOutputScannerCanActuallyFail:
+    """A scanner that finds zero offenders in the active suite is only trustworthy
+    if it is proven capable of finding both direct, indirect, wrapped, and token-based
+    unsafe assertions."""
+
+    DIRECT_BAD = '''
+def test_draft_acceptance():
+    result = runner.invoke(app, ["measure", "--target", "org/target"])
+    assert "60.0%" in result.output
+'''
+
+    INDIRECT_BAD = '''
+def test_draft_acceptance_indirect():
+    result = runner.invoke(app, ["measure", "--target", "org/target"])
+    plain = " ".join(result.output.split())
+    assert "60.0%" in plain
+'''
+
+    WRAPPED_BAD = '''
+def test_draft_acceptance_wrapped():
+    result = runner.invoke(app, ["measure", "--target", "org/target"])
+    assert (
+        "60.0%"
+        in result.output
+    )
+'''
+
+    NON_PCT_BAD = '''
+def test_merge_row_count():
+    result = runner.invoke(app, ["data", "merge"])
+    assert "5 rows" in result.output
+'''
+
+    KEY_EQUALS_BAD = '''
+def test_param_forwarding():
+    result = runner.invoke(app, ["train"])
+    assert "iterations=2" in result.output
+'''
+
+    REAL_PRE_FIX = '''
+def test_below_min_acceptance_exits_two(self, runner, in_tmp_cwd, monkeypatch):
+    result = runner.invoke(
+        app,
+        ["measure", "--target", "org/target", "--draft", "org/tiny",
+         "--prompts", prompts, "--min-acceptance", "0.6"],
+    )
+    assert result.exit_code == 2
+    assert "60.0%" in result.output
+    assert "below" in result.output.lower()
+'''
+
+    INLINE_FIXTURE = '''
+def test_inline_fixture_handling():
+    fixture = """
+    assert "60.0%" in result.output
+    """
+    assert fixture
+'''
+
+    def test_it_catches_direct_raw_output_assertion(self):
+        found = find_raw_cli_output_assertions(textwrap.dedent(self.DIRECT_BAD))
+        assert len(found) == 1, found
+        assert "60.0%" in found[0][1]
+
+    def test_it_catches_indirect_whitespace_collapsed_assertion(self):
+        found = find_raw_cli_output_assertions(textwrap.dedent(self.INDIRECT_BAD))
+        assert len(found) == 1, found
+        assert "60.0%" in found[0][1]
+
+    def test_it_catches_wrapped_raw_output_assertion(self):
+        found = find_raw_cli_output_assertions(textwrap.dedent(self.WRAPPED_BAD))
+        assert len(found) == 1, found
+        assert "assert (" in found[0][1] or "60.0%" in found[0][1]
+
+    def test_it_catches_non_percentage_unsafe_literal(self):
+        found = find_raw_cli_output_assertions(textwrap.dedent(self.NON_PCT_BAD))
+        assert len(found) == 1, found
+        assert "5 rows" in found[0][1]
+
+    def test_it_catches_key_equals_unsafe_literal(self):
+        found = find_raw_cli_output_assertions(textwrap.dedent(self.KEY_EQUALS_BAD))
+        assert len(found) == 1, found
+        assert "iterations=2" in found[0][1]
+
+    def test_it_catches_the_real_pre_fix_pattern_from_issue1068(self):
+        found = find_raw_cli_output_assertions(textwrap.dedent(self.REAL_PRE_FIX))
+        assert len(found) == 1, found
+        assert "60.0%" in found[0][1]
+
+    def test_a_normalised_direct_assertion_is_accepted(self):
+        good = self.DIRECT_BAD.replace("in result.output", "in _plain(result.output)")
+        assert find_raw_cli_output_assertions(textwrap.dedent(good)) == []
+
+    def test_a_normalised_indirect_assertion_is_accepted(self):
+        good = self.INDIRECT_BAD.replace(
+            'plain = " ".join(result.output.split())',
+            "plain = _plain(result.output)",
+        )
+        assert find_raw_cli_output_assertions(textwrap.dedent(good)) == []
+
+    def test_plain_non_token_assertion_is_not_flagged(self):
+        plain = '''
+def test_draft_measure():
+    result = runner.invoke(app, ["measure", "--target", "org/target"])
+    assert "STRONG" in result.output
+'''
+        assert find_raw_cli_output_assertions(textwrap.dedent(plain)) == []
+
+    def test_exempt_model_identifier_is_not_flagged(self):
+        model = '''
+def test_adapters_list():
+    result = runner.invoke(app, ["adapters", "list"])
+    assert "Llama-3.1-8B" in result.output
+'''
+        assert find_raw_cli_output_assertions(textwrap.dedent(model)) == []
+
+    def test_failure_message_reading_raw_output_is_not_flagged(self):
+        msg_only = '''
+def test_draft_acceptance_msg():
+    result = runner.invoke(app, ["measure", "--target", "org/target"])
+    plain = _plain(result.output)
+    assert "60.0%" in plain, result.output
+'''
+        assert find_raw_cli_output_assertions(textwrap.dedent(msg_only)) == []
+
+    def test_multiline_string_fixture_in_test_is_skipped(self):
+        assert find_raw_cli_output_assertions(textwrap.dedent(self.INLINE_FIXTURE)) == []
+
+    def test_unparseable_source_does_not_explode(self):
+        assert find_raw_cli_output_assertions("def broken(:\n") == []
+
+    @pytest.mark.parametrize("bad_number", ["1,000", "50,000", "0.7", "3.14"])
+    def test_it_catches_grouped_and_decimal_numbers(self, bad_number):
+        src = f'''
+def test_number_output():
+    result = runner.invoke(app, ["measure"])
+    assert "{bad_number}" in result.output
+'''
+        found = find_raw_cli_output_assertions(textwrap.dedent(src))
+        assert len(found) == 1, found
+        assert bad_number in found[0][1]
+
+    def test_ansi_ok_inline_marker_suppresses_offender(self):
+        src = '''
+def test_uncoloured_stdout():
+    result = runner.invoke(app, ["measure"])
+    assert "60.0%" in result.output  # ansi-ok: mock subprocess stdout is uncoloured
+'''
+        assert find_raw_cli_output_assertions(textwrap.dedent(src)) == []
+        found = find_raw_cli_output_assertions(textwrap.dedent(src), ignore_exemptions=True)
+        assert len(found) == 1
+        assert "60.0%" in found[0][1]
+
+    def test_stale_ansi_ok_marker_is_flagged(self):
+        src = '''
+def test_safe():
+    assert "plain text" in result.output  # ansi-ok: unnecessary exemption
+'''
+        stale = find_stale_ansi_ok_markers(textwrap.dedent(src))
+        assert len(stale) == 1
+        assert "unnecessary exemption" in stale[0][1]
+

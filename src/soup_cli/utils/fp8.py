@@ -12,13 +12,16 @@ Requires:
   B100, B200. Rowwise recipes also need a torch that dispatches their kernel on
   the card (Ada >= 2.7, RTX 50 >= 2.8, 11.x >= 2.10) and never run on Windows
   (#835).
-- torchao >= 0.5.0 OR transformer-engine >= 1.0
+- torchao (the floor is TORCHAO_MIN_VERSION in utils/torchao_compat.py, #826)
+  OR transformer-engine >= 1.0
 - CUDA 12.0+
 """
 
 from __future__ import annotations
 
 from typing import Literal, Union
+
+from soup_cli.utils.torchao_compat import TORCHAO_MIN_VERSION
 
 QuantizationAwareLike = Union[bool, Literal["fp8"]]
 
@@ -302,7 +305,7 @@ def validate_fp8_config(
     if not is_fp8_available():
         errors.append(
             "FP8 training dependencies are not installed. "
-            "Install with: pip install torchao (>=0.5.0)"
+            f"Install with: pip install torchao (>={TORCHAO_MIN_VERSION})"
         )
 
     return errors
