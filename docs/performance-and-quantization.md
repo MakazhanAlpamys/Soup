@@ -142,9 +142,9 @@ measured a 0.086344 nat/target gap to fixed FP, with a paired 95% interval of
 - not upstream QuEST numerical parity;
 - not packed INT4, and not a speed or memory-efficiency claim.
 
-The implementation keeps FP32 masters and performs dense fake quantization and
-Hadamard arithmetic during execution. Treat it as a reproducible research path,
-not as a cheaper deployment format.
+The implementation keeps FP32 masters. Under the trainer's CUDA BF16 autocast,
+the Hadamard and dense fake-quant arithmetic operate on BF16 tensors. Treat it
+as a reproducible research path, not as a cheaper deployment format.
 
 
 ## FP8 Training (Ada+)

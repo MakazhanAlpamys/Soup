@@ -8,6 +8,7 @@ metadata round-trips, resume fidelity and fail-closed configuration.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -16,6 +17,12 @@ import pytest
 from soup_cli.config.schema import SoupConfig
 
 _TEST_CALIBRATION_SHA256 = "ab" * 32
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _plain(text: str) -> str:
+    """Return CLI output safe for assertions across Rich-capable terminals."""
+    return " ".join(_ANSI_RE.sub("", text).split())
 
 
 def _config(**training):
@@ -234,10 +241,12 @@ def test_cli_dry_run_reports_quest_without_qat_or_torchao(tmp_path, monkeypatch)
 
     monkeypatch.setattr(builtins, "__import__", reject_torchao)
     result = CliRunner().invoke(
-        app, ["train", "--config", str(config_path), "--dry-run", "--yes"]
+        app,
+        ["train", "--config", str(config_path), "--dry-run", "--yes"],
+        env={"FORCE_COLOR": "1", "TERM": "xterm-256color", "COLUMNS": "50"},
     )
     assert result.exit_code == 0, (result.output, repr(result.exception))
-    assert "mixed W4/A4+A16 (QuEST fake quant)" in result.output
+    assert "mixed W4/A4+A16 (QuEST fake quant)" in _plain(result.output)
     assert qat_calls == []
 
 
