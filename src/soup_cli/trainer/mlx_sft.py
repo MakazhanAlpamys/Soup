@@ -281,6 +281,15 @@ class MLXSFTTrainerWrapper:
                 "data.train_on_messages_with_train_field (MLX supervises "
                 "every assistant turn; the per-message flag is not read)"
             )
+        # #761: mask_history narrows the transformers label builder
+        # (data/loss_mask.py) to the last assistant turn. MLX SFT builds its own
+        # mask and never goes through it, so without this line the same soup.yaml
+        # trained the last turn on transformers and every turn here, in silence.
+        if getattr(dcfg, "mask_history", False):
+            unsupported.append(
+                "data.mask_history (MLX supervises every assistant turn, not "
+                "only the last)"
+            )
         if getattr(dcfg, "train_on_prompt", False):
             unsupported.append(
                 "data.train_on_prompt (MLX masks the prompt or supervises the "

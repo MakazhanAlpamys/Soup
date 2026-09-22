@@ -342,3 +342,90 @@ class TestTheLiveWiring:
         assert len(_trained(labels)) == _EXPECTED[("no_markers", "three")][0], (
             "absent field behaves as mask_history: false"
         )
+
+
+class TestMlxDoesNotReadIt:
+    """``backend: mlx`` accepted ``mask_history: true`` and trained every assistant
+    turn anyway: MLX SFT builds its own mask in ``trainer/mlx_masking.py`` and never
+    goes through ``build_format_row``. Worse, ``soup doctor --config`` then printed
+    "None of the 13 setting(s) known to be unread on task=sft backend=mlx is set"
+    -- an all-clear on a config that sets a field MLX ignores (#1101 review).
+
+    Declared in ``config/backend_support.py`` so the doctor says so. Driven through
+    ``check_config``, the function ``doctor`` calls, on a config loaded the way a
+    user's is."""
+
+    _MLX = (
+        "base: mlx-community/Qwen2.5-0.5B-Instruct-4bit\n"
+        "task: sft\nbackend: mlx\n"
+        "data:\n  train: ./x.jsonl\n  format: chatml\n"
+        "  train_on_responses_only: true\n"
+    )
+
+    def _gaps(self, extra):
+        from soup_cli.config.backend_support import check_config
+        from soup_cli.config.loader import load_config_from_string
+
+        return {entry.field for entry in check_config(load_config_from_string(self._MLX + extra))}
+
+    def test_mlx_reports_mask_history_as_ignored(self):
+        assert "data.mask_history" in self._gaps("  mask_history: true\n")
+
+    def test_it_is_not_reported_when_the_config_does_not_set_it(self):
+        """``check_config`` reports only fields the user wrote. A doctor that named
+        ``mask_history`` on every MLX config would be as useless as the silence."""
+        assert "data.mask_history" not in self._gaps("")
+
+    def _mlx_warning(self, monkeypatch, **data):
+        """What ``soup train`` prints on MLX, captured the way
+        ``test_issue683_mlx_response_masking.py`` captures it."""
+        import types as _types
+
+        from soup_cli.config.schema import DataConfig, SoupConfig, TrainingConfig
+        from soup_cli.trainer.mlx_sft import MLXSFTTrainerWrapper
+
+        printed = []
+        monkeypatch.setattr(
+            "soup_cli.trainer.mlx_sft.console",
+            _types.SimpleNamespace(print=lambda msg, *a, **k: printed.append(str(msg))),
+        )
+        cfg = SoupConfig(
+            base="mlx-community/Qwen2.5-0.5B-Instruct-4bit",
+            task="sft",
+            backend="mlx",
+            data=DataConfig(train="./x.jsonl", format="chatml", **data),
+            training=TrainingConfig(epochs=1, batch_size=1),
+            output="./out",
+        )
+        MLXSFTTrainerWrapper(cfg)._check_unsupported()
+        return "\n".join(printed)
+
+    def test_the_run_itself_warns_not_only_the_doctor(self, monkeypatch):
+        """The registry entry fixes ``soup doctor``; it does not fix ``soup train``,
+        which would still have trained every turn in silence -- the #683 shape.
+        So the MLX trainer names it in its "MLX backend ignores:" line, which is
+        also what makes the entry's ``trainer_reads=True`` true (the #755 drift
+        guard refuses an entry claiming a read the trainer does not make)."""
+        out = self._mlx_warning(
+            monkeypatch, train_on_responses_only=True, mask_history=True
+        )
+
+        assert "MLX backend ignores" in out and "data.mask_history" in out, out
+
+    def test_the_run_is_quiet_about_it_when_unset(self, monkeypatch):
+        out = self._mlx_warning(monkeypatch, train_on_responses_only=True)
+
+        assert "data.mask_history" not in out, out
+
+    def test_the_transformers_backend_is_not_flagged(self):
+        """The other control: transformers DOES read it, via ``build_format_row``,
+        so flagging it there would be a false alarm."""
+        from soup_cli.config.backend_support import check_config
+        from soup_cli.config.loader import load_config_from_string
+
+        cfg = load_config_from_string(
+            "base: org/m\ntask: sft\nbackend: transformers\n"
+            "data:\n  train: ./x.jsonl\n  format: chatml\n"
+            "  train_on_responses_only: true\n  mask_history: true\n"
+        )
+        assert "data.mask_history" not in {e.field for e in check_config(cfg)}
