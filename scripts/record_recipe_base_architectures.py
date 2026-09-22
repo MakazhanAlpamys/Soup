@@ -70,7 +70,17 @@ def classify(base: str) -> dict:
     except EntryNotFoundError:
         return {"unresolvable": "the repo has no config.json"}
     config = json.loads(Path(path).read_text(encoding="utf-8"))
-    return {"model_type": config.get("model_type"), "routed_experts": routed_experts(config)}
+    entry = {"model_type": config.get("model_type"), "routed_experts": routed_experts(config)}
+    try:
+        from huggingface_hub import HfApi
+
+        info = HfApi(token=False).model_info(base)
+        st = getattr(info, "safetensors", None)
+        if st and getattr(st, "total", None):
+            entry["parameters"] = st.total
+    except Exception:
+        pass
+    return entry
 
 
 def main() -> int:

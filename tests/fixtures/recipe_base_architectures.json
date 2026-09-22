@@ -5,42 +5,52 @@
  },
  "HKUSTAudio/Llasa-1B": {
   "model_type": "llama",
+  "parameters": 1370048512,
   "routed_experts": 0
  },
  "HuggingFaceTB/SmolLM2-1.7B-Instruct": {
   "model_type": "llama",
+  "parameters": 1711376384,
   "routed_experts": 0
  },
  "HuggingFaceTB/SmolLM2-135M-Instruct": {
   "model_type": "llama",
+  "parameters": 134515008,
   "routed_experts": 0
  },
  "HuggingFaceTB/SmolLM2-360M-Instruct": {
   "model_type": "llama",
+  "parameters": 361821120,
   "routed_experts": 0
  },
  "HuggingFaceTB/SmolLM3-3B": {
   "model_type": "smollm3",
+  "parameters": 3075098624,
   "routed_experts": 0
  },
  "HuggingFaceTB/SmolVLM-256M-Instruct": {
   "model_type": "idefics3",
+  "parameters": 256484928,
   "routed_experts": 0
  },
  "LiquidAI/LFM2-1.2B": {
   "model_type": "lfm2",
+  "parameters": 1170340608,
   "routed_experts": 0
  },
  "MiniMaxAI/MiniMax-M2": {
   "model_type": "minimax_m2",
+  "parameters": 228689764864,
   "routed_experts": 256
  },
  "MiniMaxAI/MiniMax-M3": {
   "model_type": "minimax_m3_vl",
+  "parameters": 427040140160,
   "routed_experts": 128
  },
  "OpenGVLab/InternVL2_5-8B": {
   "model_type": "internvl_chat",
+  "parameters": 8075365376,
   "routed_experts": 0
  },
  "OpenGVLab/InternVL3-5": {
@@ -48,18 +58,22 @@
  },
  "OuteAI/OuteTTS-0.3-500M": {
   "model_type": "qwen2",
+  "parameters": 499193728,
   "routed_experts": 0
  },
  "PaddlePaddle/PaddleOCR-VL": {
   "model_type": "paddleocr_vl",
+  "parameters": 958588736,
   "routed_experts": 0
  },
  "Qwen/QVQ-72B-Preview": {
   "model_type": "qwen2_vl",
+  "parameters": 73405560320,
   "routed_experts": 0
  },
  "Qwen/QwQ-32B": {
   "model_type": "qwen2",
+  "parameters": 32763876352,
   "routed_experts": 0
  },
  "Qwen/Qwen-Image": {
@@ -67,130 +81,162 @@
  },
  "Qwen/Qwen2-Audio-7B-Instruct": {
   "model_type": "qwen2_audio",
+  "parameters": 8397094912,
   "routed_experts": 0
  },
  "Qwen/Qwen2-VL-72B-Instruct": {
   "model_type": "qwen2_vl",
+  "parameters": 73405560320,
   "routed_experts": 0
  },
  "Qwen/Qwen2-VL-7B-Instruct": {
   "model_type": "qwen2_vl",
+  "parameters": 8291375616,
   "routed_experts": 0
  },
  "Qwen/Qwen2.5-0.5B-Instruct": {
   "model_type": "qwen2",
+  "parameters": 494032768,
   "routed_experts": 0
  },
  "Qwen/Qwen2.5-1.5B-Instruct": {
   "model_type": "qwen2",
+  "parameters": 1543714304,
   "routed_experts": 0
  },
  "Qwen/Qwen2.5-3B-Instruct": {
   "model_type": "qwen2",
+  "parameters": 3085938688,
   "routed_experts": 0
  },
  "Qwen/Qwen2.5-72B-Instruct": {
   "model_type": "qwen2",
+  "parameters": 72706203648,
   "routed_experts": 0
  },
  "Qwen/Qwen2.5-7B": {
   "model_type": "qwen2",
+  "parameters": 7615616512,
   "routed_experts": 0
  },
  "Qwen/Qwen2.5-7B-Instruct": {
   "model_type": "qwen2",
+  "parameters": 7615616512,
   "routed_experts": 0
  },
  "Qwen/Qwen2.5-Coder-1.5B-Instruct": {
   "model_type": "qwen2",
+  "parameters": 1543714304,
   "routed_experts": 0
  },
  "Qwen/Qwen2.5-Coder-14B-Instruct": {
   "model_type": "qwen2",
+  "parameters": 14770033664,
   "routed_experts": 0
  },
  "Qwen/Qwen2.5-Coder-32B-Instruct": {
   "model_type": "qwen2",
+  "parameters": 32763876352,
   "routed_experts": 0
  },
  "Qwen/Qwen2.5-Coder-7B-Instruct": {
   "model_type": "qwen2",
+  "parameters": 7615616512,
   "routed_experts": 0
  },
  "Qwen/Qwen2.5-Math-1.5B-Instruct": {
   "model_type": "qwen2",
+  "parameters": 1543714304,
   "routed_experts": 0
  },
  "Qwen/Qwen2.5-Math-7B-Instruct": {
   "model_type": "qwen2",
+  "parameters": 7615616512,
   "routed_experts": 0
  },
  "Qwen/Qwen3-14B": {
   "model_type": "qwen3",
+  "parameters": 14768307200,
   "routed_experts": 0
  },
  "Qwen/Qwen3-30B-A3B": {
   "model_type": "qwen3_moe",
+  "parameters": 30532122624,
   "routed_experts": 128
  },
  "Qwen/Qwen3-32B": {
   "model_type": "qwen3",
+  "parameters": 32762123264,
   "routed_experts": 0
  },
  "Qwen/Qwen3-8B": {
   "model_type": "qwen3",
+  "parameters": 8190735360,
   "routed_experts": 0
  },
  "Qwen/Qwen3-Coder-30B-A3B-Instruct": {
   "model_type": "qwen3_moe",
+  "parameters": 30532122624,
   "routed_experts": 128
  },
  "Qwen/Qwen3.5-0.8B": {
   "model_type": "qwen3_5",
+  "parameters": 873438784,
   "routed_experts": 0
  },
  "Qwen/Qwen3.5-122B-A10B": {
   "model_type": "qwen3_5_moe",
+  "parameters": 125086497008,
   "routed_experts": 256
  },
  "Qwen/Qwen3.5-27B": {
   "model_type": "qwen3_5",
+  "parameters": 27781427952,
   "routed_experts": 0
  },
  "Qwen/Qwen3.5-2B": {
   "model_type": "qwen3_5",
+  "parameters": 2274069824,
   "routed_experts": 0
  },
  "Qwen/Qwen3.5-35B-A3B": {
   "model_type": "qwen3_5_moe",
+  "parameters": 35951822704,
   "routed_experts": 256
  },
  "Qwen/Qwen3.5-397B-A17B": {
   "model_type": "qwen3_5_moe",
+  "parameters": 403397928944,
   "routed_experts": 512
  },
  "Qwen/Qwen3.5-4B": {
   "model_type": "qwen3_5",
+  "parameters": 4659865088,
   "routed_experts": 0
  },
  "Qwen/Qwen3.5-4B-Base": {
   "model_type": "qwen3_5",
+  "parameters": 4659865088,
   "routed_experts": 0
  },
  "Qwen/Qwen3.5-9B": {
   "model_type": "qwen3_5",
+  "parameters": 9653104368,
   "routed_experts": 0
  },
  "Qwen/Qwen3.6-27B": {
   "model_type": "qwen3_5",
+  "parameters": 27781427952,
   "routed_experts": 0
  },
  "Qwen/Qwen3.6-35B-A3B": {
   "model_type": "qwen3_5_moe",
+  "parameters": 35951822704,
   "routed_experts": 256
  },
  "Qwen/Qwen3.8-27B": {
   "model_type": "qwen3_5",
+  "parameters": 27781427952,
   "routed_experts": 0
  },
  "SparkAudio/Spark-TTS-0.5B": {
@@ -208,10 +254,12 @@
  },
  "codellama/CodeLlama-13b-Instruct-hf": {
   "model_type": "llama",
+  "parameters": 13016028160,
   "routed_experts": 0
  },
  "codellama/CodeLlama-70b-Instruct-hf": {
   "model_type": "llama",
+  "parameters": 68976910336,
   "routed_experts": 0
  },
  "deepcogito/cogito-v2-preview": {
@@ -219,46 +267,57 @@
  },
  "deepseek-ai/DeepSeek-OCR": {
   "model_type": "deepseek_vl_v2",
+  "parameters": 3336106240,
   "routed_experts": 64
  },
  "deepseek-ai/DeepSeek-R1-Distill-Llama-70B": {
   "model_type": "llama",
+  "parameters": 70553706496,
   "routed_experts": 0
  },
  "deepseek-ai/DeepSeek-R1-Distill-Llama-8B": {
   "model_type": "llama",
+  "parameters": 8030261248,
   "routed_experts": 0
  },
  "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B": {
   "model_type": "qwen2",
+  "parameters": 1777088000,
   "routed_experts": 0
  },
  "deepseek-ai/DeepSeek-R1-Distill-Qwen-14B": {
   "model_type": "qwen2",
+  "parameters": 14770033664,
   "routed_experts": 0
  },
  "deepseek-ai/DeepSeek-R1-Distill-Qwen-32B": {
   "model_type": "qwen2",
+  "parameters": 32763876352,
   "routed_experts": 0
  },
  "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B": {
   "model_type": "qwen2",
+  "parameters": 7615616512,
   "routed_experts": 0
  },
  "deepseek-ai/DeepSeek-V3": {
   "model_type": "deepseek_v3",
+  "parameters": 684531386000,
   "routed_experts": 256
  },
  "deepseek-ai/DeepSeek-V3-0324": {
   "model_type": "deepseek_v3",
+  "parameters": 684531386000,
   "routed_experts": 256
  },
  "deepseek-ai/DeepSeek-V4-Flash": {
   "model_type": "deepseek_v4",
+  "parameters": 290944616402,
   "routed_experts": 256
  },
  "deepseek-ai/DeepSeek-V4-Pro": {
   "model_type": "deepseek_v4",
+  "parameters": 1598839674782,
   "routed_experts": 384
  },
  "epfl-llm/meditron-7b": {
@@ -266,6 +325,7 @@
  },
  "facebook/seamless-m4t-v2-large": {
   "model_type": "seamless_m4t_v2",
+  "parameters": 2309249669,
   "routed_experts": 0
  },
  "google/embeddinggemma-300m": {
@@ -291,10 +351,12 @@
  },
  "ise-uiuc/Magicoder-S-DS-6.7B": {
   "model_type": "llama",
+  "parameters": 6740512768,
   "routed_experts": 0
  },
  "llava-hf/llava-v1.6-mistral-7b-hf": {
   "model_type": "llava_next",
+  "parameters": 7566747648,
   "routed_experts": 0
  },
  "meta-llama/Llama-2-13b-hf": {
@@ -326,10 +388,12 @@
  },
  "microsoft/Phi-3.5-mini-instruct": {
   "model_type": "phi3",
+  "parameters": 3821079552,
   "routed_experts": 0
  },
  "microsoft/phi-4": {
   "model_type": "phi3",
+  "parameters": 14659507200,
   "routed_experts": 0
  },
  "mistralai/Devstral-Small": {
@@ -337,18 +401,22 @@
  },
  "mistralai/Magistral-Small": {
   "model_type": "mistral",
+  "parameters": 23572403200,
   "routed_experts": 0
  },
  "mistralai/Mathstral-7B-v0.1": {
   "model_type": "mistral",
+  "parameters": 7248023552,
   "routed_experts": 0
  },
  "mistralai/Ministral-8B-Instruct-2410": {
   "model_type": "mistral",
+  "parameters": 8019808256,
   "routed_experts": 0
  },
  "mistralai/Mistral-7B-Instruct-v0.3": {
   "model_type": "mistral",
+  "parameters": 7248023552,
   "routed_experts": 0
  },
  "mistralai/Mistral-Large-3-675B-Instruct-2512": {
@@ -359,6 +427,7 @@
  },
  "mistralai/Mistral-Small-24B-Instruct-2501": {
   "model_type": "mistral",
+  "parameters": 23572403200,
   "routed_experts": 0
  },
  "mistralai/Pixtral-12B-2409": {
@@ -369,14 +438,17 @@
  },
  "mlx-community/Llama-3.1-8B-Instruct-4bit": {
   "model_type": "llama",
+  "parameters": 8030261248,
   "routed_experts": 0
  },
  "mlx-community/Qwen3-8B-4bit": {
   "model_type": "qwen3",
+  "parameters": 8190735360,
   "routed_experts": 0
  },
  "mlx-community/gemma-3-4b-it-4bit": {
   "model_type": "gemma3",
+  "parameters": 4971331952,
   "routed_experts": 0
  },
  "moonshotai/Kimi-K2": {
@@ -384,14 +456,17 @@
  },
  "moonshotai/Kimi-K2-Thinking": {
   "model_type": "kimi_k2",
+  "parameters": 1026408240256,
   "routed_experts": 384
  },
  "moonshotai/Kimi-K2.5": {
   "model_type": "kimi_k25",
+  "parameters": 1026879376368,
   "routed_experts": 384
  },
  "moonshotai/Kimi-K2.6": {
   "model_type": "kimi_k25",
+  "parameters": 1026879376368,
   "routed_experts": 384
  },
  "nvidia/Nemotron-4-340B-Instruct": {
@@ -399,22 +474,27 @@
  },
  "openai/gpt-oss-120b": {
   "model_type": "gpt_oss",
+  "parameters": 116829156672,
   "routed_experts": 128
  },
  "openai/gpt-oss-20b": {
   "model_type": "gpt_oss",
+  "parameters": 20914757184,
   "routed_experts": 32
  },
  "openai/whisper-base": {
   "model_type": "whisper",
+  "parameters": 72593920,
   "routed_experts": 0
  },
  "openai/whisper-large-v3": {
   "model_type": "whisper",
+  "parameters": 1543490560,
   "routed_experts": 0
  },
  "openai/whisper-tiny": {
   "model_type": "whisper",
+  "parameters": 37760640,
   "routed_experts": 0
  },
  "openbmb/MiniCPM-V-2_6": {
@@ -422,6 +502,7 @@
  },
  "sentence-transformers/all-mpnet-base-v2": {
   "model_type": "mpnet",
+  "parameters": 109486978,
   "routed_experts": 0
  },
  "sesame/csm-1b": {
@@ -429,10 +510,12 @@
  },
  "zai-org/GLM-5": {
   "model_type": "glm_moe_dsa",
+  "parameters": 753864139008,
   "routed_experts": 256
  },
  "zai-org/GLM-5.1": {
   "model_type": "glm_moe_dsa",
+  "parameters": 753864139008,
   "routed_experts": 256
  }
 }
