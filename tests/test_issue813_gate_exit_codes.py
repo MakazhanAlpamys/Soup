@@ -432,7 +432,7 @@ def test_eval_checklist_missing_evidence_exits_3(
     runner = CliRunner()
     res = runner.invoke(app, ["eval", "checklist", str(spec_file)])
     assert res.exit_code == EXIT_USAGE_ERROR
-    clean_out = strip_ansi(res.output).lower()
+    clean_out = " ".join(strip_ansi(res.output).lower().split())
     assert "--evidence is required" in clean_out
     assert "checklist test name" in clean_out
 
