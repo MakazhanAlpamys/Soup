@@ -75,7 +75,20 @@ def _failed(report):
 
 
 class TestTheCommand:
-    def test_the_control_trains_and_writes_a_valid_report(self, workdir):
+    def test_the_control_trains_and_writes_a_valid_report(self, workdir, monkeypatch):
+        import subprocess
+
+        spawned = []
+        real_popen = subprocess.Popen.__init__
+
+        def watching(self, args, *a, **k):
+            listed = isinstance(args, (list, tuple))
+            spawned.append(" ".join(map(str, args)) if listed else str(args))
+            return real_popen(self, args, *a, **k)
+
+        # Memory is torch's allocator counters, never nvidia-smi: watched on
+        # the real run rather than grepped out of the source.
+        monkeypatch.setattr(subprocess.Popen, "__init__", watching)
         result = runner.invoke(
             app, ["bench", "train", "--config", "soup.yaml", "--steps", "5",
                   "--warmup", "1", "-o", "r.json"],
@@ -94,6 +107,7 @@ class TestTheCommand:
         }
         assert len(report["config_hash"]) == 64
         assert report["resolved_config"]["training"]["logging_steps"] == 1
+        assert not [cmd for cmd in spawned if "nvidia-smi" in cmd], spawned
         assert "output" not in report["resolved_config"]
         # A benchmark never writes into the config's own output directory.
         assert not (workdir / "out").exists()
