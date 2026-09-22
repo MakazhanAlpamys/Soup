@@ -176,14 +176,20 @@ class TestMoeLoraReachesTheAdapter:
         experts = [name for name in adapted if "experts" in name]
         assert experts, f"{task}: no expert module carries an adapter: {adapted}"
 
-    def test_without_the_flag_the_attach_finds_nothing_to_target(
-        self, task, monkeypatch
-    ):
-        """The control, and it is stronger than "trains attention-only": on a
-        fused-expert MoE, ``target_modules: auto`` resolves to nothing and peft
-        refuses, so these tasks could not attach LoRA at all on such a base."""
-        with pytest.raises(ValueError, match="target_modules"):
-            _attach(task, monkeypatch, moe_lora=False)
+    def test_without_the_flag_no_expert_is_adapted(self, task, monkeypatch):
+        """The control: the experts above are the flag's doing. Without it, on
+        ``main`` ``target_modules: auto`` resolves to nothing for ``qwen3_moe``
+        and the attach is refused; once #1102 maps ``qwen3_moe`` it adapts the
+        attention projections only. Either way no expert carries an adapter,
+        so this holds whichever of #1099 and #1102 merges first -- asserting
+        the refusal alone passed on ``main`` and failed on top of #1102."""
+        try:
+            adapted = _adapted(_attach(task, monkeypatch, moe_lora=False))
+        except ValueError as exc:
+            assert "target_modules" in str(exc), exc
+            adapted = []
+
+        assert not [name for name in adapted if "experts" in name], adapted
 
     def test_a_dense_base_is_untouched_by_the_flag(self, task, monkeypatch):
         """The other control: the wiring must not change a dense model's targets,
