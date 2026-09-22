@@ -99,19 +99,27 @@ output: ./output
 
 This first slice fails closed unless the loaded model has the measured 24-block
 Llama topology with exactly those 168 linears, compatible power-of-two input
-widths, and FP32 master weights. It also requires one visible Ampere-or-newer
-CUDA GPU. DDP, DataParallel, DeepSpeed, FSDP, layer streaming, LoRA, other
-backends/tasks/modalities, and pre-quantized loading are not accepted. On a
-multi-GPU host, expose one card to the process, for example:
+widths, and FP32 master weights. **That gate is topological only:** model
+identity is not checked, so any matching 24-block / 168-linear Llama receives
+the route even though the retained quality measurement used only
+`ahxt/LiteLlama-460M-1T`. It also requires one visible Ampere-or-newer CUDA GPU.
+DDP, DataParallel, DeepSpeed, FSDP, layer streaming, LoRA, activation offloading,
+NVFP4, other backends/tasks/modalities, and pre-quantized loading are not
+accepted. On a multi-GPU host, expose one card to the process, for example:
 
 ```bash
 CUDA_VISIBLE_DEVICES=0 soup train --config soup.yaml
 ```
 
+`use_cut_ce: true` remains supported: Cut Cross-Entropy is patched before model
+loading and does not depend on the v0.28 post-load path that QuEST bypasses.
+
 The final artifact and each periodic checkpoint contain
 `quest_mixed_precision.json`. The closed, versioned sidecar records every A4
 and A16 route, clipping scale, calibration-row digest, transform, grid,
-surrogate, and the evidence binding. Resume is refused if that metadata differs.
+surrogate, and route provenance. The provenance explains why this topology was
+selected; it makes no training-quality claim about the artifact beside it.
+Resume is refused if the executable route metadata differs.
 Because generic Transformers cannot infer fake-quant execution from the master
 weights, load the executable route explicitly:
 

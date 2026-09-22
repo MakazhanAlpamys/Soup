@@ -1260,7 +1260,7 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             "[green]QuEST mixed route enabled:[/] 168 W4 weights; 161 A4 + "
             f"7 A16 activations; group=128 on {gpu_name} "
             f"(SM {capability[0]}.{capability[1]})\n"
-            "[yellow]Experimental:[/] quality evidence is evaluation-only; "
+            "[yellow]Experimental:[/] route provenance is evaluation-only; "
             "this is not pure W4A4 or packed INT4"
         )
 

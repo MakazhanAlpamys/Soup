@@ -4,9 +4,11 @@ This is the exact *shape* of the route independently confirmed in the retained
 research record: all 168 transformer linear weights use group-128 fake W4,
 161 activations use group-128 fake A4, and the seven linears in block 23 keep
 their rotated activations at A16.  It is not pure W4A4, packed INT4, or an
-upstream-QuEST parity claim.  The quality evidence is evaluation-only; training
-through this route is an engineering integration whose quality is not yet
-validated.
+upstream-QuEST parity claim.  The retained measurement is evaluation-only;
+training through this route is an engineering integration whose quality is not
+yet validated.  Its retained result selects a topology only; it makes no
+quality claim about artifacts trained from another checkpoint with the same
+shape.
 
 Torch and Transformers stay lazily imported so ordinary CLI startup remains
 lightweight.
@@ -46,14 +48,24 @@ EXPECTED_MODULES = tuple(
     f"model.layers.{block}.{suffix}" for block in BLOCKS for suffix in SUFFIXES
 )
 A16_MODULES = tuple(f"model.layers.23.{suffix}" for suffix in SUFFIXES)
-QUALITY_EVIDENCE = {
-    "scope": "evaluation_only",
-    "model": "ahxt/LiteLlama-460M-1T",
-    "examples": 704,
-    "targets": 25017,
-    "gap_nat": 0.0863441881,
-    "ci95": [0.0802412531, 0.0931898109],
-    "result_sha256": "94fee10542da29281f7753cbf221a3421ad5acf67f2b290e52d65acece359cdf",
+ROUTE_PROVENANCE = {
+    "schema_version": 1,
+    "scope": "topology_selection_only",
+    "measured_on": {
+        "mode": "evaluation_only",
+        "model": "ahxt/LiteLlama-460M-1T",
+        "examples": 704,
+        "targets": 25017,
+        "gap_nat": 0.0863441881,
+        "ci95": [0.0802412531, 0.0931898109],
+        "result_sha256": (
+            "94fee10542da29281f7753cbf221a3421ad5acf67f2b290e52d65acece359cdf"
+        ),
+    },
+    "claims": {
+        "artifact_training_quality": False,
+        "cross_model_quality": False,
+    },
 }
 
 _METADATA_KEYS = frozenset(
@@ -78,7 +90,7 @@ _METADATA_KEYS = frozenset(
         "pure_w4a4",
         "packed_int4",
         "training_quality_validated",
-        "quality_evidence",
+        "route_provenance",
     }
 )
 
@@ -378,6 +390,9 @@ def _make_linear(original: Any, *, activation_scale: float, activation_bits: int
     activation_scale = validate_scale(activation_scale)
 
     class QuestMixedLinear(nn.Module):
+        # This deliberately wraps rather than subclasses nn.Linear.  Code that
+        # widens the route after installation must use the serialized module
+        # names/markers, not ``isinstance(module, nn.Linear)``.
         def __init__(self) -> None:
             super().__init__()
             self.weight = original.weight
@@ -464,7 +479,7 @@ def build_metadata(
         "pure_w4a4": False,
         "packed_int4": False,
         "training_quality_validated": False,
-        "quality_evidence": copy.deepcopy(QUALITY_EVIDENCE),
+        "route_provenance": copy.deepcopy(ROUTE_PROVENANCE),
     }
     validate_metadata(metadata)
     return metadata
@@ -582,9 +597,72 @@ def validate_metadata(metadata: Any) -> dict[str, Any]:
         raise ValueError("QuEST packed_int4 must be false for fake quantization")
     if metadata["training_quality_validated"] is not False:
         raise ValueError("QuEST training_quality_validated must remain false")
-    if metadata["quality_evidence"] != QUALITY_EVIDENCE:
-        raise ValueError("QuEST quality evidence binding differs")
+    _validate_route_provenance(metadata["route_provenance"])
     return metadata
+
+
+def _validate_route_provenance(provenance: Any) -> None:
+    """Validate provenance by schema, not by one mutable record snapshot.
+
+    A correction to the public measurement may update ``ROUTE_PROVENANCE`` for
+    newly written artifacts without making already-written sidecars unreadable.
+    Future schemas must add a version branch instead of changing version 1.
+    """
+    if not isinstance(provenance, dict) or set(provenance) != {
+        "schema_version",
+        "scope",
+        "measured_on",
+        "claims",
+    }:
+        raise ValueError("Invalid QuEST route provenance fields")
+    if type(provenance["schema_version"]) is not int or provenance["schema_version"] != 1:
+        raise ValueError("Unsupported QuEST route provenance schema_version")
+    if provenance["scope"] != "topology_selection_only":
+        raise ValueError("QuEST route provenance must be topology-selection-only")
+    if provenance["claims"] != {
+        "artifact_training_quality": False,
+        "cross_model_quality": False,
+    }:
+        raise ValueError("QuEST route provenance must not claim artifact quality")
+
+    measured = provenance["measured_on"]
+    if not isinstance(measured, dict) or set(measured) != {
+        "mode",
+        "model",
+        "examples",
+        "targets",
+        "gap_nat",
+        "ci95",
+        "result_sha256",
+    }:
+        raise ValueError("Invalid QuEST measured-on provenance fields")
+    if measured["mode"] != "evaluation_only":
+        raise ValueError("QuEST route provenance must remain evaluation-only")
+    if not isinstance(measured["model"], str) or not measured["model"]:
+        raise ValueError("Invalid QuEST provenance model")
+    if type(measured["examples"]) is not int or measured["examples"] < 1:
+        raise ValueError("Invalid QuEST provenance example count")
+    if type(measured["targets"]) is not int or measured["targets"] < 1:
+        raise ValueError("Invalid QuEST provenance target count")
+    gap = measured["gap_nat"]
+    interval = measured["ci95"]
+    if type(gap) not in (int, float) or not math.isfinite(gap) or gap < 0:
+        raise ValueError("Invalid QuEST provenance gap")
+    if (
+        not isinstance(interval, list)
+        or len(interval) != 2
+        or any(type(value) not in (int, float) or not math.isfinite(value) for value in interval)
+        or interval[0] > gap
+        or gap > interval[1]
+    ):
+        raise ValueError("Invalid QuEST provenance confidence interval")
+    result_sha256 = measured["result_sha256"]
+    if (
+        not isinstance(result_sha256, str)
+        or len(result_sha256) != 64
+        or any(character not in "0123456789abcdef" for character in result_sha256)
+    ):
+        raise ValueError("Invalid QuEST provenance result binding")
 
 
 def write_metadata(
@@ -625,11 +703,16 @@ def load_metadata(directory: str | os.PathLike[str]) -> dict[str, Any]:
     return validate_metadata(metadata)
 
 
+def _route_contract(metadata: dict[str, Any]) -> dict[str, Any]:
+    """Return fields that determine execution, excluding historical context."""
+    validate_metadata(metadata)
+    return {key: value for key, value in metadata.items() if key != "route_provenance"}
+
+
 def validate_resume_metadata(checkpoint: str | os.PathLike[str], current: dict[str, Any]) -> None:
     """Refuse resume when calibration or routing differs from the checkpoint."""
-    validate_metadata(current)
     stored = load_metadata(checkpoint)
-    if stored != current:
+    if _route_contract(stored) != _route_contract(current):
         raise ValueError("QuEST resume metadata does not match this run's calibration and route")
 
 
@@ -642,7 +725,7 @@ def restore_mixed_quest(model: Any, metadata: dict[str, Any]) -> Any:
         base_model=metadata["base_model"],
         calibration_sha256=metadata["calibration"]["rows_sha256"],
     )
-    if rebuilt != metadata:
+    if _route_contract(rebuilt) != _route_contract(metadata):
         raise ValueError("Reconstructed QuEST route differs from artifact metadata")
     return model
 

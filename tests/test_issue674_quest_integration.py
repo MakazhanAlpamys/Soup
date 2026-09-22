@@ -131,6 +131,9 @@ def test_schema_accepts_only_the_explicit_first_slice():
         ({}, {"lora": {"r": 8}}, "lora.r=0"),
         ({}, {"batch_size": "auto"}, "explicit training.batch_size"),
         ({}, {"stream_layers": True}, "stream_layers=false"),
+        ({}, {"nvfp4": True}, "nvfp4=false"),
+        ({}, {"activation_offloading": "cpu"}, "activation_offloading"),
+        ({}, {"activation_offloading": "disk"}, "activation_offloading"),
     ],
 )
 def test_schema_rejects_unwired_quest_combinations(root, training, match):
@@ -168,10 +171,74 @@ def test_schema_rejects_partial_training_routes(training):
         _config(**training)
 
 
+def test_schema_keeps_preload_cut_ce_available_for_quest():
+    cfg = _config(use_cut_ce=True)
+    assert cfg.training.use_cut_ce is True
+
+
 def test_non_quest_defaults_are_unchanged():
     cfg = SoupConfig(base="org/model", data={"train": "data.jsonl"})
     assert cfg.training.quantization_aware is False
     assert cfg.training.quantization == "4bit"
+
+
+def test_cli_dry_run_reports_quest_without_qat_or_torchao(tmp_path, monkeypatch):
+    import builtins
+
+    from typer.testing import CliRunner
+
+    import soup_cli.commands.train as train_mod
+    import soup_cli.utils.qat as qat
+    from soup_cli.cli import app
+
+    data_path = tmp_path / "train.jsonl"
+    data_path.write_text('{"text": "hello"}\n', encoding="utf-8")
+    config_path = tmp_path / "soup.yaml"
+    config_path.write_text(
+        "base: ahxt/LiteLlama-460M-1T\n"
+        "task: sft\n"
+        "backend: transformers\n"
+        "modality: text\n"
+        f"output: {tmp_path / 'out'}\n"
+        "data:\n"
+        f"  train: {data_path}\n"
+        "training:\n"
+        "  quantization_aware: quest\n"
+        "  quantization: none\n"
+        "  batch_size: 2\n"
+        "  lora:\n"
+        "    r: 0\n",
+        encoding="utf-8",
+    )
+    qat_calls = []
+    monkeypatch.setattr(train_mod, "detect_device", lambda backend=None: ("cpu", "CPU"))
+    monkeypatch.setattr(
+        train_mod, "get_gpu_info", lambda backend=None: {"memory_total": "N/A"}
+    )
+    monkeypatch.setattr(
+        train_mod,
+        "load_dataset",
+        lambda *args, **kwargs: {"train": [{"text": "hello"}]},
+    )
+    monkeypatch.setattr(
+        qat,
+        "validate_qat_config",
+        lambda *args, **kwargs: qat_calls.append((args, kwargs)) or ["must not run"],
+    )
+    real_import = builtins.__import__
+
+    def reject_torchao(name, *args, **kwargs):
+        if name == "torchao" or name.startswith("torchao."):
+            raise AssertionError("QuEST dry-run must not require torchao")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", reject_torchao)
+    result = CliRunner().invoke(
+        app, ["train", "--config", str(config_path), "--dry-run", "--yes"]
+    )
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    assert "mixed W4/A4+A16 (QuEST fake quant)" in result.output
+    assert qat_calls == []
 
 
 def test_install_accounts_for_every_weight_and_activation_route():
@@ -205,31 +272,94 @@ def test_install_accounts_for_every_weight_and_activation_route():
     ]
 
 
-def test_quality_evidence_is_bound_to_the_public_record():
-    from soup_cli.utils.quest import QUALITY_EVIDENCE
+def test_route_provenance_is_topology_only_and_bound_to_the_public_record():
+    from soup_cli.utils.quest import ROUTE_PROVENANCE
 
-    assert QUALITY_EVIDENCE == {
-        "scope": "evaluation_only",
-        "model": "ahxt/LiteLlama-460M-1T",
-        "examples": 704,
-        "targets": 25017,
-        "gap_nat": 0.0863441881,
-        "ci95": [0.0802412531, 0.0931898109],
-        "result_sha256": (
-            "94fee10542da29281f7753cbf221a3421ad5acf67f2b290e52d65acece359cdf"
-        ),
+    assert ROUTE_PROVENANCE == {
+        "schema_version": 1,
+        "scope": "topology_selection_only",
+        "measured_on": {
+            "mode": "evaluation_only",
+            "model": "ahxt/LiteLlama-460M-1T",
+            "examples": 704,
+            "targets": 25017,
+            "gap_nat": 0.0863441881,
+            "ci95": [0.0802412531, 0.0931898109],
+            "result_sha256": (
+                "94fee10542da29281f7753cbf221a3421ad5acf67f2b290e52d65acece359cdf"
+            ),
+        },
+        "claims": {
+            "artifact_training_quality": False,
+            "cross_model_quality": False,
+        },
     }
+    measured = ROUTE_PROVENANCE["measured_on"]
     record = (
         Path(__file__).parents[1] / "benchmarks" / "gate-674-quest-mixed-route.md"
     ).read_text(encoding="utf-8")
     for binding in (
-        QUALITY_EVIDENCE["result_sha256"],
+        measured["result_sha256"],
         "0.086344",
         "[0.080241, 0.093190]",
         "704 examples",
         "25,017 targets",
     ):
         assert str(binding) in record
+
+
+def test_metadata_accepts_a_schema_valid_provenance_correction():
+    from soup_cli.utils.quest import install_mixed_quest, validate_metadata
+
+    model = _tiny_litellama()
+    metadata = install_mixed_quest(
+        model,
+        activation_scales=_scales(model),
+        base_model="other/model-with-the-same-topology",
+        calibration_sha256=_TEST_CALIBRATION_SHA256,
+    )
+    measured = metadata["route_provenance"]["measured_on"]
+    measured.update(
+        model="corrected/model-id",
+        examples=705,
+        targets=25018,
+        gap_nat=0.08,
+        ci95=[0.07, 0.09],
+        result_sha256="cd" * 32,
+    )
+    assert validate_metadata(metadata) is metadata
+
+
+def test_provenance_correction_does_not_invalidate_resume_or_restore(tmp_path):
+    from soup_cli.utils.quest import (
+        install_mixed_quest,
+        restore_mixed_quest,
+        validate_resume_metadata,
+        write_metadata,
+    )
+
+    source = _tiny_litellama()
+    current = install_mixed_quest(
+        source,
+        activation_scales=_scales(source),
+        base_model="same/model",
+        calibration_sha256=_TEST_CALIBRATION_SHA256,
+    )
+    historical = json.loads(json.dumps(current))
+    historical["route_provenance"]["measured_on"].update(
+        model="corrected/model-id",
+        examples=705,
+        targets=25018,
+        gap_nat=0.08,
+        ci95=[0.07, 0.09],
+        result_sha256="cd" * 32,
+    )
+    write_metadata(tmp_path, historical)
+    validate_resume_metadata(tmp_path, current)
+
+    restored = _tiny_litellama()
+    assert restore_mixed_quest(restored, historical) is restored
+    assert int(restored.model.layers[0].self_attn.q_proj.quest_activation_bits) == 4
 
 
 def test_quantizer_matches_the_retained_grid_and_trust_gradient():
@@ -431,7 +561,16 @@ def test_resume_rejects_missing_or_different_route(tmp_path: Path):
             lambda value: value["calibration"].update(rows_sha256="not-a-digest"),
             "row binding",
         ),
-        (lambda value: value["quality_evidence"]["ci95"].pop(), "quality evidence"),
+        (
+            lambda value: value["route_provenance"]["measured_on"]["ci95"].pop(),
+            "confidence interval",
+        ),
+        (
+            lambda value: value["route_provenance"]["claims"].update(
+                artifact_training_quality=True
+            ),
+            "must not claim artifact quality",
+        ),
     ],
 )
 def test_metadata_validation_rejects_unknown_or_malformed_routes(tmp_path, mutation, match):
@@ -798,6 +937,23 @@ def test_transformers_setup_checks_hardware_before_loading(monkeypatch):
             SimpleNamespace(base="unused"),
             SimpleNamespace(quantization_aware="quest"),
         )
+
+
+def test_quest_never_enters_normal_qat_or_v028_paths(monkeypatch):
+    import soup_cli.utils.qat as qat
+    import soup_cli.utils.v028_features as v028_features
+    from soup_cli.trainer.sft import SFTTrainerWrapper
+
+    def unexpected(*args, **kwargs):
+        raise AssertionError("QuEST must bypass the normal QAT and v0.28 paths")
+
+    monkeypatch.setattr(qat, "prepare_model_for_qat", unexpected)
+    monkeypatch.setattr(v028_features, "apply_v028_speed_memory", unexpected)
+    wrapper = object.__new__(SFTTrainerWrapper)
+    original_model = object()
+    wrapper.model = original_model
+    wrapper._apply_quantization_aware(SimpleNamespace(quantization_aware="quest"))
+    assert wrapper.model is original_model
 
 
 def test_train_validates_resume_and_rewrites_final_metadata(monkeypatch, tmp_path):

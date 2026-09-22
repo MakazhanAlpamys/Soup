@@ -4607,6 +4607,15 @@ class SoupConfig(BaseModel):
             raise ValueError(
                 "quantization_aware='quest' requires training.stream_layers=false"
             )
+        if tcfg.nvfp4:
+            raise ValueError(
+                "quantization_aware='quest' requires training.nvfp4=false"
+            )
+        if tcfg.activation_offloading is not None:
+            raise ValueError(
+                "quantization_aware='quest' requires "
+                "training.activation_offloading to be unset"
+            )
 
         partial_routes = []
         if tcfg.freeze_layers is not None:
