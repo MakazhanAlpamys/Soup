@@ -787,6 +787,56 @@ class TestGenerateBatch:
         }
 
 
+    def test_default_batch_size_uses_legacy_generate_path(self, tmp_path, monkeypatch):
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        prompts_path = tmp_path / "prompts.jsonl"
+        prompts_path.write_text(json.dumps({"prompt": "hello"}) + "\n")
+        output_path = tmp_path / "output.jsonl"
+        monkeypatch.chdir(tmp_path)
+
+        monkeypatch.setattr(
+            "soup_cli.commands.infer._load_model",
+            lambda *args, **kwargs: (object(), object()),
+        )
+
+        calls = []
+
+        def fake_generate(model, tokenizer, messages, *, max_tokens, temperature):
+            calls.append(messages)
+            return "legacy-response", 3
+
+        def fail_generate_batch(*args, **kwargs):
+            raise AssertionError("_generate_batch must not be used for default batch_size=1")
+
+        monkeypatch.setattr("soup_cli.commands.infer._generate", fake_generate)
+        monkeypatch.setattr(
+            "soup_cli.commands.infer._generate_batch",
+            fail_generate_batch,
+        )
+
+        result = CliRunner().invoke(
+            app,
+            [
+                "infer",
+                "--model", "fake/model",
+                "--input", str(prompts_path),
+                "--output", str(output_path),
+                "--device", "cpu",
+            ],
+        )
+
+        assert result.exit_code == 0, result.output
+        assert len(calls) == 1
+        assert json.loads(output_path.read_text()) == {
+            "prompt": "hello",
+            "response": "legacy-response",
+            "tokens_generated": 3,
+        }
+
+
     def test_cli_batches_partial_chunk_in_input_order(self, tmp_path, monkeypatch):
         from typer.testing import CliRunner
 
