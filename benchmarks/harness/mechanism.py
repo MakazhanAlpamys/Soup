@@ -88,7 +88,7 @@ PROJECTIONS = (
     ("o", HIDDEN, HIDDEN),
     ("gate", INTERMEDIATE, HIDDEN),
     ("up", INTERMEDIATE, HIDDEN),
-    ("down", HIDDEN, INTERMEDIATE),
+    ("down", HIDDEN, HIDDEN),
 )
 
 
@@ -98,6 +98,14 @@ class QuantBundle:
 
     packed: torch.Tensor
     state: QuantState
+
+
+@dataclass
+class ArmState:
+    """Persistent model parameters and pooled buffers for one arm."""
+
+    parameters: list[dict[str, torch.Tensor]]
+    pools: dict[str, "BundlePool"]
 
 
 class BundlePool:
@@ -336,16 +344,11 @@ def acquire_bundle(
     raise ValueError(f"unsupported arm: {arm!r}")
 
 
-def run_once(
+def make_arm_state(
     sources: list[dict[str, QuantBundle]],
     initial_parameters: list[dict[str, torch.Tensor]],
-    arm: str,
-    *,
-    bypass_pool: bool,
-) -> dict[str, torch.Tensor]:
-    """Run one arm and return all four LoRA gradients per layer."""
-
-    torch.manual_seed(SEED_INPUT)
+) -> ArmState:
+    """Create one persistent parameter/pool state for a correctness arm."""
 
     parameters = [
         {
@@ -362,6 +365,27 @@ def run_once(
         )
         for name, _, _ in PROJECTIONS
     }
+
+    return ArmState(parameters=parameters, pools=pools)
+
+
+def run_once(
+    sources: list[dict[str, QuantBundle]],
+    state: ArmState,
+    arm: str,
+    *,
+    bypass_pool: bool,
+) -> dict[str, torch.Tensor]:
+    """Run one backward pass using persistent arm state."""
+
+    torch.manual_seed(SEED_INPUT)
+
+    parameters = state.parameters
+    pools = state.pools
+
+    for layer in parameters:
+        for parameter in layer.values():
+            parameter.grad = None
 
     generator = torch.Generator(device=DEVICE).manual_seed(SEED_INPUT)
 
@@ -405,7 +429,7 @@ def run_once(
             o = project(hidden, bundles["o"])
             gate = project(hidden, bundles["gate"])
             up = project(hidden, bundles["up"])
-            down = project(gate, bundles["down"])
+            down = project(hidden, bundles["down"])
 
             q_lora = functional.linear(
                 functional.linear(hidden, q_a),
@@ -465,6 +489,19 @@ def run_once(
     return gradients
 
 
+def _assert_finite_gradients(
+    gradients: dict[str, torch.Tensor],
+    label: str,
+) -> None:
+    """Reject NaN/Inf gradients before exactness checks."""
+
+    for name, gradient in gradients.items():
+        if not torch.isfinite(gradient).all():
+            raise RuntimeError(
+                f"{label} contains non-finite gradient values: {name}"
+            )
+
+
 def max_gradient_diff(
     left: dict[str, torch.Tensor],
     right: dict[str, torch.Tensor],
@@ -473,6 +510,9 @@ def max_gradient_diff(
 
     if set(left) != set(right):
         raise RuntimeError("gradient key sets differ")
+
+    _assert_finite_gradients(left, "left gradients")
+    _assert_finite_gradients(right, "right gradients")
 
     return max(
         (left[name] - right[name]).abs().max().item()
@@ -561,6 +601,10 @@ def main() -> int:
         "clone_quantstate",
         "clone_packed",
     )
+    arm_states = {
+        name: make_arm_state(sources, initial_parameters)
+        for name in all_arms
+    }
 
     exact_results = {name: [] for name in all_arms}
     diff_results = {name: [] for name in all_arms}
@@ -573,16 +617,20 @@ def main() -> int:
         print("running       clone")
         clone = run_once(
             sources,
-            initial_parameters,
+            arm_states["clone"],
             "clone",
             bypass_pool=False,
         )
 
+        clone_reference = {
+            name: gradient.clone()
+            for name, gradient in clone.items()
+        }
         clone_exact, clone_total = exact_gradient_count(
-            clone,
+            clone_reference,
             clone,
         )
-        clone_diff = max_gradient_diff(clone, clone)
+        clone_diff = max_gradient_diff(clone_reference, clone)
         exact_results["clone"].append(
             f"{clone_exact}/{clone_total}"
         )
@@ -592,7 +640,7 @@ def main() -> int:
             print(f"running       {arm}")
             candidate = run_once(
                 sources,
-                initial_parameters,
+                arm_states[arm],
                 arm,
                 bypass_pool=args.bypass_pool if arm == "control" else False,
             )
