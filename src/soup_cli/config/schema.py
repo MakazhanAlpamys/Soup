@@ -4692,6 +4692,25 @@ class SoupConfig(BaseModel):
         )
 
     @model_validator(mode="after")
+    def _validate_moe_lora_task(self) -> "SoupConfig":
+        """#1151 — ``moe_lora`` selects expert-FFN LoRA targets, so it is refused
+        where no trainer can act on it: ``asr`` only ever loads Whisper, which has
+        no experts, and ``moe_lora_routing`` builds no LoRA adapter at all."""
+        if not self.training.moe_lora:
+            return self
+        why = {
+            "asr": "that trainer loads Whisper, which has no expert layers",
+            "moe_lora_routing": "that trainer routes between existing adapters "
+            "and builds no LoRA adapter of its own",
+        }.get(self.task)
+        if why is None:
+            return self
+        raise ValueError(
+            f"training.moe_lora is not applied by task={self.task!r}: {why}. "
+            "Remove moe_lora (or set it to false)."
+        )
+
+    @model_validator(mode="after")
     def _validate_peft_variant_backend_and_quantization(self) -> "SoupConfig":
         """Keep advertised PEFT variants on paths that actually implement them."""
         lcfg = self.training.lora

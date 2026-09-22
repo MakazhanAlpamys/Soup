@@ -17,7 +17,9 @@ it came from.
 
 #1151 adds the last three trainers that build through ``build_lora_config`` and
 still accepted the flag unread: ``classifier`` (also ``reranker`` and
-``cross_encoder``), ``distill`` and ``unlearn``.
+``cross_encoder``), ``distill`` and ``unlearn``. The two tasks with no expert
+to adapt, ``asr`` (Whisper) and ``moe_lora_routing`` (no adapter built), are
+refused at config load instead. ``prm`` is left as it was, pending a ruling.
 """
 
 from __future__ import annotations
@@ -78,6 +80,9 @@ _TASKS = {
     ),
 }
 
+#: #1151: tasks where the flag is refused at config load (no expert to adapt).
+_REFUSED = ("asr", "moe_lora_routing")
+
 #: task -> the extra fields its config needs to load (schema-required ones,
 #: plus classifier's opt-in LoRA gate).
 _EXTRA = {
@@ -88,6 +93,7 @@ _EXTRA = {
         "training": {"unlearn_method": "npo"},
         "data": {"forget_set": "./forget.jsonl"},
     },
+    "moe_lora_routing": {"training": {"mole_task_adapters": ["./a", "./b"]}},
 }
 
 _SMALL = dict(
@@ -155,7 +161,7 @@ def _config(task: str, *, moe_lora: bool, dropout: float = 0.0):
     raw = {
         "base": "org/tiny-moe",
         "task": task,
-        "data": {"train": "./x.jsonl", "format": _TASKS[task][3]},
+        "data": {"train": "./x.jsonl", "format": _TASKS[task][3] if task in _TASKS else "auto"},
         "training": {"moe_lora": moe_lora, "lora": {"r": 4, "dropout": dropout}},
     }
     for section, fields in _EXTRA.get(task, {}).items():
@@ -273,12 +279,30 @@ class TestTheFlagIsAcceptedOnEveryWiredTask:
         assert cfg.task == task
 
 
+class TestTheFlagIsRefusedWhereNothingCouldReadIt:
+    """#1151: ``asr`` trains Whisper (no experts) and ``moe_lora_routing`` builds
+    no adapter, so the flag is refused at load with a message naming the task."""
+
+    @pytest.mark.parametrize("task", _REFUSED)
+    def test_moe_lora_true_is_refused(self, task):
+        with pytest.raises(ValueError, match=f"moe_lora.*task={task!r}"):
+            _config(task, moe_lora=True)
+
+    @pytest.mark.parametrize("task", _REFUSED)
+    def test_without_the_flag_the_task_still_loads(self, task):
+        """The control: the refusal is the flag's doing, not the task's."""
+        cfg = _config(task, moe_lora=False)
+
+        assert cfg.task == task
+        assert cfg.training.moe_lora is False
+
+
 class TestNoShippedConfigNeededStaging:
     """The precondition the issue names: if a shipped config had set the flag on
     one of these tasks, the standing rule would be warn-and-ignore this release
-    rather than a straight wiring change. None does -- and four of the five tasks
-    do appear in the catalogue, so this is not passing because the tasks are
-    absent."""
+    rather than a straight wiring change (or refusal). None does -- and the
+    tasks do appear in the catalogue, so this is not passing because the tasks
+    are absent."""
 
     def test_no_recipe_template_or_example_sets_moe_lora_on_these_tasks(self):
         import pathlib
@@ -288,11 +312,12 @@ class TestNoShippedConfigNeededStaging:
         from soup_cli.recipes.catalog import RECIPES
 
         root = pathlib.Path(__file__).resolve().parents[1]
+        swept = set(_TASKS) | set(_REFUSED)
         offenders, tasks_seen = [], set()
         for name, recipe in RECIPES.items():
             loaded = yaml.safe_load(recipe.yaml_str)
             task = loaded.get("task")
-            if task in _TASKS:
+            if task in swept:
                 tasks_seen.add(task)
                 if (loaded.get("training") or {}).get("moe_lora"):
                     offenders.append(f"recipe {name} ({task})")
@@ -307,11 +332,11 @@ class TestNoShippedConfigNeededStaging:
                 training = loaded.get("training") or {}
                 if not isinstance(training, dict):
                     continue
-                if loaded.get("task") in _TASKS and training.get("moe_lora"):
+                if loaded.get("task") in swept and training.get("moe_lora"):
                     offenders.append(f"{path.relative_to(root).as_posix()}")
 
         assert offenders == [], (
-            "a shipped config sets moe_lora on a task this PR wires; the standing "
-            "rule is warn-and-ignore for a release first: " + "; ".join(offenders)
+            "a shipped config sets moe_lora on a task this PR wires or refuses; the "
+            "standing rule is warn-and-ignore for a release first: " + "; ".join(offenders)
         )
         assert tasks_seen, "no shipped recipe uses any of these tasks -- sweep broke"
