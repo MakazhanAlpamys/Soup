@@ -59,6 +59,25 @@ def _cfg(
     )
 
 
+def _real_cfg(r=8, dropout=0.0, targets="auto", moe_lora=False):
+    """A config loaded through the real schema, for every test that reaches the
+    attach. The check now builds the adapter with the trainer's own
+    ``build_lora_config``, which reads the whole LoRA block (``use_dora``,
+    ``rank_pattern``, the #1037 variants ...), so a hand-built stand-in would be
+    testing a config no user can write."""
+    import json
+
+    from soup_cli.config.loader import load_config_from_string
+
+    return load_config_from_string(
+        "base: org/m\ntask: sft\n"
+        "data:\n  train: ./x.jsonl\n  format: alpaca\n"
+        f"training:\n  moe_lora: {'true' if moe_lora else 'false'}\n"
+        f"  lora:\n    r: {r}\n    alpha: 16\n    dropout: {dropout}\n"
+        f"    target_modules: {json.dumps(targets)}\n"
+    )
+
+
 class TestLoadFailuresAreNotAttachFailures:
     """Rule 1. Each of these is a config this machine could not answer for."""
 
@@ -206,7 +225,9 @@ class TestTheLoaderMatchesTheTrainer:
     def test_text_sft_uses_a_causal_lm(self):
         from soup_cli.utils.attach_preflight import loader_for
 
-        assert loader_for(_cfg())[0] == "AutoModelForCausalLM"
+        # Exact, not [0]: a fallback at [1] is the bug this pins (see
+        # test_a_text_config_the_causal_lm_class_refuses_is_not_attached).
+        assert loader_for(_cfg()) == ("AutoModelForCausalLM",)
 
     def test_a_task_with_its_own_head_wins_over_modality(self):
         """An embedding run is ``AutoModel`` whatever the modality says --
@@ -214,8 +235,8 @@ class TestTheLoaderMatchesTheTrainer:
         from soup_cli.utils.attach_preflight import loader_for
 
         assert loader_for(_cfg(task="embedding")) == ("AutoModel",)
-        assert loader_for(_cfg(task="reward_model"))[0] == (
-            "AutoModelForSequenceClassification"
+        assert loader_for(_cfg(task="reward_model")) == (
+            "AutoModelForSequenceClassification",
         )
 
 
@@ -371,7 +392,7 @@ class TestTheRealAttach:
             num_hidden_layers=2, num_attention_heads=2, num_key_value_heads=1,
         )
         check = check_attach(
-            "llama", _cfg(), load_hf_config=self._local(config), build_model=self._meta
+            "llama", _real_cfg(), load_hf_config=self._local(config), build_model=self._meta
         )
 
         assert check.verdict is Verdict.ATTACHES, check.detail
@@ -391,7 +412,7 @@ class TestTheRealAttach:
             num_hidden_layers=2, num_attention_heads=2, num_key_value_heads=2,
         )
         check = check_attach(
-            "phi", _cfg(), load_hf_config=self._local(config), build_model=self._meta
+            "phi", _real_cfg(), load_hf_config=self._local(config), build_model=self._meta
         )
 
         assert check.verdict is Verdict.CANNOT_ATTACH, check
@@ -417,18 +438,19 @@ class TestTheRealAttach:
         )
         seen = {}
 
-        def _record(model, kwargs):
-            seen.update(kwargs)
+        def _record(model, peft_config):
+            seen["config"] = peft_config
             return SimpleNamespace(named_modules=lambda: [("a.lora_A", None)])
 
         check_attach(
-            "llama", _cfg(r=64, dropout=0.05),
+            "llama", _real_cfg(r=64, dropout=0.05),
             load_hf_config=self._local(config), build_model=self._meta,
             attach=_record,
         )
 
-        assert seen["lora_dropout"] == 0.05, "the check normalised the dropout away"
-        assert seen["r"] == 64, "the check substituted its own rank"
+        # The config handed to peft IS the trainer's -- build_lora_config's output.
+        assert seen["config"].lora_dropout == 0.05, "the check normalised the dropout away"
+        assert seen["config"].r == 64, "the check substituted its own rank"
 
     def test_an_attach_that_adapts_nothing_is_a_failure(self):
         """The defensive branch: peft normally raises when nothing matches, but if
@@ -442,7 +464,7 @@ class TestTheRealAttach:
             num_hidden_layers=2, num_attention_heads=2, num_key_value_heads=1,
         )
         check = check_attach(
-            "llama", _cfg(),
+            "llama", _real_cfg(),
             load_hf_config=self._local(config), build_model=self._meta,
             attach=lambda _m, _k: SimpleNamespace(named_modules=lambda: []),
         )
@@ -460,7 +482,7 @@ class TestTheRealAttach:
             num_hidden_layers=2, num_attention_heads=2, num_key_value_heads=1,
         )
         check = check_attach(
-            "llama", _cfg(targets=["not_a_module_here"]),
+            "llama", _real_cfg(targets=["not_a_module_here"]),
             load_hf_config=self._local(config), build_model=self._meta,
         )
 
@@ -574,3 +596,119 @@ class TestTheCommand:
 
         assert result.exit_code == 1
         assert "not found" in result.output.lower()
+
+
+class TestTheVerdictIsTheTrainers:
+    """The check must answer for what the TRAINER does, not for a lookalike.
+    Two ways the first version answered for a lookalike, each now pinned."""
+
+    @staticmethod
+    def _qwen2_moe_config():
+        from transformers import Qwen2MoeConfig
+
+        return Qwen2MoeConfig(
+            vocab_size=64, hidden_size=16, intermediate_size=32,
+            moe_intermediate_size=16, shared_expert_intermediate_size=16,
+            num_hidden_layers=2, num_attention_heads=2, num_key_value_heads=1,
+            num_experts=4, num_experts_per_tok=2,
+        )
+
+    def _check(self, cfg, hf_config, classes=None):
+        from soup_cli.utils.attach_preflight import build_on_meta
+
+        return check_attach(
+            "r", cfg, load_hf_config=lambda _b: hf_config,
+            build_model=lambda c, _cls: build_on_meta(c, classes or _cls),
+        )
+
+    def test_moe_lora_rescues_an_unmapped_moe_as_it_does_in_the_trainer(self):
+        """``qwen2_moe`` is mapped by neither Soup nor peft, so ``auto`` resolves to
+        nothing -- and the trainer then replaces ``target_modules`` from the
+        ``moe_lora`` scan. The first version skipped that step and called such a
+        recipe broken: measured on ``qwen3-30b-a3b-sft`` it said FAILS while the
+        trainer's path attached 12 modules."""
+        check = self._check(_real_cfg(moe_lora=True), self._qwen2_moe_config())
+
+        assert check.verdict is Verdict.ATTACHES, check.detail
+        assert check.adapted > 0
+
+    def test_without_moe_lora_the_same_model_cannot_attach(self):
+        """The control: it is the ``moe_lora`` step that attached it above, not a
+        check that has stopped failing anything."""
+        check = self._check(_real_cfg(moe_lora=False), self._qwen2_moe_config())
+
+        assert check.verdict is Verdict.CANNOT_ATTACH, check
+
+    def test_the_attach_sees_the_keys_the_trainer_hands_peft(self):
+        """The maintainer's review ask on #1116: run against the object the trainer
+        hands ``get_peft_model``, INCLUDING the ``model.`` prefix peft matches on.
+
+        peft fullmatches a string target against the whole module key, and under
+        ``AutoModelForImageTextToText`` -- what vision SFT loads -- the key is
+        ``model.language_model....``. So a pattern anchored at ``language_model``
+        genuinely cannot attach, and a check that built the model at a different
+        level (``AutoModel``, which drops the ``model.`` wrapper) would report it
+        green. That exact regex shipped in #1102 and was caught at review."""
+        from transformers import CLIPVisionConfig, LlamaConfig, LlavaConfig
+
+        vl = LlavaConfig(
+            text_config=LlamaConfig(
+                vocab_size=64, hidden_size=16, intermediate_size=32,
+                num_hidden_layers=2, num_attention_heads=2, num_key_value_heads=2,
+                pad_token_id=0,
+            ),
+            vision_config=CLIPVisionConfig(
+                hidden_size=16, intermediate_size=32, num_hidden_layers=2,
+                num_attention_heads=2, image_size=32, patch_size=16,
+            ),
+            image_token_index=63,
+        )
+        classes = ("AutoModelForImageTextToText",)
+        anchored = _real_cfg(targets=r"language_model\..*\.self_attn\.(q_proj|v_proj)")
+        prefixed = _real_cfg(targets=r".*language_model\..*\.self_attn\.(q_proj|v_proj)")
+
+        broken = self._check(anchored, vl, classes)
+        working = self._check(prefixed, vl, classes)
+
+        assert broken.verdict is Verdict.CANNOT_ATTACH, (
+            "an anchored regex attached -- the check is not seeing the model. prefix"
+        )
+        assert working.verdict is Verdict.ATTACHES, working.detail
+        assert working.vision_modules == 0, "and it stayed out of the vision tower"
+
+
+    def test_a_text_config_the_causal_lm_class_refuses_is_not_attached(self):
+        """No trainer falls back from ``AutoModelForCausalLM`` to ``AutoModel``;
+        SFT's text path loads exactly one class. My first version did fall back,
+        so a config the causal-LM class refuses was built one level down and
+        reported as ATTACHING -- MiniMax-M3 with no ``modality`` read green, while
+        in SFT it cannot even load (#1145). A LLaVA reproduces the shape locally:
+        ``AutoModelForCausalLM`` refuses it, ``AutoModel`` builds ``LlavaModel``."""
+        from transformers import CLIPVisionConfig, LlamaConfig, LlavaConfig
+
+        from soup_cli.utils.attach_preflight import build_on_meta, loader_for
+
+        vl = LlavaConfig(
+            text_config=LlamaConfig(
+                vocab_size=64, hidden_size=16, intermediate_size=32,
+                num_hidden_layers=2, num_attention_heads=2, num_key_value_heads=2,
+                pad_token_id=0,
+            ),
+            vision_config=CLIPVisionConfig(
+                hidden_size=16, intermediate_size=32, num_hidden_layers=2,
+                num_attention_heads=2, image_size=32, patch_size=16,
+            ),
+            image_token_index=63,
+        )
+        text_cfg = _real_cfg()                       # no modality -> the text path
+
+        check = check_attach(
+            "vl-as-text", text_cfg, load_hf_config=lambda _b: vl,
+            build_model=lambda c, _cls: build_on_meta(c, loader_for(text_cfg)),
+        )
+
+        assert check.verdict is Verdict.CANNOT_ATTACH, (
+            f"reported {check.verdict.value} -- the check built it with a class "
+            "the trainer never uses"
+        )
+        assert check.stage == "build"

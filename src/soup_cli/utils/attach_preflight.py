@@ -155,15 +155,16 @@ def check_attach(
     *,
     load_hf_config: Callable[[str], Any],
     build_model: Callable[[Any, str], Any],
-    resolve_targets: Optional[Callable[[Any, Any], Any]] = None,
     attach: Optional[Callable[[Any, Any], Any]] = None,
 ) -> AttachCheck:
     """Run one config through resolution and attach; never raise.
 
     ``load_hf_config`` and ``build_model`` are injected so the decision logic is
-    testable without the Hub. ``resolve_targets`` and ``attach`` default to the
-    real ones on purpose --- stubbing those would make this check assert its own
-    beliefs about peft rather than peft's behaviour, which is the #826 mistake.
+    testable without the Hub. The target resolution is deliberately NOT
+    injectable --- it is :func:`trainer_lora_config`, the trainer's own sequence
+    --- and ``attach`` defaults to the real ``get_peft_model``: stubbing either
+    would make this check assert its own beliefs about peft and the trainer
+    rather than their behaviour, which is the #826 mistake.
     """
     base = getattr(cfg, "base", "")
     task = getattr(cfg, "task", "")
@@ -194,12 +195,9 @@ def check_attach(
             stage="build",
         )
 
-    if resolve_targets is None:
-        from soup_cli.utils.peft_wiring import resolve_lora_target_modules as resolve_targets
-    lora = cfg.training.lora
     try:
-        targets = resolve_targets(model, lora.target_modules)
-    except Exception as exc:  # noqa: BLE001 --- Soup's own refusal lands here
+        peft_config, targets = trainer_lora_config(model, cfg)
+    except Exception as exc:  # noqa: BLE001 --- Soup's own refusals land here
         return AttachCheck(
             **row,
             verdict=Verdict.CANNOT_ATTACH,
@@ -210,7 +208,7 @@ def check_attach(
     if attach is None:
         attach = _attach_with_peft
     try:
-        attached = attach(model, _lora_kwargs(lora, targets))
+        attached = attach(model, peft_config)
     except Exception as exc:  # noqa: BLE001
         return AttachCheck(
             **row,
@@ -233,28 +231,58 @@ def check_attach(
     )
 
 
-def _lora_kwargs(lora: Any, targets: Any) -> dict:
-    """The config's OWN LoRA settings, so the check answers for this recipe.
+def trainer_lora_config(model: Any, cfg: Any) -> tuple[Any, Any]:
+    """The adapter config a LoRA trainer builds, in the order it builds it.
 
-    Substituting a tidy ``r=8, dropout=0.0`` would have hidden #798 entirely: the
-    dropout that made every MoE recipe unattachable was the schema default the
-    recipes inherited.
+    ``resolve_lora_target_modules`` -> ``resolve_lora_target_parameters`` ->
+    the ``moe_lora`` override -> ``build_lora_config``: the same four calls, in the
+    same order, as ``trainer/sft.py`` and the other MoE-wired trainers. The first
+    version of this check stopped after the first call and built its own
+    ``LoraConfig``, so a recipe with ``moe_lora: true`` -- which the trainer
+    rescues by replacing ``target_modules`` -- was reported unable to attach while
+    the real trainer attached it. Measured on ``qwen3-30b-a3b-sft``: this check
+    said FAILS, the trainer's path attached 12 modules.
+
+    The config's OWN r / alpha / dropout go in unchanged: normalising them to a
+    tidy ``dropout: 0.0`` would have hidden #798, whose dropout was the schema
+    default the recipes inherited.
+
+    ``task_type`` is left unset: a task head wants a loaded model
+    (``prepare_inputs_for_generation`` and friends), and the adapter injection is
+    what is under test, not the head.
+
+    ``moe_lora`` is applied for every task, which is exact for the shipped
+    catalogue -- no recipe sets it on a task whose trainer ignores it -- and exact
+    for any config once every LoRA trainer reads it (#1099).
     """
-    return {
-        "r": lora.r,
-        "lora_alpha": lora.alpha,
-        "lora_dropout": lora.dropout,
-        "target_modules": targets,
-    }
+    from soup_cli.utils.moe import resolve_moe_lora_targets
+    from soup_cli.utils.peft_wiring import (
+        build_lora_config,
+        resolve_lora_target_modules,
+        resolve_lora_target_parameters,
+    )
+
+    tcfg = cfg.training
+    lora = tcfg.lora
+    targets = resolve_lora_target_modules(model, lora.target_modules)
+    target_parameters = resolve_lora_target_parameters(
+        model, getattr(lora, "target_parameters", None)
+    )
+    targets = resolve_moe_lora_targets(model, tcfg, targets, None)
+    peft_config = build_lora_config(
+        lora,
+        target_modules=targets,
+        task_type=None,
+        target_parameters=target_parameters,
+    )
+    return peft_config, targets
 
 
-def _attach_with_peft(model: Any, kwargs: dict) -> Any:
-    """The real ``get_peft_model``. ``task_type`` is deliberately left unset: the
-    task heads want a loaded model (``prepare_inputs_for_generation`` and
-    friends), and what is under test is the adapter injection, not the head."""
-    from peft import LoraConfig, get_peft_model
+def _attach_with_peft(model: Any, peft_config: Any) -> Any:
+    """The real ``get_peft_model``, on the config the trainer would build."""
+    from peft import get_peft_model
 
-    return get_peft_model(model, LoraConfig(**kwargs))
+    return get_peft_model(model, peft_config)
 
 
 @dataclass
@@ -287,9 +315,15 @@ _MODALITY_AUTO_CLASS = {
 }
 _TASK_AUTO_CLASS = {
     "embedding": ("AutoModel",),
-    "reward_model": ("AutoModelForSequenceClassification", "AutoModel"),
+    "reward_model": ("AutoModelForSequenceClassification",),
 }
-_DEFAULT_AUTO_CLASS = ("AutoModelForCausalLM", "AutoModel")
+#: ONE class per path, with no fallback, because no trainer has one. My first
+#: version fell back from ``AutoModelForCausalLM`` to ``AutoModel``, so a config
+#: the causal-LM class refuses -- MiniMax-M3 with no ``modality``, which cannot load
+#: in SFT at all (#1145) -- was built one level down and reported as attaching.
+#: That is the failure the #1116 ruling named: a preflight instantiating at a
+#: different level from the trainer reports green on a config that cannot attach.
+_DEFAULT_AUTO_CLASS = ("AutoModelForCausalLM",)
 
 
 def loader_for(cfg: Any) -> tuple[str, ...]:
