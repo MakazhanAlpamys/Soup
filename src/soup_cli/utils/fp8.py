@@ -111,7 +111,7 @@ class FP8DependencyMissingError(RuntimeError):
 FP8_TORCHAO_MISSING = (
     "FP8 was requested (quantization_aware: fp8 or fp8_attention: true), but "
     "torchao's float8 training is not installed, so nothing would be converted. "
-    "Install it with: pip install 'soup-cli[qat]'"
+    'Install it with: pip install "soup-cli[qat]"'
 )
 
 
