@@ -250,6 +250,10 @@ def test_doctor_gpu_panel_shows_compute_capability_and_precision(monkeypatch):
         "soup_cli.utils.advanced_precision._torchao_available",
         lambda: True,
     )
+    monkeypatch.setattr(
+        "soup_cli.utils.torchao_compat.resolve_torchao_class",
+        lambda key: object,
+    )
 
     fake_torchao = types.ModuleType("torchao")
     fake_quantization = types.ModuleType("torchao.quantization")

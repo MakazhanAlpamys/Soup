@@ -556,7 +556,7 @@ class TestNVFP4:
         )
         monkeypatch.setitem(sys.modules, "torchao", None)
         with pytest.raises(
-            RuntimeError, match="requires a compatible torchao installation"
+            RuntimeError, match="requires torchao"
         ) as excinfo:
             apply_nvfp4(_tiny_linear_model())
         assert "no Blackwell device detected" not in str(excinfo.value)
