@@ -332,6 +332,26 @@ training:
 ```
 
 
+## LoRA-FA (Frozen-A LoRA)
+
+Freeze random projection matrices in LoRA $A$ and update only LoRA $B$ matrices using PEFT's `create_lorafa_optimizer` ([arXiv:2308.03303](https://arxiv.org/abs/2308.03303)):
+
+```yaml
+training:
+  lr: 2e-4
+  use_lorafa: true
+  lora:
+    r: 64
+    alpha: 16
+```
+
+### Operating Point & Caveats
+- **Measured Adapter Operating Point:** Trains exactly 50.0% fewer parameters per adapted projection (trains $B$, freezes $A$), reducing AdamW optimizer states (`exp_avg_B`, `exp_avg_sq_B`) by half for square projections.
+- **Analytic Activation Retention:** Freezing $A$ avoids storing input activations $x \in \mathbb{R}^{B \times L \times d_{in}}$ for adapter backpropagation through $A$. Only $u = A x \in \mathbb{R}^{B \times L \times r}$ is retained, yielding an analytic adapter activation ratio of $r / d_{in}$ (~64× reduction for rank 64 on hidden dim 4096; the exact ratio scales with your rank choice).
+- **Scope & Limitations:** These values represent a micro-benchmark operating point and an analytic saved-tensor ratio for the adapter projections — **they are not total or peak LLM VRAM savings, an end-to-end throughput result, or a quality claim.** Peak training VRAM in full LLM fine-tuning is dominated by base model activations, KV caches, and weights; total end-to-end VRAM savings are substantially smaller. Downstream task quality and end-to-end throughput vs standard LoRA remain unmeasured. See [`benchmarks/gate-725-lorafa-operating-point.md`](../benchmarks/gate-725-lorafa-operating-point.md) for measured figures.
+- **Compatibility:** Supported on the `transformers` backend for `sft`, `pretrain`, and `embedding` tasks. Mutually exclusive with `loraplus_lr_ratio` (which differentiates $A$ and $B$ rates), `use_galore`, `lora.use_vera` (VeRA trains scaling vectors, so `create_lorafa_optimizer` finds no $B$ matrices), non-AdamW optimizers, and the `mlx` backend. Requires explicit `lora.r` and `lora.alpha`. LoRA-FA has not been validated under `stream_layers: true` (layer streaming); combining them is not recommended.
+
+
 ## rsLoRA (Rank-Stabilized Scaling)
 
 Use rank-stabilized LoRA scaling for better performance at high ranks:
