@@ -329,7 +329,7 @@ class DPOTrainerWrapper(StreamingSetupMixin):
             resolve_lora_target_modules,
         )
 
-        target_modules = resolve_lora_target_modules(self.model, tcfg.lora.target_modules)
+        target_modules = resolve_lora_target_modules(self.model, tcfg.lora.target_modules, console)
         # #798: moe_lora picks the expert-FFN targets. Without this the flag
         # was accepted and ignored here, and on a fused-expert MoE the auto
         # resolution leaves peft with nothing to attach.

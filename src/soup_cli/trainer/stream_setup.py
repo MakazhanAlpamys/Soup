@@ -909,7 +909,9 @@ class StreamingSetupMixin:
             resolve_lora_target_modules,
         )
 
-        target_modules = resolve_lora_target_modules(model_config, tcfg.lora.target_modules)
+        target_modules = resolve_lora_target_modules(
+            model_config, tcfg.lora.target_modules, console
+        )
         if moe_targets:
             # Already announced by resolve_moe_lora_targets when the probe ran.
             target_modules = moe_targets

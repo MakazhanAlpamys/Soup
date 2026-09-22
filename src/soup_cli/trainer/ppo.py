@@ -545,7 +545,7 @@ class PPOTrainerWrapper:
             resolve_lora_target_modules,
         )
 
-        target_modules = resolve_lora_target_modules(self.model, tcfg.lora.target_modules)
+        target_modules = resolve_lora_target_modules(self.model, tcfg.lora.target_modules, console)
 
         lora_config = build_lora_config(
             tcfg.lora,

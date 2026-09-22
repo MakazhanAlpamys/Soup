@@ -400,7 +400,7 @@ class OnlineDPOTrainerWrapper:
             resolve_lora_target_modules,
         )
 
-        target_modules = resolve_lora_target_modules(self.model, tcfg.lora.target_modules)
+        target_modules = resolve_lora_target_modules(self.model, tcfg.lora.target_modules, console)
 
         self.peft_config = build_lora_config(
             tcfg.lora,

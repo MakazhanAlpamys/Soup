@@ -1750,7 +1750,7 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             )
 
             target_modules = resolve_lora_target_modules(
-                self.model, tcfg.lora.target_modules
+                self.model, tcfg.lora.target_modules, console
             )
             target_parameters = resolve_lora_target_parameters(
                 self.model, tcfg.lora.target_parameters
@@ -1917,7 +1917,7 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             resolve_lora_target_modules,
         )
 
-        target_modules = resolve_lora_target_modules(self.model, tcfg.lora.target_modules)
+        target_modules = resolve_lora_target_modules(self.model, tcfg.lora.target_modules, console)
 
         lora_config = build_lora_config(
             tcfg.lora,
@@ -2039,7 +2039,7 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             resolve_lora_target_modules,
         )
 
-        target_modules = resolve_lora_target_modules(self.model, tcfg.lora.target_modules)
+        target_modules = resolve_lora_target_modules(self.model, tcfg.lora.target_modules, console)
 
         lora_config = build_lora_config(
             tcfg.lora,
