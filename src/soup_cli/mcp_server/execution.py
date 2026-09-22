@@ -15,7 +15,11 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from soup_cli.experiment.tracker import ExperimentTracker, generate_run_id
-from soup_cli.utils.paths import atomic_write_text, enforce_under_cwd_and_no_symlink
+from soup_cli.utils.paths import (
+    atomic_write_text,
+    enforce_under_cwd_and_no_symlink,
+    open_no_follow,
+)
 from soup_cli.utils.process_liveness import process_is_alive as _pid_is_alive
 
 logger = logging.getLogger(__name__)
@@ -77,20 +81,24 @@ def _open_binary_no_follow(path: str):
 
     ``enforce_under_cwd_and_no_symlink`` is an ``lstat`` check, so a symlink
     swapped in between that check and the read would silently redirect the
-    digest — the TOCTOU window the plan/execute split exists to close. Opening
-    with ``O_NOFOLLOW`` closes it; mirrors
-    ``mcp_server/registry.py::_read_text_under_cwd``.
+    digest — the TOCTOU window the plan/execute split exists to close.
 
-    NOTE: Windows has no ``os.O_NOFOLLOW`` (CI runs Windows too), so there the
-    flag is simply absent and the lstat check remains the only symlink guard —
-    the pre-existing behaviour. ``O_BINARY`` (Windows-only) keeps the read free
-    of CRLF translation, so a digest is the same on every platform.
+    This delegates to :func:`soup_cli.utils.paths.open_no_follow` (#820) rather
+    than passing ``O_NOFOLLOW`` itself. The v0.75.1 backport could not: that
+    helper landed after the ``v0.75.0`` tag the release was cut from, so the
+    released copy carries a bare flag and is therefore UNGUARDED ON WINDOWS,
+    where ``os.O_NOFOLLOW`` does not exist. The shared helper closes that half
+    with a pre-open ``lstat`` and a post-open ``fstat`` cross-check, so this
+    port is strictly stronger than what shipped.
+
+    ``O_BINARY`` (Windows-only) keeps the read free of CRLF translation, so a
+    digest is the same on every platform.
 
     ``OSError`` propagates to ``digest_file``'s handler, which maps it to the
     path-free ``ExecutionError``.
     """
-    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
-    return os.fdopen(os.open(path, flags), "rb")
+    flags = os.O_RDONLY | getattr(os, "O_BINARY", 0)
+    return os.fdopen(open_no_follow(path, flags), "rb")
 
 
 def digest_file(
