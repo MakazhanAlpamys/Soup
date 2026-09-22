@@ -275,6 +275,12 @@ class ClassifierTrainerWrapper:
             target_modules = resolve_lora_target_modules(
                 self.model, tcfg.lora.target_modules, console
             )
+            # #1151: moe_lora picks the expert-FFN targets; see sft.py.
+            from soup_cli.utils.moe import resolve_moe_lora_targets
+
+            target_modules = resolve_moe_lora_targets(
+                self.model, tcfg, target_modules, console
+            )
             lora_config = build_lora_config(
                 tcfg.lora,
                 target_modules=target_modules,

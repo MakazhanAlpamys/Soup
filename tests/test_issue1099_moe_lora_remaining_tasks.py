@@ -10,9 +10,14 @@ maintainer named for preferring the wiring. Measured on ``main`` before writing
 any of this — all five loaded ``moe_lora: true`` and no shipped recipe, template
 or example sets it on one of these tasks, so no warn-then-refuse staging applies.
 
-Each test drives the trainer's own ``_setup_transformers`` far enough to attach
-LoRA, with only the loaders stubbed: ``get_peft_model`` and the target-module
-resolution are the real ones, and each failure names the trainer it came from.
+Each test drives the trainer's own ``_setup_transformers`` (or ``setup``) far
+enough to attach LoRA, with only the loaders stubbed: ``get_peft_model`` and the
+target-module resolution are the real ones, and each failure names the trainer
+it came from.
+
+#1151 adds the last three trainers that build through ``build_lora_config`` and
+still accepted the flag unread: ``classifier`` (also ``reranker`` and
+``cross_encoder``), ``distill`` and ``unlearn``.
 """
 
 from __future__ import annotations
@@ -51,6 +56,38 @@ _TASKS = {
         "AutoModel",
         "embedding",
     ),
+    # #1151: the three that build through build_lora_config and were still unread.
+    # classifier also serves reranker and cross_encoder (one trainer, one call).
+    "classifier": (
+        "soup_cli.trainer.classifier",
+        "ClassifierTrainerWrapper",
+        "AutoModelForSequenceClassification",
+        "auto",
+    ),
+    "distill": (
+        "soup_cli.trainer.distill",
+        "DistillTrainerWrapper",
+        "AutoModelForCausalLM",
+        "auto",
+    ),
+    "unlearn": (
+        "soup_cli.trainer.unlearn",
+        "UnlearnTrainerWrapper",
+        "AutoModelForCausalLM",
+        "auto",
+    ),
+}
+
+#: task -> the extra fields its config needs to load (schema-required ones,
+#: plus classifier's opt-in LoRA gate).
+_EXTRA = {
+    "online_dpo": {"training": {"online_dpo_judge": "ollama://llama3.1"}},
+    "classifier": {"training": {"num_labels": 2, "classifier_lora": True}},
+    "distill": {"training": {"teacher_model": "org/tiny-teacher"}},
+    "unlearn": {
+        "training": {"unlearn_method": "npo"},
+        "data": {"forget_set": "./forget.jsonl"},
+    },
 }
 
 _SMALL = dict(
@@ -113,20 +150,17 @@ def _dense_model(auto_class: str):
 
 
 def _config(task: str, *, moe_lora: bool, dropout: float = 0.0):
-    data_format = _TASKS[task][3]
-    return load_config_from_string(
-        "base: org/tiny-moe\n"
-        f"task: {task}\n"
-        "data:\n"
-        "  train: ./x.jsonl\n"
-        f"  format: {data_format}\n"
-        "training:\n"
-        + ('  online_dpo_judge: "ollama://llama3.1"\n' if task == "online_dpo" else "")
-        + f"  moe_lora: {'true' if moe_lora else 'false'}\n"
-        "  lora:\n"
-        "    r: 4\n"
-        f"    dropout: {dropout}\n"
-    )
+    import yaml
+
+    raw = {
+        "base": "org/tiny-moe",
+        "task": task,
+        "data": {"train": "./x.jsonl", "format": _TASKS[task][3]},
+        "training": {"moe_lora": moe_lora, "lora": {"r": 4, "dropout": dropout}},
+    }
+    for section, fields in _EXTRA.get(task, {}).items():
+        raw[section].update(fields)
+    return load_config_from_string(yaml.safe_dump(raw))
 
 
 def _attach(task: str, monkeypatch, *, moe_lora: bool, dense: bool = False):
@@ -154,15 +188,25 @@ def _attach(task: str, monkeypatch, *, moe_lora: bool, dense: bool = False):
     wrapper = object.__new__(wrapper_cls)
     wrapper.config = cfg
     wrapper.device = "cpu"
+    wrapper.trust_remote_code = False
     wrapper._trust_remote_code = False
+    wrapper._raw_trust_remote_code = False  # distill resolves the teacher's own
+    wrapper.method = getattr(cfg.training, "unlearn_method", None)
     wrapper.model = None
     wrapper.tokenizer = None
     try:
-        wrapper._setup_transformers(cfg, cfg.training)
-    except ValueError:
-        raise
+        if hasattr(wrapper, "_setup_transformers"):
+            wrapper._setup_transformers(cfg, cfg.training)
+        else:
+            # classifier / distill / unlearn: setup(dataset) attaches LoRA first
+            # and only then reads the rows, which we do not supply.
+            wrapper.setup({})
     except Exception as exc:  # noqa: BLE001 — setup continues past the LoRA attach
-        if not _adapted(wrapper.model or object()):
+        if _adapted(wrapper.model or object()):
+            pass
+        elif isinstance(exc, ValueError):
+            raise
+        else:
             raise AssertionError(
                 f"{task}: setup failed before the LoRA attach: {exc!r}"
             ) from exc
@@ -217,7 +261,7 @@ class TestMoeLoraReachesTheAdapter:
         assert on, f"{task}: the dense control adapted nothing"
 
 
-class TestTheFlagIsAcceptedOnAllFive:
+class TestTheFlagIsAcceptedOnEveryWiredTask:
     """The defect as reported: it loads and nothing reads it. These pin that the
     load still works, so the fix is a wiring change and not a new refusal."""
 
