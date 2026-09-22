@@ -226,6 +226,7 @@ def test_a_peft_wrapped_embedding_is_still_exempt_from_the_private_copy():
 
 def test_a_real_lora_wrapped_embedding_is_still_exempt_from_the_private_copy():
     """The same claim through peft's own tuner layer, not a stand-in for one."""
+    peft = pytest.importorskip("peft")
     lora = pytest.importorskip("peft.tuners.lora")
     import torch
     import torch.nn as nn
@@ -241,6 +242,18 @@ def test_a_real_lora_wrapped_embedding_is_still_exempt_from_the_private_copy():
             return self.buffer
 
     untied = _Pool(["embed_tokens", "lm_head"])
-    wrapped = lora.Embedding(nn.Embedding(4, 3), adapter_name="default", r=2, lora_alpha=4)
+    class _Embeds(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.embed_tokens = nn.Embedding(4, 3)
+
+    # Let peft build the layer: lora.Embedding's constructor gained a required
+    # ``config`` argument in 0.21, so calling it directly only works on one of the
+    # two supported pefts.
+    tuned = peft.get_peft_model(
+        _Embeds(), peft.LoraConfig(r=2, lora_alpha=4, target_modules=["embed_tokens"])
+    )
+    wrapped = tuned.base_model.model.embed_tokens
+    assert isinstance(wrapped, lora.Embedding)
     layer = _streamed_large_layer_class()(wrapped, "embed_tokens", untied)
     assert layer._needs_a_private_weight() is False
