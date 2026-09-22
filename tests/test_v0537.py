@@ -430,7 +430,7 @@ class TestPreprocessTokenize:
         with pytest.raises(ValueError, match="not found"):
             load_pretokenized_dataset("nonexistent_dir")
 
-    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX symlink rejection")
+    @pytest.mark.requires_symlink
     def test_load_pretokenized_dataset_rejects_symlink(self, tmp_path, monkeypatch):
         from soup_cli.utils.data_pipeline import load_pretokenized_dataset
 
@@ -1521,7 +1521,7 @@ class TestPublicSurface:
 class TestReviewFixesRecipeRun:
     """Tests for review fixes H-B/H-C/H-D/M-C/M-E/M-F + H-J/H-K/M-O."""
 
-    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX symlinks")
+    @pytest.mark.requires_symlink
     def test_seed_rejects_symlink_via_lstat_on_raw_path(self, tmp_path, monkeypatch):
         """v0.53.7 H-B: lstat the raw path BEFORE realpath."""
         import os as _os
@@ -1778,7 +1778,7 @@ class TestReviewFixesVllmAnthropicLive:
 class TestReviewFixesDataScore:
     """v0.53.7 H-H + M-J coverage."""
 
-    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX symlinks")
+    @pytest.mark.requires_symlink
     def test_load_jsonl_rows_rejects_symlink(self, tmp_path, monkeypatch):
         import os as _os
         monkeypatch.chdir(tmp_path)

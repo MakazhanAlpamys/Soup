@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import os
-import sys
 
 import pytest
 from typer.testing import CliRunner
@@ -525,16 +524,13 @@ def test_load_spec_file_non_dict_root_rejected(tmp_path, monkeypatch):
         load_spec_file("list.json")
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="symlink ACL on Windows CI")
+@pytest.mark.requires_symlink
 def test_load_spec_file_symlink_rejected(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     real = tmp_path / "real.json"
     real.write_text("{}", encoding="utf-8")
     link = tmp_path / "link.json"
-    try:
-        os.symlink(real, link)
-    except (OSError, NotImplementedError):
-        pytest.skip("symlink unavailable")
+    os.symlink(real, link)
     with pytest.raises(ValueError, match="symlink"):
         load_spec_file("link.json")
 
@@ -771,16 +767,13 @@ def test_write_dataset_partial_failure_no_partial_file(tmp_path, monkeypatch):
     assert not (tmp_path / "out.jsonl").exists()
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="symlink ACL on Windows")
+@pytest.mark.requires_symlink
 def test_write_dataset_symlink_target_rejected(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     real = tmp_path / "real.jsonl"
     real.write_text("", encoding="utf-8")
     link = tmp_path / "link.jsonl"
-    try:
-        os.symlink(real, link)
-    except (OSError, NotImplementedError):
-        pytest.skip("symlink unavailable")
+    os.symlink(real, link)
     rows = [SynthRow(messages=(), tool="t", source_endpoint="/")]
     with pytest.raises(ValueError, match="symlink"):
         write_dataset(rows, "link.jsonl")

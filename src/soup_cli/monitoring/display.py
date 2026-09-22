@@ -65,7 +65,7 @@ class TrainingDisplay:
         self.current_epoch = 0
         self.loss = 0.0
         self.lr = 0.0
-        self.grad_norm = 0.0
+        self.grad_norm: Optional[float] = None
         self.gpu_mem = ""
         self.speed = 0.0
         #: None until an evaluation actually runs. Its own series --
@@ -85,7 +85,7 @@ class TrainingDisplay:
         self.current_epoch = epoch
         self.loss = loss
         self.lr = lr
-        self.grad_norm = kwargs.get("grad_norm", 0.0)
+        self.grad_norm = kwargs.get("grad_norm")
         self.speed = kwargs.get("speed", 0.0)
         self.gpu_mem = kwargs.get("gpu_mem", "")
         # Sticky: an evaluation happens every N steps, so the last
@@ -126,7 +126,7 @@ class TrainingDisplay:
             lines.append(f"Speed: {self.speed:.2f} it/s")
         if self.gpu_mem:
             lines.append(f"GPU peak: {self.gpu_mem}")
-        if self.grad_norm > 0:
+        if self.grad_norm is not None:
             lines.append(f"Grad:  {self.grad_norm:.4f}")
 
         content = "\n".join(lines)

@@ -146,7 +146,7 @@ def register(app: typer.Typer, console: Console) -> None:
 
         With ``--base-model`` (optionally ``--adapter``) this LIVE-generates
         pre/post responses on the bundled battery and scores them. Without it,
-        falls back to ``--evidence`` JSON, or a neutral OK report.
+        ``--evidence`` JSON is required.
         """
         from soup_cli.utils.behavior_battery import (
             compute_behavior_diff,
@@ -204,20 +204,11 @@ def register(app: typer.Typer, console: Console) -> None:
             return
 
         if evidence is None:
-            # No evidence: emit neutral OK report (matches v0.56.0 diagnose
-            # policy when no probes are supplied).
             console.print(
-                "[yellow]No --evidence supplied; emitting neutral OK report.[/]"
+                "[red]--evidence is required when --base-model is not supplied; "
+                "provide a JSON file with pre_responses, post_responses, and oracle arrays.[/]"
             )
-            payload = {
-                "run_id": run_id, "battery": canonical,
-                "pre": {"value": 1.0, "verdict": "OK", "num_probes": 0},
-                "post": {"value": 1.0, "verdict": "OK", "num_probes": 0},
-                "delta": 0.0, "overall": "OK",
-            }
-            if output:
-                _write_json_output(payload, output, console=console)
-            return
+            raise typer.Exit(EXIT_USAGE_ERROR)
 
         try:
             data = _read_evidence_json(evidence, console=console)
@@ -381,7 +372,7 @@ def register(app: typer.Typer, console: Console) -> None:
         ),
         evidence: Optional[str] = typer.Option(
             None, "--evidence", "-e",
-            help="Optional JSON with operator-supplied per-test responses.",
+            help="Required JSON with operator-supplied per-test responses.",
         ),
         output: Optional[str] = typer.Option(
             None, "--output", "-o",
@@ -400,15 +391,20 @@ def register(app: typer.Typer, console: Console) -> None:
             console.print(f"[red]Failed to load spec:[/] {escape(str(exc))}")
             raise typer.Exit(EXIT_USAGE_ERROR) from exc
 
-        evidence_map = None
-        if evidence is not None:
-            try:
-                evidence_map = _read_evidence_json(evidence, console=console)
-            except (typer.BadParameter, OSError, json.JSONDecodeError) as exc:
-                console.print(
-                    f"[red]Failed to read evidence:[/] {escape(str(exc))}"
-                )
-                raise typer.Exit(EXIT_USAGE_ERROR) from exc
+        if evidence is None:
+            console.print(
+                "[red]--evidence is required; provide a JSON object mapping each "
+                "CheckList test name to its response strings.[/]"
+            )
+            raise typer.Exit(EXIT_USAGE_ERROR)
+
+        try:
+            evidence_map = _read_evidence_json(evidence, console=console)
+        except (typer.BadParameter, OSError, json.JSONDecodeError) as exc:
+            console.print(
+                f"[red]Failed to read evidence:[/] {escape(str(exc))}"
+            )
+            raise typer.Exit(EXIT_USAGE_ERROR) from exc
 
         try:
             report = run_checklist_spec(spec, evidence=evidence_map)

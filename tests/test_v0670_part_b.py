@@ -395,7 +395,7 @@ class TestWriteLoadBank:
         with pytest.raises(FileNotFoundError):
             load_bank(str(tmp_path / "missing.json"))
 
-    @pytest.mark.skipif(os.name == "nt", reason="POSIX-only symlink test")
+    @pytest.mark.requires_symlink
     def test_load_symlink_rejected(self, tmp_path, monkeypatch) -> None:
         from soup_cli.utils.vector_bank import load_bank
 

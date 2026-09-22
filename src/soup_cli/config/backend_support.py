@@ -118,6 +118,13 @@ _MLX_SFT: tuple[SupportEntry, ...] = (
         trainer_reads=True,
     ),
     SupportEntry(
+        "data.mask_history",
+        IGNORED,
+        "MLX supervises every assistant turn, not only the last; mask_history is "
+        "applied by the transformers label builder, which MLX SFT does not use",
+        trainer_reads=True,
+    ),
+    SupportEntry(
         "data.train_on_prompt",
         IGNORED,
         "MLX masks the prompt or supervises the whole sequence; no per-field switch",

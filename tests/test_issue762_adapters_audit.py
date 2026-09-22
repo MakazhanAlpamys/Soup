@@ -872,6 +872,7 @@ class TestPathsAreRefusedBeforeTheyAreFollowed:
         assert "Path refused" in res.output, res.output
         assert "No adapter_config.json" not in res.output
 
+    @pytest.mark.requires_symlink
     def test_a_symlinked_adapter_directory_is_refused(self, tmp_path):
 
         from soup_cli.commands.adapters import app
@@ -880,10 +881,7 @@ class TestPathsAreRefusedBeforeTheyAreFollowed:
         real.mkdir()
         (real / "adapter_config.json").write_text(json.dumps(_mlx_record()))
         link = tmp_path / "link"
-        try:
-            link.symlink_to(real, target_is_directory=True)
-        except (OSError, NotImplementedError):  # unprivileged Windows
-            pytest.skip("symlink creation not permitted on this platform")
+        link.symlink_to(real, target_is_directory=True)
 
         cfg = self._config_file(tmp_path)
         res = _runner().invoke(app, ["audit", "link", "--config", cfg.name])

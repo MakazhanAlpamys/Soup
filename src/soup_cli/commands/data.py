@@ -2382,6 +2382,7 @@ def preprocess_dataset(
     import json as _json
 
     from soup_cli.config.loader import load_config
+    from soup_cli.data.chat_templates import resolve_chat_template
     from soup_cli.utils.data_pipeline import make_preprocess_cache_key
     from soup_cli.utils.paths import is_under_cwd
 
@@ -2404,6 +2405,8 @@ def preprocess_dataset(
         raise typer.Exit(1)
 
     dataset_path = _cache_key_dataset_path(cfg)
+    # #1067: render with data.chat_template, as the live path does, and key on it.
+    chat_template = resolve_chat_template(cfg.data.chat_template)
     train_display = (
         ", ".join(cfg.data.train) if isinstance(cfg.data.train, list) else cfg.data.train
     )
@@ -2412,6 +2415,7 @@ def preprocess_dataset(
         tokenizer_name=cfg.base,
         max_length=cfg.data.max_length,
         format_name=cfg.data.format,
+        chat_template=chat_template,
     )
     target = Path(out_real) / cache_key
     console.print(f"[cyan]Dataset:[/] {train_display}")
@@ -2450,6 +2454,8 @@ def preprocess_dataset(
     tokenizer = AutoTokenizer.from_pretrained(
         cfg.base, trust_remote_code=False
     )
+    if chat_template is not None:
+        tokenizer.chat_template = chat_template
 
     try:
         dataset = load_dataset(cfg.data)
@@ -2580,6 +2586,7 @@ def preprocess_dataset(
         "tokenizer_name": cfg.base,
         "max_length": max_length,
         "format": cfg.data.format,
+        "chat_template": cfg.data.chat_template,
         "task": cfg.task,
         "soup_version": _soup_version,
     }

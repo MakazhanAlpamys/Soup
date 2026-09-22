@@ -1,0 +1,438 @@
+{
+ "BioMistral/BioMistral-7B": {
+  "model_type": "mistral",
+  "routed_experts": 0
+ },
+ "HKUSTAudio/Llasa-1B": {
+  "model_type": "llama",
+  "routed_experts": 0
+ },
+ "HuggingFaceTB/SmolLM2-1.7B-Instruct": {
+  "model_type": "llama",
+  "routed_experts": 0
+ },
+ "HuggingFaceTB/SmolLM2-135M-Instruct": {
+  "model_type": "llama",
+  "routed_experts": 0
+ },
+ "HuggingFaceTB/SmolLM2-360M-Instruct": {
+  "model_type": "llama",
+  "routed_experts": 0
+ },
+ "HuggingFaceTB/SmolLM3-3B": {
+  "model_type": "smollm3",
+  "routed_experts": 0
+ },
+ "HuggingFaceTB/SmolVLM-256M-Instruct": {
+  "model_type": "idefics3",
+  "routed_experts": 0
+ },
+ "LiquidAI/LFM2-1.2B": {
+  "model_type": "lfm2",
+  "routed_experts": 0
+ },
+ "MiniMaxAI/MiniMax-M2": {
+  "model_type": "minimax_m2",
+  "routed_experts": 256
+ },
+ "MiniMaxAI/MiniMax-M3": {
+  "model_type": "minimax_m3_vl",
+  "routed_experts": 128
+ },
+ "OpenGVLab/InternVL2_5-8B": {
+  "model_type": "internvl_chat",
+  "routed_experts": 0
+ },
+ "OpenGVLab/InternVL3-5": {
+  "unresolvable": "repo not found or not publicly readable (see #677)"
+ },
+ "OuteAI/OuteTTS-0.3-500M": {
+  "model_type": "qwen2",
+  "routed_experts": 0
+ },
+ "PaddlePaddle/PaddleOCR-VL": {
+  "model_type": "paddleocr_vl",
+  "routed_experts": 0
+ },
+ "Qwen/QVQ-72B-Preview": {
+  "model_type": "qwen2_vl",
+  "routed_experts": 0
+ },
+ "Qwen/QwQ-32B": {
+  "model_type": "qwen2",
+  "routed_experts": 0
+ },
+ "Qwen/Qwen-Image": {
+  "unresolvable": "the repo has no config.json"
+ },
+ "Qwen/Qwen2-Audio-7B-Instruct": {
+  "model_type": "qwen2_audio",
+  "routed_experts": 0
+ },
+ "Qwen/Qwen2-VL-72B-Instruct": {
+  "model_type": "qwen2_vl",
+  "routed_experts": 0
+ },
+ "Qwen/Qwen2-VL-7B-Instruct": {
+  "model_type": "qwen2_vl",
+  "routed_experts": 0
+ },
+ "Qwen/Qwen2.5-0.5B-Instruct": {
+  "model_type": "qwen2",
+  "routed_experts": 0
+ },
+ "Qwen/Qwen2.5-1.5B-Instruct": {
+  "model_type": "qwen2",
+  "routed_experts": 0
+ },
+ "Qwen/Qwen2.5-3B-Instruct": {
+  "model_type": "qwen2",
+  "routed_experts": 0
+ },
+ "Qwen/Qwen2.5-72B-Instruct": {
+  "model_type": "qwen2",
+  "routed_experts": 0
+ },
+ "Qwen/Qwen2.5-7B": {
+  "model_type": "qwen2",
+  "routed_experts": 0
+ },
+ "Qwen/Qwen2.5-7B-Instruct": {
+  "model_type": "qwen2",
+  "routed_experts": 0
+ },
+ "Qwen/Qwen2.5-Coder-1.5B-Instruct": {
+  "model_type": "qwen2",
+  "routed_experts": 0
+ },
+ "Qwen/Qwen2.5-Coder-14B-Instruct": {
+  "model_type": "qwen2",
+  "routed_experts": 0
+ },
+ "Qwen/Qwen2.5-Coder-32B-Instruct": {
+  "model_type": "qwen2",
+  "routed_experts": 0
+ },
+ "Qwen/Qwen2.5-Coder-7B-Instruct": {
+  "model_type": "qwen2",
+  "routed_experts": 0
+ },
+ "Qwen/Qwen2.5-Math-1.5B-Instruct": {
+  "model_type": "qwen2",
+  "routed_experts": 0
+ },
+ "Qwen/Qwen2.5-Math-7B-Instruct": {
+  "model_type": "qwen2",
+  "routed_experts": 0
+ },
+ "Qwen/Qwen3-14B": {
+  "model_type": "qwen3",
+  "routed_experts": 0
+ },
+ "Qwen/Qwen3-30B-A3B": {
+  "model_type": "qwen3_moe",
+  "routed_experts": 128
+ },
+ "Qwen/Qwen3-32B": {
+  "model_type": "qwen3",
+  "routed_experts": 0
+ },
+ "Qwen/Qwen3-8B": {
+  "model_type": "qwen3",
+  "routed_experts": 0
+ },
+ "Qwen/Qwen3-Coder-30B-A3B-Instruct": {
+  "model_type": "qwen3_moe",
+  "routed_experts": 128
+ },
+ "Qwen/Qwen3.5-0.8B": {
+  "model_type": "qwen3_5",
+  "routed_experts": 0
+ },
+ "Qwen/Qwen3.5-122B-A10B": {
+  "model_type": "qwen3_5_moe",
+  "routed_experts": 256
+ },
+ "Qwen/Qwen3.5-27B": {
+  "model_type": "qwen3_5",
+  "routed_experts": 0
+ },
+ "Qwen/Qwen3.5-2B": {
+  "model_type": "qwen3_5",
+  "routed_experts": 0
+ },
+ "Qwen/Qwen3.5-35B-A3B": {
+  "model_type": "qwen3_5_moe",
+  "routed_experts": 256
+ },
+ "Qwen/Qwen3.5-397B-A17B": {
+  "model_type": "qwen3_5_moe",
+  "routed_experts": 512
+ },
+ "Qwen/Qwen3.5-4B": {
+  "model_type": "qwen3_5",
+  "routed_experts": 0
+ },
+ "Qwen/Qwen3.5-4B-Base": {
+  "model_type": "qwen3_5",
+  "routed_experts": 0
+ },
+ "Qwen/Qwen3.5-9B": {
+  "model_type": "qwen3_5",
+  "routed_experts": 0
+ },
+ "Qwen/Qwen3.6-27B": {
+  "model_type": "qwen3_5",
+  "routed_experts": 0
+ },
+ "Qwen/Qwen3.6-35B-A3B": {
+  "model_type": "qwen3_5_moe",
+  "routed_experts": 256
+ },
+ "Qwen/Qwen3.8-27B": {
+  "model_type": "qwen3_5",
+  "routed_experts": 0
+ },
+ "SparkAudio/Spark-TTS-0.5B": {
+  "unresolvable": "the repo has no config.json"
+ },
+ "THUDM/glm-4.6": {
+  "unresolvable": "repo not found or not publicly readable (see #677)"
+ },
+ "baichuan-inc/Baichuan2-13B-Chat": {
+  "model_type": "baichuan",
+  "routed_experts": 0
+ },
+ "canopylabs/orpheus-3b-0.1-ft": {
+  "unresolvable": "gated; set HF_TOKEN to classify"
+ },
+ "codellama/CodeLlama-13b-Instruct-hf": {
+  "model_type": "llama",
+  "routed_experts": 0
+ },
+ "codellama/CodeLlama-70b-Instruct-hf": {
+  "model_type": "llama",
+  "routed_experts": 0
+ },
+ "deepcogito/cogito-v2-preview": {
+  "unresolvable": "repo not found or not publicly readable (see #677)"
+ },
+ "deepseek-ai/DeepSeek-OCR": {
+  "model_type": "deepseek_vl_v2",
+  "routed_experts": 64
+ },
+ "deepseek-ai/DeepSeek-R1-Distill-Llama-70B": {
+  "model_type": "llama",
+  "routed_experts": 0
+ },
+ "deepseek-ai/DeepSeek-R1-Distill-Llama-8B": {
+  "model_type": "llama",
+  "routed_experts": 0
+ },
+ "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B": {
+  "model_type": "qwen2",
+  "routed_experts": 0
+ },
+ "deepseek-ai/DeepSeek-R1-Distill-Qwen-14B": {
+  "model_type": "qwen2",
+  "routed_experts": 0
+ },
+ "deepseek-ai/DeepSeek-R1-Distill-Qwen-32B": {
+  "model_type": "qwen2",
+  "routed_experts": 0
+ },
+ "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B": {
+  "model_type": "qwen2",
+  "routed_experts": 0
+ },
+ "deepseek-ai/DeepSeek-V3": {
+  "model_type": "deepseek_v3",
+  "routed_experts": 256
+ },
+ "deepseek-ai/DeepSeek-V3-0324": {
+  "model_type": "deepseek_v3",
+  "routed_experts": 256
+ },
+ "deepseek-ai/DeepSeek-V4-Flash": {
+  "model_type": "deepseek_v4",
+  "routed_experts": 256
+ },
+ "deepseek-ai/DeepSeek-V4-Pro": {
+  "model_type": "deepseek_v4",
+  "routed_experts": 384
+ },
+ "epfl-llm/meditron-7b": {
+  "unresolvable": "gated; set HF_TOKEN to classify"
+ },
+ "facebook/seamless-m4t-v2-large": {
+  "model_type": "seamless_m4t_v2",
+  "routed_experts": 0
+ },
+ "google/embeddinggemma-300m": {
+  "unresolvable": "gated; set HF_TOKEN to classify"
+ },
+ "google/gemma-2-2b-it": {
+  "unresolvable": "gated; set HF_TOKEN to classify"
+ },
+ "google/gemma-3-12b-it": {
+  "unresolvable": "gated; set HF_TOKEN to classify"
+ },
+ "google/gemma-3-27b-it": {
+  "unresolvable": "gated; set HF_TOKEN to classify"
+ },
+ "google/gemma-3-9b-it": {
+  "unresolvable": "repo not found or not publicly readable (see #677)"
+ },
+ "google/medgemma-4b-it": {
+  "unresolvable": "gated; set HF_TOKEN to classify"
+ },
+ "ibm-granite/granite-4.0-tiny-base": {
+  "unresolvable": "repo not found or not publicly readable (see #677)"
+ },
+ "ise-uiuc/Magicoder-S-DS-6.7B": {
+  "model_type": "llama",
+  "routed_experts": 0
+ },
+ "llava-hf/llava-v1.6-mistral-7b-hf": {
+  "model_type": "llava_next",
+  "routed_experts": 0
+ },
+ "meta-llama/Llama-2-13b-hf": {
+  "unresolvable": "gated; set HF_TOKEN to classify"
+ },
+ "meta-llama/Llama-3.1-70B-Instruct": {
+  "unresolvable": "gated; set HF_TOKEN to classify"
+ },
+ "meta-llama/Llama-3.1-8B": {
+  "unresolvable": "gated; set HF_TOKEN to classify"
+ },
+ "meta-llama/Llama-3.1-8B-Instruct": {
+  "unresolvable": "gated; set HF_TOKEN to classify"
+ },
+ "meta-llama/Llama-3.2-11B-Vision-Instruct": {
+  "unresolvable": "gated; set HF_TOKEN to classify"
+ },
+ "meta-llama/Llama-3.2-1B-Instruct": {
+  "unresolvable": "gated; set HF_TOKEN to classify"
+ },
+ "meta-llama/Llama-3.2-3B-Instruct": {
+  "unresolvable": "gated; set HF_TOKEN to classify"
+ },
+ "meta-llama/Llama-3.2-90B-Vision-Instruct": {
+  "unresolvable": "gated; set HF_TOKEN to classify"
+ },
+ "meta-llama/Llama-4-Scout-17B-16E-Instruct": {
+  "unresolvable": "gated; set HF_TOKEN to classify"
+ },
+ "microsoft/Phi-3.5-mini-instruct": {
+  "model_type": "phi3",
+  "routed_experts": 0
+ },
+ "microsoft/phi-4": {
+  "model_type": "phi3",
+  "routed_experts": 0
+ },
+ "mistralai/Devstral-Small": {
+  "unresolvable": "repo not found or not publicly readable (see #677)"
+ },
+ "mistralai/Magistral-Small": {
+  "model_type": "mistral",
+  "routed_experts": 0
+ },
+ "mistralai/Mathstral-7B-v0.1": {
+  "model_type": "mistral",
+  "routed_experts": 0
+ },
+ "mistralai/Ministral-8B-Instruct-2410": {
+  "model_type": "mistral",
+  "routed_experts": 0
+ },
+ "mistralai/Mistral-7B-Instruct-v0.3": {
+  "model_type": "mistral",
+  "routed_experts": 0
+ },
+ "mistralai/Mistral-Large-3-675B-Instruct-2512": {
+  "unresolvable": "the repo has no config.json"
+ },
+ "mistralai/Mistral-Medium-3.5": {
+  "unresolvable": "repo not found or not publicly readable (see #677)"
+ },
+ "mistralai/Mistral-Small-24B-Instruct-2501": {
+  "model_type": "mistral",
+  "routed_experts": 0
+ },
+ "mistralai/Pixtral-12B-2409": {
+  "unresolvable": "the repo has no config.json"
+ },
+ "mistralai/Voxtral-Mini-3B": {
+  "unresolvable": "repo not found or not publicly readable (see #677)"
+ },
+ "mlx-community/Llama-3.1-8B-Instruct-4bit": {
+  "model_type": "llama",
+  "routed_experts": 0
+ },
+ "mlx-community/Qwen3-8B-4bit": {
+  "model_type": "qwen3",
+  "routed_experts": 0
+ },
+ "mlx-community/gemma-3-4b-it-4bit": {
+  "model_type": "gemma3",
+  "routed_experts": 0
+ },
+ "moonshotai/Kimi-K2": {
+  "unresolvable": "repo not found or not publicly readable (see #677)"
+ },
+ "moonshotai/Kimi-K2-Thinking": {
+  "model_type": "kimi_k2",
+  "routed_experts": 384
+ },
+ "moonshotai/Kimi-K2.5": {
+  "model_type": "kimi_k25",
+  "routed_experts": 384
+ },
+ "moonshotai/Kimi-K2.6": {
+  "model_type": "kimi_k25",
+  "routed_experts": 384
+ },
+ "nvidia/Nemotron-4-340B-Instruct": {
+  "unresolvable": "the repo has no config.json"
+ },
+ "openai/gpt-oss-120b": {
+  "model_type": "gpt_oss",
+  "routed_experts": 128
+ },
+ "openai/gpt-oss-20b": {
+  "model_type": "gpt_oss",
+  "routed_experts": 32
+ },
+ "openai/whisper-base": {
+  "model_type": "whisper",
+  "routed_experts": 0
+ },
+ "openai/whisper-large-v3": {
+  "model_type": "whisper",
+  "routed_experts": 0
+ },
+ "openai/whisper-tiny": {
+  "model_type": "whisper",
+  "routed_experts": 0
+ },
+ "openbmb/MiniCPM-V-2_6": {
+  "unresolvable": "gated; set HF_TOKEN to classify"
+ },
+ "sentence-transformers/all-mpnet-base-v2": {
+  "model_type": "mpnet",
+  "routed_experts": 0
+ },
+ "sesame/csm-1b": {
+  "unresolvable": "gated; set HF_TOKEN to classify"
+ },
+ "zai-org/GLM-5": {
+  "model_type": "glm_moe_dsa",
+  "routed_experts": 256
+ },
+ "zai-org/GLM-5.1": {
+  "model_type": "glm_moe_dsa",
+  "routed_experts": 256
+ }
+}

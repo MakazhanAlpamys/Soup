@@ -19,13 +19,8 @@ from __future__ import annotations
 
 import json
 import os
-import sys
 
 import pytest
-
-POSIX_ONLY = pytest.mark.skipif(
-    sys.platform == "win32", reason="symlink creation needs elevation on Windows"
-)
 
 
 def _strip_ansi(text: str) -> str:
@@ -170,7 +165,7 @@ class TestSigningPrimitives:
         with pytest.raises(ValueError):
             load_private_key_file("a\x00b.pem")
 
-    @POSIX_ONLY
+    @pytest.mark.requires_symlink
     def test_load_private_key_file_symlink_rejected(self, tmp_path):
         from soup_cli.utils.signing import (
             generate_ed25519_private_pem,
@@ -740,7 +735,7 @@ class TestLicenseExtraction:
         )
         assert extract_license_from_adapter(str(adir)) == "mit"
 
-    @POSIX_ONLY
+    @pytest.mark.requires_symlink
     def test_symlinked_config_rejected(self, tmp_path):
         from soup_cli.utils.license_matrix import extract_license_from_adapter
 
@@ -1310,7 +1305,7 @@ class TestReviewFollowups:
         with pytest.raises(ValueError, match="null"):
             NamespacePinStore("a\x00b.db")
 
-    @POSIX_ONLY
+    @pytest.mark.requires_symlink
     def test_pin_store_rejects_symlink_db(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         from soup_cli.utils.namespace_pin import NamespacePinStore
@@ -1417,7 +1412,7 @@ class TestReviewFollowups:
         assert "must match" in r.output.lower()
 
     # L4 — _load_signature symlink rejection
-    @POSIX_ONLY
+    @pytest.mark.requires_symlink
     def test_load_signature_symlink_rejected(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         from soup_cli.utils.adapter_sign import sign_adapter, verify_adapter
@@ -1516,7 +1511,7 @@ class TestSecurityFixes:
         with pytest.raises(ValueError, match="null"):
             read_public_key_file("a\x00b")
 
-    @POSIX_ONLY
+    @pytest.mark.requires_symlink
     def test_read_public_key_file_symlink_rejected(self, tmp_path):
         from soup_cli.utils.signing import read_public_key_file
 
