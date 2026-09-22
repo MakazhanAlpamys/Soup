@@ -10,10 +10,11 @@ Asserted on CPU (no CUDA needed):
 
 - ``torch.autograd.gradcheck`` in float64, with and without a base bias.
 - fp32 forward, input-grad and adapter-grad parity against the unpatched peft
-  ``lora.Linear`` at ``assert_close`` defaults. Measured on the writing box,
-  all four comparisons came out bit-exact; that readout lives in the PR rather
-  than in an assertion, so a platform where the op order rounds differently
-  still passes while broken math does not.
+  ``lora.Linear`` at ``assert_close`` defaults. The parity is asserted at
+  tolerance, not bit-exactness: an earlier bit-exact readout was taken with
+  ``lora_B`` at zero, which makes the adapter term vanish, so it measured far
+  less than it appeared to. With ``lora_B`` randomised the comparison is a real
+  one and the tolerance is what carries it.
 - Delegation to peft's own forward: disabled adapters, merged adapters, a DoRA
   variant, non-zero dropout, and the ``adapter_names`` kwarg.
 - The patched forward reads the base weight at call time (the streaming
@@ -32,8 +33,7 @@ Marked ``gpu`` (the protocol for a CUDA run; skipped in CI):
 - A micro-benchmark at the Llama-3.1-8B ``o_proj`` shape. Report, do not
   assert.
 
-No CUDA device was available while writing this, so the gpu-marked tests have
-not executed yet; the PR says so. Everything CPU above ran green on macOS with
+The gpu-marked tests need a card. Everything CPU above ran green on macOS with
 torch 2.14.0 / peft 0.21.0 / Python 3.12 (the versions CI installs).
 """
 
@@ -944,12 +944,24 @@ class TestTheFastPathIsActuallyTaken:
     the kernel can satisfy.
     """
 
-    def test_the_output_carries_the_kernels_own_grad_fn(self):
+    @pytest.mark.parametrize("bias", [True, False], ids=["bias", "no-bias"])
+    @pytest.mark.parametrize("shape", [(4, 8), (2, 3, 8)], ids=["2d", "3d"])  # [N, in] / [B, S, in]
+    def test_the_output_carries_the_kernels_own_grad_fn(self, bias, shape):
         """The kernel's Function node, not peft's, is what built this output.
 
         ``grad_fn`` is the positive edge: the name is produced by the autograd
         Function that ran, so it cannot hold when the kernel was skipped. The
         unpatched forward yields ``AddBackward0`` for the same input.
+
+        Parametrised over bias and rank because the pin has to see a narrowed
+        delegation guard, not only an unconditional one. Measured at review
+        time: with both arms at defaults (bias, 2-D), three mutations at
+        ``fast_lora.py:278`` all SURVIVED the suite - delegating on a 3-D
+        activation, delegating for a bias-less base, and both together. The
+        combination is what the kernel exists for: ``_flatten``'s own docstring
+        names ``[B, S, in]`` as the transformers rank, and every ``o_proj`` call
+        in a Llama is 3-D on a bias-less base. The parity tests cannot catch it
+        because agreement is trivially true under delegation.
         """
         _requires_train_extra()
         import torch
@@ -957,8 +969,8 @@ class TestTheFastPathIsActuallyTaken:
         from soup_cli.utils.fast_lora import patch_fast_lora_single_projection
 
         torch.manual_seed(0)
-        model, layer = _make_adapted_linear()
-        x = torch.randn(3, 8, requires_grad=True)
+        model, layer = _make_adapted_linear(bias=bias)
+        x = torch.randn(*shape, requires_grad=True)
 
         before = layer(x)
         assert type(before.grad_fn).__name__ != "_FastLoraSingleProjectionBackward", (
