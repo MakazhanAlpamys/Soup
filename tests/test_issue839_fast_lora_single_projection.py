@@ -23,13 +23,17 @@ Asserted on CPU (no CUDA needed):
   and all 16 adapter grads match the resident twin (#331 shape).
 - Saved-for-backward bytes are not worse than peft's graph at the unit shapes
   (measured equal; the assertion is ``<=``).
+- The kernel's own grad_fn is asserted on CPU across bias, rank, and dtypes
+  (fp32, bf16, fp16, mixed), ensuring non-fp32 or mixed-dtype execution paths
+  do not silently delegate.
 
 Marked ``gpu`` (the protocol for a CUDA run; skipped in CI):
 
-- NF4 forward/backward parity against unpatched ``lora.bnb.Linear4bit``. The
-  tolerance is loose on purpose: the fused-vs-dequant divergence #968 pins is
-  part of whatever delta is measured there, and the honest magnitude needs a
-  card.
+- NF4 forward/backward parity and kernel execution (asserting grad_fn is the
+  kernel's autograd node, not the delegate's) against unpatched
+  ``lora.bnb.Linear4bit``. The tolerance is loose on purpose: the fused-vs-dequant
+  divergence #776 pins is part of whatever delta is measured there, and the honest
+  magnitude needs a card.
 - A micro-benchmark at the Llama-3.1-8B ``o_proj`` shape. Report, do not
   assert.
 
@@ -841,6 +845,9 @@ class TestNf4Parity:
 
         x = torch.randn(5, 32, device="cuda", dtype=torch.bfloat16, requires_grad=True)
         ref = layer(x)
+        assert type(ref.grad_fn).__name__ != "_FastLoraSingleProjectionBackward", (
+            "the fixture must not start patched, or the assertion below proves nothing"
+        )
         ref.sum().backward()
         ref_x = x.grad.detach().clone()
         ref_p = {
@@ -855,9 +862,13 @@ class TestNf4Parity:
 
         assert patch_fast_lora_single_projection(model) == 1
         out = layer(x)
+        assert type(out.grad_fn).__name__ == "_FastLoraSingleProjectionBackward", (
+            f"the kernel did not run on NF4: grad_fn is {type(out.grad_fn).__name__}, "
+            "which is the delegate's node"
+        )
         out.sum().backward()
 
-        # Loose on purpose: the fused-vs-dequant divergence pinned by #968 is
+        # Loose on purpose: the fused-vs-dequant divergence pinned by #776 is
         # part of this delta, and its magnitude on this shape is unmeasured
         # without a card. The PR asks for the readout from the first CUDA run.
         atol = 1e-2
@@ -946,7 +957,10 @@ class TestTheFastPathIsActuallyTaken:
 
     @pytest.mark.parametrize("bias", [True, False], ids=["bias", "no-bias"])
     @pytest.mark.parametrize("shape", [(4, 8), (2, 3, 8)], ids=["2d", "3d"])  # [N, in] / [B, S, in]
-    def test_the_output_carries_the_kernels_own_grad_fn(self, bias, shape):
+    @pytest.mark.parametrize(
+        "dtype", ["fp32", "bf16", "fp16", "mixed"], ids=["fp32", "bf16", "fp16", "mixed"]
+    )
+    def test_the_output_carries_the_kernels_own_grad_fn(self, bias, shape, dtype):
         """The kernel's Function node, not peft's, is what built this output.
 
         ``grad_fn`` is the positive edge: the name is produced by the autograd
@@ -962,6 +976,10 @@ class TestTheFastPathIsActuallyTaken:
         names ``[B, S, in]`` as the transformers rank, and every ``o_proj`` call
         in a Llama is 3-D on a bias-less base. The parity tests cannot catch it
         because agreement is trivially true under delegation.
+        Additionally, parametrised over dtype (fp32, bf16, fp16, mixed) because
+        delegating on non-fp32, fp16, or mixed-dtype (fp32 adapters on a bf16 base,
+        as left by get_peft_model with autocast_adapter_dtype=True) would otherwise
+        survive both parity and gradcheck.
         """
         _requires_train_extra()
         import torch
@@ -969,8 +987,19 @@ class TestTheFastPathIsActuallyTaken:
         from soup_cli.utils.fast_lora import patch_fast_lora_single_projection
 
         torch.manual_seed(0)
+        torch_dtype = {
+            "fp32": torch.float32,
+            "bf16": torch.bfloat16,
+            "fp16": torch.float16,
+            "mixed": torch.bfloat16,
+        }[dtype]
         model, layer = _make_adapted_linear(bias=bias)
-        x = torch.randn(*shape, requires_grad=True)
+        model.to(torch_dtype)
+        if dtype == "mixed":  # what get_peft_model leaves by default: fp32 adapters on a bf16 base
+            for name, param in model.named_parameters():
+                if "lora_" in name:
+                    param.data = param.data.float()
+        x = torch.randn(*shape, dtype=torch_dtype, requires_grad=True)
 
         before = layer(x)
         assert type(before.grad_fn).__name__ != "_FastLoraSingleProjectionBackward", (
