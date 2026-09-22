@@ -16,7 +16,7 @@ permissions. It deliberately does NOT add ``pre-commit run --all-files`` to CI â
 that is the larger question the issue defers.
 
 **The ``=======`` false positive.** A bare line of seven equals signs is legal
-Markdown (a setext heading underline) and adef test_valid_utf8_returns_text(self, tmp_path: Path):ppears in ReST. Matching it on its
+Markdown (a setext heading underline) and appears in ReST. Matching it on its
 own would fire on legitimate documentation. So ``=======`` is reported only when
 the *same file* also contains a ``<<<<<<<`` or ``>>>>>>>`` line â€” i.e. when it is
 part of an actual conflict block, which is exactly how Git emits them. The two
@@ -28,10 +28,11 @@ is treated as binary and skipped rather than crashing the scan.
 
 from __future__ import annotations
 
-import io
 import re
 import subprocess
 from pathlib import Path
+
+import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -40,7 +41,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 #: equals signs to end of line.
 _START = re.compile(r"^<{7}(?: .*)?$", re.M)
 _END = re.compile(r"^>{7}(?: .*)?$", re.M)
-_DIVIDER = re.compile(r"^={7}$", re.M)
+_DIVIDER = re.compile(r"^={7}\r?$", re.M)
 
 
 def _tracked_files() -> list[Path]:
@@ -53,6 +54,11 @@ def _tracked_files() -> list[Path]:
     )
     return [REPO_ROOT / line for line in out.stdout.splitlines() if line]
 
+def _tracked_files_or_skip() -> list[Path]:
+    try:
+        return _tracked_files()
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        pytest.skip("guard requires a git checkout")
 
 def _read_text(path: Path) -> str | None:
     """Return the decoded text, or ``None`` for a file we treat as binary."""
@@ -107,7 +113,10 @@ def _scan_repo() -> list[str]:
 
 class TestNoCommittedConflictMarkers:
     def test_no_tracked_file_carries_a_conflict_marker(self):
-        problems = _scan_repo()
+        try:
+            problems = _scan_repo()
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            pytest.skip("guard requires a git checkout")
         assert not problems, (
             "These tracked files contain a committed Git conflict marker. "
             "Resolve the conflict and remove the marker lines before merging "
@@ -116,7 +125,10 @@ class TestNoCommittedConflictMarkers:
 
     def test_the_scan_actually_covers_the_suite(self):
         """A scan that silently stopped reading files would pass vacuously."""
-        tracked = _tracked_files()
+        try:
+            tracked = _tracked_files()
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            pytest.skip("guard requires a git checkout")
         scanned = [path for path in tracked if _read_text(path) is not None]
         assert tracked
         assert scanned
@@ -139,6 +151,15 @@ class TestTheScannerCanActuallyFail:
         text = "before\n<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> topic\nafter\n"
         kinds = {kind for _, kind in find_conflict_markers(text)}
         assert kinds == {"<<<<<<<", "=======", ">>>>>>>"}
+
+    def test_crlf_conflict_block_reports_divider(self):
+        text = "before\r\n<<<<<<< HEAD\r\nours\r\n=======\r\ntheirs\r\n>>>>>>> topic\r\n"
+        found = find_conflict_markers(text)
+        assert found == [
+            (2, "<<<<<<<"),
+            (4, "======="),
+            (6, ">>>>>>>"),
+        ], found
 
     def test_a_standalone_divider_is_not_flagged(self):
         """CONTROL. Seven equals signs alone is a setext underline / ReST rule."""
@@ -177,7 +198,10 @@ class TestReadTextTreatsUndecodableAsBinary:
 class TestFailureNamesFileAndLine:
     def test_a_planted_marker_produces_a_diagnostic_with_path_and_line(self, tmp_path: Path):
         offender = tmp_path / "doc.md"
-        offender.write_text("intro\n<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> x\n", encoding="utf-8")
+        offender.write_text(
+            "intro\n<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> x\n",
+            encoding="utf-8",
+        )
         rel = "doc.md"
         problems = [
             f"{rel}:{lineno}: stray conflict marker {kind}"
