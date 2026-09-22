@@ -266,6 +266,10 @@ def attach_relora_callback(trainer: Any, tcfg: Any) -> bool:
         reset_optimizer=bool(tcfg.relora_reset_optimizer),
         prune_ratio=float(tcfg.relora_prune_ratio),
     )
+    logger.warning(
+        "training.relora_prune_ratio is ignored: ReLoRA restarts no longer prune "
+        "adapter weights"
+    )
     trainer.add_callback(ReLoRACallback(policy=policy))
     return True
 

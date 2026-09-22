@@ -38,6 +38,8 @@ class ReLoRAPolicy:
             raise ValueError(
                 f"ReLoRAPolicy.warmup_ratio must be in [0, 1], got {self.warmup_ratio}"
             )
+        # Mirror magnitude_prune_tensor's strict (0, 1) bound. prune_ratio=1.0
+        # would zero every weight on first fire — that's a footgun, not a feature.
         if not (0.0 < self.prune_ratio < 1.0):
             raise ValueError(
                 f"ReLoRAPolicy.prune_ratio must be in (0, 1), got {self.prune_ratio}"
@@ -58,7 +60,11 @@ class ReLoRAPolicy:
         return min(100, max(1, self.steps // 10))
 
 def magnitude_prune_tensor(tensor: Any, prune_ratio: float) -> Any:
-    """Zero smallest-magnitude entries in place with exact keep-count (#693)."""
+    """Zero smallest-magnitude entries in place with exact keep-count (#693).
+
+    Unused by the restart callback (optimizer moments are fully cleared, not
+    pruned); retained so the exact keep-count under ties stays tested.
+    """
     if not (0.0 < prune_ratio < 1.0):
         raise ValueError(
             f"magnitude_prune_tensor prune_ratio must be in (0, 1), got {prune_ratio}"
@@ -191,9 +197,17 @@ def _iter_lora_modules(model: Any) -> Iterator[Tuple[Any, str]]:
             continue
         if not (hasattr(module, "lora_A") and hasattr(module, "lora_B")):
             continue
+        # PEFT embedding adapters (embed_tokens) expose empty lora_A/lora_B
+        # ModuleDicts plus lora_embedding_A/B. Merging those raises
+        # RuntimeError: adapter 'default' not found in lora_A (available: []).
+        if hasattr(module, "lora_embedding_A") or hasattr(module, "lora_embedding_B"):
+            continue
         if module.__class__.__name__ in {"Linear", "Conv2d"} and not hasattr(
             module, "base_layer"
         ):
+            continue
+        lora_a = getattr(module, "lora_A", None)
+        if isinstance(lora_a, nn.ModuleDict) and len(lora_a) == 0:
             continue
         seen.add(id(module))
         yield module, _resolve_adapter_key(module)
@@ -256,7 +270,7 @@ def _merge_reinit_and_reset(
     reset_optimizer: bool,
     merge: bool = True,
 ) -> None:
-    if reset_optimizer and optimizer is not None:
+    if optimizer is not None:
         _assert_optimizer_resettable(optimizer)
 
     lora_params = []
@@ -283,7 +297,15 @@ def _try_import_callback_base():
 
 
 class _ReLoRACallback_body:  # type: ignore[misc]  # noqa: N801
-    """HF TrainerCallback that runs ReLoRA restarts every N steps."""
+    """HF TrainerCallback that runs ReLoRA restarts every N steps.
+
+    Subclasses the lazily-resolved ``TrainerCallback`` so it inherits the no-op
+    default for every Trainer event — HF's ``CallbackHandler.call_event``
+    dispatches every event via ``getattr(cb, event)`` with no ``hasattr`` guard,
+    so a bare duck-typed callback crashes on ``on_epoch_begin`` (#308). Only
+    ``on_step_end`` is overridden. The lazy factory keeps the module import free
+    of transformers.
+    """
 
     def __init__(self, policy: Optional[ReLoRAPolicy], console: Any = None) -> None:
         self.policy = policy

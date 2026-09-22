@@ -215,11 +215,43 @@ class TestReLoRACallback:
         cb.on_step_end(MagicMock(), state, MagicMock(), model=MagicMock(), optimizer=MagicMock())
         assert cb.fire_count == 0
 
+    def test_lr_warmup_via_param_groups(self):
+        from soup_cli.utils.relora import ReLoRACallback, ReLoRAPolicy
 
-class FakeLoraModule:
-    """Minimal LoRA module matching soup_cli.utils.relora iteration."""
+        class _Opt:
+            def __init__(self, lr):
+                self.param_groups = [{"lr": lr}]
+                self.state = {}
 
-    pass
+        cb = ReLoRACallback(policy=ReLoRAPolicy(steps=20))
+        opt = _Opt(0.01)
+        cb._start_lr_warmup(opt)
+        assert opt.param_groups[0]["lr"] == 0.0
+        assert cb._warmup_target_lrs == [0.01]
+        cb._maybe_advance_lr_warmup(opt)
+        assert opt.param_groups[0]["lr"] == 0.005
+        cb._maybe_advance_lr_warmup(opt)
+        assert opt.param_groups[0]["lr"] == 0.01
+
+    def test_lr_warmup_advances_on_next_step_after_fire(self):
+        from soup_cli.utils.relora import ReLoRACallback, ReLoRAPolicy
+
+        class _Opt:
+            def __init__(self, lr):
+                self.param_groups = [{"lr": lr}]
+                self.state = {}
+
+        cb = ReLoRACallback(policy=ReLoRAPolicy(steps=10, warmup_ratio=0.0))
+        model = _make_fake_lora_module()
+        opt = _Opt(1e-3)
+        state = MagicMock(global_step=10, max_steps=1000)
+        cb.on_step_end(MagicMock(), state, MagicMock(), model=model, optimizer=opt)
+        assert cb.fire_count == 1
+        assert opt.param_groups[0]["lr"] == 0.0
+        state = MagicMock(global_step=11, max_steps=1000)
+        cb.on_step_end(MagicMock(), state, MagicMock(), model=model, optimizer=opt)
+        assert cb.fire_count == 1
+        assert opt.param_groups[0]["lr"] == 1e-3
 
 
 def _make_fake_lora_module():
@@ -424,6 +456,84 @@ class TestMergeReinitAndReset:
         )
         cb._merge_reinit_and_reset(model, opt)
         assert len(opt.state[param]) == before
+
+    def test_skips_embedding_lora_modules(self):
+        try:
+            import torch
+            import torch.nn as nn
+        except ImportError:
+            pytest.skip("torch not available")
+        from soup_cli.utils.relora import _merge_reinit_and_reset
+
+        class _EmbedLora(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.lora_A = nn.ModuleDict({})
+                self.lora_B = nn.ModuleDict({})
+                self.lora_embedding_A = nn.Parameter(torch.ones(2, 4))
+                self.lora_embedding_B = nn.Parameter(torch.ones(4, 2))
+
+        class _Parent(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.embed = _EmbedLora()
+                self.linear = _make_fake_lora_module()
+
+        model = _Parent()
+        with torch.no_grad():
+            model.linear.lora_A.weight.fill_(0.1)
+            model.linear.lora_B.weight.fill_(0.2)
+            model.linear.base.weight.fill_(1.0)
+        embed_a_before = model.embed.lora_embedding_A.detach().clone()
+        embed_b_before = model.embed.lora_embedding_B.detach().clone()
+        linear_base_before = model.linear.base.weight.detach().clone()
+
+        _merge_reinit_and_reset(model, None, reset_optimizer=False)
+
+        assert torch.equal(model.embed.lora_embedding_A, embed_a_before)
+        assert torch.equal(model.embed.lora_embedding_B, embed_b_before)
+        assert not torch.equal(model.linear.base.weight, linear_base_before)
+
+    def test_wrapped_optimizer_rejected_even_when_reset_false(self):
+        try:
+            import torch
+        except ImportError:
+            pytest.skip("torch not available")
+        from soup_cli.utils.relora import _merge_reinit_and_reset
+
+        model = _make_fake_lora_module()
+        with torch.no_grad():
+            model.lora_A.weight.fill_(0.1)
+            model.lora_B.weight.fill_(0.2)
+            model.base.weight.fill_(1.0)
+        before_base = model.base.weight.clone()
+
+        optimizer = MagicMock()
+        del optimizer.state
+
+        with pytest.raises(RuntimeError, match="optimizer has no"):
+            _merge_reinit_and_reset(model, optimizer, reset_optimizer=False)
+
+        assert torch.equal(model.base.weight, before_base)
+
+
+def test_attach_relora_callback_warns_prune_ratio_ignored(caplog):
+    import logging
+    from types import SimpleNamespace
+
+    from soup_cli.utils.peft_wiring import attach_relora_callback
+
+    trainer = MagicMock()
+    tcfg = SimpleNamespace(
+        relora_steps=100,
+        relora_warmup_ratio=0.1,
+        relora_reset_optimizer=True,
+        relora_prune_ratio=0.9,
+    )
+    with caplog.at_level(logging.WARNING, logger="soup_cli.utils.peft_wiring"):
+        attach_relora_callback(trainer, tcfg)
+    assert "relora_prune_ratio" in caplog.text
+    assert "ignored" in caplog.text.lower()
 
 
 class TestReLoRATaskGate:

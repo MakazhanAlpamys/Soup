@@ -260,7 +260,7 @@ Five PEFT-surface improvements that LlamaFactory and Axolotl maintain:
 
 ```yaml
 training:
-  quantization: none            # required: PiSSA initializes from float weights
+  quantization: none            # required: schema default is 4bit; ReLoRA/PiSSA need float
   lora:
     init_strategy: pissa          # 'random' (default), 'pissa', 'olora'
     rank_pattern:                 # per-target-module rank override
@@ -279,12 +279,19 @@ early convergence than random init at the cost of one extra SVD pass on the firs
 epoch. `init_strategy: olora` is also accepted; setting the legacy `use_olora: true`
 auto-aligns for back-compat.
 
-**ReLoRA** fires every N global steps, merges the LoRA update (B @ A, with PEFT
+**ReLoRA is a behaviour break.** Soup's `training.quantization` **defaults to `4bit`**.
+ReLoRA restarts merge the LoRA update into the base weight, so `relora_steps` now
+**requires an explicit `quantization: none`** in soup.yaml. A config that previously
+set only `relora_steps` is refused at parse. No shipped recipe, template, or example
+sets `relora_steps`.
+
+ReLoRA fires every N global steps, merges the LoRA update (B @ A, with PEFT
 scaling) into the frozen base weight, reinitializes `lora_A` (Kaiming) and
 `lora_B` (zeros), optionally clears optimizer state for those adapter parameters,
-and runs a short learning-rate re-warmup. Requires float LoRA (`quantization: none`).
-Useful for very long training runs where adapter capacity saturates. `relora_prune_ratio`
-is retained for backward-compatible YAML but no longer prunes adapter weights.
+and runs a short learning-rate re-warmup. Embedding LoRA (`embed_tokens` /
+`lora_embedding_A`) is skipped, not merged. Useful for very long training runs
+where adapter capacity saturates. `relora_prune_ratio` is retained for
+backward-compatible YAML but no longer prunes adapter weights.
 Merged base deltas are in-memory only; run `soup merge` to export a dense checkpoint.
 
 **Per-pattern rank/alpha** map module name patterns to integer ranks. Useful in MoE

@@ -3074,8 +3074,8 @@ class TrainingConfig(BaseModel):
             "Fire a paper-faithful ReLoRA restart every N global steps: merge the "
             "LoRA update into the base weight, reinitialize lora_A/lora_B, and "
             "optionally clear optimizer state. None disables. Requires float LoRA "
-            "(quantization='none'; incompatible with VeRA, DoRA, layer streaming, "
-            "and FSDP2 compile)."
+            "(training.quantization defaults to '4bit' and must be set to 'none'; "
+            "incompatible with VeRA, DoRA, layer streaming, and FSDP2 compile)."
         ),
     )
     relora_warmup_ratio: float = Field(
