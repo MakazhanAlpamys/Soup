@@ -244,7 +244,7 @@ def _configs_to_verify(config: Optional[str], templates: bool):
 def _print_preflight(report, verdict_cls) -> None:
     """One row per config that did not simply attach, then the counts.
 
-    Printing 91 green rows buries the 42 that matter, so ATTACHES is summarised
+    Printing every green row buries the ones that matter, so ATTACHES is summarised
     and everything else is listed.
     """
     failures = report.failures
