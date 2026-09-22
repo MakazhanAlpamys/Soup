@@ -18,6 +18,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from tests.test_v07204 import _mps_is_the_accelerator
+
 pytestmark = pytest.mark.filterwarnings("ignore::DeprecationWarning")
 
 STREAMABLE_TRAINERS = ("sft", "dpo", "orpo", "simpo", "kto")
@@ -292,6 +294,10 @@ def test_the_streamable_task_list_matches_the_schema():
     assert trainers == set(STREAMABLE_TRAINERS)
 
 
+@pytest.mark.skipif(
+    _mps_is_the_accelerator(),
+    reason="MPS is untested for layer streaming (CUDA + CPU only)",
+)
 @pytest.mark.parametrize("task", STREAMABLE_TRAINERS)
 def test_a_real_streamed_train_checks_every_checkpoint_and_the_final_save(
     tmp_path, monkeypatch, task
