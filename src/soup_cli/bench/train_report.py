@@ -108,7 +108,7 @@ def token_utilisation(useful: int, total: int) -> Optional[float]:
     return useful / total
 
 
-def _check_trainable(snapshot: ParamSnapshot) -> Optional[dict]:
+def check_trainable(snapshot: ParamSnapshot) -> Optional[dict]:
     if snapshot.count > 0:
         return None
     detail = ""
@@ -170,6 +170,7 @@ def build_train_report(
     provenance: dict,
     memory: dict,
     config_hash: Optional[str] = None,
+    steps_requested: Optional[int] = None,
     extra: Optional[dict] = None,
 ) -> dict[str, Any]:
     """Assemble the report and run the three hard checks.
@@ -188,12 +189,21 @@ def build_train_report(
     failures = [
         failure
         for failure in (
-            _check_trainable(trainable),
+            check_trainable(trainable),
             grad_failure,
             _check_parameters_changed(trainable),
         )
         if failure is not None
     ]
+    if steps_requested is not None and len(steps) != steps_requested:
+        # Matched work is the premise of comparing two runs at all.
+        failures.append({
+            "check": "step_count",
+            "message": (
+                f"{len(steps)} optimizer step(s) measured, {steps_requested} "
+                f"requested: this run did not do the work it is labelled with."
+            ),
+        })
 
     return {
         "valid": not failures,
@@ -216,5 +226,7 @@ def build_train_report(
         "memory": dict(memory),
         "provenance": dict(provenance),
         "config_hash": config_hash,
+        "steps_requested": steps_requested,
+        "steps_measured": len(steps),
         **(extra or {}),
     }

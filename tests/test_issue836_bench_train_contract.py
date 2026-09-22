@@ -187,3 +187,26 @@ class TestTheControl:
         source = Path(__file__).resolve().parents[1] / "src" / "soup_cli" / "bench"
         for path in source.rglob("*.py"):
             assert "nvidia-smi" not in path.read_text(encoding="utf-8"), path
+
+
+class TestStepCount:
+    """Matched work: a run labelled N steps that ran fewer is not that run."""
+
+    def _report(self, measured, requested):
+        return build_train_report(
+            steps=[_step(i) for i in range(measured)],
+            warmup_steps=0,
+            trainable=ParamSnapshot(count=3, fingerprint_first="a", fingerprint_last="b"),
+            provenance={},
+            memory={},
+            steps_requested=requested,
+        )
+
+    def test_fewer_steps_than_requested_fails(self):
+        report = self._report(3, 5)
+        assert report["valid"] is False
+        assert [f["check"] for f in report["failures"]] == ["step_count"]
+        assert report["steps_measured"] == 3 and report["steps_requested"] == 5
+
+    def test_the_requested_count_passes(self):
+        assert self._report(5, 5)["valid"] is True

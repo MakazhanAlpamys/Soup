@@ -246,7 +246,9 @@ soup --log-level quiet|normal|verbose|debug   Global logging tier (Rich-formatte
 soup ui [--port 7860]                         Web UI (experiments, training, data)
 soup ui --public [--auth-token T]             Phone-scannable Web UI (v0.53.9); /docs + /openapi.json are loopback-only
 soup tokenizer train --input c.jsonl --vocab-size N  Train BPE tokenizer (v0.53.9)
-soup bench <model> --p50 --p95                Bench with tail-latency percentiles (v0.53.9)
+soup bench <model>                            Inference speed + memory (same as `soup bench infer <model>`)
+soup bench infer <model> --p50 --p95          Bench with tail-latency percentiles (v0.53.9)
+soup bench train --config soup.yaml --steps 20 --warmup 3 -o bench-train.json  Timed SFT steps; exits 1 when the model was not training (#836)
 soup bench <model> --backend auto             Auto-detect transformers/mlx backend (v0.53.9)
 soup serve --reasoning-parser deepseek-r1     Strip <think> blocks from responses (v0.53.9)
 soup doctor [--nccl] [--disk] [--config F]    Check environment (optionally check NCCL bandwidth, media type; --disk ~9s cold / ~2.4s warm).

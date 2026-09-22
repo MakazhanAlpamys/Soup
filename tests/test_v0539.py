@@ -490,7 +490,7 @@ def test_detect_backend_config_malformed_falls_back(tmp_path, monkeypatch):
 
 def test_bench_help_lists_percentile_flags():
     runner = CliRunner()
-    result = runner.invoke(app, ["bench", "--help"])
+    result = runner.invoke(app, ["bench", "infer", "--help"])
     assert result.exit_code == 0, (result.output, repr(result.exception))
     plain = _plain(result.output)
     assert "p50" in plain
@@ -843,7 +843,7 @@ def test_tokenizer_train_special_token_dedup_and_validation(tmp_path, monkeypatc
 def test_bench_p50_p95_runs_with_help_only():
     """Smoke: --p50/--p95 flags are wired (without spinning up a real model)."""
     runner = CliRunner()
-    result = runner.invoke(app, ["bench", "--help"])
+    result = runner.invoke(app, ["bench", "infer", "--help"])
     assert result.exit_code == 0
     # The flag descriptions must mention the v0.53.9 release tag so future
     # patches don't silently drop the percentile rows.

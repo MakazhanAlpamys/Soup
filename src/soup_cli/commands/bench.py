@@ -1,5 +1,6 @@
-"""soup bench -- simple measuring tool for model speed and memory."""
+"""soup bench -- measure inference speed (``infer``) or a training step (``train``)."""
 
+import json
 import time
 from pathlib import Path
 from typing import Optional
@@ -8,10 +9,30 @@ import typer
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
+from typer.core import TyperGroup
 
 console = Console()
 
 
+class _BenchGroup(TyperGroup):
+    """``soup bench <model>`` predates the group, so anything that is not a
+    subcommand routes to ``infer`` -- a bare model path, or an option given
+    first (``soup bench --p50 ./output``). Only ``--help`` stays the group's."""
+
+    def parse_args(self, ctx, args):
+        if args and args[0] not in self.commands and args[0] not in ctx.help_option_names:
+            args = ["infer", *args]
+        return super().parse_args(ctx, args)
+
+
+app = typer.Typer(
+    cls=_BenchGroup,
+    no_args_is_help=True,
+    help="Benchmark a model: inference speed (infer, the default) or training (train).",
+)
+
+
+@app.command(name="infer")
 def bench(
     model: str = typer.Argument(
         ...,
@@ -281,3 +302,65 @@ def bench(
             pct_table.add_row("p99", f"{summary.p99:.3f}")
         console.print()
         console.print(pct_table)
+
+
+@app.command(name="train")
+def train(
+    config: str = typer.Option("soup.yaml", "--config", "-c", help="Config to train"),
+    steps: int = typer.Option(20, "--steps", min=1, help="Optimizer steps to run"),
+    warmup: int = typer.Option(
+        3, "--warmup", min=0, help="Leading steps measured but left out of the timing"
+    ),
+    output: str = typer.Option(
+        "bench-train.json", "--output", "-o", help="Where to write the JSON report"
+    ),
+) -> None:
+    """Train for a fixed number of steps and report timing, memory and tokens --
+    failing when the model was not actually training (#836)."""
+    from rich.markup import escape
+
+    from soup_cli.bench.train_run import bench_scope_error, run_bench_train
+    from soup_cli.config.loader import load_config
+    from soup_cli.data.loader import load_dataset
+    from soup_cli.utils.gpu import detect_device
+
+    if not Path(config).is_file():
+        console.print(f"[red]Config not found:[/] {escape(config)}")
+        raise typer.Exit(1)
+    try:
+        cfg = load_config(Path(config))
+    except Exception as exc:  # noqa: BLE001 -- surfaced to the user as-is
+        console.print(f"[red]Config invalid:[/] {escape(str(exc))}")
+        raise typer.Exit(1) from exc
+    refused = bench_scope_error(cfg)
+    if refused:
+        console.print(f"[red]Cannot bench this config:[/] {escape(refused)}")
+        raise typer.Exit(1)
+
+    device, _ = detect_device(backend=cfg.backend)
+    try:
+        report = run_bench_train(
+            cfg, steps=steps, warmup=warmup, device=device,
+            load_dataset=lambda c: load_dataset(c.data),
+        )
+    except ValueError as exc:
+        console.print(f"[red]{escape(str(exc))}[/]")
+        raise typer.Exit(1) from exc
+
+    Path(output).write_text(json.dumps(report, indent=2, default=str), encoding="utf-8")
+    timing, tokens = report["timing"], report["tokens"]
+    tok_s = report["throughput"]["useful_tokens_per_second"]
+    console.print(
+        f"{report['steps_measured']} steps ({timing['warmup_steps_discarded']} warm-up "
+        f"discarded): median {timing['median_seconds']:.4f}s, "
+        f"p95 {timing['p95_seconds']:.4f}s, "
+        f"{tokens['useful']} supervised of {tokens['total']} tokens"
+        + (f", {tok_s:.1f} supervised tok/s" if tok_s else "")
+    )
+    console.print(f"[dim]Report:[/] {escape(output)}")
+    if not report["valid"]:
+        for failure in report["failures"]:
+            console.print(f"[red]FAILED {failure['check']}:[/] {escape(failure['message'])}")
+        console.print("[red]The report is written but NOT valid: this run was not training.[/]")
+        raise typer.Exit(1)
+    console.print("[green]Valid:[/] the model trained while it was measured.")
