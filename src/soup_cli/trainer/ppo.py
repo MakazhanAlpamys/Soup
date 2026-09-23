@@ -483,7 +483,11 @@ class PPOTrainerWrapper:
             console.print(f"[green]Reward model loaded:[/] {tcfg.reward_model}")
 
         # Reward function (callable — reuse GRPO reward functions)
-        if tcfg.reward_fn:
+        if tcfg.laya_reward is not None:
+            from soup_cli.trainer.laya_reward import build_laya_reward_fn
+
+            self.reward_fn = build_laya_reward_fn(tcfg, self.device)
+        elif tcfg.reward_fn:
             from soup_cli.trainer.rewards import load_reward_fn
 
             self.reward_fn = load_reward_fn(

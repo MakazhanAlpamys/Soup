@@ -1081,6 +1081,82 @@ class EvalGateConfig(BaseModel):
         return self
 
 
+class LayaQuestionConfig(BaseModel):
+    """One inline Laya typed-decision question used as a reward."""
+
+    id: str = Field(..., description="Answer key to extract from Laya's response")
+    type: Literal["score", "noul"] = Field(
+        ..., description="Numeric Laya answer primitive to use as the reward"
+    )
+    instructions: str = Field(..., description="Instructions shown to Laya")
+    criteria: Optional[Union[List[str], Dict[str, str]]] = Field(
+        default=None, description="Score criteria or optional Noul criteria"
+    )
+
+    @field_validator("id", "instructions", mode="before")
+    @classmethod
+    def _validate_laya_question_text(cls, value: Any, info: Any) -> str:
+        if isinstance(value, bool) or not isinstance(value, str) or not value.strip():
+            raise ValueError(f"question.{info.field_name} must be a non-empty string")
+        if "\x00" in value:
+            raise ValueError(f"question.{info.field_name} must not contain null bytes")
+        return value
+
+    @field_validator("criteria", mode="before")
+    @classmethod
+    def _validate_laya_criteria(cls, value: Any) -> Any:
+        if value is None:
+            return None
+        if isinstance(value, bool) or not isinstance(value, (list, dict)):
+            raise ValueError("question.criteria must be a list or mapping")
+        if isinstance(value, list) and any(
+            isinstance(item, bool) or not isinstance(item, str) or not item.strip()
+            for item in value
+        ):
+            raise ValueError("question.criteria list must contain non-empty strings")
+        return value
+
+    @model_validator(mode="after")
+    def _validate_laya_score_criteria(self) -> "LayaQuestionConfig":
+        if self.type == "score" and (
+            not isinstance(self.criteria, list) or not self.criteria
+        ):
+            raise ValueError("score questions require a non-empty list of criteria")
+        return self
+
+
+class LayaRewardConfig(BaseModel):
+    """Configuration for the optional Laya-backed reward source."""
+
+    checkpoint: str = Field(..., description="Laya checkpoint path or Hugging Face ID")
+    subfolder: Optional[str] = Field(default=None, description="Optional checkpoint subfolder")
+    question: LayaQuestionConfig = Field(..., description="Inline Laya question")
+
+    @field_validator("checkpoint", mode="before")
+    @classmethod
+    def _validate_laya_checkpoint(cls, value: Any) -> str:
+        if isinstance(value, bool) or not isinstance(value, str) or not value.strip():
+            raise ValueError("checkpoint must be a non-empty string")
+        if "\x00" in value:
+            raise ValueError("checkpoint must not contain null bytes")
+        if len(value) > 512:
+            raise ValueError("checkpoint must be <= 512 chars")
+        return value
+
+    @field_validator("subfolder", mode="before")
+    @classmethod
+    def _validate_laya_subfolder(cls, value: Any) -> Optional[str]:
+        if value is None:
+            return None
+        if isinstance(value, bool) or not isinstance(value, str) or not value.strip():
+            raise ValueError("subfolder must be null or a non-empty string")
+        if "\x00" in value:
+            raise ValueError("subfolder must not contain null bytes")
+        if len(value) > 512:
+            raise ValueError("subfolder must be <= 512 chars")
+        return value
+
+
 class TrainingConfig(BaseModel):
     epochs: int = Field(default=3, ge=1, description="Number of training epochs")
     lr: float = Field(default=2e-5, gt=0, description="Learning rate")
@@ -1380,6 +1456,13 @@ class TrainingConfig(BaseModel):
             "Reward function: 'accuracy', 'format', 'verifiable', a path to a "
             "custom .py file, or a comma-separated ensemble of the above "
             "(e.g. 'accuracy,format') — the comma form is GRPO-only (v0.71.40)."
+        ),
+    )
+    laya_reward: Optional[LayaRewardConfig] = Field(
+        default=None,
+        description=(
+            "Optional Laya typed-decision reward. Mutually exclusive with an "
+            "explicit reward_fn, prm_reward, and reward_model."
         ),
     )
     @field_validator("reward_fn", mode="before")
@@ -6022,6 +6105,35 @@ class SoupConfig(BaseModel):
         if self.modality != "text":
             raise ValueError(
                 f"prm_reward requires modality='text'; got modality={self.modality!r}"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_laya_reward(self) -> "SoupConfig":
+        """Validate Laya dispatch and distinguish omitted ``reward_fn``."""
+        if self.training.laya_reward is None:
+            return self
+        if self.task not in {"grpo", "ppo"}:
+            raise ValueError(
+                f"laya_reward requires task='grpo' or task='ppo'; got task={self.task!r}"
+            )
+        if self.training.prm_reward is not None:
+            raise ValueError(
+                "laya_reward cannot be combined with prm_reward; configure only one "
+                "reward source"
+            )
+        if self.training.reward_model is not None:
+            raise ValueError(
+                "laya_reward cannot be combined with reward_model; PPO would select "
+                "the Transformer reward model instead"
+            )
+        if (
+            "reward_fn" in self.training.model_fields_set
+            and self.training.reward_fn is not None
+        ):
+            raise ValueError(
+                "laya_reward cannot be combined with explicitly configured reward_fn; "
+                "omit reward_fn or set it to null"
             )
         return self
 
