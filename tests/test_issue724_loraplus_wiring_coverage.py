@@ -46,6 +46,7 @@ being named — with a reason — in the exemption set below.
 
 from __future__ import annotations
 
+import ast
 import pathlib
 import re
 
@@ -93,6 +94,61 @@ def _wires_loraplus(path: pathlib.Path) -> bool:
     """True if the module wires LoRA+ either way — attach or constructor inject."""
     code = _code_without_comments(path.read_text(encoding="utf-8"))
     return bool(_ATTACH_CALL.search(code) or _INJECT_CALL.search(code))
+
+
+def _is_loraplus_none_tuple(node: ast.AST) -> bool:
+    """True for the literal ``(loraplus_optimizer, None)`` handed to the trainer."""
+    return (
+        isinstance(node, ast.Tuple)
+        and len(node.elts) == 2
+        and isinstance(node.elts[0], ast.Name)
+        and node.elts[0].id == "loraplus_optimizer"
+        and isinstance(node.elts[1], ast.Constant)
+        and node.elts[1].value is None
+    )
+
+
+def _hands_optimizer_to_constructor(body: list[ast.stmt]) -> bool:
+    """True if this branch body routes ``(loraplus_optimizer, None)`` into an
+    ``optimizers`` slot, in any of these forms:
+    ``trainer_kwargs["optimizers"] = (...)``, ``optimizers = (...)``, or a call
+    keyword ``optimizers=(...)``.
+
+    Walking the AST of one branch (rather than regex-scanning the whole file)
+    is what pins the injection to the branch that actually runs; a copy sitting
+    in a sibling branch does not satisfy it.
+    """
+    for stmt in body:
+        for node in ast.walk(stmt):
+            if (
+                isinstance(node, ast.keyword)
+                and node.arg == "optimizers"
+                and _is_loraplus_none_tuple(node.value)
+            ):
+                return True
+            if isinstance(node, ast.Assign) and _is_loraplus_none_tuple(node.value):
+                for target in node.targets:
+                    if (
+                        isinstance(target, ast.Subscript)
+                        and isinstance(target.slice, ast.Constant)
+                        and target.slice.value == "optimizers"
+                    ):
+                        return True
+                    if isinstance(target, ast.Name) and target.id == "optimizers":
+                        return True
+    return False
+
+
+def _if_is_experimental_bodies(tree: ast.AST) -> list[list[ast.stmt]]:
+    """Every ``if is_experimental:`` branch body in the tree, i.e. the live PPO
+    construction path (trl >=0.28 always imports ``trl.experimental.ppo``)."""
+    return [
+        node.body
+        for node in ast.walk(tree)
+        if isinstance(node, ast.If)
+        and isinstance(node.test, ast.Name)
+        and node.test.id == "is_experimental"
+    ]
 
 
 class TestLoraPlusWiringCoverage:
@@ -237,6 +293,62 @@ class TestPpoWiresLoraPlusByInjectionNotAttach:
             "ppo.py calls attach_loraplus_optimizer(), which binds the scheduler "
             "to the wrong optimizer on PPO's eager-construction trainer. Use "
             "build_loraplus_optimizer + optimizers=(opt, None) instead."
+        )
+
+    def test_the_live_experimental_branch_injects_the_optimizer(self):
+        """The whole-file check above is necessary but not sufficient: ppo.py has
+        more than one construction branch, and a file-wide regex is satisfied by
+        an ``optimizers=(loraplus_optimizer, None)`` sitting in ANY of them. Only
+        the ``if is_experimental:`` branch runs on supported trl (``trl>=0.29``
+        always imports ``trl.experimental.ppo`` so ``_import_ppo_classes`` returns
+        ``is_experimental=True``, and the transitional ``elif`` / legacy ``else``
+        branches are unreachable there). So the injection that actually executes
+        must live in the experimental branch; deleting it there while a dead
+        branch keeps a copy would silently disable LoRA+ on every real PPO run
+        yet leave the whole-file check green.
+
+        Parsing the AST and inspecting that branch's body specifically closes
+        that gap, which is the exact per-branch pin the #745 review asked for.
+        """
+        tree = ast.parse(self._PPO.read_text(encoding="utf-8"))
+        branches = _if_is_experimental_bodies(tree)
+        assert branches, (
+            "ppo.py no longer has an `if is_experimental:` construction branch; "
+            "the live PPO path can no longer be located to pin the injection."
+        )
+        assert any(_hands_optimizer_to_constructor(body) for body in branches), (
+            "the live `if is_experimental:` branch in ppo.py does not hand the "
+            "pre-built LoRA+ optimizer to the constructor as "
+            "optimizers=(loraplus_optimizer, None). On trl >=0.29 this is the "
+            "only branch that runs, so LoRA+ would be silently disabled on PPO "
+            "even if a dead sibling branch still carries the injection."
+        )
+
+    def test_the_branch_pin_would_catch_an_empty_live_branch(self):
+        """Guard the guard: prove ``_hands_optimizer_to_constructor`` reads the
+        branch it is handed and is not vacuously true, so the pin above cannot
+        rot into an always-pass.
+        """
+        wired = ast.parse(
+            "if is_experimental:\n"
+            "    trainer_kwargs = {'model': self.model}\n"
+            "    if loraplus_optimizer is not None:\n"
+            "        trainer_kwargs['optimizers'] = (loraplus_optimizer, None)\n"
+            "    self.trainer = cls(**trainer_kwargs)\n"
+        )
+        unwired = ast.parse(
+            "if is_experimental:\n"
+            "    trainer_kwargs = {'model': self.model}\n"
+            "    self.trainer = cls(**trainer_kwargs)\n"
+        )
+        kwarg_form = ast.parse(
+            "if is_experimental:\n"
+            "    self.trainer = cls(optimizers=(loraplus_optimizer, None))\n"
+        )
+        assert _hands_optimizer_to_constructor(_if_is_experimental_bodies(wired)[0])
+        assert _hands_optimizer_to_constructor(_if_is_experimental_bodies(kwarg_form)[0])
+        assert not _hands_optimizer_to_constructor(
+            _if_is_experimental_bodies(unwired)[0]
         )
 
 
