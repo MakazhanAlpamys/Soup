@@ -168,8 +168,7 @@ def test_doctor_config_prints_gaps_for_vision_with_mask_history(
 
     doctor(nccl=False, disk=False, config=cfg_path)
     out = strip_ansi(capsys.readouterr().out)
-    assert "Config check" in out
-    assert "modality=vision" in out
+    assert "Config check - task=sft backend=transformers modality=vision" in out
     assert "data.mask_history" in out
     assert "data.train_on_responses_only" in out
     assert "multimodal vision collator" in out
@@ -205,3 +204,34 @@ def test_doctor_config_prints_all_clear_when_no_unread_flags_set(
         f"backend=transformers modality=vision is set"
     )
     assert expected_msg in out
+
+
+def test_mlx_reports_unread_flags_regardless_of_modality(
+    temp_config_file, capsys, monkeypatch
+):
+    """MLX has no multimodal vision collator and ignores modality; unread flags must be reported."""
+    from rich.console import Console
+
+    import soup_cli.commands.doctor as doctor_module
+    from soup_cli.commands.doctor import doctor
+
+    monkeypatch.setattr(doctor_module, "console", Console(width=200))
+    cfg_path = temp_config_file("""\
+        base: meta-llama/Llama-3.1-8B-Instruct
+        task: sft
+        backend: mlx
+        modality: vision
+        training:
+          seed: 42
+        data:
+          train: ./data.jsonl
+    """)
+
+    doctor(nccl=False, disk=False, config=cfg_path)
+    out = strip_ansi(capsys.readouterr().out)
+    assert "Config check - task=sft backend=mlx modality=vision" in out
+    assert "training.seed" in out
+    assert (
+        "1 setting(s) written here are not read on backend=mlx (modality=vision)"
+        in out
+    )

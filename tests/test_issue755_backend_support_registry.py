@@ -38,7 +38,7 @@ MLX_SFT = pathlib.Path(__file__).resolve().parents[1] / (
 
 #: Every entry the registry declares as read-only-to-warn. Tests parametrise
 #: over this so a new entry is covered without editing an assertion.
-_WARNED_ENTRIES = [e for e in _REGISTRY[("sft", "mlx")] if e.trainer_reads]
+_WARNED_ENTRIES = [e for e in _REGISTRY[("sft", "mlx", "text")] if e.trainer_reads]
 
 
 def _yaml_block(text: str) -> str:
@@ -599,12 +599,12 @@ def test_an_unfounded_gap_claim_is_caught():
     fabricated = bs.SupportEntry(
         "training.lr_groups", bs.IGNORED, "fabricated, unfounded claim"
     )
-    real = bs.REGISTRY[("sft", "mlx")]
+    real = bs.REGISTRY[("sft", "mlx", "text")]
     try:
-        bs.REGISTRY[("sft", "mlx")] = (fabricated,) + real
+        bs.REGISTRY[("sft", "mlx", "text")] = (fabricated,) + real
         problems = _registry_drift(repo_root)
     finally:
-        bs.REGISTRY[("sft", "mlx")] = real
+        bs.REGISTRY[("sft", "mlx", "text")] = real
 
     assert any(
         "lr_groups" in p and "globally unconsumed" in p for p in problems
@@ -626,7 +626,7 @@ def test_a_declared_module_that_does_not_exist_is_caught(tmp_path, monkeypatch):
     import soup_cli.config.backend_support as bs
 
     monkeypatch.setitem(
-        bs.TRAINER_MODULES, ("sft", "mlx"), ("soup_cli/trainer/gone.py",)
+        bs.TRAINER_MODULES, ("sft", "mlx", "text"), ("soup_cli/trainer/gone.py",)
     )
     problems = _registry_drift(tmp_path)
     assert any("does not exist" in p for p in problems), problems
@@ -653,12 +653,12 @@ def test_a_field_wired_only_inside_a_helper_is_caught(tmp_path, monkeypatch):
     )
     monkeypatch.setitem(
         bs.REGISTRY,
-        ("sft", "mlx"),
+        ("sft", "mlx", "text"),
         (bs.SupportEntry("training.warmup_ratio", bs.IGNORED, "stale on purpose"),),
     )
     monkeypatch.setitem(
         bs.TRAINER_MODULES,
-        ("sft", "mlx"),
+        ("sft", "mlx", "text"),
         ("soup_cli/trainer/mlx_sft.py", "soup_cli/trainer/mlx_optim.py"),
     )
 
@@ -692,7 +692,7 @@ def test_wiring_a_field_makes_its_stale_entry_fail(tmp_path, monkeypatch):
     )
     monkeypatch.setitem(
         bs.REGISTRY,
-        ("sft", "mlx"),
+        ("sft", "mlx", "text"),
         (
             bs.SupportEntry(
                 "training.max_grad_norm",
@@ -702,7 +702,7 @@ def test_wiring_a_field_makes_its_stale_entry_fail(tmp_path, monkeypatch):
         ),
     )
     monkeypatch.setitem(
-        bs.TRAINER_MODULES, ("sft", "mlx"), ("soup_cli/trainer/mlx_sft.py",)
+        bs.TRAINER_MODULES, ("sft", "mlx", "text"), ("soup_cli/trainer/mlx_sft.py",)
     )
 
     problems = _registry_drift(tmp_path)
@@ -728,9 +728,9 @@ def test_deleting_a_warning_makes_its_entry_fail(entry, tmp_path, monkeypatch):
     (trainer / "mlx_sft.py").write_text(
         "def build(tcfg):\n    return None\n", encoding="utf-8"
     )
-    monkeypatch.setitem(bs.REGISTRY, ("sft", "mlx"), (entry,))
+    monkeypatch.setitem(bs.REGISTRY, ("sft", "mlx", "text"), (entry,))
     monkeypatch.setitem(
-        bs.TRAINER_MODULES, ("sft", "mlx"), ("soup_cli/trainer/mlx_sft.py",)
+        bs.TRAINER_MODULES, ("sft", "mlx", "text"), ("soup_cli/trainer/mlx_sft.py",)
     )
 
     problems = _registry_drift(tmp_path)

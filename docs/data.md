@@ -785,11 +785,21 @@ rules out `train_on_messages_with_train_field`, which is itself exclusive with
 `train_on_responses_only`: the per-message `train` field and `mask_history` can
 never both decide a run.
 
-It is honoured by the transformers backend, for `task: sft` and `task: distill`.
+It is honoured by the transformers backend, for `task: sft` and `task: distill` with text modality.
 **`backend: mlx` ignores it:** MLX SFT builds its own mask and supervises every
 assistant turn, so the same config trains the last turn on transformers and every
 turn on MLX. `soup train` says so on its "MLX backend ignores:" line, and
 `soup doctor --config` reports it.
+
+**Multimodal vision and audio ignore it:** For `modality: vision` and `modality: audio`,
+multimodal collators supervise all text tokens and only mask padding and media tokens,
+because multimodal label builders do not carry conversational turn offsets across image
+or audio token projections. Implementing assistant-only masking on multimodal datasets
+would require restructuring upstream processor collators. Soup declares this gap rather
+than attempting unverified label restructuring, so both `mask_history` and `train_on_responses_only`
+are unread on vision and audio modalities, every text token trains, and `soup doctor --config`
+reports them as ignored.
+
 
 **AOT preprocessing:**
 
