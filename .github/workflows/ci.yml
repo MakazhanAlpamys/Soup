@@ -33,9 +33,55 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+# Bound every job explicitly.
+#
+# Until now only `pytorch-smoke` declared a `timeout-minutes`, so every other
+# job inherited GitHub's 360-minute default -- six hours per cell, across a 3x3
+# matrix, before the platform intervenes at all.
+#
+# The prompt for this was #763, where `test (windows-latest, 3.11)` sat
+# `pending` at 0 seconds for ~22 hours. It could not be cleared by hand:
+# `gh run rerun --job` refuses a job that has never started, so the only exit
+# was GitHub's own eviction of a never-scheduled job at the 24-hour mark.
+#
+# READ THIS BEFORE EXPECTING THE VALUES BELOW TO PREVENT THAT -- they do not.
+# `timeout-minutes` starts counting when a job ACQUIRES a runner, not when it
+# is created, so queued time is not charged against it and a job that never
+# starts is not covered by any number here. That half needs the auto-retrigger
+# tracked in #1017. What these bound is the other half of the same incident: a
+# job that does start and then hangs, which today burns 360 minutes before it
+# shows up as anything a reviewer can act on.
+#
+# Values are ~2x the slowest SUCCESSFUL duration observed over 15 recent
+# completed runs on `main` and on pull requests -- execution time only
+# (created_at -> started_at was 4-5s in that sample, so queueing is not folded
+# into these figures):
+#
+#   job                        median   max   ->  limit
+#   test (windows-latest, *)     41.5  44.6       90
+#   test (ubuntu/macos, *)       ~25   31.8       90   (one value for the matrix)
+#   pytorch-smoke                 2.6  11.1       20   (unchanged)
+#   transformers-floor            2.5   2.8       20
+#   mlx-smoke                     0.8   0.9       20
+#   type-check                    0.3   0.4       15
+#   lint                          0.2   0.2       15
+#
+# The short jobs are deliberately NOT set to 2x their measured time. Each of
+# them installs over the network -- pip, and for `lint` a release tarball from
+# the GitHub CDN with `--retry 3 --retry-all-errors` behind it -- so their
+# realistic worst case is a slow mirror, not slow compute, and a 15-20 minute
+# floor is what absorbs that. A timeout that fires on a legitimately slow run
+# is worse than no timeout, because it teaches people to re-run a red cell
+# instead of reading it.
+#
+# `test` takes a single value rather than a per-OS expression: 90 is slack for
+# ubuntu/macos, but the alternative is arithmetic in a matrix expression to
+# save runner-minutes that are only ever spent when a job is already hung.
+
 jobs:
   lint:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -80,6 +126,7 @@ jobs:
 
   type-check:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     # Non-blocking type-check baseline. The codebase adopts annotations
     # incrementally, so mypy findings are surfaced as a warning annotation (and
     # in the step log) but do NOT fail the job — the check stays green until
@@ -101,6 +148,7 @@ jobs:
     # Keep this separate from the main matrix because `.[dev]` deliberately
     # installs the PyTorch/TRL stack and would hide an accidental MLX dependency.
     runs-on: macos-14
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -120,6 +168,36 @@ jobs:
         # execute them. Without this step, replacing the whole MLX per-row loss
         # with a constant 0.0 left the suite green (#1018 review).
         run: pytest -o addopts= -q tests/test_rewind_mlx.py
+  torchao-contract:
+    # #826: every torchao class Soup names is resolved against the REAL package
+    # here. The 3x3 matrix cannot do it -- `torchao` is not in `[dev]`, so those
+    # cells skip these tests, which is how three names torchao never exported
+    # (NVFP4Config, Int8DynActInt4Config, Float8DynActFloat8Config) survived
+    # behind a stub and a MagicMock.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install the QAT extra (torchao) beside the dev stack
+        # One spec with both extras: `-e ".[dev]" ".[qat]"` asks pip for
+        # soup-cli twice, once editable and once not, and resolution fails.
+        run: pip install -e ".[dev,qat]" "torch>=2.6.0"
+      - name: Prove torchao is actually importable, so the tests do not skip
+        run: python -c "import torchao; print(torchao.__version__)"
+      - name: Resolve every torchao class Soup asks for
+        # test_v07121.py runs here too, and not only in the matrix: it is the
+        # suite that fakes torchao, so with the real package installed it is
+        # the one that catches a resolver which answers from a cached
+        # `torchao.*` submodule after the root import has been made to fail.
+        # That exact regression shipped in this PR's first push and was found
+        # by hand; running both files in one job is what makes it a CI failure
+        # next time.
+        run: |
+          pytest -o addopts= -q \
+            tests/test_issue826_torchao_class_names.py \
+            tests/test_v07121.py
   pytorch-smoke:
     # #596: exercise the real PyTorch SFT + DPO training pipeline on every PR.
     # Keep this separate from the 3x3 matrix so the expensive model-backed
@@ -181,6 +259,7 @@ jobs:
   # upgrade the cell, then assert every pinned compatibility boundary.
   transformers-floor:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     env:
       PYTHONUTF8: "1"
       PYTHONIOENCODING: "utf-8"
@@ -257,6 +336,7 @@ jobs:
         os: [ubuntu-latest, windows-latest, macos-latest]
         python-version: ["3.10", "3.11", "3.12"]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
     env:
       # Force UTF-8 mode on all platforms. Without this, Windows defaults to
       # cp1252 ('charmap'), which fails when importing upstream packages that

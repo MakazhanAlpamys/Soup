@@ -571,7 +571,7 @@ class TestPushCardIntegration:
         from soup_cli.cli import app
 
         monkeypatch.chdir(tmp_path)
-        monkeypatch.setenv("HF_TOKEN", "t1")
+        monkeypatch.setenv("MODELSCOPE_API_TOKEN", "t1")
         db = tmp_path / "reg.db"
         eid = _make_entry(db)
         monkeypatch.setenv("SOUP_REGISTRY_DB_PATH", str(db))
@@ -746,7 +746,7 @@ class TestCiWorkflowEdges:
                 data_path="d.jsonl", suite_path="s.yaml", evidence_path="e.json",
             )
 
-    @pytest.mark.skipif(os.name != "posix", reason="POSIX symlink semantics")
+    @pytest.mark.requires_symlink
     def test_write_rejects_symlink_output(self, tmp_path, monkeypatch):
         """L1 — live symlink coverage at ci_workflow's own call site."""
         from soup_cli.utils.ci_workflow import write_soup_gate_workflow

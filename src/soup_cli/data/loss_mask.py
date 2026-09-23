@@ -247,12 +247,36 @@ def ensure_causal_loss_target(labels: Sequence[int], *, max_length: int) -> None
     )
 
 
+def keep_only_the_last_assistant_turn(labels: list[int]) -> list[int]:
+    """Mask every trained span but the final one (``data.mask_history``, #761).
+
+    Takes the labels of the assistant-only path, where a *turn* is a contiguous
+    run of non-:data:`IGNORE_INDEX` positions, and returns labels in which only
+    the last such run still contributes to the loss. Prior **assistant** turns
+    stop contributing; prior user and system turns were already masked by that
+    path and are untouched, so the field never widens what trains.
+
+    Returns the list unchanged when nothing was trained (an all-masked row), so a
+    template that reported no assistant span is not turned into a silent no-op
+    with a different failure mode.
+    """
+    index = len(labels) - 1
+    while index >= 0 and labels[index] == IGNORE_INDEX:
+        index -= 1
+    if index < 0:
+        return labels
+    while index >= 0 and labels[index] != IGNORE_INDEX:
+        index -= 1
+    return [IGNORE_INDEX] * (index + 1) + labels[index + 1:]
+
+
 def build_assistant_only_labels(
     messages: Sequence[dict],
     tokenizer: Any,
     max_length: int = 2048,
     *,
     include_eot: bool = False,
+    mask_history: bool = False,
 ) -> dict[str, list[int]]:
     """Build labels where only assistant tokens contribute to loss.
 
@@ -265,6 +289,11 @@ def build_assistant_only_labels(
             token in the unmasked region — so the model learns to predict
             the turn terminator. Default False matches HF Trainer's standard
             chat-template loss-mask behaviour. (v0.53.2 #137)
+        mask_history: When True (``data.mask_history``, #761), only the LAST
+            assistant turn contributes to the loss; earlier assistant turns are
+            masked along with the rest of the history. Earlier user and system
+            turns are already masked on this path, so this only ever removes
+            assistant tokens from the loss. (v0.42.0 Part D, wired in #761)
 
     Returns:
         ``{"input_ids": [...], "labels": [...], "attention_mask": [...]}``
@@ -281,6 +310,10 @@ def build_assistant_only_labels(
         raise TypeError(
             f"include_eot must be bool, got {type(include_eot).__name__}"
         )
+    if not isinstance(mask_history, bool):
+        raise TypeError(
+            f"mask_history must be bool, got {type(mask_history).__name__}"
+        )
     _check_messages(messages)
     _validate_max_length(max_length)
 
@@ -295,6 +328,8 @@ def build_assistant_only_labels(
             tok if flag else IGNORE_INDEX
             for tok, flag in zip(input_ids, mask)
         ]
+        if mask_history:
+            labels = keep_only_the_last_assistant_turn(labels)
         return _truncate(input_ids, labels, max_length)
 
     # --- Fallback: incremental delta ---
@@ -321,6 +356,8 @@ def build_assistant_only_labels(
                     labels[extra] = full_ids[extra]
                     extra += 1
         prev_len = new_len
+    if mask_history:
+        labels = keep_only_the_last_assistant_turn(labels)
     return _truncate(full_ids, labels, max_length)
 
 

@@ -202,11 +202,11 @@ def infer(
             "'owner/repo-name' (no leading './').[/]"
         )
         raise typer.Exit(1) from exc
-    model_path = Path(model_ref)
     if model_kind == "hf":
         console.print(
             f"[dim]Local path not found; treating {model_ref!r} as a HF repo id.[/]"
         )
+    model_target = model_ref
 
     # Read prompts
     prompts = _read_prompts(input_path)
@@ -223,7 +223,7 @@ def infer(
 
     console.print(
         Panel(
-            f"Model:    [bold]{model_path}[/]\n"
+            f"Model:    [bold]{model_target}[/]\n"
             f"Input:    [bold]{input_path}[/] ({len(prompts)} prompts)\n"
             f"Output:   [bold]{output_file}[/]\n"
             f"Device:   [bold]{device}[/]\n"
@@ -236,7 +236,7 @@ def infer(
     # Load model — gate trust_remote_code via the v0.36.0 helper.
     console.print("[dim]Loading model...[/]")
     model_obj, tokenizer = _load_model(
-        str(model_path), base, device, trust_remote_code,
+        model_target, base, device, trust_remote_code, is_local=(model_kind == "local"),
     )
     console.print("[green]Model loaded.[/]\n")
 
@@ -635,6 +635,7 @@ def _load_model(
     base_model: Optional[str],
     device: str,
     trust_remote_code: bool = False,
+    is_local: Optional[bool] = None,
 ) -> tuple:
     """Load a model and tokenizer (reuses diff.py pattern)."""
     import torch
@@ -645,23 +646,31 @@ def _load_model(
         resolve_trust_remote_code,
     )
 
-    path = Path(model_path)
-    adapter_config_path = path / "adapter_config.json"
-    is_adapter = adapter_config_path.exists()
-
-    if is_adapter and not base_model:
+    if is_local is None:
         try:
-            with open(adapter_config_path, encoding="utf-8") as f:
-                config = json.load(f)
-            base_model = config.get("base_model_name_or_path")
-        except (json.JSONDecodeError, OSError):
-            pass
+            is_local = Path(model_path).exists()
+        except OSError:
+            is_local = False
 
-    if is_adapter and not base_model:
-        console.print(
-            f"[red]Cannot detect base model for {path}. Use --base.[/]"
-        )
-        raise typer.Exit(1)
+    is_adapter = False
+    if is_local:
+        path = Path(model_path)
+        adapter_config_path = path / "adapter_config.json"
+        is_adapter = adapter_config_path.exists()
+
+        if is_adapter and not base_model:
+            try:
+                with open(adapter_config_path, encoding="utf-8") as f:
+                    config = json.load(f)
+                base_model = config.get("base_model_name_or_path")
+            except (json.JSONDecodeError, OSError):
+                pass
+
+        if is_adapter and not base_model:
+            console.print(
+                f"[red]Cannot detect base model for {path}. Use --base.[/]"
+            )
+            raise typer.Exit(1)
 
     probe_target = base_model or model_path
     requires = model_requires_trust_remote_code(model_path) or False

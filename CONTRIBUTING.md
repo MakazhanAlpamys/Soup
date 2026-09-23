@@ -163,6 +163,34 @@ pytest tests/test_data.py::test_detect_alpaca_format -v
 pytest tests/ --cov=soup_cli --cov-report=html
 ```
 
+### GPU Tests
+
+Every CI runner is GPU-less, so the tests that need a CUDA device skip there and
+only mean something on a real card. They carry the `gpu` marker (#833):
+
+```bash
+pytest tests/ -m gpu --no-cov -v
+```
+
+`--no-cov` matters: the default `--cov-fail-under` gate is computed over the whole
+package and fails a subset run. To gate a new test on CUDA, decorate it with
+`@pytest.mark.gpu` (or `@pytest.mark.gpu(reason="...")`); do not write your own
+`torch.cuda.is_available()` check. `tests/conftest.py` holds the one probe, and
+`tests/test_issue833_gpu_marker.py` fails on a private one. Use
+`tests.conftest.cuda_available()` only to pick a device, never to skip.
+
+If you have a card, a run is a real contribution: both recorded runs so far found
+defects CI could not see. Open an issue (or comment on #833) with:
+
+- the card, its compute capability (`torch.cuda.get_device_capability()`), and VRAM
+- the driver version, and the torch build (`torch.__version__`, `torch.version.cuda`)
+- the `bitsandbytes` version, if installed
+- the commit you ran (`git rev-parse HEAD`)
+- the summary line (`N passed, N failed, N skipped`), and the name and first error
+  line of every failure
+
+Accepted runs are recorded in [`benchmarks/gpu-test-runs.md`](benchmarks/gpu-test-runs.md).
+
 ### Test Files
 
 > A representative sample of the suite below. Run `pytest tests/ -v` for the complete list.
@@ -258,14 +286,14 @@ pytest tests/ --cov=soup_cli --cov-report=html
 | test_multi_gpu.py | Multi-GPU Mastery: topology, --gpus, accelerate launcher, ZeRO++, FSDP2+compile, pipeline (v0.27.0) |
 | test_training_speed.py | Training Speed & Memory: CCE, FP8, grad-ckpt tiers, kernel picker, cross-doc attn, activation offload (v0.28.0) |
 | test_hf_integration.py | HF Hub Deep Integration: token/endpoint/repo_id, auto-push callback, model card v2, collections, data push, HF Spaces, private-IP SSRF (v0.29.0) |
-| test_inference_advanced.py | Inference Excellence: prefix caching, spec-decoding auto-pairing, LoRA hot-swap, structured output, dashboard + /metrics, OpenTelemetry tracing, auto-quant picker (v0.30.0) |
+| test_inference_advanced.py | Inference Excellence: prefix caching, spec-decoding auto-pairing, LoRA hot-swap, structured output, dashboard + /metrics, OpenTelemetry tracing, dormant auto-quant helpers (v0.30.0; serving refuses auto-quant since #816) |
 | test_recipes_v031.py | Model & Recipe Breadth: 34 new recipes (vision/audio/reasoning/edge/domain/multimodal); catalog-wide invariants; CI workflow validation (v0.31.0) |
 | test_auto_tuning.py | Training Stability & Auto-Tuning: LR range finder, grad-accum monitor, auto mixed-precision, auto warmup, spike recovery, convergence detector, autopilot wiring (v0.32.0) |
 | test_part_f_hardening.py | Live Wire Part F: RLVR OS-level sandbox isolation + prune_checkpoints TOCTOU (v0.33.0) |
 | test_part_a_wave1.py | Live Wire Part A: live eval-gate scoring + registry attach (v0.33.0) |
 | test_part_a_wave2.py | Live Wire Part A: soup can run / publish + DeployTarget schema (v0.33.0) |
 | test_part_e.py | Live Wire Part E: --find-lr live loop + spike recovery hint + auto mixed-precision push + grad-accum advisory (v0.33.0) |
-| test_part_d.py | Live Wire Part D: structured-output LogitsProcessor + auto-quant live picker + HF push integration smoke (v0.33.0) |
+| test_part_d.py | Historical Part D primitives: structured-output LogitsProcessor + dormant auto-quant helpers + HF push integration smoke (v0.33.0; serving refuses auto-quant since #816) |
 | test_part_c.py | Live Wire Part C: multi-trainer v0.28.0 features + selective ckpt hooks + CrossDocCollator (v0.33.0) |
 | test_part_b.py | Live Wire Part B: auto-reexec under accelerate launch + DeepSpeed-MII live serve (v0.33.0) |
 | test_log_level.py | Smart logging tiers `--log-level quiet/normal/verbose/debug` (v0.34.0 Part A) |
@@ -487,6 +515,41 @@ GitHub Actions runs on every push and PR:
   that pin.
 
 See `.github/workflows/ci.yml`.
+
+### Stale CI marks (#1017)
+
+A `pull_request` workflow run pins `refs/pull/N/merge` at **run creation**.
+`actions/checkout` fetches that SHA; later movement of `main` is not re-resolved.
+`gh run rerun` replays the frozen merge and cannot produce a different answer.
+That is why a green tick can describe a `main` that no longer exists (#763's
+`NameError` on `_for_terminal`) and why a red X can describe a test that `main`
+has already fixed. Neither is the contributor's fault, and neither clears by
+waiting.
+
+**If your PR is red for failures you do not touch:** merge or rebase onto current
+`origin/main` and push. That is the only way to rebuild the merge SHA for the
+test matrix. Maintainers will not `gh pr update-branch` onto a fork without
+asking.
+
+**If your PR is green and `main` has moved:** the `merge-freshness` check is
+re-posted on every push to `main`. It rebuilds the merge with
+`git merge-tree --write-tree` (no write to your branch) and fails on ruff F821
+or a conflict. Lag behind `main` is reported as a **neutral** check, not a
+failure — a 10-commit cap at this repo's merge rate is `strict: true` with extra
+steps. It does not re-run the 13-job test matrix.
+
+`required_status_checks.strict` stays off: flipping it would force a rebase on
+every merge. A docs-only pre-merge procedure is what maintainers already do by
+hand and is not a control — GitHub will still merge a CLEAN PR on stale marks.
+Ask a maintainer to add `merge-freshness` to the required checks on `main` so
+the GitHub merge button honours it. The `gate` job on a pull_request event runs
+the PR's own copy of `scripts/merge_freshness.py`, so it is self-graded. Only the
+`merge-freshness` check posted by the `reeval` job from `main`'s copy is
+trustworthy.
+
+Before merging anything, `gh pr checks` returning all-green is necessary and not
+sufficient. Compare the newest run's `created_at` against `main`'s commits since,
+or look at `merge-freshness`.
 
 ## Releases
 

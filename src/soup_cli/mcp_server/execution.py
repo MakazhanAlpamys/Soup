@@ -43,6 +43,18 @@ class ProtectedFile:
     digest: str
 
 
+# Digest recorded for a planned input that did not exist at plan time (a hub id,
+# a built-in reward name, a file the run would create). A sha256 hex digest can
+# never equal it, and revalidation requires the path to still be absent.
+ABSENT_DIGEST = "absent"
+
+
+def absent_marker(path: str, field: str) -> ProtectedFile:
+    """Record that planned input ``field`` at ``path`` does not exist."""
+    del field  # kept for signature symmetry with digest_file
+    return ProtectedFile(path=os.path.realpath(path), digest=ABSENT_DIGEST)
+
+
 @dataclass
 class PendingPlan:
     token: str
@@ -196,7 +208,8 @@ class ExecutionManager:
         problem degrades to the in-memory-only behaviour rather than wedging.
         """
         try:
-            runs = ExperimentTracker().list_runs()
+            # Every launching/running row, not the 50-row list_runs() window.
+            runs = ExperimentTracker().list_active_execution_runs()
         except Exception:
             return None
         for run in runs:
@@ -278,14 +291,52 @@ class ExecutionManager:
             if isinstance(exc, ExecutionError):
                 raise
             raise ExecutionError("could not spawn execution subprocess") from exc
-        tracker.mark_running(run_id, pid=process.pid)
-        threading.Thread(
-            target=self._watch,
-            args=(process, run_id),
-            daemon=True,
-            name=f"soup-mcp-{run_id}",
-        ).start()
+        try:
+            tracker.mark_running(run_id, pid=process.pid)
+            threading.Thread(
+                target=self._watch,
+                args=(process, run_id),
+                daemon=True,
+                name=f"soup-mcp-{run_id}",
+            ).start()
+        except Exception as exc:
+            # No record of a live pid and no watcher: stop the child rather
+            # than leave it running unsupervised, then free the slot.
+            self._stop_child(process)
+            try:
+                ExperimentTracker().finish_execution(run_id, status="spawn_failed", exit_code=None)
+            except Exception:
+                pass
+            with self._lock:
+                if self._active_run_id == run_id:
+                    self._active_run_id = None
+            raise ExecutionError(
+                "could not record the execution; the child process was stopped"
+            ) from exc
         return {"run_id": run_id, "status": "running", "pid": process.pid, "log_path": log_path}
+
+    @staticmethod
+    def _stop_child(process: subprocess.Popen) -> None:
+        """Terminate, then kill after 10 s; never raises."""
+        try:
+            process.terminate()
+        except Exception:
+            pass
+        try:
+            process.wait(timeout=10)
+            return
+        except subprocess.TimeoutExpired:
+            pass
+        except Exception:
+            return
+        try:
+            process.kill()
+        except Exception:
+            pass
+        try:
+            process.wait(timeout=10)
+        except Exception:
+            pass
 
     def _watch(self, process: subprocess.Popen, run_id: str) -> None:
         try:
@@ -305,6 +356,10 @@ class ExecutionManager:
         if os.path.realpath(os.getcwd()) != plan.cwd:
             raise ExecutionError("server working directory changed; create a new plan")
         for protected in plan.protected_files:
+            if protected.digest == ABSENT_DIGEST:
+                if os.path.lexists(protected.path):
+                    raise ExecutionError("planned input changed; create a new plan")
+                continue
             current = digest_file(protected.path, "planned input")
             if current.path != protected.path or not secrets.compare_digest(
                 current.digest, protected.digest

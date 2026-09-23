@@ -234,6 +234,10 @@ class TestInstallSelectiveHooks:
                 yield (f"{prefix}.self_attn", self._attn)
                 yield (f"{prefix}.mlp", self._mlp)
 
+            def named_children(self):
+                yield ("self_attn", self._attn)
+                yield ("mlp", self._mlp)
+
         class FakeModel:
             def __init__(self):
                 self.blocks = [FakeBlock() for _ in range(3)]

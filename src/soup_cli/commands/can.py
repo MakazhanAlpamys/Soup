@@ -12,12 +12,14 @@ from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
 
+from soup_cli.utils.terminal import for_terminal
+
 console = Console()
 app = typer.Typer(no_args_is_help=True)
 
 
 def _fail(message: str) -> None:
-    console.print(f"[red]{escape(message)}[/]")
+    console.print(f"[red]{for_terminal(message)}[/]")
     raise typer.Exit(1)
 
 
@@ -84,7 +86,7 @@ def pack_cmd(
     except (ValueError, FileNotFoundError) as exc:
         _fail(str(exc))
     console.print(Panel(
-        f"Packed [cyan]{escape(entry_id)}[/] -> [bold]{escape(str(path))}[/]",
+        f"Packed [cyan]{for_terminal(entry_id)}[/] -> [bold]{for_terminal(str(path))}[/]",
         title="Soup Can", border_style="green",
     ))
 
@@ -103,7 +105,7 @@ def inspect_cmd(
     except Exception as exc:
         _fail(f"Cannot inspect can: {exc}")
 
-    table = Table(title=f"Can: {escape(manifest.name)}", show_header=False)
+    table = Table(title=f"Can: {for_terminal(manifest.name)}", show_header=False)
     table.add_column("Field", style="bold cyan")
     table.add_column("Value")
     for key, val in [
@@ -115,7 +117,8 @@ def inspect_cmd(
         ("tags", ", ".join(manifest.tags)),
         ("description", manifest.description or ""),
     ]:
-        table.add_row(escape(key), escape(str(val)))
+        # ``key`` is one of the literals above; ``val`` comes from the can.
+        table.add_row(escape(key), for_terminal(str(val)))
     console.print(table)
 
 
@@ -128,9 +131,9 @@ def verify_cmd(
 
     report = verify_can(path)
     if report.manifest_ok and report.config_ok:
-        console.print(f"[green]OK:[/] {escape(report.message)}")
+        console.print(f"[green]OK:[/] {for_terminal(report.message)}")
     else:
-        console.print(f"[red]Verify failed:[/] {escape(report.message)}")
+        console.print(f"[red]Verify failed:[/] {for_terminal(report.message)}")
         raise typer.Exit(1)
 
 
@@ -168,8 +171,8 @@ def run_cmd(
             "  - Extract the can\n"
             "  - Auto-fetch any data referenced inside\n"
             "  - Run [bold]soup train[/] against the embedded config\n\n"
-            f"Recipe: [bold]{escape(manifest.name)}[/]\n"
-            f"Author: {escape(manifest.author)}\n\n"
+            f"Recipe: [bold]{for_terminal(manifest.name)}[/]\n"
+            f"Author: {for_terminal(manifest.author)}\n\n"
             "Pass [bold]--yes[/] to confirm.",
             title="Run can - confirm", border_style="yellow",
         ))
@@ -192,7 +195,7 @@ def run_cmd(
     if result.train_returncode != 0:
         console.print(
             f"[red]train failed (rc={result.train_returncode}). "
-            f"Extract dir: {escape(str(result.extract_dir))}[/]"
+            f"Extract dir: {for_terminal(str(result.extract_dir))}[/]"
         )
         raise typer.Exit(result.train_returncode)
     if result.deploy_returncode is not None and result.deploy_returncode != 0:
@@ -202,7 +205,7 @@ def run_cmd(
         raise typer.Exit(result.deploy_returncode)
     console.print(
         f"[green]Can run complete[/] - extract dir: "
-        f"[bold]{escape(str(result.extract_dir))}[/]"
+        f"[bold]{for_terminal(str(result.extract_dir))}[/]"
     )
 
 
@@ -233,7 +236,7 @@ def publish_cmd(
         _fail(str(exc))
     except ImportError as exc:
         _fail(f"huggingface_hub not installed: {exc}")
-    console.print(f"[green]Published[/] -> [bold]{escape(url)}[/]")
+    console.print(f"[green]Published[/] -> [bold]{for_terminal(url)}[/]")
 
 
 @app.command(name="fork")
@@ -256,5 +259,5 @@ def fork_cmd(
     except (ValueError, FileNotFoundError) as exc:
         _fail(str(exc))
     console.print(
-        f"[green]Forked[/] -> [bold]{escape(str(path))}[/]"
+        f"[green]Forked[/] -> [bold]{for_terminal(str(path))}[/]"
     )

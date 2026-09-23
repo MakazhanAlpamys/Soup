@@ -195,8 +195,10 @@ training:
     mlp:    1e-5
 
   # Friendly aliases for users coming from LlamaFactory / Axolotl
-  load_in_8bit: true        # equivalent to quantization: 8bit
+  # load_in_8bit: true      # equivalent to quantization: 8bit
   # load_in_16bit: true     # equivalent to quantization: none
+
+  quantization: none        # required: PEFT LoftQ quantizes the base itself
 
   lora:
     init_strategy: loftq    # quantization-aware LoRA init (also: pissa / olora / random)
@@ -210,11 +212,37 @@ training:
 
 Catch-all friendly errors: typos in `optimizer:` are rejected at config-load with the v0.41.0 additions listed in the message; `lr_groups` patterns are validated as compilable regexes (length-capped + benign-string ReDoS probe); `load_in_8bit` mixed with `load_in_16bit` raises rather than picking one silently.
 
-On the Transformers backend, `target_modules: auto` has an explicit Qwen3.5-family
-fallback because PEFT does not yet map `qwen3_5_text`. Soup targets `q_proj` and
-`v_proj` in full-attention layers plus `in_proj_qkv` and `out_proj` in the fused
-linear-attention layers. Explicit target lists still win unchanged. The MLX backend
-keeps its separate full-key default (`self_attn.q_proj`, `self_attn.v_proj`).
+PiSSA, OLoRA, LoftQ, and VeRA are applied through the shared PEFT constructor on
+the Transformers backend. Soup refuses these variants on MLX and Unsloth rather
+than silently substituting ordinary LoRA. PiSSA and LoftQ additionally require
+`quantization: none`: PiSSA needs floating-point base weights for its SVD, while
+LoftQ performs the low-bit conversion itself, so an already quantized base is
+invalid for either initializer.
+
+On the Transformers backend, `target_modules: auto` is resolved in this order, and
+an explicit target list always wins unchanged:
+
+1. **Architectures PEFT maps itself** (`llama`, `mistral`, `qwen2`, …) are left to
+   PEFT's own default.
+2. **Architectures Soup maps** are resolved from `utils/peft_wiring.py`. The Qwen3.5
+   family targets `q_proj` and `v_proj` in full-attention layers plus `in_proj_qkv`
+   and `out_proj` in the fused linear-attention layers, because PEFT does not map
+   `qwen3_5_text`. The MoE architectures Soup ships recipes for (`qwen3_moe`,
+   `deepseek_v3`, `deepseek_v4`, `glm_moe_dsa`, `kimi_k2`/`kimi_k25`, `gpt_oss`,
+   `minimax_m2`, `minimax_m3_vl`) target their attention projections; PEFT maps none
+   of them (#1070). MiniMax-M3 uses a regex scoped to its language tower, so a text
+   fine-tune does not adapt the vision encoder.
+3. **Anything else fails closed.** `auto` on an architecture neither PEFT nor Soup
+   maps is refused at setup, naming the `model_type`, rather than reaching PEFT's
+   `No target_modules passed`. This is not new behaviour — PEFT refused those too —
+   only a clearer message. It covers dense models as well as MoE ones: at the time of
+   writing `phi3`, `smollm3`, `lfm2` and several vision/audio architectures in the
+   catalogue land here. Give an explicit `target_modules` list, or for a MoE model set
+   `training.moe_lora: true`, which supplies expert targets and is checked *before*
+   the refusal. `training.lora.target_parameters` on its own also suffices.
+
+The MLX backend keeps its separate full-key default (`self_attn.q_proj`,
+`self_attn.v_proj`).
 
 Qwen4-Exp routed experts are raw 3-D parameters rather than `nn.Linear` modules, so
 `target_modules: auto` / `all-linear` deliberately does not include them. Opt into
@@ -251,6 +279,7 @@ Five PEFT-surface improvements that LlamaFactory and Axolotl maintain:
 
 ```yaml
 training:
+  quantization: none            # required: PiSSA initializes from float weights
   lora:
     init_strategy: pissa          # 'random' (default), 'pissa', 'olora'
     rank_pattern:                 # per-target-module rank override
@@ -320,6 +349,26 @@ training:
     r: 64
     alpha: 16
 ```
+
+
+## LoRA-FA (Frozen-A LoRA)
+
+Freeze random projection matrices in LoRA $A$ and update only LoRA $B$ matrices using PEFT's `create_lorafa_optimizer` ([arXiv:2308.03303](https://arxiv.org/abs/2308.03303)):
+
+```yaml
+training:
+  lr: 2e-4
+  use_lorafa: true
+  lora:
+    r: 64
+    alpha: 16
+```
+
+### Operating Point & Caveats
+- **Measured Adapter Operating Point:** Trains exactly 50.0% fewer parameters per adapted projection (trains $B$, freezes $A$), reducing AdamW optimizer states (`exp_avg_B`, `exp_avg_sq_B`) by half for square projections.
+- **Analytic Activation Retention:** Freezing $A$ avoids storing input activations $x \in \mathbb{R}^{B \times L \times d_{in}}$ for adapter backpropagation through $A$. Only $u = A x \in \mathbb{R}^{B \times L \times r}$ is retained, yielding an analytic adapter activation ratio of $r / d_{in}$ (~64× reduction for rank 64 on hidden dim 4096; the exact ratio scales with your rank choice).
+- **Scope & Limitations:** These values represent a micro-benchmark operating point and an analytic saved-tensor ratio for the adapter projections — **they are not total or peak LLM VRAM savings, an end-to-end throughput result, or a quality claim.** Peak training VRAM in full LLM fine-tuning is dominated by base model activations, KV caches, and weights; total end-to-end VRAM savings are substantially smaller. Downstream task quality and end-to-end throughput vs standard LoRA remain unmeasured. See [`benchmarks/gate-725-lorafa-operating-point.md`](../benchmarks/gate-725-lorafa-operating-point.md) for measured figures.
+- **Compatibility:** Supported on the `transformers` backend for `sft`, `pretrain`, and `embedding` tasks. Mutually exclusive with `loraplus_lr_ratio` (which differentiates $A$ and $B$ rates), `use_galore`, `lora.use_vera` (VeRA trains scaling vectors, so `create_lorafa_optimizer` finds no $B$ matrices), non-AdamW optimizers, and the `mlx` backend. Requires explicit `lora.r` and `lora.alpha`. LoRA-FA has not been validated under `stream_layers: true` (layer streaming); combining them is not recommended.
 
 
 ## rsLoRA (Rank-Stabilized Scaling)
@@ -519,6 +568,7 @@ training:
   loss_watchdog_patience: 5     # Consecutive steps above threshold before stopping
 ```
 
+> **Backend Note:** Setting `loss_watchdog: true` is refused on `backend: mlx` at config validation (Soup does not implement the watchdog on the MLX callback, which has no stop control).
 
 ## Training Stability & Auto-Tuning
 
@@ -560,7 +610,7 @@ Picks `bf16` on Ampere+, `fp16` on Turing or known fp16-stable models (Qwen2 / Q
 
 ### Loss Spike Auto-Recovery
 
-Extends the watchdog: instead of stopping on a spike, decay LR and resume. Capped at 3 attempts by default.
+Extends the watchdog: instead of stopping on a spike, writes `<output>/spike_recovery.json` with decayed LR and attempt count for re-launch. Capped at 3 attempts by default.
 
 ```yaml
 training:
@@ -569,6 +619,8 @@ training:
   loss_spike_recovery_max_attempts: 3
   loss_spike_recovery_lr_decay: 0.5     # halve LR each recovery
 ```
+
+> **Backend Note:** Setting `loss_spike_recovery: true` is refused on `backend: mlx` at config validation (spike recovery is driven by the watchdog and the watchdog cannot fire on MLX).
 
 ### Convergence Detector
 
@@ -592,6 +644,8 @@ training:
 ```
 
 Records peak memory each step. When pressure crosses the threshold, recommends a new `(batch, accum)` pair preserving effective batch (capped at `accum=1024`).
+
+> **Backend Note:** Setting `grad_accum_auto_tune: true` is refused on `backend: mlx` at config validation (there is no VRAM total to measure pressure against on unified memory).
 
 > **v0.33.0:** `--find-lr` now runs an in-process LR-sweep training loop (replaces the v0.32.0 stub curve), spike-recovery writes a `spike_recovery.json` hint with the decayed LR for re-launch, and the grad-accum advisory prints a recommended `(batch, accum)` pair when VRAM pressure crosses the threshold. Live optimizer-state rewind and live DataLoader rebuild remain follow-ups (HF Trainer / TRL upstream constraints).
 

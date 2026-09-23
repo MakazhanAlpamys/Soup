@@ -29,6 +29,8 @@ from typing import Any, List, Optional, Tuple
 
 from rich.console import Console
 
+from soup_cli.trainer.loss_summary import summarize_training_loss
+
 console = Console()
 
 # Bounds — keep the loop bounded on a 4 GB box.
@@ -320,9 +322,14 @@ class UnlearnTrainerWrapper:
             f"[green]Unlearn done:[/] {step} steps, "
             f"loss {initial_loss} -> {final_loss}, saved {output_dir}"
         )
+        losses = (
+            [final_loss]
+            if step == 1 and final_loss is not None
+            else [loss for loss in (initial_loss, final_loss) if loss is not None]
+        )
+        loss_summary = summarize_training_loss([{"loss": loss} for loss in losses])
         return {
-            "initial_loss": initial_loss if initial_loss is not None else 0.0,
-            "final_loss": final_loss if final_loss is not None else 0.0,
+            **loss_summary,
             "total_steps": step,
             "duration_secs": duration,
             "output_dir": output_dir,

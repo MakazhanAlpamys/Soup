@@ -388,6 +388,7 @@ def _parse_judge_url(judge_model: str) -> tuple[str, str, Optional[str]]:
       ``ollama://llama3.1`` -> ("ollama", "llama3.1", None)
       ``http://localhost:8000/Qwen2.5`` -> ("server", "Qwen2.5", "http://localhost:8000")
       ``https://api.openai.com/gpt-4o-mini`` -> ("openai", "gpt-4o-mini", "https://api.openai.com")
+      ``https://judge.example.com/m`` -> ("server", "m", "https://judge.example.com")
     """
 
     parsed = urlparse(judge_model)
@@ -396,7 +397,13 @@ def _parse_judge_url(judge_model: str) -> tuple[str, str, Optional[str]]:
         return ("ollama", judge_model[len("ollama://"):], None)
 
     if parsed.scheme == "https":
-        default_provider = "openai"
+        # Only the OpenAI API host is given the OpenAI provider (and so
+        # OPENAI_API_KEY); any other https judge is an OpenAI-compatible
+        # server called without that key.
+        if (parsed.hostname or "").lower() == "api.openai.com":
+            default_provider = "openai"
+        else:
+            default_provider = "server"
     elif (
         parsed.scheme == "http"
         and parsed.hostname in ("localhost", "127.0.0.1")

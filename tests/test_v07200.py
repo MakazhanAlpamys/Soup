@@ -11,6 +11,8 @@ import os
 
 import pytest
 
+from tests.conftest import cuda_available
+
 
 # ==========================================================================
 # C1 — the pure planner (utils/layer_stream.py)
@@ -768,7 +770,7 @@ class TestShardGuards:
         with pytest.raises(ValueError, match="decoder layer"):
             shard_checkpoint(str(src), str(tmp_path / "out"), dtype="float32")
 
-    @pytest.mark.skipif(os.name == "nt", reason="POSIX symlink semantics")
+    @pytest.mark.requires_symlink
     def test_symlinked_source_shard_is_skipped(self, tmp_path):
         """Mirrors spectrum_scan._discover_safetensors."""
         import torch
@@ -1224,14 +1226,6 @@ class TestStreamBufferBounds:
 # The four classes below are SILENT failures: if any regresses, training still
 # runs and still converges. That is exactly why they are tests, not comments.
 # ==========================================================================
-def _cuda_available():
-    try:
-        import torch
-
-        return torch.cuda.is_available()
-    except Exception:
-        return False
-
 
 def _mps_is_the_accelerator():
     """True on an Apple-Silicon runner with no CUDA.
@@ -1245,7 +1239,7 @@ def _mps_is_the_accelerator():
     try:
         import torch
 
-        if torch.cuda.is_available():
+        if cuda_available():
             return False
         backend = getattr(torch.backends, "mps", None)
         return bool(backend is not None and backend.is_available())
@@ -1779,9 +1773,7 @@ def _copy_lora(src, dst):
         dst_lora[key].copy_(val)
 
 
-CUDA = pytest.mark.skipif(
-    not _cuda_available(), reason="requires CUDA (layer streaming is a GPU feature)"
-)
+CUDA = pytest.mark.gpu(reason="layer streaming is a GPU feature")
 
 
 @CUDA
@@ -2378,7 +2370,7 @@ class TestShardWriteContainment:
         with pytest.raises(ValueError, match="under"):
             shard_checkpoint(src, outside, dtype="float32")
 
-    @pytest.mark.skipif(os.name == "nt", reason="POSIX symlink semantics")
+    @pytest.mark.requires_symlink
     def test_symlinked_ancestor_is_resolved_not_followed_blindly(self, tmp_path):
         from soup_cli.utils.layer_shard import shard_checkpoint
 
@@ -2506,7 +2498,7 @@ class TestStreamingEndToEndSetup:
         # Use the REAL device: TrainingArguments picks cuda when it is
         # available, so forcing the model to cpu here would only produce a
         # device mismatch that no user would ever hit.
-        device = "cuda" if _cuda_available() else "cpu"
+        device = "cuda" if cuda_available() else "cpu"
         return SFTTrainerWrapper(cfg, device=device), dataset
 
     def test_setup_builds_a_real_trl_trainer(self, tmp_path, monkeypatch):

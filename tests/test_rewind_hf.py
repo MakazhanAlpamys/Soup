@@ -12,6 +12,7 @@ import pytest
 pytest.importorskip("trl")
 
 from soup_cli.trainer import rewind_hf  # noqa: E402
+from tests._windows_ci import skip_on_windows_ci  # noqa: E402
 
 MODEL_ID = "hf-internal-testing/tiny-random-LlamaForCausalLM"
 
@@ -184,6 +185,7 @@ def test_row_losses_mean_equals_trl_scalar(tmp_path):
 # --------------------------------------------------------------------------
 
 
+@skip_on_windows_ci
 def test_recorded_rows_match_sampler_order(tmp_path, monkeypatch):
     sink = FakeSink()
     trainer = _trainer(tmp_path)
@@ -205,6 +207,7 @@ def test_recorded_rows_match_sampler_order(tmp_path, monkeypatch):
 # --------------------------------------------------------------------------
 
 
+@skip_on_windows_ci
 def test_grad_accum_step_and_micro_sequence(tmp_path, monkeypatch):
     sink = FakeSink()
     trainer = _trainer(
@@ -225,6 +228,7 @@ def test_grad_accum_step_and_micro_sequence(tmp_path, monkeypatch):
 # --------------------------------------------------------------------------
 
 
+@skip_on_windows_ci
 def test_eval_passes_record_nothing(tmp_path, monkeypatch):
     sink = FakeSink()
     trainer = _trainer(
@@ -257,6 +261,7 @@ def test_eval_passes_record_nothing(tmp_path, monkeypatch):
 # --------------------------------------------------------------------------
 
 
+@skip_on_windows_ci
 def test_rows_recorded_with_dataloader_workers(tmp_path, monkeypatch):
     sink = FakeSink()
     trainer = _trainer(tmp_path, dataloader_num_workers=2)
@@ -276,6 +281,7 @@ def test_rows_recorded_with_dataloader_workers(tmp_path, monkeypatch):
 # --------------------------------------------------------------------------
 
 
+@skip_on_windows_ci
 def test_factory_is_cached_and_unattached_trainer_records_nothing(tmp_path, monkeypatch):
     from trl import SFTTrainer
 
@@ -303,6 +309,7 @@ def test_factory_is_cached_and_unattached_trainer_records_nothing(tmp_path, monk
 # --------------------------------------------------------------------------
 
 
+@skip_on_windows_ci
 def test_row_losses_failure_disables_recorder_without_stopping_training(
     tmp_path, monkeypatch
 ):
@@ -361,6 +368,7 @@ def test_disable_reason_is_escaped_not_parsed_as_markup(monkeypatch, reason):
     assert reason in console.export_text()
 
 
+@skip_on_windows_ci
 def test_resumed_run_disables_the_recorder(tmp_path, monkeypatch):
     """Accelerate's SkipBatchSampler enumerates the wrapped sampler on resume, so
     skipped rows would reach the FIFO while compute_loss never runs for them."""
@@ -381,6 +389,7 @@ def test_resumed_run_disables_the_recorder(tmp_path, monkeypatch):
     assert "resumed runs" in console.export_text()
 
 
+@skip_on_windows_ci
 def test_packing_is_refused_and_unpacked_control_records(tmp_path, monkeypatch):
     """packing=True turns on TRL's padding_free: B=1 micro-batches, one id popped
     each, the rest leaking forever."""

@@ -45,6 +45,7 @@ import pytest
 
 from soup_cli.config.loader import load_config_from_string
 from soup_cli.utils.layer_stream import decide_measured_fit, decide_stream_fit
+from tests.conftest import cuda_available
 
 GB = 1_000_000_000
 
@@ -129,11 +130,9 @@ class TestTheProbeFailsSafeRatherThanFailingOpen:
         """A pre-flight that dies because its own instrument failed is worse than
         one that falls back to the shipped prediction — the same contract
         measure_logits_loss_bytes_per_element already keeps."""
-        import torch
-
         from soup_cli.utils.layer_stream_runtime import measure_step_peak_bytes
 
-        if torch.cuda.is_available():
+        if cuda_available():
             pytest.skip("asserts the no-CUDA fallback; this box has CUDA")
         assert measure_step_peak_bytes(object(), rows=1, seq_len=8, vocab_size=32) is None
 
@@ -432,18 +431,6 @@ class TestTheFormulaStillProducesTheNumbersThisIssueWasFiledOn:
         assert estimate_stream_peak_vram(seq_len=4352, **self._GEOM) > 3.036 * GB
 
 
-def _cuda() -> bool:
-    try:
-        import torch
-
-        return bool(torch.cuda.is_available())
-    except Exception:
-        return False
-
-
-requires_cuda = pytest.mark.skipif(not _cuda(), reason="needs a CUDA device")
-
-
 class TestTheProbeItselfOnRealHardware:
     """`measure_step_peak_bytes` against a real model on a real device.
 
@@ -467,7 +454,7 @@ class TestTheProbeItselfOnRealHardware:
         )
         return LlamaForCausalLM(cfg).to("cuda").to(torch.float32)
 
-    @requires_cuda
+    @pytest.mark.gpu
     def test_it_returns_a_peak_that_grows_with_the_shape(self):
         """A probe returning a constant would satisfy every stubbed test above
         and measure nothing, so the discriminating property is that the number
@@ -483,7 +470,7 @@ class TestTheProbeItselfOnRealHardware:
         assert large.seq_len == 256 and large.rows == 1
         assert large.seconds > 0
 
-    @requires_cuda
+    @pytest.mark.gpu
     def test_it_leaves_no_gradients_behind(self):
         """The probe backprops through random token ids. A gradient surviving
         into the first optimizer step would train on noise, once, silently, and
@@ -494,14 +481,14 @@ class TestTheProbeItselfOnRealHardware:
         assert measure_step_peak_bytes(model, rows=1, seq_len=16, vocab_size=64)
         assert all(p.grad is None for p in model.parameters())
 
-    @requires_cuda
+    @pytest.mark.gpu
     def test_a_nonsense_shape_is_rejected_rather_than_measured(self):
         from soup_cli.utils.layer_stream_runtime import measure_step_peak_bytes
 
         with pytest.raises(ValueError, match="must all be >= 1"):
             measure_step_peak_bytes(self._toy(), rows=0, seq_len=16, vocab_size=64)
 
-    @requires_cuda
+    @pytest.mark.gpu
     def test_a_model_whose_parameters_break_does_not_lose_the_measurement(self, caplog):
         """`_zero_probe_grads` must never mask the result the caller came for —
         but it must not go quiet either, or the gradient corruption it exists to
@@ -532,7 +519,7 @@ class TestTheProbeItselfOnRealHardware:
         del real
         torch.cuda.empty_cache()
 
-    @requires_cuda
+    @pytest.mark.gpu
     def test_a_model_that_raises_reports_failed_not_none(self):
         """`failed` and `None` mean different things to the caller: one refuses,
         the other falls back to the prediction."""

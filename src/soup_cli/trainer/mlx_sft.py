@@ -24,6 +24,7 @@ from pathlib import Path
 from rich.console import Console
 
 from soup_cli.config.schema import SoupConfig
+from soup_cli.trainer.loss_summary import summarize_training_loss
 
 console = Console()
 
@@ -280,6 +281,15 @@ class MLXSFTTrainerWrapper:
                 "data.train_on_messages_with_train_field (MLX supervises "
                 "every assistant turn; the per-message flag is not read)"
             )
+        # #761: mask_history narrows the transformers label builder
+        # (data/loss_mask.py) to the last assistant turn. MLX SFT builds its own
+        # mask and never goes through it, so without this line the same soup.yaml
+        # trained the last turn on transformers and every turn here, in silence.
+        if getattr(dcfg, "mask_history", False):
+            unsupported.append(
+                "data.mask_history (MLX supervises every assistant turn, not "
+                "only the last)"
+            )
         if getattr(dcfg, "train_on_prompt", False):
             unsupported.append(
                 "data.train_on_prompt (MLX masks the prompt or supervises the "
@@ -289,6 +299,10 @@ class MLXSFTTrainerWrapper:
             unsupported.append("quantization=8bit (use mlx-community 4bit models)")
         if tcfg.use_galore:
             unsupported.append("GaLore")
+        if getattr(tcfg, "use_lorafa", False):
+            unsupported.append(
+                "training.use_lorafa (LoRA-FA has no MLX implementation)"
+            )
         if tcfg.use_ring_attention:
             unsupported.append("Ring Attention")
         if tcfg.use_flash_attn:
@@ -334,6 +348,21 @@ class MLXSFTTrainerWrapper:
             unsupported.append(
                 f"gradient_checkpointing tier {tcfg.gradient_checkpointing!r} "
                 "(MLX has a single on/off switch; enabling it)"
+            )
+        if getattr(tcfg, "loss_watchdog", False):
+            unsupported.append(
+                "training.loss_watchdog (Soup does not implement the watchdog "
+                "on the MLX callback, which has no stop control)"
+            )
+        if getattr(tcfg, "loss_spike_recovery", False):
+            unsupported.append(
+                "training.loss_spike_recovery "
+                "(spike recovery is driven by the watchdog and the watchdog cannot fire on MLX)"
+            )
+        if getattr(tcfg, "grad_accum_auto_tune", False):
+            unsupported.append(
+                "training.grad_accum_auto_tune "
+                "(there is no VRAM total to measure pressure against on unified memory)"
             )
         if unsupported:
             console.print(
@@ -889,10 +918,11 @@ class MLXSFTTrainerWrapper:
             )
         )
 
-        losses = captured.get("losses") or [0.0]
+        loss_summary = summarize_training_loss(
+            [{"loss": loss} for loss in captured.get("losses", [])]
+        )
         result = {
-            "initial_loss": losses[0],
-            "final_loss": losses[-1],
+            **loss_summary,
             "total_steps": iters,
             "duration_secs": duration,
             "duration": f"{duration:.0f}s",

@@ -56,10 +56,9 @@ resolves one for a consumer.
 *A read inside a function nothing references is not consumption* (#807), and
 the gate that enforces it has limits in both directions. A field is dropped
 only when EVERY read sits in such a function; one live read anywhere rescues
-it, which is what keeps the impact small -- on this tree it drops exactly four
-declared fields, `init_strategy`, `use_olora`, `use_vera` and `warmup_auto`,
-all allowlisted and pinned by
-`test_the_real_tree_has_exactly_the_four_known_escapes`.
+it, which is what keeps the impact small -- on this tree it drops exactly one
+declared field, `warmup_auto`, pinned by
+`test_the_real_tree_has_exactly_one_known_escape`.
 
 "Referenced" is a syntactic question, not a reachability one, and it errs
 toward *referenced* -- so distrust a pass more than a failure. Two leaks
@@ -330,21 +329,15 @@ KNOWN_UNCONSUMED = {
     "training.lr_groups": "no issue yet -- utils/lr_groups.py exports parse_lr_groups() and "
                           "nothing outside schema.py imports it; documented at "
                           "docs/peft-and-efficiency.md:190",
-    "data.mask_history": "no issue yet -- schema promises 'mask all but the last assistant turn "
-                         "during loss computation'; documented at docs/data.md:692",
+    # data.mask_history was here until #761 wired it into data/loss_mask.py.
     "training.early_stop_patience": "#761 -- schema promises 'consecutive regressions "
                                     "before early stopping'; documented at "
                                     "docs/peft-and-efficiency.md:622",
     "training.citation_recall_threshold": "no issue yet -- validated by utils/citation_faithful.py "
                                           "and named in its error strings; never applied",
-    # -- found by the read/write fix, and the reason that fix exists. Both
-    #    are user settings that are OVERRIDDEN rather than merely unread, so
-    #    they are the strongest members of this list.
-    "data.remove_unused_columns": "#759 -- schema default True, documented 'set False "
-                                  "when feeding extra cols to a custom collator' "
-                                  "-- and sft.py:788 / pretrain.py:174 / "
-                                  "embedding.py:175 / grpo.py:468 each hardcode "
-                                  "False, so the setting never reaches HF",
+    # -- found by the read/write fix, and the reason that fix exists. A user
+    #    setting that is OVERRIDDEN rather than merely unread, so the strongest
+    #    kind of member this list has.
     "training.grace_codebook": "no issue yet -- the string appears as an artifact-kind name in "
                                "store.py:52 / edit.py:312, unrelated to this field",
     # -- #807: read ONLY inside a function nothing in src/ references, so the
@@ -354,16 +347,13 @@ KNOWN_UNCONSUMED = {
                             "which nothing in src/ calls; and that line reads "
                             "the decisions dict and WRITES the value into a "
                             "config, so it is not a read of the field either",
-    "training.lora.use_vera": "#794 via #807 -- read only in "
-                              "utils/peft_builder.build_peft_config, which has "
-                              "no caller in src/",
-    "training.lora.use_olora": "#794 via #807 -- same uncalled builder",
-    "training.lora.init_strategy": "#794 via #807 -- same uncalled builder; "
-                                   "PiSSA/LoftQ selection never reaches a trainer",
-    # -- #807: LoraConfig came into the guard's scope with the dead-function
-    #    gate, and these two have no read anywhere at all.
-    "training.lora.loftq_iter": "#794 -- no read anywhere; LoftQ is unreachable",
-    "training.lora.loftq_bits": "#794 -- no read anywhere; LoftQ is unreachable",
+    # -- declared, and an explicit value is IGNORED with a warning naming the
+    #    release that refuses it, so having no consumer is correct. Not refused
+    #    yet, because Soup's own writers put the old default into saved configs.
+    "data.remove_unused_columns": "#759 -- no trainer reads it; the trainers that set the "
+                                  "HF argument pass False so a custom collator still sees "
+                                  "the extra columns. The default is now False, and an "
+                                  "explicit true loads with a warning and is ignored",
     # -- declared and deliberately REFUSED, so having no consumer is correct.
     #    A distinct category from the two below: the user is told, loudly, at
     #    config load. Found by this guard rather than by hand.
@@ -669,8 +659,8 @@ def test_the_allowlist_size_is_pinned_exactly():
     half: it names WHICH entry went stale, where this one only says the count
     moved.
     """
-    assert len(KNOWN_UNCONSUMED) == 42, (
-        f"KNOWN_UNCONSUMED is {len(KNOWN_UNCONSUMED)}, pinned at 42. Going UP "
+    assert len(KNOWN_UNCONSUMED) == 36, (
+        f"KNOWN_UNCONSUMED is {len(KNOWN_UNCONSUMED)}, pinned at 36. Going UP "
         "means a field was allowlisted rather than wired; going DOWN means an "
         "entry was retired, which is the good direction -- lower this number "
         "in the same commit."
@@ -993,12 +983,8 @@ class TestTheDeadFunctionGate:
             "a read inside a method must be attributed to that method, not lost"
         )
 
-    def test_the_real_tree_has_exactly_the_four_known_escapes(self):
-        """Measured, and pinned so the number cannot drift unnoticed.
-
-        Reproduced on current main: `training.warmup_auto` plus three LoRA
-        variants, each read only inside a function nothing references.
-        """
+    def test_the_real_tree_has_exactly_one_known_escape(self):
+        """Measured, and pinned so the number cannot drift unnoticed."""
         modules = _consumer_modules()
         scoped = function_scoped_reads(modules)
         referenced = referenced_names(modules)
@@ -1010,18 +996,17 @@ class TestTheDeadFunctionGate:
             schema_property_reads(SCHEMA_PATH),
         )
         dropped = sorted(ungated - drop_dead_function_reads(ungated, scoped, referenced))
-        for expected in ("warmup_auto", "use_vera", "use_olora", "init_strategy"):
-            assert expected in dropped, (
-                f"{expected} is read only inside a function nothing references, "
-                "so the gate should drop it"
-            )
-        # The name says EXACTLY four, and membership alone would pass a gate that
+        assert "warmup_auto" in dropped, (
+            "warmup_auto is read only inside a function nothing references, "
+            "so the gate should drop it"
+        )
+        # The name says EXACTLY one, and membership alone would pass a gate that
         # dropped more (#906 review). `dropped` spans every consumed identifier,
         # not just config fields, so the exact claim is over declared leaves.
         declared_leaves = set(_declared().values())
         dropped_fields = sorted(set(dropped) & declared_leaves)
-        assert dropped_fields == ["init_strategy", "use_olora", "use_vera", "warmup_auto"], (
-            f"expected exactly the four known escapes, got {dropped_fields}"
+        assert dropped_fields == ["warmup_auto"], (
+            f"expected exactly the one known escape, got {dropped_fields}"
         )
 
     def test_consumed_in_src_applies_the_gate_independently_of_the_allowlist(self):
@@ -1036,12 +1021,13 @@ class TestTheDeadFunctionGate:
             schema_property_reads(SCHEMA_PATH),
         )
         consumed = _consumed_in_src()
-        for name in ("warmup_auto", "use_vera", "use_olora", "init_strategy"):
-            assert name in ungated, f"{name} is not read at all, so this check is vacuous"
-            assert name not in consumed, (
-                f"{name} is read only inside a dead function, yet _consumed_in_src() "
-                "counts it: the gate is not composed into the scan"
-            )
+        assert "warmup_auto" in ungated, (
+            "warmup_auto is not read at all, so this check is vacuous"
+        )
+        assert "warmup_auto" not in consumed, (
+            "warmup_auto is read only inside a dead function, yet _consumed_in_src() "
+            "counts it: the gate is not composed into the scan"
+        )
 
 
 class TestTheTreeMismatchCheck:
@@ -1061,6 +1047,7 @@ class TestTheTreeMismatchCheck:
     between implementations is exactly what a test should be doing instead.
     """
 
+    @pytest.mark.requires_symlink
     def test_the_same_directory_reached_by_a_different_spelling_is_not_a_mismatch(
         self, tmp_path
     ):

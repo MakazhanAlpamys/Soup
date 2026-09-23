@@ -490,7 +490,7 @@ def test_detect_backend_config_malformed_falls_back(tmp_path, monkeypatch):
 
 def test_bench_help_lists_percentile_flags():
     runner = CliRunner()
-    result = runner.invoke(app, ["bench", "--help"])
+    result = runner.invoke(app, ["bench", "infer", "--help"])
     assert result.exit_code == 0, (result.output, repr(result.exception))
     plain = _plain(result.output)
     assert "p50" in plain
@@ -603,15 +603,13 @@ def test_train_event_buffer_concurrent_subscribers_isolated():
     assert [e.step for e in b_events] == [0, 1, 2]
 
 
+@pytest.mark.requires_symlink
 def test_tokenizer_train_rejects_symlink_input(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     real = tmp_path / "real.jsonl"
     real.write_text('{"text": "hello"}\n', encoding="utf-8")
     link = tmp_path / "link.jsonl"
-    try:
-        os.symlink(real, link)
-    except (OSError, NotImplementedError, AttributeError):
-        pytest.skip("symlinks not supported on this platform")
+    os.symlink(real, link)
     runner = CliRunner()
     result = runner.invoke(
         app,
@@ -735,6 +733,7 @@ def test_strip_reasoning_multiple_blocks():
     assert out == "midfinal"
 
 
+@pytest.mark.requires_symlink
 def test_detect_backend_rejects_symlinked_mlx_weights(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     model_dir = tmp_path / "model"
@@ -742,10 +741,7 @@ def test_detect_backend_rejects_symlinked_mlx_weights(tmp_path, monkeypatch):
     real_weights = tmp_path / "real.npz"
     real_weights.write_bytes(b"\x00")
     link = model_dir / "weights.npz"
-    try:
-        os.symlink(real_weights, link)
-    except (OSError, NotImplementedError, AttributeError):
-        pytest.skip("symlinks not supported on this platform")
+    os.symlink(real_weights, link)
     from soup_cli.utils.backend_detect import detect_backend
 
     # Symlinked weights.npz must NOT trigger MLX dispatch.
@@ -843,7 +839,7 @@ def test_tokenizer_train_special_token_dedup_and_validation(tmp_path, monkeypatc
 def test_bench_p50_p95_runs_with_help_only():
     """Smoke: --p50/--p95 flags are wired (without spinning up a real model)."""
     runner = CliRunner()
-    result = runner.invoke(app, ["bench", "--help"])
+    result = runner.invoke(app, ["bench", "infer", "--help"])
     assert result.exit_code == 0
     # The flag descriptions must mention the v0.53.9 release tag so future
     # patches don't silently drop the percentile rows.

@@ -379,18 +379,6 @@ class TestEveryTrainerAsksTheCard:
 # The gate: fp16 must be as exact as bf16, or choosing it on a T4 would trade
 # a silent unsupported-dtype run for a silent wrong-numbers one.
 # ==========================================================================
-def _cuda_available() -> bool:
-    try:
-        import torch
-
-        return torch.cuda.is_available()
-    except Exception:
-        return False
-
-
-CUDA = pytest.mark.skipif(
-    not _cuda_available(), reason="requires CUDA (layer streaming is a GPU feature)"
-)
 
 
 def _tiny_lora():
@@ -447,7 +435,7 @@ def _copy_lora(src, dst):
             dst_lora[key].copy_(val.to(dst_lora[key].dtype))
 
 
-@CUDA
+@pytest.mark.gpu(reason="layer streaming is a GPU feature")
 class TestFloat16StreamingIsBitExact:
     """Acceptance item 4 of #385.
 

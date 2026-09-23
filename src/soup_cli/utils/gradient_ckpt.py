@@ -11,14 +11,15 @@ re-computation happens:
 - ``"auto"``                — pick based on detected VRAM headroom
 
 ``resolve_gradient_checkpointing`` returns a kwargs-dict suitable for
-``TrainingArguments(**kwargs)``. Granularity (medium / selective) is a separate
-concept — query ``resolve_granularity`` for the chosen tier so callers can
-install the correct downstream hooks without polluting HF's kwargs surface.
+``TrainingArguments(**kwargs)``. ``medium`` uses Transformers' native
+``every_n_layers`` support. ``selective`` is installed on the model through
+``plan_gradient_checkpointing`` and deliberately leaves HuggingFace
+checkpointing off, so the same activations are not recomputed twice.
 """
 
 from __future__ import annotations
 
-from typing import Any, Union
+from typing import Any, NamedTuple, Union
 
 TierLike = Union[bool, str, None]
 
@@ -63,8 +64,9 @@ def resolve_gradient_checkpointing(
     """Resolve a gradient_checkpointing setting into TrainingArguments kwargs.
 
     Only returns keys that HuggingFace's ``TrainingArguments`` actually accepts.
-    Granularity (medium/selective) is not represented here; query
-    ``resolve_granularity`` for that.
+    ``selective`` returns an explicit ``gradient_checkpointing=False`` because
+    its attention-only hooks are installed separately by
+    :func:`plan_gradient_checkpointing`.
 
     Args:
         tier: TrainingConfig.gradient_checkpointing value (bool or tier string).
@@ -80,13 +82,19 @@ def resolve_gradient_checkpointing(
     if granularity is None:
         return {}
 
-    # All granularities use HF's standard non-reentrant checkpointing at the
-    # TrainingArguments level. Selective / medium installation happens inside
-    # the wrapper via torch-level hooks (deferred to v0.28.1 wiring), without
-    # leaking markers into HF's kwargs surface.
+    if granularity == "selective":
+        return {"gradient_checkpointing": False}
+
+    checkpoint_kwargs: dict[str, Any] = {"use_reentrant": False}
+    if granularity == "medium":
+        # Transformers forwards this separately to
+        # model.gradient_checkpointing_enable(every_n_layers=2). It is not a
+        # torch.utils.checkpoint keyword and must stay at this dictionary level.
+        checkpoint_kwargs["every_n_layers"] = 2
+
     return {
         "gradient_checkpointing": True,
-        "gradient_checkpointing_kwargs": {"use_reentrant": False},
+        "gradient_checkpointing_kwargs": checkpoint_kwargs,
     }
 
 
@@ -98,8 +106,8 @@ def install_selective_hooks(model, granularity: str) -> int:
     children, then wraps their ``forward`` with
     ``torch.utils.checkpoint.checkpoint`` based on the granularity:
 
-    - ``"selective"``: only attention sub-modules (looks for ``self_attn`` /
-      ``attention`` in the module name)
+    - ``"selective"``: only each block's direct attention child (for example
+      ``self_attn``), never that child's q/k/v/o descendants
     - ``"medium"``: every second transformer block
     - ``"full"``: every transformer block (kept for symmetry; HF's native
       ``gradient_checkpointing`` already handles full — this path is a
@@ -110,7 +118,7 @@ def install_selective_hooks(model, granularity: str) -> int:
         granularity: one of ``"selective"`` / ``"medium"`` / ``"full"``.
 
     Returns:
-        Number of modules that received a hook. Zero is a meaningful signal
+        Number of modules that use a hook. Zero is a meaningful signal
         — caller should fall back to HF's native ``gradient_checkpointing``.
 
     Raises:
@@ -119,8 +127,8 @@ def install_selective_hooks(model, granularity: str) -> int:
     Notes:
         - Pure best-effort; the function never raises on a missing torch
           dependency at call site (it imports inside).
-        - We do NOT undo earlier hooks. The trainer wrapper is expected to
-          call this once per ``self.model`` instance before training starts.
+        - Existing Soup checkpoint wrappers are reused, so repeated planning
+          is idempotent and never nests one checkpoint inside another.
     """
     if granularity not in {"selective", "medium", "full"}:
         raise ValueError(
@@ -137,6 +145,8 @@ def install_selective_hooks(model, granularity: str) -> int:
     hooked = 0
 
     def _wrap(module):
+        if getattr(module.forward, "__name__", "") == "_checkpointed_forward":
+            return
         original_forward = module.forward
 
         def _checkpointed_forward(*args, **kwargs):
@@ -163,14 +173,77 @@ def install_selective_hooks(model, granularity: str) -> int:
                 hooked += 1
             layer_index += 1
         elif granularity == "selective":
-            # Find children whose name contains attention markers.
-            for child_name, child in module.named_modules():
+            # Only direct children. Walking ``named_modules`` here used to wrap
+            # self_attn AND q_proj/k_proj/v_proj/o_proj (plus names such as
+            # post_attention_layernorm), producing nested checkpoints.
+            for child_name, child in module.named_children():
                 lc = child_name.lower()
-                if "attn" in lc or "attention" in lc:
+                if (
+                    lc in {"attn", "attention", "self_attention"}
+                    or lc.endswith("_attn")
+                    or lc.endswith("_attention")
+                ):
                     _wrap(child)
                     hooked += 1
 
     return hooked
+
+
+class GradientCheckpointingPlan(NamedTuple):
+    """The model hooks and TrainingArguments kwargs actually selected."""
+
+    kwargs: dict[str, Any]
+    granularity: str | None
+    hooked_modules: int
+    description: str
+
+
+def plan_gradient_checkpointing(
+    model: Any,
+    tier: TierLike,
+    gpu_memory_gb: float | None = None,
+) -> GradientCheckpointingPlan:
+    """Apply model-side selective hooks and return truthful HF kwargs.
+
+    Full and medium are native Transformers modes. Selective needs model-side
+    hooks; when an architecture exposes no direct attention child, fall back to
+    full checkpointing instead of printing a selective mode that did nothing.
+    """
+    granularity = resolve_granularity(tier, gpu_memory_gb=gpu_memory_gb)
+    if granularity is None:
+        return GradientCheckpointingPlan({}, None, 0, "off")
+
+    requested_description = describe_tier(tier, gpu_memory_gb)
+    if granularity != "selective":
+        return GradientCheckpointingPlan(
+            resolve_gradient_checkpointing(tier, gpu_memory_gb),
+            granularity,
+            0,
+            requested_description,
+        )
+
+    hooked = install_selective_hooks(model, "selective")
+    if hooked:
+        # PEFT's ``prepare_model_for_kbit_training`` enables native HF
+        # checkpointing before this plan runs. ``TrainingArguments(False)``
+        # does not undo that model-side state, which would otherwise make a
+        # selective run checkpoint both every decoder layer and its attention
+        # child. The selective hooks are now the sole checkpointing mechanism.
+        if getattr(model, "is_gradient_checkpointing", False):
+            model.gradient_checkpointing_disable()
+        return GradientCheckpointingPlan(
+            resolve_gradient_checkpointing("selective"),
+            "selective",
+            hooked,
+            f"{requested_description}; {hooked} attention module(s)",
+        )
+
+    return GradientCheckpointingPlan(
+        resolve_gradient_checkpointing("full"),
+        "full",
+        0,
+        f"{requested_description} unavailable on this architecture; full fallback",
+    )
 
 
 def describe_tier(tier: TierLike, gpu_memory_gb: float | None = None) -> str:

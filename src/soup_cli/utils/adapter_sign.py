@@ -484,6 +484,8 @@ def verify_adapter(
             When supplied AND the recorded backend is ``ed25519``, the embedded
             public key must match this trusted key (genuine authentication) —
             otherwise verification fails with an "untrusted key" finding.
+            When supplied and the recorded backend is anything other than
+            ``ed25519``, verification fails.
 
     Returns:
         ``VerifyReport``. ``valid=True`` requires a present signature file
@@ -539,6 +541,13 @@ def verify_adapter(
     # against the embedded (or trusted) public key. The merkle-root mismatch
     # above already catches file tampering; this catches a forged/corrupted
     # signature and (with `trusted_public_key`) a signature from an untrusted key.
+    # A trusted key authenticates only an ed25519 signature made with it; a
+    # record of any other backend carries nothing that key can check.
+    if trusted_public_key is not None and record.backend != SignBackend.ED25519.value:
+        findings.append(
+            "--public-key requires an ed25519 signature; "
+            f"record backend is {record.backend!r}"
+        )
     if record.backend == SignBackend.ED25519.value:
         from soup_cli.utils import signing as _signing
 

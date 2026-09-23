@@ -14,6 +14,7 @@
 
 **Contents:**
 
+- [Which tasks apply `training.quantization`](#which-tasks-apply-trainingquantization)
 - [Continual-learning rehearsal (`--replay`)](#continual-learning-rehearsal---replay)
 - [Loop Hardening](#loop-hardening)
 - [Unlearning (`task='unlearn'`, NPO / SimNPO / RMU)](#unlearning-taskunlearn-npo--simnpo--rmu)
@@ -74,12 +75,19 @@ default, so "run it again with a different seed" was impossible: replicates of
 one arm differed only by row permutation and GPU nondeterminism. That understates
 run-to-run spread, and spread is the yardstick a real between-arm difference has
 to beat. Three replicates at three seeds is the cheapest honest error bar you can
-put on a training change:
+put on a training change. Create one config per replicate so the seed and its
+output directory stay together in the recorded recipe:
+
+```yaml
+# soup-seed-1.yaml (repeat for seeds 2 and 3)
+training:
+  seed: 1
+output: runs/seed-1
+```
 
 ```bash
 for s in 1 2 3; do
-  soup train --config soup.yaml --output "runs/seed-$s" \
-    && echo "seed $s done"   # set training.seed: $s in the config per run
+  soup train --config "soup-seed-$s.yaml" && echo "seed $s done"
 done
 ```
 
@@ -258,6 +266,32 @@ above.
 
 ---
 
+## Which tasks apply `training.quantization`
+
+`quantization` defaults to `4bit`, but not every trainer reads it. These eight load the base
+(and, for `distill`, the teacher) at checkpoint precision whatever the field says:
+
+| task | quantization | notes |
+|---|---|---|
+| `distill` | `none` only | student and frozen teacher both load unquantised |
+| `classifier`, `reranker`, `cross_encoder` | `none` only | full fine-tune unless `classifier_lora: true` |
+| `prm` | `none` only | always a full fine-tune; a `lora` block is refused (`lora.r: 0` is allowed) |
+| `moe_lora_routing` | `none` only | base frozen, only the router trains |
+| `unlearn` | `none` only | policy and reference copy both load unquantised |
+| `asr` | `none` only | full fine-tune unless `asr_lora: true` |
+
+For these tasks an unset `quantization` resolves to `none`, so the stored config and the VRAM
+pre-flight describe the run that actually happens (#795).
+
+An explicit `4bit` or `8bit` (or `load_in_8bit: true`) **loads with a warning and resolves to
+`none`**, because every config Soup dumped while `4bit` was the default carries it literally.
+The warning names the task and the release that will refuse it; set `quantization: none` to
+silence it. A Quant Menu value (`gptq`, `awq`, ...) or a 4-bit-only setting such as
+`bnb_4bit_quant_storage` is refused at config load, naming the task. Every other task applies
+the field as documented in [Performance & Quantization](performance-and-quantization.md).
+
+---
+
 ## Continual-learning rehearsal (`--replay`)
 
 Fine-tuning on a new task can erase the old one. Rehearsal is the standard
@@ -331,7 +365,9 @@ soup train --config grpo.yaml --reward-hack-mitigation log_only     # observe on
 # tokenize identically; for a genuinely different tokenizer see
 # wasserstein_aligned below).
 # (Universal Logit Distillation, Boizard et al. 2024 arXiv:2402.12030)
-soup train --config soup.yaml --uld-strategy wasserstein
+#   training:
+#     uld_strategy: wasserstein
+soup train --config soup.yaml
 
 # Cross-tokenizer distillation for DIFFERENT tokenizers, e.g. Llama -> Mistral,
 # no shared vocab needed (v0.71.18). Aligns student/teacher token sequences
@@ -362,10 +398,11 @@ soup train --config soup.yaml
 soup train --config soup.yaml --minillm-on-policy
 
 # Mid-epoch checkpoint for PPO/GRPO — TorchTune punts this; Soup ships it
-soup train --config grpo.yaml \
-    --rl-checkpoint-save-every-steps 500 \
-    --rl-checkpoint-keep-last 3 \
-    --rl-checkpoint-include-optimizer
+#   training:
+#     rl_checkpoint_save_every_steps: 500
+#     rl_checkpoint_keep_last: 3
+#     rl_checkpoint_include_optimizer: true
+soup train --config grpo.yaml
 
 # Iterative DPO loop driver — sample -> RM-score -> re-pair -> retrain
 # (drop --plan-only to run the loop; --plan-only just renders the per-round plan)
@@ -379,14 +416,19 @@ soup iterative-dpo \
 
 # RAGEN echo-trap detector — auto-halt when trajectories collapse to self-repetition
 # (Zhu et al. 2025 arXiv:2504.14437)
-soup train --config grpo.yaml \
-    --echo-trap-enabled \
-    --echo-trap-threshold 0.6 \
-    --echo-trap-halt \
-    --echo-trap-tokenizer-aware
+#   training:
+#     echo_trap_enabled: true
+#     echo_trap_threshold: 0.6
+#     echo_trap_halt: true
+#     echo_trap_tokenizer_aware: true
+soup train --config grpo.yaml
 ```
 
-`--echo-trap-tokenizer-aware` switches echo-trap n-grams from whitespace tokens to the active tokenizer's integer ids. This catches subword repetition that punctuation-heavy decoded text can hide, but the score becomes tokenizer-specific rather than vocabulary-agnostic.
+`training.echo_trap_tokenizer_aware` (also available as the real
+`--echo-trap-tokenizer-aware` option) switches echo-trap n-grams from
+whitespace tokens to the active tokenizer's integer ids. This catches subword
+repetition that punctuation-heavy decoded text can hide, but the score becomes
+tokenizer-specific rather than vocabulary-agnostic.
 
 ### Closed-loop reward-hacking auto-mitigation (v0.71.26)
 
@@ -484,7 +526,6 @@ training:
   distill_checkpoint: true         # non-reentrant activation checkpointing
   epochs: 3
   lr: 5e-5
-  quantization: 4bit               # quantizes student only
 ```
 
 Loss = student CE + (T**2) × KL(teacher_logits / T  ||  student_logits / T).
@@ -753,6 +794,8 @@ The judge is Soup's own OpenAI-compatible `JudgeEvaluator` adapted to TRL's
 `BasePairwiseJudge` (swap-debiased: a winner is only recorded when both A,B and
 B,A orders agree). Recipe: `online-dpo-smollm2-135m`. Proof-of-mechanism was
 validated on SmolLM2-135M with a synthetic judge (not a production RLHF claim; #286).
+An `https://` judge URL uses `OPENAI_API_KEY` only when its host is `api.openai.com`; other
+hosts are called as an OpenAI-compatible server without that key.
 
 
 ## Weighted Multi-Objective Preference Loss

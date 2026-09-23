@@ -121,4 +121,5 @@ def test_moving_batch_size_aborts(harness_run, monkeypatch):
 def test_the_shipped_pins_pass_and_print_both_counts(harness_run, capsys):
     assert harness_run.harness.main() == 0
 
+    # ansi-ok: uncoloured progress step summary
     assert "steps         : 10 iterations / 10 optimizer updates" in capsys.readouterr().out

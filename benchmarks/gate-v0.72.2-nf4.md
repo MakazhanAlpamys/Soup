@@ -337,3 +337,27 @@ NF4 path reported 134,975,808. PEFT computes `Params4bit` totals as
 is the packed count but not for a `meta` placeholder carrying the logical shape.
 Display-only; the loss curve was byte-identical before and after. At 8B it would
 have printed ~52 B.
+
+---
+
+## Post-#331 re-measurement — PENDING ([#361](https://github.com/MakazhanAlpamys/Soup/issues/361))
+
+The 119.6 tok/s / 3.32 GB row above predates the #331 repair and has not been
+re-run on repaired code. The protocol to repeat is
+[`harness/issue361_nf4_throughput.py`](harness/issue361_nf4_throughput.py)
+(batch 1, S=512, 50 steps after 10 warm-up, `PagedAdamW8bit`, double
+buffering, the GEMM ceiling in the same session at the stated clock). Record
+the post-repair tok/s, peak VRAM, GPU utilisation and SM clock here as an
+added row — this record stays verbatim.
+
+Owed by @umran666, who holds the RTX 3050 Laptop 4 GB this figure was measured
+on, and intended for the week of 2026-09-22. Run it from `main` at or after
+`f8226214`, so the row lands on post-#989 code; the harness prints the commit
+it was run from for exactly that reason.
+
+Expected direction: the v0.73.0 correctness repair that closed #331 cost −4.8%
+at 32B, so the post-repair 8B figure should come in **below** 119.6 tok/s. A
+figure above it is not impossible, but it needs its own explanation before it
+is recorded rather than after. The 3.32 GB peak is re-measured rather than
+carried over, because large-layer streaming moved `embed_tokens` and `lm_head`
+out of the resident allocation (see `docs/performance-and-quantization.md`).

@@ -132,6 +132,7 @@ class TestAiderResultParser:
         with pytest.raises(aider_eval.AiderEvalError, match="escaped --output"):
             aider_eval.parse_aider_results(tmp_path, model="openai/example")
 
+    @pytest.mark.requires_symlink
     def test_rejects_symlinked_result(self, tmp_path):
         from soup_cli.eval.aider_polyglot import AiderEvalError, parse_aider_results
 
@@ -139,14 +140,12 @@ class TestAiderResultParser:
         outside.write_text('{"tests_outcomes": [true]}', encoding="utf-8")
         result = tmp_path / "python/exercises/practice/clock/.aider.results.json"
         result.parent.mkdir(parents=True)
-        try:
-            result.symlink_to(outside)
-        except OSError:
-            pytest.skip("symlinks are unavailable on this platform")
+        result.symlink_to(outside)
 
         with pytest.raises(AiderEvalError, match="Refusing symlinked"):
             parse_aider_results(tmp_path, model="openai/example")
 
+    @pytest.mark.requires_symlink
     def test_rejects_symlink_even_when_target_stays_inside_root(self, tmp_path):
         from soup_cli.eval.aider_polyglot import AiderEvalError, parse_aider_results
 
@@ -154,10 +153,7 @@ class TestAiderResultParser:
         target.write_text('{"tests_outcomes": [true]}', encoding="utf-8")
         result = tmp_path / "python/exercises/practice/clock/.aider.results.json"
         result.parent.mkdir(parents=True)
-        try:
-            result.symlink_to(target)
-        except OSError:
-            pytest.skip("symlinks are unavailable on this platform")
+        result.symlink_to(target)
 
         with pytest.raises(AiderEvalError, match="Refusing symlinked"):
             parse_aider_results(tmp_path, model="openai/example")

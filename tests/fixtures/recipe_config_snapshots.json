@@ -22,7 +22,7 @@
     "data.prompt_strategy": null,
     "data.raft_epoch_shuffle": false,
     "data.raft_shuffle_seed": null,
-    "data.remove_unused_columns": true,
+    "data.remove_unused_columns": false,
     "data.replay": null,
     "data.replay_ratio": 0.1,
     "data.replay_seed": null,
@@ -290,6 +290,7 @@
     "training.use_galore": false,
     "training.use_liger": false,
     "training.use_longlora": false,
+    "training.use_lorafa": false,
     "training.use_mod": false,
     "training.use_ring_attention": false,
     "training.verifiable_domain": null,
@@ -451,6 +452,7 @@
       "data.train": "./data/train.jsonl",
       "training.gradient_accumulation_steps": 8,
       "training.lora.alpha": 32,
+      "training.lora.dropout": 0.0,
       "training.lora.r": 16,
       "training.lr": 0.0001,
       "training.moe_lora": true
@@ -465,6 +467,7 @@
       "training.gradient_accumulation_steps": 32,
       "training.gradient_checkpointing": true,
       "training.lora.alpha": 32,
+      "training.lora.dropout": 0.0,
       "training.lora.r": 16,
       "training.lr": 5e-05,
       "training.moe_lora": true,
@@ -493,6 +496,7 @@
       "task": "dpo",
       "training.gradient_accumulation_steps": 8,
       "training.lora.alpha": 32,
+      "training.lora.dropout": 0.0,
       "training.lora.r": 16,
       "training.lr": 5e-06,
       "training.moe_lora": true
@@ -507,6 +511,7 @@
       "training.gradient_accumulation_steps": 16,
       "training.gradient_checkpointing": true,
       "training.lora.alpha": 32,
+      "training.lora.dropout": 0.0,
       "training.lora.r": 16,
       "training.lr": 1e-05,
       "training.moe_lora": true
@@ -518,6 +523,7 @@
       "data.train": "./data/train.jsonl",
       "training.gradient_accumulation_steps": 8,
       "training.lora.alpha": 32,
+      "training.lora.dropout": 0.0,
       "training.lora.r": 16,
       "training.lr": 0.0001,
       "training.moe_lora": true
@@ -532,6 +538,7 @@
       "training.gradient_accumulation_steps": 32,
       "training.gradient_checkpointing": true,
       "training.lora.alpha": 64,
+      "training.lora.dropout": 0.0,
       "training.lora.r": 32,
       "training.lr": 5e-06,
       "training.moe_lora": true
@@ -634,6 +641,7 @@
       "training.gradient_accumulation_steps": 16,
       "training.gradient_checkpointing": true,
       "training.lora.alpha": 64,
+      "training.lora.dropout": 0.0,
       "training.lora.r": 32,
       "training.lr": 5e-06,
       "training.moe_lora": true
@@ -648,6 +656,7 @@
       "training.gradient_accumulation_steps": 16,
       "training.gradient_checkpointing": true,
       "training.lora.alpha": 64,
+      "training.lora.dropout": 0.0,
       "training.lora.r": 32,
       "training.lr": 1e-05,
       "training.moe_lora": true
@@ -662,6 +671,7 @@
       "training.gradient_accumulation_steps": 16,
       "training.gradient_checkpointing": true,
       "training.lora.alpha": 64,
+      "training.lora.dropout": 0.0,
       "training.lora.r": 32,
       "training.lr": 1e-05,
       "training.moe_lora": true
@@ -775,6 +785,7 @@
       "data.train": "./data/train.jsonl",
       "training.epochs": 2,
       "training.lora.alpha": 32,
+      "training.lora.dropout": 0.0,
       "training.lora.r": 16,
       "training.lr": 0.0001,
       "training.moe_lora": true
@@ -805,6 +816,7 @@
       "training.gradient_accumulation_steps": 16,
       "training.gradient_checkpointing": true,
       "training.lora.alpha": 64,
+      "training.lora.dropout": 0.0,
       "training.lora.r": 32,
       "training.lr": 5e-06,
       "training.moe_lora": true
@@ -819,6 +831,7 @@
       "training.gradient_accumulation_steps": 16,
       "training.gradient_checkpointing": true,
       "training.lora.alpha": 32,
+      "training.lora.dropout": 0.0,
       "training.lora.r": 16,
       "training.lr": 1e-05,
       "training.moe_lora": true
@@ -833,6 +846,7 @@
       "training.gradient_accumulation_steps": 16,
       "training.gradient_checkpointing": true,
       "training.lora.alpha": 64,
+      "training.lora.dropout": 0.0,
       "training.lora.r": 32,
       "training.lr": 1e-05,
       "training.moe_lora": true
@@ -848,6 +862,7 @@
       "training.gradient_accumulation_steps": 16,
       "training.gradient_checkpointing": true,
       "training.lora.alpha": 64,
+      "training.lora.dropout": 0.0,
       "training.lora.r": 32,
       "training.lr": 5e-06,
       "training.moe_lora": true
@@ -862,6 +877,7 @@
       "training.gradient_accumulation_steps": 16,
       "training.gradient_checkpointing": true,
       "training.lora.alpha": 32,
+      "training.lora.dropout": 0.0,
       "training.lora.r": 16,
       "training.lr": 1e-05,
       "training.moe_lora": true
@@ -876,6 +892,7 @@
       "training.gradient_accumulation_steps": 32,
       "training.gradient_checkpointing": true,
       "training.lora.alpha": 64,
+      "training.lora.dropout": 0.0,
       "training.lora.r": 32,
       "training.lr": 5e-06,
       "training.moe_lora": true
@@ -1215,6 +1232,7 @@
       "training.gradient_accumulation_steps": 16,
       "training.gradient_checkpointing": true,
       "training.lora.alpha": 64,
+      "training.lora.dropout": 0.0,
       "training.lora.r": 32,
       "training.lr": 5e-06,
       "training.moe_lora": true
@@ -1229,6 +1247,7 @@
       "training.gradient_accumulation_steps": 16,
       "training.gradient_checkpointing": true,
       "training.lora.alpha": 64,
+      "training.lora.dropout": 0.0,
       "training.lora.r": 32,
       "training.lr": 1e-05,
       "training.moe_lora": true
@@ -1270,6 +1289,7 @@
       "training.gradient_accumulation_steps": 32,
       "training.gradient_checkpointing": true,
       "training.lora.alpha": 64,
+      "training.lora.dropout": 0.0,
       "training.lora.r": 32,
       "training.lr": 5e-06,
       "training.moe_lora": true
@@ -1284,6 +1304,7 @@
       "training.gradient_accumulation_steps": 32,
       "training.gradient_checkpointing": true,
       "training.lora.alpha": 64,
+      "training.lora.dropout": 0.0,
       "training.lora.r": 32,
       "training.lr": 5e-06,
       "training.moe_lora": true
@@ -1641,6 +1662,7 @@
       "training.gradient_accumulation_steps": 16,
       "training.gradient_checkpointing": true,
       "training.lora.alpha": 32,
+      "training.lora.dropout": 0.0,
       "training.lora.r": 16,
       "training.lr": 1e-05,
       "training.moe_lora": true
@@ -1651,6 +1673,7 @@
       "data.train": "./data/train.jsonl",
       "training.gradient_accumulation_steps": 8,
       "training.lora.alpha": 32,
+      "training.lora.dropout": 0.0,
       "training.lora.r": 16,
       "training.lr": 0.0001,
       "training.moe_lora": true
@@ -1720,6 +1743,7 @@
       "data.train": "./data/code_train.jsonl",
       "training.gradient_accumulation_steps": 8,
       "training.lora.alpha": 32,
+      "training.lora.dropout": 0.0,
       "training.lora.r": 16,
       "training.lr": 1e-05,
       "training.moe_lora": true
@@ -1752,6 +1776,7 @@
       "training.gradient_accumulation_steps": 16,
       "training.gradient_checkpointing": true,
       "training.lora.alpha": 64,
+      "training.lora.dropout": 0.0,
       "training.lora.r": 32,
       "training.lr": 1e-05,
       "training.moe_lora": true
@@ -1792,6 +1817,7 @@
       "task": "dpo",
       "training.gradient_accumulation_steps": 8,
       "training.lora.alpha": 32,
+      "training.lora.dropout": 0.0,
       "training.lora.r": 16,
       "training.lr": 5e-06,
       "training.moe_lora": true
@@ -1806,6 +1832,7 @@
       "training.gradient_accumulation_steps": 16,
       "training.gradient_checkpointing": true,
       "training.lora.alpha": 32,
+      "training.lora.dropout": 0.0,
       "training.lora.r": 16,
       "training.lr": 1e-05,
       "training.moe_lora": true
@@ -1817,6 +1844,7 @@
       "data.train": "./data/train.jsonl",
       "training.gradient_accumulation_steps": 8,
       "training.lora.alpha": 32,
+      "training.lora.dropout": 0.0,
       "training.lora.r": 16,
       "training.lr": 0.0001,
       "training.moe_lora": true
@@ -1831,6 +1859,7 @@
       "training.gradient_accumulation_steps": 32,
       "training.gradient_checkpointing": true,
       "training.lora.alpha": 64,
+      "training.lora.dropout": 0.0,
       "training.lora.r": 32,
       "training.lr": 5e-06,
       "training.moe_lora": true
@@ -1926,6 +1955,7 @@
       "task": "dpo",
       "training.gradient_accumulation_steps": 8,
       "training.lora.alpha": 32,
+      "training.lora.dropout": 0.0,
       "training.lora.r": 16,
       "training.lr": 5e-06,
       "training.moe_lora": true
@@ -1940,6 +1970,7 @@
       "training.gradient_accumulation_steps": 16,
       "training.gradient_checkpointing": true,
       "training.lora.alpha": 32,
+      "training.lora.dropout": 0.0,
       "training.lora.r": 16,
       "training.lr": 1e-05,
       "training.moe_lora": true
@@ -1951,6 +1982,7 @@
       "data.train": "./data/train.jsonl",
       "training.gradient_accumulation_steps": 8,
       "training.lora.alpha": 32,
+      "training.lora.dropout": 0.0,
       "training.lora.r": 16,
       "training.lr": 0.0001,
       "training.moe_lora": true

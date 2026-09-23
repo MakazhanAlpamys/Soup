@@ -18,8 +18,8 @@ Exit codes so CI can gate on the result:
 **0 = SHIP, 2 = DON'T SHIP, 3 = usage/validation error, 1 = runtime error**.
 Usage errors moved off ``2`` in v0.71.38 — a typo'd flag was previously
 indistinguishable from a caught regression (both exited ``2``); ``3`` mirrors
-``soup plan`` / ``soup env check``. Offline ``--evidence`` read/parse errors
-stay ``1``.
+the unified taxonomy (EXIT_USAGE_ERROR = 3, EXIT_GATE_FAILED = 2). Offline
+``--evidence`` read/parse errors exit ``3``.
 
 Leg 1 (task win) modes: ``metric`` (reuses ``eval/custom.run_eval`` accuracy),
 ``judge_score`` (reuses ``eval/judge.JudgeEvaluator``), and ``pairwise`` (true
@@ -50,6 +50,18 @@ import typer
 from rich.console import Console
 from rich.markup import escape
 
+from soup_cli.utils.exit_codes import (
+    EXIT_GATE_FAILED as _EXIT_DONT_SHIP,
+)
+from soup_cli.utils.exit_codes import (
+    EXIT_RUNTIME_ERROR as _EXIT_RUNTIME,
+)
+from soup_cli.utils.exit_codes import (
+    EXIT_USAGE_ERROR as _EXIT_USAGE,
+)
+from soup_cli.utils.exit_codes import (
+    GateGroup,
+)
 from soup_cli.utils.paths import atomic_write_text, enforce_under_cwd_and_no_symlink
 
 if TYPE_CHECKING:  # pydantic models — import for typing only (no eager cost)
@@ -81,12 +93,7 @@ from soup_cli.utils.ship_verdict import (
 
 console = Console()
 
-app = typer.Typer(no_args_is_help=False)
-
-# Exit-code taxonomy (v0.71.38): keep DON'T-SHIP distinct from a config typo.
-_EXIT_RUNTIME = 1  # something went wrong actually running (IO, model load, ...)
-_EXIT_DONT_SHIP = 2  # a verdict: leg 1 or leg 2 said don't ship
-_EXIT_USAGE = 3  # bad flags / validation (mirrors `soup plan` / `env check`)
+app = typer.Typer(cls=GateGroup, no_args_is_help=False)
 
 # 16 MiB cap on evidence JSON (mirrors `soup diagnose` — prevents a
 # multi-GB / symlink-pointed file from OOMing at json.load time).
@@ -416,7 +423,7 @@ def _verdict_from_evidence(payload: dict, *, forgetting_threshold: float) -> Shi
             payload, forgetting_threshold=forgetting_threshold
         )
     except (TypeError, ValueError, OverflowError) as exc:
-        _fail(str(exc), _EXIT_RUNTIME)
+        _fail(str(exc), _EXIT_USAGE)
     _warn_if_floor_widens(
         verdict.noise_floor,
         verdict.forgetting_threshold,
@@ -1315,7 +1322,7 @@ def ship(
         try:
             payload = _load_evidence(evidence)
         except (OSError, ValueError, json.JSONDecodeError) as exc:
-            _fail(f"cannot read --evidence: {exc}", _EXIT_RUNTIME)
+            _fail(f"cannot read --evidence: {exc}", _EXIT_USAGE)
         # --config has two intents here:
         #   * GATE (no --emit-evidence): verify this committed evidence is bound
         #     to the committed config — refuse if config_sha drifted or is absent,

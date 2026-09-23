@@ -607,3 +607,101 @@ sharder has to stop holding every source mapping open (§13–§14), or a real
   live safetensors mappings) and its independence from file count.
 
 ---
+
+## 21. Addendum, 2026-09-15 — what bounds the cold 70B step after #974 (the ablation on the direct-I/O reader)
+
+Sections 1-20 were measured on the shipped synchronous disk tier and the
+v0.72.x reader. #971 replaced the read with an asynchronous source and #974
+(PR #991) made that source read through direct I/O in sector-aligned ranges;
+the cold 70B step went 124.5 s (§17) -> 48.1 / 30.3 s (gate-971) -> 16.2-17.3 s
+(gate-974 §8). §19 named the levers in order — the async source over both
+drives, layer-major micro-batching, #842 — and the question this addendum
+answers is which of #841 (the ~10 ms fixed cost per layer visit) and #842 (the
+per-visit NF4 dequantisation) is worth building next, measured rather than
+argued, on the reader as it stands after #974.
+
+**Instrument.** `stream_probe.py --ablate` — §4's four arms (A baseline; B no
+source read and no H2D copy, the pool keeps stale bytes; C no NF4
+dequantisation, a cached zero weight instead; D neither; B/C/D compute garbage
+and are timing-only), two interleaved rounds, 3 timed steps after 1 warm-up per
+arm per round. Same fixture and flags as every cold number in gate-971 and
+gate-974: the synthetic Llama-70B shape, NF4, the 36.39 GB store on C:, disk
+tier, `read_ahead 2`, batch 1; seq 512, then seq 256 as the headroom check §18
+could not give (its arm B at seq 512 ran under a WDDM spill). Driver
+`.claude/probes/2026-09-15-stream-901-974/session-soup-8c/ablate974.sh`, one
+process per block, every block's log to its own file; `soup_cli.__file__`
+printed and stamped (`C:\Users\user\projects\Soup-stream\src`, PR #991's tree at
+3d2be4d0). The box: 20:21:24 free physical 19.86 GB, commit 21.32 of 49.91 GB,
+2 Python processes; 19.73 / 21.39 / 2 between the blocks; 19.55 / 21.74 / 2
+after — nothing else ran (the peer session that had the card before confirmed
+its runs finished at 20:18). JSON
+`benchmarks/results/probe-rtx5070/issue974/i974_ablate_cold70b_seq{512,256}.json`.
+The new reader does not use the page cache (gate-974 §8: its two run
+positions differ by 1.07x), so the interleaving is clean in a way §10's was not.
+
+| arm | seq 512, round 0 / round 1 | tok/s | seq 256, round 0 / round 1 | tok/s |
+|---|---|---|---|---|
+| A baseline | **17.139 / 17.208 s** | 29.9 / 29.8 | **17.005 / 17.001 s** | 15.1 / 15.1 |
+| B no read, no copy | **6.450 / 6.401 s** | 79.4 / 80.0 | **3.822 / 3.846 s** | 67.0 / 66.6 |
+| C no dequantisation | 17.136 / 16.987 s | 29.9 / 30.1 | 17.046 / 16.999 s | 15.0 / 15.1 |
+| D neither | 4.967 / 4.971 s | 103.1 / 103.0 | 2.550 / 2.521 s | 100.4 / 101.6 |
+
+Round-to-round spread at most 0.9%; 157 + 2 loads per step in every arm; peak
+allocated 4.378 GB (A/B, round 0), 5.468 GB (round 1, the ablation arms leave
+state behind), 3.784 GB (C/D) at seq 512 and 3.894 / 4.985 / 3.280 GB at seq
+256 — no spill, `nvidia-smi` memory in use stayed far below the card. The SM
+clock samples (two per arm, instantaneous) are in the JSON and not read.
+
+**Finding 21 — the cold step is bounded by the read outright: halving the
+tokens does not change it.** A reads **17.14-17.21 s at seq 512 and 17.00-17.01
+s at seq 256**, while the compute floor B halves as it should (6.43 -> 3.83 s).
+So at both shapes the step IS the read time and the whole of B is hidden
+inside it; the un-overlapped remainder A - B (10.7 s at 512, 13.2 s at 256) is
+not "the read share" but the read minus whatever compute overlapped it. The
+step moves **70.38 GB** (157 layer loads + 2 large loads per step as the JSON
+records — not the 72.8 GB two full passes over the 36.39 GB store would imply)
+in 17.0-17.2 s = **4.09-4.14 GB/s averaged over the step** (`implied_h2d_gb_per_s`
+in the JSON), which is **73% of the 5.65 GB/s the unbuffered read primitive
+reached cold on this drive** (gate-974 §4) and 1.37x above the 12.5 s that
+ceiling would give. That ~4.6 s, and the second drive, are the only levers left
+on this tier below the drive floor; both belong to
+the reader, not to the compute. Because the step is read-bound and the read
+is per-step not per-token, **tokens per step are free until the compute floor
+meets the read**: from the two B points, B(S) = 1.24 s + 0.0101 s x S, which
+reaches 17.0 s at about **1,560 tokens per step** — batch 3 x 512 would
+roughly balance the two on this fixture, if it fits, and tok/s scales with
+the batch until then. That is arithmetic from two shapes, not a measurement
+at batch 3.
+
+**Finding 22 — #841 and #842 are one cost, and it is hidden.** C equals A at
+both shapes (17.06 vs 17.17 s; 17.02 vs 17.00 s): removing the NF4
+dequantisation from the cold disk-tier step changes nothing, because it sits
+inside the hidden compute. Its size is B - D: **1.46 s at seq 512 and 1.30 s at
+seq 256** — per-visit and token-independent, 8-9 ms per layer visit over the
+159 visits, 23% of the compute floor at 512, the same 23% §4 measured on the
+RAM tier. The fixed cost per visit, from the two shapes (2 x the 256 figure
+minus the 512 figure): **B 1.24 s per step = 7.8 ms per visit; D 0.10 s = 0.65
+ms per visit.** So of #841's "~10 ms per layer visit", **~8 ms is the
+dequantisation** (#842's cost, which does not scale with tokens) and **under 1
+ms is the launches, the `Params4bit` views and the `functional_call`**. #841 as
+a separate item is worth ~0.1 s per step on this fixture; #842 is worth 1.3-1.5
+s per step — and on the cold disk tier neither reaches the step at all.
+
+**What this decides.** On the disk tier the next lever is the reader: the gap
+from 4.1 to 5.65 GB/s (the pipeline between the range reads, the pinned
+staging and the copy stream), then the second NVMe, then micro-batching or a
+larger batch — the order §19 gave, with the async source now done and the
+dequantisation demoted from third to "not on this tier". On the RAM tier,
+where the read is gone, **#842 is the lever and #841 is inside it**: fuse the
+dequantise-and-multiply without putting the packed weight where
+`torch.utils.checkpoint` cannot see it, gated bit-exact against resident NF4
+as the plan's kernel section already requires, and expect at most the 23%
+measured here and in §4. #841 should be folded into #842 rather than worked
+separately; the 0.65 ms per visit it would leave is not a project.
+
+**Not measured here.** Batch > 1 on the cold tier (the crossover above is a
+prediction); `read_ranges` other than 4 and `read_ahead` other than 2 through
+the real step; the second drive; any warm number; the RAM tier on this fixture
+(the 36 GB store does not fit it). The bit-exactness gates were not re-run for
+this addendum — the ablation arms compute garbage by design and nothing in the
+shipped path changed between gate-974's gates and this run.
