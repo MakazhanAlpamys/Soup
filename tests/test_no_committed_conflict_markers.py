@@ -2,6 +2,7 @@
 
 ``docs/performance-and-quantization.md`` shipped literal ``<<<<<<< HEAD`` /
 ``=======`` / ``>>>>>>> <sha>`` lines in #1066 with all 15 CI contexts green.
+
 Two reasons it stayed green:
 
 * ``.pre-commit-config.yaml`` ships ``check-merge-conflict``, but **CI never runs
@@ -41,33 +42,31 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 #: equals signs to end of line.
 _START = re.compile(r"^<{7}(?: .*)?$", re.M)
 _END = re.compile(r"^>{7}(?: .*)?$", re.M)
-_DIVIDER = re.compile(r"^={7}\r?$", re.M)
+_DIVIDER = re.compile(r"^={7}$", re.M)
 
 
 def _tracked_files() -> list[Path]:
-    out = subprocess.run(
-        ["git", "ls-files"],
-        cwd=REPO_ROOT,
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    return [REPO_ROOT / line for line in out.stdout.splitlines() if line]
-
-def _tracked_files_or_skip() -> list[Path]:
     try:
-        return _tracked_files()
+        out = subprocess.run(
+            ["git", "ls-files"],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
     except (subprocess.CalledProcessError, FileNotFoundError):
         pytest.skip("guard requires a git checkout")
+    return [REPO_ROOT / line for line in out.stdout.splitlines() if line]
+
 
 def _read_text(path: Path) -> str | None:
     """Return the decoded text, or ``None`` for a file we treat as binary."""
     try:
         raw = path.read_bytes()
-    except OSError:  # pragma: no cover - unreadable tracked file
+    except OSError:
         return None
     try:
-        return raw.decode("utf-8")
+        return raw.decode("utf-8").replace("\r\n", "\n").replace("\r", "\n")
     except UnicodeDecodeError:
         return None
 
@@ -83,40 +82,56 @@ def find_conflict_markers(text: str) -> list[tuple[int, str]]:
     starts = [m.start() for m in _START.finditer(text)]
     ends = [m.start() for m in _END.finditer(text)]
     has_block_context = bool(starts or ends)
-
     found: list[tuple[int, str]] = []
+
     for offset in starts:
         lineno = text.count("\n", 0, offset) + 1
         found.append((lineno, "<<<<<<<"))
+
     for offset in ends:
         lineno = text.count("\n", 0, offset) + 1
         found.append((lineno, ">>>>>>>"))
+
     if has_block_context:
-        for m in _DIVIDER.finditer(text):
-            lineno = text.count("\n", 0, m.start()) + 1
+        for match in _DIVIDER.finditer(text):
+            lineno = text.count("\n", 0, match.start()) + 1
             found.append((lineno, "======="))
+
     found.sort()
     return found
 
 
 def _scan_repo() -> list[str]:
     problems: list[str] = []
+
     for path in _tracked_files():
         text = _read_text(path)
         if text is None:
             continue
+
         rel = path.relative_to(REPO_ROOT).as_posix()
+
         for lineno, kind in find_conflict_markers(text):
             problems.append(f"{rel}:{lineno}: stray conflict marker {kind}")
+
     return problems
 
 
 class TestNoCommittedConflictMarkers:
+    def test_non_git_checkout_is_skipped(self, monkeypatch):
+        def fail_git(*args, **kwargs):
+            raise subprocess.CalledProcessError(128, "git")
+
+        monkeypatch.setattr(subprocess, "run", fail_git)
+
+        with pytest.raises(
+            pytest.skip.Exception,
+            match="guard requires a git checkout",
+        ):
+            _tracked_files()
+
     def test_no_tracked_file_carries_a_conflict_marker(self):
-        try:
-            problems = _scan_repo()
-        except (subprocess.CalledProcessError, FileNotFoundError):
-            pytest.skip("guard requires a git checkout")
+        problems = _scan_repo()
         assert not problems, (
             "These tracked files contain a committed Git conflict marker. "
             "Resolve the conflict and remove the marker lines before merging "
@@ -125,13 +140,14 @@ class TestNoCommittedConflictMarkers:
 
     def test_the_scan_actually_covers_the_suite(self):
         """A scan that silently stopped reading files would pass vacuously."""
-        try:
-            tracked = _tracked_files()
-        except (subprocess.CalledProcessError, FileNotFoundError):
-            pytest.skip("guard requires a git checkout")
+        tracked = _tracked_files()
         scanned = [path for path in tracked if _read_text(path) is not None]
+
         assert tracked
         assert scanned
+        assert (
+            REPO_ROOT / "docs/performance-and-quantization.md"
+        ) in scanned
 
 
 class TestTheScannerCanActuallyFail:
@@ -152,8 +168,15 @@ class TestTheScannerCanActuallyFail:
         kinds = {kind for _, kind in find_conflict_markers(text)}
         assert kinds == {"<<<<<<<", "=======", ">>>>>>>"}
 
-    def test_crlf_conflict_block_reports_divider(self):
-        text = "before\r\n<<<<<<< HEAD\r\nours\r\n=======\r\ntheirs\r\n>>>>>>> topic\r\n"
+    def test_crlf_conflict_block_reports_divider(self, tmp_path: Path):
+        target = tmp_path / "crlf.txt"
+        target.write_bytes(
+            b"before\r\n<<<<<<< HEAD\r\nours\r\n=======\r\ntheirs\r\n>>>>>>> topic\r\n"
+        )
+
+        text = _read_text(target)
+        assert text is not None
+
         found = find_conflict_markers(text)
         assert found == [
             (2, "<<<<<<<"),
@@ -173,8 +196,14 @@ class TestTheScannerCanActuallyFail:
     def test_the_divider_only_counts_when_a_block_marker_shares_the_file(self):
         ours = "=======\n"
         theirs = "<<<<<<< HEAD\n=======\n"
+
         assert find_conflict_markers(ours) == []
-        divider_lines = [ln for ln, k in find_conflict_markers(theirs) if k == "======="]
+
+        divider_lines = [
+            line
+            for line, kind in find_conflict_markers(theirs)
+            if kind == "======="
+        ]
         assert divider_lines == [2], theirs
 
     def test_reported_line_numbers_are_one_indexed_and_correct(self):
@@ -196,18 +225,24 @@ class TestReadTextTreatsUndecodableAsBinary:
 
 
 class TestFailureNamesFileAndLine:
-    def test_a_planted_marker_produces_a_diagnostic_with_path_and_line(self, tmp_path: Path):
+    def test_a_planted_marker_produces_a_diagnostic_with_path_and_line(
+        self, tmp_path: Path
+    ):
         offender = tmp_path / "doc.md"
         offender.write_text(
             "intro\n<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> x\n",
             encoding="utf-8",
         )
+
         rel = "doc.md"
         problems = [
             f"{rel}:{lineno}: stray conflict marker {kind}"
-            for lineno, kind in find_conflict_markers(offender.read_text(encoding="utf-8"))
+            for lineno, kind in find_conflict_markers(
+                offender.read_text(encoding="utf-8")
+            )
         ]
         joined = "\n".join(problems)
+
         assert "doc.md:" in joined
         assert ":2:" in joined
         assert "<<<<<<<" in joined
