@@ -24,8 +24,11 @@ builds its own untied fixture directly.
 
 from __future__ import annotations
 
+import pytest
+
 from tests.test_v07204 import (
     _TASK_ROWS,
+    _mps_is_the_accelerator,
     _stream_cfg,
     _tiny_llama_dir,
     _wrapper_for,
@@ -48,6 +51,15 @@ class TestBackwardTailEmbedPrefetch:
     """#975 — untied `embed_tokens` / `lm_head` share one `LargeLayerBufferPool`
     slot, and the fix moves the embedding's reload from the next step's
     `_prime()` to this step's backward tail."""
+
+    # `_build_untied_wrapper` pins `device="cpu"` for exact float32 arithmetic
+    # (see `_build_streamed_wrapper`'s own docstring in test_v07204.py), which
+    # on a box where MPS is the accelerator produces a device mismatch no user
+    # would ever hit rather than anything this fix is responsible for.
+    pytestmark = pytest.mark.skipif(
+        _mps_is_the_accelerator(),
+        reason="MPS is untested for layer streaming (CUDA + CPU only)",
+    )
 
     def test_untied_fixture_actually_shares_one_slot(self, tmp_path, monkeypatch):
         """Guard: if the fixture ever stopped being untied, the rest of this
