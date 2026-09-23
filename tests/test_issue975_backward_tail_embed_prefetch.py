@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import pytest
 
+from tests.conftest import cuda_available
 from tests.test_v07204 import (
     _TASK_ROWS,
     _mps_is_the_accelerator,
@@ -42,7 +43,13 @@ def _build_untied_wrapper(tmp_path, monkeypatch, task="sft", n_layers=2, **train
     monkeypatch.setenv("SOUP_LAYER_STREAM_CACHE_DIR", str(tmp_path / "cache"))
     monkeypatch.chdir(tmp_path)
     cfg = _stream_cfg(weights, tmp_path / "out", task=task, **training)
-    wrapper = _wrapper_for(task)(cfg, device="cpu")
+    # The real accelerator when there is one, like `_build_streamed_wrapper`:
+    # `TrainingArguments` picks CUDA on its own, so pinning the model to the CPU
+    # there sends the batches to `cuda:0` and the embedding lookup fails on a
+    # device mismatch. None of these tests compares floats, so nothing needs
+    # the exact CPU arithmetic that pinning would buy.
+    device = "cuda" if cuda_available() else "cpu"
+    wrapper = _wrapper_for(task)(cfg, device=device)
     wrapper.setup({"train": _TASK_ROWS[task](8)})
     return wrapper, resident, weights
 
@@ -52,10 +59,9 @@ class TestBackwardTailEmbedPrefetch:
     slot, and the fix moves the embedding's reload from the next step's
     `_prime()` to this step's backward tail."""
 
-    # `_build_untied_wrapper` pins `device="cpu"` for exact float32 arithmetic
-    # (see `_build_streamed_wrapper`'s own docstring in test_v07204.py), which
-    # on a box where MPS is the accelerator produces a device mismatch no user
-    # would ever hit rather than anything this fix is responsible for.
+    # With no CUDA, `_build_untied_wrapper` falls back to the CPU, and on a box
+    # where MPS is the accelerator that is a device mismatch no user would ever
+    # hit, not something this fix is responsible for.
     pytestmark = pytest.mark.skipif(
         _mps_is_the_accelerator(),
         reason="MPS is untested for layer streaming (CUDA + CPU only)",
