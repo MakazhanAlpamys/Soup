@@ -7,9 +7,13 @@ execute split exists to close (a model swapped after the plan was approved).
 The sibling reader ``mcp_server/registry.py::_read_text_under_cwd`` already
 opens with ``os.O_RDONLY | os.O_NOFOLLOW`` for exactly this reason.
 
-Windows has no ``os.O_NOFOLLOW``, so there the lstat check is all there is and
-the behaviour is unchanged; the flag test below asserts the real flag where the
-platform has it and the fallback where it does not.
+The open goes through ``soup_cli.utils.paths.open_no_follow`` (#820), which
+refuses a symlink in its own pre-open ``lstat`` and passes ``O_NOFOLLOW`` where
+the platform has one. Windows has no ``os.O_NOFOLLOW``; there the helper's
+``lstat`` / reparse-point check and post-open ``fstat`` cross-check refuse
+instead, so the symlink tests below are gated on being able to CREATE a symlink
+(``requires_symlink``), not on POSIX. The flag test asserts the real flag where
+the platform has it and the fallback where it does not.
 
 Passing the flag is only half of it: the single-file branch used to open
 ``os.path.realpath(path)``, i.e. a path with the symlink ALREADY RESOLVED, so
@@ -20,9 +24,9 @@ stays the resolved one, because that is what ``_revalidate`` compares.
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import os
-import sys
 
 import pytest
 
@@ -73,6 +77,34 @@ def _record_os_open_attempts(monkeypatch) -> list[dict]:
     return attempts
 
 
+def _record_no_follow_open_attempts(monkeypatch) -> list[dict]:
+    """Record every call ``digest_file`` makes to the no-follow open helper.
+
+    ``digest_file`` opens through ``soup_cli.utils.paths.open_no_follow`` (#820),
+    which refuses a symlink in its own pre-open ``lstat``, BEFORE ``os.open`` is
+    reached. So for a symlink the open ATTEMPT is the helper call: a spy on
+    ``os.open`` records nothing, which is what reddened this test on POSIX when
+    it was ported from the release branch onto a ``main`` that opens through
+    the helper (#1126).
+    """
+    attempts: list[dict] = []
+    real_open_no_follow = execution_mod.open_no_follow
+
+    def _recording_open_no_follow(path, flags, *args, **kwargs):
+        attempt: dict = {"path": os.fspath(path), "fd": None, "error": None}
+        attempts.append(attempt)
+        try:
+            fd = real_open_no_follow(path, flags, *args, **kwargs)
+        except OSError as exc:
+            attempt["error"] = exc
+            raise
+        attempt["fd"] = fd
+        return fd
+
+    monkeypatch.setattr(execution_mod, "open_no_follow", _recording_open_no_follow)
+    return attempts
+
+
 class TestTheOpenIsNoFollow:
     def test_single_file_branch_opens_through_os_open(self, cwd, monkeypatch):
         (cwd / "model.bin").write_bytes(b"weights")
@@ -120,7 +152,7 @@ class TestTheOpenIsNoFollow:
 
 
 class TestTheSingleFileOpenUsesThePathAsGiven:
-    """Runs everywhere, including Windows, where symlinks cannot be created.
+    """Runs everywhere, including on an account that cannot create a symlink.
 
     The regression this pins was invisible to the POSIX-only symlink tests on
     the one platform the maintainer develops on, which is how it reached CI:
@@ -146,10 +178,14 @@ class TestTheSingleFileOpenUsesThePathAsGiven:
         assert result.digest == hashlib.sha256(b"weights").hexdigest()
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="POSIX symlink semantics")
 class TestSymlinkRefusedAtReadTime:
     """Simulate the TOCTOU window: the lstat guard passed, then the path became
-    a symlink. With the guard neutralised, the open itself must hold the line."""
+    a symlink. With the guard neutralised, the open itself must hold the line.
+
+    Gated per test on the capability to create a symlink, not on the platform:
+    ``open_no_follow`` refuses on Windows too, so these assertions hold there,
+    and the plain-file control needs no symlink at all.
+    """
 
     def _disable_the_lstat_guard(self, monkeypatch):
         monkeypatch.setattr(
@@ -157,6 +193,7 @@ class TestSymlinkRefusedAtReadTime:
             lambda path, field: None,
         )
 
+    @pytest.mark.requires_symlink
     def test_single_file_symlink_is_refused(self, cwd, monkeypatch):
         (cwd / "real.bin").write_bytes(b"weights")
         os.symlink(str(cwd / "real.bin"), str(cwd / "swapped.bin"))
@@ -165,6 +202,7 @@ class TestSymlinkRefusedAtReadTime:
         with pytest.raises(ExecutionError, match="unavailable for execution"):
             digest_file("swapped.bin", "model")
 
+    @pytest.mark.requires_symlink
     def test_tree_member_symlink_is_refused(self, cwd, monkeypatch):
         """Two layers can refuse here; the test pins the refusal, not the layer.
 
@@ -172,7 +210,7 @@ class TestSymlinkRefusedAtReadTime:
         regular file, so on the shipped code that per-member ``S_ISREG`` check
         is what fires first — before the member is ever opened — and the
         message is ``<field> contains non-regular file: <path>``. Were that
-        check removed, ``_open_binary_no_follow``'s ``O_NOFOLLOW`` would still
+        check removed, ``_open_binary_no_follow`` (``open_no_follow``) would still
         refuse, with the path-free ``unavailable for execution``. Either is the
         property under test; matching only one of them turns a defence in depth
         into a brittle assertion about which layer got there first.
@@ -187,6 +225,7 @@ class TestSymlinkRefusedAtReadTime:
         ):
             digest_file("tree", "model")
 
+    @pytest.mark.requires_symlink
     def test_single_file_symlink_is_refused_before_the_target_is_read(
         self, cwd, monkeypatch
     ):
@@ -195,26 +234,46 @@ class TestSymlinkRefusedAtReadTime:
         ``digest_file`` used to open ``os.path.realpath(path)`` — a path with
         the symlink already RESOLVED — so ``O_NOFOLLOW`` could never fire and
         the swapped-in link's target was digested happily. Opening the path as
-        given is what makes the flag reachable, so this pins both halves: the
+        given is what makes the refusal reachable, so this pins both halves: the
         refusal, and that it happens before any read.
+
+        The open attempt is counted where the open now happens, at
+        ``open_no_follow``: it refuses in a pre-open ``lstat``, so ``os.open``
+        is never reached for a symlink. ``os.open`` is still watched for the
+        other half: no descriptor on the link or its target may come out of the
+        call, which is what a read of the target would need first.
         """
         target = cwd / "real.bin"
         target.write_bytes(b"weights")
         os.symlink(str(target), str(cwd / "swapped.bin"))
         self._disable_the_lstat_guard(monkeypatch)
-        attempts = _record_os_open_attempts(monkeypatch)
+        raw_opens = _record_os_open_attempts(monkeypatch)
+        attempts = _record_no_follow_open_attempts(monkeypatch)
 
         with pytest.raises(ExecutionError, match="unavailable for execution") as excinfo:
             digest_file("swapped.bin", "model")
 
-        assert len(attempts) == 1, f"expected exactly one open attempt, got {attempts}"
+        assert len(attempts) == 1, (
+            f"expected exactly one open attempt, through open_no_follow, got {attempts}"
+        )
         only = attempts[0]
         assert os.path.basename(only["path"]) == "swapped.bin", (
             "digest_file must open the path AS GIVEN; opening the resolved "
-            f"target defeats O_NOFOLLOW (opened {only['path']!r})"
+            f"target defeats the no-follow refusal (opened {only['path']!r})"
         )
         assert only["fd"] is None and isinstance(only["error"], OSError), (
             "the open must fail, so not a byte of the symlink's target is read"
+        )
+        assert only["error"].errno == errno.ELOOP, (
+            f"the open must fail BECAUSE the path is a symlink, got {only['error']!r}"
+        )
+        descriptors = [
+            attempt for attempt in raw_opens
+            if attempt["fd"] is not None
+            and os.path.basename(attempt["path"]) in {"swapped.bin", "real.bin"}
+        ]
+        assert descriptors == [], (
+            f"no descriptor on the link or its target may be opened, got {descriptors}"
         )
         # Nothing about the target leaks out: no digest was produced at all, and
         # the message names no path.

@@ -73,13 +73,11 @@ class TestModalOutputDirContainment:
         with pytest.raises(ValueError, match="output_dir"):
             _plan("out/../../escape")
 
+    @pytest.mark.requires_symlink
     def test_symlinked_output_dir_is_refused(self, project, tmp_path):
         target = tmp_path.parent / "link-target"
         target.mkdir(exist_ok=True)
-        try:
-            os.symlink(str(target), str(project / "out"), target_is_directory=True)
-        except (OSError, NotImplementedError, AttributeError) as exc:
-            pytest.skip(f"symlinks unavailable on this machine: {exc}")
+        os.symlink(str(target), str(project / "out"), target_is_directory=True)
 
         with pytest.raises(ValueError, match="output_dir"):
             _plan("out")
@@ -142,13 +140,11 @@ class TestLambdaOutputDirContainment:
         with pytest.raises(ValueError, match="output_dir"):
             self._plan_lambda("../escape")
 
+    @pytest.mark.requires_symlink
     def test_symlinked_output_dir_is_refused(self, project, tmp_path):
         target = tmp_path.parent / "lambda-link-target"
         target.mkdir(exist_ok=True)
-        try:
-            os.symlink(str(target), str(project / "out"), target_is_directory=True)
-        except (OSError, NotImplementedError, AttributeError) as exc:
-            pytest.skip(f"symlinks unavailable on this machine: {exc}")
+        os.symlink(str(target), str(project / "out"), target_is_directory=True)
 
         with pytest.raises(ValueError, match="output_dir"):
             self._plan_lambda("out")

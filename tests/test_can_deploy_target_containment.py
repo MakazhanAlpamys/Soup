@@ -53,17 +53,14 @@ def test_dotdot_traversal_is_refused(tmp_path, extract_dir):
         _deploy_target(_target(os.path.join("..", "outside.gguf")), extract_dir)
 
 
+@pytest.mark.requires_symlink
 def test_symlinked_gguf_inside_the_can_is_refused(tmp_path, extract_dir):
     """The case no schema validator can catch: a legal-looking relative path
     whose parent directory is a symlink out of the extract dir."""
     outside_dir = tmp_path / "elsewhere"
     outside_dir.mkdir()
     (outside_dir / "model.gguf").write_bytes(b"GGUF")
-    try:
-        os.symlink(str(outside_dir), str(extract_dir / "link"),
-                   target_is_directory=True)
-    except (OSError, NotImplementedError, AttributeError) as exc:
-        pytest.skip(f"symlinks unavailable on this machine: {exc}")
+    os.symlink(str(outside_dir), str(extract_dir / "link"), target_is_directory=True)
 
     with pytest.raises(ValueError, match="escapes the can extract dir"):
         _deploy_target(_target("link/model.gguf"), extract_dir)
