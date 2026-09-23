@@ -860,6 +860,15 @@ such as a missing file or an undetectable format, and code `2` when a non-empty
 dataset has no usable rows or falls below `--min-valid-fraction`. A partially valid
 dataset still exits with code `0` when no minimum is specified.
 
+Training loads a dataset through the same converters, and a row they reject is
+dropped rather than stopping the run, so one bad line does not abort a load. The
+drop is reported: `soup train`, and every other command that loads a dataset,
+prints `Warning: N of M rows dropped` with the first row's index and the
+converter's reason. For a local file it also prints the `soup data validate`
+command that lists them all. The
+count agrees with `soup data validate` for the same file. Before #1181 the rows
+were dropped without a word.
+
 
 ## Demo Datasets (`soup data demo`)
 
