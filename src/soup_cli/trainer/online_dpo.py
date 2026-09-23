@@ -401,6 +401,14 @@ class OnlineDPOTrainerWrapper:
         )
 
         target_modules = resolve_lora_target_modules(self.model, tcfg.lora.target_modules, console)
+        # #1099: moe_lora picks the expert-FFN targets, as on every other
+        # build_lora_config trainer. The config is attached by TRL later, so
+        # this is where the flag has to act.
+        from soup_cli.utils.moe import resolve_moe_lora_targets
+
+        target_modules = resolve_moe_lora_targets(
+            self.model, tcfg, target_modules, console
+        )
 
         self.peft_config = build_lora_config(
             tcfg.lora,
