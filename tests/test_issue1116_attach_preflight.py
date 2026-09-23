@@ -552,7 +552,8 @@ class TestTheExitCode:
         ]
         report = PreflightReport(rows)
 
-        assert report.exit_code == 1
+        # #1117 review: the gate/verdict contract, not "1 on any failure".
+        assert report.exit_code == 2
         assert [c.name for c in report.failures] == ["c"]
 
 
@@ -577,10 +578,12 @@ class TestTheCommand:
         )
         return CliRunner().invoke(app, ["recipes", "verify", "--config", str(path)])
 
-    def test_a_failing_config_exits_1(self, tmp_path, monkeypatch):
+    def test_a_config_that_cannot_attach_exits_2(self, tmp_path, monkeypatch):
+        """Was 1. A finding is EXIT_GATE_FAILED under the gate/verdict contract,
+        so CI can tell it from a crash (1) or a bad --config (3)."""
         result = self._run(tmp_path, monkeypatch, Verdict.CANNOT_ATTACH)
 
-        assert result.exit_code == 1, result.output
+        assert result.exit_code == 2, result.output
 
     def test_an_unverified_config_exits_0(self, tmp_path, monkeypatch):
         """The rule again, through the command: CI must not go red because the
@@ -598,10 +601,43 @@ class TestTheCommand:
             app, ["recipes", "verify", "--config", str(tmp_path / "nope.yaml")]
         )
 
-        assert result.exit_code == 1
+        assert result.exit_code == 3, "an input error, not a finding or a crash"
         from tests.conftest import strip_ansi
 
         assert "not found" in strip_ansi(result.output).lower()
+
+    def test_an_unparseable_config_exits_3(self, tmp_path):
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+        from tests.conftest import strip_ansi
+
+        path = tmp_path / "bad.yaml"
+        path.write_text("base: org/m\ntask: sft\ndata:\n  train: x.jsonl\n  format: nope\n")
+        result = CliRunner().invoke(app, ["recipes", "verify", "--config", str(path)])
+
+        assert result.exit_code == 3, result.output
+        assert "does not parse" in strip_ansi(result.output)
+
+    def test_a_crash_exits_1(self, tmp_path, monkeypatch):
+        """The fourth code: an unexpected error stays a runtime error."""
+        def _boom(*_a, **_k):
+            raise RuntimeError("boom")
+
+        monkeypatch.setattr("soup_cli.utils.attach_preflight.check_attach", _boom)
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        path = tmp_path / "soup.yaml"
+        path.write_text(
+            "base: org/m\ntask: sft\ndata:\n  train: ./x.jsonl\n  format: alpaca\n"
+            "training:\n  lora:\n    r: 8\n",
+            encoding="utf-8",
+        )
+        result = CliRunner().invoke(app, ["recipes", "verify", "--config", str(path)])
+
+        assert result.exit_code == 1
 
 
 class TestTheVerdictIsTheTrainers:
@@ -815,3 +851,132 @@ class TestReviewFollowUps:
         assert targets == ["q_proj"]
         assert (seen == ["params", "moe"]) is full_sequence, seen
         assert (seen == []) is (not full_sequence), seen
+
+
+class TestOnlySftReadsModality:
+    """#1117 review, round 3: ``loader_for`` chose the class from ``modality`` for
+    every task, but only ``trainer/sft.py`` reads it. A vision DPO config was
+    reported ATTACHES (8 modules, 4 of them in the vision tower) while DPO's own
+    ``AutoModelForCausalLM`` refuses the base outright."""
+
+    @staticmethod
+    def _cfg(task, modality="text", **training):
+        import yaml
+
+        from soup_cli.config.loader import load_config_from_string
+
+        fmt = {"text": "alpaca", "vision": "llava", "audio": "audio"}[modality]
+        fmt = {"asr": "asr", "classifier": "auto"}.get(task, fmt)
+        raw = {
+            "base": "org/m", "task": task, "modality": modality,
+            "data": {"train": "./x.jsonl", "format": fmt},
+            "training": {"lora": {"r": 8, "dropout": 0.0}, **training},
+        }
+        return load_config_from_string(yaml.safe_dump(raw))
+
+    @pytest.mark.parametrize("task", ["dpo", "grpo"])
+    def test_a_vision_config_on_a_text_trainer_is_a_causal_lm(self, task):
+        from soup_cli.utils.attach_preflight import loader_for
+
+        assert loader_for(self._cfg(task, "vision")) == ("AutoModelForCausalLM",)
+
+    def test_sft_still_chooses_by_modality(self):
+        """The control: the split is SFT's, and it stays."""
+        from soup_cli.utils.attach_preflight import loader_for
+
+        assert loader_for(self._cfg("sft", "vision")) == ("AutoModelForImageTextToText",)
+        assert loader_for(self._cfg("sft", "audio")) == ("AutoModel",)
+
+    def test_asr_and_the_classifier_family_load_their_own_class(self):
+        from soup_cli.utils.attach_preflight import loader_for
+
+        asr = self._cfg("asr", "text", asr_language="en")
+        assert loader_for(asr) == ("WhisperForConditionalGeneration",)
+        clf = self._cfg("classifier", num_labels=2, classifier_lora=True)
+        assert loader_for(clf) == ("AutoModelForSequenceClassification",)
+
+
+class TestTheTrainersOwnTargetPaths:
+    def test_a_vision_dpo_config_takes_the_full_sequence(self, monkeypatch):
+        """Pins the ``task == "sft"`` half of the two-call gate: DPO has no
+        vision branch, so a vision DPO config runs the full MoE sequence."""
+        import torch
+
+        import soup_cli.utils.moe as moe
+        from soup_cli.utils.attach_preflight import trainer_lora_config
+
+        seen = []
+        real = moe.resolve_moe_lora_targets
+
+        def spy(*a, **k):
+            seen.append("moe")
+            return real(*a, **k)
+
+        monkeypatch.setattr(moe, "resolve_moe_lora_targets", spy)
+        model = torch.nn.Sequential()
+        model.add_module("q_proj", torch.nn.Linear(4, 4))
+        cfg = TestOnlySftReadsModality._cfg("dpo", "vision")
+        cfg.training.lora.target_modules = ["q_proj"]
+        trainer_lora_config(model, cfg)
+
+        assert seen == ["moe"]
+
+    def test_asr_auto_means_q_and_v_without_the_resolver(self, monkeypatch):
+        """``trainer/asr.py`` never calls the resolver; ``auto`` is Whisper's q/v."""
+        import torch
+
+        import soup_cli.utils.peft_wiring as wiring
+        from soup_cli.utils.attach_preflight import trainer_lora_config
+
+        def _no(*_a, **_k):
+            raise AssertionError("asr must not call resolve_lora_target_modules")
+
+        monkeypatch.setattr(wiring, "resolve_lora_target_modules", _no)
+        cfg = TestOnlySftReadsModality._cfg("asr", "text", asr_language="en")
+        _peft, targets = trainer_lora_config(torch.nn.Linear(2, 2), cfg)
+
+        assert targets == ["q_proj", "v_proj"]
+
+
+class TestTasksThatBuildNoAdapter:
+    @pytest.mark.parametrize("task", ["prm", "moe_lora_routing"])
+    def test_they_are_no_adapter_whatever_lora_r_says(self, task):
+        cfg = SimpleNamespace(
+            task=task, backend="transformers", training=SimpleNamespace(lora=SimpleNamespace(r=8))
+        )
+        wanted, why = plan_adapter(cfg)
+
+        assert not wanted and why
+
+    def test_the_classifier_family_needs_classifier_lora(self):
+        off = SimpleNamespace(task="reranker", backend="transformers", training=SimpleNamespace(
+            lora=SimpleNamespace(r=8), classifier_lora=False))
+        on = SimpleNamespace(task="reranker", backend="transformers", training=SimpleNamespace(
+            lora=SimpleNamespace(r=8), classifier_lora=True))
+
+        assert plan_adapter(off) == (
+            False, "classifier_lora is off --- that trainer full-fine-tunes"
+        )
+        assert plan_adapter(on) == (True, "")
+
+
+class TestConcreteClassesBuild:
+    def test_whisper_seq2seq_builds_on_meta(self):
+        """``asr`` loads ``WhisperForConditionalGeneration`` by name, which has no
+        ``from_config``. Calling it anyway turned all three shipped Whisper recipes
+        from ATTACHES into CANNOT_ATTACH on a full catalogue run."""
+        from transformers import WhisperConfig
+
+        from soup_cli.utils.attach_preflight import build_on_meta
+
+        cfg = WhisperConfig(
+            vocab_size=64, d_model=16, encoder_layers=1, decoder_layers=1,
+            encoder_attention_heads=2, decoder_attention_heads=2,
+            encoder_ffn_dim=32, decoder_ffn_dim=32, max_source_positions=16,
+            max_target_positions=16, num_mel_bins=8,
+            pad_token_id=0, bos_token_id=1, eos_token_id=2, decoder_start_token_id=1,
+        )
+        model = build_on_meta(cfg, ("WhisperForConditionalGeneration",))
+
+        assert type(model).__name__ == "WhisperForConditionalGeneration"
+        assert next(model.parameters()).device.type == "meta"

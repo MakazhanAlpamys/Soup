@@ -136,6 +136,13 @@ def count_adapted(model: Any) -> tuple[int, int, int]:
     return len(names), experts, vision
 
 
+_NO_ADAPTER_TASKS = {
+    "prm": "the prm trainer full-fine-tunes and builds no adapter",
+    "moe_lora_routing": "moe_lora_routing loads existing adapters and builds none",
+}
+_CLASSIFIER_TASKS = frozenset({"classifier", "reranker", "cross_encoder"})
+
+
 def plan_adapter(cfg: Any) -> tuple[bool, str]:
     """``(has an adapter to attach, why not)``, without touching the network.
 
@@ -145,9 +152,17 @@ def plan_adapter(cfg: Any) -> tuple[bool, str]:
     """
     if getattr(cfg, "backend", None) == "mlx":
         return False, "mlx backend attaches through a different path"
-    lora = getattr(getattr(cfg, "training", None), "lora", None)
+    tcfg = getattr(cfg, "training", None)
+    lora = getattr(tcfg, "lora", None)
     if lora is None or not getattr(lora, "r", 0):
         return False, "lora.r: 0 --- full fine-tuning, no adapter"
+    task = getattr(cfg, "task", "")
+    # Trainers that never build an adapter, whatever lora.r says: answering for one
+    # would report on an adapter the run does not have.
+    if task in _NO_ADAPTER_TASKS:
+        return False, _NO_ADAPTER_TASKS[task]
+    if task in _CLASSIFIER_TASKS and not getattr(tcfg, "classifier_lora", False):
+        return False, "classifier_lora is off --- that trainer full-fine-tunes"
     return True, ""
 
 
@@ -253,9 +268,11 @@ def trainer_lora_config(model: Any, cfg: Any) -> tuple[Any, Any]:
     (``prepare_inputs_for_generation`` and friends), and the adapter injection is
     what is under test, not the head.
 
-    ``moe_lora`` is applied for every task, which is exact for the shipped
-    catalogue -- no recipe sets it on a task whose trainer ignores it -- and exact
-    for any config once every LoRA trainer reads it (#1099). The one split by
+    ``moe_lora`` is applied for every task that reaches this sequence. That is
+    exact for the shipped catalogue -- no recipe sets it on a task whose trainer
+    ignores it -- and #1148 wired six more trainers; ``classifier``, ``distill``
+    and ``unlearn`` read it once #1151 lands, and ``asr`` takes its own path
+    above. The one split by
     modality is SFT's: its vision and audio branches (``_setup_vision_transformers``,
     ``_setup_audio_transformers``) call only ``resolve_lora_target_modules`` and
     ``build_lora_config``, so for those the MoE and ``target_parameters`` steps are
@@ -270,6 +287,12 @@ def trainer_lora_config(model: Any, cfg: Any) -> tuple[Any, Any]:
 
     tcfg = cfg.training
     lora = tcfg.lora
+    if getattr(cfg, "task", "") == "asr":
+        # trainer/asr.py never calls the resolver: auto means Whisper's q/v.
+        targets = lora.target_modules
+        if targets == "auto":
+            targets = ["q_proj", "v_proj"]
+        return build_lora_config(lora, target_modules=targets, task_type=None), targets
     targets = resolve_lora_target_modules(model, lora.target_modules)
     if getattr(cfg, "task", "") == "sft" and getattr(cfg, "modality", "text") in (
         "vision", "audio",
@@ -313,9 +336,12 @@ class PreflightReport:
 
     @property
     def exit_code(self) -> int:
-        """1 only for CANNOT_ATTACH. An unverifiable config is not a failure ---
-        it is a config this machine could not answer for."""
-        return 1 if self.failures else 0
+        """``EXIT_GATE_FAILED`` (2) only for CANNOT_ATTACH, the gate/verdict
+        contract. An unverifiable config is not a failure --- it is a config this
+        machine could not answer for."""
+        from soup_cli.utils.exit_codes import EXIT_GATE_FAILED, EXIT_OK
+
+        return EXIT_GATE_FAILED if self.failures else EXIT_OK
 
 
 #: The auto-class each trainer loads, read off the trainers rather than guessed.
@@ -329,7 +355,16 @@ _MODALITY_AUTO_CLASS = {
 _TASK_AUTO_CLASS = {
     "embedding": ("AutoModel",),
     "reward_model": ("AutoModelForSequenceClassification",),
+    # trainer/classifier.py serves all three.
+    "classifier": ("AutoModelForSequenceClassification",),
+    "reranker": ("AutoModelForSequenceClassification",),
+    "cross_encoder": ("AutoModelForSequenceClassification",),
+    # trainer/asr.py loads the Whisper seq2seq class by name, not an auto-class.
+    "asr": ("WhisperForConditionalGeneration",),
 }
+#: Only SFT reads ``modality`` (#1117 review): every other trainer loads its one
+#: class whatever the config says, so a vision DPO config is a causal LM there.
+_MODALITY_TASKS = frozenset({"sft"})
 #: ONE class per path, with no fallback, because no trainer has one. My first
 #: version fell back from ``AutoModelForCausalLM`` to ``AutoModel``, so a config
 #: the causal-LM class refuses -- MiniMax-M3 with no ``modality``, which cannot load
@@ -342,13 +377,16 @@ _DEFAULT_AUTO_CLASS = ("AutoModelForCausalLM",)
 def loader_for(cfg: Any) -> tuple[str, ...]:
     """The auto-classes to try, in the order the config's trainer would.
 
-    A task with its own head (embedding, reward_model) wins over modality; after
-    that the modality decides, as it does in SFT. The fallback is causal LM,
-    which is what every text task loads.
+    A task with its own class wins. After that only SFT lets ``modality`` choose
+    (``trainer/sft.py`` is the one trainer that reads it); every other task loads
+    a causal LM, so answering by modality there reported a vision DPO config as
+    attaching while DPO's own ``AutoModelForCausalLM`` refused it (#1117 review).
     """
     task = getattr(cfg, "task", "")
     if task in _TASK_AUTO_CLASS:
         return _TASK_AUTO_CLASS[task]
+    if task not in _MODALITY_TASKS:
+        return _DEFAULT_AUTO_CLASS
     return _MODALITY_AUTO_CLASS.get(getattr(cfg, "modality", "text"), _DEFAULT_AUTO_CLASS)
 
 
@@ -383,7 +421,11 @@ def build_on_meta(hf_config: Any, classes: tuple[str, ...]) -> Any:
                 # anyone who answers y. load_hf_config passing False is not
                 # enough: a config can load while its modeling code is remote
                 # (Kimi-K2.5 does exactly this).
-                return factory.from_config(hf_config, trust_remote_code=False)
+                if hasattr(factory, "from_config"):
+                    return factory.from_config(hf_config, trust_remote_code=False)
+                # A concrete class (asr's WhisperForConditionalGeneration) has no
+                # from_config and no remote code: the trainer constructs it by name.
+                return factory(hf_config)
         except Exception as exc:  # noqa: BLE001 --- try the next class
             last = exc
-    raise last if last is not None else RuntimeError("no auto-class available")
+    raise last if last is not None else RuntimeError("no model class available")

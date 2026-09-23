@@ -155,9 +155,11 @@ def verify(
     """Check that a config can attach a LoRA adapter, without downloading weights.
 
     Builds each base's architecture on the meta device from config.json alone,
-    then runs Soup's own target resolution and the real peft attach. Exits 1 only
-    when something cannot attach: a gated repo, or one needing trust_remote_code,
-    is reported as unverified rather than broken (#1116).
+    then runs Soup's own target resolution and the real peft attach. Exit codes
+    follow the gate/verdict contract: 0 when everything that could be checked
+    attaches, 2 when a config cannot attach, 3 for a missing or unparseable
+    --config, 1 for a crash. A gated repo, or one needing trust_remote_code, is
+    reported as unverified and does not change the exit code (#1116).
     """
     import json as _json
 
@@ -168,11 +170,12 @@ def verify(
         check_attach,
         load_hf_config,
     )
+    from soup_cli.utils.exit_codes import EXIT_USAGE_ERROR
 
     configs = _configs_to_verify(config, templates)
     if not configs:
         err_console.print("[red]Nothing to verify.[/]")
-        raise typer.Exit(1)
+        raise typer.Exit(EXIT_USAGE_ERROR)
 
     report = PreflightReport()
     for name, cfg in configs:
@@ -208,15 +211,26 @@ def verify(
 def _configs_to_verify(config: Optional[str], templates: bool):
     """``(name, SoupConfig)`` for everything in scope; a config that will not
     parse is surfaced here rather than counted as an attach failure."""
+    from rich.markup import escape
+
     from soup_cli.config.loader import load_config_from_string
+    from soup_cli.utils.exit_codes import EXIT_USAGE_ERROR
 
     pairs: list[tuple[str, str]] = []
     if config:
         path = Path(config)
         if not path.is_file():
-            err_console.print(f"[red]Config not found:[/] {config}")
-            raise typer.Exit(1)
-        pairs.append((path.name, path.read_text(encoding="utf-8")))
+            err_console.print(f"[red]Config not found:[/] {escape(config)}")
+            raise typer.Exit(EXIT_USAGE_ERROR)
+        try:
+            return [(path.name, load_config_from_string(path.read_text(encoding="utf-8")))]
+        except Exception as exc:  # noqa: BLE001 --- any parse failure is an input error
+            first_line = str(exc).splitlines()[0] if str(exc) else ""
+            err_console.print(
+                f"[red]Config does not parse:[/] {escape(config)}: "
+                f"{escape(type(exc).__name__)}: {escape(first_line)}"
+            )
+            raise typer.Exit(EXIT_USAGE_ERROR) from None
     else:
         from soup_cli.recipes.catalog import RECIPES
 
@@ -279,7 +293,7 @@ def _print_preflight(report, verdict_cls) -> None:
         f"{len(unverified)} unverified."
     )
     if experts:
-        console.print(f"[dim]{experts} adapted expert modules.[/]")
+        console.print(f"[dim]{experts} of them adapted expert modules.[/]")
     if vision:
         console.print(f"[yellow]adapted a vision tower:[/] {', '.join(vision)}")
 
