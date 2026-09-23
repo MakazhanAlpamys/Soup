@@ -249,6 +249,11 @@ def test_the_mixin_checks_only_streamed_runs(streamed, tmp_path):
     with pytest.raises(RuntimeError, match="saved no adapter_model"):
         wrapper._assert_streamed_adapter_saved(str(tmp_path / "empty"))
 
+    # a non-zero rank of a distributed run does not save, so it has nothing to check
+    wrapper.trainer.args.should_save = False
+    wrapper._assert_streamed_adapter_saved(str(tmp_path / "empty"))
+    wrapper.trainer.args.should_save = True
+
     added = []
     wrapper.trainer.add_callback = added.append
     wrapper._attach_streamed_save_guard()
