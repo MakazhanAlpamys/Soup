@@ -209,8 +209,63 @@ soup bench ./output --prompts-file bench_suite.jsonl
 
 This acts as a built-in "speedometer," outputting Tokens-Per-Second (TPS), Total Latency, and Peak VRAM allocations into a clean status table.
 
+`soup bench <model>` is shorthand for `soup bench infer <model>`; both take the same flags.
+
+### Training benchmark
+
+`soup bench train` runs a short, fixed-length SFT job from your config and writes a JSON report.
+It exists so a throughput number carries evidence that the model was training while it was
+measured (#836):
+
+```bash
+soup bench train --config soup.yaml --steps 20 --warmup 3 -o bench-train.json
+```
+
+The run trains for exactly `--steps` optimizer steps, logs every step, saves nothing, and writes
+into a scratch directory, not the config's `output`. The first `--warmup` steps are measured but
+left out of the timing. It measures `task: sft` on the transformers backend and refuses any other
+task or backend by name.
+
+It exits **1** when any check fails. The report is still written, with the failures in it:
+
+| check | fails when |
+|---|---|
+| `trainable_parameters` | no `requires_grad` tensor has real storage (`meta` ones are counted apart). Checked before training too, because the Trainer would otherwise die in autograd without naming the cause |
+| `grad_norm` | a counted step logged `grad_norm == 0.0` or a non-finite norm. A backend that logs no norm is `"not reported by this backend"`, never `0.0` |
+| `parameters_changed` | the trainable parameters are bit-identical before the first step and after the last. This check needs no `grad_norm`, so it also covers backends that log none |
+| `step_count` | fewer optimizer steps ran than were requested |
+
+Only post-warm-up steps are checked for `grad_norm`. Under fp16 the GradScaler can skip its first
+steps on overflow and log a non-finite norm; raise `--warmup` past them rather than reading that
+as divergence.
+
+Report fields:
+
+| field | meaning |
+|---|---|
+| `valid`, `failures` | the verdict, and one `{check, message}` per failed check |
+| `checks` | `trainable_parameters` (count), `grad_norm` (state), `parameters_changed` (bool) |
+| `timing` | `median_seconds`, `p95_seconds` (nearest-rank), `counted_steps`, `warmup_steps_discarded`, `total_seconds` |
+| `tokens` | `useful` (supervised: `labels != -100`), `total`, and `utilisation` (`useful / total`), counted from the batches `training_step` received |
+| `throughput` | `useful_tokens_per_second` and `total_tokens_per_second` |
+| `memory` | `max_memory_allocated_bytes` and `max_memory_reserved_bytes`, kept separate and read after `reset_peak_memory_stats`. Both are `null` off CUDA. Never read from `nvidia-smi` |
+| `provenance` | device, card, CUDA runtime, compute capability, driver version, SM clock after the run (`sm_clock_mhz_after_run`, read with `nvidia-smi`; memory never is), platform, Python, package versions (torch, transformers, peft, trl, bitsandbytes, accelerate), dtype, optimizer, seed, data seed |
+| `config_hash`, `resolved_config` | sha256 of the fully resolved config, and the config itself, so a schema-default change that moves a run shows up (#716) |
+| `steps_requested`, `steps_measured` | what was asked for and what ran |
+
+A step's time runs from the previous step's end to its own end, so data loading counts. The first
+step runs from its own start. On CUDA each boundary is read after `torch.cuda.synchronize()`.
+`parameters_changed` proves that something moved, not that the model learned anything useful. It
+is a floor, not a quality gate.
+
 
 ## Inference Server
+
+`--auto-quant` currently refuses with exit code 2. Soup cannot compare GGUF, AWQ,
+GPTQ, FP8, and an unquantized baseline before a serving engine has loaded them;
+timing an unevaluated stub would make the result depend on timer noise and could
+force a format the checkpoint does not contain. Quantize the checkpoint explicitly,
+then serve that checkpoint without `--auto-quant`.
 
 Start a local OpenAI-compatible inference server:
 
@@ -283,8 +338,9 @@ soup serve --model ./output --backend vllm --max-model-len 8192
 The vLLM backend applies the **model's own chat template**, exactly like the
 transformers backend, and encodes the rendered prompt itself so the engine
 receives the same token ids Soup trains on rather than re-tokenizing the string.
-(The SGLang and MII backends still hand the engine the rendered string; see
-#785.) A model that ships no chat template falls back to a generic `User:` /
+(The MII backend also tokenizes through a wrapper around the same tokenizer, so
+a templated prompt reaches its engine with the ids the template implies, #891.)
+A model that ships no chat template falls back to a generic `User:` /
 `Assistant:` prompt, and the server says so at startup. `finish_reason` reports `"length"` when a response
 hits `max_tokens` and `"stop"` otherwise (`/v1/messages` maps those to
 `max_tokens` / `end_turn`).
@@ -306,10 +362,14 @@ soup serve --model ./output --backend sglang --tensor-parallel 2
 
 Like the transformers and vLLM backends, the SGLang backend applies the
 **model's own chat template** via the same shared prompt builder (falling back
-to a generic `User:` / `Assistant:` prompt for template-less models), and
-`finish_reason` reports `"length"` when a response hits `max_tokens` and
-`"stop"` otherwise — so a client doing continue-on-length can tell a truncated
-answer from a completed one (#360).
+to a generic `User:` / `Assistant:` prompt for template-less models). When the
+template rendered the prompt, Soup encodes it itself and posts the token ids to
+the runtime's `/generate` endpoint, so the engine cannot add a second BOS to
+the one the template already rendered (#890); the template-less fallback is
+still sent as a string and tokenized by the engine as before. `finish_reason`
+reports `"length"` when a response hits `max_tokens` and `"stop"` otherwise, so
+a client doing continue-on-length can tell a truncated answer from a completed
+one (#360).
 
 It also honours `--trust-remote-code` like every other backend. **This changed:**
 the SGLang runtime and its tokenizer previously loaded with `trust_remote_code`
@@ -365,9 +425,30 @@ soup draft list
 
 **Acceptance rate** is the fraction of the target's own greedy tokens the draft would have
 proposed correctly (teacher-forced argmax agreement — the metric the Medusa/EAGLE papers report).
-Higher is better; roughly, ≥70% is where speculative decoding starts paying for the draft's
-forward pass on realistic hardware. `--min-acceptance 0.6` exits **2** below the floor, so CI can
-gate on it (exit 0 = ok, 2 = below floor, 1 = error).
+Higher is better, and the STRONG / MODERATE / WEAK band (≥70% / ≥50%) grades the rate alone. **It
+does not say whether the pair is faster.** That depends on how much faster the draft is than its
+target: on the one pair measured at scale (Llama-3.1-8B target, Llama-3.2-1B draft, one H100),
+81.3% acceptance was STRONG and assisted generation ran at 0.48x of plain.
+`--min-acceptance 0.6` exits **2** below the floor, so CI can gate on it (exit 0 = ok, 2 = below
+floor, 1 = error).
+
+**Break-even and draft length.** `measure` also times the draft decoding alone and reports:
+
+- **Latency ratio** `c` = plain tok/s ÷ draft-alone tok/s: what one draft token costs in target
+  steps.
+- **Break-even acceptance** at the `--num-assistant-tokens` in use: the rate at which assisted
+  generation would stop being slower. "None" means no rate pays, which is always the case once the
+  draft is no faster than the target.
+- **Best k**: the draft length in 1..64 that maximises the modelled speedup at your measured
+  acceptance.
+
+These three are **modelled, not measured**. They use the standard expected-tokens model:
+per-position acceptance `a` independent across positions, `E = (1 − a^(k+1)) / (1 − a)` tokens per
+step at a cost of `k·c + 1` target steps. So they're a ceiling that excludes framework overhead.
+On the H100 pair above the model gave 0.955x at k=5 against a measured 0.481x. To measure
+instead, add `--sweep-k 1,2,3,5,8` (at most 8 values). It times assisted generation at each k and
+reports the measured best k beside the modelled one. The numbers are a single greedy run, and
+`soup serve` samples at temperature 0.7 by default, so treat the best k as a starting point.
 
 *Note: For cross-tokenizer drafts, the measured acceptance rate is a strict lower bound. A token boundary merge between the prompt and the first generated token can cause the score to read up to `1/n_gen` lower than its true value, but it will never over-report.*
 
@@ -427,7 +508,7 @@ curl http://localhost:8000/v1/adapters
 # → {"adapters": [{"name": "chat", "active": true}, ...], "active": "chat"}
 ```
 
-Names are validated against `^[a-zA-Z0-9][a-zA-Z0-9-]*$`; activate/deactivate calls are thread-safe behind a lock.
+Names are validated against `^[a-zA-Z0-9][a-zA-Z0-9-]*$`; activate/deactivate calls are thread-safe behind a lock. Activate/deactivate also check the `Host` and `Origin` headers (see [Server-Side Tool Endpoints](#server-side-tool-endpoints)).
 
 ### Multi-Tenant Vector Bank (`soup serve --bank`)
 
@@ -548,7 +629,7 @@ soup ui
 
 **Pages:**
 - **Dashboard** — view all experiment runs, loss charts, system info, multi-run comparison
-- **New Training** — create configs from templates or 174 ready-made recipes, validate, start training with live SSE log streaming and progress bar
+- **New Training** — create configs from templates or 175 ready-made recipes, validate, start training with live SSE log streaming and progress bar
 - **Data Explorer** — browse and inspect datasets (JSONL, JSON, CSV, Parquet)
 - **Model Chat** — chat with streaming responses, configurable temperature/top_p/max_tokens, system prompt, adapter selection, markdown rendering, chat export
 
@@ -557,7 +638,12 @@ soup ui
 - **Enhanced Metrics** — 2x2 chart grid (loss, LR, grad_norm, throughput) + GPU memory chart, eval results table
 - **Multi-Run Compare** — overlay loss curves from up to 5 runs side-by-side
 - **Chat Upgrade** — SSE streaming via proxy, typing indicator, cancel button, markdown renderer (bold, italic, code blocks), chat export as JSON
-- **Config Builder** — recipe dropdown (174 recipes), config schema API for dynamic form generation
+- **Config Builder** — recipe dropdown (175 recipes), config schema API for dynamic form generation
+
+Gradient norm is nullable: backends or steps that do not report it store and
+stream `null`, and the Web UI chart leaves a gap instead of drawing a false
+zero. An actually logged `0.0` remains a measured value and appears in the
+terminal panel.
 
 **Security:** The Web UI generates a random auth token at startup (printed to console). Every private endpoint — mutating (start/stop training, delete runs, inspect data, validate config) and reading (runs, metrics, system, recipes, SSE streams) — requires an `Authorization: Bearer <token>` header. `/` and `/api/health` stay open so the dashboard can load. CORS is restricted to the served origin. Data inspection is sandboxed to the working directory.
 
@@ -566,6 +652,8 @@ YAML-entry request bodies are capped at 1 MiB on `/api/config/validate`,
 before JSON/YAML validation. The server checks both `Content-Length` and the
 bytes actually received, so chunked requests and understated headers cannot
 bypass the limit.
+
+**Content policy.** Every Web UI response carries a `Content-Security-Policy` that allows scripts only from the UI's own origin and the pinned Chart.js file (no inline script, no `eval`), plus `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer` and `X-Frame-Options: DENY`. Chart.js is loaded with a Subresource Integrity hash, so the browser refuses it if the CDN serves different bytes. The UI's markup carries no inline event handlers, and every server- or dataset-derived value is escaped before it is rendered. The loopback-only `/docs`, `/docs/oauth2-redirect` and `/redoc` pages are the one exception to the policy header, because FastAPI's interactive docs start from an inline script.
 
 **Interactive API docs are loopback-only.** `/openapi.json`, `/docs`, `/docs/oauth2-redirect` and `/redoc` serve on a loopback bind and are **absent** (404) on any other, including `soup ui --public`. This is deliberate rather than incidental: the schema exposes no run data, configuration or logs, but it does describe every route, parameter and request/response shape, and on a LAN bind that is free reconnaissance. Gating them behind the token instead was rejected — `/docs` is a browser navigation and Swagger cannot attach a Bearer header to it, so gating would break the page for a developer while leaving `/openapi.json` readable by any HTTP client. If you need the schema while bound publicly, read it from a loopback instance of the same version.
 
@@ -603,7 +691,15 @@ soup llama --help                  # list supported subcommands
 soup llama cli -m model.gguf -p "Hello"
 soup llama gguf-split --merge a.gguf b.gguf out.gguf
 soup llama server -m model.gguf
+soup llama quantize model.gguf model-q4_k_m.gguf q4_K_M
 ```
+
+### `soup llama quantize`
+
+Forwards every trailing argument to the `llama-quantize` binary on `PATH` (same
+closed allowlist / filtered-env rules as the other `soup llama` subcommands). Use
+it when you already have a GGUF and want llama.cpp's quantizer directly, rather
+than going through `soup export --format gguf` / `soup quantize`.
 
 Closed allowlist: `cli` / `mtmd-cli` / `gguf-split` / `server` / `quantize`. Forwards to `llama-*` binary on PATH (`shutil.which`) with **filtered child env** — `HF_TOKEN` / `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` and other secrets are dropped before exec; only `PATH` / `HOME` / `USER` / locale + llama.cpp-recognised `LLAMA_CPP_HOME` / `GGML_*` / `OMP_NUM_THREADS` are forwarded.
 
@@ -774,3 +870,8 @@ Three POST routes are now available on `soup serve`:
   process's read access to world-readable system files. The endpoint fails closed with
   HTTP 501 when strict OS isolation is unavailable (including on Windows or restricted
   Linux containers).
+
+Tool routes, `/v1/thumbs` and adapter activate/deactivate accept requests only when the
+`Host` header names the bound address (any loopback name for a loopback bind) and any
+`Origin` header names the same; otherwise they answer 421 or 403. Inference routes are not
+restricted, so a reverse proxy can still front them.

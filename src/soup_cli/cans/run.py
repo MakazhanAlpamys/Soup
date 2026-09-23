@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from soup_cli.cans.schema import DeployTarget, Manifest
-from soup_cli.cans.unpack import extract_can, inspect_can
+from soup_cli.cans.unpack import extract_can, inspect_can, read_config
 from soup_cli.utils.paths import is_under_cwd
 
 _RUN_TIMEOUT_SECONDS = 60 * 60 * 24  # 24h max — generous; user kills with ^C
@@ -180,6 +180,10 @@ def run_can(
 
     # Read manifest first — surface schema errors before any side effects.
     manifest = inspect_can(str(src))
+    # The extracted config.yaml is handed to ``soup train``, whose loader has
+    # no size or expansion limit of its own; read it through the capped reader
+    # first so an oversized or alias-amplified config is refused here.
+    read_config(str(src))
 
     if not yes:
         if confirm_callback is None:

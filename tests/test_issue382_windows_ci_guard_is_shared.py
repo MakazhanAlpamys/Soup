@@ -8,7 +8,9 @@ original guard did not cover. Copying the predicate would have been the third
 time this repo shipped a duplicated source of truth (#372, #392, #424), so it
 moved to ``tests/_windows_ci.py`` and both call sites import it.
 
-These tests exist so a future third copy fails loudly instead of drifting.
+These tests exist so a future copy fails loudly instead of drifting. Four files
+carry the guard now, and each one's guarded tests are named in
+:data:`GUARDED_TESTS` so a deleted decorator fails here too.
 """
 
 from __future__ import annotations
@@ -24,6 +26,16 @@ from tests._windows_ci import _windows_ci, skip_on_windows_ci
 
 _TESTS_DIR = Path(__file__).resolve().parent
 _HOME = _TESTS_DIR / "_windows_ci.py"
+
+#: The files that gate a real ``trainer.train()`` behind the shared guard. Four
+#: now: #382 (v07202), the 2026-08-31 GRPO crash (v05311), and the two from
+#: #1018's rewind batch (#1059 and #1062).
+KNOWN_CALL_SITES = (
+    "test_v07202.py",
+    "test_v05311.py",
+    "test_rewind_hf.py",
+    "test_rewind_wiring.py",
+)
 
 
 class TestThereIsExactlyOneDefinition:
@@ -59,8 +71,8 @@ class TestThereIsExactlyOneDefinition:
             f"skip_on_windows_ci must be built only in {_HOME.name}; found in {builders}"
         )
 
-    def test_both_known_call_sites_import_rather_than_redeclare(self):
-        for name in ("test_v07202.py", "test_v05311.py"):
+    def test_every_known_call_site_imports_rather_than_redeclares(self):
+        for name in KNOWN_CALL_SITES:
             src = (_TESTS_DIR / name).read_text(encoding="utf-8")
             assert "from tests._windows_ci import" in src, f"{name} must import the guard"
 
@@ -98,25 +110,61 @@ class TestTheGuardStaysNarrow:
         assert "ubuntu" in reason and "macos" in reason
 
 
-class TestTheCrashingTestIsActuallyGuarded:
-    """The 2026-08-31 crash site must carry the marker, not merely import it."""
+#: Every test that carries the guard today, by file. A name here must exist AND
+#: be decorated: the call-site test below only greps for the import line, so
+#: deleting a decorator while leaving the import passed it (#1062 review). That
+#: is the same silent-drift failure the guard itself exists to prevent, one
+#: level up.
+GUARDED_TESTS: dict[str, tuple[str, ...]] = {
+    "test_v05311.py": ("test_real_trl_grpotrainer_end_to_end_step",),
+    "test_v07202.py": (
+        "test_one_nf4_training_step_actually_runs",
+        "test_the_saved_adapter_is_canonical",
+    ),
+    "test_rewind_hf.py": (
+        "test_recorded_rows_match_sampler_order",
+        "test_grad_accum_step_and_micro_sequence",
+        "test_eval_passes_record_nothing",
+        "test_rows_recorded_with_dataloader_workers",
+        "test_factory_is_cached_and_unattached_trainer_records_nothing",
+        "test_row_losses_failure_disables_recorder_without_stopping_training",
+        "test_resumed_run_disables_the_recorder",
+        "test_packing_is_refused_and_unpacked_control_records",
+    ),
+    "test_rewind_wiring.py": ("test_hf_training_run_records_every_row_once",),
+}
 
-    def test_the_real_grpotrainer_step_carries_the_marker(self):
-        tree = ast.parse((_TESTS_DIR / "test_v05311.py").read_text(encoding="utf-8"))
-        target = "test_real_trl_grpotrainer_end_to_end_step"
+
+def _decorator_names(node: ast.AST) -> set:
+    return {
+        d.id if isinstance(d, ast.Name) else getattr(d, "attr", "")
+        for d in node.decorator_list
+    }
+
+
+class TestTheCrashingTestsAreActuallyGuarded:
+    """Each crash site must CARRY the marker, not merely import it."""
+
+    @pytest.mark.parametrize(
+        "filename, target",
+        [(f, t) for f, targets in GUARDED_TESTS.items() for t in targets],
+    )
+    def test_the_guarded_test_carries_the_marker(self, filename, target):
+        tree = ast.parse((_TESTS_DIR / filename).read_text(encoding="utf-8"))
         found = [
             node
             for node in ast.walk(tree)
             if isinstance(node, ast.FunctionDef) and node.name == target
         ]
-        assert found, f"{target} not found — did it move?"
-        names = {
-            d.id if isinstance(d, ast.Name) else getattr(d, "attr", "")
-            for d in found[0].decorator_list
-        }
-        assert "skip_on_windows_ci" in names, (
-            f"{target} calls a real trainer.train() and must carry the #382 guard"
+        assert found, f"{filename}::{target} not found — did it move or get renamed?"
+        assert "skip_on_windows_ci" in _decorator_names(found[0]), (
+            f"{filename}::{target} runs a real trainer.train() and must carry the "
+            f"#382 guard"
         )
+
+    def test_every_guarded_file_is_a_known_call_site(self):
+        """The two lists cannot drift apart."""
+        assert set(GUARDED_TESTS) == set(KNOWN_CALL_SITES)
 
 
 @pytest.mark.skipif(

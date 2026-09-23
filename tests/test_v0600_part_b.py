@@ -104,7 +104,7 @@ class TestManifest:
         assert "adapter_model.safetensors" in names
         assert "adapter_config.json" in names
 
-    @pytest.mark.skipif(os.name == "nt", reason="POSIX symlink semantics")
+    @pytest.mark.requires_symlink
     def test_manifest_symlink_rejected(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         target = tmp_path / "real_adapter"
@@ -281,7 +281,7 @@ class TestSecurityReviewFixes:
         with pytest.raises(ValueError, match="(?i)exceeds"):
             verify_adapter(str(adapter))
 
-    @pytest.mark.skipif(os.name == "nt", reason="POSIX symlink semantics")
+    @pytest.mark.requires_symlink
     def test_symlinked_signature_file_rejected(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         adapter = _make_adapter(tmp_path)

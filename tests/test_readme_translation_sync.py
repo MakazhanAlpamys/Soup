@@ -33,6 +33,16 @@ Four locks, each answering a different question:
 
    In-page anchors are translated with their headings, so instead of being
    compared they must resolve to a heading in the same file. Prose is not policed.
+
+   ``EXEMPT_SECTIONS`` (by position, matched on README.md's title) sits out of
+   both this check and lock 2: it is editorial content rewritten every release,
+   not a translation of stable fact, and 28 of the last 62 commits touching
+   ``README.md`` touched nothing else (#1013). A translation is free to run a
+   release behind there; every other section is still policed exactly as
+   strictly as before. The relief is partial, on purpose: it does nothing for
+   an edit confined to any other section -- #853 (``Common Commands``) and
+   #1014 (the pre-heading banner and ``Citing Soup``) both reddened this gate
+   on sections the exemption does not touch.
 4. **The banner links exactly the READMEs that exist.** The language banner above
    the logo in every README links every other README and nothing else, so a new
    language cannot land unlinked and no banner can point at a missing file.
@@ -42,7 +52,7 @@ Files are found with ``glob("README.*.md")``, never a hand-written list: a
 also names who maintains it in ``MAINTAINERS``; a red ``main`` says whom to ping,
 and a language nobody maintains is removed rather than left to lie (#769).
 
-**Maintainers:** tr — @Ercaner1988.
+**Maintainers:** tr, ar, ja — @Ercaner1988.
 
 **After changing README.md:** update each translation, then replace its stamp with
 the line the stale-stamp failure prints.
@@ -61,7 +71,20 @@ import pytest
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 #: Who re-syncs each translation when README.md changes.
-MAINTAINERS = {"README.tr.md": "@Ercaner1988"}
+MAINTAINERS = {
+    "README.tr.md": "@Ercaner1988",
+    "README.ar.md": "@Ercaner1988",
+    "README.ja.md": "@Ercaner1988",
+}
+
+#: README.md section titles exempt from the stamp hash and the structural
+#: comparison -- see the class docstring, lock 3. Matched on README.md's own
+#: title at each position; a translation is free to title its own copy
+#: differently (`## Yenilikler` etc. already isn't policed either way).
+#: Exemption covers content, never existence: the section-count check in
+#: structure_problems() runs unconditionally, before the per-section loop, so
+#: an exempt section that is deleted outright still fails (#1013 review).
+EXEMPT_SECTIONS = {"What's New"}
 
 _STAMP_RE = re.compile(r"<!--\s*synced-from:\s*README\.md\s+sha256:([0-9a-f]{64})\s*-->")
 _URL_RE = re.compile(r"https?://[^\s)\"'<>\]]+")
@@ -80,9 +103,32 @@ def translations(root: pathlib.Path = ROOT) -> list[pathlib.Path]:
     return sorted(root.glob("README.*.md"))
 
 
+def _without_exempt_bodies(data: bytes) -> bytes:
+    """``data`` with each ``EXEMPT_SECTIONS`` heading's body dropped, heading kept.
+
+    A README.md byte change confined to an exempt section must not move the
+    stamp -- that is the whole point of exempting it (#1013). A ``## `` line
+    inside a fenced code block is body content, not a heading (mirrors
+    ``_sections``) -- otherwise it would start the skip early and drop the
+    rest of that section, headings included, from the stamp.
+    """
+    out: list[str] = []
+    skipping = False
+    in_fence = False
+    for line in data.decode("utf-8").splitlines(keepends=True):
+        if line.startswith("```"):
+            in_fence = not in_fence
+        is_heading = not in_fence and line.startswith("## ")
+        if is_heading:
+            skipping = line[3:].strip() in EXEMPT_SECTIONS
+        if is_heading or not skipping:
+            out.append(line)
+    return "".join(out).encode("utf-8")
+
+
 def readme_sha256(root: pathlib.Path = ROOT) -> str:
     data = (root / "README.md").read_bytes().replace(b"\r\n", b"\n")
-    return hashlib.sha256(data).hexdigest()
+    return hashlib.sha256(_without_exempt_bodies(data)).hexdigest()
 
 
 def stamp_line(root: pathlib.Path = ROOT) -> str:
@@ -211,6 +257,8 @@ def structure_problems(root: pathlib.Path = ROOT) -> list[str]:
             )
             continue
         for ref, sec in zip(reference, got):
+            if ref["title"] in EXEMPT_SECTIONS:
+                continue
             where = f"{path.name} § {ref['title']!r}"
             ref_langs = [lang for lang, _ in ref["fences"]]
             got_langs = [lang for lang, _ in sec["fences"]]
@@ -324,6 +372,11 @@ read [the guide](docs/guide.md) or skip to [Support](#support).
 soup train  # start training
 ```
 
+## What's New
+
+**v0.75.0 -- something shipped.** Details at https://example.com/notes; peak memory
+dropped to 2.10 GB.
+
 ## Support
 
 Join the [Discord](https://discord.gg/x) or read `docs/commands.md`.
@@ -339,6 +392,11 @@ _TR = """<p align="center">🌍 <a href="README.md">English</a> | <strong>Türk�
 ```bash
 soup train  # eğitimi başlat
 ```
+
+## Yenilikler
+
+**v0.75.0 -- bir şey yayınlandı.** Ayrıntılar için https://example.com/notes; tepe
+bellek 2.10 GB'a düştü.
 
 ## Destek
 
@@ -454,7 +512,7 @@ class TestTheRatchetCanActuallyFail:
     def test_a_dropped_section_fails(self, tree):
         _edit(tree / "README.tr.md", "## Destek\n", "")
         problems = structure_problems(tree)
-        assert "README.tr.md: 0 `## ` sections, README.md has 1" in problems, problems
+        assert "README.tr.md: 1 `## ` sections, README.md has 2" in problems, problems
 
     def test_a_banner_pointing_at_a_missing_file_fails(self, tree):
         _edit(
@@ -472,3 +530,75 @@ class TestTheRatchetCanActuallyFail:
         """CONTROL. Only translation-invariant facts are compared; wording is free."""
         _edit(tree / "README.tr.md", "okuyun ya da", "inceleyin veya")
         assert structure_problems(tree) == []
+
+
+class TestExemptSectionsDoNotGateOnTranslation:
+    """#1013: a section listed in EXEMPT_SECTIONS must not trip the sync gate,
+    and every other section must keep tripping it exactly as before."""
+
+    def test_editing_only_the_exempt_section_does_not_move_the_stamp(self, tree):
+        readme = tree / "README.md"
+        before = readme_sha256(tree)
+        _edit(readme, "dropped to 2.10 GB", "dropped to 9.99 GB")
+        _edit(readme, "https://example.com/notes", "https://example.com/notes-v2")
+        assert readme_sha256(tree) == before
+        assert stale_stamps(tree) == []
+
+    def test_a_stale_translation_of_the_exempt_section_is_not_flagged(self, tree):
+        _edit(tree / "README.md", "dropped to 2.10 GB", "dropped to 9.99 GB")
+        _edit(tree / "README.md", "https://example.com/notes", "https://example.com/notes-v2")
+        # README.tr.md keeps translating the OLD release notes -- untouched, unsynced.
+        assert structure_problems(tree) == []
+        assert stale_stamps(tree) == []
+
+    def test_a_changed_number_in_the_exempt_section_is_not_flagged(self, tree):
+        _edit(tree / "README.tr.md", "2.10 GB'a", "1.00 GB'a")
+        assert structure_problems(tree) == []
+
+    def test_a_dropped_code_block_in_a_non_exempt_section_still_fails(self, tree):
+        """CONTROL: exempting `What's New` must not loosen any other section."""
+        _edit(tree / "README.tr.md", "```bash\nsoup train  # eğitimi başlat\n```\n", "")
+        assert any("code blocks" in problem for problem in structure_problems(tree))
+
+    def test_a_changed_number_outside_the_exempt_section_still_fails(self, tree):
+        """CONTROL: the preamble (before the first heading) is still policed."""
+        _edit(tree / "README.tr.md", "Tepe 3.32 GB", "Tepe 9.99 GB")
+        problems = structure_problems(tree)
+        assert any("number missing ['3.32']" in p for p in problems), problems
+
+    def test_dropping_the_exempt_section_still_fails_the_count(self, tree):
+        """#1013 review: exemption covers content, never existence. The exempt
+        section vanishing entirely must still trip the section-count check --
+        that check runs before the per-section loop and is not skippable."""
+        _edit(tree / "README.tr.md", "## Yenilikler\n", "")
+        problems = structure_problems(tree)
+        assert "README.tr.md: 1 `## ` sections, README.md has 2" in problems, problems
+
+    def test_a_heading_line_inside_a_fence_does_not_start_the_skip(self, tree):
+        """A `## What's New` line inside a fenced code block in a non-exempt
+        section used to be read as a real heading regardless of fence state,
+        starting the exempt-body skip early and dropping the rest of that
+        section -- headings included -- from the stamp hash."""
+        readme = tree / "README.md"
+        _edit(
+            readme,
+            "## Support\n\nJoin the [Discord](https://discord.gg/x)",
+            "## Support\n\n```text\n## What's New\n```\n\nJoin the [Discord](https://discord.gg/x)",
+        )
+        data = readme.read_bytes().replace(b"\r\n", b"\n")
+        assert b"docs/commands.md" in _without_exempt_bodies(data)
+
+    def test_widening_the_exemption_list_silences_a_real_drift(self, tree, monkeypatch):
+        """#1013 review, the requested mutation: widening EXEMPT_SECTIONS by one
+        entry must visibly stop catching a drift that is caught today, proving
+        the list is exactly the lever that turns detection off -- not incidental
+        to it, and not something that can be widened quietly."""
+        _edit(tree / "README.tr.md", "https://discord.gg/x", "https://discord.gg/y")
+        assert structure_problems(tree) != []  # caught today, with the narrow list
+
+        import sys
+
+        monkeypatch.setattr(
+            sys.modules[__name__], "EXEMPT_SECTIONS", EXEMPT_SECTIONS | {"Support"}
+        )
+        assert structure_problems(tree) == []  # same drift, silenced by widening it

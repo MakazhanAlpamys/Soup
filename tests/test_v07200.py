@@ -11,6 +11,8 @@ import os
 
 import pytest
 
+from tests.conftest import cuda_available
+
 
 # ==========================================================================
 # C1 — the pure planner (utils/layer_stream.py)
@@ -768,7 +770,7 @@ class TestShardGuards:
         with pytest.raises(ValueError, match="decoder layer"):
             shard_checkpoint(str(src), str(tmp_path / "out"), dtype="float32")
 
-    @pytest.mark.skipif(os.name == "nt", reason="POSIX symlink semantics")
+    @pytest.mark.requires_symlink
     def test_symlinked_source_shard_is_skipped(self, tmp_path):
         """Mirrors spectrum_scan._discover_safetensors."""
         import torch
@@ -1224,14 +1226,6 @@ class TestStreamBufferBounds:
 # The four classes below are SILENT failures: if any regresses, training still
 # runs and still converges. That is exactly why they are tests, not comments.
 # ==========================================================================
-def _cuda_available():
-    try:
-        import torch
-
-        return torch.cuda.is_available()
-    except Exception:
-        return False
-
 
 def _mps_is_the_accelerator():
     """True on an Apple-Silicon runner with no CUDA.
@@ -1245,7 +1239,7 @@ def _mps_is_the_accelerator():
     try:
         import torch
 
-        if torch.cuda.is_available():
+        if cuda_available():
             return False
         backend = getattr(torch.backends, "mps", None)
         return bool(backend is not None and backend.is_available())
@@ -1779,9 +1773,7 @@ def _copy_lora(src, dst):
         dst_lora[key].copy_(val)
 
 
-CUDA = pytest.mark.skipif(
-    not _cuda_available(), reason="requires CUDA (layer streaming is a GPU feature)"
-)
+CUDA = pytest.mark.gpu(reason="layer streaming is a GPU feature")
 
 
 @CUDA
@@ -2188,6 +2180,70 @@ class TestStreamLoraVariantGates:
             _load(_stream_yaml(training={"lora": {"r": 4, "init_strategy": "olora"}}))
 
 
+class TestStreamLoraHeadTargetGate:
+    """#1012 follow-up (#1019 review): the forward pass for a LoRA target on
+    lm_head/embed_tokens under streaming is correct, but saving and resuming
+    that adapter is not implemented yet (save_pretrained() raises copying a
+    meta tensor; a save -> load_adapter round trip silently drops most of the
+    adapter's tensors). Refuse at parse time, before any shard I/O runs, the
+    same way lora.use_dora / lora.use_vera are refused above."""
+
+    def test_lm_head_target_rejected(self):
+        with pytest.raises(ValueError, match="lm_head"):
+            _load(
+                _stream_yaml(
+                    training={"lora": {"r": 4, "target_modules": ["q_proj", "lm_head"]}}
+                )
+            )
+
+    def test_embed_tokens_target_rejected(self):
+        with pytest.raises(ValueError, match="embed_tokens"):
+            _load(
+                _stream_yaml(
+                    training={
+                        "lora": {"r": 4, "target_modules": ["q_proj", "embed_tokens"]}
+                    }
+                )
+            )
+
+    def test_both_boundary_modules_named_together(self):
+        with pytest.raises(ValueError, match="embed_tokens.*lm_head|lm_head.*embed_tokens"):
+            _load(
+                _stream_yaml(
+                    training={
+                        "lora": {
+                            "r": 4,
+                            "target_modules": ["embed_tokens", "q_proj", "lm_head"],
+                        }
+                    }
+                )
+            )
+
+    def test_bare_string_target_is_checked_too(self):
+        """target_modules accepts a bare string (Union[str, List[str]]), not
+        only a list: the guard must not assume a list."""
+        with pytest.raises(ValueError, match="lm_head"):
+            _load(_stream_yaml(training={"lora": {"r": 4, "target_modules": "lm_head"}}))
+
+    def test_non_boundary_targets_still_accepted(self):
+        """Negative control: q_proj/v_proj/o_proj/k_proj are unaffected. This
+        is the exact config #1019's own forward-fix tests exercise and it must
+        keep training."""
+        cfg = _load(
+            _stream_yaml(
+                training={
+                    "lora": {"r": 4, "target_modules": ["q_proj", "v_proj", "k_proj", "o_proj"]}
+                }
+            )
+        )
+        assert cfg.training.lora.target_modules == ["q_proj", "v_proj", "k_proj", "o_proj"]
+
+    def test_auto_target_modules_still_accepted(self):
+        """Negative control: the default 'auto' sentinel is untouched."""
+        cfg = _load(_stream_yaml(training={"lora": {"r": 4}}))
+        assert cfg.training.lora.target_modules == "auto"
+
+
 class TestPrefetchDirectionIsExplicit:
     """Direction was inferred from call order, which is correct today only
     because the turnaround index happens to be the last layer. Make it explicit
@@ -2314,7 +2370,7 @@ class TestShardWriteContainment:
         with pytest.raises(ValueError, match="under"):
             shard_checkpoint(src, outside, dtype="float32")
 
-    @pytest.mark.skipif(os.name == "nt", reason="POSIX symlink semantics")
+    @pytest.mark.requires_symlink
     def test_symlinked_ancestor_is_resolved_not_followed_blindly(self, tmp_path):
         from soup_cli.utils.layer_shard import shard_checkpoint
 
@@ -2442,7 +2498,7 @@ class TestStreamingEndToEndSetup:
         # Use the REAL device: TrainingArguments picks cuda when it is
         # available, so forcing the model to cpu here would only produce a
         # device mismatch that no user would ever hit.
-        device = "cuda" if _cuda_available() else "cpu"
+        device = "cuda" if cuda_available() else "cpu"
         return SFTTrainerWrapper(cfg, device=device), dataset
 
     def test_setup_builds_a_real_trl_trainer(self, tmp_path, monkeypatch):

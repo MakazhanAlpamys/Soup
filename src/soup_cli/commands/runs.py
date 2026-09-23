@@ -352,8 +352,11 @@ def clean(
     ),
     force: bool = typer.Option(False, "--force", "-f", help="Skip confirmation"),
     keep_weights: bool = typer.Option(
-        True, "--keep-weights",
-        help="Keep intermediate model weights but delete optimizer states."
+        True, "--keep-weights/--no-keep-weights",
+        help=(
+            "Keep intermediate model weights and delete only optimizer and scheduler "
+            "states (default). --no-keep-weights deletes whole non-best checkpoints."
+        ),
     ),
 ):
     """Intelligently clean up redundant checkpoint files to reclaim disk space."""

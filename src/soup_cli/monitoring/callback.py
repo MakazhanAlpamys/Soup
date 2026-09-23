@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 from rich.console import Console
 
@@ -14,6 +14,58 @@ from soup_cli.monitoring.display import TrainingDisplay
 
 logger = logging.getLogger(__name__)
 console = Console()
+
+
+def soup_callback_kwargs(
+    tcfg: Any,
+    *,
+    batch_size: Optional[int] = None,
+    output_dir: Optional[str] = None,
+    include_eval_gate: bool = True,
+) -> dict[str, Any]:
+    """Shared kwargs for :class:`SoupTrainerCallback` across all trainers (#802).
+
+    Unifies watchdog, spike recovery, and grad-accum parameters so they cannot
+    drift across trainer implementations.
+    """
+    resolved_batch = 1
+    if batch_size is not None and not isinstance(batch_size, bool):
+        try:
+            resolved_batch = max(1, int(batch_size))
+        except (TypeError, ValueError):
+            resolved_batch = 1
+    elif (
+        hasattr(tcfg, "batch_size")
+        and isinstance(tcfg.batch_size, int)
+        and not isinstance(tcfg.batch_size, bool)
+    ):
+        resolved_batch = max(1, tcfg.batch_size)
+
+    kwargs: dict[str, Any] = {
+        "loss_watchdog": getattr(tcfg, "loss_watchdog", False),
+        "loss_watchdog_threshold": getattr(tcfg, "loss_watchdog_threshold", 3.0),
+        "loss_watchdog_patience": getattr(tcfg, "loss_watchdog_patience", 5),
+        "spike_recovery": getattr(tcfg, "loss_spike_recovery", False),
+        "spike_recovery_max_attempts": getattr(
+            tcfg, "loss_spike_recovery_max_attempts", 3
+        ),
+        "spike_recovery_lr_decay": getattr(
+            tcfg, "loss_spike_recovery_lr_decay", 0.5
+        ),
+        "grad_accum_auto_tune": getattr(tcfg, "grad_accum_auto_tune", False),
+        "grad_accum_pressure_threshold": getattr(
+            tcfg, "grad_accum_pressure_threshold", 0.9
+        ),
+        "grad_accum_current_steps": getattr(
+            tcfg, "gradient_accumulation_steps", 1
+        ),
+        "grad_accum_current_batch": resolved_batch,
+    }
+    if include_eval_gate:
+        kwargs["eval_gate_config"] = getattr(tcfg, "eval_gate", None)
+    if output_dir is not None:
+        kwargs["output_dir"] = output_dir
+    return kwargs
 
 
 def _get_trainer_callback_base():
@@ -60,7 +112,9 @@ class _SoupTrainerCallback_body:  # noqa: N801
         # tracker to synthetic zeroes (#541).
         self._last_loss = 0.0
         self._last_lr = 0.0
-        self._last_grad_norm = 0.0
+        # A missing norm is not a measured zero. Keep the last measured value
+        # only for the live panel; persisted metrics use the current log.
+        self._last_grad_norm: Optional[float] = None
         #: None until an evaluation runs. Not 0.0 -- an unmeasured
         #: validation loss must not read as a measured one.
         self._last_val_loss = None
@@ -204,7 +258,8 @@ class _SoupTrainerCallback_body:  # noqa: N801
             self._last_val_loss = logs["eval_loss"]
         loss = self._last_loss
         lr = self._last_lr
-        grad_norm = self._last_grad_norm
+        display_grad_norm = self._last_grad_norm
+        measured_grad_norm = logs.get("grad_norm")
         # Two different values on purpose, and the distinction is the whole
         # point of the column existing.
         #
@@ -228,7 +283,7 @@ class _SoupTrainerCallback_body:  # noqa: N801
             loss=loss,
             val_loss=display_val_loss,
             lr=lr,
-            grad_norm=grad_norm,
+            grad_norm=display_grad_norm,
             speed=speed,
             gpu_mem=gpu_mem,
         )
@@ -254,7 +309,11 @@ class _SoupTrainerCallback_body:  # noqa: N801
                         else None
                     ),
                     lr=float(lr) if lr is not None else None,
-                    grad_norm=float(grad_norm) if grad_norm is not None else None,
+                    grad_norm=(
+                        float(measured_grad_norm)
+                        if measured_grad_norm is not None
+                        else None
+                    ),
                 )
             )
         except Exception:
@@ -337,7 +396,7 @@ class _SoupTrainerCallback_body:  # noqa: N801
                 loss=loss,
                 val_loss=measured_val_loss,
                 lr=lr,
-                grad_norm=grad_norm,
+                grad_norm=measured_grad_norm,
                 speed=speed,
                 gpu_mem=gpu_mem,
             )

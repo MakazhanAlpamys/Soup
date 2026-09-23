@@ -33,6 +33,7 @@ def apply_v028_speed_memory(
     console: Optional["Console"] = None,
     device: str = "cpu",
     backend: str = "transformers",
+    skip_cut_ce: bool = False,
 ) -> dict[str, bool]:
     """Apply Cut-CE / FP8 features to ``model``.
 
@@ -54,25 +55,34 @@ def apply_v028_speed_memory(
 
     # --- Cut Cross-Entropy ---------------------------------------------------
     if getattr(tcfg, "use_cut_ce", False):
-        from soup_cli.utils.cut_ce import NO_MATCHING_ARCHITECTURE_MESSAGE
-
-        try:
-            from soup_cli.utils.cut_ce import apply_cut_ce
-            ok = bool(apply_cut_ce(base_model))
-        except Exception:  # noqa: BLE001 — degrade gracefully
-            ok = False
-        applied["cut_ce"] = ok
-        if ok:
-            _say("Cut Cross-Entropy enabled (chunked CCE kernel)")
+        if skip_cut_ce:
+            applied["cut_ce"] = False
         else:
-            _say(f"Cut Cross-Entropy: {NO_MATCHING_ARCHITECTURE_MESSAGE}", style="yellow")
+            from soup_cli.utils.cut_ce import NO_MATCHING_ARCHITECTURE_MESSAGE
+
+            try:
+                from soup_cli.utils.cut_ce import apply_cut_ce
+                ok = bool(apply_cut_ce(base_model))
+            except Exception:  # noqa: BLE001 — degrade gracefully
+                ok = False
+            applied["cut_ce"] = ok
+            if ok:
+                _say("Cut Cross-Entropy enabled (chunked CCE kernel)")
+            else:
+                _say(f"Cut Cross-Entropy: {NO_MATCHING_ARCHITECTURE_MESSAGE}", style="yellow")
 
     # --- FP8 training --------------------------------------------------------
     if getattr(tcfg, "quantization_aware", None) == "fp8":
         recipe = getattr(tcfg, "fp8_recipe", "tensorwise")
+        from soup_cli.utils.fp8 import FP8HardwareUnsupportedError
         try:
             from soup_cli.utils.fp8 import apply_fp8_training
             ok = bool(apply_fp8_training(model, recipe=recipe))
+        except FP8HardwareUnsupportedError:
+            # #835 ruling: FP8 was asked for explicitly and this card cannot run
+            # it. Warning and training on without it is the silent-setting
+            # defect; the run stops here, before anything trains.
+            raise
         except Exception:  # noqa: BLE001
             ok = False
         applied["fp8"] = ok
@@ -80,8 +90,8 @@ def apply_v028_speed_memory(
             _say(f"FP8 training enabled (Float8Linear, recipe={recipe})")
         else:
             _say(
-                "FP8 training: torchao.float8 unavailable or no "
-                "compatible linears", style="yellow",
+                "FP8 training requested but unavailable (torchao.float8 missing)",
+                style="yellow",
             )
 
     # --- FP8 attention (v0.71.21 #141) ---------------------------------------
@@ -89,11 +99,14 @@ def apply_v028_speed_memory(
     # contract on the no-features path (test_part_c exact-equality).
     if getattr(tcfg, "fp8_attention", False):
         recipe = getattr(tcfg, "fp8_recipe", "tensorwise")
+        from soup_cli.utils.fp8 import FP8HardwareUnsupportedError
         try:
             from soup_cli.utils.advanced_precision import apply_fp8_attention
             converted = apply_fp8_attention(model, recipe=recipe)
             applied["fp8_attention"] = True
             _say(f"FP8 attention enabled ({converted} projections)")
+        except FP8HardwareUnsupportedError:
+            raise
         except (RuntimeError, ValueError, TypeError) as exc:
             applied["fp8_attention"] = False
             _say(f"FP8 attention: {exc}", style="yellow")
@@ -121,37 +134,6 @@ def apply_v028_speed_memory(
         )
 
     return applied
-
-
-def _bench_and_pick_kernel(
-    *, model: Any, device: str, backend: str,
-) -> Optional[str]:
-    """v0.35.0 #45 — benchmark candidate kernel combos and return the
-    picked combo's name. Returns ``None`` on any benchmark / pick failure
-    so the caller can degrade gracefully (no kernel_auto_compose flag set).
-    """
-    try:
-        from soup_cli.utils.kernel_picker import (
-            benchmark_kernel_combos,
-            enumerate_kernel_combos,
-            pick_best_kernel,
-        )
-        candidates = enumerate_kernel_combos(backend=backend, device=device)
-        # On CPU / unsloth / mlx the candidate list is just [baseline]; no
-        # benchmark needed — picker would raise on all-None times. Skip.
-        if len(candidates) <= 1:
-            return None
-        timed = benchmark_kernel_combos(
-            model=model, candidates=candidates, device=device,
-        )
-        picked = pick_best_kernel(timed)
-        # Picker returns either a dict (current shape) or an object with
-        # ``.name`` (legacy / namespace shape) — handle both defensively.
-        if isinstance(picked, dict):
-            return str(picked.get("name", "unknown"))
-        return str(getattr(picked, "name", "unknown"))
-    except Exception:  # noqa: BLE001 — picker is best-effort
-        return None
 
 
 @contextlib.contextmanager
@@ -231,10 +213,12 @@ def warn_unsupported_features(
         issues.append("use_cut_ce")
     if getattr(tcfg, "quantization_aware", None) == "fp8":
         issues.append('quantization_aware="fp8"')
-    if getattr(tcfg, "kernel_auto_compose", False):
-        issues.append("kernel_auto_compose")
     if getattr(tcfg, "activation_offloading", None) is not None:
         issues.append("activation_offloading")
+    if getattr(tcfg, "fp8_attention", False):
+        issues.append("fp8_attention")
+    if getattr(tcfg, "nvfp4", False):
+        issues.append("nvfp4")
     if not issues:
         return None
     return (

@@ -12,8 +12,10 @@ from pathlib import Path
 from typing import Any, Mapping, Optional
 
 from rich.console import Console
+from rich.markup import escape
 
 from soup_cli.config.schema import SoupConfig
+from soup_cli.data.chat_templates import apply_chat_template_override
 from soup_cli.trainer.loss_summary import summarize_training_loss
 from soup_cli.utils.gpu import (
     estimate_batch_size,
@@ -143,6 +145,10 @@ class PPOTrainerWrapper:
         else:
             self._setup_transformers(cfg, tcfg)
 
+        apply_chat_template_override(
+            self.tokenizer, cfg.data.chat_template, console=console
+        )
+
         trainable, total = self.model.get_nb_trainable_parameters()
         pct = 100 * trainable / total
         console.print(
@@ -169,7 +175,7 @@ class PPOTrainerWrapper:
             console.print(f"[green]Auto batch size (PPO):[/] {batch_size}")
 
         # --- Dataset ---
-        train_data = _prepare_ppo_dataset(dataset["train"])
+        train_data = _prepare_ppo_dataset(dataset["train"], tokenizer=self.tokenizer)
         train_ds = Dataset.from_list(train_data)
 
         # Tokenize dataset: trl experimental PPOTrainer expects input_ids,
@@ -525,7 +531,14 @@ class PPOTrainerWrapper:
         self.model = AutoModelForCausalLM.from_pretrained(cfg.base, **model_kwargs)
 
         if tcfg.quantization in ("4bit", "8bit", "mxfp4"):
-            self.model = prepare_model_for_kbit_training(self.model)
+            from soup_cli.utils.layer_stream import should_enable_hf_gradient_checkpointing
+
+            self.model = prepare_model_for_kbit_training(
+                self.model,
+                use_gradient_checkpointing=should_enable_hf_gradient_checkpointing(
+                    tcfg.gradient_checkpointing, stream_layers=tcfg.stream_layers
+                ),
+            )
 
         from soup_cli.utils.peft_wiring import (
             build_lora_config,
@@ -533,6 +546,14 @@ class PPOTrainerWrapper:
         )
 
         target_modules = resolve_lora_target_modules(self.model, tcfg.lora.target_modules)
+        # #1099: moe_lora picks the expert-FFN targets. Without this the flag
+        # was accepted and ignored here, and on a fused-expert MoE the auto
+        # resolution leaves peft with nothing to attach.
+        from soup_cli.utils.moe import resolve_moe_lora_targets
+
+        target_modules = resolve_moe_lora_targets(
+            self.model, tcfg, target_modules, console
+        )
 
         lora_config = build_lora_config(
             tcfg.lora,
@@ -614,15 +635,23 @@ class PPOTrainerWrapper:
                 self.trainer.dataset = self._train_ds
 
         if display:
-            from soup_cli.monitoring.callback import SoupTrainerCallback
+            from soup_cli.monitoring.callback import (
+                SoupTrainerCallback,
+                soup_callback_kwargs,
+            )
 
             self.trainer.add_callback(
                 SoupTrainerCallback(
-                    display, tracker=tracker, run_id=run_id,
-                    loss_watchdog=self.config.training.loss_watchdog,
-                    loss_watchdog_threshold=self.config.training.loss_watchdog_threshold,
-                    loss_watchdog_patience=self.config.training.loss_watchdog_patience,
+                    display,
+                    tracker=tracker,
+                    run_id=run_id,
                     eval_gate_config=self.config.training.eval_gate,
+                    **soup_callback_kwargs(
+                        self.config.training,
+                        batch_size=self._batch_size,
+                        output_dir=self._output_dir,
+                        include_eval_gate=False,
+                    ),
                 )
             )
 
@@ -887,7 +916,7 @@ def _load_reward_model(
     return reward_model
 
 
-def _prepare_ppo_dataset(data: list[dict]) -> list[dict]:
+def _prepare_ppo_dataset(data: list[dict], tokenizer: Any | None = None) -> list[dict]:
     """Convert dataset rows to PPO format.
 
     PPO expects each row to have a 'prompt_text' field (string for tokenization)
@@ -910,16 +939,68 @@ def _prepare_ppo_dataset(data: list[dict]) -> list[dict]:
             prepared.append(entry)
         elif "messages" in row:
             messages = row["messages"]
-            # Use user messages as prompt text
-            prompt_parts = [
-                msg["content"] for msg in messages if msg["role"] in ("system", "user")
-            ]
-            entry = {"prompt_text": " ".join(prompt_parts)}
+            prompt_text = None
+            if (
+                tokenizer is not None
+                and getattr(tokenizer, "chat_template", None)
+                and callable(getattr(tokenizer, "apply_chat_template", None))
+            ):
+                prompt_messages = [
+                    msg
+                    for msg in messages
+                    if isinstance(msg, dict) and msg.get("role") in ("system", "user")
+                ]
+                if not prompt_messages:
+                    prompt_messages = messages
+                try:
+                    prompt_text = tokenizer.apply_chat_template(
+                        prompt_messages, tokenize=False, add_generation_prompt=True
+                    )
+                except Exception as exc:
+                    console.print(
+                        f"[yellow]Warning:[/] apply_chat_template failed: {escape(str(exc))}; "
+                        "falling back to joined text"
+                    )
+                    prompt_text = None
+            if prompt_text is None:
+                # Use user messages as prompt text
+                prompt_parts = [
+                    msg.get("content", "")
+                    for msg in messages
+                    if isinstance(msg, dict) and msg.get("role") in ("system", "user")
+                ]
+                prompt_text = " ".join(prompt_parts)
+            entry = {"prompt_text": prompt_text}
+            if "answer" in row:
+                entry["answer"] = row["answer"]
             prepared.append(entry)
         elif "prompt" in row and isinstance(row["prompt"], list):
-            # Message list → join content
-            prompt_parts = [msg.get("content", "") for msg in row["prompt"]]
-            entry = {"prompt_text": " ".join(prompt_parts)}
+            prompt_list = row["prompt"]
+            prompt_text = None
+            if (
+                tokenizer is not None
+                and getattr(tokenizer, "chat_template", None)
+                and callable(getattr(tokenizer, "apply_chat_template", None))
+            ):
+                try:
+                    prompt_text = tokenizer.apply_chat_template(
+                        prompt_list, tokenize=False, add_generation_prompt=True
+                    )
+                except Exception as exc:
+                    console.print(
+                        f"[yellow]Warning:[/] apply_chat_template failed: {escape(str(exc))}; "
+                        "falling back to joined text"
+                    )
+                    prompt_text = None
+            if prompt_text is None:
+                # Message list → join content
+                prompt_parts = [
+                    msg.get("content", "")
+                    for msg in prompt_list
+                    if isinstance(msg, dict)
+                ]
+                prompt_text = " ".join(prompt_parts)
+            entry = {"prompt_text": prompt_text}
             if "answer" in row:
                 entry["answer"] = row["answer"]
             prepared.append(entry)

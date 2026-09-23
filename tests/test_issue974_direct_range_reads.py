@@ -49,12 +49,6 @@ N_LAYERS = 4
 SECTOR = 4096
 
 
-def _cuda() -> bool:
-    return torch.cuda.is_available()
-
-
-requires_cuda = pytest.mark.skipif(not _cuda(), reason="needs a CUDA device")
-
 #: Far beyond any box's RAM, so ``cuMemHostAlloc`` refuses it at once (#901).
 _IMPOSSIBLE_PIN_BYTES = 2**40
 
@@ -725,7 +719,7 @@ class TestTheArenaPlanForARealStore:
 # ==========================================================================
 # Real hardware: pinned arenas, and the disk tier's own failed page-lock
 # ==========================================================================
-@requires_cuda
+@pytest.mark.gpu
 class TestOnRealHardware:
     def test_every_region_is_a_pinned_sector_aligned_view_of_a_power_of_two_arena(
         self, tmp_path

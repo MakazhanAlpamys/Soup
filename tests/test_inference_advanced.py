@@ -196,7 +196,7 @@ class TestLoRAHotSwap:
                 max_tokens_default=512,
                 adapter_map={"chat": str(adapter_dir)},
             )
-            client = TestClient(app)
+            client = TestClient(app, base_url="http://127.0.0.1")
             # List route should include activate
             routes = [r.path for r in app.routes]
             assert "/v1/adapters/activate/{name}" in routes or any(
@@ -225,7 +225,7 @@ class TestLoRAHotSwap:
             max_tokens_default=512,
             adapter_map={"chat": "./x"},
         )
-        client = TestClient(app)
+        client = TestClient(app, base_url="http://127.0.0.1")
         resp = client.post("/v1/adapters/activate/unknown")
         assert resp.status_code == 404
 
@@ -244,7 +244,7 @@ class TestLoRAHotSwap:
             max_tokens_default=512,
             adapter_map={"chat": "./x"},
         )
-        client = TestClient(app)
+        client = TestClient(app, base_url="http://127.0.0.1")
         # Path-traversal style names
         resp = client.post("/v1/adapters/activate/..%2Fetc")
         assert resp.status_code in (400, 404, 422)
@@ -717,7 +717,7 @@ class TestLoRADeactivate:
             max_tokens_default=512,
             adapter_map={"chat": "./x"},
         )
-        client = TestClient(app)
+        client = TestClient(app, base_url="http://127.0.0.1")
         activate_resp = client.post("/v1/adapters/activate/chat")
         assert activate_resp.status_code == 200
         assert activate_resp.json()["active"] == "chat"
@@ -743,7 +743,7 @@ class TestLoRADeactivate:
             max_tokens_default=512,
             adapter_map=None,
         )
-        client = TestClient(app)
+        client = TestClient(app, base_url="http://127.0.0.1")
         resp = client.post("/v1/adapters/activate/chat")
         assert resp.status_code == 404
 
@@ -839,36 +839,6 @@ class TestStructuredOutputExtra:
         )
         assert result.exit_code != 0, result.output
         assert "json-schema" in _strip_ansi(result.output)
-
-
-class TestAutoQuantCLIWarning:
-    def test_auto_quant_logs_picker_choice(self, tmp_path):
-        """v0.33.0 #54: --auto-quant runs the live picker and logs the
-        chosen candidate (not a deferral warning anymore)."""
-        pytest.importorskip("fastapi")  # CLI exits early w/o FastAPI
-        from typer.testing import CliRunner
-
-        from soup_cli.cli import app
-
-        runner = CliRunner()
-        model_dir = tmp_path / "model"
-        model_dir.mkdir()
-
-        result = runner.invoke(
-            app,
-            [
-                "serve",
-                "--model",
-                str(model_dir),
-                "--device",
-                "cpu",
-                "--auto-quant",
-            ],
-        )
-        # Command will fail later (no real model); just check the picker
-        # ran (either picked a candidate or surfaced a controlled error).
-        output = _strip_ansi(result.output).lower()
-        assert "auto-quant" in output
 
 
 class TestJsonSchemaContainment:

@@ -14,6 +14,7 @@
 
 **Contents:**
 
+- [Which tasks apply `training.quantization`](#which-tasks-apply-trainingquantization)
 - [Continual-learning rehearsal (`--replay`)](#continual-learning-rehearsal---replay)
 - [Loop Hardening](#loop-hardening)
 - [Unlearning (`task='unlearn'`, NPO / SimNPO / RMU)](#unlearning-taskunlearn-npo--simnpo--rmu)
@@ -48,6 +49,7 @@
 - [EBFT + GDPO (BETA, v0.52.0)](#ebft--gdpo-beta-v0520)
 - [gpt-oss `reasoning_effort` + `train_on_eot` (v0.52.0)](#gpt-oss-reasoning_effort--train_on_eot-v0520)
 - [Seeds & reproducibility (`training.seed`)](#seeds--reproducibility-trainingseed)
+- [Rewind — which row spiked the loss (`soup rewind`)](#rewind--which-row-spiked-the-loss-soup-rewind)
 - [Full fine-tuning (`lora.r: 0`)](#full-fine-tuning-lorar-0)
 
 ---
@@ -73,12 +75,19 @@ default, so "run it again with a different seed" was impossible: replicates of
 one arm differed only by row permutation and GPU nondeterminism. That understates
 run-to-run spread, and spread is the yardstick a real between-arm difference has
 to beat. Three replicates at three seeds is the cheapest honest error bar you can
-put on a training change:
+put on a training change. Create one config per replicate so the seed and its
+output directory stay together in the recorded recipe:
+
+```yaml
+# soup-seed-1.yaml (repeat for seeds 2 and 3)
+training:
+  seed: 1
+output: runs/seed-1
+```
 
 ```bash
 for s in 1 2 3; do
-  soup train --config soup.yaml --output "runs/seed-$s" \
-    && echo "seed $s done"   # set training.seed: $s in the config per run
+  soup train --config "soup-seed-$s.yaml" && echo "seed $s done"
 done
 ```
 
@@ -130,6 +139,61 @@ reproducible. It does not make CUDA kernels bit-reproducible — non-determinist
 atomics, autotuned algorithms and a different GPU or library version can still
 move the last digits. For bit-exact reruns you also need
 `torch.use_deterministic_algorithms(True)`, which Soup does not set for you.
+
+---
+
+## Rewind — which row spiked the loss (`soup rewind`)
+
+While an SFT run trains, Soup writes `<output>/rewind.jsonl`: one line per micro-batch
+with the dataset rows in it, each row's mean supervised-token loss, and its
+supervised-token count. When the loss jumps, `soup rewind` reads that file and names
+the rows that carried the step. It needs no model or GPU, and runs in seconds.
+
+```yaml
+training:
+  rewind_log: true   # default; set false to write nothing
+```
+
+```bash
+soup rewind                      # most recent run: list spikes, detail the worst
+soup rewind <run_id> --step 340  # rank the rows of one step
+soup rewind <run_id> --top 25    # how many rows to list (default 10)
+soup rewind <run_id> --json r.json --no-preview
+```
+
+A spike is a step whose loss is non-finite, or more than 2x the median of the previous
+20 measured steps. Rows are ranked by their share of the step's summed token loss, so
+one long, badly-formed row stands out even when its per-token mean is ordinary. Example
+output (illustrative numbers):
+
+```text
+                Step 340 rows
+ Row    Loss   Tokens   Share  Preview
+  91  6.8120    3,900   94.1%  iVBORw0KGgoAAAANSUhEUgAAAyAAAAJYCAYAAAC…
+  12  1.1034      212    0.8%  Sure — here is a summary of the article…
+row 91: 94% of step 340's loss, 3,900 tokens
+Inspect or drop this row, then retrain.
+```
+
+Scope: task `sft` on the transformers and MLX backends, single process, on the plain
+text path. The recorder turns itself off, with one warning naming the reason, for
+resumed runs, `packing` / `padding_free`, multipack, vision, audio, a pre-tokenised
+dataset, and anything else it cannot attribute row by row. Previews are shown only when
+the dataset on disk still matches the one the run trained on.
+
+**What it costs.** Writing one line per micro-batch measured under 0.1 ms per
+micro-batch, which is negligible against any real step, and a run's peak memory was
+unchanged with the recorder on and off. The file grows without a cap: roughly 14 MB per
+50,000 micro-batches at batch 8, or about 100 MB for a million rows over three epochs.
+Delete it, or set `rewind_log: false`, if that matters to you.
+
+**What it contains.** Integer row indices, one loss and one token count per row — never
+any text from your dataset. Previews in `soup rewind` are rebuilt at read time from your
+own data file, and only while its fingerprint still matches. The indices and token counts
+are still weak metadata about a private dataset, so treat the file as you would the
+`output` directory it sits in.
+
+---
 
 ## Full fine-tuning (`lora.r: 0`)
 
@@ -199,6 +263,32 @@ trainable-base case and explicitly load `torch.float32` master weights
 instead — a deliberate precision choice for the parameters an optimizer
 actually steps, not an accidental upcast, and unaffected by the card check
 above.
+
+---
+
+## Which tasks apply `training.quantization`
+
+`quantization` defaults to `4bit`, but not every trainer reads it. These eight load the base
+(and, for `distill`, the teacher) at checkpoint precision whatever the field says:
+
+| task | quantization | notes |
+|---|---|---|
+| `distill` | `none` only | student and frozen teacher both load unquantised |
+| `classifier`, `reranker`, `cross_encoder` | `none` only | full fine-tune unless `classifier_lora: true` |
+| `prm` | `none` only | always a full fine-tune; a `lora` block is refused (`lora.r: 0` is allowed) |
+| `moe_lora_routing` | `none` only | base frozen, only the router trains |
+| `unlearn` | `none` only | policy and reference copy both load unquantised |
+| `asr` | `none` only | full fine-tune unless `asr_lora: true` |
+
+For these tasks an unset `quantization` resolves to `none`, so the stored config and the VRAM
+pre-flight describe the run that actually happens (#795).
+
+An explicit `4bit` or `8bit` (or `load_in_8bit: true`) **loads with a warning and resolves to
+`none`**, because every config Soup dumped while `4bit` was the default carries it literally.
+The warning names the task and the release that will refuse it; set `quantization: none` to
+silence it. A Quant Menu value (`gptq`, `awq`, ...) or a 4-bit-only setting such as
+`bnb_4bit_quant_storage` is refused at config load, naming the task. Every other task applies
+the field as documented in [Performance & Quantization](performance-and-quantization.md).
 
 ---
 
@@ -275,7 +365,9 @@ soup train --config grpo.yaml --reward-hack-mitigation log_only     # observe on
 # tokenize identically; for a genuinely different tokenizer see
 # wasserstein_aligned below).
 # (Universal Logit Distillation, Boizard et al. 2024 arXiv:2402.12030)
-soup train --config soup.yaml --uld-strategy wasserstein
+#   training:
+#     uld_strategy: wasserstein
+soup train --config soup.yaml
 
 # Cross-tokenizer distillation for DIFFERENT tokenizers, e.g. Llama -> Mistral,
 # no shared vocab needed (v0.71.18). Aligns student/teacher token sequences
@@ -285,25 +377,32 @@ soup train --config soup.yaml --uld-strategy wasserstein
 #     uld_strategy: wasserstein_aligned
 
 # MiniLLM reverse-KL distillation (Gu et al. 2024 arXiv:2306.08543).
-# Offline blend: mix ratio is the teacher weight in the reverse-KL target and
-# must be > 0 (ratio 0 is KL(student || stopgrad(student)) and is rejected).
-# On-policy: mix 0 is legal — student-only sampling, loss still KL(student || teacher).
-soup train --config soup.yaml --minillm-enabled \
-    --minillm-teacher-mix-ratio 0.3 \
-    --minillm-pretrain-anchor-weight 0.1 \
-    --minillm-pretrain-anchor-path ./pretrain.jsonl
+# Config-only: there is no --minillm-* flag beyond --minillm-on-policy below
+# (#979). Offline blend: mix ratio is the teacher weight in the reverse-KL
+# target and must be > 0 (ratio 0 is KL(student || stopgrad(student)) and is
+# rejected). On-policy: mix 0 is legal — student-only sampling, loss still
+# KL(student || teacher).
+#   training:
+#     minillm_enabled: true
+#     minillm_teacher_mix_ratio: 0.3
+#     minillm_pretrain_anchor_weight: 0.1
+#     minillm_pretrain_anchor_path: ./pretrain.jsonl
+soup train --config soup.yaml
 
 # MiniLLM TRUE on-policy rollout (v0.71.18, Gu et al. §3.1) — sample a fresh
 # autoregressive rollout from the per-token teacher/student mixture each step,
 # then length-normalised reverse-KL. training.minillm_rollout_length tunes the
 # rollout (auto min(max_length, 32)). Mix 0 here means student-only sampling.
-soup train --config soup.yaml --minillm-enabled --minillm-on-policy
+# --minillm-on-policy is the one real flag here; minillm_enabled: true still
+# has to be set in the config (#979).
+soup train --config soup.yaml --minillm-on-policy
 
 # Mid-epoch checkpoint for PPO/GRPO — TorchTune punts this; Soup ships it
-soup train --config grpo.yaml \
-    --rl-checkpoint-save-every-steps 500 \
-    --rl-checkpoint-keep-last 3 \
-    --rl-checkpoint-include-optimizer
+#   training:
+#     rl_checkpoint_save_every_steps: 500
+#     rl_checkpoint_keep_last: 3
+#     rl_checkpoint_include_optimizer: true
+soup train --config grpo.yaml
 
 # Iterative DPO loop driver — sample -> RM-score -> re-pair -> retrain
 # (drop --plan-only to run the loop; --plan-only just renders the per-round plan)
@@ -317,14 +416,19 @@ soup iterative-dpo \
 
 # RAGEN echo-trap detector — auto-halt when trajectories collapse to self-repetition
 # (Zhu et al. 2025 arXiv:2504.14437)
-soup train --config grpo.yaml \
-    --echo-trap-enabled \
-    --echo-trap-threshold 0.6 \
-    --echo-trap-halt \
-    --echo-trap-tokenizer-aware
+#   training:
+#     echo_trap_enabled: true
+#     echo_trap_threshold: 0.6
+#     echo_trap_halt: true
+#     echo_trap_tokenizer_aware: true
+soup train --config grpo.yaml
 ```
 
-`--echo-trap-tokenizer-aware` switches echo-trap n-grams from whitespace tokens to the active tokenizer's integer ids. This catches subword repetition that punctuation-heavy decoded text can hide, but the score becomes tokenizer-specific rather than vocabulary-agnostic.
+`training.echo_trap_tokenizer_aware` (also available as the real
+`--echo-trap-tokenizer-aware` option) switches echo-trap n-grams from
+whitespace tokens to the active tokenizer's integer ids. This catches subword
+repetition that punctuation-heavy decoded text can hide, but the score becomes
+tokenizer-specific rather than vocabulary-agnostic.
 
 ### Closed-loop reward-hacking auto-mitigation (v0.71.26)
 
@@ -422,7 +526,6 @@ training:
   distill_checkpoint: true         # non-reentrant activation checkpointing
   epochs: 3
   lr: 5e-5
-  quantization: 4bit               # quantizes student only
 ```
 
 Loss = student CE + (T**2) × KL(teacher_logits / T  ||  student_logits / T).
@@ -691,6 +794,8 @@ The judge is Soup's own OpenAI-compatible `JudgeEvaluator` adapted to TRL's
 `BasePairwiseJudge` (swap-debiased: a winner is only recorded when both A,B and
 B,A orders agree). Recipe: `online-dpo-smollm2-135m`. Proof-of-mechanism was
 validated on SmolLM2-135M with a synthetic judge (not a production RLHF claim; #286).
+An `https://` judge URL uses `OPENAI_API_KEY` only when its host is `api.openai.com`; other
+hosts are called as an OpenAI-compatible server without that key.
 
 
 ## Weighted Multi-Objective Preference Loss

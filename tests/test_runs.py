@@ -123,12 +123,23 @@ def test_runs_show_surfaces_the_stored_error_message(tracker):
     assert "simulated tokenizer load failure" in result.output
 
 
-def test_runs_show_strips_control_bytes_from_the_error_message(tracker):
+def test_runs_show_strips_control_bytes_from_the_error_message(tracker, monkeypatch):
     """#767 follow-up review: error_message is exception text, not a
     config-derived string, so it can carry a remote error body verbatim.
     markup_escape alone only neutralises '[...]' -- a raw ESC (window-title
     or SGR color) reaches the terminal untouched. for_terminal strips C0
     control bytes first, so neither escape sequence should survive."""
+    from rich.console import Console
+
+    from soup_cli.commands import runs as runs_command
+
+    # Pin tty detection so this asserts that for_terminal sanitised the
+    # error_message, not that the ambient shell happens not to force colour
+    # on the surrounding panel markup.
+    monkeypatch.setattr(
+        runs_command, "console", Console(force_terminal=False)
+    )
+
     run_id = tracker.start_run(
         config_dict={"base": "test-model", "task": "sft"},
         device="cpu",

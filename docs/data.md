@@ -23,6 +23,7 @@
 - [Data Quality Scorecard](#data-quality-scorecard)
 - [Remote Datasets (S3 / GCS / Azure / OCI)](#remote-datasets-s3--gcs--azure--oci)
 - [Semantic dedup (`soup data dedup --semantic`)](#semantic-dedup-soup-data-dedup---semantic)
+- [Dataset Sanitization & Repair (`soup data clean`)](#dataset-sanitization--repair-soup-data-clean)
 - [Topic map (`soup data topics`)](#topic-map-soup-data-topics)
 - [Canaries (`soup data canary insertcheck`)](#canaries-soup-data-canary-insertcheck)
 - [Data Recipe DAG](#data-recipe-dag)
@@ -78,6 +79,39 @@ against your own data, and check what got dropped.
 
 `--threshold` means Jaccard for MinHash and cosine for `--semantic`. They are
 different scales; a value tuned for one is not meaningful for the other.
+
+## Dataset Sanitization & Repair (`soup data clean`)
+
+`soup data clean` applies deterministic hygiene rules to repair corrupted, malformed, or noisy fine-tuning datasets without ever modifying the input file in place:
+
+```bash
+# Clean dataset with safe non-destructive defaults -> writes to <input>_cleaned.jsonl
+soup data clean raw_data.jsonl
+
+# Specify custom output path
+soup data clean raw_data.jsonl -o clean_data.jsonl
+
+# Preview modifications and statistics without writing any files
+soup data clean raw_data.jsonl --dry-run
+
+# Output machine-readable JSON for CI/CD pipelines
+soup data clean raw_data.jsonl --json
+
+# Enable optional heuristic repairs (AI disclaimers, code fences, tool-call JSON, echo pruning)
+soup data clean raw_data.jsonl --strip-boilerplate --repair-code --repair-json --prune-echo
+```
+
+### Cleaning Rules & Defaults:
+- **Default (Safe & Non-Destructive):**
+  1. **Control Characters & Whitespace:** Strips C0 controls (`\x00-\x1f`), zero-width spaces (`\u200b-\u200d`, `\ufeff`), and normalizes CRLF/CR to Unix LF.
+  2. **Empty & Degenerate Turns:** Drops rows where the assistant turn is empty or shorter than `--min-tokens`.
+- **Opt-In Heuristic Repairs (Flags):**
+  1. `--strip-boilerplate`: Strips canned preambles (*"Certainly! As an AI language model..."*) and sign-offs (*"I hope this helps!"*) across multiple passes.
+  2. `--repair-code`: Auto-closes unclosed triple backtick (```` ``` ````) code fences in assistant completions.
+  3. `--repair-json`: Unwraps markdown code blocks from JSON arguments and repairs trailing commas in tool calls.
+  4. `--prune-echo`: Drops rows where the assistant merely repeats the user prompt verbatim.
+
+Supports all standard formats: `chatml`, `alpaca`, `sharegpt`, `dpo`, `kto`, and `tool-calling`.
 
 ## Topic map (`soup data topics`)
 
@@ -173,7 +207,7 @@ expectations:
   - {name: expect_token_length_between, args: {min_tokens: 16, max_tokens: 4096}}
   - {name: expect_no_refusal_pattern}
 EOF
-soup expect data.jsonl suite.yaml   # exit 3 on suite failure
+soup expect data.jsonl suite.yaml   # exit 2 on suite failure
 
 # Magpie synthetic data — chat-template-prefix harvest (live, v0.71.6)
 soup data gen-magpie --base meta-llama/Llama-3.1-8B-Instruct \
@@ -725,7 +759,7 @@ data:
   add_new_tokens: ["<reasoning>", "</reasoning>"]
   new_special_tokens: ["<|tool_call|>"]
   resize_vocab: true
-  mask_history: true
+  mask_history: true              # train only on the LAST assistant turn
   split_thinking: true            # Qwen3-style <think> reasoning-block masking
   image_min_pixels: 256
   image_max_pixels: 4096
@@ -734,6 +768,28 @@ data:
   video_maxlen: 32
   video_dir: ./videos
 ```
+
+`mask_history: true` keeps only the **last** assistant turn in the loss: every
+earlier assistant turn is masked alongside the user and system turns the
+assistant-only path already excludes. It never adds tokens to the loss.
+
+It only means something for a **multi-turn chat shape** — `chatml`, `sharegpt`
+and the other message-list formats — where turns exist to mask. A single-turn
+conversation trains identically with it on or off, and a flat format such as
+`alpaca` or `plaintext` has no turns at all.
+
+It requires `train_on_responses_only: true`, which is the path that marks
+assistant spans; with `false` every token trains, including the history this
+field asks to exclude, so the combination is refused at config load. That also
+rules out `train_on_messages_with_train_field`, which is itself exclusive with
+`train_on_responses_only`: the per-message `train` field and `mask_history` can
+never both decide a run.
+
+It is honoured by the transformers backend, for `task: sft` and `task: distill`.
+**`backend: mlx` ignores it:** MLX SFT builds its own mask and supervises every
+assistant turn, so the same config trains the last turn on transformers and every
+turn on MLX. `soup train` says so on its "MLX backend ignores:" line, and
+`soup doctor --config` reports it.
 
 **AOT preprocessing:**
 
@@ -792,10 +848,14 @@ soup data stats ./data/train.jsonl
 soup data filter ./data/train.jsonl --coherence 0.3
 soup data filter ./data/train.jsonl --perplexity 500 --coherence 0.3
 soup data filter ./data/train.jsonl --score-only  # add scores without filtering
+
+# Clean dataset (control chars, zero-width spaces, empty turns; opt-in heuristics)
+soup data clean ./data/train.jsonl
+soup data clean ./data/train.jsonl -o ./data/clean.jsonl --dry-run
 ```
 
 `soup data validate` exits with code `0` when at least one row is usable and the
-optional minimum valid fraction is met. It exits with code `1` for input errors,
+optional minimum valid fraction is met. It exits with code `3` for input errors,
 such as a missing file or an undetectable format, and code `2` when a non-empty
 dataset has no usable rows or falls below `--min-valid-fraction`. A partially valid
 dataset still exits with code `0` when no minimum is specified.
@@ -946,7 +1006,7 @@ Pass `--live --base-yaml soup.yaml` to score each candidate with a short `soup t
 ## AOT Tokenization with `soup data preprocess`
 
 Pre-tokenize your dataset once and cache Arrow shards keyed by
-`(dataset, tokenizer, max_length, format)`:
+`(dataset, tokenizer, max_length, format, chat_template)`:
 
 ```bash
 soup data preprocess soup.yaml --output ./tokenized_cache
@@ -956,6 +1016,12 @@ SFT and Pretrain trainers short-circuit at schema validation when
 `format: pre_tokenized` + `tokenized_path: ./tokenized_cache` is set, eliminating
 the per-epoch tokenization tax. Cache keys ensure resume safety; partial runs pick
 up from the last completed shard.
+
+Rows are rendered with `data.chat_template` when it is set, the same as live
+training. The `pre_tokenized` training config must name the same template, since
+training saves the tokenizer with it; a different one is refused with
+`cache hash mismatch`. A cache written before the template joined the key is
+refused the same way: re-run `soup data preprocess` to rebuild it.
 
 
 ## Data Recipe DAG Runner (`soup data recipe --execute`)
@@ -984,6 +1050,9 @@ Ollama, Anthropic, or vLLM), **code** (execution via RLVR sandbox), **judge** (b
 **validator** (regex or JSON schema), **sampler** (deterministic selection). Checkpoint
 written per node; resume rehydrates from per-node sidecars. Failed rows logged with
 redacted reasons (paths stripped, capped at 256 chars).
+Regex validator nodes reject structurally unsafe patterns before matching rows;
+the error identifies the node's `config.regex` field. Simple alternations remain
+valid.
 
 
 ## Fine-tune Doctor (`soup data doctor`)

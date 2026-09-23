@@ -1328,6 +1328,26 @@ class _StreamedDecoderLayerProxy:
 StreamedDecoderLayer = _StreamedDecoderLayerProxy()
 
 
+def _large_layer_weight_param_name(inner: Any) -> str:
+    """The meta parameter name ``StreamedLargeLayer.forward`` must substitute.
+
+    Normally ``"weight"``. get_peft_model() runs before install_streaming(),
+    so a LoRA target on the input/output embedding wraps ``inner`` in a peft
+    tuner layer first (#1012): the real, still-meta base weight moves to
+    ``inner.base_layer.weight`` (``inner`` is the leaf embedding/head module
+    itself here, so the prefix carries no leading dot, unlike a nested
+    decoder-layer projection), and peft's own ``weight`` exposes a READ-ONLY
+    property delegating to it, which a plain ``{"weight": ...}`` substitution
+    cannot setattr onto. ``_layer_name_map`` resolves the same indirection one
+    level down, for decoder-layer projections (q_proj/v_proj); this mirrors
+    it for the large-layer boundary modules.
+    """
+    for pname, param in inner.named_parameters(recurse=True):
+        if param.is_meta and pname in ("weight", "base_layer.weight"):
+            return pname
+    return "weight"
+
+
 def _build_streamed_large_layer_class():
     import torch.nn as nn
     from torch.func import functional_call
@@ -1341,20 +1361,27 @@ def _build_streamed_large_layer_class():
             self.key = str(key)
             self.pool = pool
             self._register_load_state_dict_pre_hook(self._redirect_canonical_weight)
+            self._weight_param_name = _large_layer_weight_param_name(inner)
 
         def _redirect_canonical_weight(
             self, state_dict: Any, prefix: str, *_args: Any, **_kwargs: Any
         ) -> None:
-            canonical = prefix + "weight"
-            redirected = prefix + "inner.weight"
-            if canonical not in state_dict:
-                return
-            if redirected in state_dict:
-                raise ValueError(
-                    f"checkpoint contains both {canonical!r} and {redirected!r} "
-                    "for the same streamed large-layer weight"
-                )
-            state_dict[redirected] = state_dict.pop(canonical)
+            # Mirrors StreamedDecoderLayer._redirect_canonical_keys: redirect
+            # every key under this prefix, not only the literal "weight" one
+            # (#1048: a peft-wrapped inner saves lora_A/lora_B keys too).
+            inner_prefix = prefix + "inner."
+            for key in [
+                k for k in state_dict if k.startswith(prefix) and not k.startswith(inner_prefix)
+            ]:
+                redirected = inner_prefix + key[len(prefix) :]
+                value = state_dict.pop(key)
+                if redirected in state_dict:
+                    raise ValueError(
+                        f"checkpoint contains both {key!r} and {redirected!r} "
+                        f"for the same streamed large-layer weight; it is "
+                        f"malformed, re-save the adapter"
+                    )
+                state_dict[redirected] = value
 
         def _apply(self, fn: Any, recurse: bool = True) -> Any:
             def _skip_meta(tensor: Any) -> Any:
@@ -1447,7 +1474,7 @@ def _build_streamed_large_layer_class():
         def forward(self, *args: Any, **kwargs: Any) -> Any:
             return functional_call(
                 self.inner,
-                {"weight": self.pool.wait(self.key)},
+                {self._weight_param_name: self.pool.wait(self.key)},
                 args,
                 kwargs,
             )
@@ -1676,6 +1703,55 @@ class StepPeak:
     error: Optional[str] = None
 
 
+def _classify_probe_exception(
+    exc: BaseException,
+    *,
+    rows: int,
+    seq_len: int,
+    seconds: float = 0.0,
+) -> StepPeak:
+    """Map a probe-step failure to its StepPeak outcome without requiring CUDA.
+
+    An out-of-memory exception (allocator OOM or an asynchronous CUDA OOM
+    surfacing via AcceleratorError/RuntimeError) is a result (oom=True), not an
+    instrument failure. Any other exception is an instrument failure that may
+    leave the device context poisoned (failed=True).
+    """
+    if _is_out_of_memory(exc):
+        # A result, not a failure: the shape provably does not fit. That is
+        # the allocator's own `torch.OutOfMemoryError` on Linux, and — #649's
+        # shape, seen again in #901 — under WDDM, where the allocator has
+        # often already spilled, an `AcceleratorError("CUDA error: out of
+        # memory")` surfacing later at a synchronise. One spelling for both:
+        # the verdict is what tells the operator to lower batch or
+        # max_length, where "instrument failure" tells them nothing they can
+        # act on. (A WDDM run that spills WITHOUT raising reaches the success
+        # path with a peak above free VRAM, which the caller refuses too.)
+        return StepPeak(
+            peak_bytes=0,
+            reserved_bytes=0,
+            seconds=seconds,
+            rows=rows,
+            seq_len=seq_len,
+            oom=True,
+        )
+    # NOT `return None`. None means "never attempted"; this op ran and broke,
+    # which can leave the CUDA context poisoned (an illegal access or device
+    # assert surfaces exactly here). Reporting that as "cannot tell" would
+    # let the caller proceed on the prediction alone, into a context that may
+    # no longer work.
+    logger.warning("stream VRAM probe raised during the step: %r", exc)
+    return StepPeak(
+        peak_bytes=0,
+        reserved_bytes=0,
+        seconds=seconds,
+        rows=rows,
+        seq_len=seq_len,
+        failed=True,
+        error=type(exc).__name__,
+    )
+
+
 def measure_step_peak_bytes(
     model: Any,
     *,
@@ -1740,38 +1816,11 @@ def measure_step_peak_bytes(
         peak = int(torch.cuda.max_memory_allocated(device))
         reserved = int(torch.cuda.max_memory_reserved(device))
     except Exception as exc:  # pragma: no cover - a real CUDA op raised
-        if _is_out_of_memory(exc):
-            # A result, not a failure: the shape provably does not fit. That is
-            # the allocator's own `torch.OutOfMemoryError` on Linux, and — #649's
-            # shape, seen again in #901 — under WDDM, where the allocator has
-            # often already spilled, an `AcceleratorError("CUDA error: out of
-            # memory")` surfacing later at a synchronise. One spelling for both:
-            # the verdict is what tells the operator to lower batch or
-            # max_length, where "instrument failure" tells them nothing they can
-            # act on. (A WDDM run that spills WITHOUT raising reaches the success
-            # path with a peak above free VRAM, which the caller refuses too.)
-            return StepPeak(
-                peak_bytes=0,
-                reserved_bytes=0,
-                seconds=time.perf_counter() - started,
-                rows=rows,
-                seq_len=seq_len,
-                oom=True,
-            )
-        # NOT `return None`. None means "never attempted"; this op ran and broke,
-        # which can leave the CUDA context poisoned (an illegal access or device
-        # assert surfaces exactly here). Reporting that as "cannot tell" would
-        # let the caller proceed on the prediction alone, into a context that may
-        # no longer work.
-        logger.warning("stream VRAM probe raised during the step: %r", exc)
-        return StepPeak(
-            peak_bytes=0,
-            reserved_bytes=0,
-            seconds=time.perf_counter() - started,
+        return _classify_probe_exception(
+            exc,
             rows=rows,
             seq_len=seq_len,
-            failed=True,
-            error=type(exc).__name__,
+            seconds=time.perf_counter() - started,
         )
     finally:  # pragma: no cover - exercised only where torch + CUDA exist
         del ids, out

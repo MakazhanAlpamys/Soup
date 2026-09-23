@@ -9,6 +9,7 @@
 - [Post-train X-rays (`soup probe`, `soup adapters blame --live`)](#post-train-x-rays-soup-probe-soup-adapters-blame---live)
 - [Pre-flight Decision (`soup advise`)](#pre-flight-decision-soup-advise)
 - [Eval Design Pipeline (`soup eval design / discover / lock / coverage`)](#eval-design-pipeline-soup-eval-design--discover--lock--coverage)
+- [Run-vs-run Regression (`soup eval against`)](#run-vs-run-regression-soup-eval-against)
 - [Pre-Push Regression Gate (`soup eval gate-install`)](#pre-push-regression-gate-soup-eval-gate-install)
 - [Eval-Gated Training](#eval-gated-training)
 - [Sequential A/B Harness (`soup ab`)](#sequential-ab-harness-soup-ab)
@@ -146,6 +147,23 @@ iff their semantic content matches.
 from both `regex` and `rlvr`, etc. Missing scorers surface as named
 recommendations so operators can spot gaps before shipping the gate.
 
+## Run-vs-run Regression (`soup eval against`)
+
+Compare a candidate run to a baseline with a paired-bootstrap confidence interval
+on a chosen metric. Exit `0` when no regression is detected, `1` otherwise — the
+same check the pre-push hook from `soup eval gate-install` invokes. Exit `2` when
+the experiment tracker is too old to expose per-row metric series.
+
+```bash
+soup eval against run-baseline-123 --candidate run-candidate-456
+soup eval against run-baseline-123 --candidate run-candidate-456 \
+  --metric task_accuracy --suite evals/locked.json --json-only
+```
+
+Reads per-row metric series from the experiment tracker for both runs, runs the
+paired-bootstrap decision on the delta, and optionally validates a locked suite
+from `soup eval lock` as a hard precondition (`--suite`). Supported metrics:
+`task_accuracy`, `refusal_rate`, `format_validity`, `p95_latency_ms`.
 
 ## Pre-Push Regression Gate (`soup eval gate-install`)
 
@@ -237,6 +255,8 @@ tasks:
     scoring: judge
     judge_model: ollama://llama3.1        # SSRF-allowlisted scheme
 ```
+
+`judge_model` accepts `ollama://<model>`, `http://localhost:<port>/<model>` or `https://<host>/<model>`. An `https://` judge URL uses `OPENAI_API_KEY` only when its host is `api.openai.com`; other hosts are called as an OpenAI-compatible server without that key.
 
 Baselines may be a registry reference (`registry://<name-or-id>`), a file path, or omitted for the first run. Any structured exception (`ValueError`, `FileNotFoundError`, `OSError`) during the gate is treated as a regression under `on_regression: stop`.
 
@@ -337,7 +357,7 @@ SHIP  ⇔  task_tuned > task_base  AND  ∀ benchmark: base − tuned ≤ forget
 else DON'T SHIP — even if the task metric looks great.
 ```
 
-Exit codes are CI-gateable: **0 = SHIP, 2 = DON'T SHIP, 1 = runtime error**. A tie on leg 1, a
+Exit codes are CI-gateable: **0 = SHIP, 2 = DON'T SHIP, 3 = usage/flag error, 1 = runtime error**. A tie on leg 1, a
 single regressed benchmark, or a missing baseline all yield DON'T SHIP (a missing baseline
 *refuses* rather than silently shipping).
 
@@ -744,6 +764,12 @@ Paths are containment-checked, and `registry://` refs are resolved with an optio
 
 ### Custom Eval Format
 
+Regex-scored custom tasks reject structurally unsafe patterns before matching
+model output and name `eval.custom.expected` in the error. The diagnose
+`format` probe applies the same check to `regex_pattern` without running a
+canary search. Ordinary patterns, including single-character alternation,
+remain valid.
+
 ```jsonl
 {"prompt": "What is 2+2?", "expected": "4", "category": "math", "scoring": "exact"}
 {"prompt": "Explain gravity", "expected": "force.*attraction", "scoring": "regex"}
@@ -816,6 +842,10 @@ soup eval behavior my_run --battery xstest \
 # Harmful prompts ship REDACTED — pull real sets from upstream papers.
 ```
 
+Without the live `--base-model` path, `--evidence` is required. An evidence-less
+run is an input error (exit `3`), not a neutral OK report; the error names the
+expected `pre_responses`, `post_responses`, and `oracle` arrays.
+
 Word-boundary regex agreement (no `"safe" in "unsafe"` false positives); OK/MINOR/MAJOR thresholds match the v0.26 / v0.56 taxonomy.
 
 **Capability auto-suite** — pre-bundled profile selector with friendly `lm-eval-harness` task ids:
@@ -852,6 +882,10 @@ tests:
 ```bash
 soup eval checklist tests.yaml --evidence responses.json
 ```
+
+`--evidence` is required and maps each CheckList test name to its response
+strings. Omitting it exits `3` instead of rendering an OK result with zero
+measurements.
 
 `mft` = response must contain a keyword as a whole word (`"sand"` won't pass for `"and"`); `inv` = all paraphrases must agree; `dir` = directional expectation under perturbation.
 

@@ -314,6 +314,25 @@ def write_stub(plan: CloudPlan) -> str:
     return write_cloud_stub(plan)
 
 
+_WAITING_NOTICE = (
+    "Interrupted: waiting for the Lambda controller to terminate the instance...\n"
+)
+
+
+def _notify_waiting_for_controller() -> None:
+    """Say that the parent is still waiting, without letting the say-so escape.
+
+    This runs from the interrupt handler, so a second Ctrl+C can land on the
+    write itself; raising from here would abandon the controller mid-cleanup,
+    which is the whole thing the caller is avoiding.
+    """
+    try:
+        sys.stderr.write(_WAITING_NOTICE)
+        sys.stderr.flush()
+    except BaseException:
+        pass
+
+
 def submit_lambda_run(plan: CloudPlan, *, env: Optional[Mapping] = None) -> int:
     """Run the local lifecycle controller after validating its credentials."""
     if not isinstance(plan, CloudPlan):
@@ -338,9 +357,35 @@ def submit_lambda_run(plan: CloudPlan, *, env: Optional[Mapping] = None) -> int:
         )
     import subprocess
 
-    proc = subprocess.run(  # noqa: S603 — argv list, no shell
-        [sys.executable, plan.stub_path],
-        check=False,
-        env=dict(environ),
-    )
-    return proc.returncode
+    # Not subprocess.run: on KeyboardInterrupt it kills the child 0.25 s later,
+    # and the child is the controller that terminates the paid instance.
+    #
+    # The spawn is INSIDE the try, not before it (#1073). A Ctrl+C reaches the
+    # parent at whatever bytecode boundary the interpreter happens to be on,
+    # and the windows a try around proc.wait() alone leaves open -- after
+    # Popen() returns but before the loop is entered, and on the jump back to
+    # the top of it -- are ones where the controller is already running. An
+    # interrupt landing there used to unwind the parent while the instance was
+    # still being terminated. Once proc exists, every path leads back to wait.
+    proc = None
+    while True:
+        try:
+            if proc is None:
+                proc = subprocess.Popen(  # noqa: S603 — argv list, no shell
+                    [sys.executable, plan.stub_path],
+                    env=dict(environ),
+                )
+            return proc.wait()
+        except BaseException as exc:
+            if proc is None:
+                # The interrupt arrived before the controller existed: there is
+                # nothing to wait for, so it stays the caller's to handle.
+                raise
+            if not isinstance(exc, (KeyboardInterrupt, SystemExit)):
+                # wait() itself failed. Interrupts are the only thing this loop
+                # absorbs; retrying a broken wait would spin instead of report.
+                raise
+            # The controller received the same Ctrl+C and is terminating the
+            # instance in its finally block; killing it here would leave the
+            # instance running. Keep waiting until it exits.
+            _notify_waiting_for_controller()

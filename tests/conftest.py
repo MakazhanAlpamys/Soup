@@ -1,10 +1,37 @@
 """Shared pytest fixtures and helpers."""
 
+import functools
 import json
+import os
 import re
+import tempfile
 from pathlib import Path
 
 import pytest
+
+#: The skip message for a ``gpu``-marked test on a machine without CUDA (#833).
+GPU_SKIP_REASON = "needs a CUDA device (run the GPU subset with: pytest -m gpu --no-cov)"
+
+
+@functools.lru_cache(maxsize=None)
+def cuda_available() -> bool:
+    """THE one CUDA probe for the test suite (#833). Probed once per session.
+
+    Fifteen modules had grown a private copy of this, and nine of them turned it
+    into an identical ``requires_cuda`` skipif, so ``pytest -m gpu`` had nothing
+    to select. Gate a test that needs CUDA with ``@pytest.mark.gpu`` (optionally
+    ``@pytest.mark.gpu(reason="...")``) rather than calling this in a skip;
+    ``tests/test_issue833_gpu_marker.py`` holds that line.
+    """
+    try:
+        import torch
+    except ImportError:
+        return False
+    try:
+        return bool(torch.cuda.is_available())
+    except Exception:  # noqa: BLE001 — a broken CUDA install counts as no CUDA
+        return False
+
 
 #: Rich/Pygments emit SGR escapes *between* the tokens of one logical line, so a
 #: multi-token substring like "modality: text" is absent from raw output and
@@ -16,6 +43,43 @@ _ANSI_ESCAPE = re.compile(r"\x1b\[[0-9;]*m")
 def strip_ansi(text: "str | None") -> str:
     """Return ``text`` with SGR escape sequences removed."""
     return _ANSI_ESCAPE.sub("", text or "")
+
+
+#: Why a ``requires_symlink`` test was skipped. It names the account's missing capability, not
+#: the platform: Windows creates symlinks fine with Developer Mode on or when elevated, which is
+#: how the Windows CI cells run them (#832).
+SYMLINK_SKIP_REASON = "this account cannot create symlinks (enable Developer Mode or run elevated)"
+
+
+@functools.lru_cache(maxsize=None)
+def can_symlink() -> bool:
+    """Whether this process can create a symlink. Probed once per session."""
+    with tempfile.TemporaryDirectory() as tmp:
+        target = os.path.join(tmp, "target")
+        with open(target, "w", encoding="utf-8"):
+            pass
+        try:
+            os.symlink(target, os.path.join(tmp, "link"))
+        except (OSError, NotImplementedError, AttributeError):
+            return False
+    return True
+
+
+def pytest_runtest_setup(item: pytest.Item) -> None:
+    """The one collection hook. Both capability markers go through here.
+
+    pytest calls a plugin hook once per definition, and a module can only hold one
+    ``pytest_runtest_setup`` -- a second ``def`` silently replaces the first, taking its
+    marker with it. Keeping the two checks in one function is what makes that impossible
+    rather than merely unlikely, so add the next capability marker here too.
+    """
+    gpu = item.get_closest_marker("gpu")
+    if gpu is not None and not cuda_available():
+        why = gpu.kwargs.get("reason")
+        pytest.skip(f"{GPU_SKIP_REASON}: {why}" if why else GPU_SKIP_REASON)
+
+    if item.get_closest_marker("requires_symlink") is not None and not can_symlink():
+        pytest.skip(SYMLINK_SKIP_REASON)
 
 
 @pytest.fixture(autouse=True)

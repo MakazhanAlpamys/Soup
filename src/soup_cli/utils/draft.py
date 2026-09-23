@@ -39,11 +39,16 @@ from typing import TYPE_CHECKING, Optional, Sequence
 from rich.panel import Panel
 from rich.table import Table
 
+from soup_cli.utils.paths import open_no_follow
+from soup_cli.utils.terminal import for_terminal
+
 if TYPE_CHECKING:  # pragma: no cover — typing only; torch stays lazy at runtime
     from transformers import PreTrainedModel, PreTrainedTokenizerBase
 
-# Verdict bands. STRONG at >= 0.70 is where speculative decoding starts paying
-# for the draft's forward pass on realistic hardware.
+# Verdict bands on the acceptance rate alone. They do NOT say whether a pair pays:
+# that depends on how much faster the draft is than its target (#843). The one pair
+# measured at scale sat at 0.813 -- STRONG -- and ran at 0.481x of plain. See
+# :func:`breakeven_acceptance` for the rate a given draft/target pair needs.
 ACCEPTANCE_STRONG = 0.70
 ACCEPTANCE_MODERATE = 0.50
 
@@ -197,6 +202,118 @@ def classify_acceptance(rate: float) -> str:
     return VERDICT_WEAK
 
 
+# ---------------------------------------------------------------------------
+# Break-even model (#843) -- torch-free
+# ---------------------------------------------------------------------------
+#: The draft lengths the CLI accepts (``--num-assistant-tokens``, ``--sweep-k``).
+DRAFT_K_MIN = 1
+DRAFT_K_MAX = 64
+
+#: Printed beside every modelled number, so it is never read as a measurement.
+MODEL_ASSUMPTIONS = "modelled; i.i.d. acceptance; excludes framework overhead"
+
+
+def _check_acceptance(a: object) -> float:
+    if isinstance(a, bool) or not isinstance(a, (int, float)):
+        raise TypeError(f"acceptance must be a number, got {a!r}")
+    value = float(a)
+    if not math.isfinite(value) or value < 0.0 or value > 1.0:
+        raise ValueError(f"acceptance must be between 0 and 1, got {a!r}")
+    return value
+
+
+def _check_k(k: object) -> int:
+    if isinstance(k, bool) or not isinstance(k, int):
+        raise TypeError(f"k must be an int, got {k!r}")
+    if not DRAFT_K_MIN <= k <= DRAFT_K_MAX:
+        raise ValueError(f"k must be in {DRAFT_K_MIN}..{DRAFT_K_MAX}, got {k}")
+    return k
+
+
+def _check_ratio(c: object) -> float:
+    if isinstance(c, bool) or not isinstance(c, (int, float)):
+        raise TypeError(f"latency ratio must be a number, got {c!r}")
+    value = float(c)
+    if not math.isfinite(value) or value <= 0.0:
+        raise ValueError(f"latency ratio must be positive and finite, got {c!r}")
+    return value
+
+
+def latency_ratio(tok_s_plain: Optional[float], tok_s_draft: Optional[float]) -> Optional[float]:
+    """``c``: the draft's per-token cost in target steps (plain tok/s / draft tok/s).
+
+    ``None`` when either throughput is missing, non-positive or non-finite -- an
+    unmeasured arm, never a ratio of 0 or infinity.
+    """
+    values = []
+    for tok_s in (tok_s_plain, tok_s_draft):
+        if isinstance(tok_s, bool) or not isinstance(tok_s, (int, float)):
+            return None
+        if not math.isfinite(tok_s) or tok_s <= 0:
+            return None
+        values.append(float(tok_s))
+    return values[0] / values[1]
+
+
+def expected_tokens_per_step(a: float, k: int) -> float:
+    """Tokens one assisted step yields: ``E(a, k) = (1 - a^(k+1)) / (1 - a)``.
+
+    The standard model with per-position acceptance ``a`` independent across
+    positions: the target always contributes one token, plus each accepted draft
+    token up to ``k``. ``k + 1`` at ``a = 1``, where the closed form divides by zero.
+    """
+    a = _check_acceptance(a)
+    k = _check_k(k)
+    if a == 1.0:
+        return float(k + 1)
+    return (1.0 - a ** (k + 1)) / (1.0 - a)
+
+
+def modelled_speedup(a: float, k: int, c: float) -> float:
+    """``S = E(a, k) / (k*c + 1)``: tokens per target-step-equivalent of cost.
+
+    A CEILING, not a prediction. It assumes the verification pass over ``k + 1``
+    tokens costs one target decode step (batch 1) and charges nothing for framework
+    overhead, which on the one pair measured at scale halved the result again
+    (modelled 0.955x, measured 0.481x, #303).
+    """
+    return expected_tokens_per_step(a, k) / (_check_k(k) * _check_ratio(c) + 1.0)
+
+
+def breakeven_acceptance(k: int, c: float) -> Optional[float]:
+    """The acceptance at which ``S = 1`` for draft length ``k``, or ``None``.
+
+    ``None`` means no acceptance rate pays: even a perfect draft gives
+    ``(k+1) / (k*c + 1) <= 1``, which is every ``k`` once ``c >= 1`` (a draft no
+    faster than its target). ``S`` rises monotonically in ``a``, so the crossing is
+    found by bisection.
+    """
+    k = _check_k(k)
+    c = _check_ratio(c)
+    if modelled_speedup(1.0, k, c) <= 1.0:
+        return None
+    lo, hi = 0.0, 1.0
+    for _ in range(100):
+        mid = (lo + hi) / 2.0
+        if modelled_speedup(mid, k, c) < 1.0:
+            lo = mid
+        else:
+            hi = mid
+    return hi
+
+
+def modelled_best_k(a: float, c: float) -> tuple[int, float]:
+    """The draft length in the CLI's range that maximises :func:`modelled_speedup`.
+
+    Returned with its speedup, which may be below 1: the best k of a pair that
+    never pays is still reported, and the caller says it does not pay.
+    """
+    a = _check_acceptance(a)
+    c = _check_ratio(c)
+    best = max(range(DRAFT_K_MIN, DRAFT_K_MAX + 1), key=lambda k: modelled_speedup(a, k, c))
+    return best, modelled_speedup(a, best, c)
+
+
 def same_tokenizer(
     tok_a: "PreTrainedTokenizerBase", tok_b: "PreTrainedTokenizerBase"
 ) -> bool:
@@ -264,6 +381,19 @@ class AcceptanceReport:
     #: are byte-identical on disk, so a failed arm is indistinguishable from an
     #: un-run one.
     assisted_status: str = "pending"
+    #: #843. The draft decoding alone, and the break-even model it feeds. All are
+    #: modelled (:data:`MODEL_ASSUMPTIONS`) except ``tok_s_draft``. ``draft_status``
+    #: follows ``assisted_status``'s vocabulary. ``breakeven_acceptance`` is ``None``
+    #: both when unmeasured and when no rate pays; ``latency_ratio`` tells them apart.
+    tok_s_draft: Optional[float] = None
+    draft_status: str = "pending"
+    latency_ratio: Optional[float] = None
+    breakeven_acceptance: Optional[float] = None
+    modelled_best_k: Optional[int] = None
+    modelled_speedup_best_k: Optional[float] = None
+    #: ``--sweep-k``: one ``{"k", "tok_s_assisted", "speedup", "status"}`` per k.
+    k_sweep: Optional[tuple] = None
+    measured_best_k: Optional[int] = None
 
 
 def draft_report_to_dict(report: AcceptanceReport) -> dict:
@@ -286,8 +416,8 @@ def render_draft_panel(report: AcceptanceReport) -> Panel:
     table = Table.grid(padding=(0, 2))
     table.add_column(style="dim")
     table.add_column()
-    table.add_row("Target", report.target)
-    table.add_row("Draft", report.draft)
+    table.add_row("Target", for_terminal(report.target))
+    table.add_row("Draft", for_terminal(report.draft))
     table.add_row(
         "Acceptance",
         f"[bold {colour}]{report.acceptance_rate * 100:.1f}%[/] "
@@ -304,6 +434,52 @@ def render_draft_panel(report: AcceptanceReport) -> Panel:
         f"(draft={report.num_assistant_tokens} tok/step)",
     )
     table.add_row("Speedup", f"{_fmt(report.speedup, 'x')}")
+
+    if report.tok_s_draft is not None:
+        table.add_row("Draft alone", f"{_fmt(report.tok_s_draft, ' tok/s')}")
+    if report.latency_ratio is not None:
+        table.add_row(
+            "Latency ratio", f"{report.latency_ratio:.3f} (plain / draft-alone tok/s)"
+        )
+        if report.breakeven_acceptance is None:
+            table.add_row(
+                "Break-even",
+                "[red]none -- no acceptance rate pays: the draft is not fast enough "
+                "relative to the target[/]",
+            )
+        else:
+            table.add_row(
+                "Break-even",
+                f"{report.breakeven_acceptance * 100:.1f}% acceptance at "
+                f"k={report.num_assistant_tokens}",
+            )
+        if report.modelled_best_k is not None and report.modelled_speedup_best_k is not None:
+            if report.modelled_speedup_best_k > 1.0:
+                table.add_row(
+                    "Best k",
+                    f"k={report.modelled_best_k} -> {report.modelled_speedup_best_k:.2f}x "
+                    "at the measured acceptance",
+                )
+            else:
+                # A "best" k that is still a slowdown is not a recommendation.
+                table.add_row(
+                    "Best k",
+                    "[red]no k pays at the measured acceptance[/] (closest: "
+                    # Three decimals: at 0.995x, "1.00x" beside "no k pays" reads as
+                    # a contradiction.
+                    f"k={report.modelled_best_k} -> {report.modelled_speedup_best_k:.3f}x)",
+                )
+        table.add_row("", f"[dim]({MODEL_ASSUMPTIONS}; a ceiling, not a prediction)[/]")
+    if report.k_sweep:
+        for row in report.k_sweep:
+            measured = (
+                f"{_fmt(row.get('tok_s_assisted'), ' tok/s')} ({_fmt(row.get('speedup'), 'x')})"
+                if row.get("status") == "complete"
+                else row.get("status", "n/a")
+            )
+            table.add_row(f"Sweep k={row['k']}", measured)
+        best = "n/a" if report.measured_best_k is None else f"k={report.measured_best_k}"
+        table.add_row("Measured best k", best)
 
     return Panel(
         table,
@@ -351,10 +527,10 @@ def _registry_lock():
             os.makedirs(
                 os.path.dirname(os.path.abspath(lock_path)) or ".", exist_ok=True
             )
-            # O_NOFOLLOW so a pre-planted symlink at <registry>.lock can't
-            # redirect the lock (defence-in-depth — nothing is written to it).
-            flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
-            fd = os.open(lock_path, flags, 0o600)
+            # O_NOFOLLOW via open_no_follow so a pre-planted symlink at <registry>.lock
+            # can't redirect the lock or create a victim file (#820).
+            flags = os.O_RDWR | os.O_CREAT
+            fd = open_no_follow(lock_path, flags, 0o600)
             handle = os.fdopen(fd, "a+")
         except OSError:
             handle = None
@@ -431,10 +607,9 @@ def _read_registry() -> list[dict]:
     try:
         if not os.path.isfile(path):
             return []
-        # O_NOFOLLOW: this runs on every `soup serve` startup, so a symlink
-        # planted at ~/.soup/drafts.json must not be transparently followed.
-        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
-        fd = os.open(path, flags)
+        # O_NOFOLLOW via open_no_follow: this runs on every `soup serve` startup,
+        # so a symlink planted at ~/.soup/drafts.json must not be followed (#820).
+        fd = open_no_follow(path, os.O_RDONLY)
         with os.fdopen(fd, "r", encoding="utf-8") as handle:
             if os.fstat(handle.fileno()).st_size > _MAX_REGISTRY_BYTES:
                 return []

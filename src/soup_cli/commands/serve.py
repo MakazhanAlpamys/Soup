@@ -193,7 +193,10 @@ def serve(
     auto_quant: bool = typer.Option(
         False,
         "--auto-quant",
-        help="Try GGUF/AWQ/GPTQ/FP8 on a tiny eval, pick fastest-at-acceptable-quality.",
+        help=(
+            "Unavailable until Soup can measure each loaded candidate; "
+            "the command refuses instead of guessing a format."
+        ),
     ),
     trust_remote_code: bool = typer.Option(
         False,
@@ -488,6 +491,21 @@ def serve(
         )
         raise typer.Exit(1)
 
+    # #816 — the old path timed three calls to a constant-returning stub and
+    # described the fastest few hundred nanoseconds as a quality-gated model
+    # evaluation. On vLLM that random result could then force AWQ/GPTQ/FP8 on
+    # a checkpoint which did not declare that format. Refuse until candidate
+    # models are really loaded and evaluated; ``quantization=None`` lets each
+    # backend honour the checkpoint's own metadata instead of inventing it.
+    if auto_quant:
+        console.print(
+            "[red]--auto-quant is unavailable:[/] Soup cannot measure quantization "
+            "candidates before the serving engine is loaded. Refusing instead of "
+            "guessing GGUF/AWQ/GPTQ/FP8 from timer noise. Serve the checkpoint as-is "
+            "or quantize it explicitly first."
+        )
+        raise typer.Exit(2)
+
     # #333 — --dashboard used to be accepted and then do nothing on backends
     # whose app has no /metrics route. Say so instead of no-opping.
     if dashboard:
@@ -526,25 +544,30 @@ def serve(
             )
             raise typer.Exit(1)
 
-        # v0.33.0 #38 — live MII pipeline + OpenAI-compatible HTTP.
-        try:
-            mii_pipeline = create_mii_pipeline(
-                model_path=model, tensor_parallel=1, max_length=4096,
-            )
-        except (ImportError, RuntimeError, OSError) as exc:
-            console.print(f"[red]Failed to create MII pipeline:[/] {exc}")
-            raise typer.Exit(1) from exc
-
         mii_model_name = Path(model).name
 
         # #332 — the served model's own chat template, same as the vLLM path.
         # Without this the MII backend feeds a chat-tuned model a prompt format
         # it never trained on, which is what made Llama-3.1-8B run on.
+        # Loaded before the pipeline because the pipeline tokenizes prompts
+        # through this same object (#785): MII's own tokenizer re-added the
+        # special tokens the template had already rendered.
         mii_tokenizer = _load_serve_tokenizer(
             model_path=Path(model),
             base_model=None,
             trust_remote_code=trust_remote_code,
         )
+
+        # v0.33.0 #38 — live MII pipeline + OpenAI-compatible HTTP.
+        try:
+            mii_pipeline = create_mii_pipeline(
+                model_path=model, tensor_parallel=1, max_length=4096,
+                tokenizer=mii_tokenizer,
+            )
+        except (ImportError, RuntimeError, OSError) as exc:
+            console.print(f"[red]Failed to create MII pipeline:[/] {exc}")
+            raise typer.Exit(1) from exc
+
         if mii_tokenizer is None:
             console.print(
                 "[yellow]Warning:[/] no tokenizer could be loaded for this model — "
@@ -722,63 +745,6 @@ def serve(
         )
         raise typer.Exit(1)
 
-    # v0.33.0 #54 / v0.35.0 #61 — Auto-quant live picker. Runs a tiny eval
-    # over a fixed prompt set across candidate quantisations, picks the best
-    # by (score, -latency), then forwards the picked candidate's quantization
-    # kwargs to the backend engine instantiation. Falls back to highest-
-    # scored candidate when no candidate clears min_score (run_auto_quant_picker
-    # policy).
-    auto_quant_kwargs: dict = {}
-    if auto_quant:
-        from soup_cli.utils.auto_quant import (
-            default_candidate_order,
-            quant_name_to_vllm_kwargs,
-            run_auto_quant_picker,
-        )
-
-        prompts = [
-            "What is 2 + 2?",
-            "Translate 'hello' to French.",
-            "Name one prime number greater than 10.",
-        ]
-
-        def _make_eval_fn(_name):
-            def _fn(_prompt):
-                # Pre-bind eval still uses a heuristic — the engine isn't up
-                # yet. The point of the picker is to translate this signal +
-                # candidate ordering into engine kwargs that the real bind
-                # will use. A live in-engine eval refresh remains future work.
-                return ("", True)
-            return _fn
-
-        candidate_specs = [
-            (name, _make_eval_fn(name)) for name in default_candidate_order()
-        ]
-        try:
-            picked = run_auto_quant_picker(
-                candidate_specs=candidate_specs, prompts=prompts,
-            )
-            console.print(
-                f"[green]--auto-quant picked:[/] {picked.name} "
-                f"(score={picked.score:.2f}, latency={picked.latency_ms:.1f}ms)"
-            )
-            # Forward the chosen quant into the backend engine. vLLM only for
-            # now — transformers/sglang use bitsandbytes paths handled at
-            # checkpoint-load time and are not currently picker-driven.
-            if backend == "vllm":
-                from rich.markup import escape
-
-                auto_quant_kwargs = quant_name_to_vllm_kwargs(picked.name)
-                if auto_quant_kwargs:
-                    console.print(
-                        "[green]--auto-quant binding vLLM with:[/] "
-                        + escape(repr(auto_quant_kwargs))
-                    )
-        except ValueError as exc:
-            from rich.markup import escape as _esc
-
-            console.print(f"[yellow]--auto-quant: {_esc(str(exc))}[/]")
-
     # Validate trace endpoint early
     if trace and trace_endpoint:
         from soup_cli.utils.tracing import validate_otlp_endpoint
@@ -826,7 +792,7 @@ def serve(
             speculative_model=speculative_model,
             num_speculative_tokens=num_speculative_tokens,
             enable_prefix_caching=prefix_cache,
-            quantization=auto_quant_kwargs.get("quantization"),
+            quantization=None,
             trust_remote_code=resolved_trust,
             max_model_len=max_model_len,
             enable_dashboard=dashboard,
@@ -1679,14 +1645,26 @@ def _create_app(
             loopback-only CORS trust boundary. When set, callers must
             supply ``Authorization: Bearer <token>``.
     """
+    import secrets as _secrets
     import threading as _threading
 
-    from fastapi import FastAPI, Header, HTTPException
+    from fastapi import Depends, FastAPI, Header, HTTPException, Request
     from fastapi import Path as FPath
     from fastapi.middleware.cors import CORSMiddleware
     from fastapi.responses import StreamingResponse
     from pydantic import BaseModel as PydanticBaseModel
     from pydantic import Field
+
+    from soup_cli.utils.local_request_guard import check_local_request
+
+    def _check_local_request(request: Request) -> None:
+        """Refuse tool / state-changing calls whose Host or Origin names another site."""
+        refusal = check_local_request(
+            host, request.headers.get("host"), request.headers.get("origin")
+        )
+        if refusal is not None:
+            status_code, detail = refusal
+            raise HTTPException(status_code=status_code, detail=detail)
 
     def _check_tool_auth(authorization: Optional[str]) -> None:
         """v0.53.7 H-A: gate tool endpoints when host is exposed or auth_token is set."""
@@ -1698,7 +1676,9 @@ def _create_app(
         if not auth_token:
             return
         expected = f"Bearer {auth_token}"
-        if not authorization or authorization != expected:
+        if not authorization or not _secrets.compare_digest(
+            authorization.encode("utf-8"), expected.encode("utf-8")
+        ):
             raise HTTPException(
                 status_code=401, detail="Invalid or missing bearer token"
             )
@@ -1707,10 +1687,10 @@ def _create_app(
 
     app = FastAPI(title="Soup Inference Server", version="1.0.0")
 
-    # Loopback-only CORS: the inference server hosts state-mutating POST
-    # endpoints (activate/deactivate adapter) without auth, so wildcard CORS
-    # would let any browser page swap the active adapter. Loopback origins
-    # cover the curl / same-host IDE extension cases.
+    # Loopback-only CORS: CORS limits which browser pages can read responses;
+    # the Host/Origin guard on tool and adapter routes is what refuses
+    # requests from other sites. Loopback origins cover the curl / same-host
+    # IDE extension cases.
     app.add_middleware(
         CORSMiddleware,
         allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$",
@@ -1790,7 +1770,7 @@ def _create_app(
             "active": current,
         }
 
-    @app.post("/v1/adapters/activate/{name}")
+    @app.post("/v1/adapters/activate/{name}", dependencies=[Depends(_check_local_request)])
     def activate_adapter(name: str = FPath(..., pattern=r"^[a-zA-Z0-9][a-zA-Z0-9\-]*$")):
         """Hot-swap the active adapter. Name must be in the loaded map."""
         if not _adapter_map:
@@ -1806,7 +1786,7 @@ def _create_app(
             active_state["active"] = name
         return {"active": name, "status": "ok"}
 
-    @app.post("/v1/adapters/deactivate")
+    @app.post("/v1/adapters/deactivate", dependencies=[Depends(_check_local_request)])
     def deactivate_adapter():
         """Return to base model (clear active adapter)."""
         with active_lock:
@@ -2089,7 +2069,7 @@ def _create_app(
     tool_max_query_len = 1024
     tool_max_results = 16
 
-    @app.post("/v1/tools/python")
+    @app.post("/v1/tools/python", dependencies=[Depends(_check_local_request)])
     def tool_python(
         payload: dict,
         authorization: Optional[str] = Header(default=None),
@@ -2116,7 +2096,7 @@ def _create_app(
             "timed_out": stdout is None,
         }
 
-    @app.post("/v1/tools/bash")
+    @app.post("/v1/tools/bash", dependencies=[Depends(_check_local_request)])
     def tool_bash(
         payload: dict,
         authorization: Optional[str] = Header(default=None),
@@ -2166,7 +2146,7 @@ def _create_app(
             "timed_out": result.timed_out,
         }
 
-    @app.post("/v1/tools/web_search")
+    @app.post("/v1/tools/web_search", dependencies=[Depends(_check_local_request)])
     def tool_web_search(
         payload: dict,
         authorization: Optional[str] = Header(default=None),
@@ -2242,7 +2222,7 @@ def _create_app(
                         )
         return {"results": results}
 
-    @app.post("/v1/thumbs")
+    @app.post("/v1/thumbs", dependencies=[Depends(_check_local_request)])
     def record_thumb_endpoint(
         payload: dict,
         authorization: Optional[str] = Header(default=None),

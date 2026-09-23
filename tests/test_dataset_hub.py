@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 from typer.testing import CliRunner
 
 from soup_cli.commands.data import app
+from tests.conftest import strip_ansi
 
 runner = CliRunner()
 
@@ -346,7 +347,7 @@ class TestSecurityEdgeCases:
             ["download", "test/dataset", "--samples", "2000000", "-o", "out.jsonl"],
         )
         assert result.exit_code == 1
-        assert "1,000,000" in result.output
+        assert "1,000,000" in strip_ansi(result.output)
 
     @patch("soup_cli.commands.data._hf_dataset_info")
     def test_preview_huggingface_hub_not_installed(self, mock_info):

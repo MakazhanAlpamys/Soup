@@ -19,12 +19,13 @@ import shlex
 import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Mapping
+from typing import TYPE_CHECKING, Any, Callable, Iterable, Mapping
 
 from soup_cli.mcp_server.execution import (
     ExecutionError,
     ExecutionManager,
     ProtectedFile,
+    absent_marker,
     digest_file,
 )
 from soup_cli.utils.paths import enforce_under_cwd_and_no_symlink, is_under_cwd
@@ -131,6 +132,18 @@ def _read_json_under_cwd(path: str, field: str, *, max_bytes: int = _MAX_JSON_BY
 # Generous cap on free-text string args (paths, ids, goals, queries). Bounds a
 # pathological input without constraining any legitimate value (security-review).
 _MAX_STR_LEN = 4096
+
+
+def _unknown_choice(
+    field: str, value: str, choices: Iterable[str], *, preserve_order: bool = False
+) -> McpToolError:
+    """Describe a rejected choice using the live allowlist and an escaped value.
+
+    Callers apply the string length guard first. Only the choice is echoed,
+    never related model/config paths or an underlying exception's message.
+    """
+    accepted = choices if preserve_order else sorted(choices)
+    return McpToolError(f"unknown {field} {value!r}; accepted: " + ", ".join(accepted))
 
 
 def _require_str(args: dict, key: str) -> str:
@@ -251,9 +264,8 @@ def tool_data_validate(args: dict) -> dict:
     fmt = _opt_str(args, "format")
     fmt = "auto" if fmt is None else fmt
     if fmt != "auto" and fmt not in _formats.VALID_FORMATS:
-        raise McpToolError(
-            f"unknown format {fmt!r}; accepted: auto, "
-            + ", ".join(sorted(_formats.VALID_FORMATS))
+        raise _unknown_choice(
+            "format", fmt, ("auto", *_formats.VALID_FORMATS), preserve_order=True
         )
     if fmt == "auto":
         try:
@@ -295,9 +307,8 @@ def tool_data_doctor(args: dict) -> dict:
     fmt = _opt_str(args, "format")
     fmt = "auto" if fmt is None else fmt
     if fmt != "auto" and fmt not in _formats.VALID_FORMATS:
-        raise McpToolError(
-            f"unknown format {fmt!r}; accepted: auto, "
-            + ", ".join(sorted(_formats.VALID_FORMATS))
+        raise _unknown_choice(
+            "format", fmt, ("auto", *_formats.VALID_FORMATS), preserve_order=True
         )
     max_length = _opt_int(args, "max_length", 2048, lo=64, hi=1_048_576)
     sample_size = _opt_int(args, "sample_size", 200, lo=1, hi=2000)
@@ -430,7 +441,7 @@ def _resolve_gpu_memory_mcp(gpu: str | None) -> tuple[float, str]:
     if gpu is not None:
         gpu_key = normalize_gpu_key(gpu)
         if gpu_key not in GPU_MEMORY:
-            raise McpToolError("unknown gpu (see 'soup profile --help' for valid options)")
+            raise _unknown_choice("gpu", gpu, GPU_MEMORY)
         return float(GPU_MEMORY[gpu_key]), "flag"
     try:
         from soup_cli.utils.gpu import get_gpu_info
@@ -627,32 +638,93 @@ _MUTATING_NOTE = (
 )
 
 
-def _collect_external_protected_inputs(cfg: SoupConfig) -> list[ProtectedFile]:
-    """Collect and digest external paths (datasets, models) referenced by cfg."""
-    protected: list[ProtectedFile] = []
-    candidate_paths: list[tuple[str, str | list[str] | None]] = [
-        ("data.train", getattr(cfg.data, "train", None)),
-        ("data.eval", getattr(cfg.data, "eval", None)),
-        ("data.replay", getattr(cfg.data, "replay", None)),
-        ("data.image_dir", getattr(cfg.data, "image_dir", None)),
-        ("data.audio_dir", getattr(cfg.data, "audio_dir", None)),
-        ("base", getattr(cfg, "base", None)),
-        ("training.adapter", getattr(cfg.training, "adapter", None)),
-    ]
-    if getattr(cfg.training, "eval_gate", None) and cfg.training.eval_gate.enabled:
-        candidate_paths.append(("training.eval_gate.suite", cfg.training.eval_gate.suite))
+# Every schema field whose value names a local file or directory that the
+# spawned ``soup train`` may read. A plan pins each of them: an existing path is
+# digested, a value that does not exist yet (a hub id, a built-in reward name, a
+# ``registry://`` reference) is recorded as absent and must still be absent at
+# execution. ``tests/test_mcp_plan_inputs.py`` walks the schema and fails when a
+# path-like string field is in neither this tuple nor NOT_PLAN_INPUT_FIELDS.
+PLAN_INPUT_FIELDS: tuple[str, ...] = (
+    "base",
+    "data.train",
+    "data.image_dir",
+    "data.audio_dir",
+    "data.video_dir",
+    "data.replay",
+    "data.tokenized_path",
+    "data.forget_set",
+    "data.retain_set",
+    "training.reward_fn",
+    "training.prm_reward",
+    "training.reward_model",
+    "training.teacher_model",
+    "training.minillm_pretrain_anchor_path",
+    "training.mole_task_adapters",
+    "training.ra_dit_retriever_model",
+    "training.checkpoint_eval_tasks",
+    "training.eval_gate.suite",
+    "training.eval_gate.baseline",
+    "eval.custom_tasks",
+)
 
-    for field, path in candidate_paths:
-        # #443 — data.interleave lets data.train be a list of local paths.
-        # Digest each entry independently (one ProtectedFile per file) so
-        # every interleaved file is re-validated before execution, instead
-        # of the list silently contributing zero entries (isinstance(path,
-        # str) used to fail before os.path.exists even ran).
-        entries = path if isinstance(path, list) else [path]
-        for i, entry in enumerate(entries):
-            entry_field = f"{field}[{i}]" if isinstance(path, list) else field
-            if isinstance(entry, str) and entry and is_under_cwd(entry) and os.path.exists(entry):
-                protected.append(digest_file(entry, entry_field))
+NOT_PLAN_INPUT_FIELDS: Mapping[str, str] = {
+    "output": "written by the run, not read",
+    "data.chat_template": (
+        "a registered template name or inline Jinja (data/chat_templates.py "
+        "resolve_chat_template); never opened as a file"
+    ),
+    "training.online_dpo_judge": "a judge URL, not a local path",
+    "training.preference_loss_weights": "a mapping of loss weights",
+    "training.reward_hack_signals": "signal names",
+    "eval.ship.general_suite": "read by soup ship, not soup train",
+    "eval.ship.judge_model": "a judge URL read by soup ship, not soup train",
+    "eval.ship.baseline": "read by soup ship, not soup train",
+}
+
+# ``training.reward_fn`` accepts a comma-separated ensemble (v0.71.40 #311); each
+# segment is a built-in name or a ``.py`` path loaded by trainer/rewards.py.
+_COMMA_SEPARATED_PLAN_INPUTS = frozenset({"training.reward_fn"})
+
+
+def _plan_input_value(cfg: SoupConfig, dotted: str) -> Any:
+    """Resolve a dotted schema path; a missing intermediate model yields None."""
+    value: Any = cfg
+    for part in dotted.split("."):
+        value = getattr(value, part, None)
+        if value is None:
+            return None
+    return value
+
+
+def _protect_plan_input(entry: str, field: str) -> ProtectedFile:
+    """Digest an existing input, or record that it is absent; refuse outside cwd."""
+    if not is_under_cwd(entry):
+        raise ExecutionError(
+            f"{field} points outside the working directory; move it under the "
+            "project to execute"
+        )
+    if os.path.lexists(entry):
+        return digest_file(entry, field)
+    return absent_marker(entry, field)
+
+
+def _collect_external_protected_inputs(cfg: SoupConfig) -> list[ProtectedFile]:
+    """Pin every local input named by PLAN_INPUT_FIELDS (digest or absent marker)."""
+    protected: list[ProtectedFile] = []
+    for field in PLAN_INPUT_FIELDS:
+        value = _plan_input_value(cfg, field)
+        if value is None:
+            continue
+        # #443 — data.train may be a list (interleave): one entry per element.
+        if isinstance(value, (list, tuple)):
+            named = [(f"{field}[{i}]", entry) for i, entry in enumerate(value)]
+        elif field in _COMMA_SEPARATED_PLAN_INPUTS and isinstance(value, str):
+            named = [(field, part.strip()) for part in value.split(",") if part.strip()]
+        else:
+            named = [(field, value)]
+        for entry_field, entry in named:
+            if isinstance(entry, str) and entry:
+                protected.append(_protect_plan_input(entry, entry_field))
     return protected
 
 
@@ -719,7 +791,7 @@ def tool_export(args: dict, execution: ExecutionManager | None = None) -> dict:
     model = _require_str(args, "model")
     fmt = _require_str(args, "format")
     if fmt not in SUPPORTED_FORMATS:
-        raise McpToolError("unsupported export format (see 'soup export --help')")
+        raise _unknown_choice("export format", fmt, SUPPORTED_FORMATS)
     output = _opt_str(args, "output")
     try:
         enforce_under_cwd_and_no_symlink(model, "model")

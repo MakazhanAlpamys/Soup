@@ -130,18 +130,20 @@ def detect_topology() -> TopologyInfo:
     }
 
 
-def suggest_nccl_env(gpu_count: int, interconnect: str) -> dict[str, str]:
+def suggest_nccl_env(
+    gpu_count: int, interconnect: str, num_machines: int = 1,
+) -> dict[str, str]:
     """Suggest NCCL environment variables tuned for the detected topology.
 
-    Returns an empty dict for single-GPU / CPU. Local multi-GPU disables
-    InfiniBand probing to avoid startup hangs on machines without IB.
+    Returns an empty dict for CPU or one GPU on one node. Local multi-GPU
+    disables InfiniBand probing; multiple nodes leave InfiniBand enabled.
     """
-    if gpu_count <= 1:
+    if gpu_count < 1 or (gpu_count == 1 and num_machines == 1):
         return {}
 
     env = {
         "NCCL_P2P_DISABLE": "0",  # allow peer-to-peer when available
-        "NCCL_IB_DISABLE": "1",   # local only: skip IB probing
+        "NCCL_IB_DISABLE": "0" if num_machines > 1 else "1",
     }
     if interconnect == "nvlink":
         env["NCCL_NVLS_ENABLE"] = "1"

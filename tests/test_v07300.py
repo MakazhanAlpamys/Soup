@@ -214,14 +214,7 @@ class TestStreamedPreferenceLossesDisableHfGradientCheckpointing:
 # ==========================================================================
 # the CI fixture must exercise the kernel path production actually takes
 # ==========================================================================
-def _cuda_available():
-    try:
-        return torch.cuda.is_available()
-    except Exception:
-        return False
-
-
-@pytest.mark.skipif(not _cuda_available(), reason="the fused-kernel window is a CUDA dispatch")
+@pytest.mark.gpu(reason="the fused-kernel window is a CUDA dispatch")
 class TestFixtureIsOutsideTheFusedKernelWindow:
     """The streamed-vs-resident gate was comparing a code path no real model uses.
 

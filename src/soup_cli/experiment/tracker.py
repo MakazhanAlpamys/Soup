@@ -345,16 +345,15 @@ class ExperimentTracker:
         epoch: float = 0.0,
         loss: float = 0.0,
         lr: float = 0.0,
-        grad_norm: float = 0.0,
+        grad_norm: Optional[float] = None,
         speed: float = 0.0,
         gpu_mem: str = "",
         val_loss: Optional[float] = None,
     ) -> None:
         """Log a single metrics row for the given run.
 
-        ``val_loss`` defaults to ``None`` rather than ``0.0``: most rows are
-        training steps with no evaluation attached, and a zero there would be
-        indistinguishable from a genuinely measured zero.
+        ``val_loss`` and ``grad_norm`` default to ``None`` rather than ``0.0``:
+        an omitted measurement must not look like a genuinely measured zero.
         """
         now = datetime.now().isoformat()
         conn = self._get_conn()
@@ -465,6 +464,19 @@ class ExperimentTracker:
         conn = self._get_conn()
         rows = conn.execute(
             "SELECT * FROM runs ORDER BY created_at DESC, rowid DESC LIMIT ?", (limit,)
+        ).fetchall()
+        return [self._reconcile_orphaned_run(dict(row)) for row in rows]
+
+    def list_active_execution_runs(self) -> list[dict]:
+        """Return every 'launching' or 'running' run, newest first, with no limit.
+
+        The MCP one-active-execution cap reads this rather than ``list_runs``,
+        whose 50-row window lets an older live run fall out of view.
+        """
+        conn = self._get_conn()
+        rows = conn.execute(
+            "SELECT * FROM runs WHERE status IN ('launching', 'running') "
+            "ORDER BY created_at DESC, rowid DESC"
         ).fetchall()
         return [self._reconcile_orphaned_run(dict(row)) for row in rows]
 

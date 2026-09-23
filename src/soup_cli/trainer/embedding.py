@@ -185,6 +185,10 @@ class EmbeddingTrainerWrapper:
         # attached after the trainer exists (attach_loraplus_optimizer). Do NOT
         # forward loraplus_lr_ratio here (#724).
 
+        # LoRA-FA is not a TrainingArguments field; its optimizer is built and
+        # attached after the trainer exists (attach_lorafa_optimizer). Do NOT
+        # forward use_lorafa here (#725).
+
         training_args = TrainingArguments(**training_kwargs)
 
         # --- Custom Trainer with embedding loss ---
@@ -215,12 +219,15 @@ class EmbeddingTrainerWrapper:
         # v0.40.6 #67 — ReLoRA callback.
         from soup_cli.utils.peft_wiring import (
             attach_curriculum_callback,
+            attach_lorafa_optimizer,
             attach_loraplus_optimizer,
             attach_plugin_callback,
             attach_relora_callback,
         )
         # LoRA+ optimizer (#724) — build and attach now that the trainer exists.
         attach_loraplus_optimizer(self.trainer, tcfg)
+        # LoRA-FA optimizer (#725) — build and attach now that the trainer exists.
+        attach_lorafa_optimizer(self.trainer, tcfg)
         attach_relora_callback(self.trainer, tcfg)
         # v0.53.5 #114/#115 — dynamic curriculum live callback.
         attach_curriculum_callback(self.trainer, tcfg, str(output_dir), console)
@@ -228,6 +235,7 @@ class EmbeddingTrainerWrapper:
         attach_plugin_callback(self.trainer, console)
 
         self._output_dir = str(output_dir)
+        self._batch_size = batch_size
 
     def _setup_transformers(self, cfg: SoupConfig, tcfg: TrainingConfig) -> None:
         """Load model via standard transformers + peft pipeline."""
@@ -265,7 +273,14 @@ class EmbeddingTrainerWrapper:
         self.model = AutoModel.from_pretrained(cfg.base, **model_kwargs)
 
         if tcfg.quantization in ("4bit", "8bit", "mxfp4"):
-            self.model = prepare_model_for_kbit_training(self.model)
+            from soup_cli.utils.layer_stream import should_enable_hf_gradient_checkpointing
+
+            self.model = prepare_model_for_kbit_training(
+                self.model,
+                use_gradient_checkpointing=should_enable_hf_gradient_checkpointing(
+                    tcfg.gradient_checkpointing, stream_layers=tcfg.stream_layers
+                ),
+            )
 
         if tcfg.lora.r == 0:
             # #700 — Full fine-tuning for embedding models (no PEFT adapter applied).
@@ -288,6 +303,14 @@ class EmbeddingTrainerWrapper:
             )
 
             target_modules = resolve_lora_target_modules(self.model, tcfg.lora.target_modules)
+            # #1099: moe_lora picks the expert-FFN targets. Only reachable with
+            # lora.r >= 1 -- at r == 0 this trainer full-fine-tunes and builds no
+            # adapter at all, so there is nothing for the flag to select.
+            from soup_cli.utils.moe import resolve_moe_lora_targets
+
+            target_modules = resolve_moe_lora_targets(
+                self.model, tcfg, target_modules, console
+            )
 
             lora_config = build_lora_config(
                 tcfg.lora,
@@ -344,15 +367,23 @@ class EmbeddingTrainerWrapper:
         start = time.time()
 
         if display:
-            from soup_cli.monitoring.callback import SoupTrainerCallback
+            from soup_cli.monitoring.callback import (
+                SoupTrainerCallback,
+                soup_callback_kwargs,
+            )
 
             self.trainer.add_callback(
                 SoupTrainerCallback(
-                    display, tracker=tracker, run_id=run_id,
-                    loss_watchdog=self.config.training.loss_watchdog,
-                    loss_watchdog_threshold=self.config.training.loss_watchdog_threshold,
-                    loss_watchdog_patience=self.config.training.loss_watchdog_patience,
+                    display,
+                    tracker=tracker,
+                    run_id=run_id,
                     eval_gate_config=self.config.training.eval_gate,
+                    **soup_callback_kwargs(
+                        self.config.training,
+                        batch_size=self._batch_size,
+                        output_dir=self._output_dir,
+                        include_eval_gate=False,
+                    ),
                 )
             )
 

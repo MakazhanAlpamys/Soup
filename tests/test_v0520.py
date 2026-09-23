@@ -526,28 +526,6 @@ class TestBitNetUtils:
 
         assert is_bitnet_model(name) is expected
 
-    def test_validate_bitnet_compat_mlx_reject(self):
-        from soup_cli.utils.bitnet import validate_bitnet_compat
-
-        with pytest.raises(ValueError, match="mlx"):
-            validate_bitnet_compat(task="sft", backend="mlx", modality="text")
-
-    def test_validate_bitnet_compat_vision_reject(self):
-        from soup_cli.utils.bitnet import validate_bitnet_compat
-
-        with pytest.raises(ValueError, match="text"):
-            validate_bitnet_compat(
-                task="sft", backend="transformers", modality="vision",
-            )
-
-    def test_validate_bitnet_compat_grpo_reject(self):
-        from soup_cli.utils.bitnet import validate_bitnet_compat
-
-        with pytest.raises(ValueError, match="task"):
-            validate_bitnet_compat(
-                task="grpo", backend="transformers", modality="text",
-            )
-
     def test_validate_bitnet_export_canonical(self):
         from soup_cli.utils.bitnet import validate_bitnet_export
 
@@ -569,14 +547,6 @@ class TestBitNetUtils:
         with pytest.raises(exc):
             validate_bitnet_export(bad)
 
-    def test_build_bitnet_trainer_lifted_v07120(self):
-        """v0.52.0 stub lifted in v0.71.20 #134 to a BitNetTrainerWrapper
-        factory taking ``config``. No-arg call now raises TypeError."""
-        from soup_cli.utils.bitnet import build_bitnet_trainer
-
-        with pytest.raises(TypeError):
-            build_bitnet_trainer()
-
     def test_export_bitnet_gguf_lifted_v07120(self):
         """v0.52.0 stub lifted in v0.71.20 #134 to a real export taking
         required kwargs. No-arg call now raises TypeError."""
@@ -585,28 +555,35 @@ class TestBitNetUtils:
         with pytest.raises(TypeError):
             export_bitnet_gguf()
 
+    def test_build_bitnet_trainer_removed_from_utils_bitnet(self) -> None:
+        """Unreferenced build_bitnet_trainer was removed under #1004."""
+        from soup_cli.utils import bitnet
+
+        assert not hasattr(bitnet, "build_bitnet_trainer")
+
+    def test_validate_bitnet_compat_removed_from_utils_bitnet(self) -> None:
+        """validate_bitnet_compat orphaned by #981 was removed under #1004."""
+        from soup_cli.utils import bitnet
+
+        assert not hasattr(bitnet, "validate_bitnet_compat")
+
 
 class TestBitNetSchema:
-    def test_bitnet_sft_happy(self):
-        cfg = load_config_from_string(
-            "base: tiiuae/Falcon-E-1B-Instruct\ntask: sft\n"
-            "data: {train: ./d.jsonl}\ntraining: {quantization: bitnet_1.58}\n"
-        )
-        assert cfg.training.quantization == "bitnet_1.58"
-
-    def test_bitnet_dpo_happy(self):
-        cfg = load_config_from_string(
-            "base: x\ntask: dpo\ndata: {train: ./d.jsonl}\n"
+    @pytest.mark.parametrize("task", ["sft", "dpo"])
+    def test_bitnet_training_refused_until_wired(self, task):
+        yaml = (
+            f"base: x\ntask: {task}\ndata: {{train: ./d.jsonl}}\n"
             "training: {quantization: bitnet_1.58}\n"
         )
-        assert cfg.training.quantization == "bitnet_1.58"
+        with pytest.raises(ValueError, match="training is not implemented yet"):
+            load_config_from_string(yaml)
 
     def test_bitnet_grpo_rejected(self):
         yaml = (
             "base: x\ntask: grpo\ndata: {train: ./d.jsonl}\n"
             "training: {quantization: bitnet_1.58, reward_fn: accuracy, num_generations: 4}\n"
         )
-        with pytest.raises(Exception, match="task"):
+        with pytest.raises(ValueError, match="training is not implemented yet"):
             load_config_from_string(yaml)
 
     def test_bitnet_mlx_rejected(self):
@@ -614,7 +591,7 @@ class TestBitNetSchema:
             "base: x\ntask: sft\nbackend: mlx\ndata: {train: ./d.jsonl}\n"
             "training: {quantization: bitnet_1.58}\n"
         )
-        with pytest.raises(Exception, match="mlx"):
+        with pytest.raises(ValueError, match="training is not implemented yet"):
             load_config_from_string(yaml)
 
 
@@ -941,7 +918,6 @@ class TestV0520Recipes:
         "llasa-tts",
         "spark-tts",
         "oute-tts",
-        "falcon-e-bitnet-sft",
     )
 
     @pytest.mark.parametrize("name", NEW_RECIPES)
@@ -969,17 +945,17 @@ class TestV0520Recipes:
         assert cfg.task == "tts"
         assert cfg.modality == "audio_out"
 
-    def test_falcon_e_bitnet_quant(self):
+    def test_falcon_e_bitnet_recipe_retired(self):
         from soup_cli.recipes.catalog import RECIPES
 
-        cfg = load_config_from_string(RECIPES["falcon-e-bitnet-sft"].yaml_str)
-        assert cfg.training.quantization == "bitnet_1.58"
+        assert "falcon-e-bitnet-sft" not in RECIPES
 
     def test_total_catalog_size_grew(self):
         from soup_cli.recipes.catalog import RECIPES
 
-        # v0.51.0 shipped 106; v0.52.0 adds 6 (5 TTS + Falcon-E BitNet).
-        assert len(RECIPES) >= 112
+        # v0.51.0 shipped 106; five TTS recipes remain from v0.52.0.
+        # #825 retires the unusable Falcon-E BitNet training recipe.
+        assert len(RECIPES) >= 111
 
 
 class TestTddReviewGaps:
@@ -1089,7 +1065,7 @@ class TestTddReviewGaps:
 
         new = (
             "orpheus-tts-sft", "sesame-csm-tts", "llasa-tts",
-            "spark-tts", "oute-tts", "falcon-e-bitnet-sft",
+            "spark-tts", "oute-tts",
         )
         for name in new:
             base = RECIPES[name].model
