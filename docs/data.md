@@ -1023,6 +1023,15 @@ training saves the tokenizer with it; a different one is refused with
 `cache hash mismatch`. A cache written before the template joined the key is
 refused the same way: re-run `soup data preprocess` to rebuild it.
 
+A chat row the command cannot tokenize stops it, and nothing is written. That covers a
+conversation the template rejects (for example `Conversation roles must alternate`
+on a Llama-2- or Gemma-style template), an empty `messages` list, and a tokenizer error.
+The message names the row by its index in the train split and quotes the start of its
+first message. Live training stops on a rejected conversation and on an empty one
+too, so a cache that skipped them would train on fewer rows than the same `soup.yaml`
+run live. Before #1180 they were
+dropped without a word. Fix or remove the row and re-run.
+
 
 ## Data Recipe DAG Runner (`soup data recipe --execute`)
 

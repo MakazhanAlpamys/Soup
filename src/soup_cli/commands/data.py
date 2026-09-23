@@ -2357,6 +2357,30 @@ def _cache_key_dataset_path(cfg) -> str:
     return preprocess_dataset_key_input(cfg.data)
 
 
+def _refuse_row(idx: int, row, reason: str) -> None:
+    """Stop ``soup data preprocess`` on a chat row it cannot tokenize (#1180).
+
+    Names the row by its index in the train split and the start of its first
+    message, since the index alone matches the file only for a single local file.
+    """
+    from rich.markup import escape
+
+    preview = ""
+    messages = row.get("messages") if isinstance(row, dict) else None
+    if isinstance(messages, list) and messages and isinstance(messages[0], dict):
+        first = messages[0]
+        preview = f"{first.get('role')}: {str(first.get('content', ''))[:60]!r}"
+    console.print(
+        f"[red]Train row {idx} cannot be tokenized:[/] {escape(reason)}"
+        + (f"\n  first message: {escape(preview)}" if preview else "")
+    )
+    console.print(
+        "Nothing was written. Fix or remove the row and re-run; the cache must hold "
+        "every row the training path would train on."
+    )
+    raise typer.Exit(1)
+
+
 @app.command(name="preprocess")
 def preprocess_dataset(
     config_path: str = typer.Argument(
@@ -2492,17 +2516,22 @@ def preprocess_dataset(
             if not text:
                 continue
         else:
+            # #1180: a chat row that cannot be rendered stops the command, as the
+            # live training path stops on it. Skipping it wrote a smaller dataset
+            # than the one configured, exited 0, and the cached run trained on it.
             messages = row.get("messages") if isinstance(row, dict) else None
-            if not messages or not getattr(tokenizer, "chat_template", None):
-                continue
+            if not getattr(tokenizer, "chat_template", None):
+                _refuse_row(idx, row, f"the tokenizer for {cfg.base} has no chat_template")
+            if not messages:
+                _refuse_row(idx, row, "it has no messages")
             try:
                 text = tokenizer.apply_chat_template(
                     messages, tokenize=False, add_generation_prompt=False
                 )
-            except Exception:  # noqa: BLE001 — tokenizer template errors vary
-                continue
+            except Exception as exc:  # noqa: BLE001 — tokenizer template errors vary
+                _refuse_row(idx, row, f"{type(exc).__name__}: {exc}")
             if not isinstance(text, str) or not text:
-                continue
+                _refuse_row(idx, row, "the chat template rendered it as empty text")
         try:
             tokens = tokenizer(
                 text,
@@ -2517,8 +2546,10 @@ def preprocess_dataset(
                 # here; #791 then applies TRL's training EOS rule below, both only
                 # for the chat path.
             )
-        except Exception:  # noqa: BLE001 — tokenizer errors vary
-            continue
+        except Exception as exc:  # noqa: BLE001 — tokenizer errors vary
+            if is_pretrain:
+                continue
+            _refuse_row(idx, row, f"{type(exc).__name__}: {exc}")
         input_ids = tokens["input_ids"]
         attention_mask = tokens.get("attention_mask", [1] * len(input_ids))
         if not is_pretrain:
