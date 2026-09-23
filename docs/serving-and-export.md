@@ -647,6 +647,8 @@ terminal panel.
 
 **Security:** The Web UI generates a random auth token at startup (printed to console). Every private endpoint — mutating (start/stop training, delete runs, inspect data, validate config) and reading (runs, metrics, system, recipes, SSE streams) — requires an `Authorization: Bearer <token>` header. `/` and `/api/health` stay open so the dashboard can load. CORS is restricted to the served origin. Data inspection is sandboxed to the working directory.
 
+**The token is not kept across reloads.** The page reads the token from `?token=…` (the `--public` phone URL) or asks for it the first time a request is refused, then holds it in page memory only: never `sessionStorage`, `localStorage`, a cookie or a `window` property. A reload or a new tab therefore asks for it again; paste the token `soup ui` printed. That is deliberate: a token persisted where page script can read it would turn a future rendering mistake into a token disclosure. It does not protect against script already running in the page; the content policy below is the defence there.
+
 YAML-entry request bodies are capped at 1 MiB on `/api/config/validate`,
 `/api/train/start`, and `/api/config/from-form`. Larger bodies return HTTP 413
 before JSON/YAML validation. The server checks both `Content-Length` and the

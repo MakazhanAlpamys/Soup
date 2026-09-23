@@ -2,43 +2,71 @@
 
 const API = '';  // same origin
 
-// v0.53.9 #95 — Pick up Bearer token from `?token=…` (phone QR landing)
-// or from sessionStorage on subsequent navigations. Stripped from the URL
-// after read so the token doesn't sit in browser history.
-(function _bootstrapAuthToken() {
+// #1136 — The Bearer token lives only in this closure: never on `window`, in
+// web storage or in a cookie, so a future rendering mistake cannot read it
+// back. Every request goes through authFetch, which adds the header itself and
+// never returns the token. The cost is deliberate: a reload asks for it again.
+// This narrows what injected script can take away; it does not stop script
+// already running in the page (the CSP is the defence there).
+const authFetch = (() => {
+  // Bound at load, so replacing window.fetch later cannot observe the header.
+  const nativeFetch = window.fetch.bind(window);
+  let token = '';
+  let asking = null;     // one prompt shared by concurrent 401s
+  let declined = false;  // a cancelled prompt is not re-raised by polling
+
+  // v0.53.9 #95 — pick up `?token=…` (phone QR landing) and drop it from the
+  // URL so it doesn't sit in browser history.
   try {
     const params = new URLSearchParams(window.location.search);
     const fromUrl = params.get('token');
     if (fromUrl) {
-      window._authToken = fromUrl;
-      try { sessionStorage.setItem('soup_auth_token', fromUrl); } catch (e) {}
-      // Drop ?token=… from the URL so refresh history doesn't leak it.
+      token = fromUrl;
       params.delete('token');
       const qs = params.toString();
       const clean = window.location.pathname + (qs ? '?' + qs : '') +
         window.location.hash;
       window.history.replaceState(null, '', clean);
-    } else {
-      try {
-        const saved = sessionStorage.getItem('soup_auth_token');
-        if (saved) window._authToken = saved;
-      } catch (e) {}
     }
   } catch (e) {
     // Defensive: never block app load.
   }
+
+  function askForToken() {
+    if (!asking) {
+      asking = Promise.resolve().then(() => {
+        const entered = window.prompt(
+          'Paste the auth token printed by `soup ui` (not kept across reloads):');
+        if (entered) token = entered.trim();
+        else declined = true;
+        asking = null;
+        return Boolean(entered);
+      });
+    }
+    return asking;
+  }
+
+  return async function authFetch(url, opts = {}) {
+    const send = () => {
+      const headers = { ...(opts.headers || {}) };
+      if (token) headers['Authorization'] = 'Bearer ' + token;
+      return nativeFetch(url, { ...opts, headers });
+    };
+    const sentWith = token;
+    let resp = await send();
+    if (resp.status !== 401) return resp;
+    // Another request may already have been answered with a new token.
+    if (token !== sentWith || (!declined && await askForToken())) resp = await send();
+    return resp;
+  };
 })();
 
 // v0.74.x #687 — Request ephemeral single-use ticket for SSE endpoints
 async function getAuthTicket() {
-  if (!window._authToken) return '';
   try {
-    const resp = await fetch(API + '/api/auth/ticket', {
+    const resp = await authFetch(API + '/api/auth/ticket', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': 'Bearer ' + window._authToken,
-      },
+      headers: { 'Content-Type': 'application/json' },
     });
     if (!resp.ok) return '';
     const data = await resp.json();
@@ -148,11 +176,7 @@ async function renderToolOutputs() {
   if (!container) return;
   let payload;
   try {
-    const headers = {};
-    if (window._authToken) {
-      headers['Authorization'] = 'Bearer ' + window._authToken;
-    }
-    const resp = await fetch('/api/tool-outputs?limit=100', { headers });
+    const resp = await authFetch('/api/tool-outputs?limit=100');
     if (!resp.ok) throw new Error('HTTP ' + resp.status);
     payload = await resp.json();
   } catch (err) {
@@ -209,10 +233,7 @@ async function renderToolOutputs() {
 // --- API Helpers ---
 async function api(path, opts = {}) {
   const headers = { 'Content-Type': 'application/json', ...(opts.headers || {}) };
-  if (window._authToken && !headers['Authorization']) {
-    headers['Authorization'] = 'Bearer ' + window._authToken;
-  }
-  const resp = await fetch(API + path, {
+  const resp = await authFetch(API + path, {
     ...opts,
     headers,
   });
@@ -861,12 +882,9 @@ async function sendChatMessage() {
   const adapter = document.getElementById('chat-adapter')?.value?.trim() || undefined;
 
   try {
-    const resp = await fetch(API + '/api/chat/send', {
+    const resp = await authFetch(API + '/api/chat/send', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': 'Bearer ' + (window._authToken || ''),
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         messages: allMessages,
         endpoint: serverUrl,
