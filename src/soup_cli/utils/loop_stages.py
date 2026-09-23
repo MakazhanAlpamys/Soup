@@ -297,7 +297,7 @@ def _endpoint_is_local(endpoint: str) -> bool:
 TOOL_AUTH_TOKEN_ENV = "SOUP_TOOL_AUTH_TOKEN"
 
 
-class _ActivateRefused(Exception):
+class _ActivateRefusedError(Exception):
     """The serve endpoint answered the activate POST with 401."""
 
 
@@ -309,7 +309,7 @@ def _post_activate(endpoint: str, name: str) -> bool:
     interpolation (defence-in-depth against a crafted adapter dir name).
     The tool token from ``SOUP_TOOL_AUTH_TOKEN``, when set, goes as a Bearer
     header: a server started with ``--tool-auth-token`` requires it on this
-    route (#1139). A 401 raises ``_ActivateRefused`` so the caller can name
+    route (#1139). A 401 raises ``_ActivateRefusedError`` so the caller can name
     the missing credential instead of reporting a bare failure.
     """
     if _DEPLOY_POSTER is not None:
@@ -328,7 +328,7 @@ def _post_activate(endpoint: str, name: str) -> bool:
     except Exception:  # noqa: BLE001 — deploy must never crash the loop
         return False
     if resp.status_code == 401:
-        raise _ActivateRefused()
+        raise _ActivateRefusedError()
     return 200 <= resp.status_code < 300
 
 
@@ -388,7 +388,7 @@ def deploy_to_canary(
     name = os.path.basename(str(adapter_path).rstrip("/\\")) or "canary"
     try:
         ok = _post_activate(endpoint, name)
-    except _ActivateRefused:
+    except _ActivateRefusedError:
         if os.environ.get(TOOL_AUTH_TOKEN_ENV):
             note = (
                 "activate POST refused (401): the serve endpoint rejected the tool "
