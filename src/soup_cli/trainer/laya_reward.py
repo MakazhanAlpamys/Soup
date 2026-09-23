@@ -82,7 +82,7 @@ def build_laya_reward_fn(tcfg: Any, device: str) -> LayaReward:
     except ImportError as exc:
         raise ImportError(
             "Laya reward requires the optional dependency; install it with "
-            "`pip install 'soup-cli[laya]'`."
+            '`pip install "soup-cli[laya]"`.'
         ) from exc
 
     load_kwargs: dict[str, Any] = {"device": str(device)}
