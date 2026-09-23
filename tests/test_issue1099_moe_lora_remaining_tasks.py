@@ -19,7 +19,9 @@ it came from.
 still accepted the flag unread: ``classifier`` (also ``reranker`` and
 ``cross_encoder``), ``distill`` and ``unlearn``. The two tasks with no expert
 to adapt, ``asr`` (Whisper) and ``moe_lora_routing`` (no adapter built), are
-refused at config load instead. ``prm`` is left as it was, pending a ruling.
+refused at config load instead, and so is the classifier family without
+``classifier_lora: true`` and ``lora.r > 0``, where that trainer full-fine-tunes.
+``prm`` is left as it was, pending a ruling.
 """
 
 from __future__ import annotations
@@ -297,6 +299,42 @@ class TestTheFlagIsRefusedWhereNothingCouldReadIt:
         assert cfg.training.moe_lora is False
 
 
+class TestTheClassifierFamilyNeedsItsAdapter:
+    """#1151: ``trainer/classifier.py`` builds an adapter only with
+    ``classifier_lora: true`` and ``lora.r > 0``; otherwise it full-fine-tunes,
+    and ``moe_lora`` would load unread. Refused unless that adapter exists."""
+
+    @staticmethod
+    def _cfg(task, *, classifier_lora, r=4):
+        import yaml
+
+        training = {"moe_lora": True, "lora": {"r": r, "dropout": 0.0}}
+        training["num_labels"] = 2
+        if classifier_lora:
+            training["classifier_lora"] = True
+        return load_config_from_string(yaml.safe_dump({
+            "base": "org/tiny-moe",
+            "task": task,
+            "data": {"train": "./x.jsonl", "format": "auto"},
+            "training": training,
+        }))
+
+    @pytest.mark.parametrize("task", ["classifier", "reranker", "cross_encoder"])
+    def test_without_classifier_lora_it_is_refused(self, task):
+        with pytest.raises(ValueError, match=f"moe_lora.*task={task!r}.*classifier_lora"):
+            self._cfg(task, classifier_lora=False)
+
+    @pytest.mark.parametrize("task", ["classifier", "reranker", "cross_encoder"])
+    def test_with_classifier_lora_it_loads(self, task):
+        """The control: the wired path still loads."""
+        assert self._cfg(task, classifier_lora=True).training.moe_lora is True
+
+    def test_classifier_lora_at_rank_zero_is_refused_too(self):
+        """``r: 0`` builds no adapter either, as the trainer's own gate decides."""
+        with pytest.raises(ValueError, match=r"moe_lora.*lora\.r > 0"):
+            self._cfg("classifier", classifier_lora=True, r=0)
+
+
 class TestNoShippedConfigNeededStaging:
     """The precondition the issue names: if a shipped config had set the flag on
     one of these tasks, the standing rule would be warn-and-ignore this release
@@ -339,4 +377,8 @@ class TestNoShippedConfigNeededStaging:
             "a shipped config sets moe_lora on a task this PR wires or refuses; the "
             "standing rule is warn-and-ignore for a release first: " + "; ".join(offenders)
         )
-        assert tasks_seen, "no shipped recipe uses any of these tasks -- sweep broke"
+        # A floor, not just "non-empty" (#1148 review nit): these six are the swept
+        # tasks the recipe catalogue uses today. If the sweep stops matching them,
+        # it is no longer checking what it claims to.
+        expected = {"asr", "embedding", "ipo", "online_dpo", "ppo", "reward_model"}
+        assert tasks_seen >= expected, f"sweep missed {sorted(expected - tasks_seen)}"

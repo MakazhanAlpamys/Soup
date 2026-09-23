@@ -4695,9 +4695,23 @@ class SoupConfig(BaseModel):
     def _validate_moe_lora_task(self) -> "SoupConfig":
         """#1151 — ``moe_lora`` selects expert-FFN LoRA targets, so it is refused
         where no trainer can act on it: ``asr`` only ever loads Whisper, which has
-        no experts, and ``moe_lora_routing`` builds no LoRA adapter at all."""
+        no experts, and ``moe_lora_routing`` builds no LoRA adapter at all. The
+        classifier family reads it only on its opt-in adapter path
+        (``classifier_lora: true`` with ``lora.r > 0``, as ``trainer/classifier.py``
+        decides); without it that trainer full-fine-tunes, and there is no adapter
+        for the flag to select targets for."""
         if not self.training.moe_lora:
             return self
+        tcfg = self.training
+        if self.task in ("classifier", "reranker", "cross_encoder") and not (
+            getattr(tcfg, "classifier_lora", False) and tcfg.lora.r > 0
+        ):
+            raise ValueError(
+                f"training.moe_lora is not applied by task={self.task!r} unless "
+                "training.classifier_lora is true and training.lora.r > 0: without them that "
+                "trainer full-fine-tunes and builds no adapter for the flag to select. Set "
+                "classifier_lora: true, or remove moe_lora."
+            )
         why = {
             "asr": "that trainer loads Whisper, which has no expert layers",
             "moe_lora_routing": "that trainer routes between existing adapters "
