@@ -362,6 +362,22 @@ def test_provenance_correction_does_not_invalidate_resume_or_restore(tmp_path):
     assert int(restored.model.layers[0].self_attn.q_proj.quest_activation_bits) == 4
 
 
+def test_v1_local_sidecar_restores_without_the_original_base_directory():
+    from soup_cli.utils.quest import install_mixed_quest, restore_mixed_quest
+
+    source = _tiny_litellama()
+    historical = install_mixed_quest(
+        source,
+        activation_scales=_scales(source),
+        base_model="C:/Users/old-account/models/base",
+        calibration_sha256=_TEST_CALIBRATION_SHA256,
+        format_version=1,
+    )
+    target = _tiny_litellama()
+    assert restore_mixed_quest(target, historical) is target
+    assert int(target.model.layers[0].self_attn.q_proj.quest_activation_bits) == 4
+
+
 def test_quantizer_matches_the_retained_grid_and_trust_gradient():
     import torch
 
@@ -1009,7 +1025,7 @@ def test_train_validates_resume_and_rewrites_final_metadata(monkeypatch, tmp_pat
     monkeypatch.setattr(
         quest,
         "validate_resume_metadata",
-        lambda checkpoint, value: events.append(("resume", checkpoint, value)),
+        lambda checkpoint, value, **kwargs: events.append(("resume", checkpoint, value, kwargs)),
     )
     monkeypatch.setattr(
         quest,
@@ -1019,7 +1035,12 @@ def test_train_validates_resume_and_rewrites_final_metadata(monkeypatch, tmp_pat
 
     result = wrapper.train(resume_from_checkpoint="checkpoint-4")
     assert events[:5] == [
-        ("resume", "checkpoint-4", metadata),
+        (
+            "resume",
+            "checkpoint-4",
+            metadata,
+            {"legacy_base_model": "ahxt/LiteLlama-460M-1T"},
+        ),
         ("metadata", str(tmp_path), metadata),
         ("train", "checkpoint-4"),
         ("save", str(tmp_path)),
@@ -1033,7 +1054,9 @@ def test_train_validates_resume_and_rewrites_final_metadata(monkeypatch, tmp_pat
     monkeypatch.setattr(
         quest,
         "validate_resume_metadata",
-        lambda checkpoint, value: (_ for _ in ()).throw(ValueError("resume route mismatch")),
+        lambda checkpoint, value, **kwargs: (
+            _ for _ in ()
+        ).throw(ValueError("resume route mismatch")),
     )
     with pytest.raises(ValueError, match="resume route mismatch"):
         wrapper.train(resume_from_checkpoint="checkpoint-5")

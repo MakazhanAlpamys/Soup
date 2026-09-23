@@ -120,6 +120,23 @@ and A16 route, clipping scale, calibration-row digest, transform, grid,
 surrogate, and route provenance. The provenance explains why this topology was
 selected; it makes no training-quality claim about the artifact beside it.
 Resume is refused if the executable route metadata differs.
+For Hub models, `base_model` remains the repo ID. For a local base, new
+format-v2 metadata records a `local-sha256:` identity derived from the
+`config.json`, optional `generation_config.json`, standard tokenizer assets,
+and the weight file that Transformers selects (or its index and referenced
+shards). The identity uses
+relative file names and content, so moving the same base keeps resume valid;
+changing a selected file refuses resume. Soup checks the identity before and
+after loading the model. The sidecar and `config.json["soup_quest"]` contain
+the identity, not the source directory.
+Local models or tokenizers using custom `auto_map` code are refused by this
+fingerprint route because code loaded from elsewhere would not be covered.
+
+Format-v1 sidecars remain readable. Since they did not record a content hash,
+their first resume still compares the original base path string; a successful
+resume writes v2 metadata for subsequent checkpoints. A v1 artifact cannot
+prove that a relocated base is the same one, and existing v1 sidecars may
+already disclose the old local path.
 Because generic Transformers cannot infer fake-quant execution from the master
 weights, load the executable route explicitly:
 

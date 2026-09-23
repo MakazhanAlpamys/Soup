@@ -596,6 +596,7 @@ class SFTTrainerWrapper(StreamingSetupMixin):
         self.trainer = None
         self._is_raft = False  # set in setup() when data.format == 'raft'
         self._quest_metadata: Optional[dict[str, Any]] = None
+        self._quest_base_identity_before: Optional[str] = None
         # Resolve once — raises ValueError if model needs custom code but
         # the user did not opt in. Result is cached on the wrapper for use
         # by every from_pretrained() call below.
@@ -1237,6 +1238,7 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             calibrate_activation_scales,
             calibration_rows_sha256,
             install_mixed_quest,
+            resolve_base_model_identity,
             validate_cuda_hardware,
         )
 
@@ -1257,10 +1259,14 @@ class SFTTrainerWrapper(StreamingSetupMixin):
         ]
         calibration_sha256 = calibration_rows_sha256(calibration_rows)
         scales = calibrate_activation_scales(self.model, calibration_rows)
+        base_identity = resolve_base_model_identity(self.config.base)
+        before = getattr(self, "_quest_base_identity_before", None)
+        if before is not None and before != base_identity:
+            raise ValueError("QuEST local base changed while the model was loading")
         self._quest_metadata = install_mixed_quest(
             self.model,
             activation_scales=scales,
-            base_model=self.config.base,
+            base_model=base_identity,
             calibration_sha256=calibration_sha256,
         )
         # Store a second copy in HF config so generic artifact inspection says
@@ -1517,9 +1523,10 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             # several visible cards; this first engineering slice is explicitly
             # single-GPU and its dense Hadamard route has not been measured
             # under DDP, DataParallel, DeepSpeed or FSDP.
-            from soup_cli.utils.quest import validate_cuda_hardware
+            from soup_cli.utils.quest import resolve_base_model_identity, validate_cuda_hardware
 
             validate_cuda_hardware()
+            self._quest_base_identity_before = resolve_base_model_identity(cfg.base)
 
         # Liger Kernel — apply fused ops BEFORE model loading
         if tcfg.use_liger:
@@ -2184,7 +2191,11 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             from soup_cli.utils.quest import validate_resume_metadata, write_metadata
 
             if resume_from_checkpoint is not None:
-                validate_resume_metadata(resume_from_checkpoint, self._quest_metadata)
+                validate_resume_metadata(
+                    resume_from_checkpoint,
+                    self._quest_metadata,
+                    legacy_base_model=self.config.base,
+                )
             # Write only after a resumed checkpoint has proved compatible. A
             # rejected resume must not overwrite the root artifact's previous
             # route declaration during setup.
