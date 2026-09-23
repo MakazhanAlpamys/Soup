@@ -1035,17 +1035,27 @@ class StreamPrefetcher:
             self.tail_prefetch()
             self.tail_prefetched = True
         # #975 — layer 0 reached going backward is the last decoder recompute
-        # of this step's backward pass. `lm_head`'s own backward Node has
-        # already been dispatched by this point (it sits between the loss and
-        # every decoder layer in the graph, so the autograd engine calls it
-        # first), and dispatch — not GPU completion — is what the saved-tensor
-        # version counter checks against; overwriting the shared slot here
-        # cannot invalidate a check that already ran. The embedding's own
-        # backward reads indices, never the weight values (nothing holds this
-        # slot's bytes past its lookup), so it never checks this version at
-        # all. `_prime()` still issues this same load unconditionally at the
-        # next step's start — this only makes that call a same-owner no-op on
-        # the hot path, by getting there first with time to overlap.
+        # of this step's backward pass, so this refills the shared slot with
+        # the embedding while the backward is still running. Two separate
+        # things make that safe, and only the second protects the GPU:
+        #
+        # * CPU side: `lm_head`'s backward Node sits between the loss and every
+        #   decoder layer, so the autograd engine has already dispatched it, and
+        #   the saved-tensor version check happens at dispatch. The embedding's
+        #   own backward reads indices, never the weight values, so it never
+        #   checks this slot's version at all.
+        # * GPU side: when the CPU reaches layer 0, the head's backward GEMM can
+        #   still be queued on the compute stream, reading this slot. What
+        #   orders the refill after it is `stream.wait_stream(torch.cuda.
+        #   current_stream())` in `LargeLayerBufferPool.load_async`, which makes
+        #   the copy stream wait for everything already enqueued on the compute
+        #   stream. Without that wait the refill can overwrite bytes the head's
+        #   backward has not read yet, and the gradients come out silently
+        #   wrong from the second step on. Keep it if `load_async` is touched.
+        #
+        # `_prime()` still issues this same load unconditionally at the next
+        # step's start — this only makes that call a same-owner no-op on the
+        # hot path, by getting there first with time to overlap.
         if (
             self.direction == -1
             and idx == 0
