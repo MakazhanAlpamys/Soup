@@ -121,6 +121,12 @@ soup loop replay iter-20260515T120000-abcdef01 --extract ./iter-dump
 # Background subprocess (writes PID, no shell)
 soup loop watch --detach
 
+# The deploy stage activates the adapter on SOUP_LOOP_SERVE_ENDPOINT. A server
+# started with --tool-auth-token requires that token on the adapter routes, so
+# give the loop the same one: --tool-auth-token, or SOUP_TOOL_AUTH_TOKEN to keep
+# it out of the shell history. A --detach child gets it through its environment.
+SOUP_LOOP_SERVE_ENDPOINT=https://192.168.1.5:8000 SOUP_TOOL_AUTH_TOKEN="$TOKEN" soup loop watch --detach
+
 # Promote a canary at 5% traffic with auto-rollback on MAJOR verdict
 soup loop canary registry://candidate --traffic 5% --autoroll-on-regress
 

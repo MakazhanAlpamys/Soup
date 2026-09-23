@@ -1683,6 +1683,18 @@ def _create_app(
                 status_code=401, detail="Invalid or missing bearer token"
             )
 
+    def _check_adapter_auth(authorization: Optional[str] = Header(default=None)) -> None:
+        """#1139: the adapter hot-swap needs the tool token once one is configured.
+
+        Off-loopback, ``soup serve`` refuses to start without
+        ``--tool-auth-token``, so a configured token is what protects the
+        server; without this check anyone whose Host header names the bind
+        could switch the served adapter. With no token configured (the
+        loopback default) the route stays open, as before.
+        """
+        if auth_token:
+            _check_tool_auth(authorization)
+
     from soup_cli.utils.metrics import ServerMetrics
 
     app = FastAPI(title="Soup Inference Server", version="1.0.0")
@@ -1770,7 +1782,10 @@ def _create_app(
             "active": current,
         }
 
-    @app.post("/v1/adapters/activate/{name}", dependencies=[Depends(_check_local_request)])
+    @app.post(
+        "/v1/adapters/activate/{name}",
+        dependencies=[Depends(_check_local_request), Depends(_check_adapter_auth)],
+    )
     def activate_adapter(name: str = FPath(..., pattern=r"^[a-zA-Z0-9][a-zA-Z0-9\-]*$")):
         """Hot-swap the active adapter. Name must be in the loaded map."""
         if not _adapter_map:
@@ -1786,7 +1801,10 @@ def _create_app(
             active_state["active"] = name
         return {"active": name, "status": "ok"}
 
-    @app.post("/v1/adapters/deactivate", dependencies=[Depends(_check_local_request)])
+    @app.post(
+        "/v1/adapters/deactivate",
+        dependencies=[Depends(_check_local_request), Depends(_check_adapter_auth)],
+    )
     def deactivate_adapter():
         """Return to base model (clear active adapter)."""
         with active_lock:
