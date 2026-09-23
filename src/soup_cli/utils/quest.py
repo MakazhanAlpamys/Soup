@@ -22,6 +22,7 @@ import json
 import math
 import ntpath
 import os
+import posixpath
 import stat
 from functools import lru_cache
 from pathlib import Path, PurePosixPath
@@ -116,8 +117,9 @@ def _selected_local_model_files(root: Path) -> list[tuple[str, Path]]:
     """Mirror the default local weight choice in AutoModelForCausalLM.from_pretrained.
 
     QuEST supplies no variant, subfolder, or use_safetensors override. A single
-    safetensors file takes precedence over its index, then PyTorch files. Only
-    the selected weights, their index, and model configuration bind the base.
+    safetensors file takes precedence over its index, then PyTorch files. The
+    selected weights, their index, model configuration, and tokenizer inputs
+    bind the base.
     """
     config = root / "config.json"
     if not config.is_file():
@@ -140,6 +142,11 @@ def _selected_local_model_files(root: Path) -> list[tuple[str, Path]]:
         tokenizer_file = root / name
         if tokenizer_file.is_file():
             files.append((name, tokenizer_file))
+    # Transformers also loads named chat templates from this directory. Bind
+    # the relative names as well as the bytes so relocation remains portable.
+    for template in sorted((root / "additional_chat_templates").glob("*.jinja")):
+        if template.is_file():
+            files.append((f"additional_chat_templates/{template.name}", template))
     tokenizer_config = root / "tokenizer_config.json"
     if tokenizer_config.is_file():
         try:
@@ -703,7 +710,7 @@ def validate_metadata(metadata: Any) -> dict[str, Any]:
             value = base_model[len(LOCAL_BASE_PREFIX) :]
             if len(value) != 64 or any(character not in "0123456789abcdef" for character in value):
                 raise ValueError("Invalid QuEST local base_model digest")
-        elif os.path.isabs(base_model) or ntpath.isabs(base_model) or base_model.startswith("."):
+        elif posixpath.isabs(base_model) or ntpath.isabs(base_model) or base_model.startswith("."):
             raise ValueError("QuEST v2 base_model must not contain a local path")
     if metadata["group_size"] != GROUP_SIZE or metadata["weight_bits"] != WEIGHT_BITS:
         raise ValueError("Invalid QuEST W4 group declaration")
@@ -881,6 +888,10 @@ def validate_resume_metadata(
         # source string, so old checkpoints retain that rule on first resume.
         if legacy_base_model is None:
             raise ValueError("QuEST v1 resume requires the original base model reference")
+        if stored["base_model"] != legacy_base_model:
+            raise ValueError(
+                "QuEST v1 resume requires the original base model reference from the checkpoint"
+            )
         if current["base_model"] != resolve_base_model_identity(legacy_base_model):
             raise ValueError("QuEST original base model reference does not match current identity")
         current = {

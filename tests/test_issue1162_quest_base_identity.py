@@ -110,7 +110,9 @@ def test_local_identity_survives_relocation_and_ignores_unread_files(tmp_path):
     checkpoint = tmp_path / "checkpoint"
     write_metadata(checkpoint, _metadata(first))
     validate_resume_metadata(checkpoint, _metadata(resolve_base_model_identity(str(relocated))))
-    assert str(original) not in (checkpoint / "quest_mixed_precision.json").read_text()
+    assert json.dumps(str(original))[1:-1] not in (
+        checkpoint / "quest_mixed_precision.json"
+    ).read_text(encoding="utf-8")
 
 
 def test_setup_writes_only_the_local_digest_into_both_artifact_declarations(tmp_path, monkeypatch):
@@ -151,12 +153,13 @@ def test_setup_writes_only_the_local_digest_into_both_artifact_declarations(tmp_
     wrapper._setup_quest([{"input_ids": [1]}] * 32)
     assert wrapper._quest_metadata["base_model"].startswith("local-sha256:")
     assert wrapper.model.config.soup_quest == wrapper._quest_metadata
-    assert str(base) not in json.dumps(wrapper.model.config.soup_quest)
+    escaped_base = json.dumps(str(base))[1:-1]
+    assert escaped_base not in json.dumps(wrapper.model.config.soup_quest)
     artifact = tmp_path / "artifact"
     wrapper.model.config.save_pretrained(artifact)
     write_metadata(artifact, wrapper._quest_metadata)
-    assert str(base) not in (artifact / "config.json").read_text(encoding="utf-8")
-    assert str(base) not in (artifact / "quest_mixed_precision.json").read_text(encoding="utf-8")
+    assert escaped_base not in (artifact / "config.json").read_text(encoding="utf-8")
+    assert escaped_base not in (artifact / "quest_mixed_precision.json").read_text(encoding="utf-8")
 
     (base / "model.safetensors").write_bytes(b"changed-after-model-load")
     with pytest.raises(ValueError, match="changed while the model was loading"):
@@ -193,6 +196,74 @@ def test_tokenizer_change_at_the_same_path_is_refused(tmp_path):
     first = resolve_base_model_identity(str(base))
     (base / "tokenizer.json").write_text('{"version":"1.1"}', encoding="utf-8")
     assert resolve_base_model_identity(str(base)) != first
+
+
+def test_additional_chat_template_change_is_refused_after_relocation(tmp_path):
+    base = _base(tmp_path / "base")
+    templates = base / "additional_chat_templates"
+    templates.mkdir()
+    (templates / "tool_use.jinja").write_text("[A]{{ message }}", encoding="utf-8")
+    first = resolve_base_model_identity(str(base))
+
+    relocated = tmp_path / "relocated"
+    shutil.copytree(base, relocated)
+    assert resolve_base_model_identity(str(relocated)) == first
+
+    (relocated / "additional_chat_templates" / "tool_use.jinja").write_text(
+        "[B-CHANGED]{{ message }}", encoding="utf-8"
+    )
+    changed = resolve_base_model_identity(str(relocated))
+    assert changed != first
+    (relocated / "additional_chat_templates" / "analysis.jinja").write_text(
+        "{{ message }}", encoding="utf-8"
+    )
+    assert resolve_base_model_identity(str(relocated)) != changed
+
+
+def test_additional_chat_template_identity_tracks_real_tokenizer_rendering(tmp_path):
+    from tokenizers import Tokenizer, models
+    from transformers import AutoTokenizer, PreTrainedTokenizerFast
+
+    base = _base(tmp_path / "base")
+    tokenizer = PreTrainedTokenizerFast(
+        tokenizer_object=Tokenizer(models.WordLevel({"[UNK]": 0}, unk_token="[UNK]")),
+        unk_token="[UNK]",
+    )
+    tokenizer.chat_template = "[DEFAULT]{{ messages[0]['content'] }}"
+    tokenizer.save_pretrained(base)
+    templates = base / "additional_chat_templates"
+    templates.mkdir()
+    tool_use = templates / "tool_use.jinja"
+    tool_use.write_text("[A]{{ messages[0]['content'] }}", encoding="utf-8")
+
+    messages = [{"role": "user", "content": "hi"}]
+    tools = [{"type": "function", "function": {"name": "noop", "parameters": {}}}]
+    first = resolve_base_model_identity(str(base))
+    assert (
+        AutoTokenizer.from_pretrained(base).apply_chat_template(
+            messages, tools=tools, tokenize=False
+        )
+        == "[A]hi"
+    )
+
+    tool_use.write_text("[B-CHANGED]{{ messages[0]['content'] }}", encoding="utf-8")
+    assert (
+        AutoTokenizer.from_pretrained(base).apply_chat_template(
+            messages, tools=tools, tokenize=False
+        )
+        == "[B-CHANGED]hi"
+    )
+    assert resolve_base_model_identity(str(base)) != first
+
+
+def test_custom_model_with_untracked_code_is_refused(tmp_path):
+    base = _base(tmp_path / "base")
+    (base / "config.json").write_text(
+        '{"model_type":"llama","auto_map":{"AutoModelForCausalLM":"custom.Model"}}',
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="standard model config"):
+        resolve_base_model_identity(str(base))
 
 
 def test_custom_tokenizer_with_untracked_code_is_refused(tmp_path):
@@ -232,6 +303,64 @@ def test_shard_index_rejects_paths_outside_the_selected_base(tmp_path, shard_nam
         resolve_base_model_identity(str(base))
 
 
+def test_shard_index_size_and_count_limits_are_enforced(tmp_path):
+    base = _base(tmp_path / "base", sharded=True)
+    index = base / "model.safetensors.index.json"
+    index.write_bytes(b" " * (4 * 1024 * 1024 + 1))
+    with pytest.raises(ValueError, match="exceeds 4 MiB"):
+        resolve_base_model_identity(str(base))
+
+    index.write_text(
+        json.dumps({"weight_map": {str(i): f"shard-{i}.safetensors" for i in range(1025)}}),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="too many shards"):
+        resolve_base_model_identity(str(base))
+
+
+def test_changed_during_hash_is_refused(tmp_path, monkeypatch):
+    import soup_cli.utils.quest as quest
+
+    weights = _base(tmp_path / "base") / "model.safetensors"
+    original_fstat = quest.os.fstat
+    reads = 0
+
+    def changed_fstat(fd):
+        nonlocal reads
+        result = original_fstat(fd)
+        reads += 1
+        if reads == 2:
+            return SimpleNamespace(
+                st_dev=result.st_dev,
+                st_ino=result.st_ino,
+                st_size=result.st_size + 1,
+                st_mtime_ns=result.st_mtime_ns,
+            )
+        return result
+
+    monkeypatch.setattr(quest.os, "fstat", changed_fstat)
+    with pytest.raises(ValueError, match="changed during fingerprinting"):
+        quest._hash_local_file(weights)
+
+
+def test_base_move_during_hash_is_refused(tmp_path, monkeypatch):
+    import soup_cli.utils.quest as quest
+
+    base = _base(tmp_path / "base")
+    original_realpath = quest.os.path.realpath
+    reads = 0
+
+    def changed_realpath(path):
+        nonlocal reads
+        reads += 1
+        result = original_realpath(path)
+        return result + "-moved" if reads == 2 else result
+
+    monkeypatch.setattr(quest.os.path, "realpath", changed_realpath)
+    with pytest.raises(ValueError, match="moved during fingerprinting"):
+        resolve_base_model_identity(str(base))
+
+
 def test_bin_fallback_when_no_safetensors_exist(tmp_path):
     base = tmp_path / "base"
     base.mkdir()
@@ -251,7 +380,7 @@ def test_v1_sidecar_remains_readable_with_its_original_path_contract(tmp_path):
 
     current = _metadata(resolve_base_model_identity(str(original)))
     validate_resume_metadata(checkpoint, current, legacy_base_model=str(original))
-    with pytest.raises(ValueError, match="does not match"):
+    with pytest.raises(ValueError, match="v1 resume requires the original base model reference"):
         validate_resume_metadata(checkpoint, current, legacy_base_model=str(tmp_path / "moved"))
     with pytest.raises(ValueError, match="original base model reference"):
         validate_resume_metadata(checkpoint, current)
@@ -283,3 +412,9 @@ def test_v1_reference_cannot_override_a_different_current_base(tmp_path):
 def test_v2_rejects_raw_absolute_paths(absolute):
     with pytest.raises(ValueError, match="base_model"):
         _metadata(absolute)
+
+
+@pytest.mark.parametrize("digest", ["0" * 63, "0" * 63 + "g", "A" * 64])
+def test_v2_rejects_malformed_local_digest(digest):
+    with pytest.raises(ValueError, match="local base_model digest"):
+        _metadata(f"local-sha256:{digest}")

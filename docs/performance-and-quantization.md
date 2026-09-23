@@ -122,9 +122,9 @@ selected; it makes no training-quality claim about the artifact beside it.
 Resume is refused if the executable route metadata differs.
 For Hub models, `base_model` remains the repo ID. For a local base, new
 format-v2 metadata records a `local-sha256:` identity derived from the
-`config.json`, optional `generation_config.json`, standard tokenizer assets,
-and the weight file that Transformers selects (or its index and referenced
-shards). The identity uses
+`config.json`, optional `generation_config.json`, standard tokenizer assets
+(including `additional_chat_templates/*.jinja`), and the weight file that
+Transformers selects (or its index and referenced shards). The identity uses
 relative file names and content, so moving the same base keeps resume valid;
 changing a selected file refuses resume. Soup checks the identity before and
 after loading the model. The sidecar and `config.json["soup_quest"]` contain
