@@ -134,6 +134,56 @@ def test_laya_reward_falls_back_to_completion_and_loads_once(monkeypatch):
     assert load_calls[0][1]["device"] == "cpu"
 
 
+def test_laya_reward_rejects_local_checkpoint_outside_cwd(tmp_path, monkeypatch):
+    workdir = tmp_path / "work"
+    outside = tmp_path / "outside-checkpoint"
+    workdir.mkdir()
+    outside.mkdir()
+    monkeypatch.chdir(workdir)
+
+    config = _config(
+        laya_reward={
+            "checkpoint": str(outside),
+            "question": _LAYA["question"],
+        }
+    )
+    from soup_cli.trainer.laya_reward import build_laya_reward_fn
+
+    with pytest.raises(ValueError, match="checkpoint path must stay under"):
+        build_laya_reward_fn(config.training, "cpu")
+
+
+def test_laya_reward_passes_subfolder_to_loader(monkeypatch):
+    load_calls = []
+
+    class Agent:
+        def predict(self, state, questions):
+            return {"answers": {"urgency": {"score": 1}}}
+
+    def load(checkpoint, **kwargs):
+        load_calls.append((checkpoint, kwargs))
+        return Agent()
+
+    monkeypatch.setitem(sys.modules, "laya", types.SimpleNamespace(load=load))
+    from soup_cli.trainer.laya_reward import build_laya_reward_fn
+
+    config = _config(
+        laya_reward={
+            "checkpoint": "convaiinnovations/laya",
+            "subfolder": "typed-decisions",
+            "question": _LAYA["question"],
+        }
+    )
+    build_laya_reward_fn(config.training, "cuda:0")
+
+    assert load_calls == [
+        (
+            "convaiinnovations/laya",
+            {"device": "cuda:0", "subfolder": "typed-decisions"},
+        )
+    ]
+
+
 def test_laya_reward_rejects_malformed_or_nonfinite_answers(monkeypatch):
     class Agent:
         def predict(self, state, questions):
