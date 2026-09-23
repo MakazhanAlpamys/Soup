@@ -977,7 +977,7 @@ training:
   # grpo_delta: 0.2                   # required when grpo_variant: two_sided (optional for gspo)
   grpo_fp16: true                     # FP16 RL (unsloth parity)
   # Long-context + memory-efficient RL
-  long_context_grpo: true             # wires Tiled MLP when available
+  # long_context_grpo: true           # staged for future Tiled MLP; refused as of v0.77 (#808)
   vllm_sleep_mode: true               # between-rollouts vLLM standby — LIVE (vLLM >= 0.7)
   # Multi-turn agent rollout — openenv is LIVE: your function's rows replace the prompt dataset
   rollout_backend: openenv            # one of: art / ruler / nemo_gym / openenv
@@ -1019,10 +1019,10 @@ data:
   format: llava
 training:
   reward_fn: accuracy
-  vision_grpo: true                    # VLM-RL opt-in
+  # vision_grpo: true                  # staged for VLM-RL; refused as of v0.77 (#808)
 ```
 
-All flags ship as schema gates in v0.50.0; live loss kernels, vLLM sleep-mode plumbing, ART/RULER/NeMo Gym/OpenEnv launchers, and the PRM trainer wrapper land in v0.50.1 — schema accepts the values now so configs are stable.
+All flags shipped as schema gates in v0.50.0; unconsumed staged flags (e.g. `long_context_grpo`, `vision_grpo`) warn in v0.75 and are scheduled for refusal in v0.77 (#808). Live loss kernels, vLLM sleep-mode plumbing, ART/RULER/NeMo Gym/OpenEnv launchers, and the PRM trainer wrapper land in their respective milestones.
 
 
 ## DPO Training

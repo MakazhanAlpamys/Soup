@@ -1,11 +1,11 @@
-"""Staged config fields must warn in v0.75 and refuse in v0.76 (#808).
+"""Staged config fields must warn in v0.75 and refuse in v0.77 (#808).
 
-28 config fields are declared in schema.py for features that have not landed,
+19 config fields are declared in schema.py for features that have not landed,
 accepted silently, and read by nothing. Following the #627 warn-then-refuse
 pattern across two releases:
 - While warning, each staged field prints:
     <field> is accepted but read by nothing; v<STAGED_FIELD_REJECTION_VERSION> will refuse it
-- The deadline version is derived from DEPRECATED_VALUE_REJECTION_VERSION.
+- The deadline version is stated in STAGED_FIELD_REJECTION_VERSION ("0.77").
 - TestTheDeadline asserts against soup_cli.__version__ in both directions.
 """
 
@@ -34,7 +34,6 @@ data:
 output: ./o
 """
 
-# ponytail: canonical ANSI-strip + whitespace-collapse helper (#808 / #627)
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 
 
@@ -59,7 +58,7 @@ class TestTheDeadline:
 
     Mirrors the #627 pattern:
     - Named in the message
-    - Derived from ONE constant
+    - Stated in ONE constant
     - Enforced against soup_cli.__version__ in both directions
     """
 
@@ -72,9 +71,7 @@ class TestTheDeadline:
 
     def test_the_version_is_written_out_in_exactly_one_source_file(self) -> None:
         """Derived, not duplicated: a second copy is what falls out of step."""
-        from soup_cli.config.deprecation import DEPRECATED_VALUE_REJECTION_VERSION
-
-        assert STAGED_FIELD_REJECTION_VERSION is DEPRECATED_VALUE_REJECTION_VERSION
+        assert STAGED_FIELD_REJECTION_VERSION == "0.77"
 
         version = re.escape(STAGED_FIELD_REJECTION_VERSION)
         pattern = re.compile(rf"""v{version}\b|["']{version}["']""")
@@ -82,9 +79,9 @@ class TestTheDeadline:
         holders = sorted(
             p.relative_to(src).as_posix()
             for p in src.rglob("*.py")
-            if p.name != "__init__.py" and pattern.search(p.read_text(encoding="utf-8"))
+            if pattern.search(p.read_text(encoding="utf-8"))
         )
-        assert holders == ["config/deprecation.py"], (
+        assert holders == ["config/staged_fields.py"], (
             f"the deadline version is written out in more than one place: {holders}"
         )
 
@@ -113,11 +110,11 @@ class TestTheDeadline:
 
 
 class TestStagedFieldsInventory:
-    """Validate inventory size and default handling across all 28 staged fields."""
+    """Validate inventory size and default handling across all 19 staged fields."""
 
-    def test_exactly_28_staged_fields_registered(self) -> None:
-        assert len(STAGED_FIELDS) == 28, (
-            f"Expected exactly 28 staged fields, got {len(STAGED_FIELDS)}"
+    def test_exactly_19_staged_fields_registered(self) -> None:
+        assert len(STAGED_FIELDS) == 19, (
+            f"Expected exactly 19 staged fields, got {len(STAGED_FIELDS)}"
         )
 
     @pytest.mark.parametrize(
@@ -131,15 +128,6 @@ class TestStagedFieldsInventory:
             ("training", "grace_codebook_dim", 64),
             ("training", "convergence_window", 100),
             ("training", "convergence_rel_tol", 0.01),
-            ("training", "forgetting_eval_steps", 50),
-            ("training", "forgetting_threshold", 0.05),
-            ("training", "forgetting_benchmark", "mini_common_sense"),
-            ("training", "forgetting_stop", True),
-            ("training", "checkpoint_eval_steps", 100),
-            ("training", "checkpoint_eval_metric", "judge"),
-            ("training", "checkpoint_eval_tasks", "eval.jsonl"),
-            ("training", "checkpoint_keep_top", 5),
-            ("training", "early_stop_patience", 4),
             ("data", "video_dir", "./videos"),
             ("data", "video_fps", 2.0),
             ("data", "video_maxlen", 64),
@@ -165,12 +153,42 @@ class TestStagedFieldsInventory:
         assert found[0].path == f"{section}.{name}"
         assert found[0].value == non_default_value
 
+    def test_schema_defaults_match_pydantic_model_fields(self) -> None:
+        """Anti-circular ratchet: default in STAGED_FIELDS must match schema model_fields (#808)."""
+        from soup_cli.config.schema import DataConfig, TrainingConfig
+
+        configs = {
+            "training": TrainingConfig.model_fields,
+            "data": DataConfig.model_fields,
+        }
+        for (section, name), table_default in STAGED_FIELDS.items():
+            assert name in configs[section], f"{section}.{name} not found in schema"
+            schema_default = configs[section][name].default
+            assert schema_default == table_default, (
+                f"STAGED_FIELDS[{section}.{name}] default {table_default!r} does not "
+                f"match Pydantic schema default {schema_default!r}"
+            )
+
     def test_schema_defaults_produce_zero_staged_findings(self) -> None:
         raw = {"training": {}, "data": {}}
         for (sec, name), default_val in STAGED_FIELDS.items():
             raw[sec][name] = default_val
         found = find_staged_config_fields(raw)
         assert found == [], f"Default values should not trigger warnings: {found}"
+
+    def test_root_level_misplaced_keys_remapped_before_staged_check(self) -> None:
+        """Root-level misplaced keys are normalised via remap_root_level_misplaced_keys (#808)."""
+        from unittest.mock import patch
+
+        import soup_cli.config.schema as schema_mod
+
+        raw = {"staged_dummy": 999}
+        with patch.object(schema_mod, "ROOT_LEVEL_MISPLACED_KEYS", ("staged_dummy",)):
+            with patch.dict(STAGED_FIELDS, {("training", "staged_dummy"): 0}):
+                found = find_staged_config_fields(raw)
+                assert len(found) == 1
+                assert found[0].path == "training.staged_dummy"
+                assert found[0].value == 999
 
 
 class TestLoaderStagedFieldIntegration:

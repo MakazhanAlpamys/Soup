@@ -666,7 +666,7 @@ data:
     - dolma.jsonl
     - wikipedia.jsonl
   interleave: { strategy: probs, probs: [0.7, 0.3] }   # also: concat / under / over
-  eval_on_each_dataset: true
+  # eval_on_each_dataset: true                         # staged; refused as of v0.77 (#808)
 ```
 
 `data.train` as a list requires `data.interleave` (and vice versa). `training.packing` /
@@ -758,15 +758,16 @@ that still reflects the original, un-rebalanced skew, not the mixture train now 
 data:
   add_new_tokens: ["<reasoning>", "</reasoning>"]
   new_special_tokens: ["<|tool_call|>"]
-  resize_vocab: true
   mask_history: true
-  split_thinking: true            # Qwen3-style <think> reasoning-block masking
-  image_min_pixels: 256
-  image_max_pixels: 4096
-  image_resize_algorithm: bicubic
-  video_fps: 24
-  video_maxlen: 32
-  video_dir: ./videos
+  # Staged fields below warn in v0.75 and are scheduled for refusal in v0.77 (#808):
+  # resize_vocab: true
+  # split_thinking: true            # Qwen3-style <think> reasoning-block masking
+  # image_min_pixels: 256
+  # image_max_pixels: 4096
+  # image_resize_algorithm: bicubic
+  # video_fps: 24
+  # video_maxlen: 32
+  # video_dir: ./videos
 ```
 
 **AOT preprocessing:**

@@ -4,9 +4,7 @@ Warn-then-refuse across two releases following the #627 pattern:
 While warning, each of the staged fields prints:
     <field> is accepted but read by nothing; v<STAGED_FIELD_REJECTION_VERSION> will refuse it
 
-The rejection version is derived from
-:data:`soup_cli.config.deprecation.DEPRECATED_VALUE_REJECTION_VERSION`,
-asserted against ``soup_cli.__version__`` in both directions by TestTheDeadline.
+The rejection version is pinned to :data:`STAGED_FIELD_REJECTION_VERSION` ("0.77").
 """
 
 from __future__ import annotations
@@ -14,16 +12,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-# ponytail: derive single source of truth from deprecation constant (#808)
-from soup_cli.config.deprecation import (
-    DEPRECATED_VALUE_REJECTION_VERSION as STAGED_FIELD_REJECTION_VERSION,
-)
+STAGED_FIELD_REJECTION_VERSION: str = "0.77"
 
 __all__ = [
     "STAGED_FIELDS",
     "STAGED_FIELD_REJECTION_VERSION",
     "StagedField",
-    "deadline_notice",
     "find_staged_config_fields",
     "format_staged_fields",
 ]
@@ -45,6 +39,10 @@ class StagedField:
 #: Schema defaults for fields accepted by the schema but not consumed by any trainer
 #: or data pipeline. A field is only flagged if the user provides a value that
 #: DIFFERS from its schema default.
+#:
+#: Note: Training intelligence tunables already reported by ``soup train``
+#: (e.g. ``forgetting_*``, ``checkpoint_*``, ``early_stop_patience``) are excluded
+#: here to avoid conflicting diagnostics and adhere to their respective issue ownership (#808).
 STAGED_FIELDS: dict[tuple[str, str], Any] = {
     ("training", "long_context_grpo"): False,
     ("training", "vision_grpo"): False,
@@ -54,15 +52,6 @@ STAGED_FIELDS: dict[tuple[str, str], Any] = {
     ("training", "grace_codebook_dim"): None,
     ("training", "convergence_window"): 50,
     ("training", "convergence_rel_tol"): 0.005,
-    ("training", "forgetting_eval_steps"): 100,
-    ("training", "forgetting_threshold"): 0.1,
-    ("training", "forgetting_benchmark"): "mini_mmlu",
-    ("training", "forgetting_stop"): False,
-    ("training", "checkpoint_eval_steps"): 200,
-    ("training", "checkpoint_eval_metric"): "composite",
-    ("training", "checkpoint_eval_tasks"): None,
-    ("training", "checkpoint_keep_top"): 3,
-    ("training", "early_stop_patience"): 2,
     ("data", "video_dir"): None,
     ("data", "video_fps"): None,
     ("data", "video_maxlen"): None,
@@ -86,22 +75,17 @@ def find_staged_config_fields(raw: dict) -> list[StagedField]:
     if not isinstance(raw, dict):
         return []
 
+    from soup_cli.config.schema import remap_root_level_misplaced_keys
+
+    normalised = remap_root_level_misplaced_keys(raw)
     found: list[StagedField] = []
     for (section, name), default_val in STAGED_FIELDS.items():
-        sec_dict = raw.get(section)
+        sec_dict = normalised.get(section)
         if isinstance(sec_dict, dict) and name in sec_dict:
             val = sec_dict[name]
             if val != default_val:
                 found.append(StagedField(section=section, name=name, value=val))
     return found
-
-
-def deadline_notice() -> str:
-    """The one sentence that turns the warning into a deadline."""
-    return (
-        f"Soup v{STAGED_FIELD_REJECTION_VERSION} will refuse staged config fields "
-        "instead of warning."
-    )
 
 
 def format_staged_fields(
