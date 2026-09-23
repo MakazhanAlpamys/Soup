@@ -982,6 +982,7 @@ class StreamPrefetcher:
         n_layers: int,
         stream: Any = None,
         tail_prefetch: Any = None,
+        backward_tail_prefetch: Any = None,
     ):
         self.pool = pool
         self.source = source
@@ -992,12 +993,23 @@ class StreamPrefetcher:
         self.primes = 0
         self.tail_prefetch = tail_prefetch
         self.tail_prefetched = False
+        # #975 — the embedding's `_prime`-time load pays a full head-sized H2D
+        # copy with nothing to overlap it against, because it fires right as
+        # the next step's forward starts and is needed almost immediately.
+        # This callback lets the caller issue that SAME load earlier, once
+        # layer 0's backward recompute confirms this step's decoder walk is
+        # done, so it can overlap with whatever backward work is still ahead
+        # (the embedding's own backward, optimiser bookkeeping) instead of
+        # blocking the next step's first op.
+        self.backward_tail_prefetch = backward_tail_prefetch
+        self.backward_tail_prefetched = False
 
     def prime(self) -> None:
         """Start of a forward pass: layer 0, walking upward."""
         self.prev = None
         self.direction = 1
         self.primes += 1
+        self.backward_tail_prefetched = False
         self.tail_prefetched = False
         self.pool.load_async(0, self.source, self.stream)
 
@@ -1022,6 +1034,26 @@ class StreamPrefetcher:
         ):
             self.tail_prefetch()
             self.tail_prefetched = True
+        # #975 — layer 0 reached going backward is the last decoder recompute
+        # of this step's backward pass. `lm_head`'s own backward Node has
+        # already been dispatched by this point (it sits between the loss and
+        # every decoder layer in the graph, so the autograd engine calls it
+        # first), and dispatch — not GPU completion — is what the saved-tensor
+        # version counter checks against; overwriting the shared slot here
+        # cannot invalidate a check that already ran. The embedding's own
+        # backward reads indices, never the weight values (nothing holds this
+        # slot's bytes past its lookup), so it never checks this version at
+        # all. `_prime()` still issues this same load unconditionally at the
+        # next step's start — this only makes that call a same-owner no-op on
+        # the hot path, by getting there first with time to overlap.
+        if (
+            self.direction == -1
+            and idx == 0
+            and not self.backward_tail_prefetched
+            and self.backward_tail_prefetch is not None
+        ):
+            self.backward_tail_prefetch()
+            self.backward_tail_prefetched = True
 
 
 # ==========================================================================
@@ -2475,12 +2507,17 @@ def install_streaming(
         if large_pool is not None and output_key is not None:
             large_pool.load_async(output_key, source, stream)
 
+    def _prefetch_embed() -> None:
+        if large_pool is not None and embed_key is not None:
+            large_pool.load_async(embed_key, source, stream)
+
     prefetcher = StreamPrefetcher(
         pool,
         source,
         n_layers,
         stream,
         tail_prefetch=_prefetch_output if large_pool is not None else None,
+        backward_tail_prefetch=_prefetch_embed if large_pool is not None else None,
     )
 
     layer_cls = _streamed_layer_class()
@@ -2537,6 +2574,11 @@ def install_streaming(
                 raise RuntimeError("could not install the streamed output head")
 
     def _prime(*_args: Any, **_kwargs: Any) -> None:
+        # #975 — the backward-tail prefetch above already loads this for every
+        # step but the first, so `load_async`'s own-owner check makes this a
+        # no-op on the hot path. Kept unconditional: it is the only load for
+        # step 0, and for any forward that never triggers layer 0's backward
+        # (eval, a frozen embedding with no LoRA reaching it).
         if large_pool is not None and embed_key is not None:
             large_pool.load_async(embed_key, source, stream)
         prefetcher.prime()
