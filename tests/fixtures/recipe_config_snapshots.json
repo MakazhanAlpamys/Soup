@@ -136,6 +136,7 @@
     "training.kto_beta": 0.1,
     "training.kv_cache_type": null,
     "training.label_names": null,
+    "training.laya_reward": null,
     "training.lisa_enabled": false,
     "training.lisa_interval_steps": 20,
     "training.lisa_num_layers": 2,

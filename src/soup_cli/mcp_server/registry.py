@@ -657,6 +657,7 @@ PLAN_INPUT_FIELDS: tuple[str, ...] = (
     "training.reward_fn",
     "training.prm_reward",
     "training.reward_model",
+    "training.laya_reward.checkpoint",
     "training.teacher_model",
     "training.minillm_pretrain_anchor_path",
     "training.mole_task_adapters",

@@ -206,3 +206,23 @@ def test_grpo_selects_laya_reward(monkeypatch):
     from soup_cli.trainer.grpo import _select_reward_fn
 
     assert _select_reward_fn(_config().training, "cpu", False) is sentinel
+
+
+def test_ppo_uses_laya_reward_callable_before_reward_fn_branch(monkeypatch):
+    sentinel = object()
+    monkeypatch.setattr(
+        "soup_cli.trainer.laya_reward.build_laya_reward_fn",
+        lambda tcfg, device: sentinel,
+    )
+    monkeypatch.setattr(
+        "soup_cli.trainer.rewards.load_reward_fn",
+        lambda *args, **kwargs: pytest.fail("PPO must select the Laya branch first"),
+    )
+    from soup_cli.trainer.ppo import PPOTrainerWrapper
+
+    config = _config(task="ppo", reward_fn=None)
+    wrapper = PPOTrainerWrapper(config, device="cpu")
+    wrapper._setup_reward(config, config.training)
+
+    assert wrapper.reward_fn is sentinel
+    assert wrapper.reward_model_instance is None
