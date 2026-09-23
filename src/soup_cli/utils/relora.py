@@ -59,6 +59,7 @@ class ReLoRAPolicy:
     def lr_warmup_steps(self) -> int:
         return min(100, max(1, self.steps // 10))
 
+
 def magnitude_prune_tensor(tensor: Any, prune_ratio: float) -> Any:
     """Zero smallest-magnitude entries in place with exact keep-count (#693).
 
@@ -197,15 +198,8 @@ def _iter_lora_modules(model: Any) -> Iterator[Tuple[Any, str]]:
             continue
         if not (hasattr(module, "lora_A") and hasattr(module, "lora_B")):
             continue
-        # PEFT embedding adapters (embed_tokens) expose empty lora_A/lora_B
-        # ModuleDicts plus lora_embedding_A/B. Merging those raises
-        # RuntimeError: adapter 'default' not found in lora_A (available: []).
-        if hasattr(module, "lora_embedding_A") or hasattr(module, "lora_embedding_B"):
-            continue
-        if module.__class__.__name__ in {"Linear", "Conv2d"} and not hasattr(
-            module, "base_layer"
-        ):
-            continue
+        # peft embedding adapters keep an empty lora_A ModuleDict. Linear LoRA
+        # is still merged: peft puts empty embedding dicts on every LoraLayer.
         lora_a = getattr(module, "lora_A", None)
         if isinstance(lora_a, nn.ModuleDict) and len(lora_a) == 0:
             continue
@@ -247,6 +241,12 @@ def merge_reinit_lora_module(
     return weight_a, weight_b
 
 
+def _preflight_writable_bases(model: Any) -> None:
+    """Refuse a restart if any LoRA module's base cannot be merged in-place."""
+    for module, _adapter in _iter_lora_modules(model):
+        _require_writable_base(_resolve_base_weight(module))
+
+
 def _assert_optimizer_resettable(optimizer: Any) -> None:
     state = getattr(optimizer, "state", None)
     if state is None:
@@ -272,6 +272,8 @@ def _merge_reinit_and_reset(
 ) -> None:
     if optimizer is not None:
         _assert_optimizer_resettable(optimizer)
+
+    _preflight_writable_bases(model)
 
     lora_params = []
     for module, adapter in _iter_lora_modules(model):

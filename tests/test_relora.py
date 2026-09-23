@@ -273,6 +273,52 @@ def _make_fake_lora_module():
     return _Fake()
 
 
+def _make_quantized_lora_module():
+    try:
+        import torch.nn as nn
+    except ImportError:
+        pytest.skip("torch not available")
+
+    class _QuantWeight:
+        quant_state = object()
+
+    class _Fake(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.lora_A = nn.Linear(4, 2, bias=False)
+            self.lora_B = nn.Linear(2, 4, bias=False)
+
+            class _Base:
+                weight = _QuantWeight()
+
+            self.base = _Base()
+
+    return _Fake()
+
+
+def _make_mixed_writable_quantized_parent():
+    try:
+        import torch.nn as nn
+    except ImportError:
+        pytest.skip("torch not available")
+
+    class _Parent(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.first = _make_fake_lora_module()
+            self.second = _make_quantized_lora_module()
+
+    return _Parent()
+
+
+def _single_process_trainer():
+    trainer = MagicMock()
+    trainer.args.world_size = 1
+    trainer.is_deepspeed_enabled = False
+    trainer.is_fsdp_enabled = False
+    return trainer
+
+
 class TestReLoRARestart:
     def test_effective_map_preserved_after_restart(self):
         try:
@@ -413,7 +459,6 @@ class TestMergeReinitAndReset:
         for param in params:
             assert len(opt.state[param]) == 0
 
-
     def test_optimizer_reset_rejected_before_merge(self):
         try:
             import torch
@@ -494,6 +539,48 @@ class TestMergeReinitAndReset:
         assert torch.equal(model.embed.lora_embedding_B, embed_b_before)
         assert not torch.equal(model.linear.base.weight, linear_base_before)
 
+    def test_iter_yields_linear_with_empty_embedding_dicts(self):
+        try:
+            import torch.nn as nn
+        except ImportError:
+            pytest.skip("torch not available")
+        from soup_cli.utils.relora import _iter_lora_modules
+
+        class _LinearWithEmptyEmbedDicts(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.lora_A = nn.ModuleDict({"default": nn.Linear(4, 2, bias=False)})
+                self.lora_B = nn.ModuleDict({"default": nn.Linear(2, 4, bias=False)})
+                self.lora_embedding_A = nn.ParameterDict()
+                self.lora_embedding_B = nn.ParameterDict()
+                self.base_layer = nn.Linear(4, 4, bias=False)
+
+        module = _LinearWithEmptyEmbedDicts()
+        yielded = list(_iter_lora_modules(module))
+        assert len(yielded) == 1
+        assert yielded[0][0] is module
+
+    def test_restart_refuses_partial_when_later_module_quantized(self):
+        try:
+            import torch
+        except ImportError:
+            pytest.skip("torch not available")
+        from soup_cli.utils.relora import _merge_reinit_and_reset
+
+        model = _make_mixed_writable_quantized_parent()
+        with torch.no_grad():
+            model.first.lora_A.weight.fill_(0.1)
+            model.first.lora_B.weight.fill_(0.2)
+            model.first.base.weight.fill_(1.0)
+        before_base = model.first.base.weight.detach().clone()
+        before_b = model.first.lora_B.weight.detach().clone()
+
+        with pytest.raises(RuntimeError, match="quantized or sharded"):
+            _merge_reinit_and_reset(model, None, reset_optimizer=False)
+
+        assert torch.equal(model.first.base.weight, before_base)
+        assert torch.equal(model.first.lora_B.weight, before_b)
+
     def test_wrapped_optimizer_rejected_even_when_reset_false(self):
         try:
             import torch
@@ -519,21 +606,198 @@ class TestMergeReinitAndReset:
 
 def test_attach_relora_callback_warns_prune_ratio_ignored(caplog):
     import logging
-    from types import SimpleNamespace
 
     from soup_cli.utils.peft_wiring import attach_relora_callback
 
-    trainer = MagicMock()
-    tcfg = SimpleNamespace(
-        relora_steps=100,
-        relora_warmup_ratio=0.1,
-        relora_reset_optimizer=True,
-        relora_prune_ratio=0.9,
-    )
+    trainer = _single_process_trainer()
+    tcfg = TrainingConfig(relora_steps=100, relora_prune_ratio=0.9)
     with caplog.at_level(logging.WARNING, logger="soup_cli.utils.peft_wiring"):
         attach_relora_callback(trainer, tcfg)
     assert "relora_prune_ratio" in caplog.text
     assert "ignored" in caplog.text.lower()
+
+
+def test_attach_relora_callback_default_prune_ratio_does_not_warn(caplog):
+    import logging
+
+    from soup_cli.utils.peft_wiring import attach_relora_callback
+
+    trainer = _single_process_trainer()
+    tcfg = TrainingConfig(relora_steps=100)
+    assert "relora_prune_ratio" not in tcfg.model_fields_set
+    with caplog.at_level(logging.WARNING, logger="soup_cli.utils.peft_wiring"):
+        attach_relora_callback(trainer, tcfg)
+    assert "relora_prune_ratio" not in caplog.text
+
+
+def test_attach_relora_refuses_world_size_gt_1():
+    from soup_cli.utils.peft_wiring import attach_relora_callback
+
+    trainer = _single_process_trainer()
+    trainer.args.world_size = 2
+    with pytest.raises(ValueError, match="world_size"):
+        attach_relora_callback(trainer, TrainingConfig(relora_steps=100))
+    trainer.add_callback.assert_not_called()
+
+
+def test_attach_relora_refuses_deepspeed():
+    from soup_cli.utils.peft_wiring import attach_relora_callback
+
+    trainer = _single_process_trainer()
+    trainer.is_deepspeed_enabled = True
+    with pytest.raises(ValueError, match="DeepSpeed"):
+        attach_relora_callback(trainer, TrainingConfig(relora_steps=100))
+    trainer.add_callback.assert_not_called()
+
+
+def test_attach_relora_refuses_fsdp():
+    from soup_cli.utils.peft_wiring import attach_relora_callback
+
+    trainer = _single_process_trainer()
+    trainer.is_fsdp_enabled = True
+    with pytest.raises(ValueError, match="FSDP"):
+        attach_relora_callback(trainer, TrainingConfig(relora_steps=100))
+    trainer.add_callback.assert_not_called()
+
+
+def test_attach_relora_single_process_still_attaches():
+    from soup_cli.utils.peft_wiring import attach_relora_callback
+    from soup_cli.utils.relora import ReLoRACallback
+
+    trainer = _single_process_trainer()
+    assert attach_relora_callback(trainer, TrainingConfig(relora_steps=100)) is True
+    trainer.add_callback.assert_called_once()
+    assert isinstance(trainer.add_callback.call_args[0][0], ReLoRACallback)
+
+
+def test_attach_relora_preflight_rejects_quantized_base():
+    from soup_cli.utils.peft_wiring import attach_relora_callback
+
+    trainer = _single_process_trainer()
+    trainer.model = _make_mixed_writable_quantized_parent()
+    with pytest.raises(RuntimeError, match="quantized or sharded"):
+        attach_relora_callback(trainer, TrainingConfig(relora_steps=100))
+    trainer.add_callback.assert_not_called()
+
+
+class TestReLoRARealPeft:
+    def test_restart_merges_real_peft_linear_skips_embedding(self):
+        try:
+            import torch
+            import torch.nn as nn
+            from peft import LoraConfig, get_peft_model
+            from transformers import LlamaConfig, LlamaForCausalLM
+        except (ImportError, OSError) as exc:
+            pytest.skip(f"torch / transformers / peft not available: {exc}")
+        from soup_cli.utils.relora import (
+            _iter_lora_modules,
+            _merge_reinit_and_reset,
+            _resolve_base_weight,
+            _resolve_lora_weight,
+        )
+
+        torch.manual_seed(0)
+        config = LlamaConfig(
+            vocab_size=32,
+            hidden_size=32,
+            intermediate_size=64,
+            num_hidden_layers=1,
+            num_attention_heads=4,
+            num_key_value_heads=4,
+            max_position_embeddings=32,
+            tie_word_embeddings=False,
+        )
+        try:
+            model = LlamaForCausalLM(config).to(torch.float32).eval()
+            peft_cfg = LoraConfig(
+                r=4,
+                lora_alpha=8,
+                lora_dropout=0.0,
+                bias="none",
+                task_type="CAUSAL_LM",
+                target_modules=["q_proj", "v_proj", "embed_tokens"],
+            )
+            model = get_peft_model(model, peft_cfg)
+            model.eval()
+        except (ImportError, OSError) as exc:
+            pytest.skip(f"torch / transformers / peft not available: {exc}")
+
+        yielded = list(_iter_lora_modules(model))
+        assert len(yielded) == 2
+
+        for module, adapter in yielded:
+            weight_a = _resolve_lora_weight(module, "lora_A", adapter)
+            weight_b = _resolve_lora_weight(module, "lora_B", adapter)
+            with torch.no_grad():
+                weight_a.fill_(0.25)
+                weight_b.fill_(0.5)
+
+        embed_before = {}
+        for name, module in model.named_modules():
+            lora_a = getattr(module, "lora_A", None)
+            if not isinstance(lora_a, nn.ModuleDict) or len(lora_a) != 0:
+                continue
+            if not hasattr(module, "lora_embedding_A"):
+                continue
+            with torch.no_grad():
+                for key, param in module.lora_embedding_A.items():
+                    param.fill_(0.3)
+                    embed_before[(name, "A", key)] = param.detach().clone()
+                for key, param in module.lora_embedding_B.items():
+                    param.fill_(0.4)
+                    embed_before[(name, "B", key)] = param.detach().clone()
+        assert embed_before
+
+        snapshots = []
+        lora_params = []
+        for module, adapter in yielded:
+            weight_a = _resolve_lora_weight(module, "lora_A", adapter)
+            weight_b = _resolve_lora_weight(module, "lora_B", adapter)
+            base = _resolve_base_weight(module)
+            delta = module.get_delta_weight(adapter)
+            snapshots.append(
+                (
+                    module,
+                    adapter,
+                    base.detach().clone(),
+                    delta.detach().clone(),
+                    weight_a.detach().clone(),
+                )
+            )
+            lora_params.extend([weight_a, weight_b])
+
+        input_ids = torch.randint(0, config.vocab_size, (1, 8))
+        with torch.no_grad():
+            before_logits = model(input_ids=input_ids).logits
+
+        opt = torch.optim.AdamW(lora_params, lr=1e-3)
+        for param in lora_params:
+            opt.state[param] = {
+                "exp_avg": torch.ones_like(param),
+                "exp_avg_sq": torch.ones_like(param),
+            }
+
+        _merge_reinit_and_reset(model, opt, reset_optimizer=True)
+
+        for module, adapter, old_base, delta, old_a in snapshots:
+            base = _resolve_base_weight(module)
+            weight_a = _resolve_lora_weight(module, "lora_A", adapter)
+            weight_b = _resolve_lora_weight(module, "lora_B", adapter)
+            assert torch.allclose(base, old_base + delta, atol=1e-5, rtol=1e-5)
+            assert torch.all(weight_b == 0)
+            assert not torch.equal(weight_a, old_a)
+        for param in lora_params:
+            assert len(opt.state[param]) == 0
+
+        with torch.no_grad():
+            after_logits = model(input_ids=input_ids).logits
+        assert torch.allclose(before_logits, after_logits, atol=1e-5, rtol=1e-5)
+
+        for name, module in model.named_modules():
+            for key, param in getattr(module, "lora_embedding_A", {}).items():
+                assert torch.equal(param, embed_before[(name, "A", key)])
+            for key, param in getattr(module, "lora_embedding_B", {}).items():
+                assert torch.equal(param, embed_before[(name, "B", key)])
 
 
 class TestReLoRATaskGate:
@@ -604,7 +868,11 @@ class TestReLoRATaskGate:
 
         d = self._base_cfg()
         d["training"]["stream_layers"] = True
-        with pytest.raises(ValueError, match="stream_layers"):
+        d["training"]["batch_size"] = 1
+        with pytest.raises(
+            ValueError,
+            match="relora_steps is incompatible with training.stream_layers",
+        ):
             load_config_from_string(yaml.safe_dump(d))
 
     def test_vera_rejected(self):

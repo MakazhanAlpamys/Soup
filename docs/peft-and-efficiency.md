@@ -288,11 +288,14 @@ sets `relora_steps`.
 ReLoRA fires every N global steps, merges the LoRA update (B @ A, with PEFT
 scaling) into the frozen base weight, reinitializes `lora_A` (Kaiming) and
 `lora_B` (zeros), optionally clears optimizer state for those adapter parameters,
-and runs a short learning-rate re-warmup. Embedding LoRA (`embed_tokens` /
-`lora_embedding_A`) is skipped, not merged. Useful for very long training runs
-where adapter capacity saturates. `relora_prune_ratio` is retained for
-backward-compatible YAML but no longer prunes adapter weights.
-Merged base deltas are in-memory only; run `soup merge` to export a dense checkpoint.
+and runs a short learning-rate re-warmup. Restarts accumulate faithfully only
+on an fp32 base; bf16/fp16 bases lose merge delta to rounding. Embedding
+adapters (empty `lora_A`, typically `embed_tokens`) are skipped; Linear LoRA is
+merged even though peft puts empty `lora_embedding_A`/`lora_embedding_B` dicts
+on every `LoraLayer`. Useful for very long training runs where adapter capacity
+saturates. `relora_prune_ratio` is retained for backward-compatible YAML but no
+longer prunes adapter weights. Merged base deltas are in-memory only; run
+`soup merge` to export a dense checkpoint.
 
 **Per-pattern rank/alpha** map module name patterns to integer ranks. Useful in MoE
 configs where expert FFNs need lower rank than attention. Caps: 256 keys × value 1024.
