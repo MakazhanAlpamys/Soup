@@ -291,12 +291,26 @@ def _endpoint_is_local(endpoint: str) -> bool:
     return ip.is_loopback or ip.is_private or ip.is_link_local
 
 
+#: Environment variable holding the ``soup serve --tool-auth-token`` value.
+#: ``soup loop watch --tool-auth-token`` sets it, including for a ``--detach``
+#: child, so the token never has to appear in argv (#1139).
+TOOL_AUTH_TOKEN_ENV = "SOUP_TOOL_AUTH_TOKEN"
+
+
+class _ActivateRefused(Exception):
+    """The serve endpoint answered the activate POST with 401."""
+
+
 def _post_activate(endpoint: str, name: str) -> bool:
     """POST to ``<endpoint>/v1/adapters/activate/<name>``; True on 2xx.
 
     ``endpoint`` is already SSRF-validated by the caller; ``name`` is
     re-validated here against the activate-route pattern before URL
     interpolation (defence-in-depth against a crafted adapter dir name).
+    The tool token from ``SOUP_TOOL_AUTH_TOKEN``, when set, goes as a Bearer
+    header: a server started with ``--tool-auth-token`` requires it on this
+    route (#1139). A 401 raises ``_ActivateRefused`` so the caller can name
+    the missing credential instead of reporting a bare failure.
     """
     if _DEPLOY_POSTER is not None:
         return _DEPLOY_POSTER(endpoint, name)
@@ -307,11 +321,15 @@ def _post_activate(endpoint: str, name: str) -> bool:
     except ImportError:
         return False
     url = endpoint.rstrip("/") + f"/v1/adapters/activate/{name}"
+    token = os.environ.get(TOOL_AUTH_TOKEN_ENV)
+    headers = {"Authorization": f"Bearer {token}"} if token else {}
     try:
-        resp = httpx.post(url, timeout=5.0)
-        return 200 <= resp.status_code < 300
+        resp = httpx.post(url, headers=headers, timeout=5.0)
     except Exception:  # noqa: BLE001 — deploy must never crash the loop
         return False
+    if resp.status_code == 401:
+        raise _ActivateRefused()
+    return 200 <= resp.status_code < 300
 
 
 def deploy_to_canary(
@@ -368,7 +386,22 @@ def deploy_to_canary(
             "notes": "SOUP_LOOP_SERVE_ENDPOINT must be loopback/LAN (SSRF guard)",
         }
     name = os.path.basename(str(adapter_path).rstrip("/\\")) or "canary"
-    ok = _post_activate(endpoint, name)
+    try:
+        ok = _post_activate(endpoint, name)
+    except _ActivateRefused:
+        if os.environ.get(TOOL_AUTH_TOKEN_ENV):
+            note = (
+                "activate POST refused (401): the serve endpoint rejected the tool "
+                "token; check soup loop watch --tool-auth-token / SOUP_TOOL_AUTH_TOKEN "
+                "against soup serve --tool-auth-token"
+            )
+        else:
+            note = (
+                "activate POST refused (401): the serve endpoint requires its tool "
+                "token; pass soup loop watch --tool-auth-token or set SOUP_TOOL_AUTH_TOKEN"
+            )
+        _LOG.warning(note)
+        return {"deployed": False, "canary_verdict": None, "notes": note}
     # activate_adapter is a full hot-swap (100% of traffic), not a canary
     # split; canary_router.route()/BucketStats never ran, so there is no
     # verdict to report here even when the POST itself succeeded.
