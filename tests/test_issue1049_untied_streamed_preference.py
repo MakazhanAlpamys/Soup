@@ -18,10 +18,12 @@ import pytest
 
 from tests.test_v07204 import (
     _ALL_PREFERENCE,
+    _REFERENCE_USING,
     _batch_on,
     _build_streamed_wrapper,
     _loss_of,
     _match_streamed_dtype,
+    _mps_is_the_accelerator,
     _randomise_lora_b,
     _sync_adapters,
 )
@@ -29,6 +31,9 @@ from tests.test_v07204 import (
 pytestmark = pytest.mark.filterwarnings("ignore::DeprecationWarning")
 
 
+@pytest.mark.skipif(
+    _mps_is_the_accelerator(), reason="MPS is untested for layer streaming (CUDA + CPU only)"
+)
 @pytest.mark.parametrize("task", [*_ALL_PREFERENCE, "sft"])
 def test_an_untied_streamed_train_step_completes(tmp_path, monkeypatch, task):
     """dpo and kto raise on main; orpo, simpo and sft pass there and must keep passing.
@@ -149,9 +154,9 @@ def test_the_private_copy_is_taken_only_when_it_is_needed():
 
     cls = _streamed_large_layer_class()
 
-    def weight_seen_by(pool, base, grad):
+    def weight_seen_by(pool, base, grad, refill=True):
         inner = recorder(base)
-        layer = cls(inner, "lm_head", pool)
+        layer = cls(inner, "lm_head", pool, refill_before_backward=refill)
         x = torch.zeros(1, 3) if base is nn.Linear else torch.zeros(1, dtype=torch.long)
         with torch.set_grad_enabled(grad):
             layer(x)
@@ -162,6 +167,7 @@ def test_the_private_copy_is_taken_only_when_it_is_needed():
     projection_nograd = weight_seen_by(untied, nn.Linear, grad=False)
     projection_tied = weight_seen_by(tied, nn.Linear, grad=True)
     embedding = weight_seen_by(untied, nn.Embedding, grad=True)
+    projection_one_forward = weight_seen_by(untied, nn.Linear, grad=True, refill=False)
 
     assert projection.data_ptr() != untied.buffer.data_ptr(), (
         "an untied projection under a live graph must hand autograd a private copy"
@@ -175,6 +181,9 @@ def test_the_private_copy_is_taken_only_when_it_is_needed():
     )
     assert embedding.data_ptr() == untied.buffer.data_ptr(), (
         "embedding_backward reads the indices, not the weight values: no copy"
+    )
+    assert projection_one_forward.data_ptr() == untied.buffer.data_ptr(), (
+        "a loss with one forward per step never refills the slot before its backward: no copy"
     )
 
 
@@ -216,11 +225,14 @@ def test_a_peft_wrapped_embedding_is_still_exempt_from_the_private_copy():
 
     # One wrapper, and a nested pair -- peft can stack them, and the unwrap loop caps at 8.
     for inner in (_Tuner(nn.Embedding(4, 3)), _Tuner(_Tuner(nn.Embedding(4, 3)))):
-        assert cls(inner, "embed_tokens", untied)._needs_a_private_weight() is False, (
+        layer = cls(inner, "embed_tokens", untied, refill_before_backward=True)
+        assert layer._needs_a_private_weight() is False, (
             "a tuner-wrapped embedding must keep the exemption"
         )
     # and the wrapper must not hand the exemption to a projection
-    projection = cls(_Tuner(nn.Linear(3, 4, bias=False)), "lm_head", untied)
+    projection = cls(
+        _Tuner(nn.Linear(3, 4, bias=False)), "lm_head", untied, refill_before_backward=True
+    )
     assert projection._needs_a_private_weight() is True
 
 
@@ -242,6 +254,7 @@ def test_a_real_lora_wrapped_embedding_is_still_exempt_from_the_private_copy():
             return self.buffer
 
     untied = _Pool(["embed_tokens", "lm_head"])
+
     class _Embeds(nn.Module):
         def __init__(self):
             super().__init__()
@@ -255,5 +268,94 @@ def test_a_real_lora_wrapped_embedding_is_still_exempt_from_the_private_copy():
     )
     wrapped = tuned.base_model.model.embed_tokens
     assert isinstance(wrapped, lora.Embedding)
-    layer = _streamed_large_layer_class()(wrapped, "embed_tokens", untied)
+    layer = _streamed_large_layer_class()(
+        wrapped, "embed_tokens", untied, refill_before_backward=True
+    )
     assert layer._needs_a_private_weight() is False
+
+
+@pytest.mark.skipif(
+    _mps_is_the_accelerator(), reason="MPS is untested for layer streaming (CUDA + CPU only)"
+)
+@pytest.mark.parametrize("task", [*_ALL_PREFERENCE, "sft"])
+def test_only_a_loss_with_a_reference_pass_takes_the_private_copy(tmp_path, monkeypatch, task):
+    """The copy is a head-sized allocation held for the whole graph (~1.05 GiB for an
+    8B-class untied head), so it is taken only by the losses that need it: dpo and kto
+    run a reference forward between the policy forward and its backward. sft, orpo and
+    simpo run one forward per step, so their head keeps the view.
+
+    Recorded on a real train step through the real ``setup()``, so this pins the
+    trainer flag, its plumbing through ``build_streamed_model`` and the decision
+    together."""
+    import torch
+
+    from soup_cli.utils.layer_stream_runtime import _streamed_large_layer_class
+
+    cls = _streamed_large_layer_class()
+    decide = cls._needs_a_private_weight
+    copies = []
+
+    def recording(self):
+        needed = decide(self)
+        if torch.is_grad_enabled():
+            copies.append((self.key, needed))
+        return needed
+
+    monkeypatch.setattr(cls, "_needs_a_private_weight", recording)
+    wrapper, _, _ = _build_streamed_wrapper(tmp_path, monkeypatch, task=task, tie=False)
+    wrapper.trainer.args.max_steps = 1
+    try:
+        wrapper.trainer.train()
+    finally:
+        wrapper._close_stream_runtime()
+
+    assert copies, "no grad-enabled forward reached a streamed large layer"
+    took = sorted({key for key, needed in copies if needed})
+    if task in _REFERENCE_USING:
+        assert len(took) == 1 and "lm_head" in took[0], (
+            f"{task}: the untied head, and only it, must take the copy; took {took}"
+        )
+    else:
+        assert took == [], f"{task} runs one forward per step and must not copy, took {took}"
+
+
+@pytest.mark.parametrize("task", [*_ALL_PREFERENCE, "sft"])
+@pytest.mark.parametrize("n_large_keys", [1, 2], ids=["tied", "untied"])
+def test_the_pre_flight_charges_the_private_copy_exactly_when_it_is_taken(task, n_large_keys):
+    """``estimate_stream_peak_vram`` promises never to under-predict, and the copy is a
+    second head-sized allocation alive at peak. It is charged as a second large slot for
+    the runs that take it (an untied checkpoint under dpo or kto) and for no others."""
+    from tests.test_v07204 import _wrapper_for
+
+    slot = 1_050_673_152  # Llama-3.1-8B: 128256 x 4096 x 2 bytes
+    wrapper = _wrapper_for(task).__new__(_wrapper_for(task))
+    charged = wrapper._stream_large_budget_bytes(slot, n_large_keys)
+    takes_copy = task in _REFERENCE_USING and n_large_keys > 1
+    assert charged == (2 * slot if takes_copy else slot)
+
+
+def test_the_pre_flight_is_handed_the_charged_large_bytes(tmp_path, monkeypatch):
+    """The charge has to reach ``_stream_budget_lines``, not only exist: through the
+    real ``setup()`` an untied dpo run budgets twice the large bytes an untied sft run
+    does, and a tied dpo run the same as a tied sft run."""
+    from soup_cli.trainer.stream_setup import StreamingSetupMixin
+
+    budget_lines = StreamingSetupMixin._stream_budget_lines
+    seen = {}
+
+    def charged(task, tie):
+        def recording(self, *args, **kwargs):
+            seen[(task, tie)] = kwargs["large_layer_bytes"]
+            return budget_lines(self, *args, **kwargs)
+
+        monkeypatch.setattr(StreamingSetupMixin, "_stream_budget_lines", recording)
+        root = tmp_path / f"{task}-{tie}"
+        root.mkdir()
+        wrapper, _, _ = _build_streamed_wrapper(root, monkeypatch, task=task, tie=tie)
+        wrapper._close_stream_runtime()
+        return seen[(task, tie)]
+
+    untied_sft = charged("sft", False)
+    assert untied_sft > 0
+    assert charged("dpo", False) == 2 * untied_sft
+    assert charged("dpo", True) == charged("sft", True)
