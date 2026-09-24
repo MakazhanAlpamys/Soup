@@ -28,6 +28,32 @@ def _yaml_rejects(yaml: str, keyword: str) -> None:
     assert keyword in str(exc.value), f"expected {keyword!r} in: {exc.value}"
 
 
+def _save_tiny(directory, vocab):
+    """Save a tiny offline Llama checkpoint with a real chat tokenizer."""
+    from tokenizers import Tokenizer, models, pre_tokenizers
+    from transformers import LlamaConfig, LlamaForCausalLM, PreTrainedTokenizerFast
+
+    directory.mkdir(parents=True, exist_ok=True)
+    backend = Tokenizer(models.WordLevel(vocab=vocab, unk_token="<unk>"))
+    backend.pre_tokenizer = pre_tokenizers.Whitespace()
+    tokenizer = PreTrainedTokenizerFast(
+        tokenizer_object=backend,
+        unk_token="<unk>", bos_token="<s>", eos_token="</s>",
+        chat_template=(
+            "{% for message in messages %}{{ message['role'] }} "
+            "{{ message['content'] }} {% endfor %}"
+            "{% if add_generation_prompt %}assistant {% endif %}"
+        ),
+    )
+    tokenizer.save_pretrained(str(directory))
+    model = LlamaForCausalLM(LlamaConfig(
+        vocab_size=len(vocab), hidden_size=16, intermediate_size=32,
+        num_hidden_layers=1, num_attention_heads=2, num_key_value_heads=2,
+        max_position_embeddings=256, tie_word_embeddings=True,
+    ))
+    model.save_pretrained(str(directory))
+
+
 # ---------------------------------------------------------------------------
 # #145 — distill_mode token | sequence
 # ---------------------------------------------------------------------------
@@ -189,7 +215,38 @@ class TestDistillMode:
         assert len(out) == 2
         assert all(item["messages"][-1]["role"] == "assistant" for item in out)
         assert all(item["messages"][0]["role"] == "user" for item in out)
+        assert all(len(item["messages"][-1]["content"].split()) <= 1 for item in out)
 
+    def test_setup_with_sequence_mode_completes_on_cpu(self, tmp_path):
+        pytest.importorskip("torch")
+        pytest.importorskip("transformers")
+        from soup_cli.config.loader import load_config_from_string
+        from soup_cli.trainer.distill import DistillTrainerWrapper
+
+        words = ["user", "assistant", "hello", "world", "hi", "there", "what", "is", "soup", "good"]
+        vocab = {"<unk>": 0, "<s>": 1, "</s>": 2, **{w: i + 3 for i, w in enumerate(words)}}
+        _save_tiny(tmp_path / "student", vocab)
+        _save_tiny(tmp_path / "teacher", vocab)
+        cfg = load_config_from_string(
+            f"base: {(tmp_path / 'student').as_posix()}\n"
+            "task: distill\nbackend: transformers\n"
+            "data:\n  train: ./unused.jsonl\n  format: chatml\n  max_length: 64\n"
+            "training:\n"
+            f"  teacher_model: {(tmp_path / 'teacher').as_posix()}\n"
+            "  distill_mode: sequence\n  batch_size: 1\n  epochs: 1\n  quantization: none\n"
+            "  lora: {r: 4, alpha: 8, target_modules: [q_proj, v_proj]}\n"
+            f"output: {(tmp_path / 'out').as_posix()}\n"
+        )
+        rows = [
+            {"messages": [{"role": "user", "content": "hello world"},
+                          {"role": "assistant", "content": "hi there"}]},
+            {"messages": [{"role": "user", "content": "what is soup"},
+                          {"role": "assistant", "content": "soup is good"}]},
+        ]
+        wrapper = DistillTrainerWrapper(cfg, device="cpu")
+        wrapper.setup({"train": rows, "val": rows[:1]})
+        assert len(wrapper.trainer.train_dataset) == 2
+        assert len(wrapper.trainer.eval_dataset) == 1
     @pytest.mark.parametrize("return_value", ["tensor", "list"])
     def test_build_sequence_distill_rows_normalizes_tokenizer_return_types(
         self, return_value
@@ -216,6 +273,7 @@ class TestDistillMode:
                 import torch
 
                 assert input_ids.shape == attention_mask.shape
+                assert input_ids.ndim == 2 and bool(attention_mask.all())
                 return torch.tensor([[1, 2, 3, 9]])
 
             def parameters(self):
