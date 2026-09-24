@@ -1743,8 +1743,8 @@ only — there is no serve-time MoLE path yet. (v0.71.12)
 
 ## Architecture Knobs — Mixture-of-Depths, LLaMA Pro, LongLoRA
 
-Three architecture transforms that were schema-only are now live for SFT / Pretrain on
-Llama / Qwen / Mistral (LongLoRA also covers Phi). All apply at trainer setup:
+Two architecture transforms that were schema-only are now live for SFT / Pretrain on
+Llama / Qwen / Mistral. Both apply at trainer setup:
 
 ```yaml
 training:
@@ -1757,15 +1757,17 @@ training:
   # ones (freeze_trainable_layers freezes the originals).
   expand_layers: 4
   freeze_trainable_layers: 4
-
-  # LongLoRA S²: shifted-sparse attention on the Q/K projections for long-context tuning.
-  use_longlora: true
 ```
 
 `use_mod` / `expand_layers` attach AFTER `get_peft_model` so the new routers / blocks are
-trainable. Unsupported architectures warn + skip (MoD, block expansion); `use_longlora` is
-rejected at the schema gate for non-supported arches and for `use_ring_attention` / FlashAttention-3.
-Pick one of MoD / LLaMA Pro / LongLoRA per run. (v0.71.12)
+trainable. Unsupported architectures warn + skip. Pick one of MoD / LLaMA Pro per run. (v0.71.12)
+
+LongLoRA S² (`use_longlora: true`) is refused at config load
+([#1240](https://github.com/MakazhanAlpamys/Soup/issues/1240)). Its override rolled the
+query/key projections of half the heads with wrap-around under full causal attention, so
+earlier positions saw the last tokens of the sequence, and it applied no grouped attention.
+To extend the context, use `rope_scaling_type` with plain LoRA; see
+[Long Context](peft-and-efficiency.md#long-context--yarn-llama-31-ntk-longlora).
 
 
 ## Spectrum — Targeted Training on Layer SNR (`soup spectrum scan`, v0.71.23)
