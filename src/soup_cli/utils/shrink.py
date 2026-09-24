@@ -148,6 +148,13 @@ _ARCH_PATTERNS = {
 }
 SUPPORTED_SHRINK_ARCHS = tuple(_ARCH_PATTERNS)
 
+# Config attributes holding one entry per decoder layer, which a prune must
+# slice in step with ``model.model.layers``: ``layer_types`` (Qwen2 / Qwen3 /
+# Qwen2-MoE / SmolLM3) and ``no_rope_layers`` (SmolLM3). transformers 5 refuses
+# to save a config whose ``layer_types`` length differs from
+# ``num_hidden_layers`` (#1241).
+_PER_LAYER_CONFIG_ATTRS = ("layer_types", "no_rope_layers")
+
 
 def arch_family_of_config(config: object) -> str:
     """Return the supported family name for an HF ``config`` or raise ``ValueError``.
@@ -188,13 +195,14 @@ def layer_list(model: object) -> Any:
 def prune_model_layers(model: object, start: int, block_size: int) -> None:
     """Drop decoder layers ``[start, start + block_size)`` in place.
 
-    Slices ``model.model.layers`` and patches ``config.num_hidden_layers``. The
-    first and last decoder layers are protected (they carry the most residual
-    transformation, per the paper), so the dropped block must stay within
-    ``[1, num_layers - 1)``. Callers MUST reload the model from the saved dir
-    before measuring/generating — slicing leaves each surviving layer's
-    ``self_attn.layer_idx`` stale, which ``from_pretrained`` reconstructs
-    correctly.
+    Slices ``model.model.layers`` and every per-layer config list in
+    :data:`_PER_LAYER_CONFIG_ATTRS` by the same kept indices, and patches
+    ``config.num_hidden_layers``. The first and last decoder layers are
+    protected (they carry the most residual transformation, per the paper), so
+    the dropped block must stay within ``[1, num_layers - 1)``. Callers MUST
+    reload the model from the saved dir before measuring/generating — slicing
+    leaves each surviving layer's ``self_attn.layer_idx`` stale, which
+    ``from_pretrained`` reconstructs correctly.
     """
     import torch.nn as nn
 
@@ -212,9 +220,14 @@ def prune_model_layers(model: object, start: int, block_size: int) -> None:
             f"dropped block [{start}, {end}) must stay within [1, {n_total - 1}) "
             "(the first and last layer are protected)"
         )
-    kept = [layers[i] for i in range(n_total) if not (start <= i < end)]
-    model.model.layers = nn.ModuleList(kept)  # type: ignore[attr-defined]
-    model.config.num_hidden_layers = len(kept)  # type: ignore[attr-defined]
+    kept_idx = [i for i in range(n_total) if not (start <= i < end)]
+    model.model.layers = nn.ModuleList(layers[i] for i in kept_idx)  # type: ignore[attr-defined]
+    config = model.config  # type: ignore[attr-defined]
+    for attr in _PER_LAYER_CONFIG_ATTRS:
+        values = getattr(config, attr, None)
+        if isinstance(values, (list, tuple)) and len(values) == n_total:
+            setattr(config, attr, [values[i] for i in kept_idx])
+    config.num_hidden_layers = len(kept_idx)
 
 
 # ---------------------------------------------------------------------------
