@@ -20,6 +20,7 @@ from soup_cli.utils.paths import (
     atomic_write_text,
     enforce_under_cwd_and_no_symlink,
     open_no_follow,
+    refuse_linked_dirs,
 )
 from soup_cli.utils.process_liveness import process_is_alive as _pid_is_alive
 
@@ -291,7 +292,6 @@ class ExecutionManager:
             run_id = plan.run_id or generate_run_id()
             self._active_run_id = run_id
 
-        log_path = self._log_path(run_id)
         digest = hashlib.sha256(
             json.dumps(plan.argv, separators=(",", ":")).encode("utf-8")
         ).hexdigest()
@@ -299,6 +299,7 @@ class ExecutionManager:
         env["SOUP_MCP_RUN_ID"] = run_id
 
         try:
+            log_path = self._log_path(run_id)
             tracker = ExperimentTracker()
             tracker.launch_run(
                 run_id=run_id,
@@ -465,43 +466,14 @@ class ExecutionManager:
         for token in expired:
             del self._plans[token]
 
-    def _verify_log_dir_not_linked(self, root: Path) -> None:
-        """Inspect directory hierarchy from cwd to root before mkdir (#1158).
-
-        Ensures no component is a symlink or junction, preventing creation of an
-        empty directory at the link target.
-        """
-        curr = root
-        cwd_resolved = Path(self.cwd).resolve()
-        chain = []
-        while curr != curr.parent:
-            chain.append(curr)
-            try:
-                if curr.resolve() == cwd_resolved or curr.samefile(self.cwd):
-                    break
-            except OSError:
-                pass
-            curr = curr.parent
-
-        for p in reversed(chain):
-            p_str = str(p)
-            if os.path.lexists(p_str):
-                st = os.lstat(p_str)
-                if stat.S_ISLNK(st.st_mode):
-                    raise ExecutionError(
-                        "cannot execute: run log directory or parent is a "
-                        "symbolic link or junction"
-                    )
-                if os.name == "nt":
-                    reparse = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
-                    if getattr(st, "st_file_attributes", 0) & reparse:
-                        raise ExecutionError(
-                            "cannot execute: run log directory or parent is a "
-                            "symbolic link or junction"
-                        )
-
     def _log_path(self, run_id: str) -> str:
         root = Path(self.cwd) / ".soup" / "mcp-runs"
-        self._verify_log_dir_not_linked(root)
+        try:
+            refuse_linked_dirs(root, stop_at=self.cwd)
+        except OSError as exc:
+            raise ExecutionError(
+                "cannot execute: run log directory or file is a "
+                "symbolic link or junction"
+            ) from exc
         root.mkdir(parents=True, exist_ok=True)
         return str(root / f"{run_id}.log")

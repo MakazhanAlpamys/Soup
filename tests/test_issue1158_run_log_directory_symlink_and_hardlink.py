@@ -174,6 +174,62 @@ class TestRunLogDirectorySymlinkAndHardlink:
         assert log_path.read_bytes() == b"regular output\n"
 
 
+    @pytest.mark.requires_symlink
+    def test_a_refused_execute_frees_the_slot_for_the_next_plan(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        manager = ExecutionManager()
+        evildir = tmp_path / "evildir"
+        evildir.mkdir()
+        link = tmp_path / ".soup"
+        os.symlink(str(evildir), str(link), target_is_directory=True)
+        token = manager.issue(
+            kind="train", argv=[sys.executable, "--version"], display_command="t", run_id="refused"
+        )
+        with patch("subprocess.Popen") as popen:
+            with pytest.raises(ExecutionError, match="symbolic link or junction"):
+                manager.execute(token=token, kind="train")
+        assert not popen.called
+
+        (os.rmdir if os.name == "nt" else os.unlink)(link)  # the operator fixes the layout
+        fresh = manager.issue(
+            kind="train", argv=[sys.executable, "--version"], display_command="t", run_id="fresh"
+        )
+        with patch("subprocess.Popen", return_value=_mock_proc()) as popen:
+            assert manager.execute(token=fresh, kind="train")["status"] == "running"
+        assert popen.call_count == 1
+
+    @pytest.mark.requires_symlink
+    def test_execute_refuses_symlink_swapped_after_mkdir(self, tmp_path, monkeypatch):
+        """A symlink swapped in at .soup/mcp-runs after mkdir is caught by open_no_follow."""
+        monkeypatch.chdir(tmp_path)
+        manager = ExecutionManager()
+        token = manager.issue(
+            kind="train",
+            argv=[sys.executable, "--version"],
+            display_command="test",
+            run_id="swappedsym",
+        )
+        evildir = tmp_path / "evildir"
+        evildir.mkdir()
+
+        orig_log_path = manager._log_path
+
+        def swapping_log_path(run_id: str) -> str:
+            res = orig_log_path(run_id)
+            runs_dir = tmp_path / ".soup" / "mcp-runs"
+            os.rmdir(runs_dir)
+            os.symlink(str(evildir), str(runs_dir), target_is_directory=True)
+            return res
+
+        monkeypatch.setattr(manager, "_log_path", swapping_log_path)
+
+        with patch("subprocess.Popen") as mock_popen:
+            mock_popen.return_value = _mock_proc()
+            with pytest.raises(ExecutionError, match="symbolic link or junction"):
+                manager.execute(token=token, kind="train")
+            assert not mock_popen.called
+
+
 class TestOpenNoFollowHardlinkAndParentChecks:
     @pytest.mark.requires_symlink
     def test_open_no_follow_rejects_parent_directory_symlink(self, tmp_path):
@@ -182,6 +238,44 @@ class TestOpenNoFollowHardlinkAndParentChecks:
         link_dir = tmp_path / "link"
         os.symlink(str(target_dir), str(link_dir), target_is_directory=True)
         file_path = link_dir / "test.log"
+
+        with pytest.raises(OSError) as exc_info:
+            open_no_follow(
+                file_path,
+                os.O_WRONLY | os.O_CREAT | os.O_APPEND,
+                0o666,
+                check_parent=True,
+            )
+        assert exc_info.value.errno == errno.ELOOP
+
+    @pytest.mark.requires_symlink
+    def test_open_no_follow_rejects_grandparent_directory_symlink(self, tmp_path):
+        target_dir = tmp_path / "target"
+        target_dir.mkdir()
+        link_dir = tmp_path / "link"
+        os.symlink(str(target_dir), str(link_dir), target_is_directory=True)
+        child_dir = link_dir / "child"
+        child_dir.mkdir()
+        file_path = child_dir / "test.log"
+
+        with pytest.raises(OSError) as exc_info:
+            open_no_follow(
+                file_path,
+                os.O_WRONLY | os.O_CREAT | os.O_APPEND,
+                0o666,
+                check_parent=True,
+            )
+        assert exc_info.value.errno == errno.ELOOP
+
+    @pytest.mark.skipif(os.name != "nt", reason="Windows junctions only exist on Windows")
+    def test_open_no_follow_rejects_parent_junction(self, tmp_path):
+        import _winapi
+
+        target_dir = tmp_path / "target"
+        target_dir.mkdir()
+        junction_dir = tmp_path / "junction"
+        _winapi.CreateJunction(str(target_dir), str(junction_dir))
+        file_path = junction_dir / "test.log"
 
         with pytest.raises(OSError) as exc_info:
             open_no_follow(

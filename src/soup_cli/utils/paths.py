@@ -312,6 +312,59 @@ def atomic_write_bytes_group(
     return [os.path.realpath(output_path) for _data, output_path, _field in prepared]
 
 
+def refuse_linked_dirs(
+    path: Union[str, Path],
+    *,
+    stop_at: Union[str, Path, None] = None,
+) -> None:
+    """Inspect directory hierarchy from ``path`` up to ``stop_at`` for symlinks and
+    junctions (#1158).
+
+    Raises :exc:`OSError` with :data:`errno.ELOOP` if any directory component
+    between ``path`` and ``stop_at`` is a symbolic link or junction / reparse point.
+    """
+    if not isinstance(path, (str, Path)):
+        raise TypeError(f"path must be str or Path, got {type(path).__name__}")
+    p = str(path)
+    if not p:
+        raise ValueError("path must be non-empty")
+    if "\x00" in p:
+        raise ValueError("path must not contain null bytes")
+
+    curr = os.path.abspath(p)
+    stop: Optional[str] = None
+    if stop_at is not None:
+        stop = os.path.abspath(str(stop_at))
+    elif is_under_cwd(curr):
+        stop = os.path.abspath(os.getcwd())
+
+    stop_norm = os.path.normcase(stop) if stop is not None else None
+
+    while curr and curr != os.path.dirname(curr):
+        curr_norm = os.path.normcase(curr)
+        if stop_norm is not None and curr_norm == stop_norm:
+            break
+        if os.path.lexists(curr):
+            st = os.lstat(curr)
+            if stat.S_ISLNK(st.st_mode):
+                raise OSError(
+                    errno.ELOOP, f"Directory symbolic link not allowed: {curr!r}"
+                )
+            if os.name == "nt":
+                reparse = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+                if getattr(st, "st_file_attributes", 0) & reparse:
+                    raise OSError(
+                        errno.ELOOP, f"Directory reparse point not allowed: {curr!r}"
+                    )
+        if stop is not None:
+            try:
+                if os.path.samefile(curr, stop):
+                    break
+            except OSError:
+                pass
+        curr = os.path.dirname(curr)
+
+
 def open_no_follow(
     path: Union[str, Path],
     flags: int,
@@ -358,29 +411,7 @@ def open_no_follow(
                 raise OSError(errno.ELOOP, f"Reparse point not allowed: {p!r}")
 
     if check_parent:
-        under_cwd = is_under_cwd(p)
-
-        curr = os.path.dirname(os.path.abspath(p))
-        while curr and curr != os.path.dirname(curr):
-            if os.path.lexists(curr):
-                st = os.lstat(curr)
-                if stat.S_ISLNK(st.st_mode):
-                    raise OSError(
-                        errno.ELOOP, f"Directory symbolic link not allowed: {curr!r}"
-                    )
-                if os.name == "nt":
-                    reparse = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
-                    if getattr(st, "st_file_attributes", 0) & reparse:
-                        raise OSError(
-                            errno.ELOOP, f"Directory reparse point not allowed: {curr!r}"
-                        )
-            if under_cwd:
-                try:
-                    if os.path.samefile(curr, os.getcwd()):
-                        break
-                except OSError:
-                    pass
-            curr = os.path.dirname(curr)
+        refuse_linked_dirs(os.path.dirname(os.path.abspath(p)))
 
     open_flags = flags | getattr(os, "O_NOFOLLOW", 0)
     fd = os.open(p, open_flags, mode)
