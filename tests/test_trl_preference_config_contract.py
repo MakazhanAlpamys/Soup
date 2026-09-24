@@ -79,13 +79,23 @@ def _pref_rows(n=8):
     return [{"prompt": "hi", "chosen": " good answer", "rejected": " bad"} for _ in range(n)]
 
 
+_MAX_SEQUENCE_LENGTH = 64
+_MAX_PROMPT_LENGTH = _MAX_SEQUENCE_LENGTH // 2
+_OVERLONG_PROMPT_WORDS = 161
+
+
 def _long_pref_rows(n=8):
-    prompt = " ".join(["hello"] * 161)
+    prompt = " ".join(["hello"] * _OVERLONG_PROMPT_WORDS)
     return [{"prompt": prompt, "chosen": " good answer", "rejected": " bad"} for _ in range(n)]
 
 
 def _kto_rows(n=8):
     return [{"prompt": "hi", "completion": " good answer", "label": i % 2 == 0} for i in range(n)]
+
+
+def _long_kto_rows(n=8):
+    prompt = " ".join(["hello"] * _OVERLONG_PROMPT_WORDS)
+    return [{"prompt": prompt, "completion": " good answer", "label": i % 2 == 0} for i in range(n)]
 
 
 #: KTO refuses `per_device_train_batch_size == 1` outright — its KL term is
@@ -100,6 +110,7 @@ _ROWS = {
     "orpo": _pref_rows,
     "simpo": _pref_rows,
 }
+_PREPARED_ROW_MULTIPLIER = {"bco": 2}
 
 #: task -> (wrapper import path, the trl config class its `setup()` builds).
 #: The config class is named so a failure says *which* trl API moved, rather
@@ -132,7 +143,11 @@ def _cfg(weights, out_dir, task):
                 "task": task,
                 "backend": "transformers",
                 "modality": "text",
-                "data": {"train": "train.jsonl", "max_length": 64, "chat_template": "chatml"},
+                "data": {
+                    "train": "train.jsonl",
+                    "max_length": _MAX_SEQUENCE_LENGTH,
+                    "chat_template": "chatml",
+                },
                 "training": {
                     "batch_size": _MIN_BATCH.get(task, 1),
                     "quantization": "none",
@@ -191,24 +206,34 @@ class TestEveryPreferenceTrainerReachesALiveTrlTrainer:
         wrapper = _build(tmp_path, monkeypatch, task)
         args = wrapper.trainer.args
         if config_accepts(type(args), "max_prompt_length"):
-            assert args.max_prompt_length == 32, (task, args.max_prompt_length)
+            assert args.max_prompt_length == _MAX_PROMPT_LENGTH, (task, args.max_prompt_length)
         else:
             assert not hasattr(args, "max_prompt_length"), (
                 f"{task}: installed trl does not accept `max_prompt_length` as a "
                 f"keyword, yet the built config has the attribute — the capability "
                 f"probe and the object disagree"
             )
-        assert args.max_length == 64, (task, args.max_length)
+        assert args.max_length == _MAX_SEQUENCE_LENGTH, (task, args.max_length)
 
-    @pytest.mark.parametrize("task", ("dpo", "orpo"))
+    @pytest.mark.parametrize(
+        ("task", "rows_factory"),
+        (
+            ("bco", _long_pref_rows),
+            ("dpo", _long_pref_rows),
+            ("ipo", _long_pref_rows),
+            ("kto", _long_kto_rows),
+            ("orpo", _long_pref_rows),
+            ("simpo", _long_pref_rows),
+        ),
+    )
     def test_removed_prompt_cap_is_enforced_on_the_effective_batch(
-        self, tmp_path, monkeypatch, task
+        self, tmp_path, monkeypatch, task, rows_factory
     ):
         """TRL 0.29 must not turn ``data.max_length`` into a cosmetic field.
 
         The assertion is on the tensors the model receives, not the config or
         an intermediate column: 0.29 accepted ``max_length=64`` while emitting
-        164/165-token DPO/ORPO batches from this exact 161-token prompt.
+        over-length batches from this exact 161-token prompt.
         """
         from soup_cli.trainer._trl_compat import config_accepts
 
@@ -220,16 +245,17 @@ class TestEveryPreferenceTrainerReachesALiveTrlTrainer:
         monkeypatch.chdir(tmp_path)
         cfg = _cfg(weights, tmp_path / "out", task)
         wrapper = getattr(importlib.import_module(module), cls_name)(cfg, device="cpu")
-        wrapper.setup({"train": _long_pref_rows(8)})
+        wrapper.setup({"train": rows_factory(8)})
 
         if config_accepts(type(wrapper.trainer.args), "max_prompt_length"):
             pytest.skip("installed TRL still enforces its own prompt cap")
 
-        assert len(wrapper.trainer.train_dataset) == 8
+        expected_rows = 8 * _PREPARED_ROW_MULTIPLIER.get(task, 1)
+        assert len(wrapper.trainer.train_dataset) == expected_rows
         batch = next(iter(wrapper.trainer.get_train_dataloader()))
         sequence_keys = [key for key in batch if key.endswith("input_ids")]
         assert sequence_keys, batch.keys()
-        assert all(batch[key].shape[-1] <= 64 for key in sequence_keys), {
+        assert all(batch[key].shape[-1] <= _MAX_SEQUENCE_LENGTH for key in sequence_keys), {
             key: tuple(batch[key].shape) for key in sequence_keys
         }
 
