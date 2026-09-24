@@ -4704,18 +4704,19 @@ class SoupConfig(BaseModel):
             return self
         tcfg = self.training
         if self.task in ("classifier", "reranker", "cross_encoder") and not (
-            getattr(tcfg, "classifier_lora", False) and tcfg.lora.r > 0
+            tcfg.classifier_lora and tcfg.lora.r > 0
         ):
             raise ValueError(
                 f"training.moe_lora is not applied by task={self.task!r} unless "
                 "training.classifier_lora is true and training.lora.r > 0: without them that "
                 "trainer full-fine-tunes and builds no adapter for the flag to select. Set "
-                "classifier_lora: true, or remove moe_lora."
+                "classifier_lora: true and lora.r >= 1, or remove moe_lora."
             )
         why = {
             "asr": "that trainer loads Whisper, which has no expert layers",
             "moe_lora_routing": "that trainer routes between existing adapters "
             "and builds no LoRA adapter of its own",
+            "prm": "that trainer fine-tunes every base parameter and builds no LoRA adapter",
         }.get(self.task)
         if why is None:
             return self

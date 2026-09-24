@@ -21,7 +21,7 @@ still accepted the flag unread: ``classifier`` (also ``reranker`` and
 to adapt, ``asr`` (Whisper) and ``moe_lora_routing`` (no adapter built), are
 refused at config load instead, and so is the classifier family without
 ``classifier_lora: true`` and ``lora.r > 0``, where that trainer full-fine-tunes.
-``prm`` is left as it was, pending a ruling.
+``prm``, which fine-tunes every base parameter, is refused too (ruled on #1179).
 """
 
 from __future__ import annotations
@@ -83,7 +83,7 @@ _TASKS = {
 }
 
 #: #1151: tasks where the flag is refused at config load (no expert to adapt).
-_REFUSED = ("asr", "moe_lora_routing")
+_REFUSED = ("asr", "moe_lora_routing", "prm")
 
 #: task -> the extra fields its config needs to load (schema-required ones,
 #: plus classifier's opt-in LoRA gate).
@@ -96,6 +96,9 @@ _EXTRA = {
         "data": {"forget_set": "./forget.jsonl"},
     },
     "moe_lora_routing": {"training": {"mole_task_adapters": ["./a", "./b"]}},
+    # prm refuses an adapter-bearing lora block first (#795), so the refusal under
+    # test is only reached at r: 0.
+    "prm": {"training": {"lora": {"r": 0}}},
 }
 
 _SMALL = dict(
@@ -210,6 +213,13 @@ def _attach(task: str, monkeypatch, *, moe_lora: bool, dense: bool = False):
             # and only then reads the rows, which we do not supply.
             wrapper.setup({})
     except Exception as exc:  # noqa: BLE001 — setup continues past the LoRA attach
+        # Only setup(dataset) reads rows after the attach (classifier / distill /
+        # unlearn, fed no rows here). A ValueError out of _setup_transformers is
+        # still the trainer's own refusal and must surface (#1179 review: the
+        # tolerance was first applied to #1148's six trainers too).
+        reads_rows_after_attach = not hasattr(wrapper, "_setup_transformers")
+        if isinstance(exc, ValueError) and not reads_rows_after_attach:
+            raise
         if _adapted(wrapper.model or object()):
             pass
         elif isinstance(exc, ValueError):
@@ -350,7 +360,7 @@ class TestNoShippedConfigNeededStaging:
         from soup_cli.recipes.catalog import RECIPES
 
         root = pathlib.Path(__file__).resolve().parents[1]
-        swept = set(_TASKS) | set(_REFUSED)
+        swept = set(_TASKS) | set(_REFUSED) | {"reranker", "cross_encoder"}
         offenders, tasks_seen = [], set()
         for name, recipe in RECIPES.items():
             loaded = yaml.safe_load(recipe.yaml_str)
@@ -382,3 +392,47 @@ class TestNoShippedConfigNeededStaging:
         # it is no longer checking what it claims to.
         expected = {"asr", "embedding", "ipo", "online_dpo", "ppo", "reward_model"}
         assert tasks_seen >= expected, f"sweep missed {sorted(expected - tasks_seen)}"
+
+
+class TestEveryAdapterBuildingTrainerReadsTheFlag:
+    """#1179 review: this class has taken three PRs (#798, #1148, #1179). A new
+    trainer module that builds a LoRA adapter must also pick the MoE targets, or be
+    declared here as one whose task refuses ``moe_lora`` at config load."""
+
+    #: Trainer modules whose task refuses the flag (schema ``_validate_moe_lora_task``).
+    REFUSED_MODULES = frozenset({"asr.py"})
+
+    @staticmethod
+    def _calls(path):
+        import ast
+
+        names = set()
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if isinstance(node, ast.Call):
+                func = node.func
+                names.add(getattr(func, "id", None) or getattr(func, "attr", None))
+        return names
+
+    def test_no_trainer_builds_an_adapter_without_the_moe_helper(self):
+        import pathlib
+
+        import soup_cli.trainer as trainer_pkg
+
+        root = pathlib.Path(trainer_pkg.__file__).parent
+        builders = {
+            p.name: self._calls(p)
+            for p in sorted(root.glob("*.py"))
+            if "build_lora_config" in self._calls(p)
+        }
+        missing = sorted(
+            name for name, calls in builders.items()
+            if "resolve_moe_lora_targets" not in calls and name not in self.REFUSED_MODULES
+        )
+
+        assert len(builders) >= 17, f"the scan found only {sorted(builders)}"
+        assert missing == [], f"these build an adapter but never read moe_lora: {missing}"
+
+    def test_the_refused_modules_really_are_refused(self):
+        """The exemption list must not drift from the schema's refusal."""
+        with pytest.raises(ValueError, match="moe_lora.*task='asr'"):
+            _config("asr", moe_lora=True)
