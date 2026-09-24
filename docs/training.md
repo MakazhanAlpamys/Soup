@@ -690,6 +690,13 @@ Variants:
 - **two_sided** — symmetric clipping with operator-supplied `grpo_delta`.
 - **rft** — rejection-sampling fine-tuning (only positive-advantage tokens contribute).
 
+Every variant applies `grpo_beta` (default `0.1`) as a KL penalty against the
+reference policy, where trl's own GRPO loss puts it: trl's per-token estimator
+`exp(ref - logp) - (ref - logp) - 1`, weighted by `grpo_beta` and reduced the
+same way as that variant's policy term. `rft` applies it only to the accepted
+completions it trains on. The β that the reward-hack controller sets at runtime
+(`kl_control` / `pid_lagrangian`) reaches every variant the same way.
+
 The stability callback (EMA ref-model update, replay buffer, TIS alert counter)
 attaches automatically when any of `ref_model_ema_alpha` / `replay_buffer_size`
 / `tis_threshold` / etc. is set.
