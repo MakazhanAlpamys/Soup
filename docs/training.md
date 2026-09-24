@@ -696,6 +696,9 @@ reference policy, where trl's own GRPO loss puts it: trl's per-token estimator
 same way as that variant's policy term. `rft` applies it only to the accepted
 completions it trains on. The β that the reward-hack controller sets at runtime
 (`kl_control` / `pid_lagrangian`) reaches every variant the same way.
+`grpo_beta` must be greater than zero, so a KL-free run, the setting the DAPO
+paper uses, cannot be configured yet
+([#1247](https://github.com/MakazhanAlpamys/Soup/issues/1247)).
 
 The stability callback (EMA ref-model update, replay buffer, TIS alert counter)
 attaches automatically when any of `ref_model_ema_alpha` / `replay_buffer_size`

@@ -414,10 +414,13 @@ def _per_token_kl(variant: str, beta: float, logp_new, reference_logp):
     import torch  # lazy import — utility module is dependency-light
 
     if reference_logp is None:
+        # Inside the trainer this text reaches the user through the #159
+        # fallback warning, where beta=0 is no remedy (grpo_beta must be > 0),
+        # so it names the batch key trl should have filled instead.
         raise ValueError(
-            f"grpo_variant={variant!r} with beta={beta} needs reference_logp (the "
-            "frozen reference policy's per-token log-probs) for its KL penalty; "
-            "pass reference_logp, or beta=0 for no KL term (#1232)"
+            f"grpo_variant={variant!r} with beta={beta} needs reference_logp, the "
+            "frozen reference policy's per-token log-probs, for its KL penalty "
+            "(#1232); in a trl batch that is 'ref_per_token_logps', and it is missing"
         )
     if tuple(reference_logp.shape) != tuple(logp_new.shape):
         raise ValueError(

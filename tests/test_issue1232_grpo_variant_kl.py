@@ -28,6 +28,7 @@ Three layers, each with the control that must not move:
 
 import logging
 import math
+import re
 import types
 
 import pytest
@@ -374,7 +375,13 @@ class TestTheKernelRefusesWhatItCannotCompute:
 class TestTheKernelReadsOnlyTheTokensItScores:
     @pytest.mark.parametrize("variant", VARIANTS)
     def test_masked_reference_values_are_ignored(self, variant):
-        """The reference is read on scored tokens and ignored on padding."""
+        """The reference is read on scored tokens; FINITE values on padding are ignored.
+
+        Finite only: padding is zeroed by multiplying with the mask, as in trl's
+        own reduction, so a KL that overflows to inf on a padded token still
+        turns the loss into NaN through ``inf * 0``. That is parity with trl,
+        and trl's reference log-probs are finite.
+        """
         torch = _torch()
         batch = _batch(torch)
         base = _loss(variant, batch, beta=1.0)
@@ -532,6 +539,10 @@ class TestTheVariantTrainerWiresBeta:
         messages = [r.getMessage() for r in caplog.records if "fell back" in r.getMessage()]
         assert len(messages) == 1, [r.getMessage() for r in caplog.records]
         assert "needs reference_logp" in messages[0]
+        # it names the batch key trl should have filled, and does not offer
+        # beta=0 as a way out: grpo_beta must be > 0
+        assert "'ref_per_token_logps'" in messages[0], messages[0]
+        assert re.search(r"beta=0(?![\d.])", messages[0]) is None, messages[0]
 
 
 # ==========================================================================
@@ -758,6 +769,9 @@ class TestTheRealTrainer:
             )
             losses.append(loss.item())
             norms.append(grad.norm().item())
+        # The variant computed these itself. trl's stock loss defaults to dapo,
+        # so a #159 fallback would satisfy the dapo / two_sided parity above.
+        assert not trainer._soup_fallback_warned, f"{variant}: fell back to trl's stock loss"
         assert losses[0] < losses[1] < losses[2], (variant, losses)
         assert len(set(norms)) == 3, f"{variant}: gradient norm constant across beta: {norms}"
 
@@ -802,6 +816,8 @@ class TestTheRealTrainer:
         assert trainer.args.beta == pytest.approx(0.2)
         after, _ = variant_loss()
         stock_after, _ = stock_loss()
+        # a fallback to trl's stock dapo would move by the same amount
+        assert not trainer._soup_fallback_warned, "fell back to trl's stock loss"
         moved = after.item() - before.item()
         assert moved > 0.0, "the controller's beta did not reach the variant loss"
         assert moved == pytest.approx(stock_after.item() - stock_before.item(), rel=1e-4), (
