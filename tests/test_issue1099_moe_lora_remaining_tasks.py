@@ -436,3 +436,42 @@ class TestEveryAdapterBuildingTrainerReadsTheFlag:
         """The exemption list must not drift from the schema's refusal."""
         with pytest.raises(ValueError, match="moe_lora.*task='asr'"):
             _config("asr", moe_lora=True)
+
+
+class TestThePathsThatNeverReadIt:
+    """A local CodeRabbit review of #1179 found the flag still loading unread by
+    PATH, not task: every ``_setup_unsloth`` attaches ``utils/unsloth.py``'s fixed
+    attention list, and SFT's vision / audio setups skip the MoE step."""
+
+    @pytest.mark.parametrize("task", ["sft", "dpo", "grpo", "kto", "pretrain"])
+    def test_unsloth_refuses_it_on_every_task(self, task):
+        import yaml
+
+        fmt = {"dpo": "dpo", "kto": "kto", "grpo": "alpaca", "pretrain": "plaintext"}.get(
+            task, "alpaca"
+        )
+        raw = {
+            "base": "org/m", "task": task, "backend": "unsloth",
+            "data": {"train": "./x.jsonl", "format": fmt},
+            "training": {"moe_lora": True, "lora": {"r": 4, "dropout": 0.0}},
+        }
+        with pytest.raises(ValueError, match="moe_lora is not applied on backend='unsloth'"):
+            load_config_from_string(yaml.safe_dump(raw))
+
+    @pytest.mark.parametrize(("modality", "fmt"), [("vision", "llava"), ("audio", "audio")])
+    def test_sft_vision_and_audio_refuse_it(self, modality, fmt):
+        import yaml
+
+        raw = {
+            "base": "org/m", "task": "sft", "modality": modality,
+            "data": {"train": "./x.jsonl", "format": fmt},
+            "training": {"moe_lora": True, "lora": {"r": 4, "dropout": 0.0}},
+        }
+        with pytest.raises(ValueError, match=f"modality={modality!r}"):
+            load_config_from_string(yaml.safe_dump(raw))
+
+    def test_sft_text_on_transformers_still_loads(self):
+        """The control: the wired path is untouched."""
+        cfg = _config("sft", moe_lora=True)
+
+        assert cfg.training.moe_lora is True and cfg.backend == "transformers"
