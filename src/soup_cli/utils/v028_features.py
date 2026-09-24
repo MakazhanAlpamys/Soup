@@ -38,9 +38,10 @@ def apply_v028_speed_memory(
     """Apply Cut-CE / FP8 features to ``model``.
 
     Returns a dict ``{feature_name: applied}`` so the caller can log the
-    decisions for the run record. Each feature degrades silently to a
-    yellow advisory if the underlying lib isn't available — never crashes
-    the training kick-off.
+    decisions for the run record. Cut-CE degrades to a yellow advisory when
+    its library is missing. An explicitly requested FP8 does not: a card that
+    cannot run it, or a missing torchao, stops the run (#835), and only a
+    conversion that fails partway still prints a yellow line (#1152).
     """
     applied: dict[str, bool] = {
         "cut_ce": False,

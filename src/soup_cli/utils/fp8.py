@@ -26,6 +26,15 @@ from soup_cli.utils.torchao_compat import TORCHAO_MIN_VERSION
 QuantizationAwareLike = Union[bool, Literal["fp8"]]
 
 
+def is_torchao_float8_available() -> bool:
+    """True when torchao's float8 converter, the one Soup applies, is importable."""
+    try:
+        from torchao.float8 import convert_to_float8_training  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
 def is_fp8_available() -> bool:
     """Return True if *any* FP8 training backend is importable.
 
