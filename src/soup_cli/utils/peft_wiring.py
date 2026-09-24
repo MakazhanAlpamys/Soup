@@ -645,6 +645,45 @@ def build_loraplus_optimizer(model: Any, args: Any, tcfg: Any) -> Any:
     )
 
 
+def add_value_model_param_groups(optimizer: Any, value_model: Any, args: Any) -> int:
+    """Add a PPO value model's trainable parameters to a LoRA+ optimizer.
+
+    trl's ``PPOTrainer`` builds its default optimizer over
+    ``PolicyAndValueWrapper(policy, value_model)``, so the critic trains with
+    the policy. A LoRA+ optimizer injected through ``optimizers=`` is built over
+    the PEFT policy alone, so without this the critic's parameters belong to no
+    optimizer and its value head never leaves its random initialisation (#745).
+
+    The critic gets what ``Trainer.create_optimizer`` would have given it: a
+    decay and a no-decay group at ``args.learning_rate``, split by the installed
+    transformers' own ``get_decay_parameter_names`` (which does not use
+    ``self``). Parameters the optimizer already holds are skipped, so a critic
+    that shares tensors with the policy is not added twice. Empty groups are
+    not added.
+
+    Returns how many tensors were added.
+    """
+    from transformers import Trainer
+
+    held = {id(p) for group in optimizer.param_groups for p in group["params"]}
+    decay_names = set(Trainer.get_decay_parameter_names(None, value_model))
+    decay, no_decay = [], []
+    for name, param in value_model.named_parameters():
+        if not param.requires_grad or id(param) in held:
+            continue
+        (decay if name in decay_names else no_decay).append(param)
+    for params, weight_decay in ((decay, args.weight_decay), (no_decay, 0.0)):
+        if params:
+            optimizer.add_param_group(
+                {
+                    "params": params,
+                    "lr": args.learning_rate,
+                    "weight_decay": weight_decay,
+                }
+            )
+    return len(decay) + len(no_decay)
+
+
 def attach_loraplus_optimizer(trainer: Any, tcfg: Any) -> bool:
     """Attach a PEFT LoRA+ optimizer when ``training.loraplus_lr_ratio`` is set.
 

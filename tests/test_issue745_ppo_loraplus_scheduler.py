@@ -242,13 +242,57 @@ def _fake_ppo_classes(captured, *, accepts_optimizers=True):
                 captured.pop("self")
 
     class FakePPOConfig:
+        """Keeps what the wrapper passes. weight_decay is not set by the
+        wrapper; it is nonzero here so the decay / no-decay split is visible."""
+
         def __init__(self, **kwargs):
-            pass
+            self.weight_decay = 0.05
+            self.__dict__.update(kwargs)
 
     return FakePPOTrainer, FakePPOConfig
 
 
-def _run_ppo_setup(trainer_cls, config_cls, *, is_experimental, ratio, sentinel):
+def _critic():
+    """A real value model: a decayed weight, a bias and norm weights (no-decay
+    under transformers' rule), and a frozen layer that must stay out of the
+    optimizer."""
+    import torch.nn as nn
+
+    class Critic(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.norm = nn.LayerNorm(4)
+            self.score = nn.Linear(4, 1)
+            self.frozen = nn.Linear(4, 4)
+            self.frozen.requires_grad_(False)
+
+    return Critic()
+
+
+def _loraplus_shaped_optimizer():
+    """Shaped like build_loraplus_optimizer's result on a LoRA policy: A at lr,
+    B at lr * ratio, and the embedding and groupB_no_decay groups empty
+    (measured 5/0/5/0 tensors on the real trainer)."""
+    import torch
+
+    def param():
+        return torch.nn.Parameter(torch.zeros(2, 2))
+
+    return torch.optim.AdamW(
+        [
+            {"params": [param()], "lr": BASE_LR},
+            {"params": [], "lr": BASE_LR},
+            {"params": [param()], "lr": B_GROUP_LR},
+            {"params": [], "lr": B_GROUP_LR},
+        ],
+        lr=BASE_LR,
+    )
+
+
+def _run_ppo_setup(
+    trainer_cls, config_cls, *, is_experimental, ratio, sentinel,
+    value_model=None, deepspeed_config=None,
+):
     from unittest.mock import MagicMock
     from unittest.mock import patch as mock_patch
 
@@ -262,7 +306,7 @@ def _run_ppo_setup(trainer_cls, config_cls, *, is_experimental, ratio, sentinel)
         data={"train": "./data.jsonl"},
         training=training,
     )
-    wrapper = PPOTrainerWrapper(cfg, device="cpu")
+    wrapper = PPOTrainerWrapper(cfg, device="cpu", deepspeed_config=deepspeed_config)
     dataset = {"train": [{"prompt": "What is 2+2?", "answer": "4"}]}
 
     with mock_patch("soup_cli.trainer.ppo.PPOTrainerWrapper._setup_reward"), \
@@ -277,7 +321,7 @@ def _run_ppo_setup(trainer_cls, config_cls, *, is_experimental, ratio, sentinel)
          ), \
          mock_patch(
              "soup_cli.trainer.ppo.PPOTrainerWrapper._create_value_model",
-             return_value=MagicMock(),
+             return_value=value_model if value_model is not None else _critic(),
          ), \
          mock_patch(
              "soup_cli.utils.peft_wiring.build_loraplus_optimizer",
@@ -305,7 +349,7 @@ _CONSTRUCTION_BRANCHES = pytest.mark.parametrize(
 
 @_CONSTRUCTION_BRANCHES
 def test_ppo_wrapper_hands_the_loraplus_optimizer_to_the_constructor(is_experimental):
-    sentinel = object()
+    sentinel = _loraplus_shaped_optimizer()
     captured = {}
     trainer_cls, config_cls = _fake_ppo_classes(captured)
 
@@ -320,7 +364,7 @@ def test_ppo_wrapper_hands_the_loraplus_optimizer_to_the_constructor(is_experime
 
 @_CONSTRUCTION_BRANCHES
 def test_ppo_wrapper_leaves_trl_its_own_optimizer_without_a_ratio(is_experimental):
-    sentinel = object()
+    sentinel = _loraplus_shaped_optimizer()
     captured = {}
     trainer_cls, config_cls = _fake_ppo_classes(captured)
 
@@ -343,6 +387,130 @@ def test_ppo_wrapper_refuses_a_ratio_when_trl_cannot_take_an_optimizer():
     with pytest.raises(RuntimeError, match="optimizers"):
         _run_ppo_setup(
             trainer_cls, config_cls,
-            is_experimental=True, ratio=RATIO, sentinel=object(),
+            is_experimental=True, ratio=RATIO, sentinel=_loraplus_shaped_optimizer(),
         )
     assert captured == {}
+
+
+# --- The value model trains too ---
+#
+# trl's default PPO optimizer covers PolicyAndValueWrapper(policy, value_model).
+# The LoRA+ optimizer is built over the policy alone, so the wrapper has to add
+# the critic before injecting it, or no optimizer owns the critic's parameters.
+
+
+def _groups_holding(optimizer, module):
+    names = {id(p): name for name, p in module.named_parameters()}
+    return {
+        names[id(p)]: group
+        for group in optimizer.param_groups
+        for p in group["params"]
+        if id(p) in names
+    }
+
+
+@_CONSTRUCTION_BRANCHES
+def test_ppo_wrapper_adds_the_value_model_to_the_loraplus_optimizer(is_experimental):
+    optimizer = _loraplus_shaped_optimizer()
+    critic = _critic()
+    captured = {}
+    trainer_cls, config_cls = _fake_ppo_classes(captured)
+
+    _run_ppo_setup(
+        trainer_cls, config_cls,
+        is_experimental=is_experimental, ratio=RATIO, sentinel=optimizer,
+        value_model=critic,
+    )
+
+    injected, _ = captured["optimizers"]
+    assert injected is optimizer
+    held = _groups_holding(injected, critic)
+    trainable = {n for n, p in critic.named_parameters() if p.requires_grad}
+    # Every trainable critic tensor, and only those, at the base rate.
+    assert set(held) == trainable
+    assert all(group["lr"] == pytest.approx(BASE_LR) for group in held.values())
+    # Split the way Trainer.create_optimizer splits it: biases and norm
+    # weights get no weight decay.
+    assert held["score.weight"]["weight_decay"] == captured["args"].weight_decay
+    for name in ("score.bias", "norm.weight", "norm.bias"):
+        assert held[name]["weight_decay"] == 0.0
+    # The policy's LoRA+ split is untouched: B is still at lr * ratio.
+    assert round(injected.param_groups[2]["lr"], 12) == B_GROUP_LR
+
+
+def test_the_empty_loraplus_groups_are_pruned_under_deepspeed():
+    """#359: DeepSpeed drops empty groups, so a scheduler built from the
+    injected optimizer would keep one base_lr too many. They must be gone
+    before the constructor sees the optimizer."""
+    captured = {}
+    trainer_cls, config_cls = _fake_ppo_classes(captured)
+
+    _run_ppo_setup(
+        trainer_cls, config_cls,
+        is_experimental=True, ratio=RATIO, sentinel=_loraplus_shaped_optimizer(),
+        deepspeed_config="ds_config.json",
+    )
+
+    groups = captured["optimizers"][0].param_groups
+    assert groups and all(group["params"] for group in groups)
+
+
+def test_the_loraplus_groups_are_left_alone_without_deepspeed():
+    captured = {}
+    trainer_cls, config_cls = _fake_ppo_classes(captured)
+
+    _run_ppo_setup(
+        trainer_cls, config_cls,
+        is_experimental=True, ratio=RATIO, sentinel=_loraplus_shaped_optimizer(),
+    )
+
+    groups = captured["optimizers"][0].param_groups
+    assert sum(1 for group in groups if not group["params"]) == 2
+
+
+@pytest.mark.smoke
+def test_real_ppo_trainer_trains_the_value_model_with_loraplus(tmp_path, monkeypatch):
+    """On the real trl PPOTrainer built through the wrapper: the injected LoRA+
+    optimizer holds every trainable value-model tensor at lr, and lora_B at
+    lr * ratio. Before the fix no optimizer owned the critic, so its value
+    head stayed at its random initialisation."""
+    pytest.importorskip("trl")
+    from transformers import AutoModelForSequenceClassification
+
+    from soup_cli.config.loader import load_config_from_string
+    from soup_cli.trainer.ppo import PPOTrainerWrapper
+
+    base = "hf-internal-testing/tiny-random-gpt2"
+    reward_dir = tmp_path / "reward"
+    AutoModelForSequenceClassification.from_pretrained(base, num_labels=1).save_pretrained(
+        reward_dir
+    )
+    monkeypatch.chdir(tmp_path)
+    cfg = load_config_from_string(
+        f"base: {base}\n"
+        "task: ppo\n"
+        "data:\n  train: x.jsonl\n  max_length: 64\n"
+        "training:\n"
+        f"  reward_model: {reward_dir.as_posix()}\n"
+        "  epochs: 1\n"
+        "  batch_size: 2\n"
+        "  lr: 1e-4\n"
+        f"  loraplus_lr_ratio: {RATIO}\n"
+        "output: ./out\n"
+    )
+    wrapper = PPOTrainerWrapper(cfg, device="cpu")
+    wrapper.setup({"train": [{"prompt": "What is 2+2?"}, {"prompt": "Say hi."}]})
+
+    trainer = wrapper.trainer
+    optimizer = trainer.optimizer
+    group_lr = {id(p): g["lr"] for g in optimizer.param_groups for p in g["params"]}
+
+    value_params = [p for p in trainer.value_model.parameters() if p.requires_grad]
+    assert value_params
+    missing = [p for p in value_params if id(p) not in group_lr]
+    assert not missing, f"{len(missing)}/{len(value_params)} value-model tensors in no optimizer"
+    assert all(group_lr[id(p)] == pytest.approx(1e-4) for p in value_params)
+
+    lora_b = [p for n, p in trainer.policy_model.named_parameters() if "lora_B" in n]
+    assert lora_b
+    assert all(group_lr[id(p)] == pytest.approx(1e-4 * RATIO) for p in lora_b)
