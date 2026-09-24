@@ -724,7 +724,9 @@ master weights on every device. On CUDA, autocast runs the forward pass in bf16 
 pre-Ampere cards); on MPS it uses bf16 where the runtime supports it; CPU trains in fp32.
 With the default optimizer (AdamW), budget about 16 bytes per parameter before
 activations (fp32 weights, fp32 gradients and two fp32 AdamW moments), which is what the
-VRAM pre-flight predicts for `task: prm`. The saved checkpoint is fp32. Under DeepSpeed,
+VRAM pre-flight predicts for `task: prm` when `batch_size` is an integer (with the
+default `batch_size: auto` the pre-flight does not run). The saved checkpoint is fp32, and
+without DeepSpeed loading the fp32 base needs about twice the host RAM of a bf16 load. Under DeepSpeed,
 each rank loads the base in fp32 on the host before the engine exists (4 bytes per
 parameter of host RAM per rank); the engine then casts it to its bf16/fp16 dtype, keeps
 its own fp32 master copy and saves a 16-bit checkpoint. A bf16 base without master
