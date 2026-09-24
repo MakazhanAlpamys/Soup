@@ -13,6 +13,7 @@ from rich.table import Table
 from soup_cli.commands._webhook_cli import emit_webhooks, validate_webhook_flags
 from soup_cli.utils.ab_test import (
     HIGHER_IS_BETTER,
+    MIN_ROWS_PER_ARM,
     MsprtConfig,
     run_msprt,
     validate_metric_name,
@@ -128,6 +129,16 @@ def ab(
                 "[yellow]No significant difference. Treatment is not "
                 "distinguishable from control at the configured effect size.[/]",
                 border_style="yellow",
+            )
+        )
+    elif min(verdict.n_control, verdict.n_treatment) < MIN_ROWS_PER_ARM:
+        console.print(
+            Panel(
+                f"[cyan]Burn-in: no verdict before {MIN_ROWS_PER_ARM} rows per arm "
+                f"(control has {verdict.n_control}, treatment {verdict.n_treatment}); "
+                "with fewer rows the variance estimate is too noisy for the test's "
+                "false-positive guarantee. Collect more samples and re-run.[/]",
+                border_style="cyan",
             )
         )
     else:

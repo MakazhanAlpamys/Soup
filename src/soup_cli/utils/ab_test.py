@@ -28,8 +28,9 @@ Three known limitations:
    resulting per-prompt averages are approximately Gaussian.
 3. The variance is estimated from the rows, not known. The martingale
    argument holds for a known variance; with only a few rows per arm the
-   estimate is noisy enough to push the Type-I rate under peeking above
-   `alpha` when `effect_size` is comparable to the row-to-row noise.
+   estimate is too noisy for it. So no verdict is given (`continue`) until
+   each arm has `MIN_ROWS_PER_ARM` rows; that constant says how it was chosen
+   and what Type-I rate remains.
 """
 
 from __future__ import annotations
@@ -51,6 +52,20 @@ SUPPORTED_METRICS: frozenset[str] = frozenset(
 HIGHER_IS_BETTER: Mapping[str, bool] = MappingProxyType(
     {"judge_score": True, "latency": False, "retry_rate": False}
 )
+# Burn-in (#1227): while either arm has fewer rows than this, the verdict is
+# `continue` whatever the log-likelihood ratio says. The pooled variance is
+# estimated from the rows, and from a handful of them it can come out far too
+# small; the likelihood ratio is then no martingale, and an operator who re-runs
+# after every new pair rejected a true H0 up to 0.163 of the time at alpha 0.05
+# (effect_size / sigma 1.25, no burn-in). Chosen by a Monte-Carlo sweep of that
+# peeking procedure (H0, a look after every pair up to 200 rows per arm,
+# alpha 0.05, beta 0.20, effect_size / sigma from 0.1 to 5, 100,000 runs per
+# ratio): the smallest N in {10, 15, 20, 30, 40} whose Type-I rate stays within
+# alpha + 3 binomial standard errors (0.0521) at every ratio. N = 20: worst
+# 0.0513 at effect_size / sigma 0.4 (with the true variance 0.0420); N = 15
+# reaches 0.0536. Calibrated at alpha 0.05 only: at alpha 0.01 the same sweep
+# gives up to 0.0125. The sweep and its log are on the #1227 pull request.
+MIN_ROWS_PER_ARM = 20
 _MAX_METRIC_NAME_LEN = 32
 _MAX_SAMPLES_PER_ARM = 1_000_000
 _VALID_DECISIONS: frozenset[str] = frozenset(
@@ -216,7 +231,8 @@ def _verdict_from_summary(
 
     The decision half of :func:`msprt_step`, split out so a peeking simulation
     can drive exactly this code from running sums instead of re-reading every
-    row at every peek.
+    row at every peek. Below ``MIN_ROWS_PER_ARM`` rows in either arm the
+    log-likelihood ratio is still reported, but the decision is ``continue``.
     """
     pooled_se = math.sqrt(pooled_variance * (1.0 / n_control + 1.0 / n_treatment))
 
@@ -255,7 +271,9 @@ def _verdict_from_summary(
     lower = math.log(config.beta / (1.0 - config.alpha))
 
     direction = None
-    if llr >= upper:
+    if min(n_control, n_treatment) < MIN_ROWS_PER_ARM:
+        decision = "continue"  # burn-in: see MIN_ROWS_PER_ARM
+    elif llr >= upper:
         decision = "reject_h0"
         direction = _direction(config.metric, diff)
     elif llr <= lower:
@@ -283,7 +301,8 @@ def msprt_step(
     """Run a single two-sided mSPRT decision step.
 
     Returns ``MsprtVerdict`` with one of:
-    - ``continue``: keep collecting samples
+    - ``continue``: keep collecting samples; always the answer while either
+      arm has fewer than ``MIN_ROWS_PER_ARM`` rows (burn-in)
     - ``reject_h0``: difference is real (treatment != control), in either
       direction; ``direction`` says whether the treatment is ``better`` or
       ``worse`` than control, by the metric's polarity
@@ -389,6 +408,7 @@ def run_msprt(
 
 __all__ = [
     "HIGHER_IS_BETTER",
+    "MIN_ROWS_PER_ARM",
     "MsprtConfig",
     "MsprtVerdict",
     "SUPPORTED_METRICS",

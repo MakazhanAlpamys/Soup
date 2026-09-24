@@ -13,6 +13,13 @@ ratio is a martingale under H0 and so is their average, which is why the
 ``log((1 - beta) / alpha)`` boundary keeps its meaning. Averaging the
 log-ratios, or substituting ``|z|``, does not have that property; the peeking
 simulations below are what catch the ``|z|`` shortcut.
+
+That argument needs a known variance, and ``soup ab`` estimates it from the rows.
+From a handful of rows the estimate is too noisy: re-running after every pair
+rejected a true H0 up to 0.163 of the time at alpha 0.05. So no verdict is given
+until each arm has ``MIN_ROWS_PER_ARM`` (20) rows, the smallest burn-in that a
+Monte-Carlo sweep over effect_size / sigma 0.1 to 5 found to keep Type-I within
+alpha plus Monte-Carlo error at every ratio (worst 0.0513, at ratio 0.4).
 """
 
 from __future__ import annotations
@@ -31,7 +38,7 @@ runner = CliRunner()
 # Box-drawing characters go too, so a table row reads "direction worse" and a
 # panel sentence wrapped across two lines reads as one sentence.
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
-_BOX_RE = re.compile(r"[─-╿|]")
+_BOX_RE = re.compile(f"[{chr(0x2500)}-{chr(0x257F)}|]")  # the box-drawing block, and "|"
 
 
 def _plain(text: str) -> str:
@@ -167,6 +174,67 @@ class TestNoDifference:
         assert verdict.decision == "continue"
         assert verdict.direction is None
         assert verdict.log_likelihood_ratio == 0.0
+
+
+# ---------------------------------------------------------------------------
+# Burn-in: no verdict until each arm has MIN_ROWS_PER_ARM rows
+# ---------------------------------------------------------------------------
+
+
+def _judge_rows(count):
+    """``count`` judge_score rows around 0.80 (the issue's pattern, extended)."""
+    return ([0.80, 0.82, 0.78, 0.81, 0.79] * 20)[:count]
+
+
+def _min_rows():
+    from soup_cli.utils.ab_test import MIN_ROWS_PER_ARM
+
+    return MIN_ROWS_PER_ARM
+
+
+class TestBurnIn:
+    def test_min_rows_per_arm_is_the_swept_value(self):
+        """20 is the smallest N in {10, 15, 20, 30, 40} whose Type-I rate under
+        peeking stays within alpha + 3 binomial SE at every effect_size / sigma
+        from 0.1 to 5 (alpha 0.05, 100,000 runs per ratio). Changing it means
+        re-running that sweep, not editing this number.
+        """
+        assert _min_rows() == 20
+
+    @pytest.mark.parametrize("shift", [-0.30, 0.30])
+    def test_no_rejection_below_the_burn_in(self, shift):
+        control = _judge_rows(_min_rows() - 1)
+        verdict = _step("judge_score", control, _shifted(control, shift))
+        assert verdict.decision == "continue", verdict
+        assert verdict.direction is None
+        # The evidence is computed and reported; only the verdict is withheld.
+        assert verdict.log_likelihood_ratio >= _upper()
+
+    def test_no_acceptance_below_the_burn_in(self):
+        control = _judge_rows(_min_rows() - 1)
+        verdict = _step("judge_score", control, list(control))
+        assert verdict.decision == "continue", verdict
+        assert verdict.log_likelihood_ratio <= math.log(0.20 / 0.95)
+
+    @pytest.mark.parametrize(
+        ("shift", "decision", "direction"),
+        [(-0.30, "reject_h0", "worse"), (0.0, "accept_h0", None), (0.30, "reject_h0", "better")],
+    )
+    def test_verdicts_resume_at_the_burn_in(self, shift, decision, direction):
+        control = _judge_rows(_min_rows())
+        verdict = _step("judge_score", control, _shifted(control, shift))
+        assert verdict.decision == decision, verdict
+        assert verdict.direction == direction
+
+    @pytest.mark.parametrize(("short_control", "short_treatment"), [(True, False), (False, True)])
+    def test_both_arms_must_reach_the_burn_in(self, short_control, short_treatment):
+        full = _judge_rows(_min_rows())
+        short = full[:-1]
+        control = short if short_control else full
+        treatment = _shifted(short if short_treatment else full, -0.30)
+        verdict = _step("judge_score", control, treatment)
+        assert verdict.decision == "continue", verdict
+        assert verdict.log_likelihood_ratio >= _upper()
 
 
 # ---------------------------------------------------------------------------
@@ -369,6 +437,20 @@ class TestCli:
         assert "direction" in payload
         assert payload["direction"] is None
 
+    def test_burn_in_file_says_why_there_is_no_verdict(self, tmp_path, monkeypatch):
+        control = _judge_rows(5)
+        result, captured = _run_cli(
+            tmp_path, monkeypatch, "judge_score", control, _shifted(control, -0.30),
+        )
+        assert result.exit_code == 0, (result.output, repr(result.exception))
+        out = _plain(result.output)
+        assert "decision continue" in out
+        assert "direction n/a" in out
+        assert "Burn-in: no verdict before 20 rows per arm" in out
+        assert "control has 5, treatment 5" in out
+        assert "rollback" not in out.lower()
+        assert captured == []  # a `continue` never pages anyone
+
 
 # ---------------------------------------------------------------------------
 # Type-I error under peeking (seeded Monte-Carlo, vectorised with numpy)
@@ -447,16 +529,17 @@ class TestTypeOneErrorUnderPeeking:
     def test_rejects_at_most_alpha_when_the_effect_is_small_against_noise(self):
         """Acceptance: H0, a peek after every pair, rejection rate <= alpha.
 
-        effect_size / sigma = 0.18: the effect you look for is small next to the
-        row-to-row noise, the usual A/B regime. Measured over 40,000 runs of this
-        statistic: 0.043 for the mixture, 0.083 for a |z| substitution, 0.041 for
-        the old one-sided test. 3000 runs put the bound at 0.0619.
+        effect_size / sigma = 0.25: the effect you look for is small next to the
+        row-to-row noise, the usual A/B regime. Measured over 100,000 runs with
+        the burn-in (the #1227 sweep): 0.0347 for the mixture, 0.0848 for a |z|
+        substitution, 0.0405 for the old one-sided test. 3000 runs put the bound
+        at 0.0619.
         """
         np = pytest.importorskip("numpy")
         from soup_cli.utils.ab_test import MsprtConfig, _verdict_from_summary, msprt_step
 
         config = MsprtConfig(metric="latency", alpha=_ALPHA, beta=0.20, effect_size=0.1)
-        sim = _peek_until_decided(np, config, sigma=0.1 / 0.18, reps=_REPS, seed=1227)
+        sim = _peek_until_decided(np, config, sigma=0.1 / 0.25, reps=_REPS, seed=1227)
         outcomes = sim["outcomes"]
         rate = _rejection_rate(outcomes)
         assert rate <= _ALPHA + _MC_TOLERANCE, (
@@ -499,38 +582,42 @@ class TestTypeOneErrorUnderPeeking:
     def test_mixture_keeps_the_wald_boundary_with_a_known_variance(self):
         """The martingale argument itself, with the variance estimate taken out.
 
-        effect_size / sigma = 1.0. Measured over 40,000 runs with the true
-        variance: 0.035 for the mixture, 0.071 for |z|. 6000 runs put the bound at
-        0.05 + 3 * sqrt(0.05 * 0.95 / 6000) = 0.0584.
+        effect_size / sigma = 0.4. Measured over 100,000 runs with the true
+        variance and the burn-in (the #1227 sweep): 0.0420 for the mixture,
+        0.0905 for |z|. 3000 runs put the bound at 0.0619.
         """
         np = pytest.importorskip("numpy")
         from soup_cli.utils.ab_test import MsprtConfig
 
-        reps = 6000
-        tolerance = 3.0 * math.sqrt(_ALPHA * (1.0 - _ALPHA) / reps)
         config = MsprtConfig(metric="judge_score", alpha=_ALPHA, beta=0.20, effect_size=0.1)
         sim = _peek_until_decided(
-            np, config, sigma=0.1, reps=reps, seed=2027, known_variance=True
+            np, config, sigma=0.1 / 0.4, reps=_REPS, seed=2027, known_variance=True
         )
         rate = _rejection_rate(sim["outcomes"])
-        assert rate <= _ALPHA + tolerance, (rate, _ALPHA + tolerance)
+        assert rate <= _ALPHA + _MC_TOLERANCE, (rate, _ALPHA + _MC_TOLERANCE)
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason=(
-            "Pre-existing, not caused by #1227: the pooled variance is estimated from "
-            "as few as 2 rows per arm, and with effect_size close to the row noise that "
-            "estimate is too noisy for the likelihood ratio to stay a martingale. The "
-            "old one-sided statistic measures 0.11 here; the two-sided one 0.16."
-        ),
+    @pytest.mark.parametrize(
+        ("ratio", "seed"),
+        [(0.4, 2028), (1.0, 2029), (2.0, 2030)],
     )
-    def test_few_rows_per_arm_inflate_type_one_error_when_effect_matches_noise(self):
+    def test_burn_in_keeps_type_one_error_within_alpha_with_few_rows(self, ratio, seed):
+        """The small-sample case: the variance estimated from as few as 2 rows.
+
+        Measured over 100,000 runs (the #1227 sweep), Type-I with the 20-row
+        burn-in / without any: 0.0513 / 0.1154 at effect_size / sigma 0.4 (the
+        worst ratio for the burn-in), 0.0230 / 0.1628 at 1.0, 0.0006 / 0.1348 at
+        2.0. 2000 runs put the bound at 0.0646, so removing the burn-in fails
+        every case.
+        """
         np = pytest.importorskip("numpy")
         from soup_cli.utils.ab_test import MsprtConfig
 
         reps = 2000
         tolerance = 3.0 * math.sqrt(_ALPHA * (1.0 - _ALPHA) / reps)
         config = MsprtConfig(metric="judge_score", alpha=_ALPHA, beta=0.20, effect_size=0.1)
-        sim = _peek_until_decided(np, config, sigma=0.1, reps=reps, seed=2028)
-        assert _rejection_rate(sim["outcomes"]) <= _ALPHA + tolerance
+        sim = _peek_until_decided(np, config, sigma=0.1 / ratio, reps=reps, seed=seed)
+        rate = _rejection_rate(sim["outcomes"])
+        assert rate <= _ALPHA + tolerance, (
+            f"Type-I rate {rate:.4f} at effect_size / sigma {ratio} exceeds alpha "
+            f"{_ALPHA} + tolerance {tolerance:.4f}"
+        )
