@@ -785,7 +785,11 @@ rules out `train_on_messages_with_train_field`, which is itself exclusive with
 `train_on_responses_only`: the per-message `train` field and `mask_history` can
 never both decide a run.
 
-It is honoured by the transformers backend, for `task: sft` and `task: distill`.
+On text SFT it is honoured by the transformers and unsloth backends, which run
+the same `SFTTrainerWrapper.setup()` row builder, and `task: distill` honours it
+too, since distill builds every row that way. On `task: sft` with
+`modality: vision` or `audio` it is accepted but not applied: those rows are
+built by the vision and audio preparers, which never read it (#1156).
 **`backend: mlx` ignores it:** MLX SFT builds its own mask and supervises every
 assistant turn, so the same config trains the last turn on transformers and every
 turn on MLX. `soup train` says so on its "MLX backend ignores:" line, and
@@ -1006,7 +1010,7 @@ Pass `--live --base-yaml soup.yaml` to score each candidate with a short `soup t
 ## AOT Tokenization with `soup data preprocess`
 
 Pre-tokenize your dataset once and cache Arrow shards keyed by
-`(dataset, tokenizer, max_length, format, chat_template)`:
+`(dataset, tokenizer, max_length, format, chat_template, loss-mask mode)`:
 
 ```bash
 soup data preprocess soup.yaml --output ./tokenized_cache
@@ -1040,6 +1044,17 @@ tokenizer with no chat template is reported once, before any row, and points at
 `data.chat_template`. The rows are checked when the command builds a cache: if one
 with the same key already exists it stops at `Target already exists` (exit 0)
 without reading them, so rebuild a cache written before this change with `--yes`.
+
+Cached rows carry a `labels` column masked exactly as the equivalent live run
+would mask it (`data.train_on_responses_only` /
+`data.train_on_messages_with_train_field`, plus `data.mask_history` and
+`training.train_on_eot`). That mask mode is part of the cache key too, so a cache
+built under one masking setting is refused — with the same
+`cache hash mismatch` error — when loaded under a different one. Caches written
+before this fix (tokenizer schema `v5` and earlier) have no `labels` and are
+rejected; re-run `soup data preprocess`. A `pre_tokenized` dataset you built
+yourself must carry its own `labels` column (`-100` on every token not to train
+on); without one it is refused rather than trained on every token.
 
 
 ## Data Recipe DAG Runner (`soup data recipe --execute`)

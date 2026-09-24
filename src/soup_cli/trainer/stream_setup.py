@@ -423,6 +423,13 @@ class StreamingSetupMixin:
     #: step; 2 for a loss whose forward concatenates chosen and rejected.
     _STREAM_ROWS_PER_EXAMPLE = 1
 
+    #: True for a loss that runs a second forward before each step's backward
+    #: (the reference pass of DPO and KTO). On an untied checkpoint that
+    #: forward refills the large slot the output head's autograd view points
+    #: into, so the head takes a private copy of its weight and the VRAM
+    #: pre-flight charges a second large slot for it (#1049).
+    _STREAM_REFILL_BEFORE_BACKWARD = False
+
     #: Set by :meth:`_setup_streaming_transformers`; absent on a resident run.
     _stream_runtime = None
 
@@ -538,6 +545,7 @@ class StreamingSetupMixin:
             expandable_segments_status,
             extras_resident_bytes,
             large_layer_buffer_bytes,
+            large_layer_specs,
             large_layer_store_bytes,
             quantised_layer_suffixes,
         )
@@ -725,6 +733,9 @@ class StreamingSetupMixin:
         embed_bytes = extras_resident_bytes(shard_dir)
         large_store_bytes = large_layer_store_bytes(shard_dir, index)
         large_buffer_bytes = large_layer_buffer_bytes(shard_dir, index)
+        large_budget_bytes = self._stream_large_budget_bytes(
+            large_buffer_bytes, len(large_layer_specs(shard_dir, index))
+        )
         ngram_bytes = external_tensor_bytes(getattr(index, "external_tensors", None) or {})
 
         free_ram = free_ram_bytes()
@@ -890,7 +901,7 @@ class StreamingSetupMixin:
             model_config=model_config,
             layer_bytes=layer_bytes,
             embed_bytes=embed_bytes,
-            large_layer_bytes=large_buffer_bytes,
+            large_layer_bytes=large_budget_bytes,
             index=index,
             on_cuda=on_cuda,
         )
@@ -959,6 +970,7 @@ class StreamingSetupMixin:
             tier=tier,
             weights_dir=weights_dir,
             ngram_source=ngram_source,
+            refill_before_backward=self._STREAM_REFILL_BEFORE_BACKWARD,
         )
         self.model = model
         self._stream_runtime = runtime
@@ -977,6 +989,21 @@ class StreamingSetupMixin:
             f"[green]Layer streaming ready:[/] {stats['n_layers']} layers, "
             f"{source_line}, {buffer_line}"
         )
+
+    def _stream_large_budget_bytes(self, slot_bytes: int, n_large_keys: int) -> int:
+        """Large-layer bytes the VRAM pre-flight charges.
+
+        One reusable slot, sized to the larger of ``embed_tokens`` and an untied
+        ``lm_head`` (#324). An untied checkpoint (two large keys) under a loss
+        with a second forward per step also holds a private copy of the head's
+        weight for the whole graph (#1049). It is charged as a second full slot.
+        That is the head's size when the head is the larger matrix and an
+        over-count otherwise, which keeps ``estimate_stream_peak_vram`` on the
+        side it promises never to leave.
+        """
+        if self._STREAM_REFILL_BEFORE_BACKWARD and n_large_keys > 1:
+            return 2 * slot_bytes
+        return slot_bytes
 
     def _attach_streamed_save_guard(self) -> None:
         """Check every ``checkpoint-*`` adapter a streamed run writes (#1011)."""

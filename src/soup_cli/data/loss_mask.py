@@ -361,6 +361,37 @@ def build_assistant_only_labels(
     return _truncate(full_ids, labels, max_length)
 
 
+def align_labels_to_ids(
+    source_ids: Sequence[int],
+    source_labels: Sequence[int],
+    target_ids: Sequence[int],
+) -> list[int]:
+    """Carry a loss mask built on one tokenization over onto another's ids.
+
+    ``soup data preprocess`` tokenizes the rendered template its own way (#876
+    settled the BOS question; #791 appends the training EOS), while the masking
+    builders above go through ``_tokenize_only``. The two need not agree token
+    for token, and after #876 they still differ by the trailing EOS. Rather than
+    re-deriving the mask against the cache's own tokenizer call — the drift that
+    produced #1054 in the first place — run the builders as-is and transfer
+    their mask onto the cache's ids by longest-common-subsequence alignment.
+
+    This holds whatever the two tokenizations differ by, so it does not need
+    revisiting each time one of them changes.
+
+    Positions with no aligned source token stay ``IGNORE_INDEX``.
+    """
+    labels = [IGNORE_INDEX] * len(target_ids)
+    matcher = SequenceMatcher(a=list(source_ids), b=list(target_ids), autojunk=False)
+    for tag, a1, _a2, b1, b2 in matcher.get_opcodes():
+        if tag != "equal":
+            continue
+        for offset in range(b2 - b1):
+            if source_labels[a1 + offset] != IGNORE_INDEX:
+                labels[b1 + offset] = target_ids[b1 + offset]
+    return labels
+
+
 def build_full_sequence_labels(
     messages: Sequence[dict],
     tokenizer: Any,

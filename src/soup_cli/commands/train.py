@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import json
 import os
 import re
 from pathlib import Path
@@ -77,6 +78,32 @@ def _format_training_complete_loss(result: dict) -> str:
     ):
         return f"Loss: [bold]{result['final_loss']:.4f}[/]"
     return f"Loss: [bold]{result['initial_loss']:.4f} -> {result['final_loss']:.4f}[/]"
+
+
+def _train_sample_count(dcfg, dataset) -> int:
+    """Rows training will actually consume (#1054).
+
+    For ``format: pre_tokenized`` the rows come from the Arrow cache at
+    ``data.tokenized_path`` (loaded later, in the trainer), not from
+    ``load_dataset`` — which sees the ORIGINAL ``data.train`` file and drops
+    every row for want of an ``input_ids`` column, printing "0 train samples"
+    for a run that then trains on the whole cache. Read the count preprocess
+    recorded instead, falling back to the loader's view if it is unavailable or
+    not a plausible count (a negative ``row_count`` is a corrupt or hand-edited
+    metadata.json, and printing "Loaded: -3 train samples" helps nobody).
+    """
+    rows = len(dataset.get("train", []))
+    if dcfg.format != "pre_tokenized" or not dcfg.tokenized_path:
+        return rows
+    try:
+        with open(
+            os.path.join(dcfg.tokenized_path, "metadata.json"), encoding="utf-8"
+        ) as f:
+            count = json.load(f).get("row_count")
+    except (OSError, ValueError):
+        return rows
+    valid = isinstance(count, int) and not isinstance(count, bool) and count >= 0
+    return count if valid else rows
 
 
 def _build_hardware_fit_input(cfg):
@@ -1409,7 +1436,9 @@ def train(
         cfg.data,
         preserve_source_columns=cfg.task == "grpo",
     )
-    console.print(f"[green]Loaded:[/] {len(dataset['train'])} train samples")
+    console.print(
+        f"[green]Loaded:[/] {_train_sample_count(cfg.data, dataset)} train samples"
+    )
 
     # Capture the --tracker CLI value BEFORE the local ExperimentTracker
     # shadows it (v0.43.0 review fix — name-collision regression).

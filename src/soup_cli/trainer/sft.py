@@ -174,7 +174,15 @@ def _validate_pretokenized_targets(dataset: Any, *, split: str, max_length: int)
     )
 
     if "labels" not in getattr(dataset, "column_names", ()):
-        return
+        # #1054: skipping here let a label-less cache through to TRL, whose
+        # collator then falls back to ``labels = input_ids`` and trained on the
+        # prompt. A pre-tokenized cache without labels is never trustworthy.
+        raise ValueError(
+            f"pre_tokenized {split} dataset has no 'labels' column — its loss "
+            "mask is unknown and TRL would train on every token. Re-run "
+            "`soup data preprocess` with a current Soup version, or add a "
+            "'labels' column to a dataset you built yourself."
+        )
     for row_index in range(len(dataset)):
         try:
             ensure_causal_loss_target(
@@ -450,7 +458,7 @@ def _make_vision_trainer(
 
 
 def _maybe_load_pretokenized(
-    dcfg, base: str, console_obj: Console,
+    dcfg, base: str, console_obj: Console, tcfg=None,
 ) -> Optional[Tuple[object, object]]:
     """v0.53.7 #86 — short-circuit tokenization when caller pre-tokenized via
     ``soup data preprocess``.
@@ -461,8 +469,9 @@ def _maybe_load_pretokenized(
 
     Cache-hash gate: when ``<tokenized_path>/metadata.json`` exists, its
     ``cache_key`` is cross-checked against the current
-    ``(base, max_length, format, train)`` config via
-    :func:`make_preprocess_cache_key`. Mismatch raises ``ValueError`` with
+    ``(train, base, max_length, format, chat_template, mask_mode)`` config via
+    :func:`make_preprocess_cache_key` — every input that changes what a cached
+    row looks like. Mismatch raises ``ValueError`` with
     the keyword ``"cache hash mismatch"`` so users know to re-run
     ``soup data preprocess``. Missing ``metadata.json`` falls back to
     "trusted" mode with a yellow advisory.
@@ -475,6 +484,7 @@ def _maybe_load_pretokenized(
         load_pretokenized_dataset,
         make_preprocess_cache_key,
         preprocess_dataset_key_input,
+        preprocess_mask_mode,
     )
 
     tokenized_path = dcfg.tokenized_path
@@ -505,14 +515,19 @@ def _maybe_load_pretokenized(
             # #1067: unlike the format, the template is restated in this config. It
             # has to match, since training saves the tokenizer with this template.
             chat_template=resolve_chat_template(dcfg.chat_template),
+            mask_mode=preprocess_mask_mode(dcfg, tcfg),
         )
         if stored_key != current_key:
-            # A cache without the field was written before #1067 keyed on the template.
-            predates = (
-                "the cache predates chat_template keying (#1067); "
-                if "chat_template" not in metadata
-                else ""
-            )
+            # A cache without the field was written before that input joined the
+            # key, so name the reason rather than leaving two hashes to compare
+            # by eye. Oldest gap first: a cache missing both predates #1067, and
+            # saying so places it further back than naming #1054 alone would.
+            if "chat_template" not in metadata:
+                predates = "the cache predates chat_template keying (#1067); "
+            elif "mask_mode" not in metadata:
+                predates = "the cache predates loss-mask keying (#1054); "
+            else:
+                predates = ""
             raise ValueError(
                 "pre_tokenized cache hash mismatch: was generated with "
                 f"{stored_key!r}, current config implies {current_key!r}; "
@@ -823,7 +838,7 @@ class SFTTrainerWrapper(StreamingSetupMixin):
         self._raft_epoch_shuffle = self._is_raft and bool(
             getattr(cfg.data, "raft_epoch_shuffle", False)
         )
-        pretok = _maybe_load_pretokenized(cfg.data, cfg.base, console)
+        pretok = _maybe_load_pretokenized(cfg.data, cfg.base, console, tcfg)
         if pretok is not None:
             train_ds, eval_ds = pretok
             _validate_pretokenized_targets(

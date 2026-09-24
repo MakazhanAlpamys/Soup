@@ -37,6 +37,9 @@ class DPOTrainerWrapper(StreamingSetupMixin):
     #: the configured batch. The VRAM pre-flight must budget for that.
     _STREAM_ROWS_PER_EXAMPLE = 2
 
+    #: The reference forward runs after the policy forward, before its backward.
+    _STREAM_REFILL_BEFORE_BACKWARD = True
+
     def __init__(
         self,
         config: SoupConfig,

@@ -2388,6 +2388,50 @@ def _refuse_row(idx: int, row, reason: str) -> NoReturn:
     raise typer.Exit(1)
 
 
+def _mask_labels_for_cache_row(
+    messages, tokenizer, mask_mode: str, max_length: int, input_ids: list
+) -> list:
+    """Loss mask for one cached chat row, from the live path's own builders (#1054).
+
+    ``mask_mode`` comes from ``preprocess_mask_mode``, which mirrors
+    ``data.sft_format.build_format_row``'s selection — so a cache and the
+    equivalent live run mask the same tokens. Every flag that reaches the live
+    builder has to be read back out of the mode string here: dropping one caches
+    a different mask under a key that says otherwise, which is #1054 again.
+
+    Suffixes are matched with ``in``, not ``endswith`` — with both suffixes
+    present the mode is ``responses_only+eot+mask_history``, and ``endswith``
+    would silently drop the EOT from every such cache.
+
+    The builders tokenize through ``add_special_tokens=False`` while this path is
+    pinned to the rendered template's own tokenization, so their mask is aligned
+    back onto ``input_ids`` rather than replacing it (``align_labels_to_ids``).
+    """
+    from soup_cli.data.loss_mask import (
+        align_labels_to_ids,
+        build_assistant_only_labels,
+        build_per_message_train_labels,
+    )
+
+    if mask_mode == "full":
+        return list(input_ids)
+    if mask_mode == "train_field":
+        built = build_per_message_train_labels(
+            messages, tokenizer, max_length=max_length
+        )
+    else:
+        built = build_assistant_only_labels(
+            messages,
+            tokenizer,
+            max_length=max_length,
+            include_eot="+eot" in mask_mode,
+            mask_history="+mask_history" in mask_mode,
+        )
+    return align_labels_to_ids(
+        built["input_ids"], built["labels"], input_ids
+    )
+
+
 @app.command(name="preprocess")
 def preprocess_dataset(
     config_path: str = typer.Argument(
@@ -2414,7 +2458,10 @@ def preprocess_dataset(
 
     from soup_cli.config.loader import load_config
     from soup_cli.data.chat_templates import resolve_chat_template
-    from soup_cli.utils.data_pipeline import make_preprocess_cache_key
+    from soup_cli.utils.data_pipeline import (
+        make_preprocess_cache_key,
+        preprocess_mask_mode,
+    )
     from soup_cli.utils.paths import is_under_cwd
 
     cfg_real = os.path.realpath(config_path)
@@ -2441,17 +2488,20 @@ def preprocess_dataset(
     train_display = (
         ", ".join(cfg.data.train) if isinstance(cfg.data.train, list) else cfg.data.train
     )
+    mask_mode = preprocess_mask_mode(cfg.data, getattr(cfg, "training", None))
     cache_key = make_preprocess_cache_key(
         dataset_path=dataset_path,
         tokenizer_name=cfg.base,
         max_length=cfg.data.max_length,
         format_name=cfg.data.format,
         chat_template=chat_template,
+        mask_mode=mask_mode,
     )
     target = Path(out_real) / cache_key
     console.print(f"[cyan]Dataset:[/] {train_display}")
     console.print(f"[cyan]Tokenizer:[/] {cfg.base}")
     console.print(f"[cyan]max_length:[/] {cfg.data.max_length}")
+    console.print(f"[cyan]Loss mask:[/] {mask_mode}")
     console.print(f"[cyan]Cache key:[/] {cache_key}")
     console.print(f"[cyan]Target:[/] {target}")
 
@@ -2613,9 +2663,22 @@ def preprocess_dataset(
                 if len(with_eos) != len(input_ids):
                     input_ids = with_eos
                     attention_mask = attention_mask + [1]
+            # #1054: without a ``labels`` column TRL's collator falls back to
+            # ``labels = input_ids`` and the cached run trains on the prompt
+            # too, silently diverging from the equivalent live chatml run. Build
+            # the mask with the very helpers the live path uses, then align it
+            # onto this path's ids, which are left exactly as the tokenization
+            # above produced them — only ``labels`` is new here.
+            labels = _mask_labels_for_cache_row(
+                messages, tokenizer, mask_mode, max_length, input_ids
+            )
+        else:
+            # Pretrain trains on every token by design — no masking.
+            labels = list(input_ids)
         rendered_rows.append(
             {
                 "input_ids": input_ids,
+                "labels": labels,
                 "attention_mask": attention_mask,
             }
         )
@@ -2656,6 +2719,7 @@ def preprocess_dataset(
         "max_length": max_length,
         "format": cfg.data.format,
         "chat_template": cfg.data.chat_template,
+        "mask_mode": mask_mode,
         "task": cfg.task,
         "soup_version": _soup_version,
     }

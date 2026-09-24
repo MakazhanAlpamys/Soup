@@ -2066,6 +2066,7 @@ class TestSftPretrainPreTokenizedShortCircuit:
             tokenizer_name="TinyLlama/TinyLlama-1.1B-Chat-v1.0",
             max_length=64,
             format_name="pre_tokenized",
+            mask_mode="responses_only",
         )
         (target / "metadata.json").write_text(
             json.dumps({"cache_key": cache_key}), encoding="utf-8"
@@ -2106,6 +2107,7 @@ class TestSftPretrainPreTokenizedShortCircuit:
             tokenizer_name="TinyLlama/TinyLlama-1.1B-Chat-v1.0",
             max_length=64,
             format_name="pre_tokenized",
+            mask_mode="responses_only",
         )
         (target / "metadata.json").write_text(
             json.dumps({"cache_key": cache_key}), encoding="utf-8"

@@ -269,18 +269,24 @@ class TestCacheKey:
             tokenizer_name="meta-llama/Llama-3.1-8B",
             max_length=2048,
             format_name="chatml",
+            mask_mode="responses_only",
         )
 
-        def _blob_key(schema):
+        def _blob_key(schema, *, mask=False):
             # Six fields: #1067 appended the resolved chat template (empty for the
-            # tokenizer's shipped one) after format_name.
+            # tokenizer's shipped one) after format_name. #1054 appended the
+            # loss-mask mode after that, so v6 has seven -- each generation is
+            # rebuilt with exactly the fields it wrote.
             blob = (
                 f"{schema}\x1f{args['dataset_path']}\x1f{args['tokenizer_name']}"
                 f"\x1f{args['max_length']}\x1f{args['format_name']}\x1f"
             )
+            if mask:
+                blob += f"\x1f{args['mask_mode']}"
             return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:16]
 
         current = make_preprocess_cache_key(**args)
         assert current != _blob_key("v3"), "a v3 (#791) cache must be rejected"
         assert current != _blob_key("v4"), "a v4 (#1067) cache must be rejected"
-        assert current == _blob_key("v5"), "current schema is v5 (#876)"
+        assert current != _blob_key("v5"), "a v5 (#876) cache must be rejected"
+        assert current == _blob_key("v6", mask=True), "current schema is v6 (#1054)"

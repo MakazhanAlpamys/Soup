@@ -1348,18 +1348,33 @@ def _large_layer_weight_param_name(inner: Any) -> str:
     return "weight"
 
 
+def _unwrap_tuner_base(module: Any) -> Any:
+    """The real module under any peft tuner wrapper (#1012 wraps a LoRA target)."""
+    seen = 0
+    while hasattr(module, "base_layer") and seen < 8:
+        module = module.base_layer
+        seen += 1
+    return module
+
+
 def _build_streamed_large_layer_class():
+    import torch
     import torch.nn as nn
     from torch.func import functional_call
 
     class StreamedLargeLayer(nn.Module):
         """Embedding or output projection backed by the shared large slot."""
 
-        def __init__(self, inner: Any, key: str, pool: Any):
+        def __init__(
+            self, inner: Any, key: str, pool: Any, refill_before_backward: bool = False
+        ):
             super().__init__()
             self.inner = inner
             self.key = str(key)
             self.pool = pool
+            # #1049 -- set by the trainers whose loss runs a second forward before
+            # the step's backward (see `_needs_a_private_weight`).
+            self.refill_before_backward = bool(refill_before_backward)
             self._register_load_state_dict_pre_hook(self._redirect_canonical_weight)
             self._weight_param_name = _large_layer_weight_param_name(inner)
 
@@ -1472,12 +1487,47 @@ def _build_streamed_large_layer_class():
                 return getattr(inner, name)
 
         def forward(self, *args: Any, **kwargs: Any) -> Any:
+            weight = self.pool.wait(self.key)
+            if torch.is_grad_enabled() and self._needs_a_private_weight():
+                # #1049 -- embed_tokens and an untied lm_head SHARE one slot, and
+                # `wait` returns a view of it, so the next `load_async` refills the
+                # bytes autograd is holding. The projection saves its weight to build
+                # `grad wrt x`, so a second forward in the same step -- the reference
+                # pass of a preference loss -- bumped that tensor's version and the
+                # policy backward died with "modified by an inplace operation".
+                # Hand autograd a private copy: one head-sized allocation, alive only
+                # while the graph is, and only when a second forward can refill the
+                # slot before the backward. The VRAM pre-flight charges it.
+                weight = weight.clone()
             return functional_call(
                 self.inner,
-                {self._weight_param_name: self.pool.wait(self.key)},
+                {self._weight_param_name: weight},
                 args,
                 kwargs,
             )
+
+        def _needs_a_private_weight(self) -> bool:
+            """True when this layer's weight can be refilled while autograd holds it.
+
+            Three things have to be true. The loss must run a second forward
+            before the step's backward -- the reference pass of a preference
+            loss. SFT, ORPO and SimPO run one forward per step, and nothing
+            refills the slot between it and its backward, so they never need the
+            copy (``refill_before_backward``, set by the trainer). The slot must
+            be SHARED: a tied checkpoint streams one key, so its buffer is never
+            refilled within a step. And the weight must be one autograd can save,
+            which an embedding's is not -- ``embedding_backward`` works from the
+            indices and the vocabulary size, never from the weight values, so
+            nothing holds those bytes past the lookup. That leaves the
+            projection, i.e. the untied ``lm_head``, and keeps the cost at one
+            head-sized copy rather than two.
+            """
+            if not self.refill_before_backward:
+                return False
+            specs = getattr(self.pool, "specs", None)
+            if specs is None or len(specs) <= 1:
+                return False
+            return not isinstance(_unwrap_tuner_base(self.inner), nn.Embedding)
 
     return StreamedLargeLayer
 
@@ -2427,8 +2477,14 @@ def install_streaming(
     codes: Optional[Mapping[str, Any]] = None,
     tier: str = "ram",
     read_ahead: int = DEFAULT_STREAM_READ_AHEAD,
+    refill_before_backward: bool = False,
 ) -> StreamRuntime:
-    """Wrap every decoder layer and wire the buffer pool + prefetch scheduler."""
+    """Wrap every decoder layer and wire the buffer pool + prefetch scheduler.
+
+    ``refill_before_backward`` says the loss runs a second forward before each
+    step's backward; an untied output head then hands autograd a private copy
+    of its weight (#1049).
+    """
     import torch
 
     from soup_cli.utils.layer_shard import (
@@ -2610,12 +2666,18 @@ def install_streaming(
             # is read, not run. Kept for the architecture that does share it.
             if embed_key != output_key:
                 raise ValueError("one module cannot represent two untied large-layer weights")
-            shared = large_cls(input_module, embed_key, large_pool)
+            shared = large_cls(
+                input_module, embed_key, large_pool, refill_before_backward=refill_before_backward
+            )
             if not _replace_module_references(model, input_module, shared):
                 raise RuntimeError("could not install the streamed tied embedding module")
         else:
-            streamed_input = large_cls(input_module, embed_key, large_pool)
-            streamed_output = large_cls(output_module, output_key, large_pool)
+            streamed_input = large_cls(
+                input_module, embed_key, large_pool, refill_before_backward=refill_before_backward
+            )
+            streamed_output = large_cls(
+                output_module, output_key, large_pool, refill_before_backward=refill_before_backward
+            )
             if not _replace_module_references(model, input_module, streamed_input):
                 raise RuntimeError("could not install the streamed input embedding")
             if not _replace_module_references(model, output_module, streamed_output):
@@ -2947,6 +3009,7 @@ def build_streamed_model(
     read_ahead: int = DEFAULT_STREAM_READ_AHEAD,
     weights_dir: Optional[str] = None,
     ngram_source: str = "disk",
+    refill_before_backward: bool = False,
 ) -> Tuple[Any, StreamRuntime]:
     """Meta skeleton -> extras -> LoRA -> streaming. No resident base load."""
     from peft import get_peft_model
@@ -2993,6 +3056,7 @@ def build_streamed_model(
             codes=extras.codes,
             tier=tier,
             read_ahead=read_ahead,
+            refill_before_backward=refill_before_backward,
         )
     except BaseException:
         for external in external_sources:

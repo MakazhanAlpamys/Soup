@@ -37,6 +37,9 @@ class KTOTrainerWrapper(StreamingSetupMixin):
     #: it (``kto_trainer.py`` :939-977), so the row count per forward is 1x.
     _STREAM_ROWS_PER_EXAMPLE = 1
 
+    #: The reference forward runs after the policy forward, before its backward.
+    _STREAM_REFILL_BEFORE_BACKWARD = True
+
     def __init__(
         self,
         config: SoupConfig,

@@ -411,6 +411,7 @@ class TestPreprocessCacheKey:
             tokenizer_name="meta-llama/Llama-3.1-8B",
             max_length=2048,
             format_name="chatml",
+            mask_mode="responses_only",
         )
         old_blob = (
             f"{args['dataset_path']}\x1f{args['tokenizer_name']}"
