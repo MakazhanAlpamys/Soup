@@ -14,6 +14,9 @@ _RL_MAP = {
     "kto": "kto",
     "grpo": "grpo",
     "gdpo": "grpo",
+    "orpo": "orpo",
+    "ipo": "ipo",
+    "simpo": "simpo",
 }
 
 # Axolotl dataset type → Soup format
@@ -35,6 +38,9 @@ _TASK_FORMAT_MAP = {
     "dpo": "dpo",
     "kto": "kto",
     "grpo": "auto",
+    "orpo": "dpo",
+    "ipo": "dpo",
+    "simpo": "dpo",
 }
 
 
@@ -59,7 +65,15 @@ def migrate_axolotl(config_path: Path) -> Dict[str, Any]:
 
     # --- Task ---
     rl_type = raw.get("rl")
-    task = _RL_MAP.get(rl_type, "sft") if rl_type else "sft"
+    if rl_type:
+        task = _RL_MAP.get(rl_type, "sft")
+        if rl_type not in _RL_MAP:
+            warnings.append(
+                f"No Soup task matches axolotl rl: {rl_type}. Falling back "
+                "to task: sft."
+            )
+    else:
+        task = "sft"
 
     # --- Data ---
     data: Dict[str, Any] = {}

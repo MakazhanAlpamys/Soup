@@ -1348,6 +1348,93 @@ class TestMigrateTDDGaps:
         result = migrate_axolotl(cfg_file)
         assert result["task"] == "grpo"
 
+    @pytest.mark.parametrize("rl_value,soup_task", [
+        ("orpo", "orpo"),
+        ("ipo", "ipo"),
+        ("simpo", "simpo"),
+    ])
+    def test_axolotl_preference_rl_maps_to_soup_task(
+        self, tmp_path, rl_value, soup_task
+    ):
+        """rl: orpo/ipo/simpo → matching Soup task, not a silent sft fallback."""
+        from soup_cli.migrate.axolotl import migrate_axolotl
+
+        cfg_file = tmp_path / "config.yaml"
+        cfg_file.write_text(
+            "base_model: meta-llama/Llama-3.1-8B\n"
+            "datasets:\n"
+            "  - path: ./data/train.jsonl\n"
+            "    type: chat_template\n"
+            "sequence_len: 2048\n"
+            "adapter: lora\n"
+            "lora_r: 16\n"
+            "micro_batch_size: 2\n"
+            "num_epochs: 3\n"
+            "learning_rate: 1e-5\n"
+            "output_dir: ./output\n"
+            f"rl: {rl_value}\n",
+            encoding="utf-8",
+        )
+        result = migrate_axolotl(cfg_file)
+        assert result["task"] == soup_task
+        assert result["data"]["format"] == "dpo"
+        assert not any("rl" in w.lower() for w in result.get("_warnings", []))
+
+    def test_axolotl_preference_rl_migration_loads(self, tmp_path):
+        """The migrated orpo config must load as a valid SoupConfig, not
+        just build without raising (same shape as #806 for grpo)."""
+        from soup_cli.config.loader import load_config_from_string
+        from soup_cli.migrate.axolotl import migrate_axolotl
+        from soup_cli.migrate.common import config_to_yaml
+
+        cfg_file = tmp_path / "config.yaml"
+        cfg_file.write_text(
+            "base_model: meta-llama/Llama-3.1-8B\n"
+            "datasets:\n"
+            "  - path: ./data/train.jsonl\n"
+            "    type: chat_template\n"
+            "sequence_len: 2048\n"
+            "adapter: lora\n"
+            "lora_r: 16\n"
+            "micro_batch_size: 2\n"
+            "num_epochs: 3\n"
+            "learning_rate: 1e-5\n"
+            "output_dir: ./output\n"
+            "rl: orpo\n",
+            encoding="utf-8",
+        )
+        result = migrate_axolotl(cfg_file)
+        yaml_str = config_to_yaml(result)
+        soup_config = load_config_from_string(yaml_str)
+        assert soup_config.task == "orpo"
+
+    def test_axolotl_unmapped_rl_warns_and_falls_back(self, tmp_path):
+        """rl: ebft has no Soup task: fall back to sft but warn about rl,
+        unlike the previous silent fallback for orpo/ipo/simpo."""
+        from soup_cli.migrate.axolotl import migrate_axolotl
+
+        cfg_file = tmp_path / "config.yaml"
+        cfg_file.write_text(
+            "base_model: meta-llama/Llama-3.1-8B\n"
+            "datasets:\n"
+            "  - path: ./data/train.jsonl\n"
+            "    type: sharegpt\n"
+            "sequence_len: 2048\n"
+            "adapter: lora\n"
+            "lora_r: 16\n"
+            "micro_batch_size: 2\n"
+            "num_epochs: 3\n"
+            "learning_rate: 1e-5\n"
+            "output_dir: ./output\n"
+            "rl: ebft\n",
+            encoding="utf-8",
+        )
+        result = migrate_axolotl(cfg_file)
+        assert result["task"] == "sft"
+        assert any(
+            "ebft" in w and "sft" in w for w in result.get("_warnings", [])
+        )
+
     def test_unsloth_markdown_only_notebook(self, tmp_path):
         """Notebook with only markdown cells (no code) raises ValueError."""
         from soup_cli.migrate.unsloth import migrate_unsloth
