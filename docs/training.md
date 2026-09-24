@@ -1037,7 +1037,7 @@ training:
   # vision_grpo: true                  # staged for VLM-RL; refused as of v0.77 (#808)
 ```
 
-All flags shipped as schema gates in v0.50.0; unconsumed staged flags (e.g. `long_context_grpo`, `vision_grpo`) warn in v0.75 and are scheduled for refusal in v0.77 (#808). Live loss kernels, vLLM sleep-mode plumbing, ART/RULER/NeMo Gym/OpenEnv launchers, and the PRM trainer wrapper land in their respective milestones.
+All flags shipped as schema gates in v0.50.0; unconsumed staged flags (e.g. `long_context_grpo`, `vision_grpo`) warn in v0.76 and are scheduled for refusal in v0.77 (#808). Live loss kernels, vLLM sleep-mode plumbing, ART/RULER/NeMo Gym/OpenEnv launchers, and the PRM trainer wrapper land in their respective milestones.
 
 
 ## DPO Training

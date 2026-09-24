@@ -41,8 +41,9 @@ class StagedField:
 #: DIFFERS from its schema default.
 #:
 #: Note: Training intelligence tunables already reported by ``soup train``
-#: (e.g. ``forgetting_*``, ``checkpoint_*``, ``early_stop_patience``) are excluded
-#: here to avoid conflicting diagnostics and adhere to their respective issue ownership (#808).
+#: (e.g. ``forgetting_*``, ``checkpoint_*``, ``early_stop_patience``,
+#: ``convergence_*``) are excluded here to avoid conflicting diagnostics
+#: and adhere to their respective issue ownership (#808).
 STAGED_FIELDS: dict[tuple[str, str], Any] = {
     ("training", "long_context_grpo"): False,
     ("training", "vision_grpo"): False,
@@ -50,8 +51,6 @@ STAGED_FIELDS: dict[tuple[str, str], Any] = {
     ("training", "grace_codebook"): False,
     ("training", "grace_codebook_size"): None,
     ("training", "grace_codebook_dim"): None,
-    ("training", "convergence_window"): 50,
-    ("training", "convergence_rel_tol"): 0.005,
     ("data", "video_dir"): None,
     ("data", "video_fps"): None,
     ("data", "video_maxlen"): None,
@@ -66,7 +65,27 @@ STAGED_FIELDS: dict[tuple[str, str], Any] = {
 }
 
 
-def find_staged_config_fields(raw: dict) -> list[StagedField]:
+def _coerce_staged_value(section: str, name: str, val: Any) -> Any:
+    """Coerce a raw config value through the schema field's type if needed (#808)."""
+    if val is None:
+        return None
+    from pydantic import TypeAdapter
+
+    from soup_cli.config.schema import DataConfig, TrainingConfig
+
+    model_cls = TrainingConfig if section == "training" else DataConfig
+    field_info = model_cls.model_fields.get(name)
+    if field_info is None:
+        return val
+    try:
+        return TypeAdapter(field_info.annotation).validate_python(val)
+    except Exception:
+        return val
+
+
+def find_staged_config_fields(
+    raw: dict, config: Any | None = None
+) -> list[StagedField]:
     """Find any staged config field set to a non-default value in the raw mapping.
 
     If a field is omitted or explicitly set to its schema default value, it is
@@ -82,7 +101,12 @@ def find_staged_config_fields(raw: dict) -> list[StagedField]:
     for (section, name), default_val in STAGED_FIELDS.items():
         sec_dict = normalised.get(section)
         if isinstance(sec_dict, dict) and name in sec_dict:
-            val = sec_dict[name]
+            raw_val = sec_dict[name]
+            if config is not None:
+                sec_obj = getattr(config, section, None)
+                val = getattr(sec_obj, name, raw_val) if sec_obj is not None else raw_val
+            else:
+                val = _coerce_staged_value(section, name, raw_val)
             if val != default_val:
                 found.append(StagedField(section=section, name=name, value=val))
     return found

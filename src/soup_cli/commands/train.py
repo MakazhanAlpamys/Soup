@@ -43,6 +43,8 @@ _UNWIRED_TRAINING_TUNABLES = (
     "checkpoint_eval_tasks",
     "checkpoint_keep_top",
     "early_stop_patience",
+    "convergence_window",
+    "convergence_rel_tol",
 )
 
 

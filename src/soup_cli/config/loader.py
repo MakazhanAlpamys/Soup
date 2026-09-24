@@ -71,7 +71,9 @@ def _report_unknown_keys(raw: dict) -> "str | None":
     return None
 
 
-def _report_staged_fields(raw: dict) -> "str | None":
+def _report_staged_fields(
+    raw: dict, *, config: SoupConfig | None = None
+) -> "str | None":
     """Return an error string when staged fields must stop the load (#808).
 
     Silence is the thing being fixed: under ``"warn"`` it is printed and
@@ -79,7 +81,7 @@ def _report_staged_fields(raw: dict) -> "str | None":
     caller to raise in its own contract (``SystemExit`` for the CLI,
     ``ValueError`` for the API/UI).
     """
-    staged = find_staged_config_fields(raw)
+    staged = find_staged_config_fields(raw, config=config)
     if not staged:
         return None
     warning = STAGED_FIELD_SEVERITY != "error"
@@ -155,12 +157,6 @@ def load_config(
         console.print(f"  [red]{for_terminal(unknown_error)}[/]")
         raise SystemExit(1)
 
-    staged_error = _report_staged_fields(raw)
-    if staged_error is not None:
-        console.print("[red bold]Config validation error:[/]\n")
-        console.print(f"  [red]{for_terminal(staged_error)}[/]")
-        raise SystemExit(1)
-
     try:
         config = _build_config(raw)
     except ValidationError as e:
@@ -168,6 +164,12 @@ def load_config(
         for err in e.errors():
             loc = " -> ".join(str(part) for part in err["loc"])
             console.print(f"  [red]{loc}:[/] {err['msg']}")
+        raise SystemExit(1)
+
+    staged_error = _report_staged_fields(raw, config=config)
+    if staged_error is not None:
+        console.print("[red bold]Config validation error:[/]\n")
+        console.print(f"  [red]{for_terminal(staged_error)}[/]")
         raise SystemExit(1)
 
     return config
@@ -194,15 +196,17 @@ def load_config_from_string(yaml_str: str) -> SoupConfig:
     if unknown_error is not None:
         raise ValueError(unknown_error)
 
-    staged_error = _report_staged_fields(raw)
-    if staged_error is not None:
-        raise ValueError(staged_error)
-
     try:
-        return _build_config(raw)
+        config = _build_config(raw)
     except ValidationError as exc:
         errors = []
         for err in exc.errors():
             loc = " -> ".join(str(part) for part in err["loc"])
             errors.append(f"{loc}: {err['msg']}")
         raise ValueError("; ".join(errors))
+
+    staged_error = _report_staged_fields(raw, config=config)
+    if staged_error is not None:
+        raise ValueError(staged_error)
+
+    return config
