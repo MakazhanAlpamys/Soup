@@ -118,6 +118,120 @@ class TestDistillMode:
         assert msgs[-1]["role"] == "assistant"
         assert msgs[-1]["content"] == "teacher-says-hello"
 
+
+    def test_build_sequence_distill_rows_with_real_transformers_tokenizer(self):
+        pytest.importorskip("torch")
+        pytest.importorskip("tokenizers")
+        pytest.importorskip("transformers")
+
+        import torch
+        from tokenizers import Tokenizer, models, pre_tokenizers
+        from transformers import LlamaConfig, LlamaForCausalLM, PreTrainedTokenizerFast
+
+        from soup_cli.utils.distill import build_sequence_distill_rows
+
+        vocab = {
+            "<unk>": 0,
+            "<s>": 1,
+            "</s>": 2,
+            "user": 3,
+            "hello": 4,
+            "assistant": 5,
+        }
+        backend = Tokenizer(models.WordLevel(vocab=vocab, unk_token="<unk>"))
+        backend.pre_tokenizer = pre_tokenizers.Whitespace()
+        tokenizer = PreTrainedTokenizerFast(
+            tokenizer_object=backend,
+            unk_token="<unk>",
+            bos_token="<s>",
+            eos_token="</s>",
+            chat_template=(
+                "{% for message in messages %}{{ message['role'] }} "
+                "{{ message['content'] }} {% endfor %}"
+                "{% if add_generation_prompt %}assistant {% endif %}"
+            ),
+        )
+        assert tokenizer.pad_token_id is None
+
+        teacher = LlamaForCausalLM(
+            LlamaConfig(
+                vocab_size=len(vocab),
+                hidden_size=16,
+                intermediate_size=32,
+                num_hidden_layers=1,
+                num_attention_heads=2,
+                num_key_value_heads=2,
+                max_position_embeddings=32,
+                tie_word_embeddings=True,
+            )
+        ).to(torch.float32).eval()
+
+        encoded = tokenizer.apply_chat_template(
+            [{"role": "user", "content": "hello"}],
+            add_generation_prompt=True,
+            return_tensors="pt",
+            tokenize=True,
+            return_dict=True,
+        )
+        assert type(encoded).__name__ == "BatchEncoding"
+        assert "input_ids" in encoded
+        assert "attention_mask" in encoded
+
+        rows = [
+            {"messages": [{"role": "user", "content": "hello"}]},
+            {"messages": [
+                {"role": "user", "content": "hello"},
+                {"role": "assistant", "content": "old"},
+            ]},
+        ]
+        out = build_sequence_distill_rows(
+            rows, teacher, tokenizer, max_new_tokens=1, device="cpu"
+        )
+        assert len(out) == 2
+        assert all(item["messages"][-1]["role"] == "assistant" for item in out)
+        assert all(item["messages"][0]["role"] == "user" for item in out)
+
+    @pytest.mark.parametrize("return_value", ["tensor", "list"])
+    def test_build_sequence_distill_rows_normalizes_tokenizer_return_types(self, return_value):
+        from soup_cli.utils.distill import build_sequence_distill_rows
+
+        class _FakeTok:
+            eos_token_id = 2
+            pad_token_id = None
+
+            def apply_chat_template(self, messages, tokenize, **kw):
+                import torch
+
+                values = [[1, 2, 3]]
+                if return_value == "list":
+                    return values[0]
+                return torch.tensor(values)
+
+            def decode(self, ids, skip_special_tokens=True):
+                return "teacher-says-hello"
+
+        class _FakeTeacher:
+            def generate(self, input_ids, attention_mask, max_new_tokens=None, **kw):
+                import torch
+
+                assert input_ids.shape == attention_mask.shape
+                return torch.tensor([[1, 2, 3, 9]])
+
+            def parameters(self):
+                import torch
+
+                yield torch.nn.Parameter(torch.empty(0))
+
+        out = build_sequence_distill_rows(
+            [{"messages": [{"role": "user", "content": "Hi"}]}],
+            _FakeTeacher(),
+            _FakeTok(),
+            max_new_tokens=1,
+            device="cpu",
+        )
+        assert len(out) == 1
+        assert out[0]["messages"][-1]["role"] == "assistant"
+
     def test_schema_default_token(self):
         from soup_cli.config.schema import TrainingConfig
 
