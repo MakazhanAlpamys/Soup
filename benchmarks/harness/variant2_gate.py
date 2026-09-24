@@ -51,6 +51,7 @@ import subprocess
 import sys
 import time
 from dataclasses import asdict, dataclass
+from importlib.metadata import PackageNotFoundError, version as distribution_version
 from pathlib import Path
 from types import ModuleType
 from typing import Any, Callable
@@ -262,10 +263,23 @@ def _versions() -> dict[str, str]:
     return {
         "commit": _source_sha(),
         "torch": str(torch.__version__),
+        "cuda_runtime": str(torch.version.cuda or "not-available"),
+        "cuda_compute_capability": ".".join(
+            str(part) for part in torch.cuda.get_device_capability(0)
+        ),
         "bitsandbytes": str(bitsandbytes.__version__),
         "transformers": str(transformers.__version__),
         "peft": str(peft.__version__),
+        "trl": _optional_distribution_version("trl"),
     }
+
+
+def _optional_distribution_version(distribution: str) -> str:
+    """Return an installed distribution version without importing the package."""
+    try:
+        return distribution_version(distribution)
+    except PackageNotFoundError:
+        return "not-installed"
 
 
 def _write_json(path: str, payload: dict[str, Any]) -> None:
@@ -467,6 +481,11 @@ def main() -> int:
             double_quant=True,
             quant_device="cuda",
         )
+        # ``load_resident_reference`` creates LoRA-A before ``make_non_vacuous_lora``
+        # overwrites LoRA-B. Seed both generators so the retained A matrices, and
+        # therefore the reported loss magnitudes, are repeatable across runs.
+        torch.manual_seed(DEFAULT_SEED)
+        torch.cuda.manual_seed_all(DEFAULT_SEED)
         reference = shared.load_resident_reference(weights_dir, "nf4")
         shared.make_non_vacuous_lora(reference)
 

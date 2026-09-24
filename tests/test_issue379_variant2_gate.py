@@ -226,12 +226,23 @@ class TestWholeRunVerdict:
         monkeypatch.setattr(spectrum_scan, "resolve_model_weights", lambda *_: "fake-weights")
         monkeypatch.setattr(_harness.shared, "model_arch_name", lambda *_: "fake-arch")
         monkeypatch.setattr(
-            _harness.shared,
-            "load_resident_reference",
-            lambda *a, **k: SimpleNamespace(config=SimpleNamespace(vocab_size=16)),
+            _harness.shared, "load_resident_reference", lambda *a, **k: _load_reference(seed_calls)
         )
         monkeypatch.setattr(_harness.shared, "make_non_vacuous_lora", lambda *_: None)
         monkeypatch.setattr(_harness.shared, "copy_lora", lambda *a: None)
+        seed_calls: list[tuple[str, int]] = []
+        monkeypatch.setattr(torch, "manual_seed", lambda seed: seed_calls.append(("cpu", seed)))
+        monkeypatch.setattr(
+            torch.cuda, "manual_seed_all", lambda seed: seed_calls.append(("cuda", seed))
+        )
+
+        def _load_reference(calls: list[tuple[str, int]]) -> Any:
+            assert calls == [
+                ("cpu", _harness.DEFAULT_SEED),
+                ("cuda", _harness.DEFAULT_SEED),
+            ]
+            return SimpleNamespace(config=SimpleNamespace(vocab_size=16))
+
         monkeypatch.setattr(
             torch, "Generator", lambda **k: SimpleNamespace(manual_seed=lambda *_: object())
         )
@@ -378,7 +389,132 @@ class TestRewiringCounter:
                 repeats=1,
             )
 
+    def test_both_tiny_nf4_arms_report_their_real_wrapper_counts(self, monkeypatch) -> None:
+        torch = pytest.importorskip("torch")
+        from soup_cli.utils import layer_stream_runtime as runtime_module
+
+        class FakeNF4Linear(torch.nn.Module):
+            def __init__(self) -> None:
+                super().__init__()
+                self.is_fake_nf4 = True
+
+        def fake_install_dequant_forward(inner: Any) -> int:
+            return sum(1 for module in inner.modules() if getattr(module, "is_fake_nf4", False))
+
+        monkeypatch.setattr(runtime_module, "install_dequant_forward", fake_install_dequant_forward)
+        streamed_layer = runtime_module._build_streamed_layer_class()
+
+        def build_tiny_nf4_model() -> Any:
+            return torch.nn.Sequential(
+                *[
+                    streamed_layer(
+                        inner=torch.nn.Sequential(*(FakeNF4Linear() for _ in range(7))),
+                        idx=layer_index,
+                        pool=None,
+                        prefetcher=None,
+                        quant_specs={"nf4": object()},
+                        codes={},
+                    )
+                    for layer_index in range(2)
+                ]
+            )
+
+        control = _harness.build_streamed_arm(
+            repair_enabled=False,
+            runtime_module=runtime_module,
+            build_model=build_tiny_nf4_model,
+        )
+        repaired = _harness.build_streamed_arm(
+            repair_enabled=True,
+            runtime_module=runtime_module,
+            build_model=build_tiny_nf4_model,
+        )
+
+        assert _harness._rewired_modules(control) == 0
+        assert _harness._rewired_modules(repaired) == 14
+        assert runtime_module.install_dequant_forward is fake_install_dequant_forward
+
+
+class TestRunArm:
+    def test_measures_identical_control_and_perturbed_repair_on_cpu(self, monkeypatch) -> None:
+        torch = pytest.importorskip("torch")
+
+        class TinyLoraArm(torch.nn.Module):
+            def __init__(self, weight: tuple[tuple[float, float], ...], rewired: int) -> None:
+                super().__init__()
+                self.lora_A = torch.nn.Parameter(torch.tensor(weight, dtype=torch.float32))
+                self.n_dequant_forward = rewired
+
+            def forward(self, *, input_ids: Any, labels: Any) -> Any:
+                prediction = input_ids @ self.lora_A
+                return SimpleNamespace(loss=torch.nn.functional.mse_loss(prediction, labels))
+
+        monkeypatch.setattr(torch.cuda, "reset_peak_memory_stats", lambda: None)
+        monkeypatch.setattr(torch.cuda, "synchronize", lambda: None)
+        monkeypatch.setattr(torch.cuda, "max_memory_allocated", lambda: 0)
+
+        reference = TinyLoraArm(((1.0, 0.0), (0.0, 1.0)), rewired=0)
+        control = TinyLoraArm(((1.0, 0.0), (0.0, 1.0)), rewired=0)
+        repaired = TinyLoraArm(((1.5, 0.0), (0.0, 1.0)), rewired=14)
+        input_ids = torch.tensor([[1.0, 2.0], [-1.0, 0.5]])
+        labels = torch.zeros_like(input_ids)
+
+        control_result = _harness._run_arm(
+            label="control",
+            model=control,
+            reference=reference,
+            input_ids=input_ids,
+            repeats=1,
+        )
+        repaired_result = _harness._run_arm(
+            label="repaired",
+            model=repaired,
+            reference=reference,
+            input_ids=input_ids,
+            repeats=1,
+        )
+
+        assert control_result["losses_exact"] is True
+        assert control_result["gradients"][0]["exact"] == 1
+        assert control_result["rewired_modules"] == 0
+        assert repaired_result["losses_exact"] is False
+        assert repaired_result["gradients"][0]["exact"] == 0
+        assert repaired_result["rewired_modules"] == 14
+
+
+def test_versions_record_the_runtime_used_for_the_verdict(monkeypatch) -> None:
+    fake_torch = SimpleNamespace(
+        __version__="2.14.0",
+        version=SimpleNamespace(cuda="13.0"),
+        cuda=SimpleNamespace(get_device_capability=lambda device=0: (12, 0)),
+    )
+    monkeypatch.setitem(sys.modules, "torch", fake_torch)
+    monkeypatch.setitem(sys.modules, "bitsandbytes", SimpleNamespace(__version__="0.50.2"))
+    monkeypatch.setitem(sys.modules, "peft", SimpleNamespace(__version__="0.20.0"))
+    monkeypatch.setitem(sys.modules, "transformers", SimpleNamespace(__version__="5.17.0"))
+    monkeypatch.setattr(_harness, "_source_sha", lambda: "a" * 40)
+    monkeypatch.setattr(_harness, "distribution_version", lambda name: "0.26.2")
+
+    versions = _harness._versions()
+
+    assert versions["cuda_runtime"] == "13.0"
+    assert versions["cuda_compute_capability"] == "12.0"
+    assert versions["trl"] == "0.26.2"
+
+
+def test_optional_distribution_version_marks_trl_missing(monkeypatch) -> None:
+    from importlib.metadata import PackageNotFoundError
+
+    def missing_version(distribution: str) -> str:
+        raise PackageNotFoundError(distribution)
+
+    monkeypatch.setattr(_harness, "distribution_version", missing_version)
+
+    assert _harness._optional_distribution_version("trl") == "not-installed"
+
 
 def test_harness_is_indexed() -> None:
     readme = (_REPO_ROOT / "benchmarks" / "README.md").read_text(encoding="utf-8")
     assert "harness/variant2_gate.py" in readme
+    assert "failed closed, as expected" in readme
+    assert "sm_120" in readme
