@@ -304,7 +304,7 @@ class PPOTrainerWrapper:
         # Store for use in train() — experimental API has different .train() signature
         self._is_experimental = is_experimental
 
-        # LoRA+ optimizer (#724/#745), PPO's shape. The other eleven LoRA
+        # LoRA+ optimizer (#724/#745), PPO's shape. The other LoRA
         # trainers are plain transformers.Trainer subclasses whose
         # create_optimizer runs lazily at train(), so a post-construction
         # attach_loraplus_optimizer lands cleanly and the scheduler is built

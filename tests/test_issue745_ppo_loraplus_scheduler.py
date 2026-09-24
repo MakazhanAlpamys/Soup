@@ -1,7 +1,7 @@
 """Issue #745 — PPO wires LoRA+ so the LR SCHEDULER binds to the LoRA+ optimizer.
 
-Ten of the eleven trainers #745 wires are plain ``transformers.Trainer``
-subclasses: their optimizer is created lazily at ``train()``, so a
+Every trainer #745 wires except PPO is a plain ``transformers.Trainer``
+subclass whose optimizer is created lazily at ``train()``, so a
 post-construction ``attach_loraplus_optimizer`` lands before the scheduler is
 built and the scheduler is built around the LoRA+ optimizer for free.
 
