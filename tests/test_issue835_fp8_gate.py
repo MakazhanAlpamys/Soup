@@ -646,11 +646,16 @@ class TestSoupTrainReachesTheStop:
         assert "soup-cli[qat]" not in out
 
     def test_fp8_with_card_and_torchao_passes_the_preflight(self, tmp_path, monkeypatch):
-        """Control: the pre-flight is not refusing every FP8 config."""
-        _result, out = self._train(
-            tmp_path, monkeypatch, quantization_aware="fp8", card_ok=True, torchao=True
+        """Control: the pre-flight is not refusing every FP8 config. A dry run, so
+        the command ends right after validation and must end there successfully --
+        an absent "QAT error" alone would also pass on a crash elsewhere."""
+        result, out = self._train(
+            tmp_path, monkeypatch, quantization_aware="fp8", card_ok=True, torchao=True,
+            dry_run=True,
         )
-        assert "QAT error" not in out
+        assert result.exit_code == 0, out
+        assert "Config valid" in out
+        assert "QAT error" not in out and "Note:" not in out
 
 
 class TestTheRecipeReachesTheGate:
