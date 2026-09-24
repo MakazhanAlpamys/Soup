@@ -1173,7 +1173,13 @@ class TestTheAdvisoryGoesToStderr:
             "training:\n  lora:\n    r: 8\n    target_modules: auto\n",
             encoding="utf-8",
         )
-        result = CliRunner().invoke(app, ["recipes", "verify", "--config", str(path), "--json"])
+        # Click < 8.2 mixes stderr into stdout unless told not to; 8.2 removed the
+        # parameter and always keeps them apart (cf. test_issue762's note).
+        import importlib.metadata as _md
+
+        click_version = tuple(int(x) for x in _md.version("click").split(".")[:2])
+        runner = CliRunner(mix_stderr=False) if click_version < (8, 2) else CliRunner()
+        result = runner.invoke(app, ["recipes", "verify", "--config", str(path), "--json"])
 
         rows = _json.loads(result.stdout)
         assert rows[0]["model_type"] == "granitemoehybrid"
