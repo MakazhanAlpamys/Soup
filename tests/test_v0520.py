@@ -422,7 +422,12 @@ class TestDistillUtils:
     def test_validate_distill_compat_unsloth(self):
         from soup_cli.utils.distill import validate_distill_compat
 
-        with pytest.raises(ValueError, match="unsloth"):
+        # Pin the reason and the supported backend, not just the word "unsloth",
+        # so a refusal that drops the explanation or the transformers pointer
+        # still fails this test.
+        with pytest.raises(
+            ValueError, match=r"backend=unsloth: .*Use backend=transformers"
+        ):
             validate_distill_compat(
                 task="distill", backend="unsloth", teacher_model="t/model",
             )
@@ -432,7 +437,9 @@ class TestDistillUtils:
 
         from soup_cli.config.schema import SoupConfig
 
-        with pytest.raises(ValidationError, match="unsloth"):
+        with pytest.raises(
+            ValidationError, match=r"backend=unsloth: .*Use backend=transformers"
+        ):
             SoupConfig(
                 base="s/model",
                 task="distill",
