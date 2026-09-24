@@ -1192,3 +1192,54 @@ class TestNothingToVerify:
         result = CliRunner().invoke(app, ["recipes", "verify", "--no-templates"])
 
         assert result.exit_code == 3, result.output
+
+
+class TestTheSkeletonKeepsAnExpertLayer:
+    """A local CodeRabbit review: shrinking every config to two layers kept only
+    dense layers on DeepSeek-V3 and GLM-5.1 (``first_k_dense_replace: 3``), so their
+    ``moe_lora`` recipes were reported ATTACHES with zero experts built -- the
+    thing those recipes exist for was never checked."""
+
+    @pytest.mark.parametrize(
+        ("fields", "depth"),
+        [
+            ({"first_k_dense_replace": 3, "moe_layer_freq": 1}, 4),
+            ({"first_k_dense_replace": 1, "moe_layer_freq": 1}, 2),
+            ({"decoder_sparse_step": 2}, 2),
+            # A step whose first sparse layer lies past the 2-layer minimum: the
+            # step-2 case alone could not tell the rule from its absence.
+            ({"decoder_sparse_step": 4}, 4),
+            ({"decoder_sparse_step": 1, "mlp_only_layers": [0, 1, 2]}, 4),
+            ({"interleave_moe_layer_step": 4}, 4),
+            ({}, 2),
+        ],
+    )
+    def test_the_depth_reaches_the_first_sparse_layer(self, fields, depth):
+        config = SimpleNamespace(num_hidden_layers=61, **fields)
+
+        assert shrink_for_preflight(config).num_hidden_layers == depth
+
+    def test_a_shallow_model_is_not_deepened(self):
+        config = SimpleNamespace(num_hidden_layers=2, first_k_dense_replace=3, moe_layer_freq=1)
+
+        assert shrink_for_preflight(config).num_hidden_layers == 2
+
+    def test_a_deepseek_v3_moe_lora_config_reaches_its_experts(self):
+        from transformers import DeepseekV3Config
+
+        from soup_cli.utils.attach_preflight import build_on_meta
+
+        hf = DeepseekV3Config(
+            vocab_size=64, hidden_size=32, intermediate_size=32, moe_intermediate_size=16,
+            num_hidden_layers=61, num_attention_heads=2, num_key_value_heads=2,
+            n_routed_experts=4, num_experts_per_tok=2, n_group=1, topk_group=1,
+            first_k_dense_replace=3, moe_layer_freq=1, q_lora_rank=16, kv_lora_rank=16,
+            qk_rope_head_dim=8, qk_nope_head_dim=8, v_head_dim=8, pad_token_id=0,
+        )
+        check = check_attach(
+            "r", _real_cfg(moe_lora=True), load_hf_config=lambda _b: hf,
+            build_model=lambda c, cls: build_on_meta(c, cls),
+        )
+
+        assert check.verdict is Verdict.ATTACHES, check.detail
+        assert check.expert_modules > 0, "the skeleton built no expert layer"

@@ -114,8 +114,44 @@ def shrink_for_preflight(hf_config: Any, layers: int = PREFLIGHT_LAYERS) -> Any:
     for target in targets:
         current = getattr(target, "num_hidden_layers", None)
         if isinstance(current, int) and current > layers:
-            target.num_hidden_layers = layers
+            target.num_hidden_layers = max(layers, _first_sparse_depth(target, current))
     return hf_config
+
+
+def _first_sparse_depth(config: Any, current: int) -> int:
+    """Layers needed to include the first MoE layer, or 0 for a dense config.
+
+    A shrink to two layers kept only dense layers on DeepSeek-V3 and GLM-5.1
+    (``first_k_dense_replace: 3``), so their ``moe_lora`` recipes were reported as
+    attaching with no expert ever built (found by a local CodeRabbit review).
+    Each rule is the one the architecture's own modeling code applies.
+    """
+    first_dense = getattr(config, "first_k_dense_replace", None)
+    moe_freq = getattr(config, "moe_layer_freq", None)
+    sparse_step = getattr(config, "decoder_sparse_step", None)
+    interleave = getattr(config, "interleave_moe_layer_step", None)
+    mlp_only = getattr(config, "mlp_only_layers", None) or []
+    fields = (first_dense, moe_freq, sparse_step, interleave)
+    if not any(isinstance(v, int) and v > 0 for v in fields):
+        return 0
+
+    def is_sparse(i: int) -> bool:
+        if i in mlp_only:
+            return False
+        if isinstance(first_dense, int) and i < first_dense:
+            return False
+        if isinstance(moe_freq, int) and moe_freq > 0 and i % moe_freq != 0:
+            return False
+        if isinstance(sparse_step, int) and sparse_step > 0 and (i + 1) % sparse_step != 0:
+            return False
+        if isinstance(interleave, int) and interleave > 0 and (i + 1) % interleave != 0:
+            return False
+        return True
+
+    for i in range(current):
+        if is_sparse(i):
+            return i + 1
+    return 0
 
 
 def count_adapted(model: Any) -> tuple[int, int, int]:
