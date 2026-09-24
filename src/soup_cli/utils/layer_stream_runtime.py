@@ -1051,7 +1051,7 @@ class StreamPrefetcher:
         #   the copy stream wait for everything already enqueued on the compute
         #   stream. Without that wait the refill can overwrite bytes the head's
         #   backward has not read yet, and the gradients come out silently
-        #   wrong from the second step on. Keep it if `load_async` is touched.
+        #   wrong. Keep it if `load_async` is touched.
         #
         # `_prime()` still issues this same load unconditionally at the next
         # step's start — this only makes that call a same-owner no-op on the
@@ -2587,8 +2587,8 @@ def install_streaming(
         # #975 — the backward-tail prefetch above already loads this for every
         # step but the first, so `load_async`'s own-owner check makes this a
         # no-op on the hot path. Kept unconditional: it is the only load for
-        # step 0, and for any forward that never triggers layer 0's backward
-        # (eval, a frozen embedding with no LoRA reaching it).
+        # step 0, and for any forward that follows a backward that never
+        # reached layer 0.
         if large_pool is not None and embed_key is not None:
             large_pool.load_async(embed_key, source, stream)
         prefetcher.prime()

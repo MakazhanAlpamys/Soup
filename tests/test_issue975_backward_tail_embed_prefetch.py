@@ -4,15 +4,18 @@ fires right as the next step's forward starts and the embedding lookup is
 almost the first thing that forward does.
 
 `StreamPrefetcher` now also prefetches `embed_tokens` at the tail of the
-BACKWARD pass: when the checkpoint recompute for decoder layer 0 confirms
-this step's backward walk is done, `lm_head`'s own backward Node has already
-been dispatched (it sits between the loss and every decoder layer, so the
-autograd engine reaches it first), so refilling the shared slot here cannot
-invalidate a saved-tensor version check that already ran. `_prime()` still
-issues the same load unconditionally at the next step's start as a fallback
-for step 0 and for any forward that never reaches layer 0's backward (eval);
-on the hot path that call now finds the slot already holding what it asked
-for and is a same-owner no-op.
+BACKWARD pass, when the checkpoint recompute for decoder layer 0 confirms
+this step's backward walk is done. Two things make refilling the shared slot
+there safe. On the CPU side, `lm_head`'s own backward Node has already been
+dispatched (it sits between the loss and every decoder layer, so the autograd
+engine reaches it first), so the saved-tensor version check has already run.
+On the GPU side, the head's backward GEMM can still be queued on the compute
+stream, and what orders the refill after it is the `stream.wait_stream(...)`
+in `LargeLayerBufferPool.load_async`; the GPU-only test at the bottom of this
+file is the one that pins that guard. `_prime()` still issues the same load
+unconditionally at the next step's start as a fallback for step 0 and for any
+backward that never reaches layer 0; on the hot path that call now finds the
+slot already holding what it asked for and is a same-owner no-op.
 
 This only matters for an UNTIED checkpoint: a tied model streams one key for
 both `embed_tokens` and `lm_head`, so `LargeLayerBufferPool.owner` never
@@ -98,16 +101,6 @@ class TestBackwardTailEmbedPrefetch:
         assert large_pool.owner == embed_key, (
             "backward tail fired but did not leave the slot holding embed_tokens"
         )
-
-        # Simulate the next step's `_prime()` calling the same load in
-        # isolation: with the slot already holding `embed_tokens`, this must
-        # be the early-return no-op `LargeLayerBufferPool.load_async` takes
-        # when `owner == key`, not a fresh copy.
-        loads_before = large_pool.loads
-        large_pool.load_async(embed_key, runtime.source, None)
-        assert large_pool.loads == loads_before, (
-            "prime()'s fallback load re-copied a slot the backward tail already filled"
-        )
         wrapper._close_stream_runtime()
 
     def test_two_steps_complete_without_an_autograd_version_error(self, tmp_path, monkeypatch):
@@ -126,22 +119,72 @@ class TestBackwardTailEmbedPrefetch:
         wrapper._close_stream_runtime()
 
     def test_prime_no_op_saves_one_reload_from_the_second_step_on(self, tmp_path, monkeypatch):
-        """Counts real copies directly, rather than trusting the no-op check
-        in the previous test to generalise: confirms `_prime()`'s fallback
-        load stops costing a real copy from the second step onward, without
-        the backward-tail prefetch turning into an extra, unplanned load."""
+        """Counts real copies directly: from the second step on, `_prime()`'s
+        load is a same-owner no-op, so a steady-state step costs two real
+        large-layer loads (the head at the forward tail, the embedding at the
+        backward tail), the same two `main` makes per step."""
         wrapper, _, _ = _build_untied_wrapper(tmp_path, monkeypatch)
         large_pool = wrapper._stream_runtime.large_pool
         wrapper.trainer.args.max_steps = 2
         wrapper.trainer.train()
-        # Step 0 has no preceding backward tail to make its `_prime()` a
-        # no-op, so it pays a real embed copy cold (load 1), then a real
-        # lm_head copy at its forward tail (load 2), then a real embed copy
-        # again at its OWN backward tail (load 3) — this is the one this fix
-        # moves earlier, not one it removes. Step 1's `_prime()` is then the
-        # no-op: lm_head at its forward tail (load 4) and embed at its
-        # backward tail (load 5) are the only other real copies. 5, not 6:
-        # one fewer than two full steps of "reload both every prime and every
-        # tail" would cost.
+        # `main` makes 4 real loads over these 2 steps: the cold embed load in
+        # step 0's `_prime()` and the head at its forward tail, then the embed
+        # in step 1's `_prime()` and the head at its forward tail. This change
+        # makes 5. Steady state is 2 loads per step in both trees; the fifth is
+        # the LAST backward's prefetch, which no later forward ever consumes,
+        # so every `train()` now ends with exactly one extra load.
         assert large_pool.loads == 5, large_pool.loads
         wrapper._close_stream_runtime()
+
+
+class _PinnedSource:
+    def __init__(self, tensors):
+        self.tensors = tensors
+
+    def get(self, idx, key):
+        return self.tensors[key]
+
+
+@pytest.mark.gpu
+def test_refill_waits_for_a_read_still_queued_on_the_compute_stream():
+    """The GPU-side guard for the backward-tail refill, at pool level so it does
+    not depend on how fast the host is.
+
+    When the CPU reaches layer 0, the head's backward GEMM can still be queued on
+    the compute stream, reading the shared slot. What orders the refill after it
+    is `stream.wait_stream(torch.cuda.current_stream())` in
+    `LargeLayerBufferPool.load_async`. Remove that wait and the copy stream
+    overwrites the slot while the queued read has not run, so `seen` picks up the
+    embedding's bytes instead of the head's.
+
+    The compute stream is held back with `torch.cuda._sleep`, about a second, and
+    the refill is issued microseconds after the read is queued, so the race is
+    always open. A trainer-level version of this needs to assert the race really
+    opened (for example `event.query()` on the sleep when the prefetch fires);
+    otherwise a slow host makes it pass with the guard deleted.
+    """
+    import torch
+
+    from soup_cli.utils.layer_stream_runtime import LargeLayerBufferPool
+
+    shape = (1024, 1024)
+    pool = LargeLayerBufferPool(
+        {"lm_head": (shape, "float32"), "embed_tokens": (shape, "float32")},
+        {"lm_head": 0, "embed_tokens": 1},
+        device="cuda",
+    )
+    head = torch.full(shape, 1.0).pin_memory()
+    embed = torch.full(shape, 2.0).pin_memory()
+    source = _PinnedSource({"lm_head": head, "embed_tokens": embed})
+    copy_stream = torch.cuda.Stream()
+
+    pool.load_async("lm_head", source, copy_stream)
+    slot = pool.wait("lm_head")
+    torch.cuda.synchronize()
+
+    torch.cuda._sleep(int(1e9))  # the compute stream lags, like a queued head backward
+    seen = slot.clone()  # a read of the slot, queued behind the sleep
+    pool.load_async("embed_tokens", source, copy_stream)  # the #975 refill
+    torch.cuda.synchronize()
+
+    assert torch.equal(seen, head.cuda())
