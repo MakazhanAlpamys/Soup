@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -87,6 +88,33 @@ _DEEPSEEK_V3_ATTENTION = (
 
 MOE_TEXT_LORA_TARGETS: dict[str, Any] = {
     "qwen3_moe": ("q_proj", "k_proj", "v_proj", "o_proj"),
+    # GLM-4.6 (``zai-org/GLM-4.6``, 92 layers). Ordinary attention, the same
+    # four projections as ``qwen3_moe``: enumerated on the meta device, every
+    # layer carries ``self_attn.{q,k,v,o}_proj`` and nothing else that is a
+    # ``nn.Linear``. The ``q_norm`` / ``k_norm`` siblings are RMSNorms, not
+    # Linears, so a suffix list cannot reach them by accident. Not ``glm_moe_dsa``
+    # (GLM-5/5.1): that one is V3-shaped attention plus the DSA indexer, and its
+    # names are different. Previously invisible to the ratchet because the
+    # recipe named ``THUDM/glm-4.6``, which 404s (#1132 repoints it).
+    "glm4_moe": ("q_proj", "k_proj", "v_proj", "o_proj"),
+    # Granite 4.0 (``ibm-granite/granite-4.0-tiny-base-preview``) is a HYBRID:
+    # ``config.layer_types`` is 36 ``linear_attention`` blocks and only 4
+    # ``full_attention`` ones, and only those 4 of the 40 decoder layers define a
+    # ``self_attn`` at all (measured: layers 5, 15, 25, 35). So this entry adapts
+    # a TENTH of the decoder, which is why ``granitemoehybrid`` also has a row in
+    # :data:`PARTIAL_COVERAGE_NOTES` -- a comment here is not where a user reads
+    # why their adapter is small.
+    #
+    # The other 36 layers are Mamba-2 blocks (``mamba.in_proj`` 36,
+    # ``mamba.out_proj`` 36, plus a ``conv1d``) and every layer carries
+    # ``shared_mlp.input_linear`` / ``shared_mlp.output_linear`` (40 each). They
+    # are deliberately NOT adapted: this table is the attention-projection
+    # baseline on every other row, and whether LoRA on a state-space projection
+    # trains well is a separate decision from #1070's "auto resolved to nothing".
+    # A user who wants them writes an explicit ``target_modules`` list.
+    # Routed experts are fused 3-D ``block_sparse_moe.experts`` parameters, so
+    # ``target_modules`` cannot reach them here either (#798).
+    "granitemoehybrid": ("q_proj", "k_proj", "v_proj", "o_proj"),
     # Two MoE bases whose recipes set no MoE flag at all, so the flag-based
     # sizing of this table missed them; found by attaching every shipped config
     # on the meta device. Both keep their experts as fused 3-D parameters, like
@@ -128,6 +156,86 @@ MOE_TEXT_LORA_TARGETS: dict[str, Any] = {
     # wrapper reaches the resolver as this type instead of ``minimax_m3_vl``.
     "minimax_m3_vl_text": ("q_proj", "k_proj", "v_proj", "o_proj"),
 }
+
+#: Entries of :data:`MOE_TEXT_LORA_TARGETS` that cover only PART of the decoder,
+#: each with what is left unadapted. A declared table rather than a branch in the
+#: resolver: the next hybrid architecture is a row here, and an entry that grows
+#: partial coverage is a reviewed edit instead of an ``if`` someone forgets.
+#:
+#: The note is PRINTED, not just commented, because "your LoRA touched a tenth of
+#: the model" is not something a user can be expected to infer from a silent
+#: ``target_modules: auto``.
+PARTIAL_COVERAGE_NOTES: dict[str, str] = {
+    "granitemoehybrid": (
+        "the remaining layers are Mamba-2 blocks (mamba.in_proj / mamba.out_proj), "
+        "and every layer's shared-expert projections (shared_mlp.input_linear / "
+        "shared_mlp.output_linear) and fused routed experts are unadapted too. "
+        "Set training.lora.target_modules explicitly to include them."
+    ),
+}
+
+#: A decoder-layer index in a module key: ``model.layers.7.self_attn`` -> ``7``.
+_DECODER_LAYER_RE = re.compile(r"(?:^|\.)layers\.(\d+)(?:\.|$)")
+
+
+def _self_attention_coverage(model: Any) -> tuple[int, int] | None:
+    """``(layers defining a self_attn, decoder layers)``, or ``None`` if unknown.
+
+    COUNTED off the model when the caller passed one, so the notice describes the
+    checkpoint in hand rather than the one this table was measured on -- the
+    granite-4.0 family ships several depths, and a hard-coded "4 of 40" would be
+    wrong on all but one of them. ``stream_setup`` resolves from a bare config, so
+    ``config.layer_types`` is the fallback; a model with neither gets the notice
+    without a fraction rather than no notice.
+
+    Only consulted for a ``model_type`` in :data:`PARTIAL_COVERAGE_NOTES`, i.e.
+    for a text-only decoder, so ``layers.N`` is unambiguous here. A hybrid VL
+    wrapper would need the tower prefix taken into account first.
+    """
+    try:
+        named_modules = getattr(model, "named_modules", None)
+        if callable(named_modules):
+            total: set[str] = set()
+            attentive: set[str] = set()
+            for name, _module in named_modules():
+                match = _DECODER_LAYER_RE.search(str(name))
+                if match is None:
+                    continue
+                total.add(match.group(1))
+                if str(name).endswith(".self_attn"):
+                    attentive.add(match.group(1))
+            if total:
+                return len(attentive), len(total)
+    except Exception:  # noqa: BLE001 -- a notice never breaks a training run
+        logger.debug("self-attention coverage not countable", exc_info=True)
+
+    config = getattr(model, "config", model)
+    config = getattr(config, "text_config", None) or config
+    layer_types = getattr(config, "layer_types", None)
+    if isinstance(layer_types, (list, tuple)) and layer_types:
+        return sum(1 for kind in layer_types if kind == "full_attention"), len(layer_types)
+    return None
+
+
+def _note_partial_coverage(model_type: Any, model: Any, console: Any) -> None:
+    """Print the partial-coverage advisory for ``model_type``, if it has one."""
+    note = PARTIAL_COVERAGE_NOTES.get(model_type)
+    if note is None or console is None:
+        return
+    coverage = _self_attention_coverage(model)
+    scope = (
+        f"{coverage[0]} of {coverage[1]} decoder layers"
+        if coverage is not None
+        else "only the layers that define one"
+    )
+    try:
+        console.print(
+            f"[yellow]Partial LoRA coverage:[/yellow] {model_type} -- "
+            f"target_modules: auto adapts the attention projections of {scope}; "
+            f"{note}"
+        )
+    except Exception:  # noqa: BLE001 -- never crash on console issues.
+        logger.debug("partial-coverage notice not printed", exc_info=True)
 
 
 def _model_types(model: Any) -> set[Any]:
@@ -192,7 +300,7 @@ class UnmappedTargets:
         return f"UnmappedTargets({self.model_types!r})"
 
 
-def resolve_lora_target_modules(model: Any, configured: Any) -> Any:
+def resolve_lora_target_modules(model: Any, configured: Any, console: Any = None) -> Any:
     """Resolve ``target_modules: auto`` for models PEFT does not know yet.
 
     Existing architectures remain delegated to PEFT by returning ``None``.
@@ -204,6 +312,11 @@ def resolve_lora_target_modules(model: Any, configured: Any) -> Any:
     An architecture neither Soup nor peft maps returns :class:`UnmappedTargets`
     rather than raising; :func:`build_lora_config` decides, once a ``moe_lora``
     override and ``target_parameters`` have had their chance (#1070).
+
+    ``console`` is optional so the pure resolution stays callable without one.
+    When it is supplied and the resolved entry covers only part of the decoder
+    (:data:`PARTIAL_COVERAGE_NOTES`), the advisory is printed here -- this is the
+    one place that knows WHICH entry was chosen.
     """
     if configured != "auto" and configured != ["auto"]:
         return configured
@@ -223,9 +336,11 @@ def resolve_lora_target_modules(model: Any, configured: Any) -> Any:
     # language tower in the module path and the text-only entry does not.
     for value in (getattr(getattr(model, "config", model), "model_type", None),):
         if value in MOE_TEXT_LORA_TARGETS:
+            _note_partial_coverage(value, model, console)
             return _as_targets(MOE_TEXT_LORA_TARGETS[value])
     for value in sorted(str(v) for v in model_types if v is not None):
         if value in MOE_TEXT_LORA_TARGETS:
+            _note_partial_coverage(value, model, console)
             return _as_targets(MOE_TEXT_LORA_TARGETS[value])
 
     named = sorted(value for value in model_types if isinstance(value, str))

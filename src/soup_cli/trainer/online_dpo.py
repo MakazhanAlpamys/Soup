@@ -400,7 +400,7 @@ class OnlineDPOTrainerWrapper:
             resolve_lora_target_modules,
         )
 
-        target_modules = resolve_lora_target_modules(self.model, tcfg.lora.target_modules)
+        target_modules = resolve_lora_target_modules(self.model, tcfg.lora.target_modules, console)
         # #1099: moe_lora picks the expert-FFN targets, as on every other
         # build_lora_config trainer. The config is attached by TRL later, so
         # this is where the flag has to act.
