@@ -638,6 +638,8 @@ class TestTheCommand:
         result = CliRunner().invoke(app, ["recipes", "verify", "--config", str(path)])
 
         assert result.exit_code == 1
+        # The 1 must come from the injected crash, not some other failure path.
+        assert isinstance(result.exception, RuntimeError), result.exception
 
 
 class TestTheVerdictIsTheTrainers:
@@ -866,7 +868,8 @@ class TestOnlySftReadsModality:
         from soup_cli.config.loader import load_config_from_string
 
         fmt = {"text": "alpaca", "vision": "llava", "audio": "audio"}[modality]
-        fmt = {"asr": "asr", "classifier": "auto"}.get(task, fmt)
+        fmt = {"asr": "asr", "classifier": "auto", "reranker": "auto",
+               "cross_encoder": "auto"}.get(task, fmt)
         raw = {
             "base": "org/m", "task": task, "modality": modality,
             "data": {"train": "./x.jsonl", "format": fmt},
@@ -887,12 +890,19 @@ class TestOnlySftReadsModality:
         assert loader_for(self._cfg("sft", "vision")) == ("AutoModelForImageTextToText",)
         assert loader_for(self._cfg("sft", "audio")) == ("AutoModel",)
 
-    def test_asr_and_the_classifier_family_load_their_own_class(self):
+    def test_asr_loads_whisper_seq2seq(self):
         from soup_cli.utils.attach_preflight import loader_for
 
         asr = self._cfg("asr", "text", asr_language="en")
         assert loader_for(asr) == ("WhisperForConditionalGeneration",)
-        clf = self._cfg("classifier", num_labels=2, classifier_lora=True)
+
+    @pytest.mark.parametrize("task", ["classifier", "reranker", "cross_encoder"])
+    def test_the_classifier_family_loads_a_sequence_classifier(self, task):
+        """All three: only ``classifier`` was asserted, so dropping the other two
+        entries survived (#1117 review, round 3)."""
+        from soup_cli.utils.attach_preflight import loader_for
+
+        clf = self._cfg(task, num_labels=2, classifier_lora=True)
         assert loader_for(clf) == ("AutoModelForSequenceClassification",)
 
 
@@ -980,3 +990,205 @@ class TestConcreteClassesBuild:
 
         assert type(model).__name__ == "WhisperForConditionalGeneration"
         assert next(model.parameters()).device.type == "meta"
+
+
+class TestAsrNeedsItsAdapter:
+    def test_asr_without_asr_lora_is_no_adapter(self):
+        """trainer/asr.py attaches only with asr_lora on (#1117 review, round 3):
+        without it that run full-fine-tunes, so the check has nothing to attach."""
+        off = SimpleNamespace(task="asr", backend="transformers", training=SimpleNamespace(
+            lora=SimpleNamespace(r=8), asr_lora=False))
+        on = SimpleNamespace(task="asr", backend="transformers", training=SimpleNamespace(
+            lora=SimpleNamespace(r=8), asr_lora=True))
+
+        assert plan_adapter(off) == (False, "asr_lora is off --- that trainer full-fine-tunes")
+        assert plan_adapter(on) == (True, "")
+
+
+def _tiny_llama():
+    from transformers import LlamaConfig
+
+    return LlamaConfig(
+        vocab_size=64, hidden_size=16, intermediate_size=32, num_hidden_layers=2,
+        num_attention_heads=2, num_key_value_heads=2, pad_token_id=0,
+    )
+
+
+@pytest.fixture
+def plain_consoles(monkeypatch):
+    """Both of the command's consoles with no colour system: Rich then emits no
+    escape of its own, so any ESC byte in the output came from the config."""
+    from rich.console import Console
+
+    import soup_cli.commands.recipes as recipes_cmd
+
+    monkeypatch.setattr(recipes_cmd, "console", Console(color_system=None, width=400))
+    monkeypatch.setattr(
+        recipes_cmd, "err_console", Console(stderr=True, color_system=None, width=400)
+    )
+
+
+@pytest.mark.usefixtures("plain_consoles")
+class TestTheReportIsSafeForATerminal:
+    """#1117 review, round 3: peft quotes a string target_modules verbatim, and the
+    "Cannot attach" table printed it as Rich markup with control bytes intact."""
+
+    def _verify(self, tmp_path, monkeypatch, targets):
+        import json as _json
+
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        monkeypatch.setattr(
+            "soup_cli.utils.attach_preflight.load_hf_config", lambda _base: _tiny_llama()
+        )
+        path = tmp_path / "soup.yaml"
+        path.write_text(
+            "base: org/m\ntask: sft\ndata:\n  train: ./x.jsonl\n  format: alpaca\n"
+            f"training:\n  lora:\n    r: 8\n    target_modules: {_json.dumps(targets)}\n",
+            encoding="utf-8",
+        )
+        return CliRunner().invoke(app, ["recipes", "verify", "--config", str(path)])
+
+    def test_markup_in_the_config_is_printed_literally(self, tmp_path, monkeypatch):
+        """'[/]' used to raise MarkupError after the verdict, turning a finding
+        into a crash (exit 1)."""
+        result = self._verify(tmp_path, monkeypatch, ".*[/]nothing")
+
+        assert result.exit_code == 2, (result.output, result.exception)
+        assert "[/]nothing" in result.output
+
+    def test_a_character_class_survives(self, tmp_path, monkeypatch):
+        """'[qkv]' was swallowed as a markup tag."""
+        result = self._verify(tmp_path, monkeypatch, r".*\.[qkv]_nothing")
+
+        assert result.exit_code == 2
+        assert "[qkv]_nothing" in result.output
+
+    def test_control_bytes_do_not_reach_the_terminal(self, tmp_path, monkeypatch):
+        """'\\x1bc' is a full terminal reset."""
+        result = self._verify(tmp_path, monkeypatch, "x\x1bcEVIL_nothing")
+
+        assert result.exit_code == 2
+        assert "\x1b" not in result.output
+        assert "EVIL_nothing" in result.output
+
+
+@pytest.mark.usefixtures("plain_consoles")
+class TestConfigNamesAreSafeToo:
+    def test_a_missing_config_path_prints_literally(self, tmp_path):
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        result = CliRunner().invoke(
+            app, ["recipes", "verify", "--config", str(tmp_path / "[/]x\x1b[2J.yaml")]
+        )
+
+        assert result.exit_code == 3
+        assert "[/]x" in result.output and "\x1b" not in result.output
+
+    def test_a_vision_tower_name_prints_literally(self, tmp_path, monkeypatch):
+        """The "adapted a vision tower" line lists config names, which come from
+        the file name in --config mode."""
+        from transformers import CLIPVisionConfig, LlamaConfig, LlavaConfig
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        vl = LlavaConfig(
+            text_config=LlamaConfig(
+                vocab_size=64, hidden_size=16, intermediate_size=32,
+                num_hidden_layers=2, num_attention_heads=2, num_key_value_heads=2,
+                pad_token_id=0,
+            ),
+            vision_config=CLIPVisionConfig(
+                hidden_size=16, intermediate_size=32, num_hidden_layers=2,
+                num_attention_heads=2, image_size=32, patch_size=16,
+            ),
+            image_token_index=63,
+        )
+        monkeypatch.setattr("soup_cli.utils.attach_preflight.load_hf_config", lambda _b: vl)
+        path = tmp_path / "[bold]v.yaml"
+        path.write_text(
+            "base: org/vl\ntask: sft\nmodality: vision\n"
+            "data:\n  train: ./x.jsonl\n  format: llava\n"
+            'training:\n  lora:\n    r: 8\n    target_modules: ".*(q_proj|v_proj)"\n',
+            encoding="utf-8",
+        )
+        result = CliRunner().invoke(app, ["recipes", "verify", "--config", str(path)])
+
+        assert result.exit_code == 0, (result.output, result.exception)
+        assert "adapted a vision tower: [bold]v.yaml" in " ".join(result.output.split())
+
+
+class TestAMissingLibraryIsAnEnvironmentError:
+    @pytest.mark.parametrize("lib", ["torch", "transformers", "peft"])
+    def test_it_exits_1_naming_the_extra(self, tmp_path, monkeypatch, lib):
+        """Without these the per-stage catch-alls turned a missing library into a
+        verdict: unverified with exit 0, or cannot_attach with exit 2."""
+        import importlib.util
+
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+        from tests.conftest import strip_ansi
+
+        real = importlib.util.find_spec
+        monkeypatch.setattr(
+            importlib.util, "find_spec", lambda name, *a: None if name == lib else real(name, *a)
+        )
+        path = tmp_path / "soup.yaml"
+        path.write_text(
+            "base: org/m\ntask: sft\ndata:\n  train: ./x.jsonl\n  format: alpaca\n",
+            encoding="utf-8",
+        )
+        result = CliRunner().invoke(app, ["recipes", "verify", "--config", str(path)])
+
+        assert result.exit_code == 1
+        out = " ".join(strip_ansi(result.output).split())
+        assert f"needs {lib}" in out and 'pip install "soup-cli[train]"' in out
+
+
+class TestTheAdvisoryGoesToStderr:
+    def test_json_stdout_parses_with_a_partial_coverage_advisory(self, tmp_path, monkeypatch):
+        """#1164's resolver prints a partial-coverage advisory for
+        ``granitemoehybrid``. It must reach the user on stderr and leave --json's
+        stdout a document."""
+        import json as _json
+
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+        from tests.test_issue1122_glm4_granite_moe_targets import _granite_config
+
+        monkeypatch.setattr(
+            "soup_cli.utils.attach_preflight.load_hf_config",
+            lambda _base: _granite_config(num_hidden_layers=10, attention_every=5),
+        )
+        path = tmp_path / "soup.yaml"
+        path.write_text(
+            "base: org/granite\ntask: sft\ndata:\n  train: ./x.jsonl\n  format: alpaca\n"
+            "training:\n  lora:\n    r: 8\n    target_modules: auto\n",
+            encoding="utf-8",
+        )
+        result = CliRunner().invoke(app, ["recipes", "verify", "--config", str(path), "--json"])
+
+        rows = _json.loads(result.stdout)
+        assert rows[0]["model_type"] == "granitemoehybrid"
+        assert "Partial LoRA coverage" in result.stderr
+        assert "Partial LoRA coverage" not in result.stdout
+
+
+class TestNothingToVerify:
+    def test_an_empty_scope_exits_3(self, monkeypatch):
+        from typer.testing import CliRunner
+
+        import soup_cli.recipes.catalog as catalog
+        from soup_cli.cli import app
+
+        monkeypatch.setattr(catalog, "RECIPES", {})
+        result = CliRunner().invoke(app, ["recipes", "verify", "--no-templates"])
+
+        assert result.exit_code == 3, result.output

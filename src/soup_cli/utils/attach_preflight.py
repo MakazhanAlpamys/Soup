@@ -163,6 +163,9 @@ def plan_adapter(cfg: Any) -> tuple[bool, str]:
         return False, _NO_ADAPTER_TASKS[task]
     if task in _CLASSIFIER_TASKS and not getattr(tcfg, "classifier_lora", False):
         return False, "classifier_lora is off --- that trainer full-fine-tunes"
+    if task == "asr" and not getattr(tcfg, "asr_lora", False):
+        # trainer/asr.py attaches only with asr_lora on (and r > 0, checked above).
+        return False, "asr_lora is off --- that trainer full-fine-tunes"
     return True, ""
 
 
@@ -173,6 +176,7 @@ def check_attach(
     load_hf_config: Callable[[str], Any],
     build_model: Callable[[Any, str], Any],
     attach: Optional[Callable[[Any, Any], Any]] = None,
+    console: Any = None,
 ) -> AttachCheck:
     """Run one config through resolution and attach; never raise.
 
@@ -213,7 +217,7 @@ def check_attach(
         )
 
     try:
-        peft_config, targets = trainer_lora_config(model, cfg)
+        peft_config, targets = trainer_lora_config(model, cfg, console)
     except Exception as exc:  # noqa: BLE001 --- Soup's own refusals land here
         return AttachCheck(
             **row,
@@ -248,7 +252,7 @@ def check_attach(
     )
 
 
-def trainer_lora_config(model: Any, cfg: Any) -> tuple[Any, Any]:
+def trainer_lora_config(model: Any, cfg: Any, console: Any = None) -> tuple[Any, Any]:
     """The adapter config a LoRA trainer builds, in the order it builds it.
 
     ``resolve_lora_target_modules`` -> ``resolve_lora_target_parameters`` ->
@@ -277,6 +281,10 @@ def trainer_lora_config(model: Any, cfg: Any) -> tuple[Any, Any]:
     ``_setup_audio_transformers``) call only ``resolve_lora_target_modules`` and
     ``build_lora_config``, so for those the MoE and ``target_parameters`` steps are
     skipped here too -- the same split :func:`loader_for` makes for the class.
+    The classifier family runs the full sequence here, while ``trainer/classifier.py``
+    calls the resolver and ``build_lora_config`` (plus the MoE step once #1151 lands)
+    without ``target_parameters``. No shipped config sets ``classifier_lora``, so no
+    verdict depends on the difference today.
     """
     from soup_cli.utils.moe import resolve_moe_lora_targets
     from soup_cli.utils.peft_wiring import (
@@ -293,7 +301,7 @@ def trainer_lora_config(model: Any, cfg: Any) -> tuple[Any, Any]:
         if targets == "auto":
             targets = ["q_proj", "v_proj"]
         return build_lora_config(lora, target_modules=targets, task_type=None), targets
-    targets = resolve_lora_target_modules(model, lora.target_modules)
+    targets = resolve_lora_target_modules(model, lora.target_modules, console)
     if getattr(cfg, "task", "") == "sft" and getattr(cfg, "modality", "text") in (
         "vision", "audio",
     ):
@@ -304,7 +312,7 @@ def trainer_lora_config(model: Any, cfg: Any) -> tuple[Any, Any]:
     target_parameters = resolve_lora_target_parameters(
         model, getattr(lora, "target_parameters", None)
     )
-    targets = resolve_moe_lora_targets(model, tcfg, targets, None)
+    targets = resolve_moe_lora_targets(model, tcfg, targets, console)
     peft_config = build_lora_config(
         lora,
         target_modules=targets,

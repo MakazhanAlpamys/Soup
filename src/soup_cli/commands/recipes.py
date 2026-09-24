@@ -9,6 +9,9 @@ from rich.panel import Panel
 from rich.syntax import Syntax
 from rich.table import Table
 
+from soup_cli.utils.exit_codes import GateCommand
+from soup_cli.utils.terminal import for_terminal
+
 console = Console()
 #: Diagnostics for ``verify``. They go to stderr so that ``--json`` leaves stdout
 #: as nothing but the JSON document -- a skipped config is a note, not a result.
@@ -138,7 +141,7 @@ def search(
     console.print(table)
 
 
-@app.command()
+@app.command(cls=GateCommand)
 def verify(
     config: Optional[str] = typer.Option(
         None, "--config", "-c",
@@ -161,7 +164,22 @@ def verify(
     --config, 1 for a crash. A gated repo, or one needing trust_remote_code, is
     reported as unverified and does not change the exit code (#1116).
     """
+    import importlib.util
     import json as _json
+
+    from soup_cli.utils.exit_codes import EXIT_RUNTIME_ERROR
+
+    # #1117 review: without these the per-stage catch-alls turned a missing
+    # library into a verdict (unverified, exit 0; or cannot_attach, exit 2).
+    # A missing dependency is an environment problem: exit 1, naming the fix.
+    missing = [m for m in ("torch", "transformers", "peft") if importlib.util.find_spec(m) is None]
+    if missing:
+        err_console.print(
+            f"[red]soup recipes verify needs {', '.join(missing)}.[/] "
+            # \\[ -- Rich reads a bare [train] as a markup tag and drops it.
+            'Install them with: pip install "soup-cli\\[train]"'
+        )
+        raise typer.Exit(EXIT_RUNTIME_ERROR)
 
     from soup_cli.utils.attach_preflight import (
         PreflightReport,
@@ -181,7 +199,10 @@ def verify(
     for name, cfg in configs:
         report.checks.append(
             check_attach(
-                name, cfg, load_hf_config=load_hf_config, build_model=build_on_meta
+                name, cfg, load_hf_config=load_hf_config, build_model=build_on_meta,
+                # stderr: the resolver's partial-coverage advisory must not land
+                # in --json's stdout (#1117 review, after #1164).
+                console=err_console,
             )
         )
 
@@ -211,8 +232,6 @@ def verify(
 def _configs_to_verify(config: Optional[str], templates: bool):
     """``(name, SoupConfig)`` for everything in scope; a config that will not
     parse is surfaced here rather than counted as an attach failure."""
-    from rich.markup import escape
-
     from soup_cli.config.loader import load_config_from_string
     from soup_cli.utils.exit_codes import EXIT_USAGE_ERROR
 
@@ -220,15 +239,15 @@ def _configs_to_verify(config: Optional[str], templates: bool):
     if config:
         path = Path(config)
         if not path.is_file():
-            err_console.print(f"[red]Config not found:[/] {escape(config)}")
+            err_console.print(f"[red]Config not found:[/] {for_terminal(config)}")
             raise typer.Exit(EXIT_USAGE_ERROR)
         try:
             return [(path.name, load_config_from_string(path.read_text(encoding="utf-8")))]
         except Exception as exc:  # noqa: BLE001 --- any parse failure is an input error
             first_line = str(exc).splitlines()[0] if str(exc) else ""
             err_console.print(
-                f"[red]Config does not parse:[/] {escape(config)}: "
-                f"{escape(type(exc).__name__)}: {escape(first_line)}"
+                f"[red]Config does not parse:[/] {for_terminal(config)}: "
+                f"{for_terminal(type(exc).__name__)}: {for_terminal(first_line)}"
             )
             raise typer.Exit(EXIT_USAGE_ERROR) from None
     else:
@@ -250,7 +269,7 @@ def _configs_to_verify(config: Optional[str], templates: bool):
             loaded.append((name, load_config_from_string(text)))
         except Exception as exc:  # noqa: BLE001 --- a parse failure is #330's job
             err_console.print(
-                f"[dim]skipped {name}: does not parse ({type(exc).__name__})[/]"
+                f"[dim]skipped {for_terminal(name)}: does not parse ({type(exc).__name__})[/]"
             )
     return loaded
 
@@ -271,8 +290,12 @@ def _print_preflight(report, verdict_cls) -> None:
         table.add_column("Stage", style="yellow")
         table.add_column("Why")
         for check in failures:
+            # Every cell can carry config text (peft quotes target_modules
+            # verbatim): markup would crash the report or restyle it, and a raw
+            # ESC would reach the terminal (#1117 review).
             table.add_row(
-                check.name, str(check.model_type), check.stage, check.detail[:90]
+                for_terminal(check.name), for_terminal(check.model_type),
+                for_terminal(check.stage), for_terminal(check.detail[:90]),
             )
         console.print(table)
 
@@ -295,7 +318,9 @@ def _print_preflight(report, verdict_cls) -> None:
     if experts:
         console.print(f"[dim]{experts} of them adapted expert modules.[/]")
     if vision:
-        console.print(f"[yellow]adapted a vision tower:[/] {', '.join(vision)}")
+        console.print(
+            f"[yellow]adapted a vision tower:[/] {for_terminal(', '.join(vision))}"
+        )
 
 
 def _suggest_recipes(query: str, n: int = 3) -> list[str]:
