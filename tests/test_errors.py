@@ -9,6 +9,7 @@ from typer.testing import CliRunner
 
 from soup_cli.cli import app
 from soup_cli.utils.errors import format_friendly_error
+from tests.conftest import strip_ansi
 
 runner = CliRunner()
 
@@ -260,3 +261,26 @@ def test_trust_remote_code_error():
 
     output = buf.getvalue()
     assert "trust_remote_code=True" in output
+
+
+_HINT = 'pip install "soup-cli[audio]"'
+
+
+@pytest.mark.parametrize(
+    "exc",
+    [
+        FileNotFoundError(f"No such file or directory: \x1b]0;pwned\x07 {_HINT}"),
+        ImportError(f"XCodec2 needs torchaudio: \x1b]0;pwned\x07 {_HINT}"),
+    ],
+    ids=["known-pattern", "unknown-error"],
+)
+def test_exception_text_is_not_parsed_as_markup(exc):
+    """#1200: `[extra]` in exception text survives and control bytes are stripped."""
+    buf = StringIO()
+    test_console = Console(file=buf, force_terminal=True, color_system="truecolor", width=300)
+    with patch("soup_cli.utils.errors.console", test_console):
+        format_friendly_error(exc, verbose=False)
+    output = strip_ansi(buf.getvalue())
+    assert "soup-cli[audio]" in output
+    assert "\x1b" not in output
+    assert "\x07" not in output
