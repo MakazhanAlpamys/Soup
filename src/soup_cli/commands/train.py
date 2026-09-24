@@ -2473,6 +2473,13 @@ def _live_lr_sweep_from_config(
     # With a row for every step, a short result means the loss went non-finite.
     if len(losses) < len(schedule):
         diverged_lr = schedule[len(losses)]
+        if not losses:
+            # No update has run yet, so the learning rate cannot be the cause.
+            raise SweepTooShortError(
+                f"--find-lr: the loss was non-finite on the first step (lr {diverged_lr:.3g}), "
+                "before any update; check the training data, dtype and model rather "
+                "than the LR range"
+            )
         if len(losses) < MIN_NUM_STEPS:
             steps_run = f"{len(losses)} step" + ("" if len(losses) == 1 else "s")
             raise SweepTooShortError(

@@ -138,13 +138,14 @@ def test_divergence_writes_a_report_for_the_steps_that_ran(find_lr):
     text, code, report, _ = find_lr(rows=8, steps=8, nan_at=6)
     assert code == 0, text
     assert len(report["lrs"]) == len(report["losses"]) == 6
-    assert "non-finite" in text, text
+    # Names the LR of the step that went non-finite, not the last one that ran.
+    assert "non-finite at lr 0.0139;" in text, text
 
 
 def test_early_divergence_is_refused_with_its_own_message(find_lr):
     text, code, report, _ = find_lr(rows=8, steps=8, nan_at=2)
     assert code == 1, text
-    assert "non-finite" in text and "after 2 steps" in text, text
+    assert "non-finite at lr 5.18e-06 after 2 steps" in text, text
     assert report is None
     assert "--find-lr-output" not in text
     assert "synthetic" not in text
@@ -155,3 +156,12 @@ def test_a_bad_output_path_still_names_find_lr_output(find_lr):
     text, code, _, _ = find_lr(rows=6, steps=5, output="../outside.json")
     assert code == 1, text
     assert "Invalid --find-lr-output" in text, text
+
+
+def test_a_non_finite_first_step_points_away_from_the_lr_range(find_lr):
+    # No update has run, so lowering the LR range cannot help.
+    text, code, report, _ = find_lr(rows=8, steps=8, nan_at=0)
+    assert code == 1, text
+    assert "non-finite on the first step (lr 1e-07), before any update" in text, text
+    assert "lower --find-lr-start" not in text
+    assert report is None
