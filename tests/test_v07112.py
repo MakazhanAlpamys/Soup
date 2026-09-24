@@ -118,7 +118,6 @@ class TestDistillMode:
         assert msgs[-1]["role"] == "assistant"
         assert msgs[-1]["content"] == "teacher-says-hello"
 
-
     def test_build_sequence_distill_rows_with_real_transformers_tokenizer(self):
         pytest.importorskip("torch")
         pytest.importorskip("tokenizers")
@@ -192,7 +191,9 @@ class TestDistillMode:
         assert all(item["messages"][0]["role"] == "user" for item in out)
 
     @pytest.mark.parametrize("return_value", ["tensor", "list"])
-    def test_build_sequence_distill_rows_normalizes_tokenizer_return_types(self, return_value):
+    def test_build_sequence_distill_rows_normalizes_tokenizer_return_types(
+        self, return_value
+    ):
         from soup_cli.utils.distill import build_sequence_distill_rows
 
         class _FakeTok:
