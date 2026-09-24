@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import dataclasses
 import os
-import sys
 from pathlib import Path
 from types import MappingProxyType
 
@@ -27,10 +26,6 @@ from typer.testing import CliRunner
 from soup_cli.cli import app
 
 runner = CliRunner()
-
-_POSIX_ONLY = pytest.mark.skipif(
-    sys.platform == "win32", reason="POSIX symlink semantics"
-)
 
 
 # =====================================================================
@@ -219,7 +214,7 @@ class TestConsolidateShards:
         with pytest.raises(TypeError):
             consolidate_shards({"not": "a plan"})  # type: ignore[arg-type]
 
-    @_POSIX_ONLY
+    @pytest.mark.requires_symlink
     def test_symlinked_shard_rejected(self, tmp_path, monkeypatch):
         # A symlinked shard child could redirect torch.load to an arbitrary
         # target — consolidate_shards must reject it (TOCTOU defence). The

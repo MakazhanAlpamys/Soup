@@ -75,12 +75,19 @@ default, so "run it again with a different seed" was impossible: replicates of
 one arm differed only by row permutation and GPU nondeterminism. That understates
 run-to-run spread, and spread is the yardstick a real between-arm difference has
 to beat. Three replicates at three seeds is the cheapest honest error bar you can
-put on a training change:
+put on a training change. Create one config per replicate so the seed and its
+output directory stay together in the recorded recipe:
+
+```yaml
+# soup-seed-1.yaml (repeat for seeds 2 and 3)
+training:
+  seed: 1
+output: runs/seed-1
+```
 
 ```bash
 for s in 1 2 3; do
-  soup train --config soup.yaml --output "runs/seed-$s" \
-    && echo "seed $s done"   # set training.seed: $s in the config per run
+  soup train --config "soup-seed-$s.yaml" && echo "seed $s done"
 done
 ```
 
@@ -358,7 +365,9 @@ soup train --config grpo.yaml --reward-hack-mitigation log_only     # observe on
 # tokenize identically; for a genuinely different tokenizer see
 # wasserstein_aligned below).
 # (Universal Logit Distillation, Boizard et al. 2024 arXiv:2402.12030)
-soup train --config soup.yaml --uld-strategy wasserstein
+#   training:
+#     uld_strategy: wasserstein
+soup train --config soup.yaml
 
 # Cross-tokenizer distillation for DIFFERENT tokenizers, e.g. Llama -> Mistral,
 # no shared vocab needed (v0.71.18). Aligns student/teacher token sequences
@@ -389,10 +398,11 @@ soup train --config soup.yaml
 soup train --config soup.yaml --minillm-on-policy
 
 # Mid-epoch checkpoint for PPO/GRPO — TorchTune punts this; Soup ships it
-soup train --config grpo.yaml \
-    --rl-checkpoint-save-every-steps 500 \
-    --rl-checkpoint-keep-last 3 \
-    --rl-checkpoint-include-optimizer
+#   training:
+#     rl_checkpoint_save_every_steps: 500
+#     rl_checkpoint_keep_last: 3
+#     rl_checkpoint_include_optimizer: true
+soup train --config grpo.yaml
 
 # Iterative DPO loop driver — sample -> RM-score -> re-pair -> retrain
 # (drop --plan-only to run the loop; --plan-only just renders the per-round plan)
@@ -406,14 +416,19 @@ soup iterative-dpo \
 
 # RAGEN echo-trap detector — auto-halt when trajectories collapse to self-repetition
 # (Zhu et al. 2025 arXiv:2504.14437)
-soup train --config grpo.yaml \
-    --echo-trap-enabled \
-    --echo-trap-threshold 0.6 \
-    --echo-trap-halt \
-    --echo-trap-tokenizer-aware
+#   training:
+#     echo_trap_enabled: true
+#     echo_trap_threshold: 0.6
+#     echo_trap_halt: true
+#     echo_trap_tokenizer_aware: true
+soup train --config grpo.yaml
 ```
 
-`--echo-trap-tokenizer-aware` switches echo-trap n-grams from whitespace tokens to the active tokenizer's integer ids. This catches subword repetition that punctuation-heavy decoded text can hide, but the score becomes tokenizer-specific rather than vocabulary-agnostic.
+`training.echo_trap_tokenizer_aware` (also available as the real
+`--echo-trap-tokenizer-aware` option) switches echo-trap n-grams from
+whitespace tokens to the active tokenizer's integer ids. This catches subword
+repetition that punctuation-heavy decoded text can hide, but the score becomes
+tokenizer-specific rather than vocabulary-agnostic.
 
 ### Closed-loop reward-hacking auto-mitigation (v0.71.26)
 

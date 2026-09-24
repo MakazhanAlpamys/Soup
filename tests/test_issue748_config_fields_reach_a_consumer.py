@@ -329,8 +329,7 @@ KNOWN_UNCONSUMED = {
     "training.lr_groups": "no issue yet -- utils/lr_groups.py exports parse_lr_groups() and "
                           "nothing outside schema.py imports it; documented at "
                           "docs/peft-and-efficiency.md:190",
-    "data.mask_history": "no issue yet -- schema promises 'mask all but the last assistant turn "
-                         "during loss computation'; documented at docs/data.md:692",
+    # data.mask_history was here until #761 wired it into data/loss_mask.py.
     "training.early_stop_patience": "#761 -- schema promises 'consecutive regressions "
                                     "before early stopping'; documented at "
                                     "docs/peft-and-efficiency.md:622",
@@ -660,8 +659,8 @@ def test_the_allowlist_size_is_pinned_exactly():
     half: it names WHICH entry went stale, where this one only says the count
     moved.
     """
-    assert len(KNOWN_UNCONSUMED) == 37, (
-        f"KNOWN_UNCONSUMED is {len(KNOWN_UNCONSUMED)}, pinned at 37. Going UP "
+    assert len(KNOWN_UNCONSUMED) == 36, (
+        f"KNOWN_UNCONSUMED is {len(KNOWN_UNCONSUMED)}, pinned at 36. Going UP "
         "means a field was allowlisted rather than wired; going DOWN means an "
         "entry was retired, which is the good direction -- lower this number "
         "in the same commit."
@@ -1048,6 +1047,7 @@ class TestTheTreeMismatchCheck:
     between implementations is exactly what a test should be doing instead.
     """
 
+    @pytest.mark.requires_symlink
     def test_the_same_directory_reached_by_a_different_spelling_is_not_a_mismatch(
         self, tmp_path
     ):

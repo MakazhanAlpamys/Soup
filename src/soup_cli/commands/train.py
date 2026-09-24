@@ -1188,7 +1188,9 @@ def train(
         backend_label = "unsloth [green](fast mode)[/]"
 
     quant_label = cfg.training.quantization
-    if cfg.training.quantization_aware:
+    if cfg.training.quantization_aware == "quest":
+        quant_label = "mixed W4/A4+A16 (QuEST fake quant)"
+    elif cfg.training.quantization_aware:
         quant_label += " + QAT"
 
     # v0.53.2 review-fix: classifier-family tasks train a sequence-classification
@@ -1253,7 +1255,10 @@ def train(
             raise typer.Exit(1)
 
     # Validate QAT configuration
-    if cfg.training.quantization_aware:
+    if (
+        cfg.training.quantization_aware is True
+        or cfg.training.quantization_aware == "fp8"
+    ):
         from soup_cli.utils.qat import validate_qat_config
 
         qat_errors = validate_qat_config(

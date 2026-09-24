@@ -357,7 +357,7 @@ SHIP  ⇔  task_tuned > task_base  AND  ∀ benchmark: base − tuned ≤ forget
 else DON'T SHIP — even if the task metric looks great.
 ```
 
-Exit codes are CI-gateable: **0 = SHIP, 2 = DON'T SHIP, 1 = runtime error**. A tie on leg 1, a
+Exit codes are CI-gateable: **0 = SHIP, 2 = DON'T SHIP, 3 = usage/flag error, 1 = runtime error**. A tie on leg 1, a
 single regressed benchmark, or a missing baseline all yield DON'T SHIP (a missing baseline
 *refuses* rather than silently shipping).
 
@@ -764,6 +764,12 @@ Paths are containment-checked, and `registry://` refs are resolved with an optio
 
 ### Custom Eval Format
 
+Regex-scored custom tasks reject structurally unsafe patterns before matching
+model output and name `eval.custom.expected` in the error. The diagnose
+`format` probe applies the same check to `regex_pattern` without running a
+canary search. Ordinary patterns, including single-character alternation,
+remain valid.
+
 ```jsonl
 {"prompt": "What is 2+2?", "expected": "4", "category": "math", "scoring": "exact"}
 {"prompt": "Explain gravity", "expected": "force.*attraction", "scoring": "regex"}
@@ -836,6 +842,10 @@ soup eval behavior my_run --battery xstest \
 # Harmful prompts ship REDACTED — pull real sets from upstream papers.
 ```
 
+Without the live `--base-model` path, `--evidence` is required. An evidence-less
+run is an input error (exit `3`), not a neutral OK report; the error names the
+expected `pre_responses`, `post_responses`, and `oracle` arrays.
+
 Word-boundary regex agreement (no `"safe" in "unsafe"` false positives); OK/MINOR/MAJOR thresholds match the v0.26 / v0.56 taxonomy.
 
 **Capability auto-suite** — pre-bundled profile selector with friendly `lm-eval-harness` task ids:
@@ -872,6 +882,10 @@ tests:
 ```bash
 soup eval checklist tests.yaml --evidence responses.json
 ```
+
+`--evidence` is required and maps each CheckList test name to its response
+strings. Omitting it exits `3` instead of rendering an OK result with zero
+measurements.
 
 `mft` = response must contain a keyword as a whole word (`"sand"` won't pass for `"and"`); `inv` = all paraphrases must agree; `dir` = directional expectation under perturbation.
 

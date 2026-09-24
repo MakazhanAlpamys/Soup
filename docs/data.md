@@ -207,7 +207,7 @@ expectations:
   - {name: expect_token_length_between, args: {min_tokens: 16, max_tokens: 4096}}
   - {name: expect_no_refusal_pattern}
 EOF
-soup expect data.jsonl suite.yaml   # exit 3 on suite failure
+soup expect data.jsonl suite.yaml   # exit 2 on suite failure
 
 # Magpie synthetic data — chat-template-prefix harvest (live, v0.71.6)
 soup data gen-magpie --base meta-llama/Llama-3.1-8B-Instruct \
@@ -758,8 +758,8 @@ that still reflects the original, un-rebalanced skew, not the mixture train now 
 data:
   add_new_tokens: ["<reasoning>", "</reasoning>"]
   new_special_tokens: ["<|tool_call|>"]
-  mask_history: true
-  # Staged fields below warn in v0.75 and are scheduled for refusal in v0.77 (#808):
+  mask_history: true              # train only on the LAST assistant turn
+  # Staged fields below warn in v0.76 and are scheduled for refusal in v0.77 (#808):
   # resize_vocab: true
   # split_thinking: true            # Qwen3-style <think> reasoning-block masking
   # image_min_pixels: 256
@@ -769,6 +769,28 @@ data:
   # video_maxlen: 32
   # video_dir: ./videos
 ```
+
+`mask_history: true` keeps only the **last** assistant turn in the loss: every
+earlier assistant turn is masked alongside the user and system turns the
+assistant-only path already excludes. It never adds tokens to the loss.
+
+It only means something for a **multi-turn chat shape** — `chatml`, `sharegpt`
+and the other message-list formats — where turns exist to mask. A single-turn
+conversation trains identically with it on or off, and a flat format such as
+`alpaca` or `plaintext` has no turns at all.
+
+It requires `train_on_responses_only: true`, which is the path that marks
+assistant spans; with `false` every token trains, including the history this
+field asks to exclude, so the combination is refused at config load. That also
+rules out `train_on_messages_with_train_field`, which is itself exclusive with
+`train_on_responses_only`: the per-message `train` field and `mask_history` can
+never both decide a run.
+
+It is honoured by the transformers backend, for `task: sft` and `task: distill`.
+**`backend: mlx` ignores it:** MLX SFT builds its own mask and supervises every
+assistant turn, so the same config trains the last turn on transformers and every
+turn on MLX. `soup train` says so on its "MLX backend ignores:" line, and
+`soup doctor --config` reports it.
 
 **AOT preprocessing:**
 
@@ -834,7 +856,7 @@ soup data clean ./data/train.jsonl -o ./data/clean.jsonl --dry-run
 ```
 
 `soup data validate` exits with code `0` when at least one row is usable and the
-optional minimum valid fraction is met. It exits with code `1` for input errors,
+optional minimum valid fraction is met. It exits with code `3` for input errors,
 such as a missing file or an undetectable format, and code `2` when a non-empty
 dataset has no usable rows or falls below `--min-valid-fraction`. A partially valid
 dataset still exits with code `0` when no minimum is specified.
@@ -985,7 +1007,7 @@ Pass `--live --base-yaml soup.yaml` to score each candidate with a short `soup t
 ## AOT Tokenization with `soup data preprocess`
 
 Pre-tokenize your dataset once and cache Arrow shards keyed by
-`(dataset, tokenizer, max_length, format)`:
+`(dataset, tokenizer, max_length, format, chat_template)`:
 
 ```bash
 soup data preprocess soup.yaml --output ./tokenized_cache
@@ -995,6 +1017,12 @@ SFT and Pretrain trainers short-circuit at schema validation when
 `format: pre_tokenized` + `tokenized_path: ./tokenized_cache` is set, eliminating
 the per-epoch tokenization tax. Cache keys ensure resume safety; partial runs pick
 up from the last completed shard.
+
+Rows are rendered with `data.chat_template` when it is set, the same as live
+training. The `pre_tokenized` training config must name the same template, since
+training saves the tokenizer with it; a different one is refused with
+`cache hash mismatch`. A cache written before the template joined the key is
+refused the same way: re-run `soup data preprocess` to rebuild it.
 
 
 ## Data Recipe DAG Runner (`soup data recipe --execute`)
@@ -1023,6 +1051,9 @@ Ollama, Anthropic, or vLLM), **code** (execution via RLVR sandbox), **judge** (b
 **validator** (regex or JSON schema), **sampler** (deterministic selection). Checkpoint
 written per node; resume rehydrates from per-node sidecars. Failed rows logged with
 redacted reasons (paths stripped, capped at 256 chars).
+Regex validator nodes reject structurally unsafe patterns before matching rows;
+the error identifies the node's `config.regex` field. Simple alternations remain
+valid.
 
 
 ## Fine-tune Doctor (`soup data doctor`)

@@ -271,7 +271,7 @@ def test_compute_adapter_diff_top_k_lower_bound(tmp_path, monkeypatch):
     assert len(report.top_changed) == 1
 
 
-@pytest.mark.skipif(os.name == "nt", reason="POSIX-only symlink semantics")
+@pytest.mark.requires_symlink
 def test_compute_adapter_diff_rejects_symlinked_weights(tmp_path, monkeypatch):
     """Symlink at adapter_model.safetensors must be rejected (TOCTOU)."""
     pytest.importorskip("safetensors")

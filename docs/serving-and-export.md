@@ -209,6 +209,55 @@ soup bench ./output --prompts-file bench_suite.jsonl
 
 This acts as a built-in "speedometer," outputting Tokens-Per-Second (TPS), Total Latency, and Peak VRAM allocations into a clean status table.
 
+`soup bench <model>` is shorthand for `soup bench infer <model>`; both take the same flags.
+
+### Training benchmark
+
+`soup bench train` runs a short, fixed-length SFT job from your config and writes a JSON report.
+It exists so a throughput number carries evidence that the model was training while it was
+measured (#836):
+
+```bash
+soup bench train --config soup.yaml --steps 20 --warmup 3 -o bench-train.json
+```
+
+The run trains for exactly `--steps` optimizer steps, logs every step, saves nothing, and writes
+into a scratch directory, not the config's `output`. The first `--warmup` steps are measured but
+left out of the timing. It measures `task: sft` on the transformers backend and refuses any other
+task or backend by name.
+
+It exits **1** when any check fails. The report is still written, with the failures in it:
+
+| check | fails when |
+|---|---|
+| `trainable_parameters` | no `requires_grad` tensor has real storage (`meta` ones are counted apart). Checked before training too, because the Trainer would otherwise die in autograd without naming the cause |
+| `grad_norm` | a counted step logged `grad_norm == 0.0` or a non-finite norm. A backend that logs no norm is `"not reported by this backend"`, never `0.0` |
+| `parameters_changed` | the trainable parameters are bit-identical before the first step and after the last. This check needs no `grad_norm`, so it also covers backends that log none |
+| `step_count` | fewer optimizer steps ran than were requested |
+
+Only post-warm-up steps are checked for `grad_norm`. Under fp16 the GradScaler can skip its first
+steps on overflow and log a non-finite norm; raise `--warmup` past them rather than reading that
+as divergence.
+
+Report fields:
+
+| field | meaning |
+|---|---|
+| `valid`, `failures` | the verdict, and one `{check, message}` per failed check |
+| `checks` | `trainable_parameters` (count), `grad_norm` (state), `parameters_changed` (bool) |
+| `timing` | `median_seconds`, `p95_seconds` (nearest-rank), `counted_steps`, `warmup_steps_discarded`, `total_seconds` |
+| `tokens` | `useful` (supervised: `labels != -100`), `total`, and `utilisation` (`useful / total`), counted from the batches `training_step` received |
+| `throughput` | `useful_tokens_per_second` and `total_tokens_per_second` |
+| `memory` | `max_memory_allocated_bytes` and `max_memory_reserved_bytes`, kept separate and read after `reset_peak_memory_stats`. Both are `null` off CUDA. Never read from `nvidia-smi` |
+| `provenance` | device, card, CUDA runtime, compute capability, driver version, SM clock after the run (`sm_clock_mhz_after_run`, read with `nvidia-smi`; memory never is), platform, Python, package versions (torch, transformers, peft, trl, bitsandbytes, accelerate), dtype, optimizer, seed, data seed |
+| `config_hash`, `resolved_config` | sha256 of the fully resolved config, and the config itself, so a schema-default change that moves a run shows up (#716) |
+| `steps_requested`, `steps_measured` | what was asked for and what ran |
+
+A step's time runs from the previous step's end to its own end, so data loading counts. The first
+step runs from its own start. On CUDA each boundary is read after `torch.cuda.synchronize()`.
+`parameters_changed` proves that something moved, not that the model learned anything useful. It
+is a floor, not a quality gate.
+
 
 ## Inference Server
 
@@ -289,8 +338,9 @@ soup serve --model ./output --backend vllm --max-model-len 8192
 The vLLM backend applies the **model's own chat template**, exactly like the
 transformers backend, and encodes the rendered prompt itself so the engine
 receives the same token ids Soup trains on rather than re-tokenizing the string.
-(The MII backend still hands the engine the rendered string; see #891.) A
-model that ships no chat template falls back to a generic `User:` /
+(The MII backend also tokenizes through a wrapper around the same tokenizer, so
+a templated prompt reaches its engine with the ids the template implies, #891.)
+A model that ships no chat template falls back to a generic `User:` /
 `Assistant:` prompt, and the server says so at startup. `finish_reason` reports `"length"` when a response
 hits `max_tokens` and `"stop"` otherwise (`/v1/messages` maps those to
 `max_tokens` / `end_turn`).
@@ -589,6 +639,11 @@ soup ui
 - **Multi-Run Compare** — overlay loss curves from up to 5 runs side-by-side
 - **Chat Upgrade** — SSE streaming via proxy, typing indicator, cancel button, markdown renderer (bold, italic, code blocks), chat export as JSON
 - **Config Builder** — recipe dropdown (175 recipes), config schema API for dynamic form generation
+
+Gradient norm is nullable: backends or steps that do not report it store and
+stream `null`, and the Web UI chart leaves a gap instead of drawing a false
+zero. An actually logged `0.0` remains a measured value and appears in the
+terminal panel.
 
 **Security:** The Web UI generates a random auth token at startup (printed to console). Every private endpoint — mutating (start/stop training, delete runs, inspect data, validate config) and reading (runs, metrics, system, recipes, SSE streams) — requires an `Authorization: Bearer <token>` header. `/` and `/api/health` stay open so the dashboard can load. CORS is restricted to the served origin. Data inspection is sandboxed to the working directory.
 

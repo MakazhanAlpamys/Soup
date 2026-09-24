@@ -198,7 +198,14 @@ def validate_shards(value: Optional[int]) -> Optional[int]:
 # now also applies TRL's ``add_eos`` rule — a chat row that does not already end on
 # the EOS gets one appended — so a cache built before this no longer trains without a
 # stop token on templates that render none (the Qwen shape). A v2 cache is rejected.
-_PREPROCESS_TOKENIZE_SCHEMA = "v3"
+# v4 (#1067): the chat path now renders with ``data.chat_template`` (it used the
+# tokenizer's shipped template whatever the config said) and the template is part
+# of the key. A v3 cache recorded no template, so it is rejected, not guessed at.
+# v5 (#876): the chat path keeps only the template's own leading BOS, so a
+# ``data.chat_template`` preset on a BOS-adding tokenizer no longer caches the
+# post-processor's BOS, and a truncated row no longer gains an EOS. A v4 cache is
+# rejected.
+_PREPROCESS_TOKENIZE_SCHEMA = "v5"
 
 
 def preprocess_dataset_key_input(data_cfg: Any) -> str:
@@ -224,11 +231,16 @@ def make_preprocess_cache_key(
     tokenizer_name: str,
     max_length: int,
     format_name: str,
+    chat_template: Optional[str] = None,
 ) -> str:
     """Return a 16-char hex cache key for AOT-tokenized output.
 
     Defence-in-depth: every input is type-checked and bool-rejected so the
     SHA-256 input is always canonical. Mirrors v0.36.0 ``make_cache_key``.
+
+    ``chat_template`` is the resolved Jinja the chat path renders with (#1067), or
+    ``None`` for the tokenizer's shipped template. Hashing the resolved string
+    rather than a preset name means an edited preset also invalidates the cache.
     """
     if not isinstance(dataset_path, str) or not dataset_path:
         raise ValueError("dataset_path must be a non-empty string")
@@ -244,9 +256,13 @@ def make_preprocess_cache_key(
         raise ValueError("max_length must be a positive int")
     if not isinstance(format_name, str) or not format_name:
         raise ValueError("format_name must be a non-empty string")
+    if chat_template is not None and not isinstance(chat_template, str):
+        raise ValueError("chat_template must be a string or None")
+    if chat_template is not None and "\x00" in chat_template:
+        raise ValueError("chat_template must not contain null bytes")
     blob = (
         f"{_PREPROCESS_TOKENIZE_SCHEMA}\x1f{dataset_path}\x1f{tokenizer_name}"
-        f"\x1f{max_length}\x1f{format_name}"
+        f"\x1f{max_length}\x1f{format_name}\x1f{chat_template or ''}"
     )
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:16]
 

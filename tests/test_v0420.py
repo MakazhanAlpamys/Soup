@@ -1026,16 +1026,14 @@ class TestSecurityReviewFixes:
         with pytest.raises(Exception, match="probs"):
             DataConfig(train="d.jsonl", interleave="probs")
 
+    @pytest.mark.requires_symlink
     def test_ingest_symlink_rejected(self, tmp_path, monkeypatch):
         # Security M2: lstat-based symlink rejection (TOCTOU defence).
         monkeypatch.chdir(tmp_path)
         target = tmp_path / "real.txt"
         target.write_text("hello", encoding="utf-8")
         link = tmp_path / "link.txt"
-        try:
-            link.symlink_to(target)
-        except (OSError, NotImplementedError):
-            pytest.skip("symlinks not supported on this platform")
+        link.symlink_to(target)
         runner = CliRunner()
         result = runner.invoke(app, ["data", "ingest", "link.txt"])
         assert result.exit_code == 1

@@ -74,7 +74,7 @@ soup lock write \
   --dataset-sha $DATA_SHA \
   --env-hash $(jq -r .closure soup-env.lock) \
   -o soup.lock
-# Teammates re-check the lock; exit 3 on drift.
+# Teammates re-check the lock; exit 2 on drift.
 soup lock check soup.lock \
   --base-model meta-llama/Llama-3.1-8B \
   --base-sha $BASE_SHA --dataset-sha $DATA_SHA --env-hash $ENV_HASH
@@ -511,6 +511,7 @@ soup adapters audit ./output --config soup.yaml --json   # machine-readable
 ```
 Audit: output
 │ optimizer                    │ adamw_torch │ AdamW  │ ok      │
+│ learning_rate                │ 0.0001      │ 0.0001 │ ok      │
 │ warmup_ratio                 │ 0.03        │ —      │ unknown │
 │ weight_decay                 │ 0.01        │ 0.01   │ ok      │
 │ lora.r                       │ 8           │ 8      │ ok      │
@@ -525,6 +526,20 @@ user's fault.
 The config is read through the schema, so a setting you omitted is audited
 against the default Soup would actually have used, not against a second copy
 of the defaults kept by the audit.
+
+**The MLX learning-rate comparand is `peak_lr`.** `training.lr` is the target
+peak/base value passed to the resolved optimizer schedule. Warmup starts below
+it and controls when the schedule reaches it; cosine or linear decay controls
+what follows. Comparing `training.lr` with an early schedule sample would
+therefore flag a correct warmup run. The audit instead compares it with the
+optimizer plan's recorded `peak_lr`. It deliberately does not use the record's
+`learning_rate`, because that field is only the config value echoed when the
+file is written, not evidence of what reached the optimizer.
+
+PEFT's `adapter_config.json` on the transformers backend does not record the
+effective optimizer learning rate. That row is therefore `unknown`, and the
+output says explicitly that the effective learning rate was **not checked**;
+it never presents a transformers adapter with a false clean bill.
 
 **Masking is audited by effect, not by request.** The record's
 `train_on_responses_only` is the config's own request echoed back; the effect
