@@ -193,3 +193,156 @@ def test_build_loraplus_optimizer_returns_none_without_ratio(tmp_path):
         _tiny_peft_model(), _args(tmp_path), _TCfg(loraplus_lr_ratio=None)
     )
     assert optimizer is None
+
+
+# --- The wrapper itself: the LoRA+ optimizer reaches PPOTrainer's constructor ---
+#
+# The tests above prove the mechanism on a real Trainer. These pin the wiring in
+# PPOTrainerWrapper.setup: with a ratio set, the optimizer build_loraplus_optimizer
+# returns is the one handed to the trl constructor as optimizers=(opt, None). A
+# source-level check cannot see an inverted guard or an injection moved below the
+# constructor call; recording what the constructor actually receives can.
+
+
+def _fake_ppo_classes(captured, *, accepts_optimizers=True):
+    """A PPOTrainer whose __init__ declares its parameters explicitly, so the
+    wrapper's signature probe sees the eager shape (or, with
+    accepts_optimizers=False, a trl that cannot take an optimizer at all)."""
+    if accepts_optimizers:
+
+        class FakePPOTrainer:
+            def __init__(
+                self,
+                args=None,
+                processing_class=None,
+                model=None,
+                ref_model=None,
+                reward_model=None,
+                train_dataset=None,
+                value_model=None,
+                optimizers=(None, None),
+            ):
+                captured.update(locals())
+                captured.pop("self")
+
+    else:
+
+        class FakePPOTrainer:
+            def __init__(
+                self,
+                args=None,
+                processing_class=None,
+                model=None,
+                ref_model=None,
+                reward_model=None,
+                train_dataset=None,
+                value_model=None,
+            ):
+                captured.update(locals())
+                captured.pop("self")
+
+    class FakePPOConfig:
+        def __init__(self, **kwargs):
+            pass
+
+    return FakePPOTrainer, FakePPOConfig
+
+
+def _run_ppo_setup(trainer_cls, config_cls, *, is_experimental, ratio, sentinel):
+    from unittest.mock import MagicMock
+    from unittest.mock import patch as mock_patch
+
+    from soup_cli.config.schema import SoupConfig
+    from soup_cli.trainer.ppo import PPOTrainerWrapper
+
+    training = {"loraplus_lr_ratio": ratio} if ratio is not None else {}
+    cfg = SoupConfig(
+        base="test-model",
+        task="ppo",
+        data={"train": "./data.jsonl"},
+        training=training,
+    )
+    wrapper = PPOTrainerWrapper(cfg, device="cpu")
+    dataset = {"train": [{"prompt": "What is 2+2?", "answer": "4"}]}
+
+    with mock_patch("soup_cli.trainer.ppo.PPOTrainerWrapper._setup_reward"), \
+         mock_patch("soup_cli.trainer.ppo.PPOTrainerWrapper._setup_transformers"), \
+         mock_patch(
+             "soup_cli.trainer.ppo._import_ppo_classes",
+             return_value=(trainer_cls, config_cls, is_experimental),
+         ), \
+         mock_patch(
+             "soup_cli.trainer.ppo.PPOTrainerWrapper._get_or_create_reward_model",
+             return_value=MagicMock(),
+         ), \
+         mock_patch(
+             "soup_cli.trainer.ppo.PPOTrainerWrapper._create_value_model",
+             return_value=MagicMock(),
+         ), \
+         mock_patch(
+             "soup_cli.utils.peft_wiring.build_loraplus_optimizer",
+             return_value=sentinel,
+         ) as build:
+        wrapper.model = MagicMock()
+        wrapper.model.get_nb_trainable_parameters.return_value = (100, 1000)
+        tokenizer = MagicMock()
+        tokenizer.pad_token = "pad"
+        tokenizer.side_effect = lambda texts, **kw: {
+            "input_ids": [[1, 2, 3]] * (len(texts) if isinstance(texts, list) else 1),
+            "attention_mask": [[1, 1, 1]] * (len(texts) if isinstance(texts, list) else 1),
+        }
+        wrapper.tokenizer = tokenizer
+        wrapper.setup(dataset)
+    return build
+
+
+# Both construction branches that take an `args` config inject the optimizer:
+# the trl.experimental one (the live path on trl>=0.29) and the transitional one.
+_CONSTRUCTION_BRANCHES = pytest.mark.parametrize(
+    "is_experimental", [True, False], ids=["experimental", "transitional"]
+)
+
+
+@_CONSTRUCTION_BRANCHES
+def test_ppo_wrapper_hands_the_loraplus_optimizer_to_the_constructor(is_experimental):
+    sentinel = object()
+    captured = {}
+    trainer_cls, config_cls = _fake_ppo_classes(captured)
+
+    build = _run_ppo_setup(
+        trainer_cls, config_cls,
+        is_experimental=is_experimental, ratio=RATIO, sentinel=sentinel,
+    )
+
+    build.assert_called_once()
+    assert captured["optimizers"] == (sentinel, None)
+
+
+@_CONSTRUCTION_BRANCHES
+def test_ppo_wrapper_leaves_trl_its_own_optimizer_without_a_ratio(is_experimental):
+    sentinel = object()
+    captured = {}
+    trainer_cls, config_cls = _fake_ppo_classes(captured)
+
+    build = _run_ppo_setup(
+        trainer_cls, config_cls,
+        is_experimental=is_experimental, ratio=None, sentinel=sentinel,
+    )
+
+    build.assert_not_called()
+    assert captured["optimizers"] == (None, None)
+
+
+def test_ppo_wrapper_refuses_a_ratio_when_trl_cannot_take_an_optimizer():
+    """A PPOTrainer without an `optimizers` parameter cannot have the scheduler
+    bound to the LoRA+ optimizer, so setup fails loudly instead of falling back
+    to a post-construction attach that trains B at a flat lr*ratio."""
+    captured = {}
+    trainer_cls, config_cls = _fake_ppo_classes(captured, accepts_optimizers=False)
+
+    with pytest.raises(RuntimeError, match="optimizers"):
+        _run_ppo_setup(
+            trainer_cls, config_cls,
+            is_experimental=True, ratio=RATIO, sentinel=object(),
+        )
+    assert captured == {}
