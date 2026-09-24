@@ -175,6 +175,17 @@ class TestBothSurfacesAreCovered:
             assert pair.meta_model, f"{name} has no RecipeMeta.model"
             assert pair.yaml_base, f"{name} has no YAML base:"
 
+    def test_every_recipe_meta_model_and_yaml_base_agree(self):
+        """RecipeMeta.model and YAML base: must be identical (#1122)."""
+        from scripts.check_recipe_repo_ids import collect_recipe_repo_ids
+
+        surfaces = collect_recipe_repo_ids()
+        for name, pair in surfaces.items():
+            assert pair.meta_model == pair.yaml_base, (
+                f"{name}: RecipeMeta.model ({pair.meta_model!r}) does not "
+                f"match YAML base ({pair.yaml_base!r})"
+            )
+
     def test_a_wrong_meta_model_is_caught_independently_of_the_yaml(self, monkeypatch):
         """#666's mutation testing showed the snapshot guard sees only the YAML
         half, so a wrong `RecipeMeta.model` slips past everything else."""

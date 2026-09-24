@@ -108,6 +108,20 @@ class TestRecipeCatalog:
                 f"Recipe '{name}' task mismatch: meta={recipe.task}, yaml={yaml_task}"
             )
 
+    def test_recipe_models_match_yaml_base(self):
+        """Recipe.model matches the base model in the YAML content (#1122)."""
+        import yaml
+
+        from soup_cli.recipes.catalog import RECIPES
+
+        for name, recipe in RECIPES.items():
+            parsed = yaml.safe_load(recipe.yaml_str)
+            yaml_base = parsed.get("base")
+            assert recipe.model == yaml_base, (
+                f"Recipe '{name}' model mismatch: "
+                f"meta={recipe.model}, yaml={yaml_base}"
+            )
+
 
 # ---------------------------------------------------------------------------
 # CLI tests
@@ -1732,6 +1746,7 @@ class TestV025NewRecipes:
         Task-variant for #275 / #846 added 2 (qwen3.6-35b-a3b-dpo, qwen3.6-35b-a3b-grpo) -> 174.
         Issue #845 added 2 (qwen3.6-27b-dpo, qwen3.6-27b-grpo) -> 176.
         Issue #825 retires the unusable Falcon-E BitNet training recipe -> 175.
+        Issue #1122 retires the nonexistent cogito-v2-sft recipe -> 174.
         """
         from soup_cli.recipes.catalog import RECIPES
         from tests.recipe_count import EXPECTED_RECIPE_COUNT, recipe_count_hint
