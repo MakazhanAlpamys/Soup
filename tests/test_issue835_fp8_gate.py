@@ -763,7 +763,10 @@ class TestThePreflightAsksForTorchaoItself:
         )
 
         assert result.exit_code == 1
-        assert "not compatible with the unsloth backend" in out
+        # Either wording of the unsloth refusal: soup train's "not compatible with
+        # the unsloth backend", or #1155's parse-time "not supported on the unsloth
+        # backend". What matters is that it is the unsloth refusal and nothing else.
+        assert "unsloth backend" in out
         # Broad on purpose (round 3): the narrow check passed while the int8
         # "pip install torchao" was printed instead.
         assert "pip install" not in out
@@ -826,7 +829,10 @@ class TestTheDryRunNoteRound3:
         )
 
         assert result.exit_code == 1
-        assert "not compatible with the unsloth backend" in out
+        # Either wording of the unsloth refusal: soup train's "not compatible with
+        # the unsloth backend", or #1155's parse-time "not supported on the unsloth
+        # backend". What matters is that it is the unsloth refusal and nothing else.
+        assert "unsloth backend" in out
         assert "Note:" not in out and "pip install" not in out
 
     def test_no_torchao_and_no_card_shows_both(self, tmp_path, monkeypatch):
