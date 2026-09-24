@@ -22,7 +22,8 @@ A wrapper wires LoRA+ one of two ways, and this scan accepts both:
 
 - **Attach** — ``attach_loraplus_optimizer(trainer, tcfg)`` after construction.
   Correct for every trainer whose optimizer is created lazily at ``train()``
-  (the SFT family and ten of the preference/RL wrappers).
+  (the SFT family and every preference/RL wrapper except PPO, online_dpo
+  included).
 - **Inject** — ``build_loraplus_optimizer(...)`` before construction, handed to
   the trainer via ``optimizers=(opt, None)``. This is PPO's shape: its
   ``trl.experimental`` trainer builds the optimizer and scheduler eagerly in
@@ -37,6 +38,11 @@ lump it in with the wired wrappers or leave it silently ignoring the option,
 ``loraplus_lr_ratio`` is **refused at config parse** for ``task='unlearn'`` — see
 ``test_unlearn_loraplus_is_refused_at_config_parse``. So the exemption below is
 earned by a hard error, not by an unimplemented gap.
+
+A wrapper counts as building a LoRA adapter when it calls ``get_peft_model``
+itself OR hands a ``peft_config=`` to a TRL trainer that applies the adapter in
+its own ``__init__`` (``online_dpo.py``). Until #745's second round the scan
+only knew the first shape, so online_dpo ignored ``loraplus_lr_ratio`` unseen.
 
 Coverage is derived by SCANNING ``soup_cli/trainer/`` (following
 ``tests/test_issue359_deepspeed_guard_coverage.py``) rather than a hand-written
@@ -55,8 +61,12 @@ import pytest
 _TRAINER_DIR = pathlib.Path(__file__).resolve().parents[1] / "src" / "soup_cli" / "trainer"
 _TRAINER_SOURCES = sorted(_TRAINER_DIR.glob("*.py"))
 
-#: A wrapper applies a LoRA adapter when it calls ``get_peft_model(...)`` — the
-#: point at which LoRA A/B matrices exist for LoRA+ to give different rates to.
+#: A wrapper applies a LoRA adapter one of two ways, and either is the point at
+#: which LoRA A/B matrices exist for LoRA+ to give different rates to: it calls
+#: ``get_peft_model(...)`` itself, or it hands a ``peft_config=`` to a TRL trainer
+#: that applies the adapter inside its own ``__init__`` (``online_dpo.py``). The
+#: second shape is detected on the AST (see :func:`_hands_peft_config_to_trl`),
+#: since ``self.peft_config = ...`` assignments share the spelling.
 _BUILDS_PEFT = re.compile(r"get_peft_model\s*\(")
 #: The two wiring shapes (see the module docstring): attach after construction,
 #: or build before it and inject via ``optimizers=``. A wrapper counts as wiring
@@ -86,14 +96,40 @@ def _code_without_comments(text: str) -> str:
     return "\n".join(line.split("#", 1)[0] for line in text.splitlines())
 
 
+def _hands_peft_config_to_trl(source: str) -> bool:
+    """True when some call passes a ``peft_config=`` keyword that is not a
+    literal ``None``, i.e. the wrapper delegates applying the adapter to TRL."""
+    for node in ast.walk(ast.parse(source)):
+        if not isinstance(node, ast.Call):
+            continue
+        for keyword in node.keywords:
+            if keyword.arg != "peft_config":
+                continue
+            if isinstance(keyword.value, ast.Constant) and keyword.value.value is None:
+                continue
+            return True
+    return False
+
+
+def _source_builds_peft(source: str) -> bool:
+    return bool(
+        _BUILDS_PEFT.search(_code_without_comments(source))
+        or _hands_peft_config_to_trl(source)
+    )
+
+
 def _builds_peft(path: pathlib.Path) -> bool:
-    return bool(_BUILDS_PEFT.search(_code_without_comments(path.read_text(encoding="utf-8"))))
+    return _source_builds_peft(path.read_text(encoding="utf-8"))
+
+
+def _wires_source(source: str) -> bool:
+    """True if the source wires LoRA+ either way: attach or constructor inject."""
+    code = _code_without_comments(source)
+    return bool(_ATTACH_CALL.search(code) or _INJECT_CALL.search(code))
 
 
 def _wires_loraplus(path: pathlib.Path) -> bool:
-    """True if the module wires LoRA+ either way — attach or constructor inject."""
-    code = _code_without_comments(path.read_text(encoding="utf-8"))
-    return bool(_ATTACH_CALL.search(code) or _INJECT_CALL.search(code))
+    return _wires_source(path.read_text(encoding="utf-8"))
 
 
 def _is_loraplus_none_tuple(node: ast.AST) -> bool:
@@ -170,7 +206,7 @@ class TestLoraPlusWiringCoverage:
     @pytest.mark.parametrize("path", _TRAINER_SOURCES, ids=[p.stem for p in _TRAINER_SOURCES])
     def test_every_peft_builder_wires_loraplus_or_is_exempt(self, path):
         code = _code_without_comments(path.read_text(encoding="utf-8"))
-        if not _BUILDS_PEFT.search(code):
+        if not _builds_peft(path):
             return
         if path.name in _LORAPLUS_EXEMPT:
             return
@@ -186,7 +222,7 @@ class TestLoraPlusWiringCoverage:
         """Pins the positive set so the parametrized check above is not vacuous:
         every PEFT-building wrapper except the earned exemptions wires LoRA+ (by
         attach or by constructor inject). #724 wired three; #745 wires all the
-        rest — ten by attach (dpo, kto, ...) and PPO by inject."""
+        rest: twelve by attach (dpo, kto, online_dpo, ...) and PPO by inject."""
         builders = {p.name for p in _TRAINER_SOURCES if _builds_peft(p)}
         wired = {p.name for p in _TRAINER_SOURCES if _wires_loraplus(p)}
         assert wired == builders - set(_LORAPLUS_EXEMPT), (
@@ -202,7 +238,7 @@ class TestLoraPlusWiringCoverage:
         offenders = []
         for path in _TRAINER_SOURCES:
             code = _code_without_comments(path.read_text(encoding="utf-8"))
-            if not _BUILDS_PEFT.search(code):
+            if not _builds_peft(path):
                 continue
             if path.name in _LORAPLUS_EXEMPT:
                 continue
@@ -223,7 +259,7 @@ class TestLoraPlusWiringCoverage:
             path = _TRAINER_DIR / name
             assert path.is_file(), f"_LORAPLUS_EXEMPT names {name}, which no longer exists"
             code = _code_without_comments(path.read_text(encoding="utf-8"))
-            assert _BUILDS_PEFT.search(code), (
+            assert _builds_peft(path), (
                 f"{name} is exempt but no longer builds a PEFT model; drop it from "
                 "_LORAPLUS_EXEMPT."
             )
@@ -242,6 +278,30 @@ class TestLoraPlusWiringCoverage:
         assert _INJECT_CALL.search("opt = build_loraplus_optimizer(model, args, tcfg)")
         assert not _INJECT_CALL.search("# build_loraplus_optimizer builds it")
 
+    def test_the_patterns_would_catch_a_trainer_that_hands_trl_a_peft_config(self):
+        """online_dpo.py never calls get_peft_model: TRL applies the adapter from
+        the peft_config it is handed. That shape builds a LoRA adapter too, so
+        the scan must count it, and an unwired one must fail the scan."""
+        delegated = (
+            "self.peft_config = build_lora_config(tcfg)\n"
+            "self.trainer = OnlineDPOTrainer(\n"
+            "    model=self.model, args=args, peft_config=self.peft_config,\n"
+            ")\n"
+        )
+        assert _source_builds_peft(delegated)
+        assert not _wires_source(delegated)
+        assert _wires_source(delegated + "attach_loraplus_optimizer(self.trainer, tcfg)\n")
+        # The attribute assignment alone, a prose mention, and an explicit
+        # peft_config=None do not apply an adapter.
+        assert not _source_builds_peft("self.peft_config = None\n")
+        assert not _source_builds_peft("# TRL applies peft_config=... itself\n")
+        assert not _source_builds_peft("Trainer(model=m, peft_config=None)\n")
+
+    def test_online_dpo_counts_as_a_peft_builder(self):
+        """The live instance of the delegated shape: until #745's second round
+        the scan could not see it, so it silently ignored loraplus_lr_ratio."""
+        assert _builds_peft(_TRAINER_DIR / "online_dpo.py")
+
     def test_a_comment_mentioning_the_call_does_not_satisfy_it(self):
         """The positive check reads code, not prose — otherwise the note that
         explains the wiring would pass without calling it."""
@@ -254,7 +314,7 @@ class TestPpoWiresLoraPlusByInjectionNotAttach:
 
     Its ``trl.experimental`` trainer builds the optimizer and scheduler eagerly
     in ``__init__``, so the post-construction ``attach_loraplus_optimizer`` the
-    other ten preference/RL wrappers use would leave the scheduler bound to the
+    other preference/RL wrappers use would leave the scheduler bound to the
     discarded default optimizer — the B group would train at a flat ``lr*ratio``
     with warmup and decay never reaching it. The behavioural proof lives in
     ``tests/test_issue745_ppo_loraplus_scheduler.py``; this pins the source
@@ -401,3 +461,65 @@ class TestUnlearnExemptionIsEarned:
             data={"train": "t.jsonl"},
             training={"loraplus_lr_ratio": 16.0},
         )
+
+
+class TestLoraPlusRefusedWhereNoLoraBTrains:
+    """#745: tasks that accept ``loraplus_lr_ratio`` but never train a LoRA B
+    matrix refuse it at parse, the way unlearn does, instead of ignoring it or
+    failing after the base model loads."""
+
+    _BASE = "hf-internal-testing/tiny-random-gpt2"
+
+    _NO_LORA_B = {
+        # full fine-tune, no adapter
+        "prm": ({}, _BASE),
+        # adapters loaded frozen, only the routing gate trains
+        "moe_lora_routing": ({"mole_task_adapters": ["a1", "a2"]}, _BASE),
+        # full fine-tune unless the task's own LoRA flag is on
+        "classifier": ({"num_labels": 2}, _BASE),
+        "reranker": ({"num_labels": 1}, _BASE),
+        "cross_encoder": ({"num_labels": 1}, _BASE),
+        "asr": ({}, "openai/whisper-tiny"),
+    }
+
+    def _config(self, task, **training):
+        from soup_cli.config.schema import SoupConfig
+
+        extra, base = self._NO_LORA_B[task]
+        return SoupConfig(
+            base=base,
+            task=task,
+            data={"train": "t.jsonl"},
+            training={**extra, **training},
+        )
+
+    @pytest.mark.parametrize("task", sorted(_NO_LORA_B))
+    def test_loraplus_is_refused_at_parse(self, task):
+        with pytest.raises(ValueError, match="loraplus_lr_ratio needs a trainable LoRA"):
+            self._config(task, loraplus_lr_ratio=16.0)
+
+    @pytest.mark.parametrize("task", sorted(_NO_LORA_B))
+    def test_the_same_config_without_loraplus_parses(self, task):
+        """Control: the config is otherwise valid, so the refusal above is the
+        ratio's, not some unrelated requirement of the task."""
+        self._config(task)
+
+    @pytest.mark.parametrize(
+        "task, flag",
+        [
+            ("classifier", "classifier_lora"),
+            ("reranker", "classifier_lora"),
+            ("cross_encoder", "classifier_lora"),
+            ("asr", "asr_lora"),
+        ],
+    )
+    def test_loraplus_parses_once_the_task_trains_a_lora_adapter(self, task, flag):
+        """These tasks do wire LoRA+ (they are in the scan): it is only the
+        default full fine-tune that has no B to speed up."""
+        self._config(task, loraplus_lr_ratio=16.0, **{flag: True})
+
+    @pytest.mark.parametrize("task, flag", [("classifier", "classifier_lora"), ("asr", "asr_lora")])
+    def test_a_zero_rank_adapter_is_still_refused(self, task, flag):
+        """The trainers apply LoRA only for the flag AND lora.r > 0."""
+        with pytest.raises(ValueError, match="loraplus_lr_ratio needs a trainable LoRA"):
+            self._config(task, loraplus_lr_ratio=16.0, lora={"r": 0}, **{flag: True})

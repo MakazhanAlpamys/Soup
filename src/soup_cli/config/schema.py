@@ -6765,6 +6765,60 @@ class SoupConfig(BaseModel):
         return self
 
     @model_validator(mode="after")
+    def _validate_loraplus_has_a_trainable_lora_b(self) -> "SoupConfig":
+        """#745: refuse ``loraplus_lr_ratio`` where no LoRA B matrix trains.
+
+        LoRA+ gives the LoRA B matrices ``lr * ratio``. On these tasks there is
+        no trainable B, so the ratio is either silently ignored or fails only
+        after the base model has loaded:
+
+        - ``prm`` is a full fine-tune with no adapter (``trainer/prm.py``).
+        - ``moe_lora_routing`` loads existing adapters frozen and trains only
+          the routing gate.
+        - ``classifier`` / ``reranker`` / ``cross_encoder`` without
+          ``classifier_lora``, and ``asr`` without ``asr_lora``, full fine-tune
+          by default; the adapter exists only when the flag is on and
+          ``lora.r > 0``.
+
+        ``unlearn`` is refused in :meth:`_validate_unlearn_compat` for a
+        different reason (it has an adapter but no ``Trainer`` optimizer).
+        """
+        tcfg = self.training
+        if tcfg.loraplus_lr_ratio is None:
+            return self
+        task = self.task
+        if task == "prm":
+            reason = (
+                "task='prm' is a full fine-tune with no LoRA adapter, so there "
+                "are no LoRA B matrices to give the higher learning rate."
+            )
+        elif task == "moe_lora_routing":
+            reason = (
+                "task='moe_lora_routing' loads its adapters frozen and trains "
+                "only the routing gate, so no LoRA B matrix is trained."
+            )
+        elif task in ("classifier", "reranker", "cross_encoder") and not (
+            tcfg.classifier_lora and tcfg.lora.r > 0
+        ):
+            reason = (
+                f"task={task!r} full fine-tunes unless training.classifier_lora "
+                "is true with lora.r > 0, so there is no LoRA adapter here. Set "
+                "training.classifier_lora: true to train a LoRA adapter."
+            )
+        elif task == "asr" and not (tcfg.asr_lora and tcfg.lora.r > 0):
+            reason = (
+                "task='asr' full fine-tunes unless training.asr_lora is true "
+                "with lora.r > 0, so there is no LoRA adapter here. Set "
+                "training.asr_lora: true to train a LoRA adapter."
+            )
+        else:
+            return self
+        raise ValueError(
+            "Refused: training.loraplus_lr_ratio needs a trainable LoRA adapter. "
+            f"{reason} Remove training.loraplus_lr_ratio for this run."
+        )
+
+    @model_validator(mode="after")
     def _validate_grace_codebook_compat(self) -> "SoupConfig":
         """v0.62.0 Part E — GRACE codebook cross-validator.
 
