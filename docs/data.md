@@ -1034,7 +1034,10 @@ training stops on a rejected conversation, an empty one and an empty render too,
 so a cache that skipped them would train on fewer rows than the same `soup.yaml`
 run live. Before #1180 they were dropped without a word, and the command exited 0.
 Fix or remove the row and re-run. A tokenizer with no chat template is reported
-once, before any row, and points at `data.chat_template`.
+once, before any row, and points at `data.chat_template`. The rows are checked
+when the command builds a cache: if one with the same key already exists it stops
+at `Target already exists` (exit 0) without reading them, so rebuild a cache
+written before this change with `--yes`.
 
 
 ## Data Recipe DAG Runner (`soup data recipe --execute`)
