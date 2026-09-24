@@ -1003,6 +1003,29 @@ class StreamingSetupMixin:
             return 2 * slot_bytes
         return slot_bytes
 
+    def _attach_streamed_save_guard(self) -> None:
+        """Check every ``checkpoint-*`` adapter a streamed run writes (#1011)."""
+        if getattr(self, "_stream_runtime", None) is None:
+            return
+        from soup_cli.utils.layer_stream_runtime import build_streamed_save_guard_callback
+
+        self.trainer.add_callback(build_streamed_save_guard_callback())
+
+    def _assert_streamed_adapter_saved(self, output_dir: str) -> None:
+        """Check the final adapter a streamed run wrote (#1011).
+
+        ``save_model`` dispatches no ``on_save``, so the callback above does not
+        see this save. Gated on ``args.should_save``, the condition ``save_model``
+        gates the write on.
+        """
+        if getattr(self, "_stream_runtime", None) is None:
+            return
+        if not getattr(self.trainer.args, "should_save", True):
+            return
+        from soup_cli.utils.layer_stream_runtime import assert_streamed_adapter_saved
+
+        assert_streamed_adapter_saved(self.trainer.model, output_dir)
+
     def _close_stream_runtime(self) -> None:
         """Release the streaming weight source, if this run had one."""
         runtime = getattr(self, "_stream_runtime", None)

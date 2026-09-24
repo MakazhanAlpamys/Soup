@@ -2203,6 +2203,7 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             offload_save_dir = candidate
         # v0.72.3 — the shared context releases the streaming weight source even
         # if training raises (see StreamingSetupMixin._training_context).
+        self._attach_streamed_save_guard()
         with self._training_context(
             offload_context(tcfg.activation_offloading, save_dir=offload_save_dir)
         ) as train_ctx:
@@ -2244,6 +2245,7 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             from soup_cli.utils.quest import write_metadata
 
             write_metadata(self._output_dir, self._quest_metadata)
+        self._assert_streamed_adapter_saved(self._output_dir)
         # #335 — under torch.compile the Trainer saves THROUGH the wrapper, so
         # every key gains `_orig_mod.` and PeftModel.from_pretrained then matches
         # none of them: it warns and leaves lora_B at zero init, i.e. the run
