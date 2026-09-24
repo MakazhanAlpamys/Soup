@@ -14,8 +14,20 @@ from types import SimpleNamespace
 import pytest
 
 from soup_cli.config.schema import SoupConfig
+from tests.conftest import strip_ansi
 
 _TEST_CALIBRATION_SHA256 = "ab" * 32
+
+
+def _plain(text: str) -> str:
+    """Return CLI output safe for assertions across Rich-capable terminals."""
+    return " ".join(strip_ansi(text).split())
+
+
+def test_plain_joins_a_label_split_by_ansi():
+    decorated = "mixed W4/A4+A16 (QuEST \x1b[1mfake\x1b[0m quant)"
+    assert "mixed W4/A4+A16 (QuEST fake quant)" not in decorated
+    assert "mixed W4/A4+A16 (QuEST fake quant)" in _plain(decorated)
 
 
 def _config(**training):
@@ -185,6 +197,7 @@ def test_non_quest_defaults_are_unchanged():
 def test_cli_dry_run_reports_quest_without_qat_or_torchao(tmp_path, monkeypatch):
     import builtins
 
+    from rich.console import Console
     from typer.testing import CliRunner
 
     import soup_cli.commands.train as train_mod
@@ -213,6 +226,11 @@ def test_cli_dry_run_reports_quest_without_qat_or_torchao(tmp_path, monkeypatch)
     qat_calls = []
     monkeypatch.setattr(train_mod, "detect_device", lambda backend=None: ("cpu", "CPU"))
     monkeypatch.setattr(
+        train_mod,
+        "console",
+        Console(force_terminal=True, color_system="truecolor", width=200),
+    )
+    monkeypatch.setattr(
         train_mod, "get_gpu_info", lambda backend=None: {"memory_total": "N/A"}
     )
     monkeypatch.setattr(
@@ -234,10 +252,12 @@ def test_cli_dry_run_reports_quest_without_qat_or_torchao(tmp_path, monkeypatch)
 
     monkeypatch.setattr(builtins, "__import__", reject_torchao)
     result = CliRunner().invoke(
-        app, ["train", "--config", str(config_path), "--dry-run", "--yes"]
+        app,
+        ["train", "--config", str(config_path), "--dry-run", "--yes"],
     )
     assert result.exit_code == 0, (result.output, repr(result.exception))
-    assert "mixed W4/A4+A16 (QuEST fake quant)" in result.output
+    assert "\x1b[" in result.output
+    assert "mixed W4/A4+A16 (QuEST fake quant)" in _plain(result.output)
     assert qat_calls == []
 
 

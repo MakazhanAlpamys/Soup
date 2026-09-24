@@ -354,6 +354,7 @@ def _build_streamed_wrapper(
     device=None,
     hidden=64,
     vocab=64,
+    tie=True,
     **training,
 ):
     """Build a task wrapper through the REAL `setup()` path, streaming.
@@ -365,7 +366,9 @@ def _build_streamed_wrapper(
     bf16 on CUDA, and "bit-exact" is only a meaningful assertion in the former
     (a bf16 logp of -12.75 cannot represent a change smaller than ~0.05).
     """
-    weights, resident, _ = _tiny_llama_dir(tmp_path, n_layers=n_layers, hidden=hidden, vocab=vocab)
+    weights, resident, _ = _tiny_llama_dir(
+        tmp_path, n_layers=n_layers, tie=tie, hidden=hidden, vocab=vocab
+    )
     _write_tiny_tokenizer(weights)
     monkeypatch.setenv("SOUP_LAYER_STREAM_CACHE_DIR", str(tmp_path / "cache"))
     monkeypatch.chdir(tmp_path)
