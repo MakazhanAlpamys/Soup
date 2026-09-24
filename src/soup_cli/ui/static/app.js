@@ -32,21 +32,50 @@ const authFetch = (() => {
     // Defensive: never block app load.
   }
 
+  // A cancel holds until the user acts again, so a stray Escape does not
+  // leave the page signed out until a reload.
+  document.addEventListener('click', () => { declined = false; }, true);
+
+  // No regex touches the token: a match leaves its input readable to any page
+  // script through the legacy RegExp.input / RegExp.lastMatch globals.
+  function stripPrefix(text, prefix) {
+    return text.toLowerCase().startsWith(prefix) ? text.slice(prefix.length).trim() : text;
+  }
+
+  function readToken() {
+    let entered;
+    try {
+      entered = String(window.prompt(
+        'Paste the auth token printed by `soup ui` (not kept across reloads):') || '');
+    } catch (e) {
+      // Dialogs disabled (some webviews): behave as a cancel instead of wedging.
+      entered = '';
+    }
+    // The `soup ui` panel prints `Authorization: Bearer <token>` under the token.
+    entered = stripPrefix(stripPrefix(entered.trim(), 'authorization:'), 'bearer ');
+    if (!entered) {
+      declined = true;
+      return false;
+    }
+    // Outside printable ASCII it can never match, and the server answers 500
+    // rather than 401 (#1195); treat it as a wrong token and ask again later.
+    if (![...entered].every((ch) => ch > ' ' && ch <= '~')) return false;
+    token = entered;
+    return true;
+  }
+
   function askForToken() {
     if (!asking) {
-      asking = Promise.resolve().then(() => {
-        const entered = window.prompt(
-          'Paste the auth token printed by `soup ui` (not kept across reloads):');
-        if (entered) token = entered.trim();
-        else declined = true;
-        asking = null;
-        return Boolean(entered);
-      });
+      asking = Promise.resolve().then(readToken).finally(() => { asking = null; });
     }
     return asking;
   }
 
   return async function authFetch(url, opts = {}) {
+    // The header only ever goes to this origin, whatever the CSP allows.
+    if (new URL(url, window.location.href).origin !== window.location.origin) {
+      throw new Error('authFetch: refusing a cross-origin URL');
+    }
     const send = () => {
       const headers = { ...(opts.headers || {}) };
       if (token) headers['Authorization'] = 'Bearer ' + token;
