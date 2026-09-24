@@ -29,9 +29,7 @@ from soup_cli.ui.app import (  # noqa: E402
 )
 
 _REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
-_UI_APP_PATH = _REPO_ROOT / "src" / "soup_cli" / "ui" / "app.py"
-_SERVE_PATH = _REPO_ROOT / "src" / "soup_cli" / "commands" / "serve.py"
-_MCP_SERVER_PATH = _REPO_ROOT / "src" / "soup_cli" / "mcp_server" / "server.py"
+_SOUP_CLI_DIR = _REPO_ROOT / "src" / "soup_cli"
 
 
 def _assert_security_headers(resp) -> None:
@@ -144,9 +142,28 @@ class TestBearerMatchesUnit:
         assert _bearer_matches("Bearer \u0442\u0435\u0441\u0442") is False
         assert _bearer_matches(f"Bearer {get_auth_token()}\u00e9") is False
 
+    def test_bearer_matches_uses_constant_time_compare_on_bytes(self, monkeypatch):
+        """Pin that _bearer_matches delegates to secrets.compare_digest with bytes on both sides."""
+        seen = []
+        real = ui_mod.secrets.compare_digest
+
+        def spy(a, b):
+            seen.append((type(a), type(b)))
+            return real(a, b)
+
+        monkeypatch.setattr(ui_mod.secrets, "compare_digest", spy)
+        assert _bearer_matches(f"Bearer {get_auth_token()}") is True
+        assert _bearer_matches("Bearer \u00e9") is False
+        assert seen == [(bytes, bytes), (bytes, bytes)]
+
 
 def find_auth_compare_digest_violations(tree: ast.AST) -> list[str]:
-    """Scan an AST for compare_digest calls in auth checks that compare str."""
+    """Scan an AST for compare_digest calls in auth checks that compare str.
+
+    Heuristic check targeting the #1195 failure shape (unencoded headers and
+    f-strings passed directly into compare_digest), rather than a full type
+    system for every possible str comparison.
+    """
     violations: list[str] = []
 
     # Map variable names to their assigning expressions within each function/scope
@@ -224,9 +241,10 @@ class TestCompareDigestGuard:
     """Guard test ensuring Bearer token comparisons use bytes, not str."""
 
     def test_guard_accepts_existing_auth_checks(self):
-        """The guard must pass on all three Bearer authentication sites in the repo."""
-        for path in [_UI_APP_PATH, _SERVE_PATH, _MCP_SERVER_PATH]:
-            assert path.is_file(), f"Expected source file at {path}"
+        """The guard must pass across all Python files in src/soup_cli."""
+        files = sorted(_SOUP_CLI_DIR.rglob("*.py"))
+        assert len(files) > 100, f"Expected scanner to find files in {_SOUP_CLI_DIR}"
+        for path in files:
             tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
             violations = find_auth_compare_digest_violations(tree)
             assert not violations, f"Violations found in {path.name}: {violations}"
