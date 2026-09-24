@@ -224,8 +224,9 @@ class TestTheLoadDtype:
         assert {p.dtype for p in wrapper.model.parameters()} == {torch.float32}
 
     def test_a_deepspeed_config_does_not_change_the_decision(self, prm_base, tmp_path):
-        """The load dtype is decided in ``setup()``, before any engine exists; a
-        DeepSpeed bf16 config builds its own fp32 master copy from what was loaded."""
+        """The load dtype is decided in ``setup()``, before any engine exists. A
+        DeepSpeed bf16/fp16 engine later casts the parameters to 16-bit and builds its
+        own fp32 master copy from that cast, so this pins only the load decision."""
         import torch
 
         from soup_cli.trainer.prm import PRMTrainerWrapper
@@ -466,7 +467,10 @@ class TestThePreflight:
     def test_the_budget_matches_the_dtype_the_trainer_loads(self, prm_base, tmp_path):
         """Weights and gradients once each in the parameter dtype, and AdamW's two
         moments, which torch keeps in the parameter dtype too: 16 bytes per
-        parameter at fp32. ``main`` budgeted that while loading bf16 (8 bytes)."""
+        parameter at fp32. ``main`` budgeted that while loading bf16 (8 bytes).
+
+        Default optimizer only: PRM ignores ``training.optimizer`` and always runs
+        HF's AdamW (#805), while the pre-flight prices whatever that setting says."""
         import torch
 
         from soup_cli.commands.train import _build_hardware_fit_input
@@ -523,3 +527,37 @@ class TestThePreflight:
             self._cfg(), {"memory_total_bytes": 80 * 10**9}, allow_oom_attempt=False
         )
         assert printed.getvalue() == ""
+
+
+class TestTheQuantizationMessages:
+    """The #795 warning and refusal said the trainer loads the base "at checkpoint
+    precision", which PRM no longer does. What holds for all eight tasks is that
+    none of them quantises the base."""
+
+    _PRM = "base: org/model\ntask: prm\ndata: {train: x.jsonl}\n"
+
+    def test_the_warning_says_the_base_is_never_quantised(self, monkeypatch):
+        from rich.console import Console
+
+        from soup_cli.config import loader
+        from soup_cli.config.loader import load_config_from_string
+
+        buffer = io.StringIO()
+        monkeypatch.setattr(
+            loader, "console",
+            Console(file=buffer, width=500, force_terminal=False, color_system=None),
+        )
+        cfg = load_config_from_string(self._PRM + "training: {quantization: 4bit}\n")
+
+        assert cfg.training.quantization == "none"
+        out = _plain(buffer.getvalue())
+        assert "task='prm' and is ignored: its trainer never quantises the base" in out, out
+        assert "checkpoint precision" not in out, out
+
+    def test_the_refusal_says_the_base_is_never_quantised(self):
+        from soup_cli.config.loader import load_config_from_string
+
+        with pytest.raises(ValueError, match="its trainer never quantises the base") as exc:
+            load_config_from_string(self._PRM + "training: {quantization: gptq}\n")
+        assert "task='prm' does not apply training.quantization" in str(exc.value)
+        assert "checkpoint precision" not in str(exc.value)
