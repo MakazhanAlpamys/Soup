@@ -470,6 +470,35 @@ class TestThePathsThatNeverReadIt:
         with pytest.raises(ValueError, match=f"modality={modality!r}"):
             load_config_from_string(yaml.safe_dump(raw))
 
+    @pytest.mark.parametrize("task", ["dpo", "grpo"])
+    def test_vision_on_a_task_that_reads_it_still_loads(self, task):
+        """The refusal is SFT's alone (#1179 review, round 3): dpo and grpo load a
+        vision config through _setup_transformers, which reads the flag. Dropping
+        the `task == "sft"` half refused pixtral-dpo / llama3.2-vision-grpo-shaped
+        configs and the suite stayed green."""
+        import yaml
+
+        raw = {
+            "base": "org/m", "task": task, "modality": "vision",
+            "data": {"train": "./x.jsonl", "format": "llava"},
+            "training": {"moe_lora": True, "lora": {"r": 4, "dropout": 0.0}},
+        }
+        cfg = load_config_from_string(yaml.safe_dump(raw))
+
+        assert cfg.training.moe_lora is True and cfg.modality == "vision"
+
+    def test_mlx_still_loads_it_and_reports_it_ignored(self):
+        """The one exception to "every path reads it or refuses it", pinned."""
+        from soup_cli.config.backend_support import check_config
+
+        cfg = load_config_from_string(
+            "base: org/m\ntask: sft\nbackend: mlx\n"
+            "data:\n  train: ./x.jsonl\n  format: chatml\n"
+            "training:\n  moe_lora: true\n  lora:\n    r: 4\n    dropout: 0.0\n"
+        )
+
+        assert "training.moe_lora" in [g.field for g in check_config(cfg)]
+
     def test_sft_text_on_transformers_still_loads(self):
         """The control: the wired path is untouched."""
         cfg = _config("sft", moe_lora=True)
