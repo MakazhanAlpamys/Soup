@@ -742,7 +742,10 @@ class TestThePreflightAsksForTorchaoItself:
 
         assert result.exit_code == 1
         assert "not compatible with the unsloth backend" in out
-        assert "soup-cli[qat]" not in out
+        # Broad on purpose (round 3): the narrow check passed while the int8
+        # "pip install torchao" was printed instead.
+        assert "pip install" not in out
+        assert "torchao" not in out.lower().replace("not compatible", "")
 
 
 class TestTheSecondAttentionRaiseSite:
@@ -769,3 +772,104 @@ class TestTheSecondAttentionRaiseSite:
 
         with pytest.raises(fp8.FP8DependencyMissingError, match="soup-cli"):
             ap.apply_fp8_attention(_Attn())
+
+
+class TestTheDryRunNoteRound3:
+    """#1154 review, round 3: the note's own call site dropped the recipe, its FP8
+    condition was unpinned, and a dry run lacking torchao hid the card verdict."""
+
+    def test_a_rowwise_dry_run_notes_the_recipe_refusal(self, tmp_path, monkeypatch):
+        """The note must ask about the configured recipe, not the default."""
+        result, out = TestSoupTrainReachesTheStop()._train(
+            tmp_path, monkeypatch, quantization_aware="fp8", card_ok=True, torchao=True,
+            gate=TestTheRecipeReachesTheGate._gate, recipe="rowwise", dry_run=True,
+        )
+
+        assert result.exit_code == 0, out
+        assert "Note: this machine could not run it: ROWWISE REFUSED" in out
+
+    def test_an_int8_dry_run_prints_no_fp8_note(self, tmp_path, monkeypatch):
+        result, out = TestSoupTrainReachesTheStop()._train(
+            tmp_path, monkeypatch, quantization_aware=True, card_ok=False, torchao=True,
+            dry_run=True,
+        )
+
+        assert result.exit_code == 0, out
+        assert "Note:" not in out
+
+    def test_an_unsloth_dry_run_prints_only_the_refusal(self, tmp_path, monkeypatch):
+        result, out = TestSoupTrainReachesTheStop()._train(
+            tmp_path, monkeypatch, quantization_aware="fp8", card_ok=False, torchao=False,
+            backend="unsloth", dry_run=True,
+        )
+
+        assert result.exit_code == 1
+        assert "not compatible with the unsloth backend" in out
+        assert "Note:" not in out and "pip install" not in out
+
+    def test_no_torchao_and_no_card_shows_both(self, tmp_path, monkeypatch):
+        """Nit taken: the card verdict is printed before the dependency error exits."""
+        result, out = TestSoupTrainReachesTheStop()._train(
+            tmp_path, monkeypatch, quantization_aware="fp8", card_ok=False, torchao=False,
+            dry_run=True,
+        )
+
+        assert result.exit_code == 1
+        assert "Note: this machine could not run it:" in out
+        assert 'pip install "soup-cli[qat]"' in out
+
+
+class TestTheTorchaoProbeItself:
+    """Every other test stubs ``is_torchao_float8_available``; these run the real one
+    against import-machinery stubs, so a probe that answered True on ImportError
+    (which would let a torchao-less run load the model, then stop) fails here."""
+
+    def test_torchao_without_float8_is_not_available(self, monkeypatch):
+        import types
+
+        from soup_cli.utils.fp8 import is_torchao_float8_available
+
+        monkeypatch.setitem(sys.modules, "torchao", types.ModuleType("torchao"))
+        monkeypatch.setitem(sys.modules, "torchao.float8", None)
+
+        assert is_torchao_float8_available() is False
+
+    def test_no_torchao_at_all_is_not_available(self, monkeypatch):
+        from soup_cli.utils.fp8 import is_torchao_float8_available
+
+        monkeypatch.setitem(sys.modules, "torchao", None)
+
+        assert is_torchao_float8_available() is False
+
+    def test_a_float8_module_with_the_converter_is_available(self, monkeypatch):
+        import types
+
+        from soup_cli.utils.fp8 import is_torchao_float8_available
+
+        pkg = types.ModuleType("torchao")
+        pkg.__path__ = []
+        float8 = types.ModuleType("torchao.float8")
+        float8.convert_to_float8_training = lambda *a, **k: None
+        pkg.float8 = float8
+        monkeypatch.setitem(sys.modules, "torchao", pkg)
+        monkeypatch.setitem(sys.modules, "torchao.float8", float8)
+
+        assert is_torchao_float8_available() is True
+
+
+class TestTheConversionFailedWording:
+    def test_a_failed_conversion_says_so(self, monkeypatch):
+        """Round 1 renamed the yellow line; nothing held it (non-blocking, taken)."""
+        from soup_cli.config.schema import TrainingConfig
+        from soup_cli.utils.v028_features import apply_v028_speed_memory
+
+        monkeypatch.setattr("soup_cli.utils.fp8.apply_fp8_training", lambda *a, **k: False)
+        out, console = TestTheRunStops()._console()
+        applied = apply_v028_speed_memory(
+            model=_Attn(), tcfg=TrainingConfig(quantization_aware="fp8"), base_model="m",
+            console=console, device="cuda",
+        )
+
+        assert applied["fp8"] is False
+        assert "the float8 conversion failed" in out.getvalue()
+        assert "torchao.float8 missing" not in out.getvalue()
