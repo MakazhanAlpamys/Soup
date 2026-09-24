@@ -193,6 +193,18 @@ class TestTheMessageIsSafeForATerminal:
         assert "\x1b" not in result.output
         assert "TITLE" in result.output
 
+    def test_a_long_role_is_capped(self, tmp_path, monkeypatch):
+        """Round-3 nit: the role was capped at 30 characters but nothing held it."""
+        long_role = {"messages": [
+            {"role": "R" * 1000, "content": "x"},
+            {"role": "assistant", "content": "Paris ."},
+        ]}
+        result, out = _preprocess(tmp_path, monkeypatch, [_ok(0), long_role])
+
+        assert result.exit_code == 1
+        assert "R" * 30 in out
+        assert "R" * 31 not in out
+
     def test_a_markup_role_prints_literally(self, tmp_path, monkeypatch):
         styled = {"messages": [
             {"role": "[bold red]x[/]", "content": "y"},
@@ -204,40 +216,55 @@ class TestTheMessageIsSafeForATerminal:
         assert "[bold red]x[/]" in out
 
 
-class TestPretrainIsUnchanged:
-    def test_a_pretrain_row_the_tokenizer_rejects_is_still_skipped(self, tmp_path, monkeypatch):
-        """The deliberate carve-out: a raw-text pretrain row the tokenizer rejects
-        is skipped, as before, and the rest are written."""
-        transformers = pytest.importorskip("transformers")
-        pytest.importorskip("datasets")
-        from typer.testing import CliRunner
+def _pretrain(tmp_path, monkeypatch, texts):
+    transformers = pytest.importorskip("transformers")
+    pytest.importorskip("datasets")
+    from typer.testing import CliRunner
 
-        from soup_cli.cli import app
+    from soup_cli.cli import app
 
-        real = transformers.PreTrainedTokenizerFast.__call__
+    real = transformers.PreTrainedTokenizerFast.__call__
 
-        def _boom(self, text, *a, **k):
-            if "reject" in str(text):
-                raise ValueError("no")
-            return real(self, text, *a, **k)
+    def _boom(self, text, *a, **k):
+        if "reject" in str(text):
+            raise ValueError("tokenizer refused this text")
+        return real(self, text, *a, **k)
 
-        monkeypatch.setattr(transformers.PreTrainedTokenizerFast, "__call__", _boom)
-        monkeypatch.chdir(tmp_path)
-        (tmp_path / "d.jsonl").write_text(
-            "".join(json.dumps({"text": t}) + "\n" for t in ("Paris .", "reject me", "What ?")),
-            encoding="utf-8",
-        )
-        tok = _tokenizer()
-        monkeypatch.setattr(transformers.AutoTokenizer, "from_pretrained", lambda *a, **k: tok)
-        (tmp_path / "soup.yaml").write_text(
-            "base: x/tiny\ntask: pretrain\n"
-            "data:\n  train: d.jsonl\n  format: plaintext\n  max_length: 64\n  val_split: 0\n"
-            "training:\n  epochs: 1\n",
-            encoding="utf-8",
-        )
-        result = CliRunner().invoke(app, ["data", "preprocess", "soup.yaml", "--yes"])
+    monkeypatch.setattr(transformers.PreTrainedTokenizerFast, "__call__", _boom)
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "d.jsonl").write_text(
+        "".join(json.dumps({"text": t}) + "\n" for t in texts), encoding="utf-8"
+    )
+    tok = _tokenizer()
+    monkeypatch.setattr(transformers.AutoTokenizer, "from_pretrained", lambda *a, **k: tok)
+    (tmp_path / "soup.yaml").write_text(
+        "base: x/tiny\ntask: pretrain\n"
+        "data:\n  train: d.jsonl\n  format: plaintext\n  max_length: 64\n  val_split: 0\n"
+        "training:\n  epochs: 1\n",
+        encoding="utf-8",
+    )
+    result = CliRunner().invoke(app, ["data", "preprocess", "soup.yaml", "--yes"])
+    return result, " ".join(strip_ansi(result.output).split())
 
-        assert result.exit_code == 0, result.output
+
+class TestPretrainMatchesTheLivePath:
+    """#1182 review, round 3: live pretraining stops on a row the tokenizer rejects
+    (TRL's map has no per-row skip), so preprocess must refuse it too. INVERTED:
+    this used to pin the skip, and passed on unmodified main."""
+
+    def test_a_pretrain_row_the_tokenizer_rejects_is_refused(self, tmp_path, monkeypatch):
+        result, out = _pretrain(tmp_path, monkeypatch, ("Paris .", "reject me", "What ?"))
+
+        assert result.exit_code == 1, out
+        assert "Train row 2 cannot be tokenized: ValueError: tokenizer refused this text" in out
+        assert "text: 'reject me'" in out
+        assert not (tmp_path / ".soup-tokenized").exists()
+
+    def test_a_clean_pretrain_dataset_writes_every_row(self, tmp_path, monkeypatch):
+        """Control: the refusal is the rejected row's doing."""
+        result, out = _pretrain(tmp_path, monkeypatch, ("Paris .", "What ?"))
+
+        assert result.exit_code == 0, out
         (cache,) = (p for p in (tmp_path / ".soup-tokenized").iterdir() if p.is_dir())
         metadata = json.loads((cache / "metadata.json").read_text(encoding="utf-8"))
         assert metadata["row_count"] == 2

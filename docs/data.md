@@ -1023,21 +1023,23 @@ training saves the tokenizer with it; a different one is refused with
 `cache hash mismatch`. A cache written before the template joined the key is
 refused the same way: re-run `soup data preprocess` to rebuild it.
 
-A chat row the command cannot tokenize stops it, and nothing is written. That
-covers a conversation the template rejects (for example
+A row the command cannot tokenize stops it, and nothing is written. For pretrain
+that is a text row the tokenizer rejects (a lone surrogate, for example), which
+live pretraining refuses too; an empty `text` row is dropped by the loader on both
+paths. That covers a conversation the template rejects (for example
 `Conversation roles must alternate` on a Llama-2- or Gemma-style template), an
 empty `messages` list, a row the template renders as empty text, and a tokenizer
 error. The message numbers the row from 1, as live training does, counting the
-rows that survived loading, and quotes the start of its first message, which is
-what finds it when an earlier row was dropped or the files were interleaved. Live
-training stops on a rejected conversation, an empty one and an empty render too,
-so a cache that skipped them would train on fewer rows than the same `soup.yaml`
-run live. Before #1180 they were dropped without a word, and the command exited 0.
-Fix or remove the row and re-run. A tokenizer with no chat template is reported
-once, before any row, and points at `data.chat_template`. The rows are checked
-when the command builds a cache: if one with the same key already exists it stops
-at `Target already exists` (exit 0) without reading them, so rebuild a cache
-written before this change with `--yes`.
+rows that survived loading, and quotes the start of its first message (or of a
+pretrain row's text), which is what finds it when an earlier row was dropped or
+the files were interleaved. Live training stops on a rejected conversation, an
+empty one and an empty render too, so a cache that skipped them would train on
+fewer rows than the same `soup.yaml` run live. Before #1180 they were dropped
+without a word, and the command exited 0. Fix or remove the row and re-run. A
+tokenizer with no chat template is reported once, before any row, and points at
+`data.chat_template`. The rows are checked when the command builds a cache: if one
+with the same key already exists it stops at `Target already exists` (exit 0)
+without reading them, so rebuild a cache written before this change with `--yes`.
 
 
 ## Data Recipe DAG Runner (`soup data recipe --execute`)

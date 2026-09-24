@@ -2367,15 +2367,19 @@ def _refuse_row(idx: int, row, reason: str) -> NoReturn:
     the message comes from the dataset, so it goes through ``for_terminal``: a
     role holding ``\\x1b[2J`` would otherwise clear the user's screen.
     """
-    preview = ""
+    preview = label = ""
     messages = row.get("messages") if isinstance(row, dict) else None
+    text = (row.get("text") or row.get("content")) if isinstance(row, dict) else None
     if isinstance(messages, list) and messages and isinstance(messages[0], dict):
         first = messages[0]
         role = str(first.get("role"))[:30]
-        preview = f"{role!r}: {str(first.get('content', ''))[:60]!r}"
+        label, preview = "first message", f"{role!r}: {str(first.get('content', ''))[:60]!r}"
+    elif isinstance(text, str):
+        # A pretrain row has raw text, not messages.
+        label, preview = "text", f"{text[:60]!r}"
     console.print(
         f"[red]Train row {idx + 1} cannot be tokenized:[/] {for_terminal(reason)}"
-        + (f"\n  first message: {for_terminal(preview)}" if preview else "")
+        + (f"\n  {label}: {for_terminal(preview)}" if preview else "")
     )
     console.print(
         "Nothing was written. Fix or remove the row and re-run; the cache must hold "
@@ -2558,8 +2562,9 @@ def preprocess_dataset(
                 # for the chat path.
             )
         except Exception as exc:  # noqa: BLE001 — tokenizer errors vary
-            if is_pretrain:
-                continue
+            # Pretrain too (#1182 review, round 3): live pretraining stops on a row
+            # the tokenizer rejects -- TRL's map has no per-row skip -- so skipping
+            # it here cached fewer rows than the live run trains on.
             _refuse_row(idx, row, f"{type(exc).__name__}: {exc}")
         input_ids = tokens["input_ids"]
         attention_mask = tokens.get("attention_mask", [1] * len(input_ids))
