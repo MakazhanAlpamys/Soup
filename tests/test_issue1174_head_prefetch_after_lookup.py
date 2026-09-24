@@ -242,6 +242,31 @@ class TestBothTimingsAreBitIdentical:
         _assert_identical(arm_a, arm_b)
 
 
+@_NO_MPS
+class TestTheInstalledDefault:
+    """The arms above set `head_prefetch_layer` themselves, so nothing there covers
+    what `install_streaming` wires when nobody touches it."""
+
+    def test_an_untied_model_defaults_to_the_earliest_point(self, tmp_path, monkeypatch):
+        wrapper, _, _ = _build_streamed_wrapper(
+            tmp_path, monkeypatch, task="sft", n_layers=4, tie=False
+        )
+        try:
+            assert wrapper._stream_runtime.prefetcher.head_prefetch_layer == 0
+        finally:
+            wrapper._close_stream_runtime()
+
+    def test_a_tied_model_has_nothing_to_move(self, tmp_path, monkeypatch):
+        wrapper, _, _ = _build_streamed_wrapper(
+            tmp_path, monkeypatch, task="sft", n_layers=4, tie=True
+        )
+        try:
+            assert wrapper._stream_runtime.large_pool is None
+            assert wrapper._stream_runtime.prefetcher.head_prefetch_layer is None
+        finally:
+            wrapper._close_stream_runtime()
+
+
 # --------------------------------------------------------------------------
 # what the pool sees
 # --------------------------------------------------------------------------
