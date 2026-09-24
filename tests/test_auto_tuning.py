@@ -88,10 +88,10 @@ class TestLRFinderSchedule:
             compute_lr_schedule(1e-7, 1e-1, 100_000)
 
     def test_schedule_min_steps_accepted(self):
-        from soup_cli.utils.lr_finder import compute_lr_schedule
+        from soup_cli.utils.lr_finder import MIN_NUM_STEPS, compute_lr_schedule
 
-        lrs = compute_lr_schedule(1e-7, 1e-1, 2)
-        assert len(lrs) == 2
+        lrs = compute_lr_schedule(1e-7, 1e-1, MIN_NUM_STEPS)
+        assert len(lrs) == MIN_NUM_STEPS
         assert lrs[0] == pytest.approx(1e-7, rel=1e-6)
         assert lrs[-1] == pytest.approx(1e-1, rel=1e-6)
 
