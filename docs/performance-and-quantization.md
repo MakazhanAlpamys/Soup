@@ -142,9 +142,11 @@ measured a 0.086344 nat/target gap to fixed FP, with a paired 95% interval of
 - not upstream QuEST numerical parity;
 - not packed INT4, and not a speed or memory-efficiency claim.
 
-The implementation keeps FP32 masters and performs dense fake quantization and
-Hadamard arithmetic during execution. Treat it as a reproducible research path,
-not as a cheaper deployment format.
+The implementation keeps FP32 masters. The Hadamard and fake-quant grid arithmetic
+run under the trainer's CUDA autocast: BF16 by default on the Ampere-or-newer GPUs
+this route requires, though `training.auto_mixed_precision` can select FP16.
+Activation calibration always runs under BF16. Treat this as a reproducible
+research path, not as a cheaper deployment format.
 
 
 ## FP8 Training (Ada+)
@@ -636,6 +638,8 @@ output: ./output
 > ```
 >
 > `0` means the adapter is lost. Fixed on `main` by PR #1010 (the wrapper now reports canonical names, so peft 0.20 and 0.21 both save every tensor; no `peft<0.21` pin); the next release carries it. Until you run a Soup with that fix, `pip install "peft<0.21"` is the workaround.
+>
+> Since #1011, a streamed run also checks every checkpoint and the final save: if `adapter_model.safetensors` is missing, carries the wrapper's `.inner.` keys, or holds a different number of LoRA tensors than the model trained, the run stops with a `RuntimeError` instead of reporting success. The manual check above is only needed for adapters saved before that.
 
 **Troubleshooting:**
 - **"trainable LoRA parameters remain on the meta device"** — PEFT attached an

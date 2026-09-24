@@ -270,6 +270,13 @@ def plan_modal_run(
         raise ValueError(f"config exceeds {_MAX_CONFIG_BYTES} bytes")
     gpu_key = validate_gpu(gpu)
     _validate_path_shape(output_dir, "output_dir")
+    # output_dir is the LOCAL root the generated stub's _download() writes the
+    # remote run's files into. The stub keeps each downloaded ENTRY inside that
+    # root, but the root itself came straight from a shareable soup.yaml whose
+    # author need not be whoever runs it — an absolute or '..' path put remote
+    # bytes anywhere the user can write (_download() mkdirs on the way). Same
+    # containment requirement as config_path / stub_path at this call site.
+    enforce_under_cwd_and_no_symlink(output_dir, "output_dir")
     _validate_path_shape(stub_path, "stub_path")
     stub_text = render_modal_stub(
         config_yaml,

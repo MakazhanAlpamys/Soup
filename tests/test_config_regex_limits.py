@@ -13,7 +13,19 @@ import yaml
 
 _ROOT = Path(__file__).resolve().parents[1]
 
-BYPASSES = ["((.+))+z", "(.+){2,}z", "(?:.|.)+z", "(a+)+b"]
+# A chain of sibling bounded repeats over one character: not nested, not
+# alternated, not unbounded, so every rule before v0.75.1 accepted it while
+# matching it against 40 'a's never finishes. Never matched here, only refused.
+CHAIN_PAYLOAD = "a{1,20}" * 12 + "z"
+
+BYPASSES = [
+    "((.+))+z",
+    "(.+){2,}z",
+    "(?:.|.)+z",
+    "(a+)+b",
+    CHAIN_PAYLOAD,
+    "a{1,20}a{1,20}",
+]
 
 
 def _sft_yaml(extra_training: str) -> str:
@@ -67,6 +79,39 @@ def test_lr_groups_refused_through_the_config_loader():
         load_config_from_string(
             _sft_yaml("lr_groups:\n  - pattern: '(.+){2,}z'\n    lr: 0.0001\n")
         )
+
+
+def test_chain_payload_named_reason_through_unfrozen_parameters():
+    """The refusal names the count, not a generic 'too complex'."""
+    from soup_cli.config.loader import load_config_from_string
+
+    with pytest.raises(ValueError, match="too many repetitions"):
+        load_config_from_string(_sft_yaml(f"unfrozen_parameters: ['{CHAIN_PAYLOAD}']\n"))
+
+
+def test_chain_payload_named_reason_through_lr_groups():
+    from soup_cli.utils.lr_groups import parse_lr_groups
+
+    with pytest.raises(ValueError, match="too many repetitions"):
+        parse_lr_groups([{"pattern": CHAIN_PAYLOAD, "lr": 1e-4}])
+
+
+def test_adjacent_ambiguous_pattern_named_reason_through_lr_groups():
+    from soup_cli.utils.lr_groups import parse_lr_groups
+
+    with pytest.raises(ValueError, match="ambiguous adjacent repetition"):
+        parse_lr_groups([{"pattern": r"\d+\d*", "lr": 1e-4}])
+
+
+def test_spectrum_shaped_moe_pattern_still_loads():
+    """The chain rules must not cost a real deep-MoE parameter name."""
+    from soup_cli.config.loader import load_config_from_string
+
+    pattern = r"model\.layers\.\d+\.mlp\.experts\.\d+\.(gate|up|down)_proj\.\d+\.weight"
+    cfg = load_config_from_string(
+        _sft_yaml(f"unfrozen_parameters: ['{pattern}']\n")
+    )
+    assert cfg.training.unfrozen_parameters == [pattern]
 
 
 def test_lr_groups_literal_pattern_still_parses():
@@ -139,6 +184,49 @@ def test_lora_pattern_literal_keys_still_load(field):
 
     cfg = load_config_from_string(_lora_yaml(field, "q_proj"))
     assert getattr(cfg.training.lora, field) == {"q_proj": 8}
+
+
+# --- one key's LENGTH, not the number of keys -------------------------------
+
+
+@pytest.mark.parametrize("field", ["rank_pattern", "alpha_pattern"])
+def test_lora_pattern_key_at_the_cap_still_loads(field):
+    from soup_cli.config.loader import load_config_from_string
+    from soup_cli.config.schema import _MAX_LORA_PATTERN_KEY_LEN
+
+    key = "q" * _MAX_LORA_PATTERN_KEY_LEN
+    cfg = load_config_from_string(_lora_yaml(field, key))
+    assert getattr(cfg.training.lora, field) == {key: 8}
+
+
+@pytest.mark.parametrize("field", ["rank_pattern", "alpha_pattern"])
+def test_lora_pattern_key_one_over_the_cap_is_refused(field):
+    from soup_cli.config.loader import load_config_from_string
+    from soup_cli.config.schema import _MAX_LORA_PATTERN_KEY_LEN
+
+    key = "q" * (_MAX_LORA_PATTERN_KEY_LEN + 1)
+    with pytest.raises(ValueError) as excinfo:
+        load_config_from_string(_lora_yaml(field, key))
+    message = str(excinfo.value)
+    assert f"lora.{field}" in message, message
+    assert str(_MAX_LORA_PATTERN_KEY_LEN) in message, message
+
+
+def test_lora_pattern_key_refusal_does_not_echo_the_whole_key():
+    """An over-long key belongs in the config, not in the terminal refusing it."""
+    from soup_cli.config.loader import load_config_from_string
+    from soup_cli.config.schema import _MAX_LORA_PATTERN_KEY_SHOWN
+
+    # 1000 and not more: PyYAML refuses a *simple* mapping key past 1024
+    # characters before the schema ever sees it.
+    key = "q" * 1000
+    with pytest.raises(ValueError) as excinfo:
+        load_config_from_string(_lora_yaml("rank_pattern", key))
+    message = str(excinfo.value)
+    assert key not in message, len(message)
+    # Exactly the documented prefix: 80 characters, not 81.
+    assert "q" * _MAX_LORA_PATTERN_KEY_SHOWN in message, message
+    assert "q" * (_MAX_LORA_PATTERN_KEY_SHOWN + 1) not in message, message
 
 
 # --- shipped configs -------------------------------------------------------

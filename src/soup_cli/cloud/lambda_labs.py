@@ -292,6 +292,11 @@ def plan_lambda_run(
         raise ValueError(f"config exceeds {_MAX_LAMBDA_CONFIG_BYTES} bytes")
     gpu_key = validate_gpu(gpu)
     _validate_remote_output(output_dir)
+    # output_dir is also the LOCAL download root (_LOCAL_OUTPUT in the rendered
+    # controller). _validate_remote_output already rejects absolute and '..'
+    # paths by shape, so this adds only the symlink / junction rejection that
+    # config_path gets above.
+    enforce_under_cwd_and_no_symlink(output_dir, "output_dir")
     _validate_path_shape(stub_path, "stub_path")
     stub_text = render_lambda_stub(
         config_yaml,
