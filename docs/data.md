@@ -792,10 +792,10 @@ turn on MLX. `soup train` says so on its "MLX backend ignores:" line, and
 `soup doctor --config` reports it.
 
 **Multimodal vision and audio ignore it:** For `modality: vision` and `modality: audio`,
-multimodal collators supervise all text tokens and only mask padding and media tokens,
-because multimodal label builders do not carry conversational turn offsets across image
-or audio token projections. Implementing assistant-only masking on multimodal datasets
-would require restructuring upstream processor collators. Soup declares this gap rather
+every text token is supervised. Soup's vision collator masks only padding and image
+tokens, and the audio path only padding. Assistant-only masking would have to locate the
+assistant spans after the processor expands the image or audio tokens, which neither path
+does yet. Soup declares this gap rather
 than attempting unverified label restructuring, so both `mask_history` and `train_on_responses_only`
 are unread on vision and audio modalities, every text token trains, and `soup doctor --config`
 reports them as ignored.
