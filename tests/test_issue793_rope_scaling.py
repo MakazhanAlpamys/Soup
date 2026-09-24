@@ -199,10 +199,13 @@ def test_switching_rope_type_drops_foreign_algorithm_tunables() -> None:
 
     from soup_cli.utils.long_context import apply_long_context_config
 
+    # #1239: a native llama3 block is no longer replaced (linear on top of it is
+    # refused, see test_issue1239_llama3_rope_compose.py), so a type switch now
+    # starts from an unscaled block. It must still shed another algorithm's keys.
     config = SimpleNamespace(
         max_position_embeddings=64,
         rope_parameters={
-            "rope_type": "llama3",
+            "rope_type": "default",
             "factor": 8.0,
             "low_freq_factor": 1.0,
             "high_freq_factor": 4.0,
