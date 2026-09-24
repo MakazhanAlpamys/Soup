@@ -164,22 +164,27 @@ def verify(
     --config, 1 for a crash. A gated repo, or one needing trust_remote_code, is
     reported as unverified and does not change the exit code (#1116).
     """
-    import importlib.util
+    import importlib
     import json as _json
 
     from soup_cli.utils.exit_codes import EXIT_RUNTIME_ERROR
 
     # #1117 review: without these the per-stage catch-alls turned a missing
     # library into a verdict (unverified, exit 0; or cannot_attach, exit 2).
-    # A missing dependency is an environment problem: exit 1, naming the fix.
-    missing = [m for m in ("torch", "transformers", "peft") if importlib.util.find_spec(m) is None]
-    if missing:
-        err_console.print(
-            f"[red]soup recipes verify needs {', '.join(missing)}.[/] "
-            # \\[ -- Rich reads a bare [train] as a markup tag and drops it.
-            'Install them with: pip install "soup-cli\\[train]"'
-        )
-        raise typer.Exit(EXIT_RUNTIME_ERROR)
+    # A missing or broken dependency is an environment problem: exit 1, naming
+    # the fix. Import, not find_spec: an installed torch whose DLL will not load
+    # is found but raises (an OSError on Windows, hence Exception).
+    for name in ("torch", "transformers", "peft"):
+        try:
+            importlib.import_module(name)
+        except Exception as exc:  # noqa: BLE001
+            err_console.print(
+                f"[red]soup recipes verify needs {name}, which failed to import:[/] "
+                f"{for_terminal(type(exc).__name__)}: {for_terminal(str(exc))}. "
+                # \\[ -- Rich reads a bare [train] as a markup tag and drops it.
+                'Install it with: pip install "soup-cli\\[train]"'
+            )
+            raise typer.Exit(EXIT_RUNTIME_ERROR) from None
 
     from soup_cli.utils.attach_preflight import (
         PreflightReport,

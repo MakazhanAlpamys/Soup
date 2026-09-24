@@ -114,8 +114,28 @@ def shrink_for_preflight(hf_config: Any, layers: int = PREFLIGHT_LAYERS) -> Any:
     for target in targets:
         current = getattr(target, "num_hidden_layers", None)
         if isinstance(current, int) and current > layers:
-            target.num_hidden_layers = max(layers, _first_sparse_depth(target, current))
+            target.num_hidden_layers = max(
+                layers,
+                _first_sparse_depth(target, current),
+                _first_of_each_kind_depth(target, current),
+            )
     return hf_config
+
+
+def _first_of_each_kind_depth(config: Any, current: int) -> int:
+    """Layers needed to include one layer of every kind in ``layer_types``.
+
+    A hybrid decoder (Granite 4.0-H, Qwen3.5) puts attention at only some depths:
+    two layers kept only Mamba or linear-attention layers, so ``q_proj`` was
+    reported missing on a config the trainer attaches (#1117 review).
+    """
+    kinds = getattr(config, "layer_types", None)
+    if not isinstance(kinds, (list, tuple)) or not kinds:
+        return 0
+    first: dict = {}
+    for index, kind in enumerate(kinds[:current]):
+        first.setdefault(kind, index)
+    return max(first.values()) + 1
 
 
 def _first_sparse_depth(config: Any, current: int) -> int:
@@ -348,7 +368,9 @@ def trainer_lora_config(model: Any, cfg: Any, console: Any = None) -> tuple[Any,
     target_parameters = resolve_lora_target_parameters(
         model, getattr(lora, "target_parameters", None)
     )
-    targets = resolve_moe_lora_targets(model, tcfg, targets, console)
+    # No console: its "targeting N module patterns" line names no config, so in
+    # catalogue mode it is noise on stderr (#1117 review). The verdict is the same.
+    targets = resolve_moe_lora_targets(model, tcfg, targets, None)
     peft_config = build_lora_config(
         lora,
         target_modules=targets,

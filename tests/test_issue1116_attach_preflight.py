@@ -1077,13 +1077,15 @@ class TestTheReportIsSafeForATerminal:
 
 @pytest.mark.usefixtures("plain_consoles")
 class TestConfigNamesAreSafeToo:
-    def test_a_missing_config_path_prints_literally(self, tmp_path):
+    def test_a_missing_config_path_prints_literally(self):
         from typer.testing import CliRunner
 
         from soup_cli.cli import app
 
+        # Bare, not joined onto tmp_path: Windows pathlib splits at the "/" and
+        # the literal "[/]x" never reaches the output (#1117 review).
         result = CliRunner().invoke(
-            app, ["recipes", "verify", "--config", str(tmp_path / "[/]x\x1b[2J.yaml")]
+            app, ["recipes", "verify", "--config", "[/]x\x1b[2J.yaml"]
         )
 
         assert result.exit_code == 3
@@ -1122,23 +1124,56 @@ class TestConfigNamesAreSafeToo:
         assert result.exit_code == 0, (result.output, result.exception)
         assert "adapted a vision tower: [bold]v.yaml" in " ".join(result.output.split())
 
+    def test_a_parse_error_prints_literally(self, tmp_path):
+        """The parse-error line carries the file name and pydantic's text, which
+        quotes the key: both are user-controlled."""
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        # "[bold]", not "[/]": a "/" in the name is a separator on Windows.
+        path = tmp_path / "[bold]p.yaml"
+        path.write_text(
+            'base: org/m\ntask: sft\ndata:\n  train: ./x.jsonl\n  format: alpaca\n"[/]x": 1\n',
+            encoding="utf-8",
+        )
+        result = CliRunner().invoke(app, ["recipes", "verify", "--config", str(path)])
+
+        assert result.exit_code == 3, (result.output, result.exception)
+        out = " ".join(result.output.split())
+        assert "Config does not parse" in out and "[/]x" in out and "[bold]p.yaml" in out
+
 
 class TestAMissingLibraryIsAnEnvironmentError:
     @pytest.mark.parametrize("lib", ["torch", "transformers", "peft"])
-    def test_it_exits_1_naming_the_extra(self, tmp_path, monkeypatch, lib):
+    @pytest.mark.parametrize(
+        "error",
+        [
+            ModuleNotFoundError("No module named 'x'"),
+            # Installed but broken: find_spec finds it, the import raises. A torch
+            # DLL that will not load on Windows is an OSError (#1117 review).
+            OSError("DLL load failed"),
+        ],
+        ids=["absent", "broken"],
+    )
+    def test_it_exits_1_naming_the_extra(self, tmp_path, monkeypatch, lib, error):
         """Without these the per-stage catch-alls turned a missing library into a
         verdict: unverified with exit 0, or cannot_attach with exit 2."""
-        import importlib.util
+        import importlib
 
         from typer.testing import CliRunner
 
         from soup_cli.cli import app
         from tests.conftest import strip_ansi
 
-        real = importlib.util.find_spec
-        monkeypatch.setattr(
-            importlib.util, "find_spec", lambda name, *a: None if name == lib else real(name, *a)
-        )
+        real = importlib.import_module
+
+        def fake(name, *a, **k):
+            if name == lib:
+                raise error
+            return real(name, *a, **k)
+
+        monkeypatch.setattr(importlib, "import_module", fake)
         path = tmp_path / "soup.yaml"
         path.write_text(
             "base: org/m\ntask: sft\ndata:\n  train: ./x.jsonl\n  format: alpaca\n",
@@ -1149,6 +1184,7 @@ class TestAMissingLibraryIsAnEnvironmentError:
         assert result.exit_code == 1
         out = " ".join(strip_ansi(result.output).split())
         assert f"needs {lib}" in out and 'pip install "soup-cli[train]"' in out
+        assert type(error).__name__ in out
 
 
 class TestTheAdvisoryGoesToStderr:
@@ -1183,6 +1219,7 @@ class TestTheAdvisoryGoesToStderr:
 
         rows = _json.loads(result.stdout)
         assert rows[0]["model_type"] == "granitemoehybrid"
+        assert rows[0]["verdict"] == "attaches", rows[0]["detail"]
         assert "Partial LoRA coverage" in result.stderr
         assert "Partial LoRA coverage" not in result.stdout
 
@@ -1211,6 +1248,9 @@ class TestTheSkeletonKeepsAnExpertLayer:
         [
             ({"first_k_dense_replace": 3, "moe_layer_freq": 1}, 4),
             ({"first_k_dense_replace": 1, "moe_layer_freq": 1}, 2),
+            # Frequency 2 skips layer 1: only this case tells the moe_layer_freq
+            # rule from its absence (#1117 review).
+            ({"first_k_dense_replace": 1, "moe_layer_freq": 2}, 3),
             ({"decoder_sparse_step": 2}, 2),
             # A step whose first sparse layer lies past the 2-layer minimum: the
             # step-2 case alone could not tell the rule from its absence.
@@ -1249,3 +1289,33 @@ class TestTheSkeletonKeepsAnExpertLayer:
 
         assert check.verdict is Verdict.ATTACHES, check.detail
         assert check.expert_modules > 0, "the skeleton built no expert layer"
+
+
+class TestTheSkeletonKeepsEveryLayerKind:
+    """#1117 review: on a hybrid decoder the first two layers can hold no
+    attention layer, so a config the trainer attaches read cannot_attach."""
+
+    def test_a_hybrid_skeleton_keeps_an_attention_layer(self):
+        from soup_cli.utils.attach_preflight import build_on_meta
+        from tests.test_issue1122_glm4_granite_moe_targets import _granite_config
+
+        hf = _granite_config(num_hidden_layers=10, attention_every=5)  # attention at 2 and 7
+        check = check_attach(
+            "g", _real_cfg(), load_hf_config=lambda _b: hf, build_model=build_on_meta
+        )
+
+        assert check.verdict is Verdict.ATTACHES, check.detail
+        assert check.adapted == 4  # q/k/v/o of the first attention layer
+
+    @pytest.mark.parametrize(
+        ("kinds", "depth"),
+        [
+            (["mamba"] * 5 + ["attention"] + ["mamba"] * 10, 6),
+            (["linear_attention"] * 3 + ["full_attention"] * 13, 4),
+            (["full_attention"] * 16, 2),
+        ],
+    )
+    def test_the_depth_reaches_the_first_layer_of_each_kind(self, kinds, depth):
+        config = SimpleNamespace(num_hidden_layers=len(kinds), layer_types=kinds)
+
+        assert shrink_for_preflight(config).num_hidden_layers == depth

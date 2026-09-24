@@ -184,6 +184,7 @@ soup recipes search "reasoning"              Search by keyword/task/size
 soup recipes verify                           Attach every shipped config on the meta device; exit 2 if one cannot (#1116)
 soup recipes verify --config soup.yaml        Same check for one config, before downloading weights
 soup recipes verify --no-templates            Recipes only; skip src/soup_cli/templates and examples/
+soup recipes verify --json                    One JSON row per config on stdout; advisories go to stderr
 soup registry push --run-id <id> --name n --tag v1  Register run
 soup registry list [--name n] [--tag v1]     List registry entries
 soup registry show <ref>                      Entry details + artifacts + ancestors
