@@ -983,6 +983,7 @@ class StreamPrefetcher:
         stream: Any = None,
         tail_prefetch: Any = None,
         backward_tail_prefetch: Any = None,
+        head_prefetch_layer: Optional[int] = None,
     ):
         self.pool = pool
         self.source = source
@@ -993,6 +994,20 @@ class StreamPrefetcher:
         self.primes = 0
         self.tail_prefetch = tail_prefetch
         self.tail_prefetched = False
+        # #1174 part 2 — which decoder layer's forward issues `tail_prefetch`, the
+        # head's load into the shared slot. `None` is the original timing, the
+        # last layer, where the copy has only that one layer's compute to hide
+        # behind. A smaller index issues it earlier in the forward: the
+        # embedding's bytes in the slot are dead once the lookup has run, and
+        # the lookup precedes layer 0's `advance`, so layer 0 is the earliest
+        # point. It is a plain attribute on purpose, so a harness can flip it
+        # between steps and run both timings in one process.
+        if head_prefetch_layer is not None and not 0 <= head_prefetch_layer < self.n_layers:
+            raise ValueError(
+                f"head_prefetch_layer must be None or in [0, {self.n_layers}), "
+                f"got {head_prefetch_layer}"
+            )
+        self.head_prefetch_layer = head_prefetch_layer
         # #975 — the embedding's `_prime`-time load pays a full head-sized H2D
         # copy with nothing to overlap it against, because it fires right as
         # the next step's forward starts and is needed almost immediately.
@@ -1026,12 +1041,19 @@ class StreamPrefetcher:
         nxt = idx + self.direction
         if 0 <= nxt < self.n_layers and self.pool.owner[self.pool.slot_for(nxt)] != nxt:
             self.pool.load_async(nxt, self.source, self.stream)
+        head_layer = self.head_prefetch_layer
+        if head_layer is None:
+            head_layer = self.n_layers - 1
         if (
             self.direction == 1
-            and idx == self.n_layers - 1
+            and idx == head_layer
             and not self.tail_prefetched
             and self.tail_prefetch is not None
         ):
+            # The refill of the shared slot with the head. It is ordered after
+            # the embedding lookup (queued on the compute stream, reading the
+            # slot) by the `wait_stream` in `LargeLayerBufferPool.load_async`,
+            # the same guard the backward-tail refill below relies on.
             self.tail_prefetch()
             self.tail_prefetched = True
         # #975 — layer 0 reached going backward is the last decoder recompute
@@ -2669,6 +2691,9 @@ def install_streaming(
         stream,
         tail_prefetch=_prefetch_output if large_pool is not None else None,
         backward_tail_prefetch=_prefetch_embed if large_pool is not None else None,
+        # #1174 part 2: the head's load right after the embedding lookup. Set
+        # `prefetcher.head_prefetch_layer = None` to restore the last-layer timing.
+        head_prefetch_layer=0 if large_pool is not None else None,
     )
 
     layer_cls = _streamed_layer_class()
