@@ -2,7 +2,8 @@
 
 Per-step reward prediction over stepwise-supervised data. Consumes the
 v0.42.0 Part A ``data.format='prm'`` rows (segments + per-segment labels)
-and trains a scalar reward head on top of a causal LM via LoRA.
+and trains a scalar reward head on top of a causal LM, fine-tuning every base
+parameter with it (no LoRA, #795).
 
 Loss: MSE between predicted scalar rewards and the supervised labels at
 each step boundary. The math kernel is
@@ -25,7 +26,7 @@ from rich.console import Console
 
 from soup_cli.config.schema import SoupConfig
 from soup_cli.trainer.loss_summary import summarize_training_loss
-from soup_cli.utils.gpu import bf16_fp16_flags
+from soup_cli.utils.gpu import bf16_fp16_flags, resolve_base_load_dtype
 from soup_cli.utils.mixed_precision import align_trainable_dtype_for_fp16
 from soup_cli.utils.seeding import apply_training_seed, training_seed_kwargs
 
@@ -81,7 +82,12 @@ def make_prm_trainer_class(base_cls: type) -> type:
             )
             step_hidden = last_hidden.gather(1, idx)
             # Project to scalar: [B, S, 1] -> [B, S]
-            predictions = self.model.reward_head(step_hidden).squeeze(-1)
+            reward_head = self.model.reward_head
+            # #1235: the head runs here, outside ``model.forward``, which is all
+            # Accelerate autocasts; under bf16/fp16 mixed precision it also
+            # converts the forward's outputs to fp32. Feed the head its own
+            # weight dtype, whatever dtype the forward handed back.
+            predictions = reward_head(step_hidden.to(reward_head.weight.dtype)).squeeze(-1)
             loss = compute_prm_loss(predictions, labels, mask=valid_mask)
             if return_outputs:
                 return loss, {"predictions": predictions}
@@ -259,19 +265,19 @@ class PRMTrainerWrapper:
         base_model = AutoModelForCausalLM.from_pretrained(
             cfg.base,
             trust_remote_code=self._trust_remote_code,
-            # MPS PRM keeps fp32 master weights while TrainingArguments below
-            # autocasts the forward to bf16. Loading the trainable base itself
-            # as bf16 makes the Metal optimizer abort: its accumulator and
-            # destination matrix dtypes differ. CUDA retains its established
-            # bf16-parameter policy; CPU remains fp32.
-            torch_dtype=torch.bfloat16 if self.device == "cuda" else torch.float32,
+            # #1235: PRM is a full fine-tune (every base parameter plus the
+            # reward head), so the optimizer steps these weights directly and
+            # they load as fp32 master weights on every device, the #339 policy;
+            # bf16/fp16 is left to the autocast TrainingArguments below asks for.
+            # A bf16 base rounds most AdamW steps away at PRM learning rates (an
+            # RMSNorm weight at 1.0 never moves), cannot go through the fp16
+            # GradScaler on pre-Ampere cards, and makes the Metal optimizer abort
+            # on MPS (#564).
+            torch_dtype=resolve_base_load_dtype(self.device, full_finetune=True),
         )
         hidden_size = base_model.config.hidden_size
-        # Cast the reward head to the base model's dtype. On CUDA the base loads
-        # in bf16 while nn.Linear defaults to fp32, so without this cast the
-        # first compute_loss forward (hidden_states[bf16] @ reward_head[fp32])
-        # raises a dtype-mismatch RuntimeError (v0.71.30 code-review fix).
-        base_model.reward_head = nn.Linear(hidden_size, 1, bias=True).to(base_model.dtype)
+        # The head trains too, so it is an fp32 master weight like the base.
+        base_model.reward_head = nn.Linear(hidden_size, 1, bias=True, dtype=torch.float32)
         self.model = base_model
         self._dataset = dataset
         console.print(

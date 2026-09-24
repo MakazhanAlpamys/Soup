@@ -718,6 +718,13 @@ and the per-step labels. The reward head is saved inside the model checkpoint
 (`reward_head.*` in `model.safetensors`) and the tokenizer is saved alongside it,
 so the resulting directory is loadable standalone.
 
+PRM trains every base parameter along with the head, so all of them load as fp32
+master weights on every device; bf16 (fp16 on cards without bf16) is applied by
+autocast in the forward pass. Budget about 16 bytes per parameter before
+activations (fp32 weights, fp32 gradients and two fp32 AdamW moments). That is
+what the VRAM pre-flight predicts for `task: prm`, and the saved checkpoint is
+fp32. A bf16 base would round most updates away at these learning rates (#1235).
+
 
 ## PRM-guided GRPO (process-supervised RL)
 
