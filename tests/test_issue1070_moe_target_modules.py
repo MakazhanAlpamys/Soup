@@ -547,10 +547,15 @@ class TestTheRatchet:
         assert len({info["model_type"] for info in moe.values()}) == 11
 
 
-#: Two MoE-wired trainers, driven through their own ``_setup_transformers``.
+#: Text SFT/pretrain and the preference/RL trainers; #1148's six are driven in test_issue1099.
 _TRAINERS = {
-    "sft": ("soup_cli.trainer.sft", "SFTTrainerWrapper", "alpaca"),
     "dpo": ("soup_cli.trainer.dpo", "DPOTrainerWrapper", "dpo"),
+    "grpo": ("soup_cli.trainer.grpo", "GRPOTrainerWrapper", "alpaca"),
+    "kto": ("soup_cli.trainer.kto", "KTOTrainerWrapper", "kto"),
+    "orpo": ("soup_cli.trainer.orpo", "ORPOTrainerWrapper", "dpo"),
+    "pretrain": ("soup_cli.trainer.pretrain", "PretrainTrainerWrapper", "plaintext"),
+    "sft": ("soup_cli.trainer.sft", "SFTTrainerWrapper", "alpaca"),
+    "simpo": ("soup_cli.trainer.simpo", "SimPOTrainerWrapper", "dpo"),
 }
 
 

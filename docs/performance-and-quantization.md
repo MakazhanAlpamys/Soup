@@ -142,9 +142,11 @@ measured a 0.086344 nat/target gap to fixed FP, with a paired 95% interval of
 - not upstream QuEST numerical parity;
 - not packed INT4, and not a speed or memory-efficiency claim.
 
-The implementation keeps FP32 masters and performs dense fake quantization and
-Hadamard arithmetic during execution. Treat it as a reproducible research path,
-not as a cheaper deployment format.
+The implementation keeps FP32 masters. The Hadamard and fake-quant grid arithmetic
+run under the trainer's CUDA autocast: BF16 by default on the Ampere-or-newer GPUs
+this route requires, though `training.auto_mixed_precision` can select FP16.
+Activation calibration always runs under BF16. Treat this as a reproducible
+research path, not as a cheaper deployment format.
 
 
 ## FP8 Training (Ada+)
@@ -636,6 +638,8 @@ output: ./output
 > ```
 >
 > `0` means the adapter is lost. Fixed on `main` by PR #1010 (the wrapper now reports canonical names, so peft 0.20 and 0.21 both save every tensor; no `peft<0.21` pin); the next release carries it. Until you run a Soup with that fix, `pip install "peft<0.21"` is the workaround.
+>
+> Since #1011, a streamed run also checks every checkpoint and the final save: if `adapter_model.safetensors` is missing, carries the wrapper's `.inner.` keys, or holds a different number of LoRA tensors than the model trained, the run stops with a `RuntimeError` instead of reporting success. The manual check above is only needed for adapters saved before that.
 
 **Troubleshooting:**
 - **"trainable LoRA parameters remain on the meta device"** — PEFT attached an
@@ -1072,9 +1076,11 @@ Both reject silently-no-op combinations: setting either flag without `moe_lora=t
 
 | flag | applied by | elsewhere |
 |---|---|---|
-| `moe_lora` | `sft`, `pretrain`, `tts`, and (since #798) `dpo`, `kto`, `orpo`, `simpo`, `grpo` | — |
+| `moe_lora` | `sft`, `pretrain`, `tts`, (since #798) `dpo`, `kto`, `orpo`, `simpo`, `grpo`, and (since #1099) `ipo`, `bco`, `reward_model`, `ppo`, `embedding`, `online_dpo` | — |
 | `moe_expert_quant`, `train_router_only` | `sft`, `tts` | refused at config load, naming the task |
 | `moe_aux_loss_coeff` | `sft`, `tts`, `pretrain` | a **non-default** value is refused; the default `0.01` still loads, because every stored config and eleven shipped recipes write it |
+
+**`moe_lora` on the remaining LoRA tasks (#1099).** #798 left it loading but unread on `ipo`, `bco`, `reward_model`, `ppo` and `embedding`, and `online_dpo` had the same gap. All six build their adapter through the same `build_lora_config` path, so they were wired to the same helper rather than refused. On `embedding` it applies only with `lora.r >= 1`; at `r: 0` that trainer full-fine-tunes and builds no adapter for the flag to select. The flag still loads without being read on eight tasks (#1151). `classifier`, `reranker` and `cross_encoder` (one trainer), `distill` and `unlearn` build their adapter the same way and can be wired to the same helper. `asr` trains only Whisper, which has no experts. `moe_lora_routing` and `prm` build no LoRA adapter at all. `preference` is covered through the trainers it dispatches to, and `tts` through the SFT trainer it subclasses.
 
 **`moe_lora` requires `lora.dropout: 0.0` on a fused-expert MoE.** transformers 5.x keeps a Qwen3-MoE's experts as fused 3-D parameters (`mlp.experts.gate_up_proj`), which peft adapts through `lora.ParamWrapper`, and that wrapper raises `lora.ParamWrapper does not work with lora_dropout != 0.` With the schema default of `0.05` the LoRA attach failed outright, so `moe_lora` did not work on any task — including `sft`. Soup now stops at the attach with a message naming the flag, instead of letting peft's reach the user, and all 31 shipped MoE recipes pin `lora.dropout: 0.0`. The check is made against the loaded model, not at config load: whether the experts are fused depends on the checkpoint and the transformers version, and a model with one module per expert takes dropout normally. A dense base is untouched — there the flag is a no-op.
 
