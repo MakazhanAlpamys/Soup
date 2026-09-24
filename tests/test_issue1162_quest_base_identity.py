@@ -11,6 +11,7 @@ import pytest
 
 from soup_cli.utils.quest import (
     EXPECTED_MODULES,
+    _selected_local_model_files,
     build_metadata,
     load_metadata,
     resolve_base_model_identity,
@@ -220,6 +221,30 @@ def test_additional_chat_template_change_is_refused_after_relocation(tmp_path):
     assert resolve_base_model_identity(str(relocated)) != changed
 
 
+def test_renaming_an_additional_chat_template_changes_the_identity(tmp_path):
+    base = _base(tmp_path / "base")
+    templates = base / "additional_chat_templates"
+    templates.mkdir()
+    (templates / "tool_use.jinja").write_text("[A]{{ message }}", encoding="utf-8")
+    first = resolve_base_model_identity(str(base))
+    (templates / "tool_use.jinja").rename(templates / "rag.jinja")
+    assert resolve_base_model_identity(str(base)) != first
+
+
+def test_additional_chat_templates_have_platform_independent_order(tmp_path):
+    base = _base(tmp_path / "base")
+    templates = base / "additional_chat_templates"
+    templates.mkdir()
+    for name in ("Tool.jinja", "analysis.jinja"):
+        (templates / name).write_text("{{ message }}", encoding="utf-8")
+    names = [
+        name
+        for name, _ in _selected_local_model_files(base)
+        if name.startswith("additional_chat_templates/")
+    ]
+    assert names == sorted(names)
+
+
 def test_additional_chat_template_identity_tracks_real_tokenizer_rendering(tmp_path):
     from tokenizers import Tokenizer, models
     from transformers import AutoTokenizer, PreTrainedTokenizerFast
@@ -272,6 +297,16 @@ def test_custom_tokenizer_with_untracked_code_is_refused(tmp_path):
         '{"auto_map":{"AutoTokenizer":["custom.Tokenizer",null]}}', encoding="utf-8"
     )
     with pytest.raises(ValueError, match="standard tokenizer"):
+        resolve_base_model_identity(str(base))
+
+
+def test_versioned_fast_tokenizer_files_are_refused(tmp_path):
+    base = _base(tmp_path / "base")
+    (base / "tokenizer_config.json").write_text(
+        '{"fast_tokenizer_files":["tokenizer.4.0.0.json"]}', encoding="utf-8"
+    )
+    (base / "tokenizer.4.0.0.json").write_text('{"version":"1.0"}', encoding="utf-8")
+    with pytest.raises(ValueError, match="fast_tokenizer_files"):
         resolve_base_model_identity(str(base))
 
 
@@ -343,6 +378,28 @@ def test_changed_during_hash_is_refused(tmp_path, monkeypatch):
         quest._hash_local_file(weights)
 
 
+def test_replaced_path_during_hash_is_refused(tmp_path, monkeypatch):
+    import soup_cli.utils.quest as quest
+
+    weights = _base(tmp_path / "base") / "model.safetensors"
+    original_stat = Path.stat
+
+    def replaced_stat(path, *args, **kwargs):
+        result = original_stat(path, *args, **kwargs)
+        if path != weights:
+            return result
+        return SimpleNamespace(
+            st_dev=result.st_dev,
+            st_ino=result.st_ino + 1,
+            st_size=result.st_size,
+            st_mtime_ns=result.st_mtime_ns,
+        )
+
+    monkeypatch.setattr(Path, "stat", replaced_stat)
+    with pytest.raises(ValueError, match="changed during fingerprinting"):
+        quest._hash_local_file(weights)
+
+
 def test_base_move_during_hash_is_refused(tmp_path, monkeypatch):
     import soup_cli.utils.quest as quest
 
@@ -380,7 +437,7 @@ def test_v1_sidecar_remains_readable_with_its_original_path_contract(tmp_path):
 
     current = _metadata(resolve_base_model_identity(str(original)))
     validate_resume_metadata(checkpoint, current, legacy_base_model=str(original))
-    with pytest.raises(ValueError, match="v1 resume requires the original base model reference"):
+    with pytest.raises(ValueError, match="set base: to the exact path or Hub ID"):
         validate_resume_metadata(checkpoint, current, legacy_base_model=str(tmp_path / "moved"))
     with pytest.raises(ValueError, match="original base model reference"):
         validate_resume_metadata(checkpoint, current)

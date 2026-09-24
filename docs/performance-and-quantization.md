@@ -131,6 +131,8 @@ after loading the model. The sidecar and `config.json["soup_quest"]` contain
 the identity, not the source directory.
 Local models or tokenizers using custom `auto_map` code are refused by this
 fingerprint route because code loaded from elsewhere would not be covered.
+Local tokenizers declaring `fast_tokenizer_files` are also refused because
+their versioned tokenizer JSON files are not covered by this fingerprint.
 
 Format-v1 sidecars remain readable. Since they did not record a content hash,
 their first resume still compares the original base path string; a successful

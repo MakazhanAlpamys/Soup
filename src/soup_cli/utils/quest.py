@@ -144,7 +144,9 @@ def _selected_local_model_files(root: Path) -> list[tuple[str, Path]]:
             files.append((name, tokenizer_file))
     # Transformers also loads named chat templates from this directory. Bind
     # the relative names as well as the bytes so relocation remains portable.
-    for template in sorted((root / "additional_chat_templates").glob("*.jinja")):
+    for template in sorted(
+        (root / "additional_chat_templates").glob("*.jinja"), key=lambda path: path.name
+    ):
         if template.is_file():
             files.append((f"additional_chat_templates/{template.name}", template))
     tokenizer_config = root / "tokenizer_config.json"
@@ -155,6 +157,8 @@ def _selected_local_model_files(root: Path) -> list[tuple[str, Path]]:
             raise ValueError("QuEST local base tokenizer_config.json is unreadable") from exc
         if not isinstance(tokenizer_config_data, dict) or tokenizer_config_data.get("auto_map"):
             raise ValueError("QuEST local base fingerprint requires a standard tokenizer")
+        if "fast_tokenizer_files" in tokenizer_config_data:
+            raise ValueError("QuEST local base fingerprint does not support fast_tokenizer_files")
 
     selected = next(
         (
@@ -890,7 +894,8 @@ def validate_resume_metadata(
             raise ValueError("QuEST v1 resume requires the original base model reference")
         if stored["base_model"] != legacy_base_model:
             raise ValueError(
-                "QuEST v1 resume requires the original base model reference from the checkpoint"
+                "QuEST v1 resume requires the original base model reference; "
+                "set base: to the exact path or Hub ID recorded in the checkpoint"
             )
         if current["base_model"] != resolve_base_model_identity(legacy_base_model):
             raise ValueError("QuEST original base model reference does not match current identity")
