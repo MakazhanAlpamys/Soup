@@ -666,7 +666,7 @@ data:
     - dolma.jsonl
     - wikipedia.jsonl
   interleave: { strategy: probs, probs: [0.7, 0.3] }   # also: concat / under / over
-  # eval_on_each_dataset: true                         # staged; refused as of v0.77 (#808)
+  # eval_on_each_dataset: true                         # staged; refused as of v0.77 — #808
 ```
 
 `data.train` as a list requires `data.interleave` (and vice versa). `training.packing` /
@@ -759,7 +759,7 @@ data:
   add_new_tokens: ["<reasoning>", "</reasoning>"]
   new_special_tokens: ["<|tool_call|>"]
   mask_history: true              # train only on the LAST assistant turn
-  # Staged fields below warn in v0.76 and are scheduled for refusal in v0.77 (#808):
+  # Staged fields below warn in v0.76 and are refused as of v0.77 (#808):
   # resize_vocab: true
   # split_thinking: true            # Qwen3-style <think> reasoning-block masking
   # image_min_pixels: 256

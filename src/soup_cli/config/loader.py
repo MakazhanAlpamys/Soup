@@ -37,7 +37,7 @@ UNKNOWN_KEY_SEVERITY = "error"
 
 #: What to do about a declared config field that is read by nothing (#808).
 #:
-#: The decision was warn-then-forbid. Shipped ``"warn"`` with a deadline named
+#: The decision was warn-then-forbid. Ships ``"warn"`` with a deadline named
 #: by :data:`~soup_cli.config.staged_fields.STAGED_FIELD_REJECTION_VERSION` -- by
 #: reference, not by number, because the warning stated that version in
 #: exactly one place -- and the release that reaches it flips this to
@@ -72,7 +72,7 @@ def _report_unknown_keys(raw: dict) -> "str | None":
 
 
 def _report_staged_fields(
-    raw: dict, *, config: SoupConfig | None = None
+    raw: dict, *, config: SoupConfig
 ) -> "str | None":
     """Return an error string when staged fields must stop the load (#808).
 

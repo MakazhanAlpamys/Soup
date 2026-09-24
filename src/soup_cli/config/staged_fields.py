@@ -69,7 +69,7 @@ def _coerce_staged_value(section: str, name: str, val: Any) -> Any:
     """Coerce a raw config value through the schema field's type if needed (#808)."""
     if val is None:
         return None
-    from pydantic import TypeAdapter
+    from pydantic import TypeAdapter, ValidationError
 
     from soup_cli.config.schema import DataConfig, TrainingConfig
 
@@ -79,7 +79,7 @@ def _coerce_staged_value(section: str, name: str, val: Any) -> Any:
         return val
     try:
         return TypeAdapter(field_info.annotation).validate_python(val)
-    except Exception:
+    except ValidationError:
         return val
 
 

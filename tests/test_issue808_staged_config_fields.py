@@ -285,10 +285,32 @@ class TestLoaderStagedFieldIntegration:
         assert excinfo.value.code == 1
 
     @pytest.mark.parametrize("severity", ["warn", "error"])
-    def test_convergence_rel_tol_scientific_notation_loads_silently(
+    @pytest.mark.parametrize(
+        "field,spelling",
+        [("split_thinking", "'false'"), ("resize_vocab", "'off'"), ("video_dir", "''")],
+    )
+    def test_default_equivalent_spellings_load_silently(
+        self, severity: str, field: str, spelling: str, monkeypatch, capsys
+    ) -> None:
+        monkeypatch.setattr(loader, "STAGED_FIELD_SEVERITY", severity)
+        loader.load_config_from_string(_valid_with_data(**{field: spelling}))
+        assert "read by nothing" not in capsys.readouterr().out
+
+    @pytest.mark.parametrize("severity", ["warn", "error"])
+    def test_load_config_file_default_equivalent_spelling_loads_silently(
+        self, severity: str, tmp_path, capsys, monkeypatch
+    ) -> None:
+        monkeypatch.setattr(loader, "STAGED_FIELD_SEVERITY", severity)
+        cfg_file = tmp_path / "soup.yaml"
+        cfg_file.write_text(_valid_with_data(split_thinking="'false'", video_dir="''"))
+        loader.load_config(cfg_file)
+        assert "read by nothing" not in capsys.readouterr().out
+
+    @pytest.mark.parametrize("severity", ["warn", "error"])
+    def test_convergence_rel_tol_scientific_notation_unwired_tunable_loads_silently(
         self, severity: str, monkeypatch, capsys
     ) -> None:
-        """convergence_rel_tol: 5e-3 matching schema default loads silently."""
+        """convergence_rel_tol: 5e-3 matching schema default loads cleanly as an unwired tunable."""
         monkeypatch.setattr(loader, "STAGED_FIELD_SEVERITY", severity)
         yaml_str = _VALID + "\ntraining:\n  convergence_rel_tol: 5e-3\n"
         cfg = loader.load_config_from_string(yaml_str)

@@ -205,7 +205,7 @@ soup edit set --base ./model --method grace \
 ```
 
 ```yaml
-# Planned for soup.yaml when training with GRACE-aware lookups (staged; refused as of v0.77 (#808)):
+# Planned for soup.yaml when training with GRACE-aware lookups (staged; refused as of v0.77 — #808):
 # training:
 #   grace_codebook: true
 #   grace_codebook_size: 1024    # codebook entries (max 100k)
