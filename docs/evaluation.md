@@ -263,7 +263,9 @@ Baselines may be a registry reference (`registry://<name-or-id>`), a file path, 
 
 ## Sequential A/B Harness (`soup ab`)
 
-Proper sequential testing with early-stop guarantees on `latency` / `judge_score` / `retry_rate`. Uses Wald's classic SPRT for the point alternative — the log-likelihood ratio is a martingale under H0, so Type-I error is controlled at every stopping time per the optional stopping theorem (unlike a naive repeated t-test, which inflates Type-I if you peek at the data).
+Proper sequential testing with early-stop guarantees on `latency` / `judge_score` / `retry_rate`. The test is two-sided: the statistic averages Wald's likelihood ratios for a treatment-minus-control difference of `+effect-size` and of `-effect-size` (a symmetric two-point mixture). Each of those ratios is a martingale under H0, and so is their average, so Type-I error is controlled at every stopping time per the optional stopping theorem (unlike a naive repeated t-test, which inflates Type-I if you peek at the data).
+
+That guarantee assumes the variance is known, while `soup ab` estimates it from the rows. With only a few rows per arm the estimate is noisy, and when `--effect-size` is close to the metric's row-to-row standard deviation, a test re-run after every new row can reject a true H0 more often than `--alpha`.
 
 ```bash
 soup ab --input ab.jsonl --metric latency --effect-size 0.5
@@ -271,9 +273,11 @@ soup ab --input ab.jsonl --metric latency --effect-size 0.5
 soup ab --input ab.jsonl --metric judge_score --alpha 0.01 --beta 0.10 --effect-size 0.1
 ```
 
-Input rows look like `{"arm": "control", "latency": 1.23}` or `{"arm": "treatment", "judge_score": 0.91}`. Decision is one of `continue` (keep collecting samples), `reject_h0` (real difference detected), `accept_h0` (no significant difference). Composes with `soup loop canary` (v0.58) — promote or roll back as soon as the LLR clears a decision boundary.
+Input rows look like `{"arm": "control", "latency": 1.23}` or `{"arm": "treatment", "judge_score": 0.91}`. Decision is one of `continue` (keep collecting samples), `reject_h0` (real difference detected, in either direction), `accept_h0` (no significant difference). A `reject_h0` also reports a `direction`, `better` or `worse`, read through the metric's polarity: `judge_score` is higher-is-better, `latency` and `retry_rate` are lower-is-better. Composes with `soup loop canary` (v0.58): the panel recommends promoting a `better` treatment and a rollback only for a `worse` one.
 
-`soup ab` accepts `--slack-url` / `--discord-url` (v0.71.5) and pings the webhook **only when the test actually decides** (`reject_h0` / `accept_h0`) — a still-running `continue` stays quiet so you're not paged on every peek. Same SSRF-hardened validator as `soup drift-alarm`.
+`soup ab` exits `0` on every decision, including a `worse` one; to gate a pipeline on a regression, read `direction` from the output or the webhook payload.
+
+`soup ab` accepts `--slack-url` / `--discord-url` (v0.71.5) and pings the webhook **only when the test actually decides** (`reject_h0` / `accept_h0`) — a still-running `continue` stays quiet so you're not paged on every peek. The payload carries `decision` and `direction` (`null` on `accept_h0`). Same SSRF-hardened validator as `soup drift-alarm`.
 
 
 ## Drift Alarm (`soup drift-alarm`)

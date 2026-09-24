@@ -11,16 +11,25 @@ Why mSPRT and not a t-test:
   errors *for any stopping time*. You can monitor live and stop as soon as
   the log-likelihood ratio crosses either decision boundary.
 
-We use the canonical Gaussian-mixture-prior formulation. The likelihood
-ratio is computed at each step and compared against `log(beta/(1-alpha))`
-(accept H0) and `log((1-beta)/alpha)` (reject H0).
+The test is two-sided (#1227). The statistic is a symmetric two-point
+mixture: the average of Wald's likelihood ratios for a treatment-minus-control
+difference of `+effect_size` and of `-effect_size`, averaged as ratios (in log
+space, via logsumexp), never as log-ratios and never via `|z|`. Each point
+ratio is a martingale under H0 and so is their average, so the boundaries
+`log(beta/(1-alpha))` (accept H0) and `log((1-beta)/alpha)` (reject H0) keep
+their any-time meaning. A `reject_h0` reports its direction, `better` or
+`worse`, from the metric's polarity in `HIGHER_IS_BETTER`.
 
-Two known limitations:
+Three known limitations:
 1. Single metric per pass — multi-metric correction (Bonferroni / Holm)
    is operator-controlled. The CLI accepts one metric at a time.
 2. Assumes Gaussian-like data. For binary metrics (e.g. retry_rate as
    a boolean), the operator should pre-aggregate per-prompt rates so the
    resulting per-prompt averages are approximately Gaussian.
+3. The variance is estimated from the rows, not known. The martingale
+   argument holds for a known variance; with only a few rows per arm the
+   estimate is noisy enough to push the Type-I rate under peeking above
+   `alpha` when `effect_size` is comparable to the row-to-row noise.
 """
 
 from __future__ import annotations
@@ -29,18 +38,25 @@ import json
 import math
 import os
 from dataclasses import dataclass
-from typing import Sequence
+from types import MappingProxyType
+from typing import Mapping, Sequence
 
 from soup_cli.utils.paths import is_under_cwd
 
 SUPPORTED_METRICS: frozenset[str] = frozenset(
     {"latency", "judge_score", "retry_rate"}
 )
+# Which way is an improvement, per metric (#1227). Every supported metric must
+# appear here (a test pins it), so a new metric cannot inherit a direction.
+HIGHER_IS_BETTER: Mapping[str, bool] = MappingProxyType(
+    {"judge_score": True, "latency": False, "retry_rate": False}
+)
 _MAX_METRIC_NAME_LEN = 32
 _MAX_SAMPLES_PER_ARM = 1_000_000
 _VALID_DECISIONS: frozenset[str] = frozenset(
     {"continue", "reject_h0", "accept_h0"}
 )
+_VALID_DIRECTIONS: frozenset[str] = frozenset({"better", "worse"})
 
 
 def validate_metric_name(name: object) -> str:
@@ -116,7 +132,12 @@ class MsprtConfig:
 
 @dataclass(frozen=True)
 class MsprtVerdict:
-    """Outcome of an mSPRT step."""
+    """Outcome of an mSPRT step.
+
+    ``direction`` is ``"better"`` or ``"worse"`` (the treatment relative to
+    control, by the metric's polarity) on a ``reject_h0``, and ``None`` on
+    ``accept_h0`` / ``continue``.
+    """
 
     decision: str
     log_likelihood_ratio: float
@@ -124,12 +145,25 @@ class MsprtVerdict:
     n_treatment: int
     mean_control: float
     mean_treatment: float
+    direction: str | None = None
 
     def __post_init__(self) -> None:
         if self.decision not in _VALID_DECISIONS:
             raise ValueError(
                 f"decision must be one of {sorted(_VALID_DECISIONS)}, "
                 f"got {self.decision!r}"
+            )
+        if self.direction is not None and self.direction not in _VALID_DIRECTIONS:
+            raise ValueError(
+                f"direction must be one of {sorted(_VALID_DIRECTIONS)} or None, "
+                f"got {self.direction!r}"
+            )
+        if self.decision == "reject_h0" and self.direction is None:
+            raise ValueError("a reject_h0 verdict must carry a direction (better / worse)")
+        if self.decision != "reject_h0" and self.direction is not None:
+            raise ValueError(
+                f"only a reject_h0 verdict has a direction; got {self.direction!r} "
+                f"with decision {self.decision!r}"
             )
 
 
@@ -157,17 +191,102 @@ def _validate_sample_list(samples: object, *, arm: str) -> list[float]:
     return out
 
 
+def _log_mean_exp(first: float, second: float) -> float:
+    """``log((exp(first) + exp(second)) / 2)`` without overflow (two-term logsumexp)."""
+    top = max(first, second)
+    return top + math.log1p(math.exp(-abs(first - second))) - math.log(2.0)
+
+
+def _direction(metric: str, diff: float) -> str:
+    """``better`` / ``worse`` for a treatment-minus-control difference, by polarity."""
+    treatment_higher = diff > 0.0
+    return "better" if treatment_higher == HIGHER_IS_BETTER[metric] else "worse"
+
+
+def _verdict_from_summary(
+    config: MsprtConfig,
+    *,
+    n_control: int,
+    n_treatment: int,
+    mean_control: float,
+    mean_treatment: float,
+    pooled_variance: float,
+) -> MsprtVerdict:
+    """Decide from per-arm summaries (``n >= 2`` per arm, ``pooled_variance > 0``).
+
+    The decision half of :func:`msprt_step`, split out so a peeking simulation
+    can drive exactly this code from running sums instead of re-reading every
+    row at every peek.
+    """
+    pooled_se = math.sqrt(pooled_variance * (1.0 / n_control + 1.0 / n_treatment))
+
+    # Standardised effect size (z-statistic of the difference of means).
+    diff = mean_treatment - mean_control
+    z = diff / pooled_se
+
+    # Two-sided SPRT (#1227). For a point alternative H1: delta = +d (d =
+    # effect_size, in standardised units mu_h1) Wald's log-likelihood ratio is
+    #
+    # log(LR+_n) = z * mu_h1 * sqrt(n_eff / (n_eff + 1))
+    #            - 0.5 * mu_h1**2 * n_eff / (n_eff + 1)
+    #
+    # and for H1: delta = -d the first term flips sign. With a known variance
+    # each LR is a martingale under H0 (E[LR_n] = 1), and so is their average,
+    # which is what makes the statistic below keep Wald's boundaries at every
+    # stopping time per the optional stopping theorem (here the variance is
+    # estimated; see limitation 3 in the module docstring).
+    #
+    # It must be the average of the RATIOS. The mean of the log-ratios is just
+    # -drift (it ignores the data), and |z| in the one-sided formula is the
+    # larger of the two log-ratios, which is not a martingale and inflates
+    # Type-I error under peeking.
+    #
+    # (Code-review CRITICAL fix v0.63.0: earlier draft used a malformed
+    # mixture-prior LLR with the wrong sign on the log term, which drove
+    # the LLR positive under H0 as n grew → unbounded Type-I error.)
+    n_eff = (n_control * n_treatment) / (n_control + n_treatment)
+    mu_h1 = config.effect_size / pooled_se  # in standardised units
+    n_ratio = n_eff / (n_eff + 1.0)
+    shift = z * mu_h1 * math.sqrt(n_ratio)
+    drift = 0.5 * mu_h1**2 * n_ratio
+    llr = _log_mean_exp(shift - drift, -shift - drift)
+
+    upper = math.log((1.0 - config.beta) / config.alpha)
+    lower = math.log(config.beta / (1.0 - config.alpha))
+
+    direction = None
+    if llr >= upper:
+        decision = "reject_h0"
+        direction = _direction(config.metric, diff)
+    elif llr <= lower:
+        decision = "accept_h0"
+    else:
+        decision = "continue"
+
+    return MsprtVerdict(
+        decision=decision,
+        log_likelihood_ratio=llr,
+        n_control=n_control,
+        n_treatment=n_treatment,
+        mean_control=mean_control,
+        mean_treatment=mean_treatment,
+        direction=direction,
+    )
+
+
 def msprt_step(
     config: MsprtConfig,
     *,
     control: Sequence[float],
     treatment: Sequence[float],
 ) -> MsprtVerdict:
-    """Run a single mSPRT decision step.
+    """Run a single two-sided mSPRT decision step.
 
     Returns ``MsprtVerdict`` with one of:
     - ``continue``: keep collecting samples
-    - ``reject_h0``: difference is real (treatment != control)
+    - ``reject_h0``: difference is real (treatment != control), in either
+      direction; ``direction`` says whether the treatment is ``better`` or
+      ``worse`` than control, by the metric's polarity
     - ``accept_h0``: difference is not significant
     """
     ctrl = _validate_sample_list(control, arm="control")
@@ -191,7 +310,6 @@ def msprt_step(
     var_c = sum((x - mean_c) ** 2 for x in ctrl) / (n_c - 1)
     var_t = sum((x - mean_t) ** 2 for x in treat) / (n_t - 1)
     raw_pooled_var = ((n_c - 1) * var_c + (n_t - 1) * var_t) / (n_c + n_t - 2)
-    diff = mean_t - mean_c
     # Degenerate (zero variance) — both arms are constant. If the means
     # are also identical, defer to ``continue`` (no information). If the
     # means differ, fall back to ``continue`` as well: with zero observed
@@ -208,48 +326,13 @@ def msprt_step(
             mean_control=mean_c,
             mean_treatment=mean_t,
         )
-    pooled_se = math.sqrt(raw_pooled_var * (1.0 / n_c + 1.0 / n_t))
-
-    # Standardised effect size (z-statistic of the difference of means).
-    diff = mean_t - mean_c
-    z = diff / pooled_se
-
-    # SPRT log-likelihood-ratio for the point alternative H1: delta = effect_size.
-    # In standardised units (z), this is Wald's classic SPRT — a martingale
-    # under H0 (E[exp(LLR_n)] = 1) so Type-I error is controlled at every
-    # stopping time per the optional stopping theorem.
-    #
-    # log(LR_n) = z * mu_h1 * sqrt(n_eff / (n_eff + 1))
-    #           - 0.5 * mu_h1**2 * n_eff / (n_eff + 1)
-    #
-    # (Code-review CRITICAL fix v0.63.0: earlier draft used a malformed
-    # mixture-prior LLR with the wrong sign on the log term, which drove
-    # the LLR positive under H0 as n grew → unbounded Type-I error.)
-    n_eff = (n_c * n_t) / (n_c + n_t)
-    mu_h1 = config.effect_size / pooled_se  # in standardised units
-    n_ratio = n_eff / (n_eff + 1.0)
-    llr = (
-        z * mu_h1 * math.sqrt(n_ratio)
-        - 0.5 * mu_h1**2 * n_ratio
-    )
-
-    upper = math.log((1.0 - config.beta) / config.alpha)
-    lower = math.log(config.beta / (1.0 - config.alpha))
-
-    if llr >= upper:
-        decision = "reject_h0"
-    elif llr <= lower:
-        decision = "accept_h0"
-    else:
-        decision = "continue"
-
-    return MsprtVerdict(
-        decision=decision,
-        log_likelihood_ratio=llr,
+    return _verdict_from_summary(
+        config,
         n_control=n_c,
         n_treatment=n_t,
         mean_control=mean_c,
         mean_treatment=mean_t,
+        pooled_variance=raw_pooled_var,
     )
 
 
@@ -305,6 +388,7 @@ def run_msprt(
 
 
 __all__ = [
+    "HIGHER_IS_BETTER",
     "MsprtConfig",
     "MsprtVerdict",
     "SUPPORTED_METRICS",

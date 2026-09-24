@@ -12,6 +12,7 @@ from rich.table import Table
 
 from soup_cli.commands._webhook_cli import emit_webhooks, validate_webhook_flags
 from soup_cli.utils.ab_test import (
+    HIGHER_IS_BETTER,
     MsprtConfig,
     run_msprt,
     validate_metric_name,
@@ -81,8 +82,12 @@ def ab(
         console.print(f"[red]{escape(str(exc))}[/]")
         raise typer.Exit(1) from exc
 
+    # The test is two-sided (#1227): a reject_h0 carries the direction, read
+    # through the metric's polarity, and only a worse treatment is a rollback.
+    worse = verdict.direction == "worse"
+    polarity = "higher is better" if HIGHER_IS_BETTER[canonical] else "lower is better"
     decision_colour = {
-        "reject_h0": "green",
+        "reject_h0": "red" if worse else "green",
         "accept_h0": "yellow",
         "continue": "cyan",
     }[verdict.decision]
@@ -91,6 +96,7 @@ def ab(
     table.add_column("Field")
     table.add_column("Value")
     table.add_row("decision", f"[bold]{verdict.decision}[/]")
+    table.add_row("direction", verdict.direction or "n/a")
     table.add_row("log_likelihood_ratio", f"{verdict.log_likelihood_ratio:.4f}")
     table.add_row("n_control", str(verdict.n_control))
     table.add_row("n_treatment", str(verdict.n_treatment))
@@ -98,11 +104,21 @@ def ab(
     table.add_row("mean_treatment", f"{verdict.mean_treatment:.4f}")
     console.print(table)
 
-    if verdict.decision == "reject_h0":
+    if verdict.decision == "reject_h0" and worse:
         console.print(
             Panel(
-                "[green]Significant difference detected. Promote / rollback "
-                "via `soup loop canary` (v0.58).[/]",
+                "[red]Significant difference detected: the treatment is worse than "
+                f"control on {escape(canonical)} ({polarity}). Recommend rollback: "
+                "keep serving the control.[/]",
+                border_style="red",
+            )
+        )
+    elif verdict.decision == "reject_h0":
+        console.print(
+            Panel(
+                "[green]Significant difference detected: the treatment is better than "
+                f"control on {escape(canonical)} ({polarity}). Promote via "
+                "`soup loop canary` (v0.58).[/]",
                 border_style="green",
             )
         )
@@ -132,6 +148,7 @@ def ab(
                 "command": "ab",
                 "metric": canonical,
                 "decision": verdict.decision,
+                "direction": verdict.direction,
                 "log_likelihood_ratio": verdict.log_likelihood_ratio,
                 "n_control": verdict.n_control,
                 "n_treatment": verdict.n_treatment,
