@@ -7,7 +7,7 @@ import ntpath
 import os
 import random
 from pathlib import Path
-from typing import Optional
+from typing import NoReturn, Optional
 
 import typer
 from rich.console import Console
@@ -19,6 +19,7 @@ from soup_cli.utils.embed import DEFAULT_EMBED_MODEL, embed_texts
 from soup_cli.utils.exit_codes import EXIT_GATE_FAILED, EXIT_USAGE_ERROR, GateCommand
 from soup_cli.utils.paths import is_under_cwd
 from soup_cli.utils.semdedup import DedupReport, greedy_semdedup
+from soup_cli.utils.terminal import for_terminal
 
 console = Console()
 
@@ -2357,22 +2358,24 @@ def _cache_key_dataset_path(cfg) -> str:
     return preprocess_dataset_key_input(cfg.data)
 
 
-def _refuse_row(idx: int, row, reason: str) -> None:
+def _refuse_row(idx: int, row, reason: str) -> NoReturn:
     """Stop ``soup data preprocess`` on a chat row it cannot tokenize (#1180).
 
-    Names the row by its index in the train split and the start of its first
-    message, since the index alone matches the file only for a single local file.
+    Numbers the row from 1, as the live SFT path does (``trainer/sft.py``), among
+    the rows that survived loading, and quotes the start of its first message so
+    it can be found even where that number is not the file's line. Every part of
+    the message comes from the dataset, so it goes through ``for_terminal``: a
+    role holding ``\\x1b[2J`` would otherwise clear the user's screen.
     """
-    from rich.markup import escape
-
     preview = ""
     messages = row.get("messages") if isinstance(row, dict) else None
     if isinstance(messages, list) and messages and isinstance(messages[0], dict):
         first = messages[0]
-        preview = f"{first.get('role')}: {str(first.get('content', ''))[:60]!r}"
+        role = str(first.get("role"))[:30]
+        preview = f"{role!r}: {str(first.get('content', ''))[:60]!r}"
     console.print(
-        f"[red]Train row {idx} cannot be tokenized:[/] {escape(reason)}"
-        + (f"\n  first message: {escape(preview)}" if preview else "")
+        f"[red]Train row {idx + 1} cannot be tokenized:[/] {for_terminal(reason)}"
+        + (f"\n  first message: {for_terminal(preview)}" if preview else "")
     )
     console.print(
         "Nothing was written. Fix or remove the row and re-run; the cache must hold "
@@ -2499,6 +2502,16 @@ def preprocess_dataset(
 
         bos_added_by_post_processor = post_processor_leading_bos_count(tokenizer)
 
+    if not is_pretrain and not getattr(tokenizer, "chat_template", None):
+        # #1180 review: a whole-dataset problem, reported once rather than blamed
+        # on the first row -- removing a row cannot fix it.
+        console.print(
+            f"[red]The tokenizer for {for_terminal(cfg.base)} has no chat_template,[/] "
+            "so no chat row can be rendered. Set data.chat_template, or use a base "
+            "whose tokenizer ships one. Nothing was written."
+        )
+        raise typer.Exit(1)
+
     rendered_rows: list[dict] = []
     for idx, row in enumerate(raw_rows):
         if idx >= max_preprocess_rows:
@@ -2520,8 +2533,6 @@ def preprocess_dataset(
             # live training path stops on it. Skipping it wrote a smaller dataset
             # than the one configured, exited 0, and the cached run trained on it.
             messages = row.get("messages") if isinstance(row, dict) else None
-            if not getattr(tokenizer, "chat_template", None):
-                _refuse_row(idx, row, f"the tokenizer for {cfg.base} has no chat_template")
             if not messages:
                 _refuse_row(idx, row, "it has no messages")
             try:
