@@ -318,6 +318,7 @@ def open_no_follow(
     mode: int = 0o600,
     *,
     check_parent: bool = False,
+    refuse_hardlink: bool = False,
 ) -> int:
     """Open ``path`` refusing to follow symlinks across all platforms (#820).
 
@@ -328,8 +329,8 @@ def open_no_follow(
     a TOCTOU swap.
 
     When ``check_parent`` is True (#1158), inspects parent directory components
-    for symlinks and reparse points. Rejects hardlinked regular files
-    (``st_nlink > 1``).
+    for symlinks and reparse points. When ``refuse_hardlink`` is True (#1158),
+    rejects hardlinked regular files (``st_nlink > 1``) with :data:`errno.EMLINK`.
 
     Raises :exc:`OSError` with :data:`errno.ELOOP` if ``path`` is a symlink or
     reparse point, or :data:`errno.EMLINK` if hardlinked.
@@ -357,10 +358,7 @@ def open_no_follow(
                 raise OSError(errno.ELOOP, f"Reparse point not allowed: {p!r}")
 
     if check_parent:
-        try:
-            under_cwd = is_under_cwd(p)
-        except Exception:
-            under_cwd = False
+        under_cwd = is_under_cwd(p)
 
         curr = os.path.dirname(os.path.abspath(p))
         while curr and curr != os.path.dirname(curr):
@@ -388,7 +386,11 @@ def open_no_follow(
     fd = os.open(p, open_flags, mode)
     try:
         post_fst = os.fstat(fd)
-        if stat.S_ISREG(post_fst.st_mode) and getattr(post_fst, "st_nlink", 1) > 1:
+        if (
+            refuse_hardlink
+            and stat.S_ISREG(post_fst.st_mode)
+            and post_fst.st_nlink > 1
+        ):
             raise OSError(errno.EMLINK, f"Hard link not allowed: {p!r}")
         if os.name == "nt":
             if pre_st is not None:

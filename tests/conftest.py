@@ -65,12 +65,33 @@ def can_symlink() -> bool:
     return True
 
 
+#: Why a ``requires_hardlink`` test was skipped (#1158).
+HARDLINK_SKIP_REASON = "this filesystem does not support hard links"
+
+
+@functools.lru_cache(maxsize=None)
+def can_hardlink() -> bool:
+    """Whether this filesystem/account supports creating hard links (#1158).
+
+    Probed once per session.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        target = os.path.join(tmp, "target")
+        with open(target, "w", encoding="utf-8"):
+            pass
+        try:
+            os.link(target, os.path.join(tmp, "link"))
+        except (OSError, NotImplementedError, AttributeError):
+            return False
+    return True
+
+
 def pytest_runtest_setup(item: pytest.Item) -> None:
-    """The one collection hook. Both capability markers go through here.
+    """The one collection hook. All capability markers go through here (#832, #833, #1158).
 
     pytest calls a plugin hook once per definition, and a module can only hold one
     ``pytest_runtest_setup`` -- a second ``def`` silently replaces the first, taking its
-    marker with it. Keeping the two checks in one function is what makes that impossible
+    marker with it. Keeping the checks in one function is what makes that impossible
     rather than merely unlikely, so add the next capability marker here too.
     """
     gpu = item.get_closest_marker("gpu")
@@ -80,6 +101,9 @@ def pytest_runtest_setup(item: pytest.Item) -> None:
 
     if item.get_closest_marker("requires_symlink") is not None and not can_symlink():
         pytest.skip(SYMLINK_SKIP_REASON)
+
+    if item.get_closest_marker("requires_hardlink") is not None and not can_hardlink():
+        pytest.skip(HARDLINK_SKIP_REASON)
 
 
 @pytest.fixture(autouse=True)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
 import logging
@@ -308,19 +309,32 @@ class ExecutionManager:
             )
             try:
                 # open_no_follow (#820, #1138, #1158): refuses a file symlink at
-                # the log path, a directory symlink in its parent hierarchy, or
-                # a pre-planted hardlink, so the child's output cannot be redirected
-                # outside .soup/mcp-runs/. Mode 0o666 keeps plain open()'s permissions
-                # (umask still applies); the OSError on refusal maps to ExecutionError.
-                log_handle = os.fdopen(
-                    open_no_follow(
+                # the log path, a directory symlink or junction in its parent
+                # hierarchy, or a pre-planted hardlink (refuse_hardlink=True).
+                # Note: this check closes uncoordinated redirection; a residual
+                # TOCTOU window remains between the parent walk and os.open if an
+                # attacker has concurrent write access inside .soup. Mode 0o666
+                # keeps plain open()'s permissions (umask still applies).
+                try:
+                    log_fd = open_no_follow(
                         log_path,
                         os.O_WRONLY | os.O_CREAT | os.O_APPEND,
                         0o666,
                         check_parent=True,
-                    ),
-                    "ab",
-                )
+                        refuse_hardlink=True,
+                    )
+                    log_handle = os.fdopen(log_fd, "ab")
+                except OSError as exc:
+                    if exc.errno == errno.ELOOP:
+                        raise ExecutionError(
+                            "cannot execute: run log directory or file is a "
+                            "symbolic link or junction"
+                        ) from exc
+                    if exc.errno == errno.EMLINK:
+                        raise ExecutionError(
+                            "cannot execute: run log path is a hard link"
+                        ) from exc
+                    raise
                 process = subprocess.Popen(  # noqa: S603 - internal argv, no shell
                     list(plan.argv),
                     cwd=plan.cwd,
@@ -451,7 +465,43 @@ class ExecutionManager:
         for token in expired:
             del self._plans[token]
 
+    def _verify_log_dir_not_linked(self, root: Path) -> None:
+        """Inspect directory hierarchy from cwd to root before mkdir (#1158).
+
+        Ensures no component is a symlink or junction, preventing creation of an
+        empty directory at the link target.
+        """
+        curr = root
+        cwd_resolved = Path(self.cwd).resolve()
+        chain = []
+        while curr != curr.parent:
+            chain.append(curr)
+            try:
+                if curr.resolve() == cwd_resolved or curr.samefile(self.cwd):
+                    break
+            except OSError:
+                pass
+            curr = curr.parent
+
+        for p in reversed(chain):
+            p_str = str(p)
+            if os.path.lexists(p_str):
+                st = os.lstat(p_str)
+                if stat.S_ISLNK(st.st_mode):
+                    raise ExecutionError(
+                        "cannot execute: run log directory or parent is a "
+                        "symbolic link or junction"
+                    )
+                if os.name == "nt":
+                    reparse = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+                    if getattr(st, "st_file_attributes", 0) & reparse:
+                        raise ExecutionError(
+                            "cannot execute: run log directory or parent is a "
+                            "symbolic link or junction"
+                        )
+
     def _log_path(self, run_id: str) -> str:
         root = Path(self.cwd) / ".soup" / "mcp-runs"
+        self._verify_log_dir_not_linked(root)
         root.mkdir(parents=True, exist_ok=True)
         return str(root / f"{run_id}.log")
