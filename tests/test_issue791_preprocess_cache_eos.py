@@ -340,7 +340,8 @@ class TestCacheKey:
             return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:16]
 
         current = make_preprocess_cache_key(**args)
-        assert current == _blob_key("v4", chat_template=""), "current schema is v4 (#1067)"
+        assert current == _blob_key("v5", chat_template=""), "current schema is v5 (#876)"
         assert current != _blob_key("v2"), "a v2 (#785) cache must be rejected"
         assert current != _blob_key(""), "a pre-schema cache must be rejected"
         assert current != _blob_key("v3"), "a v3 cache must be rejected too (#1067)"
+        assert current != _blob_key("v4", chat_template=""), "a v4 (#1067) cache must be rejected"
