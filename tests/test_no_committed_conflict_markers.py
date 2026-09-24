@@ -23,6 +23,9 @@ the *same file* also contains a ``<<<<<<<`` or ``>>>>>>>`` line — i.e. when it
 part of an actual conflict block, which is exactly how Git emits them. The two
 angle-bracket markers are unambiguous and always reported.
 
+Diff3/zdiff3 conflict blocks also contain a ``||||||| base`` ancestor marker,
+which is detected alongside the standard Git conflict markers.
+
 Binary files are detected by attempting a strict UTF-8 decode; a file that fails
 is treated as binary and skipped rather than crashing the scan.
 """
@@ -39,10 +42,12 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 
 #: Conflict-marker forms Git writes, anchored at column 0. The angle-bracket
 #: markers carry a trailing space then a branch/sha label; the divider is seven
-#: equals signs to end of line.
+#: equals signs to end of line. Diff3 adds seven pipe characters for the
+#: common ancestor marker.
 _START = re.compile(r"^<{7}(?: .*)?$", re.M)
 _END = re.compile(r"^>{7}(?: .*)?$", re.M)
 _DIVIDER = re.compile(r"^={7}$", re.M)
+_DIFF3_BASE = re.compile(r"^\|{7}(?: .*)?$", re.M)
 
 
 def _tracked_files() -> list[Path]:
@@ -74,19 +79,27 @@ def _read_text(path: Path) -> str | None:
 def find_conflict_markers(text: str) -> list[tuple[int, str]]:
     """Return ``(lineno, marker_kind)`` for each conflict-marker line.
 
-    ``marker_kind`` is one of ``"<<<<<<<"``, ``">>>>>>>"``, ``"======="``.
+    ``marker_kind`` is one of ``"<<<<<<<"``, ``"|||||||"``,
+    ``"======="``, ``">>>>>>>``.
+
     A standalone ``=======`` with no companion angle-bracket marker in the same
     text is NOT returned — that is the setext-heading / ReST case the guard must
     tolerate.
     """
     starts = [m.start() for m in _START.finditer(text)]
+    bases = [m.start() for m in _DIFF3_BASE.finditer(text)]
     ends = [m.start() for m in _END.finditer(text)]
     has_block_context = bool(starts or ends)
+
     found: list[tuple[int, str]] = []
 
     for offset in starts:
         lineno = text.count("\n", 0, offset) + 1
         found.append((lineno, "<<<<<<<"))
+
+    for offset in bases:
+        lineno = text.count("\n", 0, offset) + 1
+        found.append((lineno, "|||||||"))
 
     for offset in ends:
         lineno = text.count("\n", 0, offset) + 1
@@ -103,17 +116,13 @@ def find_conflict_markers(text: str) -> list[tuple[int, str]]:
 
 def _scan_repo() -> list[str]:
     problems: list[str] = []
-
     for path in _tracked_files():
         text = _read_text(path)
         if text is None:
             continue
-
         rel = path.relative_to(REPO_ROOT).as_posix()
-
         for lineno, kind in find_conflict_markers(text):
             problems.append(f"{rel}:{lineno}: stray conflict marker {kind}")
-
     return problems
 
 
@@ -138,16 +147,30 @@ class TestNoCommittedConflictMarkers:
             "(see #1125):\n  " + "\n  ".join(problems)
         )
 
-    def test_the_scan_actually_covers_the_suite(self):
-        """A scan that silently stopped reading files would pass vacuously."""
-        tracked = _tracked_files()
-        scanned = [path for path in tracked if _read_text(path) is not None]
+    def test_the_scan_actually_covers_the_regression_docs_file(
+        self, monkeypatch
+    ):
+        """The repo scan must actually read the regression docs file."""
+        target = REPO_ROOT / "docs" / "performance-and-quantization.md"
+        original_read_text = _read_text
 
-        assert tracked
-        assert scanned
-        assert (
-            REPO_ROOT / "docs/performance-and-quantization.md"
-        ) in scanned
+        def fake_read_text(path):
+            text = original_read_text(path)
+            if path == target and text is not None:
+                return "<<<<<<< injected\n" + text
+            return text
+
+        monkeypatch.setattr(
+            "tests.test_no_committed_conflict_markers._read_text",
+            fake_read_text,
+        )
+
+        problems = _scan_repo()
+
+        assert any(
+            problem.startswith("docs/performance-and-quantization.md:")
+            for problem in problems
+        )
 
 
 class TestTheScannerCanActuallyFail:
@@ -157,6 +180,19 @@ class TestTheScannerCanActuallyFail:
         text = "# header\n<<<<<<< HEAD\nours\n"
         found = find_conflict_markers(text)
         assert (2, "<<<<<<<") in found, found
+
+    def test_it_catches_a_diff3_base_marker(self):
+        text = (
+            "<<<<<<< HEAD\n"
+            "ours\n"
+            "||||||| base\n"
+            "base\n"
+            "=======\n"
+            "theirs\n"
+            ">>>>>>> topic\n"
+        )
+        found = find_conflict_markers(text)
+        assert (3, "|||||||") in found, found
 
     def test_it_catches_an_end_marker(self):
         text = "# header\ntheir\n>>>>>>> abc1234\n"
@@ -175,9 +211,11 @@ class TestTheScannerCanActuallyFail:
         )
 
         text = _read_text(target)
+
         assert text is not None
 
         found = find_conflict_markers(text)
+
         assert found == [
             (2, "<<<<<<<"),
             (4, "======="),
@@ -204,6 +242,7 @@ class TestTheScannerCanActuallyFail:
             for line, kind in find_conflict_markers(theirs)
             if kind == "======="
         ]
+
         assert divider_lines == [2], theirs
 
     def test_reported_line_numbers_are_one_indexed_and_correct(self):
@@ -235,12 +274,14 @@ class TestFailureNamesFileAndLine:
         )
 
         rel = "doc.md"
+
         problems = [
             f"{rel}:{lineno}: stray conflict marker {kind}"
             for lineno, kind in find_conflict_markers(
                 offender.read_text(encoding="utf-8")
             )
         ]
+
         joined = "\n".join(problems)
 
         assert "doc.md:" in joined
