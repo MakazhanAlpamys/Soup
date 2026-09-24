@@ -658,6 +658,23 @@ class TestSoupTrainReachesTheStop:
         assert "QAT error" not in out and "Note:" not in out
 
 
+class TestARealRunGetsThroughThePreflight:
+    """#1154 review, round 4: 320e8c20 turned the only real-run pass-through control
+    into a dry run (a CodeRabbit suggestion), so a pre-flight that refused FP8 on a
+    real run with a working card and torchao -- or exited 1 silently -- stayed
+    green. The dry-run control stays; this real-run one sits next to it. The base
+    does not exist, so reaching model setup proves the pre-flight let the run go."""
+
+    def test_a_real_fp8_run_with_card_and_torchao_gets_past_the_preflight(
+        self, tmp_path, monkeypatch
+    ):
+        _result, out = TestSoupTrainReachesTheStop()._train(
+            tmp_path, monkeypatch, quantization_aware="fp8", card_ok=True, torchao=True
+        )
+        assert "QAT error" not in out
+        assert "Setting up model + trainer" in out
+
+
 class TestTheRecipeReachesTheGate:
     """#1154 review, round 2: every stub above ignored its ``recipe`` argument, so
     dropping ``fp8_recipe=`` at the call site left the suite green -- and then
