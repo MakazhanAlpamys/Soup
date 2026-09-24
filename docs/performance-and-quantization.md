@@ -163,9 +163,10 @@ measured a 0.086344 nat/target gap to fixed FP, with a paired 95% interval of
 
 The implementation keeps FP32 masters. The Hadamard and fake-quant grid arithmetic
 run under the trainer's CUDA autocast: BF16 by default on the Ampere-or-newer GPUs
-this route requires, though `training.auto_mixed_precision` can select FP16.
-Activation calibration always runs under BF16. Treat this as a reproducible
-research path, not as a cheaper deployment format.
+this route requires. `training.auto_mixed_precision: true` is refused for QuEST
+because it can select FP16, which the #674 gate did not measure. Activation
+calibration always runs under BF16. Treat this as a reproducible research path,
+not as a cheaper deployment format.
 
 
 ## FP8 Training (Ada+)
