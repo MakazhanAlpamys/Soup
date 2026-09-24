@@ -6780,6 +6780,12 @@ class SoupConfig(BaseModel):
           by default; the adapter exists only when the flag is on and
           ``lora.r > 0``.
 
+        - ``lora.use_vera`` on any task: VeRA trains the ``vera_lambda_b`` /
+          ``vera_lambda_d`` scaling vectors, not LoRA A/B matrices. peft's
+          ``create_loraplus_optimizer`` puts all of them in the ``lr * ratio``
+          groups and leaves group A empty, so every trainable tensor would run
+          at ``ratio`` times the learning rate.
+
         ``unlearn`` is refused in :meth:`_validate_unlearn_compat` for a
         different reason (it has an adapter but no ``Trainer`` optimizer).
         """
@@ -6787,7 +6793,14 @@ class SoupConfig(BaseModel):
         if tcfg.loraplus_lr_ratio is None:
             return self
         task = self.task
-        if task == "prm":
+        if getattr(tcfg.lora, "use_vera", False):
+            reason = (
+                "lora.use_vera trains VeRA scaling vectors, not LoRA A/B "
+                "matrices, and peft's LoRA+ optimizer would put every one of "
+                "them in the lr * ratio groups, so the whole adapter would "
+                "train at ratio times the learning rate."
+            )
+        elif task == "prm":
             reason = (
                 "task='prm' is a full fine-tune with no LoRA adapter, so there "
                 "are no LoRA B matrices to give the higher learning rate."

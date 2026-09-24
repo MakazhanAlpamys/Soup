@@ -523,3 +523,47 @@ class TestLoraPlusRefusedWhereNoLoraBTrains:
         """The trainers apply LoRA only for the flag AND lora.r > 0."""
         with pytest.raises(ValueError, match="loraplus_lr_ratio needs a trainable LoRA"):
             self._config(task, loraplus_lr_ratio=16.0, lora={"r": 0}, **{flag: True})
+
+
+class TestLoraPlusRefusedWithVera:
+    """#745: VeRA trains ``vera_lambda_b`` / ``vera_lambda_d`` scaling vectors,
+    not LoRA A/B matrices. peft's ``create_loraplus_optimizer`` puts every one
+    of them in the ``lr * ratio`` groups and leaves group A empty, so the whole
+    adapter would train at ``ratio`` times the learning rate. Refuse it at
+    parse, as ``use_lorafa`` already refuses VeRA."""
+
+    _TASKS = [
+        "sft", "pretrain", "dpo", "kto", "orpo", "simpo", "ipo", "bco",
+        "grpo", "ppo", "reward_model", "online_dpo",
+    ]
+    # What each task needs to parse at all, so the refusal tested is the ratio's.
+    _EXTRA = {"online_dpo": {"reward_model": "hf-internal-testing/tiny-random-gpt2"}}
+
+    def _config(self, task, *, use_vera, **training):
+        from soup_cli.config.schema import SoupConfig
+
+        return SoupConfig(
+            base="hf-internal-testing/tiny-random-gpt2",
+            task=task,
+            data={"train": "t.jsonl"},
+            training={
+                "lora": {"use_vera": use_vera},
+                **self._EXTRA.get(task, {}),
+                **training,
+            },
+        )
+
+    @pytest.mark.parametrize("task", _TASKS)
+    def test_loraplus_with_vera_is_refused_at_parse(self, task):
+        with pytest.raises(ValueError, match="use_vera"):
+            self._config(task, use_vera=True, loraplus_lr_ratio=16.0)
+
+    @pytest.mark.parametrize("task", _TASKS)
+    def test_vera_without_loraplus_parses(self, task):
+        """Control: VeRA alone is valid, so the refusal is the ratio's."""
+        self._config(task, use_vera=True)
+
+    @pytest.mark.parametrize("task", _TASKS)
+    def test_loraplus_without_vera_parses(self, task):
+        """Control: the ratio alone is valid on these tasks."""
+        self._config(task, use_vera=False, loraplus_lr_ratio=16.0)
