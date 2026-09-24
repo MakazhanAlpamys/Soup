@@ -1193,8 +1193,16 @@ soup train --config soup.yaml
 ```
 
 **Built-in reward functions:**
-- `accuracy` — checks if the final answer matches expected (supports `####` and `\boxed{}` formats)
+- `accuracy` — 1.0 when the completion's final answer matches the gold's, else 0.0 (no partial credit)
 - `format` — checks for structured `<think>...</think>` reasoning blocks
+
+`accuracy` and verifiable `math` read the completion and the gold with the same parser. The final
+answer is what follows the last `####`, the content of the last `\boxed{}` (a space before the
+brace and nested braces such as `\boxed{\frac{1}{2}}` are fine), or what follows `The answer is` /
+`Answer:`. A completion with none of these is read by its last line and its last number. A numeric
+gold is compared by value, so `#### 1,000`, `\boxed{1000}` and `The answer is $1000.` all match a
+gold of `1000`; any other gold is compared as case-insensitive text. `$`, trailing punctuation and
+LaTeX thousands separators such as `1{,}000` are ignored; units and `\text{}` are not stripped.
 
 For GRPO, Soup preserves source dataset columns and TRL passes them to reward functions as
 keyword arguments. An Alpaca `output` or the final assistant turn in ShareGPT/ChatML is also
@@ -1203,9 +1211,14 @@ validate their inputs before generation:
 
 | Reward | Required source metadata |
 |---|---|
-| `accuracy` or verifiable `math` | `answer`, or an assistant reference response |
+| `accuracy` or verifiable `math` | `answer`, or an assistant reference response, that states a final answer |
 | verifiable `code` | `expected` or `answer` |
 | verifiable `json_schema` | `schema` |
+
+A gold states its final answer with `####`, `\boxed{}` or `The answer is`, or by being the bare
+answer on one line (`42`, `Paris`); `math` also needs that answer to be a number. A row whose gold
+does not is refused before generation with its split, row number and field, because a gold the
+reward cannot read would score every completion 0.0 and give GRPO no signal.
 
 **Custom reward functions** — point to a Python file:
 ```python

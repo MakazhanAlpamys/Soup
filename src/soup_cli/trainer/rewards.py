@@ -31,6 +31,8 @@ from typing import Any
 from rich.console import Console
 from rich.panel import Panel
 
+from soup_cli.utils import final_answer
+
 console = Console()
 
 MAX_CODE_OUTPUT_BYTES = 10_000
@@ -202,10 +204,14 @@ def _show_code_exec_warning_once() -> None:
 
 
 def accuracy_reward(completions: list[list[dict]], **kwargs) -> list[float]:
-    """Reward based on whether the final answer matches the expected answer.
+    """Reward 1.0 when the completion's final answer matches the gold's, else 0.0.
 
-    Looks for the answer after the last '####' or in a \\boxed{} block.
-    Falls back to checking if the expected answer appears anywhere in the response.
+    The completion and the gold are read by the same parser,
+    :mod:`soup_cli.utils.final_answer`: the answer after the last '####', in the last
+    \\boxed{}, or after 'answer is' / 'answer:'; an unmarked completion by its last line and
+    its last number. A numeric gold is compared by value ('42' equals '#### 42.0'), any other
+    gold as case-insensitive text. There is no partial credit (#1226): the old 0.5 for "the
+    gold appears somewhere in the completion" paid '#### 420' for a gold of 42.
 
     Args:
         completions: list of message lists, each containing a completion with 'content'.
@@ -218,17 +224,12 @@ def accuracy_reward(completions: list[list[dict]], **kwargs) -> list[float]:
     rewards = []
     for completion, expected in zip(completions, answers):
         content = completion[-1]["content"] if completion else ""
-        expected_text = "" if expected is None else str(expected).strip()
-        if not expected_text:
+        reference = None if expected is None else final_answer.parse_reference(str(expected))
+        if reference is None:
             rewards.append(0.0)
             continue
-        predicted = _extract_answer(content)
-        if predicted is not None and predicted.strip() == expected_text:
-            rewards.append(1.0)
-        elif expected_text.lower() in content.lower():
-            rewards.append(0.5)
-        else:
-            rewards.append(0.0)
+        predicted = final_answer.parse_completion(content)
+        rewards.append(1.0 if final_answer.answers_match(predicted, reference) else 0.0)
     return rewards
 
 
@@ -262,46 +263,14 @@ def format_reward(completions: list[list[dict]], **kwargs) -> list[float]:
 
 
 def _extract_answer(text: str) -> str | None:
-    """Extract the final answer from model output.
+    """Return the final answer ``text`` states explicitly ('####', \\boxed{}, 'answer is').
 
-    Supports:
-      - #### <answer> format (GSM8K style)
-      - \\boxed{<answer>} format (math style)
+    Kept as a thin alias: the parser lives in :mod:`soup_cli.utils.final_answer` (#1226).
     """
-    # Try #### format
-    parts = text.split("####")
-    if len(parts) > 1:
-        return parts[-1].strip()
-    # Try \\boxed{} format
-    match = re.search(r"\\boxed\{([^}]+)\}", text)
-    if match:
-        return match.group(1).strip()
-    return None
+    return final_answer.extract_final_answer(text)
 
 
 # --- RLVR: verifiable rewards (Part C of v0.25.0) ---
-
-_MATH_NUM_RE = re.compile(r"-?\d+(?:\.\d+)?")
-
-
-def _extract_numeric_answer(text: str) -> "float | None":
-    """Extract a numeric answer using safe regex (never calls eval())."""
-    answer_str = _extract_answer(text)
-    if answer_str is None:
-        # Fallback: find the last number in text
-        nums = _MATH_NUM_RE.findall(text)
-        if not nums:
-            return None
-        answer_str = nums[-1]
-
-    # Accept only simple numeric literals — reject anything else
-    match = _MATH_NUM_RE.fullmatch(answer_str.strip())
-    if match is None:
-        return None
-    try:
-        return float(match.group(0))
-    except (ValueError, TypeError):
-        return None
 
 
 def math_verify_reward(
@@ -309,28 +278,32 @@ def math_verify_reward(
     tolerance: float = 1e-4,
     **kwargs,
 ) -> list[float]:
-    """RLVR math reward: compare extracted numeric answer to expected.
+    """RLVR math reward: compare the completion's numeric final answer with the gold's.
 
-    Security: never uses ``eval()``. Only numeric literals that match a strict
-    regex are accepted. Non-numeric answers score 0.0.
+    Both sides are read by :mod:`soup_cli.utils.final_answer`, so a GSM8K-shaped gold such as
+    '6*7=42\\n#### 42' is the number 42 (#1226). Security: never uses ``eval()``; only plain
+    numeric literals are accepted, and a non-numeric answer scores 0.0.
     """
     answers = kwargs.get("answer", [])
     rewards: list[float] = []
     for completion, expected in zip(completions, answers):
         content = completion[-1]["content"] if completion else ""
-        predicted = _extract_numeric_answer(content)
+        reference = None if expected is None else final_answer.parse_reference(str(expected))
+        parsed = final_answer.parse_completion(content)
+        gold = None if reference is None else reference.number
+        predicted = None if parsed is None else parsed.number
+        if predicted is None or gold is None:
+            rewards.append(0.0)
+            continue
         try:
-            expected_num = float(str(expected).strip())
-        except (ValueError, TypeError):
-            expected_num = None
-
-        if predicted is None or expected_num is None:
+            error = float(abs(predicted - gold))
+        except ArithmeticError:  # an exponent beyond Decimal's range cannot be compared
             rewards.append(0.0)
             continue
 
-        if abs(predicted - expected_num) <= tolerance:
+        if error <= tolerance:
             rewards.append(1.0)
-        elif abs(predicted - expected_num) <= max(tolerance * 100, 1e-2):
+        elif error <= max(tolerance * 100, 1e-2):
             rewards.append(0.6)
         else:
             rewards.append(0.0)

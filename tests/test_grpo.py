@@ -140,12 +140,14 @@ class TestAccuracyReward:
         rewards = accuracy_reward(completions, answer=["42"])
         assert rewards == [1.0]
 
-    def test_partial_match(self):
+    def test_answer_with_a_unit_scores_full_credit(self):
+        # #1226: there is no 0.5 substring credit any more. "42 degrees" is not a bare
+        # number, so the completion is read as free text, whose final number is 42.
         from soup_cli.trainer.rewards import accuracy_reward
 
         completions = [[{"role": "assistant", "content": "The answer is 42 degrees"}]]
         rewards = accuracy_reward(completions, answer=["42"])
-        assert rewards == [0.5]
+        assert rewards == [1.0]
 
     def test_no_match(self):
         from soup_cli.trainer.rewards import accuracy_reward
@@ -163,7 +165,8 @@ class TestAccuracyReward:
             [{"role": "assistant", "content": "The answer is 42"}],
         ]
         rewards = accuracy_reward(completions, answer=["42", "42", "42"])
-        assert rewards == [1.0, 0.0, 0.5]
+        # #1226: "The answer is 42" is an explicit answer now, not a 0.5 substring hit.
+        assert rewards == [1.0, 0.0, 1.0]
 
     def test_empty_completion(self):
         from soup_cli.trainer.rewards import accuracy_reward

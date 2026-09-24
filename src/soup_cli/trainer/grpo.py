@@ -13,6 +13,7 @@ from rich.console import Console
 from soup_cli.config.schema import SoupConfig, TrainingConfig
 from soup_cli.data.chat_templates import apply_chat_template_override
 from soup_cli.trainer.loss_summary import summarize_training_loss
+from soup_cli.utils import final_answer
 from soup_cli.utils.gpu import (
     bf16_fp16_flags,
     estimate_batch_size,
@@ -827,6 +828,11 @@ def _copy_grpo_metadata(row: dict, entry: dict) -> None:
             entry[key] = value
 
 
+# Rewards that compare a completion's final answer with the gold's (#1226). A gold they cannot
+# read would score every completion 0.0, so the group advantage would be zero with no warning.
+_GOLD_PARSING_REWARDS = frozenset({"accuracy", "verifiable/math"})
+
+
 def _validate_grpo_reward_metadata(
     data: list[dict],
     tcfg: TrainingConfig,
@@ -853,6 +859,10 @@ def _validate_grpo_reward_metadata(
     for row_index, row in enumerate(data):
         for reward_name, alternatives in requirements:
             if any(_has_grpo_reward_metadata(row.get(field)) for field in alternatives):
+                if reward_name in _GOLD_PARSING_REWARDS:
+                    _require_readable_gold(
+                        row["answer"], reward_name, split=split, row_index=row_index
+                    )
                 continue
             fields = " or ".join(repr(field) for field in alternatives)
             raise ValueError(
@@ -861,6 +871,24 @@ def _validate_grpo_reward_metadata(
                 "dataset or include an assistant response that Soup can use as "
                 "'answer'."
             )
+
+
+def _require_readable_gold(
+    value: object, reward_name: str, *, split: str, row_index: int
+) -> None:
+    """Refuse a gold the reward's parser cannot read, naming the row and the field."""
+    reference = final_answer.parse_reference(str(value))
+    numeric = reward_name == "verifiable/math"
+    if reference is not None and (reference.number is not None or not numeric):
+        return
+    stated = "a numeric final answer" if numeric else "a final answer"
+    bare = "a bare number such as 42" if numeric else "a bare one-line answer"
+    raise ValueError(
+        f"GRPO {split} row {row_index} 'answer' does not state {stated} that reward "
+        f"{reward_name!r} can compare against, so every completion would score 0.0. "
+        "Put the answer after '####', inside \\boxed{}, or after 'The answer is', or make "
+        f"the field {bare}."
+    )
 
 
 def _has_grpo_reward_metadata(value: object) -> bool:

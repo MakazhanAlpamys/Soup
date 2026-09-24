@@ -2,7 +2,7 @@
 
 Generates deterministic short-document + question rows whose answer is a span
 present in the document, as GRPO prompt+answer rows. Score with
-``reward_fn='accuracy'`` (the answer span appears in the model's completion).
+``reward_fn='accuracy'`` (the completion states the span, as the prompt asks).
 
 Usage: ``training.rollout_backend='openenv'`` +
 ``training.rollout_func='soup_cli.envs.retrieval_qa:rollout'``.
