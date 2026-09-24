@@ -39,6 +39,8 @@ import importlib
 import inspect
 from typing import Any
 
+DEFAULT_PROMPT_TRUNCATION_MODE = "keep_start"
+
 
 def _installed_trl_version() -> str:
     """Best-effort version string, for error messages only."""
@@ -145,6 +147,38 @@ def _truncate_tokens(tokens: list[int], limit: int, mode: str) -> list[int]:
     return tokens[:limit]
 
 
+def _cap_combined_preference_sequence(
+    row: dict[str, Any],
+    prefix: str,
+    *,
+    max_length: int,
+    max_prompt_length: int,
+    truncation_mode: str,
+) -> dict[str, list[int]]:
+    input_ids = list(row[f"{prefix}_input_ids"])
+    attention_mask = list(row[f"{prefix}_attention_mask"])
+    labels = list(row[f"{prefix}_labels"])
+    prompt_size = next(
+        (index for index, label in enumerate(labels) if label != -100),
+        len(labels),
+    )
+    prompt_ids = _truncate_tokens(
+        input_ids[:prompt_size], max_prompt_length, truncation_mode
+    )
+    prompt_mask = _truncate_tokens(
+        attention_mask[:prompt_size], max_prompt_length, truncation_mode
+    )
+    completion_limit = max(0, max_length - len(prompt_ids))
+    completion_ids = input_ids[prompt_size:][:completion_limit]
+    completion_mask = attention_mask[prompt_size:][:completion_limit]
+    completion_labels = labels[prompt_size:][:completion_limit]
+    return {
+        f"{prefix}_input_ids": prompt_ids + completion_ids,
+        f"{prefix}_attention_mask": prompt_mask + completion_mask,
+        f"{prefix}_labels": [-100] * len(prompt_ids) + completion_labels,
+    }
+
+
 def enforce_preference_sequence_limit(
     dataset: Any,
     *,
@@ -154,12 +188,14 @@ def enforce_preference_sequence_limit(
 ) -> Any:
     """Restore TRL's removed prompt cap on an already-tokenized dataset.
 
-    TRL 0.29 exposes two preference dataset layouts. DPO stores a shared
-    ``prompt_ids`` plus separate completion ids; experimental ORPO stores two
-    combined sequences whose prompt span is identified by ``-100`` labels.
-    Applying the cap after TRL tokenizes keeps text and conversational inputs
-    on the exact same chat-template path while guaranteeing that the tensors
-    reaching the model obey ``data.max_length``.
+    TRL 0.29 exposes a few preference dataset layouts. DPO stores a shared
+    ``prompt_ids`` plus separate completion ids; experimental ORPO/CPO store
+    two combined sequences whose prompt span is identified by ``-100`` labels;
+    BCO/KTO store one unpaired ``completion_*`` sequence, with KTO adding a
+    ``KL_completion_*`` sequence as well. Applying the cap after TRL tokenizes
+    keeps text and conversational inputs on the exact same chat-template path
+    while guaranteeing that the tensors reaching the model obey
+    ``data.max_length``.
     """
     columns = set(getattr(dataset, "column_names", ()))
     dpo_columns = {"prompt_ids", "chosen_ids", "rejected_ids"}
@@ -172,6 +208,13 @@ def enforce_preference_sequence_limit(
         "rejected_input_ids",
         "rejected_attention_mask",
         "rejected_labels",
+    }
+    unpaired_columns = {
+        "prompt_input_ids",
+        "prompt_attention_mask",
+        "completion_input_ids",
+        "completion_attention_mask",
+        "completion_labels",
     }
 
     if dpo_columns <= columns:
@@ -190,31 +233,6 @@ def enforce_preference_sequence_limit(
         return dataset.map(cap_dpo)
 
     if orpo_columns <= columns:
-
-        def cap_combined(row: dict[str, Any], prefix: str) -> dict[str, list[int]]:
-            input_ids = list(row[f"{prefix}_input_ids"])
-            attention_mask = list(row[f"{prefix}_attention_mask"])
-            labels = list(row[f"{prefix}_labels"])
-            prompt_size = next(
-                (index for index, label in enumerate(labels) if label != -100),
-                len(labels),
-            )
-            prompt_ids = _truncate_tokens(
-                input_ids[:prompt_size], max_prompt_length, truncation_mode
-            )
-            prompt_mask = _truncate_tokens(
-                attention_mask[:prompt_size], max_prompt_length, truncation_mode
-            )
-            completion_limit = max(0, max_length - len(prompt_ids))
-            completion_ids = input_ids[prompt_size:][:completion_limit]
-            completion_mask = attention_mask[prompt_size:][:completion_limit]
-            completion_labels = labels[prompt_size:][:completion_limit]
-            return {
-                f"{prefix}_input_ids": prompt_ids + completion_ids,
-                f"{prefix}_attention_mask": prompt_mask + completion_mask,
-                f"{prefix}_labels": [-100] * len(prompt_ids) + completion_labels,
-            }
-
         def cap_orpo(row: dict[str, Any]) -> dict[str, Any]:
             prompt_ids = _truncate_tokens(
                 list(row["prompt_input_ids"]), max_prompt_length, truncation_mode
@@ -225,11 +243,72 @@ def enforce_preference_sequence_limit(
             return {
                 "prompt_input_ids": prompt_ids,
                 "prompt_attention_mask": prompt_mask,
-                **cap_combined(row, "chosen"),
-                **cap_combined(row, "rejected"),
+                **_cap_combined_preference_sequence(
+                    row,
+                    "chosen",
+                    max_length=max_length,
+                    max_prompt_length=max_prompt_length,
+                    truncation_mode=truncation_mode,
+                ),
+                **_cap_combined_preference_sequence(
+                    row,
+                    "rejected",
+                    max_length=max_length,
+                    max_prompt_length=max_prompt_length,
+                    truncation_mode=truncation_mode,
+                ),
             }
 
         return dataset.map(cap_orpo)
+
+    if unpaired_columns <= columns:
+
+        def cap_unpaired(row: dict[str, Any]) -> dict[str, Any]:
+            prompt_ids = _truncate_tokens(
+                list(row["prompt_input_ids"]), max_prompt_length, truncation_mode
+            )
+            prompt_mask = _truncate_tokens(
+                list(row["prompt_attention_mask"]), max_prompt_length, truncation_mode
+            )
+            capped = {
+                "prompt_input_ids": prompt_ids,
+                "prompt_attention_mask": prompt_mask,
+                **_cap_combined_preference_sequence(
+                    row,
+                    "completion",
+                    max_length=max_length,
+                    max_prompt_length=max_prompt_length,
+                    truncation_mode=truncation_mode,
+                ),
+            }
+            if {"KL_prompt_input_ids", "KL_prompt_attention_mask"} <= columns:
+                capped["KL_prompt_input_ids"] = _truncate_tokens(
+                    list(row["KL_prompt_input_ids"]),
+                    max_prompt_length,
+                    truncation_mode,
+                )
+                capped["KL_prompt_attention_mask"] = _truncate_tokens(
+                    list(row["KL_prompt_attention_mask"]),
+                    max_prompt_length,
+                    truncation_mode,
+                )
+            if {
+                "KL_completion_input_ids",
+                "KL_completion_attention_mask",
+                "KL_completion_labels",
+            } <= columns:
+                capped.update(
+                    _cap_combined_preference_sequence(
+                        row,
+                        "KL_completion",
+                        max_length=max_length,
+                        max_prompt_length=max_prompt_length,
+                        truncation_mode=truncation_mode,
+                    )
+                )
+            return capped
+
+        return dataset.map(cap_unpaired)
 
     raise ValueError(
         "TRL prepared a preference dataset with an unknown token layout; "
