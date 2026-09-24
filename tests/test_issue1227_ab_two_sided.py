@@ -17,9 +17,11 @@ simulations below are what catch the ``|z|`` shortcut.
 That argument needs a known variance, and ``soup ab`` estimates it from the rows.
 From a handful of rows the estimate is too noisy: re-running after every pair
 rejected a true H0 up to 0.163 of the time at alpha 0.05. So no verdict is given
-until each arm has ``MIN_ROWS_PER_ARM`` (20) rows, the smallest burn-in that a
+until each arm has ``min_rows_per_arm(alpha)`` rows: 20 at alpha >= 0.05, 40
+below (not calibrated below alpha 0.01). Each is the smallest burn-in that a
 Monte-Carlo sweep over effect_size / sigma 0.1 to 5 found to keep Type-I within
-alpha plus Monte-Carlo error at every ratio (worst 0.0513, at ratio 0.4).
+alpha plus Monte-Carlo error at every ratio (worst 0.0513 at alpha 0.05, 0.0108
+at alpha 0.01).
 """
 
 from __future__ import annotations
@@ -177,7 +179,7 @@ class TestNoDifference:
 
 
 # ---------------------------------------------------------------------------
-# Burn-in: no verdict until each arm has MIN_ROWS_PER_ARM rows
+# Burn-in: no verdict until each arm has min_rows_per_arm(alpha) rows
 # ---------------------------------------------------------------------------
 
 
@@ -186,20 +188,65 @@ def _judge_rows(count):
     return ([0.80, 0.82, 0.78, 0.81, 0.79] * 20)[:count]
 
 
-def _min_rows():
-    from soup_cli.utils.ab_test import MIN_ROWS_PER_ARM
+def _min_rows(alpha=0.05):
+    from soup_cli.utils.ab_test import min_rows_per_arm
 
-    return MIN_ROWS_PER_ARM
+    return min_rows_per_arm(alpha)
 
 
 class TestBurnIn:
-    def test_min_rows_per_arm_is_the_swept_value(self):
-        """20 is the smallest N in {10, 15, 20, 30, 40} whose Type-I rate under
+    @pytest.mark.parametrize(
+        ("alpha", "rows"),
+        [(0.5, 20), (0.10, 20), (0.05, 20), (0.0499, 40), (0.025, 40), (0.01, 40),
+         (0.0099, 40), (0.001, 40)],
+    )
+    def test_burn_in_table_is_the_calibrated_one(self, alpha, rows):
+        """alpha >= 0.05: 20 rows; 0.01 <= alpha < 0.05: 40; below 0.01: 40, uncalibrated.
+
+        Each is the smallest N in {10, 15, 20, 30, 40} whose Type-I rate under
         peeking stays within alpha + 3 binomial SE at every effect_size / sigma
-        from 0.1 to 5 (alpha 0.05, 100,000 runs per ratio). Changing it means
-        re-running that sweep, not editing this number.
+        from 0.1 to 5 (100,000 runs per ratio). Changing one means re-running
+        that sweep, not editing this table.
         """
-        assert _min_rows() == 20
+        assert _min_rows(alpha) == rows
+
+    @pytest.mark.parametrize(
+        ("alpha", "calibrated"), [(0.5, True), (0.05, True), (0.01, True), (0.0099, False),
+                                  (0.001, False)],
+    )
+    def test_calibration_stops_below_alpha_0_01(self, alpha, calibrated):
+        from soup_cli.utils.ab_test import burn_in_is_calibrated
+
+        assert burn_in_is_calibrated(alpha) is calibrated
+
+    @pytest.mark.parametrize(
+        ("bad", "message"),
+        [
+            (0.0, "alpha must be in"),
+            (1.0, "alpha must be in"),
+            (float("nan"), "alpha must be finite"),
+            (True, "alpha must be a number, not bool"),
+            ("0.05", "alpha must be a number"),
+        ],
+    )
+    def test_burn_in_refuses_an_invalid_alpha(self, bad, message):
+        from soup_cli.utils.ab_test import burn_in_is_calibrated, min_rows_per_arm
+
+        with pytest.raises((TypeError, ValueError), match=message):
+            min_rows_per_arm(bad)
+        with pytest.raises((TypeError, ValueError), match=message):
+            burn_in_is_calibrated(bad)
+
+    @pytest.mark.parametrize("shift", [-0.30, 0.30])
+    def test_alpha_0_01_needs_40_rows(self, shift):
+        below = _judge_rows(_min_rows(0.01) - 1)
+        verdict = _step("judge_score", below, _shifted(below, shift), alpha=0.01)
+        assert verdict.decision == "continue", verdict
+        assert verdict.log_likelihood_ratio >= _upper(alpha=0.01)
+
+        at = _judge_rows(_min_rows(0.01))
+        verdict = _step("judge_score", at, _shifted(at, shift), alpha=0.01)
+        assert verdict.decision == "reject_h0", verdict
 
     @pytest.mark.parametrize("shift", [-0.30, 0.30])
     def test_no_rejection_below_the_burn_in(self, shift):
@@ -354,7 +401,7 @@ def _write_ab(path, metric, control, treatment):
     path.write_text("\n".join(json.dumps(r) for r in rows), encoding="utf-8")
 
 
-def _run_cli(tmp_path, monkeypatch, metric, control, treatment):
+def _run_cli(tmp_path, monkeypatch, metric, control, treatment, extra=()):
     from soup_cli.cli import app
     from soup_cli.utils import webhooks
 
@@ -367,7 +414,7 @@ def _run_cli(tmp_path, monkeypatch, metric, control, treatment):
     result = runner.invoke(
         app,
         ["ab", "--input", "ab.jsonl", "--metric", metric,
-         "--slack-url", "https://hooks.slack.com/x"],
+         "--slack-url", "https://hooks.slack.com/x", *extra],
     )
     return result, captured
 
@@ -384,9 +431,11 @@ class TestCli:
         out = _plain(result.output)
         assert "reject_h0" in out
         assert "direction worse" in out
+        assert "burn_in 20 rows per arm (alpha 0.05)" in out
         assert "rollback" in out.lower()
         assert "No significant difference" not in out
         assert "promote" not in out.lower()
+        assert "not calibrated" not in out
 
         assert len(captured) == 1
         payload = captured[0]["payload"]
@@ -446,10 +495,42 @@ class TestCli:
         out = _plain(result.output)
         assert "decision continue" in out
         assert "direction n/a" in out
-        assert "Burn-in: no verdict before 20 rows per arm" in out
+        assert "Burn-in: no verdict before 20 rows per arm at alpha 0.05" in out
         assert "control has 5, treatment 5" in out
         assert "rollback" not in out.lower()
         assert captured == []  # a `continue` never pages anyone
+
+    def test_alpha_0_01_states_its_40_row_burn_in(self, tmp_path, monkeypatch):
+        control = _judge_rows(30)  # past the alpha-0.05 burn-in, short of alpha 0.01's
+        result, captured = _run_cli(
+            tmp_path, monkeypatch, "judge_score", control, _shifted(control, -0.30),
+            extra=("--alpha", "0.01"),
+        )
+        assert result.exit_code == 0, (result.output, repr(result.exception))
+        out = _plain(result.output)
+        assert "decision continue" in out
+        assert "burn_in 40 rows per arm (alpha 0.01)" in out
+        assert "Burn-in: no verdict before 40 rows per arm at alpha 0.01" in out
+        assert "control has 30, treatment 30" in out
+        assert "not calibrated" not in out
+        assert captured == []
+
+    def test_alpha_below_0_01_warns_that_it_is_not_calibrated(self, tmp_path, monkeypatch):
+        control = _judge_rows(40)
+        result, captured = _run_cli(
+            tmp_path, monkeypatch, "judge_score", control, _shifted(control, -0.30),
+            extra=("--alpha", "0.005"),
+        )
+        assert result.exit_code == 0, (result.output, repr(result.exception))
+        out = _plain(result.output)
+        assert (
+            "Warning: Type-I control under peeking is not calibrated below alpha 0.01" in out
+        )
+        assert "At --alpha 0.005 the burn-in is 40 rows per arm" in out
+        assert "burn_in 40 rows per arm (alpha 0.005)" in out
+        # The warning qualifies the verdict; it does not suppress it.
+        assert "direction worse" in out
+        assert captured[0]["payload"]["direction"] == "worse"
 
 
 # ---------------------------------------------------------------------------
@@ -621,3 +702,41 @@ class TestTypeOneErrorUnderPeeking:
             f"Type-I rate {rate:.4f} at effect_size / sigma {ratio} exceeds alpha "
             f"{_ALPHA} + tolerance {tolerance:.4f}"
         )
+        _assert_no_verdict_before(sim["outcomes"], 20)
+
+    @pytest.mark.parametrize(
+        ("ratio", "seed"),
+        [(0.425, 2031), (0.55, 2032)],
+    )
+    def test_alpha_0_01_burn_in_keeps_type_one_error_within_alpha(self, ratio, seed):
+        """alpha 0.01 uses the 40-row burn-in.
+
+        Measured over 100,000 runs (the sweep's finer grid), Type-I at alpha 0.01
+        with 40 / 20 rows: 0.01059 / 0.01155 at effect_size / sigma 0.425 (the
+        worst ratio for 40 rows; 400,000 runs there give 0.01004 for 40 rows) and
+        0.01016 / 0.01294 at 0.55 (the worst for 20 rows). At CI size the rate
+        alone cannot tell 40 rows from 20: 2000 runs put the bound at 0.0167. So
+        the test also checks where the verdicts start, never before 40 rows per
+        arm. Forcing 20 rows at alpha 0.01 fails that check.
+        """
+        np = pytest.importorskip("numpy")
+        from soup_cli.utils.ab_test import MsprtConfig
+
+        alpha, reps = 0.01, 2000
+        tolerance = 3.0 * math.sqrt(alpha * (1.0 - alpha) / reps)
+        config = MsprtConfig(metric="judge_score", alpha=alpha, beta=0.20, effect_size=0.1)
+        sim = _peek_until_decided(np, config, sigma=0.1 / ratio, reps=reps, seed=seed)
+        _assert_no_verdict_before(sim["outcomes"], 40)
+        rate = _rejection_rate(sim["outcomes"])
+        assert rate <= alpha + tolerance, (
+            f"Type-I rate {rate:.4f} at effect_size / sigma {ratio} exceeds alpha "
+            f"{alpha} + tolerance {tolerance:.4f}"
+        )
+
+
+def _assert_no_verdict_before(outcomes, rows):
+    """Every run's first verdict came with at least ``rows`` rows per arm."""
+    decided = [v for v in outcomes if v is not None]
+    assert decided, "no run reached a verdict"
+    earliest = min(v.n_control for v in decided)
+    assert earliest >= rows, f"a run was decided at {earliest} rows per arm (burn-in {rows})"

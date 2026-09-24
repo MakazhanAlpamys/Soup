@@ -13,8 +13,9 @@ from rich.table import Table
 from soup_cli.commands._webhook_cli import emit_webhooks, validate_webhook_flags
 from soup_cli.utils.ab_test import (
     HIGHER_IS_BETTER,
-    MIN_ROWS_PER_ARM,
     MsprtConfig,
+    burn_in_is_calibrated,
+    min_rows_per_arm,
     run_msprt,
     validate_metric_name,
 )
@@ -83,6 +84,20 @@ def ab(
         console.print(f"[red]{escape(str(exc))}[/]")
         raise typer.Exit(1) from exc
 
+    # The burn-in depends on alpha, and below alpha 0.01 it is not calibrated
+    # (#1227): say so before the verdict, and show the rows actually required.
+    rows_needed = min_rows_per_arm(cfg.alpha)
+    if not burn_in_is_calibrated(cfg.alpha):
+        console.print(
+            Panel(
+                f"[yellow]Warning: Type-I control under peeking is not calibrated below "
+                f"alpha 0.01. At --alpha {cfg.alpha:g} the burn-in is {rows_needed} rows "
+                "per arm, the value calibrated for alpha 0.01, and a test re-run after "
+                "every new row may reject a true H0 more often than --alpha.[/]",
+                border_style="yellow",
+            )
+        )
+
     # The test is two-sided (#1227): a reject_h0 carries the direction, read
     # through the metric's polarity, and only a worse treatment is a rollback.
     worse = verdict.direction == "worse"
@@ -98,6 +113,7 @@ def ab(
     table.add_column("Value")
     table.add_row("decision", f"[bold]{verdict.decision}[/]")
     table.add_row("direction", verdict.direction or "n/a")
+    table.add_row("burn_in", f"{rows_needed} rows per arm (alpha {cfg.alpha:g})")
     table.add_row("log_likelihood_ratio", f"{verdict.log_likelihood_ratio:.4f}")
     table.add_row("n_control", str(verdict.n_control))
     table.add_row("n_treatment", str(verdict.n_treatment))
@@ -131,13 +147,14 @@ def ab(
                 border_style="yellow",
             )
         )
-    elif min(verdict.n_control, verdict.n_treatment) < MIN_ROWS_PER_ARM:
+    elif min(verdict.n_control, verdict.n_treatment) < rows_needed:
         console.print(
             Panel(
-                f"[cyan]Burn-in: no verdict before {MIN_ROWS_PER_ARM} rows per arm "
-                f"(control has {verdict.n_control}, treatment {verdict.n_treatment}); "
-                "with fewer rows the variance estimate is too noisy for the test's "
-                "false-positive guarantee. Collect more samples and re-run.[/]",
+                f"[cyan]Burn-in: no verdict before {rows_needed} rows per arm at alpha "
+                f"{cfg.alpha:g} (control has {verdict.n_control}, treatment "
+                f"{verdict.n_treatment}); with fewer rows the variance estimate is too "
+                "noisy for the test's false-positive guarantee. Collect more samples "
+                "and re-run.[/]",
                 border_style="cyan",
             )
         )

@@ -29,8 +29,9 @@ Three known limitations:
 3. The variance is estimated from the rows, not known. The martingale
    argument holds for a known variance; with only a few rows per arm the
    estimate is too noisy for it. So no verdict is given (`continue`) until
-   each arm has `MIN_ROWS_PER_ARM` rows; that constant says how it was chosen
-   and what Type-I rate remains.
+   each arm has `min_rows_per_arm(alpha)` rows; `BURN_IN_ROWS_BY_ALPHA` says
+   how those were chosen and what Type-I rate remains. Below alpha 0.01 the
+   burn-in is not calibrated (`burn_in_is_calibrated`).
 """
 
 from __future__ import annotations
@@ -52,20 +53,30 @@ SUPPORTED_METRICS: frozenset[str] = frozenset(
 HIGHER_IS_BETTER: Mapping[str, bool] = MappingProxyType(
     {"judge_score": True, "latency": False, "retry_rate": False}
 )
-# Burn-in (#1227): while either arm has fewer rows than this, the verdict is
-# `continue` whatever the log-likelihood ratio says. The pooled variance is
-# estimated from the rows, and from a handful of them it can come out far too
-# small; the likelihood ratio is then no martingale, and an operator who re-runs
-# after every new pair rejected a true H0 up to 0.163 of the time at alpha 0.05
-# (effect_size / sigma 1.25, no burn-in). Chosen by a Monte-Carlo sweep of that
-# peeking procedure (H0, a look after every pair up to 200 rows per arm,
-# alpha 0.05, beta 0.20, effect_size / sigma from 0.1 to 5, 100,000 runs per
-# ratio): the smallest N in {10, 15, 20, 30, 40} whose Type-I rate stays within
-# alpha + 3 binomial standard errors (0.0521) at every ratio. N = 20: worst
-# 0.0513 at effect_size / sigma 0.4 (with the true variance 0.0420); N = 15
-# reaches 0.0536. Calibrated at alpha 0.05 only: at alpha 0.01 the same sweep
-# gives up to 0.0125. The sweep and its log are on the #1227 pull request.
-MIN_ROWS_PER_ARM = 20
+# Burn-in (#1227): rows per arm required before any verdict, by the Type-I level
+# alpha. While either arm has fewer, the verdict is `continue` whatever the
+# log-likelihood ratio says. The pooled variance is estimated from the rows, and
+# from a handful of them it can come out far too small; the likelihood ratio is
+# then no martingale, and an operator who re-runs after every new pair rejected
+# a true H0 up to 0.163 of the time at alpha 0.05 (effect_size / sigma 1.25, no
+# burn-in). Calibrated by a Monte-Carlo sweep of that peeking procedure (H0, a
+# look after every pair up to 200 rows per arm, beta 0.20, effect_size / sigma
+# from 0.1 to 5, 100,000 runs per ratio): each N is the smallest candidate in
+# {10, 15, 20, 30, 40} whose Type-I rate stays within alpha + 3 binomial
+# standard errors at every ratio.
+#   alpha >= 0.05       -> 20 rows. Alpha 0.05: worst 0.0513 at ratio 0.4
+#                          (bound 0.0521); 15 rows reach 0.0536. Alpha 0.10:
+#                          worst 0.0986 (bound 0.1028).
+#   0.01 <= alpha < 0.05 -> 40 rows. Alpha 0.01: worst 0.0108 at ratio 0.45
+#                          (bound 0.0109; 400,000 runs at the worst ratio of a
+#                          finer grid give 0.0100); 30 rows reach 0.0114, 20
+#                          rows 0.0129. Alpha 0.025: worst 0.0246 (bound 0.0265).
+#   alpha < 0.01        -> 40 rows, NOT calibrated: at alpha 0.005 the worst is
+#                          0.0058, above its bound 0.0057. `soup ab` warns.
+# The summary table is in the #1227 pull request, and the full sweep log is
+# attached there.
+BURN_IN_ROWS_BY_ALPHA: tuple[tuple[float, int], ...] = ((0.05, 20), (0.01, 40))
+_BURN_IN_ROWS_UNCALIBRATED = 40
 _MAX_METRIC_NAME_LEN = 32
 _MAX_SAMPLES_PER_ARM = 1_000_000
 _VALID_DECISIONS: frozenset[str] = frozenset(
@@ -108,6 +119,24 @@ def _require_unit_open(value: object, *, field: str) -> float:
     if not (0.0 < f_val < 1.0):
         raise ValueError(f"{field} must be in (0.0, 1.0) exclusive, got {f_val}")
     return f_val
+
+
+def min_rows_per_arm(alpha: float) -> int:
+    """Rows each arm needs before `soup ab` gives any verdict at Type-I level ``alpha``.
+
+    From ``BURN_IN_ROWS_BY_ALPHA``: 20 at alpha >= 0.05, 40 below. Below alpha
+    0.01 the value is 40 but not calibrated; see :func:`burn_in_is_calibrated`.
+    """
+    value = _require_unit_open(alpha, field="alpha")
+    for lowest_alpha, rows in BURN_IN_ROWS_BY_ALPHA:
+        if value >= lowest_alpha:
+            return rows
+    return _BURN_IN_ROWS_UNCALIBRATED
+
+
+def burn_in_is_calibrated(alpha: float) -> bool:
+    """False below alpha 0.01, where Type-I control under peeking was not calibrated."""
+    return _require_unit_open(alpha, field="alpha") >= BURN_IN_ROWS_BY_ALPHA[-1][0]
 
 
 def _require_positive_finite(value: object, *, field: str) -> float:
@@ -231,8 +260,9 @@ def _verdict_from_summary(
 
     The decision half of :func:`msprt_step`, split out so a peeking simulation
     can drive exactly this code from running sums instead of re-reading every
-    row at every peek. Below ``MIN_ROWS_PER_ARM`` rows in either arm the
-    log-likelihood ratio is still reported, but the decision is ``continue``.
+    row at every peek. Below ``min_rows_per_arm(config.alpha)`` rows in either
+    arm the log-likelihood ratio is still reported, but the decision is
+    ``continue``.
     """
     pooled_se = math.sqrt(pooled_variance * (1.0 / n_control + 1.0 / n_treatment))
 
@@ -271,8 +301,8 @@ def _verdict_from_summary(
     lower = math.log(config.beta / (1.0 - config.alpha))
 
     direction = None
-    if min(n_control, n_treatment) < MIN_ROWS_PER_ARM:
-        decision = "continue"  # burn-in: see MIN_ROWS_PER_ARM
+    if min(n_control, n_treatment) < min_rows_per_arm(config.alpha):
+        decision = "continue"  # burn-in: see BURN_IN_ROWS_BY_ALPHA
     elif llr >= upper:
         decision = "reject_h0"
         direction = _direction(config.metric, diff)
@@ -302,7 +332,7 @@ def msprt_step(
 
     Returns ``MsprtVerdict`` with one of:
     - ``continue``: keep collecting samples; always the answer while either
-      arm has fewer than ``MIN_ROWS_PER_ARM`` rows (burn-in)
+      arm has fewer than ``min_rows_per_arm(config.alpha)`` rows (burn-in)
     - ``reject_h0``: difference is real (treatment != control), in either
       direction; ``direction`` says whether the treatment is ``better`` or
       ``worse`` than control, by the metric's polarity
@@ -407,11 +437,13 @@ def run_msprt(
 
 
 __all__ = [
+    "BURN_IN_ROWS_BY_ALPHA",
     "HIGHER_IS_BETTER",
-    "MIN_ROWS_PER_ARM",
     "MsprtConfig",
     "MsprtVerdict",
     "SUPPORTED_METRICS",
+    "burn_in_is_calibrated",
+    "min_rows_per_arm",
     "msprt_step",
     "run_msprt",
     "validate_metric_name",

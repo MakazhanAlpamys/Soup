@@ -265,7 +265,15 @@ Baselines may be a registry reference (`registry://<name-or-id>`), a file path, 
 
 Proper sequential testing with early-stop guarantees on `latency` / `judge_score` / `retry_rate`. The test is two-sided: the statistic averages Wald's likelihood ratios for a treatment-minus-control difference of `+effect-size` and of `-effect-size` (a symmetric two-point mixture). Each of those ratios is a martingale under H0, and so is their average, so Type-I error is controlled at every stopping time per the optional stopping theorem (unlike a naive repeated t-test, which inflates Type-I if you peek at the data).
 
-That guarantee assumes the variance is known, while `soup ab` estimates it from the rows. From a handful of rows the estimate is too noisy for it: re-run after every new pair, the test used to reject a true H0 up to 16% of the time at `--alpha 0.05` when `--effect-size` was close to the metric's row-to-row standard deviation. So `soup ab` gives no verdict, only `continue`, until **each arm has at least 20 rows** (the burn-in, `MIN_ROWS_PER_ARM`). The value comes from a simulation of that re-run-after-every-pair procedure (alpha 0.05, beta 0.20, up to 200 rows per arm, `--effect-size` from 0.1 to 5 standard deviations): 20 is the smallest burn-in that keeps the false-positive rate within Monte-Carlo error of `--alpha` everywhere, with a worst case of 0.051. It was calibrated at `--alpha 0.05`; at `--alpha 0.01` the worst case is 0.0125.
+That guarantee assumes the variance is known, while `soup ab` estimates it from the rows. From a handful of rows the estimate is too noisy for it: re-run after every new pair, the test used to reject a true H0 up to 16% of the time at `--alpha 0.05` when `--effect-size` was close to the metric's row-to-row standard deviation. So `soup ab` gives no verdict, only `continue`, until each arm has enough rows. That burn-in depends on `--alpha`, and the verdict table shows the value in use:
+
+| `--alpha` | rows per arm before a verdict | worst simulated false-positive rate |
+|---|---|---|
+| 0.05 and above | 20 | 0.051 at `--alpha 0.05` |
+| from 0.01 to below 0.05 | 40 | 0.011 at `--alpha 0.01` |
+| below 0.01 | 40, **not calibrated** | 0.0058 at `--alpha 0.005` |
+
+The values come from a simulation of that re-run-after-every-pair procedure (beta 0.20, up to 200 rows per arm, `--effect-size` from 0.1 to 5 standard deviations). Each is the smallest burn-in that keeps the false-positive rate within Monte-Carlo error of `--alpha` at every effect size. **Below `--alpha 0.01` the burn-in is not calibrated**: `soup ab` prints a warning, and at `--alpha 0.005` the simulated rate is slightly above the level asked for.
 
 ```bash
 soup ab --input ab.jsonl --metric latency --effect-size 0.5
