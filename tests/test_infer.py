@@ -256,13 +256,17 @@ class TestInferCLI:
         assert "--batch-size" in strip_ansi(result.output)
 
     @pytest.mark.parametrize("batch_size", [0, -1])
-    def test_batch_size_must_be_positive(self, tmp_path, batch_size):
+    def test_batch_size_must_be_positive(self, tmp_path, batch_size, monkeypatch):
         from typer.testing import CliRunner
 
         from soup_cli.cli import app
 
         prompts_file = tmp_path / "prompts.jsonl"
         prompts_file.write_text(json.dumps({"prompt": "test"}) + "\n")
+        monkeypatch.setattr(
+            "soup_cli.commands.infer._load_model",
+            lambda *args, **kwargs: (object(), object()),
+        )
 
         result = CliRunner().invoke(
             app,
@@ -275,7 +279,8 @@ class TestInferCLI:
             ],
         )
 
-        assert result.exit_code != 0
+        assert result.exit_code == 2
+        assert "batch-size must be >= 1" in result.output
 
     def test_required_options_error(self):
         """Should fail if required options are missing."""
@@ -518,6 +523,22 @@ class TestGenerate:
 
 
 class TestGenerateBatch:
+    def test_batch_template_errors_are_not_silently_fallback(self):
+        from soup_cli.commands.infer import _generate_batch
+
+        class BrokenTemplateTokenizer(_BatchTokenizer):
+            def apply_chat_template(self, messages, **kwargs):
+                raise ValueError("broken chat template")
+
+        with pytest.raises(ValueError, match="broken chat template"):
+            _generate_batch(
+                _DeterministicBatchModel(),
+                BrokenTemplateTokenizer(templated=True),
+                ["first", "second"],
+                max_tokens=1,
+                temperature=0,
+            )
+
     def test_batch_generation_uses_left_padding_and_one_call(self):
         from soup_cli.commands.infer import _generate_batch
 
@@ -838,6 +859,7 @@ class TestGenerateBatch:
 
 
     def test_cli_batches_partial_chunk_in_input_order(self, tmp_path, monkeypatch):
+        import torch
         from typer.testing import CliRunner
 
         from soup_cli.cli import app
@@ -848,7 +870,22 @@ class TestGenerateBatch:
             "".join(json.dumps({"prompt": prompt}) + "\n" for prompt in prompts)
         )
         output_path = tmp_path / "output.jsonl"
-        model = _DeterministicBatchModel()
+        class UniqueBatchModel:
+            device = torch.device("cpu")
+
+            def __init__(self):
+                self.next_token = 101
+                self.generate_calls = []
+
+            def generate(self, input_ids, attention_mask, **kwargs):
+                self.generate_calls.append(input_ids.clone())
+                rows = []
+                for _ in range(input_ids.shape[0]):
+                    rows.append(torch.tensor([[self.next_token]]))
+                    self.next_token += 1
+                return torch.cat([input_ids, torch.cat(rows)], dim=1)
+
+        model = UniqueBatchModel()
         tokenizer = _BatchTokenizer(templated=True)
         monkeypatch.setattr(
             "soup_cli.commands.infer._load_model",
@@ -871,7 +908,10 @@ class TestGenerateBatch:
 
         assert result.exit_code == 0, result.output
         rows = [json.loads(line) for line in output_path.read_text().splitlines()]
-        assert [row["prompt"] for row in rows] == prompts
+        assert [(row["prompt"], row["response"]) for row in rows] == [
+            (prompt, f"response-{101 + index}")
+            for index, prompt in enumerate(prompts)
+        ]
         assert len(model.generate_calls) == 3
 
     def test_batch_size_one_and_eight_have_identical_outputs(
