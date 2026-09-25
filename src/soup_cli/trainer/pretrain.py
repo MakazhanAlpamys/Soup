@@ -136,7 +136,8 @@ class PretrainTrainerWrapper:
         # ``+eot`` suffix here but not in ``soup data preprocess``, so the cache
         # was refused by a hash the re-run advised in the error reproduces.
         pretok = _maybe_load_pretokenized(
-            cfg.data, cfg.base, console, getattr(cfg, "training", None)
+            cfg.data, cfg.base, console, getattr(cfg, "training", None),
+            task=cfg.task,
         )
         if pretok is not None:
             train_ds, eval_ds = pretok

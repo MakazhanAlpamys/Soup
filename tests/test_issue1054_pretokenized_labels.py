@@ -352,7 +352,7 @@ class TestMaskFlagsReachTheCache:
 
         common = dict(
             dataset_path="d.jsonl", tokenizer_name="x/y",
-            max_length=128, format_name="chatml",
+            max_length=128, format_name="chatml", task="sft",
         )
         keys = {
             make_preprocess_cache_key(
@@ -536,6 +536,7 @@ class TestCacheKeyCoversMaskMode:
                 max_length=128,
                 format_name="chatml",
                 mask_mode=bad,
+                task="sft",
             )
 
     @pytest.mark.parametrize(
@@ -590,6 +591,7 @@ class TestCacheKeyCoversMaskMode:
             tokenizer_name="x/y",
             max_length=128,
             format_name="chatml",
+            task="sft",
         )
         keys = {
             make_preprocess_cache_key(**common, mask_mode=mode)
@@ -738,7 +740,7 @@ class TestCacheKeyCoversMaskMode:
         )
         tcfg = SimpleNamespace(train_on_eot=True)
         # Exactly what trainer/pretrain.py now passes.
-        loaded = _maybe_load_pretokenized(dcfg, "x/y", Console(), tcfg)
+        loaded = _maybe_load_pretokenized(dcfg, "x/y", Console(), tcfg, task="pretrain")
         assert loaded is not None
         train_ds, _ = loaded
         assert len(train_ds) == 1

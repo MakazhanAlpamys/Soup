@@ -26,7 +26,6 @@ Every tokenizer is a real ``transformers`` fast tokenizer built offline, so
 genuine ``tokenizers`` post-processor.
 """
 
-import hashlib
 import sys
 
 import pytest
@@ -321,6 +320,7 @@ class TestCacheKey:
         (v2) encoding: the schema token advanced, so the key differs from both the
         v2 blob and the pre-schema blob. Fails if the schema token is reverted."""
         from soup_cli.utils.data_pipeline import make_preprocess_cache_key
+        from tests.preprocess_cache_blob import CURRENT_SCHEMA, blob_key
 
         args = dict(
             dataset_path="data/train.jsonl",
@@ -328,38 +328,19 @@ class TestCacheKey:
             max_length=2048,
             format_name="chatml",
             mask_mode="responses_only",
+            task="sft",
+            chat_template=None,
         )
-
-        def _blob_key(schema, *, chat_template=None, mask=False):
-            """Rebuild a historical blob in WRITER order.
-
-            Segment order is the contract, so each generation is reproduced with
-            exactly the fields it had: v2/v3 five, v4/v5 six (chat_template),
-            v6 seven (chat_template + mask_mode). Defaulting either flag on
-            would hash a shape no release ever wrote, and the ``!=`` rows would
-            then pass for the wrong reason.
-            """
-            prefix = f"{schema}\x1f" if schema else ""
-            blob = (
-                f"{prefix}{args['dataset_path']}\x1f{args['tokenizer_name']}"
-                f"\x1f{args['max_length']}\x1f{args['format_name']}"
-            )
-            if chat_template is not None:
-                blob += f"\x1f{chat_template}"
-            if mask:
-                blob += f"\x1f{args['mask_mode']}"
-            return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:16]
 
         current = make_preprocess_cache_key(**args)
-        assert current == _blob_key("v6", chat_template="", mask=True), (
-            "current schema is v6 (#1054)"
-        )
-        assert current != _blob_key("v2"), "a v2 (#785) cache must be rejected"
-        assert current != _blob_key(""), "a pre-schema cache must be rejected"
-        assert current != _blob_key("v3"), "a v3 cache must be rejected too (#1067)"
-        assert current != _blob_key("v4", chat_template=""), (
-            "a v4 (#1067) cache must be rejected"
-        )
-        assert current != _blob_key("v5", chat_template=""), (
+        assert current == blob_key(CURRENT_SCHEMA, **args)
+        assert current != blob_key("v2", **args), "a v2 (#785) cache must be rejected"
+        assert current != blob_key("", **args), "a pre-schema cache must be rejected"
+        assert current != blob_key("v3", **args), "a v3 cache must be rejected too (#1067)"
+        assert current != blob_key("v4", **args), "a v4 (#1067) cache must be rejected"
+        assert current != blob_key("v5", **args), (
             "a v5 (#876) cache must be rejected -- it carries no labels (#1054)"
+        )
+        assert current != blob_key("v6", **args), (
+            "a v6 (#1054) cache must be rejected -- its key missed the row set (#1127)"
         )

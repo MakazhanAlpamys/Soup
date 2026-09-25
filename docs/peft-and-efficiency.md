@@ -678,10 +678,12 @@ Records peak memory each step. When pressure crosses the threshold, recommends a
 
 ## Training Intelligence (Forgetting + Checkpoint Quality)
 
-The `forgetting_*`, `checkpoint_*`, and `early_stop_on_regression` settings are
+The `forgetting_*`, `checkpoint_*`, `early_stop_on_regression`, and `convergence_*` settings are
 reserved for planned in-training callbacks. They are accepted by the schema but
-are not enforced during training in this build. `soup train` warns when one is
-set away from its default, and Autopilot does not enable or advertise them.
+are not enforced during training in this build. `soup train` prints an advisory note
+when one is set away from its default, directing users to `--gate <suite.yaml>`.
+(Other unconsumed configuration fields staged for features that have not landed emit
+a load-time warning in v0.76 and are refused as of v0.77 per #808).
 
 Use the live eval gate for regression detection and automatic stopping today:
 

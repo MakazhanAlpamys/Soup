@@ -273,6 +273,15 @@ class TestSFTSetupQuantizationAwareIntegration:
             "soup_cli.utils.fp8.fp8_training_supported",
             return_value=(True, ""),
         ), patch(
+            # This test is about WHERE SFT calls the helper (post-LoRA, on the
+            # PeftModel). A missing torchao now stops an explicit FP8 request
+            # (#835 ruling), so the two converters are stubbed to keep it on that.
+            "soup_cli.utils.fp8.apply_fp8_training",
+            return_value=True,
+        ), patch(
+            "soup_cli.utils.advanced_precision.apply_fp8_attention",
+            return_value=2,
+        ), patch(
             "soup_cli.utils.v028_features.apply_v028_speed_memory",
             wraps=apply_v028_speed_memory,
         ) as mock_v028:

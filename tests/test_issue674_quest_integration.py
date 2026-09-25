@@ -13,6 +13,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from soup_cli.config.loader import load_config_from_string
 from soup_cli.config.schema import SoupConfig
 from tests.conftest import strip_ansi
 
@@ -133,6 +134,42 @@ def test_schema_accepts_only_the_explicit_first_slice():
     assert cfg.training.batch_size == 2
 
 
+def test_config_loader_rejects_quest_auto_mixed_precision() -> None:
+    config = (
+        "base: ahxt/LiteLlama-460M-1T\n"
+        "task: sft\n"
+        "backend: transformers\n"
+        "modality: text\n"
+        "data:\n"
+        "  train: data.jsonl\n"
+        "training:\n"
+        "  quantization_aware: quest\n"
+        "  quantization: none\n"
+        "  batch_size: 2\n"
+        "  lora:\n"
+        "    r: 0\n"
+    )
+    with pytest.raises(ValueError) as error:
+        load_config_from_string(config + "  auto_mixed_precision: true\n")
+    assert "training.quantization_aware" in str(error.value)
+    assert "training.auto_mixed_precision" in str(error.value)
+
+    assert load_config_from_string(config).training.quantization_aware == "quest"
+    allowed = load_config_from_string(config + "  auto_mixed_precision: false\n")
+    assert allowed.training.quantization_aware == "quest"
+
+
+def test_config_loader_keeps_non_quest_auto_mixed_precision() -> None:
+    cfg = load_config_from_string(
+        "base: org/model\n"
+        "data:\n"
+        "  train: data.jsonl\n"
+        "training:\n"
+        "  auto_mixed_precision: true\n"
+    )
+    assert cfg.training.auto_mixed_precision is True
+
+
 @pytest.mark.parametrize(
     "root,training,match",
     [
@@ -142,6 +179,7 @@ def test_schema_accepts_only_the_explicit_first_slice():
         ({}, {"quantization": "4bit"}, "quantization='none'"),
         ({}, {"lora": {"r": 8}}, "lora.r=0"),
         ({}, {"batch_size": "auto"}, "explicit training.batch_size"),
+        ({}, {"auto_mixed_precision": True}, "auto_mixed_precision=false"),
         ({}, {"stream_layers": True}, "stream_layers=false"),
         ({}, {"nvfp4": True}, "nvfp4=false"),
         ({}, {"activation_offloading": "cpu"}, "activation_offloading"),

@@ -205,14 +205,14 @@ soup edit set --base ./model --method grace \
 ```
 
 ```yaml
-# Or via soup.yaml when training a model with GRACE-aware lookups
-training:
-  grace_codebook: true
-  grace_codebook_size: 1024    # codebook entries (max 100k)
-  grace_codebook_dim: 768      # residual-stream width
+# Planned for soup.yaml when training with GRACE-aware lookups (staged; refused as of v0.77 — #808):
+# training:
+#   grace_codebook: true
+#   grace_codebook_size: 1024    # codebook entries (max 100k)
+#   grace_codebook_dim: 768      # residual-stream width
 ```
 
-`grace` joins the existing `rome` / `memit` / `alphaedit` allowlist on `soup edit set`; the sequential edit governor still gates the call when the per-base-model edit count or norm-blowup verdict trips. GRACE is live: `soup edit set --method grace --output ./ckpt` captures the residual key at the subject's last token, optimises a replacement value, and appends a `(key, value)` triple to a `grace_codebook.json` sidecar (atomic, cwd-contained). At inference the codebook is applied via a forward hook that substitutes the residual whenever it falls within an epsilon ball of a stored key — so the base weights are never modified and thousands of edits survive without norm blowup.
+`grace` joins the existing `rome` / `memit` / `alphaedit` allowlist on `soup edit set`; the sequential edit governor still gates the call when the per-base-model edit count or norm-blowup verdict trips. GRACE is live for editing: `soup edit set --method grace --output ./ckpt` captures the residual key at the subject's last token, optimises a replacement value, and appends a `(key, value)` triple to a `grace_codebook.json` sidecar (atomic, cwd-contained). At inference the codebook is applied via a forward hook that substitutes the residual whenever it falls within an epsilon ball of a stored key — so the base weights are never modified and thousands of edits survive without norm blowup. Training-time lookup integration remains staged.
 
 
 ## Model Registry & Lineage

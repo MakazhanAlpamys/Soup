@@ -636,9 +636,19 @@ soup ui
 # -> prints auth token to console
 ```
 
+> **v0.75.0 and v0.75.1: add the token to the URL yourself.** In these two
+> releases the tab `soup ui` opens carries no token, so it shows
+> `Error loading dashboard: Unauthorized` and no page can load data (#1194).
+> Open `http://127.0.0.1:<PORT>/?token=<TOKEN>` instead, with the port from
+> the startup panel's `URL:` line and the value on its `Token:` line. The page
+> keeps the token for that tab, so a reload works, and removes it from the
+> address bar; your browser's history still records the URL. A new tab or
+> another browser needs the URL again, and the token changes every time
+> `soup ui` starts unless you pass `--auth-token`.
+
 **Pages:**
 - **Dashboard** — view all experiment runs, loss charts, system info, multi-run comparison
-- **New Training** — create configs from templates or 173 ready-made recipes, validate, start training with live SSE log streaming and progress bar
+- **New Training** — create configs from templates or 172 ready-made recipes, validate, start training with live SSE log streaming and progress bar
 - **Data Explorer** — browse and inspect datasets (JSONL, JSON, CSV, Parquet)
 - **Model Chat** — chat with streaming responses, configurable temperature/top_p/max_tokens, system prompt, adapter selection, markdown rendering, chat export
 
@@ -647,7 +657,7 @@ soup ui
 - **Enhanced Metrics** — 2x2 chart grid (loss, LR, grad_norm, throughput) + GPU memory chart, eval results table
 - **Multi-Run Compare** — overlay loss curves from up to 5 runs side-by-side
 - **Chat Upgrade** — SSE streaming via proxy, typing indicator, cancel button, markdown renderer (bold, italic, code blocks), chat export as JSON
-- **Config Builder** — recipe dropdown (173 recipes), config schema API for dynamic form generation
+- **Config Builder** — recipe dropdown (172 recipes), config schema API for dynamic form generation
 
 Gradient norm is nullable: backends or steps that do not report it store and
 stream `null`, and the Web UI chart leaves a gap instead of drawing a false
@@ -655,6 +665,8 @@ zero. An actually logged `0.0` remains a measured value and appears in the
 terminal panel.
 
 **Security:** The Web UI generates a random auth token at startup (printed to console). Every private endpoint — mutating (start/stop training, delete runs, inspect data, validate config) and reading (runs, metrics, system, recipes, SSE streams) — requires an `Authorization: Bearer <token>` header. `/` and `/api/health` stay open so the dashboard can load. CORS is restricted to the served origin. Data inspection is sandboxed to the working directory.
+
+**The token is not kept across reloads.** The page reads the token from `?token=…` (the `--public` phone URL) or asks for it the first time a request is refused, then holds it in page memory only: never `sessionStorage`, `localStorage`, a cookie or a `window` property. A reload or a new tab therefore asks for it again; paste the token `soup ui` printed (the whole `Authorization: Bearer …` line works too). If you cancel the prompt, the page stays signed out until your next click, which asks again. That is deliberate: a token persisted where page script can read it would turn a future rendering mistake into a token disclosure. It does not protect against script already running in the page; the content policy below is the defence there.
 
 YAML-entry request bodies are capped at 1 MiB on `/api/config/validate`,
 `/api/train/start`, and `/api/config/from-form`. Larger bodies return HTTP 413

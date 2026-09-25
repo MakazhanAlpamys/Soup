@@ -943,7 +943,6 @@ class TestModuleSurface:
 class TestV0520Recipes:
     NEW_RECIPES = (
         "orpheus-tts-sft",
-        "sesame-csm-tts",
         "llasa-tts",
         "spark-tts",
         "oute-tts",
@@ -960,7 +959,6 @@ class TestV0520Recipes:
     @pytest.mark.parametrize(
         "name,expected_family", [
             ("orpheus-tts-sft", "orpheus"),
-            ("sesame-csm-tts", "sesame_csm"),
             ("llasa-tts", "llasa"),
             ("spark-tts", "spark"),
             ("oute-tts", "oute"),
@@ -982,9 +980,9 @@ class TestV0520Recipes:
     def test_total_catalog_size_grew(self):
         from soup_cli.recipes.catalog import RECIPES
 
-        # v0.51.0 shipped 106; five TTS recipes remain from v0.52.0.
+        # v0.51.0 shipped 106; four runnable TTS recipes remain from v0.52.0.
         # #825 retires the unusable Falcon-E BitNet training recipe.
-        assert len(RECIPES) >= 111
+        assert len(RECIPES) >= 110
 
 
 class TestTddReviewGaps:
@@ -1093,8 +1091,7 @@ class TestTddReviewGaps:
         from soup_cli.recipes.catalog import RECIPES
 
         new = (
-            "orpheus-tts-sft", "sesame-csm-tts", "llasa-tts",
-            "spark-tts", "oute-tts",
+            "orpheus-tts-sft", "llasa-tts", "spark-tts", "oute-tts",
         )
         for name in new:
             base = RECIPES[name].model

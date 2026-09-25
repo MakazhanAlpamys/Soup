@@ -262,13 +262,17 @@ class TestFP8RecipeDispatch:
         mock_from_recipe.assert_called_once_with("rowwise_with_gw_hp")
         assert result is True
 
-    def test_apply_fp8_returns_false_when_unavailable(self):
-        """When FP8 deps are missing, apply_fp8_training returns False."""
-        from soup_cli.utils.fp8 import apply_fp8_training
+    def test_apply_fp8_stops_when_unavailable(self):
+        """INVERTED by the #835 ruling: FP8 deps missing on a card that can run
+        the recipe now raise instead of returning False."""
+        from soup_cli.utils.fp8 import FP8DependencyMissingError, apply_fp8_training
 
-        with patch("soup_cli.utils.fp8.is_fp8_available", return_value=False):
+        with patch("soup_cli.utils.fp8.is_fp8_available", return_value=False), patch(
+            "soup_cli.utils.fp8.fp8_training_supported", return_value=(True, "")
+        ):
             model = MagicMock()
-            assert apply_fp8_training(model, recipe="rowwise") is False
+            with pytest.raises(FP8DependencyMissingError):
+                apply_fp8_training(model, recipe="rowwise")
 
     def test_apply_fp8_default_recipe_is_tensorwise(self):
         """Calling without recipe= uses 'tensorwise' (v0.28.0 compat)."""

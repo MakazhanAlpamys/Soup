@@ -458,7 +458,7 @@ def _make_vision_trainer(
 
 
 def _maybe_load_pretokenized(
-    dcfg, base: str, console_obj: Console, tcfg=None,
+    dcfg, base: str, console_obj: Console, tcfg=None, task: str = "sft",
 ) -> Optional[Tuple[object, object]]:
     """v0.53.7 #86 — short-circuit tokenization when caller pre-tokenized via
     ``soup data preprocess``.
@@ -469,9 +469,10 @@ def _maybe_load_pretokenized(
 
     Cache-hash gate: when ``<tokenized_path>/metadata.json`` exists, its
     ``cache_key`` is cross-checked against the current
-    ``(train, base, max_length, format, chat_template, mask_mode)`` config via
-    :func:`make_preprocess_cache_key` — every input that changes what a cached
-    row looks like. Mismatch raises ``ValueError`` with
+    ``(dataset, base, max_length, format, chat_template, mask_mode, task)``
+    config via :func:`make_preprocess_cache_key`: every input that changes which
+    rows are cached or what a cached row looks like (``PREPROCESS_KEY_FIELDS``).
+    Mismatch raises ``ValueError`` with
     the keyword ``"cache hash mismatch"`` so users know to re-run
     ``soup data preprocess``. Missing ``metadata.json`` falls back to
     "trusted" mode with a yellow advisory.
@@ -516,6 +517,7 @@ def _maybe_load_pretokenized(
             # has to match, since training saves the tokenizer with this template.
             chat_template=resolve_chat_template(dcfg.chat_template),
             mask_mode=preprocess_mask_mode(dcfg, tcfg),
+            task=task,
         )
         if stored_key != current_key:
             # A cache without the field was written before that input joined the
@@ -839,7 +841,9 @@ class SFTTrainerWrapper(StreamingSetupMixin):
         self._raft_epoch_shuffle = self._is_raft and bool(
             getattr(cfg.data, "raft_epoch_shuffle", False)
         )
-        pretok = _maybe_load_pretokenized(cfg.data, cfg.base, console, tcfg)
+        pretok = _maybe_load_pretokenized(
+            cfg.data, cfg.base, console, tcfg, task=cfg.task
+        )
         if pretok is not None:
             train_ds, eval_ds = pretok
             _validate_pretokenized_targets(

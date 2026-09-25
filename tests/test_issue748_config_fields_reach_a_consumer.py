@@ -338,8 +338,9 @@ KNOWN_UNCONSUMED = {
     # -- found by the read/write fix, and the reason that fix exists. A user
     #    setting that is OVERRIDDEN rather than merely unread, so the strongest
     #    kind of member this list has.
-    "training.grace_codebook": "no issue yet -- the string appears as an artifact-kind name in "
-                               "store.py:52 / edit.py:312, unrelated to this field",
+    "training.grace_codebook": "#808 -- warns at load from v0.76, refused as of v0.77 "
+                               "(the string appears as an artifact-kind name in "
+                               "store.py:52 / edit.py:312, unrelated to this field)",
     # -- #807: read ONLY inside a function nothing in src/ references, so the
     #    read is not consumption. Surfaced by the dead-function gate, which
     #    the guard previously applied to @property resolvers only.
@@ -364,15 +365,19 @@ KNOWN_UNCONSUMED = {
                                             "quantization.md:153",
     # -- staged for features that have not landed; grouped so they can be
     #    retired together rather than one at a time.
-    "training.long_context_grpo": "no issue yet -- documented as wiring "
-                                  "Tiled MLP; no Tiled MLP exists",
-    "training.vision_grpo": "no issue yet -- no vision GRPO path",
+    "training.long_context_grpo": "#808 -- warns at load from v0.76, refused as of v0.77 "
+                                  "(documented as wiring Tiled MLP; no Tiled MLP exists)",
+    "training.vision_grpo": "#808 -- warns at load from v0.76, refused as of v0.77 "
+                            "(no vision GRPO path)",
     "training.load_in_16bit": "no issue needed: schema rewrites quantization at validation time",
-    "training.unsloth_bnb_4bit": "no issue yet -- unsloth quantisation staging",
-    "training.llm_int8": "no issue yet -- bitsandbytes int8 staging",
-    "training.quantize_ref_model": "no issue yet -- reference-model quantisation staging",
-    "training.convergence_window": "no issue yet -- convergence-detector staging",
-    "training.convergence_rel_tol": "no issue yet -- convergence-detector staging",
+    "training.unsloth_bnb_4bit": "no issue needed: schema assertion alias",
+    "training.llm_int8": "no issue needed: schema assertion alias",
+    "training.quantize_ref_model": "#808 -- warns at load from v0.76, refused as of v0.77 "
+                                   "(reference-model quantisation staging)",
+    "training.convergence_window": "#808 group B -- soup train reports it as not enforced "
+                                   "(convergence-detector staging)",
+    "training.convergence_rel_tol": "#808 group B -- soup train reports it as not enforced "
+                                    "(convergence-detector staging)",
     "training.forgetting_eval_steps": "#799 -- catastrophic-forgetting probe staging",
     "training.forgetting_threshold": "#799 -- staged catastrophic-forgetting threshold; "
                                      "the same name in ship.py is unrelated",
@@ -382,19 +387,32 @@ KNOWN_UNCONSUMED = {
     "training.checkpoint_eval_metric": "#799 -- checkpoint-eval staging",
     "training.checkpoint_eval_tasks": "#799 -- checkpoint-eval staging",
     "training.checkpoint_keep_top": "#799 -- checkpoint-eval staging",
-    "training.grace_codebook_size": "no issue yet -- GRACE codebook staging",
-    "training.grace_codebook_dim": "no issue yet -- GRACE codebook staging",
-    "data.video_dir": "no issue yet -- video pipeline staging",
-    "data.eval_on_each_dataset": "no issue yet -- per-dataset eval staging",
-    "data.split_thinking": "no issue yet -- thinking-block masking staging",
-    "data.image_min_pixels": "no issue yet -- image preprocessing staging",
-    "data.image_max_pixels": "no issue yet -- image preprocessing staging",
-    "data.image_resize_algorithm": "no issue yet -- image preprocessing staging",
-    "data.video_fps": "no issue yet -- video pipeline staging",
-    "data.video_maxlen": "no issue yet -- video pipeline staging",
-    "data.resize_vocab": "no issue yet -- vocab-resize staging",
-    "data.extend_conversation": "no issue yet -- conversation-extension staging",
-    "data.skip_prepare_dataset": "no issue yet -- dataset-prep bypass staging",
+    "training.grace_codebook_size": "#808 -- warns at load from v0.76, refused as of v0.77 "
+                                    "(GRACE codebook staging)",
+    "training.grace_codebook_dim": "#808 -- warns at load from v0.76, refused as of v0.77 "
+                                   "(GRACE codebook staging)",
+    "data.video_dir": "#808 -- warns at load from v0.76, refused as of v0.77 "
+                      "(video pipeline staging)",
+    "data.eval_on_each_dataset": "#808 -- warns at load from v0.76, refused as of v0.77 "
+                                 "(per-dataset eval staging)",
+    "data.split_thinking": "#808 -- warns at load from v0.76, refused as of v0.77 "
+                           "(thinking-block masking staging)",
+    "data.image_min_pixels": "#808 -- warns at load from v0.76, refused as of v0.77 "
+                             "(image preprocessing staging)",
+    "data.image_max_pixels": "#808 -- warns at load from v0.76, refused as of v0.77 "
+                             "(image preprocessing staging)",
+    "data.image_resize_algorithm": "#808 -- warns at load from v0.76, refused as of v0.77 "
+                                   "(image preprocessing staging)",
+    "data.video_fps": "#808 -- warns at load from v0.76, refused as of v0.77 "
+                      "(video pipeline staging)",
+    "data.video_maxlen": "#808 -- warns at load from v0.76, refused as of v0.77 "
+                         "(video pipeline staging)",
+    "data.resize_vocab": "#808 -- warns at load from v0.76, refused as of v0.77 "
+                         "(vocab-resize staging)",
+    "data.extend_conversation": "#808 -- warns at load from v0.76, refused as of v0.77 "
+                                "(conversation-extension staging)",
+    "data.skip_prepare_dataset": "#808 -- warns at load from v0.76, refused as of v0.77 "
+                                 "(dataset-prep bypass staging)",
 }
 
 

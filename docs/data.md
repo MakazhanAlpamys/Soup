@@ -666,7 +666,7 @@ data:
     - dolma.jsonl
     - wikipedia.jsonl
   interleave: { strategy: probs, probs: [0.7, 0.3] }   # also: concat / under / over
-  eval_on_each_dataset: true
+  # eval_on_each_dataset: true                         # staged; refused as of v0.77 — #808
 ```
 
 `data.train` as a list requires `data.interleave` (and vice versa). `training.packing` /
@@ -758,15 +758,16 @@ that still reflects the original, un-rebalanced skew, not the mixture train now 
 data:
   add_new_tokens: ["<reasoning>", "</reasoning>"]
   new_special_tokens: ["<|tool_call|>"]
-  resize_vocab: true
   mask_history: true              # train only on the LAST assistant turn
-  split_thinking: true            # Qwen3-style <think> reasoning-block masking
-  image_min_pixels: 256
-  image_max_pixels: 4096
-  image_resize_algorithm: bicubic
-  video_fps: 24
-  video_maxlen: 32
-  video_dir: ./videos
+  # Staged fields below warn in v0.76 and are refused as of v0.77 (#808):
+  # resize_vocab: true
+  # split_thinking: true            # Qwen3-style <think> reasoning-block masking
+  # image_min_pixels: 256
+  # image_max_pixels: 4096
+  # image_resize_algorithm: bicubic
+  # video_fps: 24
+  # video_maxlen: 32
+  # video_dir: ./videos
 ```
 
 `mask_history: true` keeps only the **last** assistant turn in the loss: every
@@ -790,10 +791,21 @@ the same `SFTTrainerWrapper.setup()` row builder, and `task: distill` honours it
 too, since distill builds every row that way. On `task: sft` with
 `modality: vision` or `audio` it is accepted but not applied: those rows are
 built by the vision and audio preparers, which never read it (#1156).
+
 **`backend: mlx` ignores it:** MLX SFT builds its own mask and supervises every
 assistant turn, so the same config trains the last turn on transformers and every
 turn on MLX. `soup train` says so on its "MLX backend ignores:" line, and
 `soup doctor --config` reports it.
+
+**Multimodal vision and audio ignore it:** For `modality: vision` and `modality: audio`,
+every text token is supervised. Soup's vision collator masks only padding and image
+tokens, and the audio path only padding. Assistant-only masking would have to locate the
+assistant spans after the processor expands the image or audio tokens, which neither path
+does yet. Soup declares this gap rather
+than attempting unverified label restructuring, so both `mask_history` and `train_on_responses_only`
+are unread on vision and audio modalities, every text token trains, and `soup doctor --config`
+reports them as ignored.
+
 
 **AOT preprocessing:**
 
@@ -1019,7 +1031,7 @@ Pass `--live --base-yaml soup.yaml` to score each candidate with a short `soup t
 ## AOT Tokenization with `soup data preprocess`
 
 Pre-tokenize your dataset once and cache Arrow shards keyed by
-`(dataset, tokenizer, max_length, format, chat_template, loss-mask mode)`:
+`(dataset, tokenizer, max_length, format, chat_template, loss-mask mode, task)`:
 
 ```bash
 soup data preprocess soup.yaml --output ./tokenized_cache
@@ -1036,6 +1048,24 @@ training saves the tokenizer with it; a different one is refused with
 `cache hash mismatch`. A cache written before the template joined the key is
 refused the same way: re-run `soup data preprocess` to rebuild it.
 
+A row the command cannot tokenize stops it, and nothing is written. For pretrain
+that is a text row the tokenizer rejects (a lone surrogate, for example), which
+live pretraining refuses too; an empty `text` row is dropped by the loader on both
+paths. That covers a conversation the template rejects (for example
+`Conversation roles must alternate` on a Llama-2- or Gemma-style template), an
+empty `messages` list, a row the template renders as empty text, and a tokenizer
+error. The message numbers the row from 1, as live training does, counting the
+rows that survived loading, and quotes the start of its first message (or of a
+pretrain row's text), which is what finds it when an earlier row was dropped or
+the files were interleaved. Live training stops on a rejected conversation, an
+empty one and an empty render too, so a cache that skipped them would train on
+fewer rows than the same `soup.yaml` run live. Before #1180 they were dropped
+without a word, and the command exited 0. Fix or remove the row and re-run. A
+tokenizer with no chat template is reported once, before any row, and points at
+`data.chat_template`. The rows are checked when the command builds a cache: if one
+with the same key already exists it stops at `Target already exists` (exit 0)
+without reading them, so rebuild a cache written before this change with `--yes`.
+
 Cached rows carry a `labels` column masked exactly as the equivalent live run
 would mask it (`data.train_on_responses_only` /
 `data.train_on_messages_with_train_field`, plus `data.mask_history` and
@@ -1043,9 +1073,33 @@ would mask it (`data.train_on_responses_only` /
 built under one masking setting is refused — with the same
 `cache hash mismatch` error — when loaded under a different one. Caches written
 before this fix (tokenizer schema `v5` and earlier) have no `labels` and are
-rejected; re-run `soup data preprocess`. A `pre_tokenized` dataset you built
-yourself must carry its own `labels` column (`-100` on every token not to train
-on); without one it is refused rather than trained on every token.
+rejected; re-run `soup data preprocess`. With `task: sft`, a `pre_tokenized`
+dataset you built yourself must carry its own `labels` column (`-100` on every
+token not to train on); a train or validation split without one is refused
+rather than trained on every token. `task: pretrain` has no such check: a
+dataset without `labels` trains on every token, because TRL's collator copies
+`input_ids` into `labels`. That is the pretraining objective, and a
+`soup data preprocess` cache built for `task: pretrain` records the same labels.
+
+The full key, as `PREPROCESS_KEY_FIELDS` in `soup_cli/utils/data_pipeline.py`
+declares it:
+
+| Key input | Config fields |
+|---|---|
+| dataset | `data.train`, `data.interleave`, `data.val_split`, `data.replay`, `data.replay_ratio`, `data.replay_seed`, `data.streaming`, `data.buffer_size`, `data.image_dir`, `data.audio_dir` |
+| tokenizer | `base` |
+| max_length | `data.max_length` |
+| format | `data.format` (the source format preprocess read, recorded in `metadata.json`) |
+| chat_template | `data.chat_template`, resolved to the Jinja it renders |
+| loss-mask mode | `data.train_on_responses_only`, `data.train_on_messages_with_train_field`, `data.mask_history`, `training.train_on_eot` |
+| task | `task` |
+
+The dataset input covers every setting that decides which rows are cached: only
+the train split is cached, replay rows are mixed into it first, and the streaming
+loaders choose rows and their order. Every other `data` field is listed in
+`NOT_PREPROCESS_KEY_FIELDS` with the reason it cannot change a cached row, and a
+new field must be added to one of the two tables. Caches written before this
+(tokenizer schema `v6` and earlier) are refused; re-run `soup data preprocess`.
 
 
 ## Data Recipe DAG Runner (`soup data recipe --execute`)

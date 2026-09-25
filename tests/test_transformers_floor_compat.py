@@ -290,22 +290,32 @@ class TestFloorConstraintAndWorkflowPins:
 
     def test_workflow_runs_pip_check_and_asserts_floor_versions(self):
         job = _transformers_floor_job_block(CI_WORKFLOW.read_text(encoding="utf-8"))
+        assert 'pip install -e ".[dev,audio]"' in job
         assert "python -m pip check" in job
         assert "-c .github/constraints/transformers-floor.txt" in job
+        assert "tests/test_issue265_xcodec2_audio_contract.py" in job
         assert "tests/test_issue571_qwen4_exp.py" in job
         assert "tests/test_plotext_compat.py" in job
 
     @pytest.mark.parametrize(
-        "package", ["torch", "transformers", "trl", "peft", "plotext"]
+        "package", ["torch", "torchaudio", "transformers", "trl", "peft", "plotext"]
     )
     def test_workflow_version_check_accepts_pins_and_rejects_mismatch(self, package: str):
         constraints = (
-            "torch==2.5.1\ntransformers==8.8.8\ntrl==9.9.9\n"
+            "torch==2.5.1\ntorchaudio==2.5.1\n"
+            "transformers==8.8.8\ntrl==9.9.9\n"
             "peft==7.7.7\nplotext==6.6.6\n"
         )
         installed = {
             name: _constraint_pin(constraints, name)
-            for name in ("torch", "transformers", "trl", "peft", "plotext")
+            for name in (
+                "torch",
+                "torchaudio",
+                "transformers",
+                "trl",
+                "peft",
+                "plotext",
+            )
         }
         _run_transformers_floor_version_check(installed, constraints)
 

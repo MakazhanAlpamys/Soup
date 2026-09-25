@@ -2087,16 +2087,6 @@
       "training.lora.r": 32,
       "training.lr": 1e-05
     },
-    "sesame-csm-tts": {
-      "base": "sesame/csm-1b",
-      "data.audio_dir": "./data/audio",
-      "data.format": "audio",
-      "data.train": "./data/tts_train.jsonl",
-      "modality": "audio_out",
-      "task": "tts",
-      "training.lr": 5e-05,
-      "training.tts_family": "sesame_csm"
-    },
     "smollm2-1.7b-sft": {
       "base": "HuggingFaceTB/SmolLM2-1.7B-Instruct",
       "data.format": "auto",

@@ -44,6 +44,8 @@ _UNWIRED_TRAINING_TUNABLES = (
     "checkpoint_eval_tasks",
     "checkpoint_keep_top",
     "early_stop_patience",
+    "convergence_window",
+    "convergence_rel_tol",
 )
 
 
@@ -1301,9 +1303,26 @@ def train(
 
         qat_errors = validate_qat_config(
             cfg.training.quantization, cfg.backend, cfg.modality,
+            quantization_aware=cfg.training.quantization_aware,
+            fp8_recipe=cfg.training.fp8_recipe,
+            check_card=not dry_run,
         )
         for err in qat_errors:
-            console.print(f"[red]QAT error:[/] {err}")
+            console.print(f"[red]QAT error:[/] {markup_escape(err)}")
+        if dry_run and cfg.training.quantization_aware == "fp8" and cfg.backend != "unsloth":
+            # #1154 review: a dry run validates the config, and FP8 configs are
+            # routinely written on a laptop for a remote card, so the local card
+            # is a note here -- printed before any error exit, so a dry run that
+            # also lacks torchao still shows the whole picture. The real run
+            # still stops on the card. (Unsloth: its refusal is the answer.)
+            from soup_cli.utils.fp8 import fp8_training_supported
+
+            card_ok, card_reason = fp8_training_supported(cfg.training.fp8_recipe)
+            if not card_ok:
+                console.print(
+                    "[yellow]Note:[/] this machine could not run it: "
+                    f"{markup_escape(card_reason)}"
+                )
         if qat_errors:
             raise typer.Exit(1)
 

@@ -2052,7 +2052,10 @@ class TestSftPretrainPreTokenizedShortCircuit:
         """Happy path: SFT trainer loads pre-tokenized Arrow shards directly
         and skips ``Dataset.from_list(...).map(format_row)`` entirely."""
         from soup_cli.config.loader import load_config_from_string
-        from soup_cli.utils.data_pipeline import make_preprocess_cache_key
+        from soup_cli.utils.data_pipeline import (
+            make_preprocess_cache_key,
+            preprocess_dataset_key_input,
+        )
 
         monkeypatch.chdir(tmp_path)
         # The cfg.data.train path doesn't need to exist for the short-circuit
@@ -2060,20 +2063,21 @@ class TestSftPretrainPreTokenizedShortCircuit:
         train_jsonl = "train.jsonl"
         target = self._write_arrow_dir(tmp_path, cache_key="placeholder")
 
+        yaml = self._build_cfg_yaml(train_jsonl, "tokenized")
+        cfg = load_config_from_string(yaml)
+
         # Compute matching cache_key so the gate passes.
         cache_key = make_preprocess_cache_key(
-            dataset_path=train_jsonl,
+            dataset_path=preprocess_dataset_key_input(cfg.data),
             tokenizer_name="TinyLlama/TinyLlama-1.1B-Chat-v1.0",
             max_length=64,
             format_name="pre_tokenized",
             mask_mode="responses_only",
+            task="sft",
         )
         (target / "metadata.json").write_text(
             json.dumps({"cache_key": cache_key}), encoding="utf-8"
         )
-
-        yaml = self._build_cfg_yaml(train_jsonl, "tokenized")
-        cfg = load_config_from_string(yaml)
 
         # Exercise the helper directly — bypasses the full ``setup()`` (which
         # would also load a 1B model). The helper is the unit under test.
@@ -2096,34 +2100,38 @@ class TestSftPretrainPreTokenizedShortCircuit:
         """Same as SFT but for the Pretrain wrapper — verifies pretrain.py
         also short-circuits, not just sft.py."""
         from soup_cli.config.loader import load_config_from_string
-        from soup_cli.utils.data_pipeline import make_preprocess_cache_key
+        from soup_cli.utils.data_pipeline import (
+            make_preprocess_cache_key,
+            preprocess_dataset_key_input,
+        )
 
         monkeypatch.chdir(tmp_path)
         train_jsonl = "train.txt"
         target = self._write_arrow_dir(tmp_path, cache_key="placeholder")
-
-        cache_key = make_preprocess_cache_key(
-            dataset_path=train_jsonl,
-            tokenizer_name="TinyLlama/TinyLlama-1.1B-Chat-v1.0",
-            max_length=64,
-            format_name="pre_tokenized",
-            mask_mode="responses_only",
-        )
-        (target / "metadata.json").write_text(
-            json.dumps({"cache_key": cache_key}), encoding="utf-8"
-        )
 
         yaml = self._build_cfg_yaml(
             train_jsonl, "tokenized", task="pretrain",
         )
         cfg = load_config_from_string(yaml)
 
+        cache_key = make_preprocess_cache_key(
+            dataset_path=preprocess_dataset_key_input(cfg.data),
+            tokenizer_name="TinyLlama/TinyLlama-1.1B-Chat-v1.0",
+            max_length=64,
+            format_name="pre_tokenized",
+            mask_mode="responses_only",
+            task="pretrain",
+        )
+        (target / "metadata.json").write_text(
+            json.dumps({"cache_key": cache_key}), encoding="utf-8"
+        )
+
         # The pretrain wrapper imports the helper from sft.py — verify that
         # import resolves and the function behaves identically.
         from soup_cli.trainer.sft import _maybe_load_pretokenized as helper
 
         captured = MagicMock()
-        result = helper(cfg.data, cfg.base, captured)
+        result = helper(cfg.data, cfg.base, captured, task=cfg.task)
         assert result is not None
         train_ds, _ = result
         assert len(train_ds) == 2

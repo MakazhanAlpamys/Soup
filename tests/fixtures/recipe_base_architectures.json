@@ -421,9 +421,6 @@
   "model_type": "mpnet",
   "routed_experts": 0
  },
- "sesame/csm-1b": {
-  "unresolvable": "gated; set HF_TOKEN to classify"
- },
  "zai-org/GLM-4.6": {
   "model_type": "glm4_moe",
   "routed_experts": 160
