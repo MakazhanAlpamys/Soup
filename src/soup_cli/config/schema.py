@@ -4837,6 +4837,16 @@ class SoupConfig(BaseModel):
         from soup_cli.utils.v028_features import supports_v028_features
 
         if supports_v028_features(self.task) and self.backend != "mlx":
+            if self.backend == "unsloth" and self.training.quantization_aware == "fp8":
+                from soup_cli.utils.advanced_precision import (
+                    UNSLOTH_PRECISION_INCOMPATIBLE_REASON,
+                )
+
+                raise ValueError(
+                    'v0.28.0 features [\'quantization_aware="fp8"\'] are not supported on the '
+                    f"unsloth backend ({UNSLOTH_PRECISION_INCOMPATIBLE_REASON}). "
+                    "Switch to backend='transformers' or remove these flags."
+                )
             return self
         tcfg = self.training
         offenders: list[str] = []
@@ -6030,6 +6040,12 @@ class SoupConfig(BaseModel):
             conflicts.append("train_router_only")
         if tcfg.expand_layers is not None:
             conflicts.append("expand_layers")
+        if tcfg.quantization_aware:
+            conflicts.append("quantization_aware")
+        if tcfg.fp8_attention:
+            conflicts.append("fp8_attention")
+        if tcfg.nvfp4:
+            conflicts.append("nvfp4")
         if conflicts:
             raise ValueError(
                 f"training.stream_layers is mutually exclusive with "

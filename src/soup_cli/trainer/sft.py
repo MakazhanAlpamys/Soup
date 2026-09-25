@@ -2074,6 +2074,8 @@ class SFTTrainerWrapper(StreamingSetupMixin):
         )
         self.model = get_peft_model(self.model, lora_config)
 
+        self._apply_quantization_aware(tcfg)
+
     def _prepare_audio_dataset(self, dataset: dict):
         """Prepare dataset for audio fine-tuning with audio loading."""
         from datasets import Dataset
