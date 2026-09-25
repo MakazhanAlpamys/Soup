@@ -1297,7 +1297,7 @@ def train(
             cfg.training.use_galore, cfg.training.quantization, cfg.backend,
         )
         for err in galore_errors:
-            console.print(f"[red]GaLore error:[/] {err}")
+            console.print(f"[red]GaLore error:[/] {for_terminal(err)}")
         if galore_errors:
             raise typer.Exit(1)
 
@@ -1315,7 +1315,7 @@ def train(
             check_card=not dry_run,
         )
         for err in qat_errors:
-            console.print(f"[red]QAT error:[/] {markup_escape(err)}")
+            console.print(f"[red]QAT error:[/] {for_terminal(err)}")
         if dry_run and cfg.training.quantization_aware == "fp8" and cfg.backend != "unsloth":
             # #1154 review: a dry run validates the config, and FP8 configs are
             # routinely written on a laptop for a remote card, so the local card
@@ -1344,7 +1344,7 @@ def train(
             device=device,
         )
         for err in fsdp_errors:
-            console.print(f"[red]FSDP error:[/] {err}")
+            console.print(f"[red]FSDP error:[/] {for_terminal(err)}")
         if fsdp_errors:
             raise typer.Exit(1)
 
@@ -1360,7 +1360,7 @@ def train(
             deepspeed_config=ds_config_path,
         )
         for err in compile_errors:
-            console.print(f"[red]FSDP2 + torch.compile error:[/] {err}")
+            console.print(f"[red]FSDP2 + torch.compile error:[/] {for_terminal(err)}")
         if compile_errors:
             raise typer.Exit(1)
 
@@ -1375,7 +1375,7 @@ def train(
             gpu_count=gpu_info.get("gpu_count", 0),
         )
         for err in pp_errors:
-            console.print(f"[red]Pipeline parallel error:[/] {err}")
+            console.print(f"[red]Pipeline parallel error:[/] {for_terminal(err)}")
         if pp_errors:
             raise typer.Exit(1)
         console.print(
@@ -1400,7 +1400,7 @@ def train(
             cfg.training.use_liger, cfg.backend, device,
         )
         for err in liger_errors:
-            console.print(f"[red]Liger error:[/] {err}")
+            console.print(f"[red]Liger error:[/] {for_terminal(err)}")
         if liger_errors:
             raise typer.Exit(1)
 
@@ -1412,7 +1412,7 @@ def train(
             cfg.training.use_flash_attn, cfg.backend, device,
         )
         for err in fa_errors:
-            console.print(f"[red]FlashAttention error:[/] {err}")
+            console.print(f"[red]FlashAttention error:[/] {for_terminal(err)}")
         if fa_errors:
             raise typer.Exit(1)
 
@@ -1424,7 +1424,7 @@ def train(
             cfg.training.use_ring_attention, device, cfg.data.max_length,
         )
         for err in ring_errors:
-            console.print(f"[red]Ring Attention error:[/] {err}")
+            console.print(f"[red]Ring Attention error:[/] {for_terminal(err)}")
         if ring_errors:
             raise typer.Exit(1)
 

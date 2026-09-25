@@ -14,8 +14,14 @@ from soup_cli.autopilot.analyzer import (
     analyze_hardware,
     analyze_model,
 )
-from soup_cli.autopilot.decisions import GOAL_TO_TASK, parse_gpu_budget
+from soup_cli.autopilot.decisions import (
+    GOAL_TO_TASK,
+    kernel_flag_notes,
+    parse_gpu_budget,
+)
 from soup_cli.autopilot.generate_config import build_soup_config, write_yaml
+from soup_cli.config.schema import SFT_KERNEL_AWARE_TASKS
+from soup_cli.utils.terminal import for_terminal
 
 console = Console()
 
@@ -42,6 +48,17 @@ def _is_under_cwd(path: Path) -> bool:
     except ValueError:
         return False
     return common == cwd
+
+
+def _kernel_display(enabled: bool, note: str | None) -> str:
+    """One Autopilot Decisions kernel entry; name a missing package (#1212).
+
+    The flag alone reads like a decision to skip a speedup; when the GPU
+    qualifies and the package simply isn't there, say so instead.
+    """
+    if not enabled and note:
+        return f"off ({for_terminal(note)})"
+    return str(enabled)
 
 
 def autopilot_cmd(
@@ -118,6 +135,15 @@ def autopilot_cmd(
         console.print(f"[red]{exc}[/]")
         raise typer.Exit(1)
 
+    # #1212 — when the GPU qualifies but a package is missing, the panel names
+    # it. Only the SFT-family tasks read either flag (#806), so a note next to
+    # any other task's off-flag would be misleading (it is off by task scope).
+    kernel_notes = (
+        kernel_flag_notes(hardware_profile.compute_capability)
+        if cfg.task in SFT_KERNEL_AWARE_TASKS
+        else {"flash_attn": None, "liger": None}
+    )
+
     # Render decision summary
     console.print(
         Panel(
@@ -144,8 +170,10 @@ def autopilot_cmd(
             f"Learning rate: {cfg.training.lr}\n"
             f"Epochs: {cfg.training.epochs}\n"
             f"Max length: {cfg.data.max_length}\n"
-            f"Flash Attention: {cfg.training.use_flash_attn}\n"
-            f"Liger Kernel: {cfg.training.use_liger}",
+            f"Flash Attention: "
+            f"{_kernel_display(cfg.training.use_flash_attn, kernel_notes['flash_attn'])}\n"
+            f"Liger Kernel: "
+            f"{_kernel_display(cfg.training.use_liger, kernel_notes['liger'])}",
             title="Autopilot Decisions",
         )
     )
