@@ -682,7 +682,7 @@
       "training.lr": 0.0001
     },
     "granite-4-sft": {
-      "base": "ibm-granite/granite-4.0-tiny-base-preview",
+      "base": "ibm-granite/granite-4.0-h-tiny-base",
       "data.format": "auto",
       "data.train": "./data/train.jsonl",
       "training.lora.alpha": 32,
@@ -762,7 +762,7 @@
       "training.lr": 1e-05
     },
     "kimi-k2-sft": {
-      "base": "moonshotai/Kimi-K2-Instruct",
+      "base": "moonshotai/Kimi-K2-Base",
       "data.format": "auto",
       "data.max_length": 8192,
       "data.train": "./data/train.jsonl",

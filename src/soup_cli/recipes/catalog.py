@@ -2824,13 +2824,13 @@ output: ./output
 """,
     ),
     "kimi-k2-sft": RecipeMeta(
-        model="moonshotai/Kimi-K2-Instruct",
+        model="moonshotai/Kimi-K2-Base",
         task="sft",
         size="N/A",
         tags=("kimi", "moonshot", "moe", "long-context"),
         description="Kimi K2 SFT (Moonshot MoE, long-context-aware)",
         yaml_str="""\
-base: moonshotai/Kimi-K2-Instruct
+base: moonshotai/Kimi-K2-Base
 task: sft
 
 data:
@@ -2984,13 +2984,13 @@ output: ./output
     # v0.51.0 Part B — Small / edge / specialist (~6 model families)
     # ------------------------------------------------------------------
     "granite-4-sft": RecipeMeta(
-        model="ibm-granite/granite-4.0-tiny-base-preview",
+        model="ibm-granite/granite-4.0-h-tiny-base",
         task="sft",
         size="7B",
         tags=("granite", "ibm", "small", "instruction"),
         description="IBM Granite 4.0 tiny SFT",
         yaml_str="""\
-base: ibm-granite/granite-4.0-tiny-base-preview
+base: ibm-granite/granite-4.0-h-tiny-base
 task: sft
 
 data:
