@@ -123,10 +123,29 @@ def migrate(
     # Generate YAML
     yaml_str = config_to_yaml(result)
 
+    # Validate output with schema before printing / writing
+    from soup_cli.config.loader import load_config_from_string
+
+    try:
+        loaded_cfg = load_config_from_string(yaml_str)
+    except Exception as exc:
+        from rich.markup import escape
+        console.print(f"[red]Generated config failed schema validation: {escape(str(exc))}[/]")
+        raise typer.Exit(1)
+
+    task_val = getattr(loaded_cfg, "task", "unknown")
+    quant_val = getattr(loaded_cfg.training, "quantization", "none")
+    lora_obj = getattr(loaded_cfg.training, "lora", None)
+    lora_r_val = getattr(lora_obj, "r", "none") if lora_obj is not None else "none"
+
     # Show generated config
     console.print(Panel(
         Syntax(yaml_str, "yaml", theme="monokai"),
         title=f"[bold green]Generated soup.yaml[/] (from {source})",
+        subtitle=(
+            f"[dim]Resolved: task={task_val}, "
+            f"quantization={quant_val}, lora.r={lora_r_val}[/]"
+        ),
     ))
 
     if dry_run:

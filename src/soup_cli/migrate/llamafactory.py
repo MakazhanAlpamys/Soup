@@ -68,9 +68,10 @@ def migrate_llamafactory(config_path: Path) -> Dict[str, Any]:
 
     data_format = _TASK_FORMAT_MAP.get(task, "auto")
 
-    # --- LoRA ---
+    # --- LoRA / Full Fine-tuning ---
     finetuning_type = raw.get("finetuning_type", "lora")
     include_lora = finetuning_type == "lora"
+    lora_section: Dict[str, Any] = {}
 
     if finetuning_type == "freeze":
         warnings.append(
@@ -79,13 +80,27 @@ def migrate_llamafactory(config_path: Path) -> Dict[str, Any]:
         )
         include_lora = True
 
-    if finetuning_type == "full":
+    elif finetuning_type == "oft":
         warnings.append(
-            "finetuning_type: full — no LoRA will be used. "
-            "Soup will train all parameters."
+            "finetuning_type: oft is not supported in Soup. "
+            "Using LoRA instead."
         )
+        include_lora = True
 
-    lora_section = {}
+    elif finetuning_type == "full":
+        if task in ("sft", "embedding"):
+            warnings.append(
+                "finetuning_type: full — no LoRA will be used. "
+                "Soup will train all parameters."
+            )
+            lora_section = {"r": 0}
+        else:
+            raise ValueError(
+                f"finetuning_type: full is requested, but stage '{stage}' (task '{task}') "
+                "does not support full fine-tuning in Soup. "
+                "Only sft and embedding support full fine-tuning (lora.r=0)."
+            )
+
     if include_lora:
         lora_section["r"] = raw.get("lora_rank", 64)
         lora_section["alpha"] = raw.get("lora_alpha", 16)
@@ -116,13 +131,50 @@ def migrate_llamafactory(config_path: Path) -> Dict[str, Any]:
         training["warmup_ratio"] = raw["warmup_ratio"]
 
     # Quantization
-    quant_bit = raw.get("quantization_bit")
-    if quant_bit == 4:
-        training["quantization"] = "4bit"
-    elif quant_bit == 8:
-        training["quantization"] = "8bit"
-    elif quant_bit is not None:
+    quant_bit_raw = raw.get("quantization_bit")
+    quant_bit = None
+    if quant_bit_raw is not None:
+        if isinstance(quant_bit_raw, int):
+            quant_bit = quant_bit_raw
+        elif isinstance(quant_bit_raw, str) and quant_bit_raw.strip().isdigit():
+            quant_bit = int(quant_bit_raw.strip())
+        else:
+            raise ValueError(f"Invalid quantization_bit value: {quant_bit_raw!r}")
+
+    quant_method = raw.get("quantization_method")
+    if isinstance(quant_method, str):
+        quant_method = quant_method.lower().strip()
+
+    if finetuning_type == "full":
         training["quantization"] = "none"
+    elif quant_bit is None:
+        training["quantization"] = "none"
+    elif quant_method in (None, "bitsandbytes", "bnb"):
+        if quant_bit == 4:
+            training["quantization"] = "4bit"
+        elif quant_bit == 8:
+            training["quantization"] = "8bit"
+        else:
+            method_name = quant_method or "bitsandbytes"
+            raise ValueError(
+                f"Unsupported quantization_bit={quant_bit} for method '{method_name}'"
+            )
+    elif quant_method == "hqq":
+        if quant_bit in (1, 2, 3, 4, 8):
+            training["quantization"] = f"hqq:{quant_bit}bit"
+        else:
+            raise ValueError(
+                f"Unsupported quantization_bit={quant_bit} for method 'hqq'"
+            )
+    elif quant_method == "eetq":
+        if quant_bit == 8:
+            training["quantization"] = "eetq"
+        else:
+            raise ValueError(
+                f"Unsupported quantization_bit={quant_bit} for method 'eetq' (expected 8)"
+            )
+    else:
+        raise ValueError(f"Unsupported quantization_method: '{quant_method}'")
 
     # Task-specific params
     pref_beta = raw.get("pref_beta")
@@ -142,7 +194,7 @@ def migrate_llamafactory(config_path: Path) -> Dict[str, Any]:
         training["loraplus_lr_ratio"] = raw["loraplus_lr_ratio"]
 
     # Add lora section
-    if include_lora and lora_section:
+    if lora_section:
         training["lora"] = lora_section
 
     # --- Data ---
