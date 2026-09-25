@@ -155,6 +155,11 @@ def _map_text_sft_rows(
             labels = formatted.get("labels")
             if labels is not None:
                 ensure_causal_loss_target(labels, max_length=max_length)
+                # #1236 — emit assistant_masks alongside labels for TRL packing
+                if "assistant_masks" not in formatted:
+                    formatted["assistant_masks"] = [
+                        1 if int(x) != -100 else 0 for x in labels
+                    ]
             return formatted
         except NoCausalLossTargetError as exc:
             raise ValueError(f"{split} row {row_index + 1}: {exc}") from exc
@@ -164,6 +169,20 @@ def _map_text_sft_rows(
         with_indices=True,
         remove_columns=["messages"],
     )
+
+
+def _ensure_assistant_masks(dataset: Any) -> Any:
+    """Ensure `assistant_masks` column exists alongside `labels` for TRL packing (#1236)."""
+    if dataset is None:
+        return None
+    cols = getattr(dataset, "column_names", ())
+    if "labels" in cols and "assistant_masks" not in cols:
+        return dataset.map(
+            lambda row: {
+                "assistant_masks": [1 if int(x) != -100 else 0 for x in row["labels"]]
+            }
+        )
+    return dataset
 
 
 def _validate_pretokenized_targets(dataset: Any, *, split: str, max_length: int) -> None:
@@ -884,6 +903,11 @@ class SFTTrainerWrapper(StreamingSetupMixin):
                     split="validation",
                     max_length=cfg.data.max_length,
                 )
+
+        # #1236 — Ensure assistant_masks exists alongside labels for TRL packing
+        train_ds = _ensure_assistant_masks(train_ds)
+        if eval_ds is not None:
+            eval_ds = _ensure_assistant_masks(eval_ds)
 
         # --- Output dir ---
         output_dir = Path(cfg.output)
