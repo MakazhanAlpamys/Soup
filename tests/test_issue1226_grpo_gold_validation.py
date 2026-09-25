@@ -233,6 +233,39 @@ class TestUnparseableGoldRefused:
         assert "GRPO train row 1 'answer'" in message
         assert "2 more of the 5 rows have the same problem" in message
 
+    def test_a_hedged_gold_is_refused_and_counted_like_an_unreadable_one(self):
+        tcfg = TrainingConfig(reward_fn="verifiable", verifiable_domain="math")
+        rows = [
+            {"prompt": "q0", "answer": "42"},
+            {"prompt": "q1", "answer": "The answer is either 41 or 42."},
+            {"prompt": "q2", "answer": r"\frac{1}{2}"},
+            {"prompt": "q3", "answer": "Line one\nLine two"},
+        ]
+        with pytest.raises(ValueError) as excinfo:
+            _validate_grpo_reward_metadata(rows, tcfg, split="train")
+        message = str(excinfo.value)
+        assert "GRPO train row 1 'answer'" in message
+        assert "1 more of the 4 rows have the same problem" in message
+        assert "more than one number" in message
+
+    @pytest.mark.parametrize(
+        "gold",
+        [
+            "The answer is 42 (i.e. 42.0).",  # one value, said twice
+            "The answer is 41 apples, not 42.",  # the clause ends at the comma
+            "#### 41 or 42",  # inside a delimiter the answer is compared whole, as text
+            "(3, 4)",  # a tuple is one answer
+            "-2, 1",  # a bare list gold (MATH-500 has them) is not a phrase
+        ],
+    )
+    @pytest.mark.parametrize(("reward_fn", "domain"), [("accuracy", None), ("verifiable", "math")])
+    def test_single_value_phrases_and_delimited_or_bare_lists_pass(self, gold, reward_fn, domain):
+        _validate_grpo_reward_metadata(
+            [{"prompt": "q", "answer": gold}],
+            TrainingConfig(reward_fn=reward_fn, verifiable_domain=domain),
+            split="train",
+        )
+
     def test_refusal_names_the_split(self):
         with pytest.raises(ValueError, match=r"GRPO validation row 0 'answer'"):
             _validate_grpo_reward_metadata(

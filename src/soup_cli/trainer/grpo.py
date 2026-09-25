@@ -876,7 +876,8 @@ def _validate_grpo_reward_metadata(
 
 
 def _check_golds_are_readable(data: list[dict], reward_names: list[str], *, split: str) -> None:
-    """Refuse golds with no extractable final answer; report the ones compared as text."""
+    """Refuse golds with no single extractable final answer (none, or a hedge such as "The
+    answer is either 41 or 42."); report the ones compared as text."""
     unreadable: list[int] = []
     text_golds = 0
     for row_index, row in enumerate(data):
@@ -903,12 +904,13 @@ def _unreadable_gold_message(
         f" {len(rows) - 1} more of the {total} rows have the same problem." if len(rows) > 1 else ""
     )
     return (
-        f"GRPO {split} row {rows[0]} 'answer' states no final answer that {label} {names} can "
-        f"compare against, so every completion would score 0.0.{more} The field comes from an "
-        "'answer' column, an Alpaca 'output' or the final assistant turn; rows count from 0 "
-        "after the train/validation split. Put the answer after '####', inside \\boxed{}, or "
-        "after 'The answer is' or 'Answer:', make the field the bare answer on one line, or "
-        "drop the row."
+        f"GRPO {split} row {rows[0]} 'answer' states no single final answer that {label} "
+        f"{names} can compare against: it states none, or its answer phrase names more than one "
+        "number (a hedge such as 'The answer is either 41 or 42.'), so every completion would "
+        f"score 0.0.{more} The field comes from an 'answer' column, an Alpaca 'output' or the "
+        "final assistant turn; rows count from 0 after the train/validation split. Put one "
+        "answer after '####', inside \\boxed{}, or after 'The answer is' or 'Answer:', make the "
+        "field the bare answer on one line, or drop the row."
     )
 
 

@@ -236,6 +236,62 @@ STRING_GOLD_CASES = [
     (r"x \leftarrow y", r"\boxed{x arrow y}", 0.0),
 ]
 
+# Hedges (ruling): an answer clause that names more than one DISTINCT value states no answer.
+# (completion, every value it hedges between). None of them may be paid for any of its values.
+HEDGES = [
+    ("The answer is either 41 or 42.", ["41", "42"]),
+    ("Answer: 41 or 42", ["41", "42"]),
+    ("the answer is 41, 42 or 43", ["41", "42", "43"]),
+    ("The answer is 42 or 43.", ["42", "43"]),
+    ("The answer is 42 (or 43).", ["42", "43"]),  # an aside is part of the clause
+    ("**Answer**: 41 or 42", ["41", "42"]),
+    ("Answer:\n41 or 42", ["41", "42"]),
+    ("#### Final Answer\n41 or 42", ["41", "42"]),
+    ("#### 42\nThe answer is 41 or 42.", ["41", "42"]),  # a later phrase supersedes the marker
+    ("The final answer is 42; 43 is also possible.", ["42", "43"]),  # "; " + a number goes on
+    ("The answer is 41 apples (not 42).", ["41", "42"]),
+    ("The answer is 41 apples or 42.", ["41", "42"]),
+    ("The answer is 1,000 or 2,000.", ["1000", "2000"]),
+    ("The answer is -3 or 3.", ["-3", "3"]),
+    ("The answer is $41$ or $42$.", ["41", "42"]),
+    ("The answer is 6 times 7 which is 42.", ["6", "7", "42"]),  # boundary: every number counts
+    ("The answer is 42 (6 times 7).", ["42", "6", "7"]),  # boundary: so does an aside's
+    ("The answer is 3, 4.", ["3", "4"]),  # boundary: a bare list in a phrase is a hedge
+]
+
+# Not hedges: ONE value, maybe repeated or respelled; a tuple or an expression is one answer.
+# (completion, gold, expected score in both rewards)
+SINGLE_VALUE_CLAUSES = [
+    ("The answer is 42 (i.e. 42.0).", "42", 1.0),
+    ("The answer is 42 or 42.0.", "42", 1.0),
+    ("The answer is 42, i.e. 42.0.", "42", 1.0),
+    ("The answer is -42 (that is, " + MINUS + "42).", "-42", 1.0),
+    ("The answer is 1,000 (one thousand).", "1000", 1.0),
+    ("The answer is 41 apples, not 42.", "41", 1.0),  # the comma ends the clause: only 41
+    ("The answer is 41 apples, not 42.", "42", 0.0),
+    ("The answer is 42 apples, not 41.", "42", 1.0),
+    ("The answer is 42. 41 was my first guess.", "42", 1.0),  # ". " ends the clause
+    ("The answer is (3, 4).", "(3, 4)", 1.0),  # a tuple is one answer
+    (r"The answer is \left(3, \frac{\pi}{2}\right).", r"\left( 3, \frac{\pi}{2} \right)", 1.0),
+    (r"The answer is \frac{14}{3}.", r"\frac{14}{3}", 1.0),  # so is an expression...
+    (r"The answer is \frac{14}{3}.", "3", 0.0),  # ...and its digits are not its value
+    (r"The answer is 2^{10}.", "10", 0.0),
+    ("The answer is 2x.", "2", 0.0),
+    ("41 or 42", "42", 1.0),  # no answer phrase: an unmarked completion reads its last number
+    (r"\boxed{42}. The answer is 41 or 42.", "42", 1.0),  # a box outranks the phrase
+    ("#### 41 or 42", "42", 0.0),  # a delimited answer is compared whole: never a number
+]
+
+# Hedged golds are a data problem: refused, never compared.
+HEDGED_GOLDS = [
+    "The answer is either 41 or 42.",
+    "Answer: 41 or 42",
+    "the answer is 41, 42 or 43",
+    "The answer is 42 (or 43).",
+    "6*7 is 42.\nThe answer is 42 or 43.",
+    "#### Final Answer\n41 or 42",
+]
+
 # The partial-credit policy, pinned: (completion, gold, accuracy before #1226, accuracy now).
 # The 0.5 substring credit is REMOVED. It paid a wrong answer that mentions the gold exactly as
 # much as a right answer in a spelling the parser missed, which is a reward-hacking surface.
@@ -370,6 +426,49 @@ class TestSpellingMatrix:
         self, gold, completion, expected
     ):
         assert _scores(completion, gold) == (expected, expected)
+
+
+# ===========================================================================
+# hedges: an answer clause naming more than one distinct value (ruling)
+# ===========================================================================
+
+
+class TestHedges:
+    @pytest.mark.parametrize(("completion", "values"), HEDGES)
+    def test_a_hedged_answer_extracts_nothing_and_is_paid_for_none_of_its_values(
+        self, completion, values
+    ):
+        from soup_cli.utils.final_answer import extract_final_answer, parse_completion
+
+        assert extract_final_answer(completion) is None
+        assert parse_completion(completion) is None
+        for value in values:
+            assert _scores(completion, value) == (0.0, 0.0), value
+
+    @pytest.mark.parametrize(("completion", "gold", "expected"), SINGLE_VALUE_CLAUSES)
+    def test_one_value_repeated_or_respelled_is_not_a_hedge(self, completion, gold, expected):
+        assert _scores(completion, gold) == (expected, expected)
+
+    @pytest.mark.parametrize("gold", HEDGED_GOLDS)
+    def test_a_hedged_gold_is_not_a_reference(self, gold):
+        from soup_cli.utils.final_answer import parse_reference
+
+        assert parse_reference(gold) is None
+        for completion in ("#### 41", "#### 42", "#### 43", "41 or 42"):
+            assert _scores(completion, gold) == (0.0, 0.0), completion
+
+    def test_the_clause_rule_decides_what_the_hedge_rule_sees(self):
+        from soup_cli.utils.final_answer import parse_completion, parse_reference
+
+        # The comma ends the clause, so only 41 is in it: one value, read as 41 (not a hedge).
+        assert parse_completion("The answer is 41 apples, not 42.").number == Decimal(41)
+        assert parse_reference("The answer is 41 apples, not 42.") is not None
+        # The same two numbers inside ONE clause are a hedge.
+        assert parse_completion("The answer is 41 apples or 42.") is None
+        assert parse_completion("The answer is 41 apples (not 42).") is None
+        # A comma that a number follows continues a list rather than ending the clause.
+        assert parse_completion("The answer is 41, 42 or 43.") is None
+        assert parse_completion("The answer is 41, then 42.").number == Decimal(41)
 
 
 # ===========================================================================
