@@ -22,16 +22,18 @@ import types
 from typing import Optional
 
 # HF Trainer / transformers built-in optimizers (no extra dep required).
+# adamw_apex_fused and adamw_hf are NOT here: transformers 5.x rejects both
+# in TrainingArguments (OptimizerNames) even though 4.x accepted them, so a
+# config that loaded fine used to crash inside the trainer after the model
+# was already loaded (#1269). They are refused at config load instead.
 _HF_NATIVE: frozenset = frozenset({
     "adamw_torch",
     "adamw_torch_fused",
     "adamw_torch_xla",
-    "adamw_apex_fused",
     "adamw_anyprecision",
     "adafactor",
     "sgd",
     "adagrad",
-    "adamw_hf",
     "rmsprop",
 })
 
@@ -49,20 +51,29 @@ _BNB_BACKED: frozenset = frozenset({
 
 # v0.41.0 — new entries (require optional packages).
 _NEW_V0_41_0: frozenset = frozenset({
-    "badam",
     "apollo_adamw",
-    "adam_mini",
     "lomo",
     "adalomo",
     "grokadamw",
     "schedule_free_adamw",
     "schedule_free_sgd",
-    "muon",
-    "dion",
-    "came_pytorch",
-    "ao_adamw_fp8",
+})
+
+# Names that used to be in the allowlist but transformers 5.x rejects in
+# TrainingArguments (verified on 5.17, #1269). Kept separately so the config
+# loader can refuse them with a message that names working alternatives
+# instead of letting the run die inside the trainer after the model loads.
+_TORCH_REJECTED: frozenset = frozenset({
+    "adam_mini",
+    "adamw_apex_fused",
+    "adamw_hf",
     "ao_adamw_4bit",
     "ao_adamw_8bit",
+    "ao_adamw_fp8",
+    "badam",
+    "came_pytorch",
+    "dion",
+    "muon",
 })
 
 SUPPORTED_OPTIMIZERS: frozenset = _HF_NATIVE | _BNB_BACKED | _NEW_V0_41_0
@@ -74,20 +85,12 @@ SUPPORTED_OPTIMIZERS: frozenset = _HF_NATIVE | _BNB_BACKED | _NEW_V0_41_0
 # in test environments. Wrapped in MappingProxyType to prevent runtime mutation
 # (matches v0.36.0 _REGISTRY policy).
 _OPTIMIZER_PACKAGES = types.MappingProxyType({
-    "badam": "badam",
     "apollo_adamw": "apollo-torch",
-    "adam_mini": "adam-mini",
     "lomo": "lomo-optim",
     "adalomo": "lomo-optim",
     "grokadamw": "grokadamw",
     "schedule_free_adamw": "schedulefree",
     "schedule_free_sgd": "schedulefree",
-    "muon": "muon-optimizer",
-    "dion": "dion-optimizer",
-    "came_pytorch": "came-pytorch",
-    "ao_adamw_fp8": "torchao",
-    "ao_adamw_4bit": "torchao",
-    "ao_adamw_8bit": "torchao",
 })
 
 _MAX_OPTIMIZER_NAME_LEN = 64
@@ -112,6 +115,15 @@ def validate_optimizer_name(name: object) -> str:
             f"optimizer name exceeds {_MAX_OPTIMIZER_NAME_LEN} chars"
         )
     normalised = name.lower()
+    if normalised in _TORCH_REJECTED:
+        raise ValueError(
+            f"optimizer={name!r} is no longer supported: transformers 5.x "
+            "rejects it in TrainingArguments after the model has loaded, so "
+            "Soup refuses it at config load instead. Use one of: "
+            "adamw_torch, adamw_torch_fused, adamw_bnb_8bit, apollo_adamw, "
+            "grokadamw. See soup_cli.utils.optimizer_zoo."
+            "SUPPORTED_OPTIMIZERS for the complete list."
+        )
     if normalised not in SUPPORTED_OPTIMIZERS:
         # Show a tight allowlist preview rather than dumping all 30+ names.
         suggestions = sorted(_NEW_V0_41_0)[:6]
