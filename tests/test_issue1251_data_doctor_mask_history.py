@@ -18,9 +18,9 @@ import json
 
 import pytest
 
-pytestmark = pytest.mark.unit
-
 from soup_cli.data.loss_mask import IGNORE_INDEX
+
+pytestmark = pytest.mark.unit
 
 _SPECIALS = ["<unk>", "<s>", "</s>", "<|user|>", "<|assistant|>", "<|end|>"]
 _WORDS = [
