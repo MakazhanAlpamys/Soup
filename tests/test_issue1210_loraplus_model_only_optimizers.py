@@ -4,6 +4,9 @@
 optimizer without a model. For apollo_adamw, lomo and adalomo transformers needs one,
 so such a config passed load and failed only after the base model had loaded. It is
 now refused at config load, as is LoRA+ with GaLore.
+
+Every case runs under several tasks: the refusal is a TrainingConfig check and must not
+depend on the task, which a task-scoped refactor could otherwise break unnoticed.
 """
 
 from __future__ import annotations
@@ -14,6 +17,7 @@ from soup_cli.config.loader import load_config_from_string
 
 _BASE = """
 base: some-org/some-model
+task: {task}
 data:
   train: ./train.jsonl
 training:
@@ -22,34 +26,40 @@ training:
     alpha: 16
 """
 
+_TASKS = ["sft", "dpo", "ppo"]
 
-def _config(**training: object) -> str:
+
+def _config(task: str, **training: object) -> str:
     lines = "".join(f"  {key}: {value}\n" for key, value in training.items())
-    return _BASE + lines
+    return _BASE.format(task=task) + lines
 
 
+@pytest.mark.parametrize("task", _TASKS)
 @pytest.mark.parametrize("optimizer", ["apollo_adamw", "lomo", "adalomo"])
-def test_loraplus_with_a_model_only_optimizer_is_refused_at_load(optimizer):
+def test_loraplus_with_a_model_only_optimizer_is_refused_at_load(task, optimizer):
     with pytest.raises(ValueError) as caught:
-        load_config_from_string(_config(loraplus_lr_ratio=16.0, optimizer=optimizer))
+        load_config_from_string(_config(task, loraplus_lr_ratio=16.0, optimizer=optimizer))
     message = str(caught.value)
     assert "training.loraplus_lr_ratio" in message
     assert f"training.optimizer={optimizer!r}" in message
 
 
-def test_optimizer_name_is_matched_case_insensitively():
+@pytest.mark.parametrize("task", _TASKS)
+def test_optimizer_name_is_matched_case_insensitively(task):
     with pytest.raises(ValueError, match="training.loraplus_lr_ratio"):
-        load_config_from_string(_config(loraplus_lr_ratio=16.0, optimizer="LOMO"))
+        load_config_from_string(_config(task, loraplus_lr_ratio=16.0, optimizer="LOMO"))
 
 
-def test_loraplus_with_galore_is_refused_at_load():
+@pytest.mark.parametrize("task", _TASKS)
+def test_loraplus_with_galore_is_refused_at_load(task):
     with pytest.raises(ValueError) as caught:
-        load_config_from_string(_config(loraplus_lr_ratio=16.0, use_galore="true"))
+        load_config_from_string(_config(task, loraplus_lr_ratio=16.0, use_galore="true"))
     message = str(caught.value)
     assert "training.loraplus_lr_ratio" in message
     assert "training.use_galore" in message
 
 
+@pytest.mark.parametrize("task", _TASKS)
 @pytest.mark.parametrize(
     "training",
     [
@@ -71,6 +81,6 @@ def test_loraplus_with_galore_is_refused_at_load():
         "galore-alone",
     ],
 )
-def test_each_setting_alone_still_loads(training):
+def test_each_setting_alone_still_loads(task, training):
     # Controls: only the combination is refused.
-    load_config_from_string(_config(**training))
+    load_config_from_string(_config(task, **training))
