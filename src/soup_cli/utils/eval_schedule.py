@@ -40,12 +40,18 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 GENERATION_EVAL_TASKS: frozenset[str] = frozenset({"grpo", "ppo", "online_dpo"})
 
 #: Tasks that refuse ``training.eval_steps`` at config load, each with the
-#: reason. The setting would be read by nothing on them.
+#: reason. The setting would be read by nothing on them (ppo, unlearn) or would
+#: crash the run (online_dpo). A generation-based evaluation for ppo and
+#: online_dpo -- scoring completions for held-out prompts -- is a separate
+#: feature, not something this setting can switch on.
 EVAL_STEPS_UNSUPPORTED_TASKS: dict[str, str] = {
-    "ppo": "TRL's PPO training loop never runs an evaluation pass",
+    "ppo": (
+        "TRL's PPO loop never calls evaluate(); a generation-based evaluation "
+        "for ppo is a separate feature"
+    ),
     "online_dpo": (
-        "TRL's online-DPO trainer has no evaluation step for prompt-only rows "
-        "(its evaluate() fails on them)"
+        "online DPO's evaluate() crashes on prompt-only rows; a "
+        "generation-based evaluation for online_dpo is a separate feature"
     ),
     "unlearn": (
         "unlearning trains on data.forget_set and data.retain_set and never "

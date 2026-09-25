@@ -462,6 +462,25 @@ class GRPOTrainerWrapper:
                 "causing tensor size errors. A CUDA GPU is recommended.[/]"
             )
 
+        # #1223: TRL evaluates num_generations completions per held-out prompt
+        # and refuses an eval batch that does not hold whole groups (a batch of
+        # 3 with 2 generations and gradient accumulation 2 trains, then raised
+        # at setup). Evaluate at the largest multiple of num_generations that
+        # fits in the train batch -- the bump above guarantees at least one.
+        eval_kwargs = training_eval_kwargs(
+            cfg, eval_ds, batch_size=batch_size - batch_size % num_gen
+        )
+        if (
+            eval_kwargs["eval_strategy"] != "no"
+            and eval_kwargs["per_device_eval_batch_size"] != batch_size
+        ):
+            console.print(
+                "[yellow]Note:[/] grpo evaluates at batch "
+                f"{eval_kwargs['per_device_eval_batch_size']}, not the train batch "
+                f"{batch_size}: TRL's evaluation needs whole groups of "
+                f"num_generations={num_gen} completions."
+            )
+
         # --- GRPO config ---
         grpo_kwargs = {
             "output_dir": str(output_dir),
@@ -482,7 +501,7 @@ class GRPOTrainerWrapper:
             "remove_unused_columns": False,
             "deepspeed": self.deepspeed_config,
             **training_seed_kwargs(tcfg),
-            **training_eval_kwargs(cfg, eval_ds, batch_size=batch_size),
+            **eval_kwargs,
             **(self.fsdp_config or {}),
             "beta": tcfg.grpo_beta,
             "num_generations": tcfg.num_generations,

@@ -91,10 +91,15 @@ they do not evaluate by default, and they do not withhold rows either:
 `data.val_split` is ignored, every row trains, and the run prints a one-line note
 saying so. On `grpo`, set `training.eval_steps` to hold the split out and
 evaluate it; TRL generates completions for the held-out prompts and logs
-`eval_loss` with the evaluation rewards. TRL requires that evaluation batch (the
-train batch) to be divisible by `num_generations`. `ppo` and `online_dpo` refuse
-`training.eval_steps`: TRL's PPO loop never runs an evaluation pass, and its
-online-DPO trainer has no evaluation step for prompt-only rows.
+`eval_loss` with the evaluation rewards. TRL needs whole groups of
+`num_generations` completions in an evaluation batch, so `grpo` evaluates at the
+largest multiple of `num_generations` that fits in the train batch, and says so
+when that differs from the train batch. The evaluation's rewards never reach the
+reward-hack detector, the mitigation controller or the echo-trap detector: they
+read training generations only. `ppo` and `online_dpo` refuse
+`training.eval_steps`: TRL's PPO loop never calls `evaluate()`, and online DPO's
+`evaluate()` crashes on prompt-only rows. A generation-based evaluation for
+those two is a separate feature.
 
 **Refused at config load.** `training.eval_steps` on `backend: mlx` (mlx-lm
 evaluates the split on its own cadence, #739), on `task: unlearn` (it trains on

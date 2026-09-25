@@ -152,8 +152,8 @@ class TestEvalStepsFootguns:
     @pytest.mark.parametrize(
         ("task", "reason"),
         [
-            ("ppo", "never runs an evaluation pass"),
-            ("online_dpo", "no evaluation step for prompt-only rows"),
+            ("ppo", "TRL's PPO loop never calls evaluate()"),
+            ("online_dpo", "online DPO's evaluate() crashes on prompt-only rows"),
             ("unlearn", "never evaluates a validation split"),
         ],
     )
@@ -164,6 +164,14 @@ class TestEvalStepsFootguns:
         assert f"training.eval_steps is not supported for task='{task}'" in message
         assert reason in message
         assert "#1223" in message
+
+    @pytest.mark.parametrize("task", ["ppo", "online_dpo"])
+    def test_generation_based_evaluation_is_named_as_a_separate_feature(self, task):
+        with pytest.raises(ValueError) as info:
+            _load(_yaml(task=task, training_extra="  eval_steps: 5\n"))
+        assert f"a generation-based evaluation for {task} is a separate feature" in str(
+            info.value
+        )
 
     def test_grpo_accepts_it_as_the_opt_in(self):
         cfg = _load(_yaml(task="grpo", training_extra="  eval_steps: 5\n"))

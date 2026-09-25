@@ -424,6 +424,46 @@ class TestGrpoIsGenerationBased:
         assert math.isfinite(evals[0]["eval_loss"])
 
 
+class TestGrpoEvalBatchHoldsWholeGroups:
+    """TRL evaluates ``num_generations`` completions per held-out prompt and
+    refuses an eval batch that splits a group. Batch 3 with 2 generations
+    trains (gradient accumulation 2 makes the generation batch 6) but raised at
+    setup, on one process, as soon as ``eval_steps`` was set."""
+
+    _NOTE = (
+        "grpo evaluates at batch 2, not the train batch 3: TRL's evaluation needs "
+        "whole groups of num_generations=2 completions."
+    )
+
+    def _build3(self, tmp_path, monkeypatch, **over):
+        return _build(
+            tmp_path, monkeypatch, "grpo", batch_size=3, gradient_accumulation_steps=2, **over
+        )
+
+    def test_the_eval_batch_rounds_down_to_whole_groups(self, tmp_path, monkeypatch, capsys):
+        _requires_train_extra()
+        wrapper = self._build3(tmp_path, monkeypatch, eval_steps=1)
+        args = wrapper.trainer.args
+        assert (args.per_device_train_batch_size, args.per_device_eval_batch_size) == (3, 2)
+        assert self._NOTE in _plain(capsys.readouterr().out)
+        args.max_steps = 1
+        wrapper.trainer.train()
+        assert [e["step"] for e in _eval_entries(wrapper.trainer)] == [1]
+
+    def test_no_note_when_nothing_is_evaluated(self, tmp_path, monkeypatch, capsys):
+        _requires_train_extra()
+        self._build3(tmp_path, monkeypatch)
+        assert "grpo evaluates at batch" not in _plain(capsys.readouterr().out)
+
+    def test_no_note_when_the_train_batch_already_holds_whole_groups(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        _requires_train_extra()
+        wrapper = _build(tmp_path, monkeypatch, "grpo", batch_size=4, eval_steps=1)
+        assert wrapper.trainer.args.per_device_eval_batch_size == 4
+        assert "grpo evaluates at batch" not in _plain(capsys.readouterr().out)
+
+
 class TestLayerStreamingEvaluates:
     """``stream_layers: true`` is not special-cased: the streamed model runs the
     evaluation pass on CPU, through the streamed decoder layers, and the loss it
