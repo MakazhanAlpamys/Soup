@@ -48,7 +48,7 @@ def make_grpo_trainer_variant(base_cls: type, variant: str) -> type:
 @lru_cache(maxsize=8)
 def _make_grpo_trainer_variant_cached(base_cls: type, variant: str) -> type:
     """Cached factory body — keyed on already-normalised variant."""
-    from soup_cli.utils.grpo_variants import apply_variant_loss
+    from soup_cli.utils.grpo_variants import apply_variant_loss, compute_variant_mean_kl
 
     class _GRPOTrainerVariant(base_cls):  # type: ignore[misc, valid-type]
         """GRPOTrainer subclass that routes compute_loss through Soup's variants."""
@@ -167,6 +167,31 @@ def _make_grpo_trainer_variant_cached(base_cls: type, variant: str) -> type:
                 if mode == "train"
                 else 1.0
             )
+
+            # #1263 — Log the `kl` metric when beta != 0, matching trl's stock metric
+            if beta != 0.0 and ref_logp is not None and logp_new is not None:
+                metrics_dict = getattr(self, "_metrics", None)
+                if metrics_dict is not None and mode in metrics_dict:
+                    mean_kl = compute_variant_mean_kl(
+                        self._soup_grpo_variant,
+                        logp_new=logp_new,
+                        reference_logp=ref_logp,
+                        completion_mask=mask,
+                        advantages=advantages,
+                    )
+                    accelerator = getattr(self, "accelerator", None)
+                    if accelerator is not None and hasattr(accelerator, "gather"):
+                        val = accelerator.gather(mean_kl.detach()).nanmean().item()
+                    else:
+                        val = (
+                            mean_kl.detach().nanmean().item()
+                            if hasattr(mean_kl, "nanmean")
+                            else float(mean_kl.item())
+                        )
+                    if "kl" not in metrics_dict[mode]:
+                        metrics_dict[mode]["kl"] = []
+                    metrics_dict[mode]["kl"].append(val)
+
             return variant_loss / normalizer
 
         def _compute_loss(self, model, inputs):

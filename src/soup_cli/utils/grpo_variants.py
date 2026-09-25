@@ -431,6 +431,45 @@ def _per_token_kl(variant: str, beta: float, logp_new, reference_logp):
     return torch.exp(ref_minus_logp) - ref_minus_logp - 1
 
 
+def compute_variant_mean_kl(
+    variant: str,
+    *,
+    logp_new,
+    reference_logp,
+    completion_mask=None,
+    advantages=None,
+):
+    """Compute the batch-mean per-token KL term for the given variant (#1263).
+
+    For variants matching trl's reduction (gspo, dapo, dr_grpo, bnpo, two_sided),
+    computes the completion-token masked mean of trl 0.29's per-token KL estimator:
+    ``(per_token_kl * mask).sum() / mask.sum().clamp(min=1.0)``.
+
+    For ``rft``, averages only over accepted completions (positive advantage tokens)
+    using the same denominator as its loss:
+    ``(per_token_kl * accepted_mask).sum() / accepted_mask.sum().clamp(min=1.0)``.
+    """
+    normalised = variant.strip().lower()
+    per_token_kl = _per_token_kl(normalised, 1.0, logp_new, reference_logp)
+
+    if normalised == "rft":
+        if advantages is None:
+            raise ValueError("rft variant requires advantages to identify accepted tokens")
+        adv_2d = advantages.unsqueeze(-1) if advantages.dim() == 1 else advantages
+        pos_mask = (adv_2d > 0).to(dtype=per_token_kl.dtype)
+        if completion_mask is not None:
+            pos_mask = pos_mask * completion_mask.to(dtype=per_token_kl.dtype)
+        denom = pos_mask.sum().clamp(min=1.0)
+        return (per_token_kl * pos_mask).sum() / denom
+
+    if completion_mask is not None:
+        c_mask = completion_mask.to(dtype=per_token_kl.dtype)
+        denom = c_mask.sum().clamp(min=1.0)
+        return (per_token_kl * c_mask).sum() / denom
+
+    return per_token_kl.mean()
+
+
 def _with_kl(token_loss, per_token_kl, beta: float):
     """``token_loss + beta * kl_t``, trl's placement; a no-op without a KL term."""
     if per_token_kl is None:
