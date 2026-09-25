@@ -25,6 +25,13 @@ _COMMON = dict(
     num_key_value_heads=2,
 )
 
+_LINEAR_ATTN = dict(
+    linear_num_key_heads=2,
+    linear_num_value_heads=2,
+    linear_key_head_dim=8,
+    linear_value_head_dim=8,
+)
+
 _CASES = [
     ("LlamaConfig", {}),
     ("Qwen2Config", {}),
@@ -47,6 +54,9 @@ _CASES = [
         {"head_dim": 8, "num_experts": 2, "num_experts_per_tok": 1, "moe_intermediate_size": 16},
     ),
     ("SmolLM3Config", {"pad_token_id": 0, "bos_token_id": 1, "eos_token_id": 2}),
+    # Hybrid: `layer_types` decides whether each layer is built with linear or
+    # full attention, so a wrong slice changes the architecture, not a flag.
+    ("Qwen3_5TextConfig", {"head_dim": 8, **_LINEAR_ATTN}),
 ]
 
 # (start, block_size) on 6 layers: first allowed position, middle, ending at
@@ -103,6 +113,75 @@ def test_every_per_layer_list_is_in_the_declared_table(config_name, extra):
 
     config = getattr(transformers, config_name)(**_COMMON, **extra)
     assert set(_per_layer_lists(config, 6)) <= set(_PER_LAYER_CONFIG_ATTRS)
+
+
+_QWEN2_MOE = (
+    "Qwen2MoeConfig",
+    {
+        "num_experts": 2,
+        "num_experts_per_tok": 1,
+        "moe_intermediate_size": 16,
+        "shared_expert_intermediate_size": 16,
+    },
+)
+_QWEN3_MOE = (
+    "Qwen3MoeConfig",
+    {"head_dim": 8, "num_experts": 2, "num_experts_per_tok": 1, "moe_intermediate_size": 16},
+)
+_LLAMA4_TEXT = (
+    "Llama4TextConfig",
+    {"head_dim": 8, "num_local_experts": 2, "num_experts_per_tok": 1, "intermediate_size_mlp": 32},
+)
+
+# Index-valued MoE layout attributes: a non-default value names layers by
+# number, which a slice cannot remap, so the prune must refuse it.
+_LAYER_INDEX_CASES = [
+    (*_QWEN2_MOE, "mlp_only_layers", [3]),
+    (*_QWEN3_MOE, "decoder_sparse_step", 2),
+    (*_LLAMA4_TEXT, "moe_layers", [1, 3]),
+    (*_LLAMA4_TEXT, "interleave_moe_layer_step", 2),
+]
+_LAYER_INDEX_IDS = [attr for _, _, attr, _ in _LAYER_INDEX_CASES]
+
+
+@pytest.mark.parametrize(
+    "config_name,extra,attr,value", _LAYER_INDEX_CASES, ids=_LAYER_INDEX_IDS
+)
+def test_prune_refuses_a_non_default_layer_index_attr(config_name, extra, attr, value):
+    import torch
+    from transformers import AutoModelForCausalLM
+
+    from soup_cli.utils.shrink import prune_model_layers
+
+    config = getattr(transformers, config_name)(**_COMMON, **extra, **{attr: value})
+    torch.manual_seed(0)
+    model = AutoModelForCausalLM.from_config(config)
+
+    with pytest.raises(ValueError, match=attr):
+        prune_model_layers(model, 1, 1)
+    assert len(model.model.layers) == 6
+    assert model.config.num_hidden_layers == 6
+
+
+@pytest.mark.parametrize(
+    "config_name,extra,attr,value", _LAYER_INDEX_CASES, ids=_LAYER_INDEX_IDS
+)
+def test_prune_accepts_the_default_layer_index_attr(tmp_path, config_name, extra, attr, value):
+    import torch
+    from transformers import AutoModelForCausalLM
+
+    from soup_cli.utils.shrink import prune_model_layers
+
+    config = getattr(transformers, config_name)(**_COMMON, **extra)
+    torch.manual_seed(0)
+    model = AutoModelForCausalLM.from_config(config)
+
+    prune_model_layers(model, 1, 1)
+
+    assert len(model.model.layers) == 5
+    model.save_pretrained(str(tmp_path))
+    _, info = AutoModelForCausalLM.from_pretrained(str(tmp_path), output_loading_info=True)
+    assert not info["missing_keys"] and not info["unexpected_keys"], info
 
 
 def _write_tiny_qwen2(dir_path, lines):
