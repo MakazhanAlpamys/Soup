@@ -828,7 +828,7 @@ def _validate_grpo_reward_metadata(
     split: str,
 ) -> None:
     """Fail before generation when a built-in reward lacks required data."""
-    if tcfg.prm_reward is not None:
+    if tcfg.prm_reward is not None or getattr(tcfg, "laya_reward", None) is not None:
         return
 
     requirements: list[tuple[str, tuple[str, ...]]] = []

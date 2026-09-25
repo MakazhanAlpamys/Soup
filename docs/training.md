@@ -1234,6 +1234,12 @@ the existing callable `reward_fn` path and does not load Laya as a Transformer r
 model. Local checkpoint paths must resolve under the current working directory, including
 symlink resolution. The checkpoint is loaded once per reward-function instance and
 completions are evaluated sequentially; batched Laya inference is not currently used.
+When the checkpoint is a Hub model ID, `laya.load()` downloads it through
+`huggingface_hub` using `HF_TOKEN` from the environment, outside Soup's normal
+`training.hub` settings. Laya also loads a second model onto the training device without
+Soup's VRAM pre-flight accounting, and each completion performs its own forward pass even
+though Laya exposes `predict_batch`; these are known efficiency and resource-accounting
+limitations of the initial integration.
 
 **Reward ensembles** — list several rewards, comma-separated, and they combine (GRPO only).
 This also unlocks the `rm_ensemble` reward-hack detector, which needs ≥ 2 rewards:

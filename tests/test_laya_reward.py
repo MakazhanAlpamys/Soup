@@ -226,3 +226,99 @@ def test_ppo_uses_laya_reward_callable_before_reward_fn_branch(monkeypatch):
 
     assert wrapper.reward_fn is sentinel
     assert wrapper.reward_model_instance is None
+
+
+def test_laya_reward_allows_prompt_only_grpo_rows():
+    from soup_cli.trainer.grpo import _validate_grpo_reward_metadata
+
+    _validate_grpo_reward_metadata(
+        [{"prompt": "score this"}], _config().training, split="train"
+    )
+
+
+def _reward_with_answer(monkeypatch, answer):
+    class Agent:
+        def predict(self, state, questions):
+            return {"answers": {"urgency": answer}}
+
+    monkeypatch.setitem(
+        sys.modules, "laya", types.SimpleNamespace(load=lambda *a, **k: Agent())
+    )
+    from soup_cli.trainer.laya_reward import build_laya_reward_fn
+
+    return build_laya_reward_fn(_config().training, "cpu")
+
+
+def test_laya_reward_rejects_missing_answer_mapping(monkeypatch):
+    reward = _reward_with_answer(monkeypatch, None)
+    with pytest.raises(ValueError, match="no mapping answer"):
+        reward(["one"])
+
+
+def test_laya_reward_rejects_boolean_answer(monkeypatch):
+    reward = _reward_with_answer(monkeypatch, {"score": True})
+    with pytest.raises(ValueError, match="must contain numeric 'score'"):
+        reward(["one"])
+
+
+def test_laya_reward_rejects_string_answer(monkeypatch):
+    reward = _reward_with_answer(monkeypatch, {"score": "1.5"})
+    with pytest.raises(ValueError, match="must contain numeric 'score'"):
+        reward(["one"])
+
+
+def test_laya_reward_rejects_null_bytes_in_question_text():
+    with pytest.raises(ValueError, match="must not contain null bytes"):
+        _config(
+            laya_reward={
+                "checkpoint": "model",
+                "question": {
+                    **_LAYA["question"],
+                    "instructions": "unsafe\x00question",
+                },
+            }
+        )
+
+
+def test_laya_reward_rejects_oversized_checkpoint():
+    with pytest.raises(ValueError, match="checkpoint must be <= 512 chars"):
+        _config(
+            laya_reward={
+                "checkpoint": "x" * 513,
+                "question": _LAYA["question"],
+            }
+        )
+
+
+def test_laya_reward_rejects_list_criteria_for_noul():
+    with pytest.raises(ValueError, match="noul questions require criteria"):
+        _config(
+            laya_reward={
+                "checkpoint": "model",
+                "question": {
+                    "id": "risk",
+                    "type": "noul",
+                    "instructions": "How risky is this?",
+                    "criteria": ["false", "true"],
+                },
+            }
+        )
+
+
+def test_laya_reward_accepts_true_false_mapping_for_noul():
+    config = _config(
+        laya_reward={
+            "checkpoint": "model",
+            "question": {
+                "id": "risk",
+                "type": "noul",
+                "instructions": "How risky is this?",
+                "criteria": {"true": "high risk", "false": "low risk"},
+            },
+        }
+    )
+
+    assert config.training.laya_reward.question.criteria == {
+        "true": "high risk",
+        "false": "low risk",
+    }

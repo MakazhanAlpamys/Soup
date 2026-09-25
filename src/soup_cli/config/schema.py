@@ -1122,6 +1122,14 @@ class LayaQuestionConfig(BaseModel):
             not isinstance(self.criteria, list) or not self.criteria
         ):
             raise ValueError("score questions require a non-empty list of criteria")
+        if self.type == "noul" and self.criteria is not None:
+            if not isinstance(self.criteria, dict) or not set(self.criteria).issubset(
+                {"true", "false"}
+            ):
+                raise ValueError(
+                    "noul questions require criteria to be a mapping keyed only by "
+                    "'true' and/or 'false'"
+                )
         return self
 
 
