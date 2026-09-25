@@ -122,11 +122,12 @@ def _load_csv(path: Path) -> list[dict]:
 
 def _load_parquet(path: Path) -> list[dict]:
     try:
-        import pandas as pd
+        import pyarrow.parquet as pq
     except ImportError:
-        raise ImportError("Install pandas to read parquet files: pip install pandas pyarrow")
-    df = pd.read_parquet(path)
-    return df.to_dict(orient="records")
+        raise ImportError("Install pandas and pyarrow to read parquet files: pip install pandas pyarrow")
+
+    table = pq.read_table(path)
+    return table.to_pylist()
 
 
 def _load_txt(path: Path) -> list[dict]:
