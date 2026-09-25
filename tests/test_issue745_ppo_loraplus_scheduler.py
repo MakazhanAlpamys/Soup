@@ -224,6 +224,13 @@ def _fake_ppo_classes(captured, *, accepts_optimizers=True):
             ):
                 captured.update(locals())
                 captured.pop("self")
+                # What the constructor SEES, before setup() returns: trl builds
+                # its scheduler here, so a later change to the optimizer is
+                # invisible to the schedule.
+                opt = optimizers[0]
+                captured["groups_at_init"] = None if opt is None else [
+                    len(g["params"]) for g in opt.param_groups
+                ]
 
     else:
 
@@ -434,6 +441,8 @@ def test_ppo_wrapper_adds_the_value_model_to_the_loraplus_optimizer(is_experimen
     assert held["score.weight"]["weight_decay"] == captured["args"].weight_decay
     for name in ("score.bias", "norm.weight", "norm.bias"):
         assert held[name]["weight_decay"] == 0.0
+    # The constructor saw the finished optimizer, so its scheduler covers the critic.
+    assert captured["groups_at_init"] == [len(g["params"]) for g in injected.param_groups]
     # The policy's LoRA+ split is untouched: B is still at lr * ratio.
     assert round(injected.param_groups[2]["lr"], 12) == B_GROUP_LR
 
@@ -453,6 +462,7 @@ def test_the_empty_loraplus_groups_are_pruned_under_deepspeed():
 
     groups = captured["optimizers"][0].param_groups
     assert groups and all(group["params"] for group in groups)
+    assert captured["groups_at_init"] and all(captured["groups_at_init"])
 
 
 def test_the_loraplus_groups_are_left_alone_without_deepspeed():
@@ -466,6 +476,33 @@ def test_the_loraplus_groups_are_left_alone_without_deepspeed():
 
     groups = captured["optimizers"][0].param_groups
     assert sum(1 for group in groups if not group["params"]) == 2
+
+
+def test_a_critic_tensor_the_optimizer_already_holds_is_not_added_twice():
+    """A critic that shares a Parameter with the policy must not put it in a
+    second group: torch refuses a tensor that appears in two groups."""
+    from types import SimpleNamespace
+
+    import torch
+
+    from soup_cli.utils.peft_wiring import add_value_model_param_groups
+
+    optimizer = _loraplus_shaped_optimizer()
+    shared = optimizer.param_groups[0]["params"][0]
+    critic = _critic()
+    critic.shared = shared
+    assert isinstance(critic.shared, torch.nn.Parameter)
+
+    added = add_value_model_param_groups(
+        optimizer, critic, SimpleNamespace(learning_rate=BASE_LR, weight_decay=0.05)
+    )
+
+    occurrences = sum(
+        p is shared for group in optimizer.param_groups for p in group["params"]
+    )
+    assert occurrences == 1
+    trainable = sum(1 for p in critic.parameters() if p.requires_grad)
+    assert added == trainable - 1
 
 
 @pytest.mark.smoke
@@ -510,6 +547,9 @@ def test_real_ppo_trainer_trains_the_value_model_with_loraplus(tmp_path, monkeyp
     missing = [p for p in value_params if id(p) not in group_lr]
     assert not missing, f"{len(missing)}/{len(value_params)} value-model tensors in no optimizer"
     assert all(group_lr[id(p)] == pytest.approx(1e-4) for p in value_params)
+
+    # The eagerly-built scheduler covers every group, the critic's included.
+    assert len(trainer.lr_scheduler.base_lrs) == len(optimizer.param_groups)
 
     lora_b = [p for n, p in trainer.policy_model.named_parameters() if "lora_B" in n]
     assert lora_b
