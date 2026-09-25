@@ -314,8 +314,10 @@ def resolve_baseline(
 
     Provenance is checked on read. A correctly stamped baseline matching the
     running scorer revision is silent. An unstamped (pre-existing) baseline
-    warns exactly once naming unknown provenance. A stamp whose
-    ``scorer_revision`` disagrees warns about the mismatch.
+    warns about unknown provenance, and a stamp whose ``scorer_revision``
+    disagrees warns about the mismatch. A file baseline warns at most once;
+    a registry baseline warns once per distinct problem and names the
+    affected benchmarks.
     """
     if not spec:
         return {}

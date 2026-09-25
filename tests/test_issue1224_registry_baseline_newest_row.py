@@ -15,8 +15,10 @@ from __future__ import annotations
 import json
 
 import pytest
+from typer.testing import CliRunner
 
 from soup_cli.eval.gate_suites import BUNDLED_SCORER_REVISION
+from tests.conftest import strip_ansi
 
 _OLD = {"provenance": {"soup_version": "0.60.0", "scorer_revision": 0}}
 _CURRENT = {"provenance": {"soup_version": "x", "scorer_revision": BUNDLED_SCORER_REVISION}}
@@ -111,8 +113,10 @@ class TestNewestRowWins:
 
     def test_benchmarks_sharing_a_problem_share_one_warning(self, registry_run):
         insert, spec = registry_run
-        insert("mmlu", 0.30, _OLD, "2026-01-01T00:00:00")
-        insert("gsm8k", 0.20, _OLD, "2026-01-01T00:00:01")
+        # gsm8k is older, so newest-first order is not alphabetical and the
+        # sorted() in the warning is actually exercised.
+        insert("gsm8k", 0.20, _OLD, "2026-01-01T00:00:00")
+        insert("mmlu", 0.30, _OLD, "2026-01-01T00:00:01")
 
         scores, seen = _resolve(spec)
         assert scores == {"mmlu": 0.30, "gsm8k": 0.20}
@@ -202,3 +206,37 @@ def test_gate_flags_regression_against_remeasured_baseline(
     assert task.delta == pytest.approx(-0.07)
     assert result.regression is True
     assert result.passed is False
+
+
+def test_eval_gate_prints_a_markup_bearing_benchmark_name_literally(tmp_path, monkeypatch):
+    monkeypatch.setenv("SOUP_DB_PATH", str(tmp_path / "exp.db"))
+    monkeypatch.setenv("SOUP_REGISTRY_DB_PATH", str(tmp_path / "reg.db"))
+    monkeypatch.chdir(tmp_path)
+    from soup_cli.cli import app
+    from soup_cli.experiment.tracker import ExperimentTracker
+    from soup_cli.registry.store import RegistryStore
+
+    tracker = ExperimentTracker()
+    tracker.save_eval_result(
+        model_path="m", benchmark="mmlu[/]", score=0.3,
+        details={"provenance": {"soup_version": "0.60.0", "scorer_revision": 0}},
+        run_id="R",
+    )
+    tracker.close()
+    with RegistryStore() as store:
+        entry = store.push(name="b", tag="v1", base_model="b", task="sft", run_id="R", config={})
+    (tmp_path / "tasks.jsonl").write_text(
+        json.dumps({"prompt": "q", "expected": "yes", "scorer": "exact"}) + "\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "suite.yaml").write_text(
+        "suite: s\ntasks:\n  - type: custom\n    name: mmlu\n"
+        "    tasks: tasks.jsonl\n    scorer: exact\n    threshold: 0.0\n",
+        encoding="utf-8",
+    )
+    result = CliRunner().invoke(
+        app, ["eval", "gate", "--suite", "suite.yaml", "--baseline", f"registry://{entry}"]
+    )
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    text = " ".join(strip_ansi(result.output).split())
+    assert "Affected benchmark(s): mmlu[/]." in text
