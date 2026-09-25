@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import dataclasses
 import os
-import sys
 from pathlib import Path
 
 import pytest
@@ -465,7 +464,7 @@ class TestLoadBuildYaml:
         with pytest.raises((TypeError, ValueError)):
             build_dag.load_build_yaml(42)  # type: ignore[arg-type]
 
-    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX symlink")
+    @pytest.mark.requires_symlink
     def test_symlink_rejected(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -533,7 +532,7 @@ class TestValidateBuildSource:
         with pytest.raises(TypeError):
             build_dag.validate_build_source(42)  # type: ignore[arg-type]
 
-    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX symlink")
+    @pytest.mark.requires_symlink
     def test_symlink_rejected(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

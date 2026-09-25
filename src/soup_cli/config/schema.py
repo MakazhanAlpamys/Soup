@@ -38,6 +38,15 @@ _MAX_LORA_RANK_PATTERN_KEYS = 256
 _MAX_LORA_RANK_PATTERN_VALUE = 1024
 _MAX_LORA_TARGET_PARAMETERS = 256
 _MAX_LORA_TARGET_PARAMETER_LEN = 512
+# One rank_pattern/alpha_pattern KEY is a regex peft matches against every
+# module name, so its length is bounded for the same reason the sibling regex
+# fields bound theirs (training.unfrozen_parameters at 512 chars, lr_groups at
+# 256): soup.yaml is shareable config, and the key-count cap above says how
+# MANY patterns it may carry, not how long a single one may be.
+_MAX_LORA_PATTERN_KEY_LEN = 512
+# How much of an over-long key the refusal quotes back: enough to recognise
+# which key it was, not enough to paste kilobytes into a terminal or a log.
+_MAX_LORA_PATTERN_KEY_SHOWN = 80
 
 # v0.71.23 #266 — Spectrum targeted-training unfrozen-parameter caps
 _MAX_UNFROZEN_PARAMETERS = 50_000
@@ -231,6 +240,7 @@ class LoraConfig(BaseModel):
                 f"got {len(value)}"
             )
         cleaned: Dict[str, int] = {}
+        field = f"lora.{info.field_name}"
         for key, val in value.items():
             if not isinstance(key, str) or not key:
                 raise ValueError(
@@ -238,10 +248,15 @@ class LoraConfig(BaseModel):
                 )
             if "\x00" in key:
                 raise ValueError("rank_pattern/alpha_pattern keys cannot contain null bytes")
+            if len(key) > _MAX_LORA_PATTERN_KEY_LEN:
+                shown = key[:_MAX_LORA_PATTERN_KEY_SHOWN]
+                raise ValueError(
+                    f"{field}: pattern {shown!r}... is {len(key)} characters, "
+                    f"over the {_MAX_LORA_PATTERN_KEY_LEN}-character cap"
+                )
             # peft matches each key as a regex against every module name
             # (peft.utils.other.get_pattern_key), so the key is held to the
             # same complexity check as unfrozen_parameters / lr_groups.
-            field = f"lora.{info.field_name}"
             try:
                 re.compile(key)
             except re.error as exc:
@@ -872,6 +887,27 @@ class DataConfig(BaseModel):
         return self
 
     @model_validator(mode="after")
+    def _validate_mask_history_has_a_mask_to_narrow(self) -> "DataConfig":
+        # #761: mask_history narrows the assistant-only loss mask to its LAST
+        # span. Without that mask there is nothing to narrow, and the two
+        # readings of "mask the history" (train on nothing but the last turn,
+        # or train on everything as asked) contradict each other. Refuse at
+        # parse naming both fields rather than picking one silently.
+        if self.mask_history and not self.train_on_responses_only:
+            raise ValueError(
+                "data.mask_history requires data.train_on_responses_only: true "
+                "— it masks all but the LAST assistant turn, and only the "
+                "assistant-only path marks assistant turns. With "
+                "train_on_responses_only: false every token trains, including "
+                "the history mask_history asks to exclude."
+            )
+        # train_on_messages_with_train_field needs no clause of its own: it is
+        # already mutually exclusive with train_on_responses_only
+        # (_validate_loss_mask_exclusivity), so the requirement above refuses
+        # that pair transitively. A second clause here would be unreachable.
+        return self
+
+    @model_validator(mode="after")
     def _validate_v042_train_on_prompt(self) -> "DataConfig":
         # train_on_prompt is the inverse semantics of train_on_responses_only —
         # both True is contradictory. Match v0.36.0 loss-mask exclusivity policy.
@@ -1186,11 +1222,12 @@ class TrainingConfig(BaseModel):
             "outside FSDP, None keeps BNB's legacy uint8 default."
         ),
     )
-    quantization_aware: Union[bool, Literal["fp8"]] = Field(
+    quantization_aware: Union[bool, Literal["fp8", "quest"]] = Field(
         default=False,
         description=(
             "Quantization-Aware Training. False=off, True=int8 QAT (torchao), "
-            "'fp8'=FP8 training on H100/B100 (v0.28.0)."
+            "'fp8'=FP8 training on H100/B100 (v0.28.0), "
+            "'quest'=experimental mixed W4/A4+A16 QuEST route (#674)."
         ),
     )
     fp8_recipe: Literal["tensorwise", "rowwise", "rowwise_with_gw_hp"] = Field(
@@ -1700,9 +1737,10 @@ class TrainingConfig(BaseModel):
     ]] = Field(
         default=None,
         description=(
-            "TTS model family — required when task='tts'. One of: orpheus, "
-            "sesame_csm, llasa, spark, oute. Selects the family-specific "
-            "codec and trainer preparation path."
+            "TTS model family — required when task='tts'. Runnable choices are "
+            "orpheus, llasa, spark, and oute. sesame_csm is retained only so "
+            "legacy configs receive an explicit refusal until Soup has a native "
+            "CSM multimodal trainer."
         ),
     )
     tts_emotion: Optional[str] = Field(
@@ -4579,6 +4617,71 @@ class SoupConfig(BaseModel):
         )
 
     @model_validator(mode="after")
+    def _validate_quest_first_slice(self) -> "SoupConfig":
+        """Keep #674 on the one route supported by the measured prototype."""
+        tcfg = self.training
+        if tcfg.quantization_aware != "quest":
+            return self
+        if tcfg.auto_mixed_precision:
+            raise ValueError(
+                "training.quantization_aware='quest' requires "
+                "training.auto_mixed_precision=false; the QuEST route has only "
+                "been measured under BF16"
+            )
+        if self.task != "sft":
+            raise ValueError("quantization_aware='quest' requires task='sft'")
+        if self.backend != "transformers":
+            raise ValueError(
+                "quantization_aware='quest' requires backend='transformers'"
+            )
+        if self.modality != "text":
+            raise ValueError("quantization_aware='quest' requires modality='text'")
+        if tcfg.quantization != "none":
+            raise ValueError(
+                "quantization_aware='quest' requires training.quantization='none'"
+            )
+        if tcfg.lora.r != 0:
+            raise ValueError("quantization_aware='quest' requires training.lora.r=0")
+        if not isinstance(tcfg.batch_size, int):
+            raise ValueError(
+                "quantization_aware='quest' requires an explicit training.batch_size"
+            )
+        if tcfg.stream_layers:
+            raise ValueError(
+                "quantization_aware='quest' requires training.stream_layers=false"
+            )
+        if tcfg.nvfp4:
+            raise ValueError(
+                "quantization_aware='quest' requires training.nvfp4=false"
+            )
+        if tcfg.activation_offloading is not None:
+            raise ValueError(
+                "quantization_aware='quest' requires "
+                "training.activation_offloading to be unset"
+            )
+
+        partial_routes = []
+        if tcfg.freeze_layers is not None:
+            partial_routes.append("freeze_layers")
+        if tcfg.freeze_ratio is not None:
+            partial_routes.append("freeze_ratio")
+        if tcfg.unfrozen_parameters:
+            partial_routes.append("unfrozen_parameters")
+        if tcfg.lisa_enabled:
+            partial_routes.append("lisa_enabled")
+        if tcfg.expand_layers is not None:
+            partial_routes.append("expand_layers")
+        if tcfg.freeze_trainable_layers is not None:
+            partial_routes.append("freeze_trainable_layers")
+        if partial_routes:
+            joined = ", ".join(partial_routes)
+            raise ValueError(
+                "quantization_aware='quest' first slice requires unmodified full "
+                f"fine-tuning; remove: {joined}"
+            )
+        return self
+
+    @model_validator(mode="after")
     def _validate_prm_lora_block(self) -> "SoupConfig":
         """#795 — ``trainer/prm.py`` never reads ``training.lora``: every base
         parameter trains. A LoRA block that differs from the schema default is
@@ -4593,6 +4696,56 @@ class SoupConfig(BaseModel):
         raise ValueError(
             "task='prm' does not apply training.lora: the PRM trainer fine-tunes "
             "every base parameter. Remove the lora block (or set lora.r: 0)."
+        )
+
+    @model_validator(mode="after")
+    def _validate_moe_lora_task(self) -> "SoupConfig":
+        """#1151 — ``moe_lora`` selects expert-FFN LoRA targets, so it is refused
+        where no trainer can act on it: ``asr`` only ever loads Whisper, which has
+        no experts, and ``moe_lora_routing`` builds no LoRA adapter at all. The
+        classifier family reads it only on its opt-in adapter path
+        (``classifier_lora: true`` with ``lora.r > 0``, as ``trainer/classifier.py``
+        decides); without it that trainer full-fine-tunes, and there is no adapter
+        for the flag to select targets for. Across tasks: every ``_setup_unsloth``
+        attaches ``utils/unsloth.py``'s fixed attention list, and SFT's vision and
+        audio setups build their adapter without the MoE step, so neither reads it
+        (found by a local CodeRabbit review of #1179). MLX stays declared-ignored in
+        ``backend_support`` instead, which ``soup doctor`` reports."""
+        if not self.training.moe_lora:
+            return self
+        tcfg = self.training
+        if self.task in ("classifier", "reranker", "cross_encoder") and not (
+            tcfg.classifier_lora and tcfg.lora.r > 0
+        ):
+            raise ValueError(
+                f"training.moe_lora is not applied by task={self.task!r} unless "
+                "training.classifier_lora is true and training.lora.r > 0: without them that "
+                "trainer full-fine-tunes and builds no adapter for the flag to select. Set "
+                "classifier_lora: true and lora.r >= 1, or remove moe_lora."
+            )
+        if self.backend == "unsloth":
+            raise ValueError(
+                "training.moe_lora is not applied on backend='unsloth': unsloth attaches "
+                "its own fixed attention targets and never reads the flag. Use backend: "
+                "transformers, or remove moe_lora."
+            )
+        if self.task == "sft" and self.modality in ("vision", "audio"):
+            raise ValueError(
+                f"training.moe_lora is not applied by task='sft' with "
+                f"modality={self.modality!r}: that setup builds its adapter without the "
+                "MoE target step. Remove moe_lora, or train with modality: text."
+            )
+        why = {
+            "asr": "that trainer loads Whisper, which has no expert layers",
+            "moe_lora_routing": "that trainer routes between existing adapters "
+            "and builds no LoRA adapter of its own",
+            "prm": "that trainer fine-tunes every base parameter and builds no LoRA adapter",
+        }.get(self.task)
+        if why is None:
+            return self
+        raise ValueError(
+            f"training.moe_lora is not applied by task={self.task!r}: {why}. "
+            "Remove moe_lora (or set it to false)."
         )
 
     @model_validator(mode="after")
@@ -4824,7 +4977,7 @@ class SoupConfig(BaseModel):
 
         Delegates to :func:`grpo_long_context.validate_long_context_grpo_compat`
         so the rules are single-source-of-truth (mirrors v0.49.0 LongLoRA).
-        Live Tiled MLP wiring is deferred to v0.56.0.
+        Staged field is accepted but unconsumed, and refused as of v0.77 (#808).
         """
         if not self.training.long_context_grpo:
             return self
@@ -4995,8 +5148,17 @@ class SoupConfig(BaseModel):
                 raise ValueError(str(exc)) from exc
             if tcfg.tts_family is None:
                 raise ValueError(
-                    "task='tts' requires training.tts_family in "
-                    "(orpheus, sesame_csm, llasa, spark, oute)"
+                    "task='tts' requires a runnable training.tts_family in "
+                    "(orpheus, llasa, spark, oute); sesame_csm is currently refused"
+                )
+            if tcfg.tts_family == "sesame_csm":
+                raise ValueError(
+                    "training.tts_family='sesame_csm' is not supported by Soup yet: "
+                    "CSM trains text plus 32 Mimi codebooks as parallel multimodal "
+                    "frames, so neither raw data.format='audio' nor pre-encoded "
+                    "data.format='chatml' is a valid text-SFT substitute. Use the "
+                    "model's native CSM/AutoProcessor training path until Soup has "
+                    "a dedicated CSM trainer."
                 )
             if tcfg.tts_emotion is not None:
                 try:

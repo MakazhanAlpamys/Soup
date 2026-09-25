@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import dataclasses
 import os
-import sys
 
 import pytest
 from typer.testing import CliRunner
@@ -233,7 +232,7 @@ def test_write_state_outside_cwd_rejected(tmp_path, monkeypatch):
         write_state(state, str(outside))
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="POSIX symlinks")
+@pytest.mark.requires_symlink
 def test_write_state_symlink_rejected(tmp_path, monkeypatch):
     from soup_cli.utils.terraform_plan import TrainingPlan, TrainingState, write_state
 

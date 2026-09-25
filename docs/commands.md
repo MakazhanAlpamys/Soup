@@ -42,7 +42,7 @@ soup train --config sft.yaml  # training.stream_layers: true [stream_source stre
 soup export --model ./output --format gguf    Export to GGUF (Ollama)
 soup export --model ./output --deploy ollama  Export GGUF + auto-deploy to Ollama
 soup export --model ./output --format onnx    Export to ONNX
-soup export --model ./output --format tensorrt Export to TensorRT-LLM
+soup export --model ./output --format tensorrt  Export to TensorRT-LLM
 soup export --model ./output --format awq --calibration-data cal.jsonl  Export to AWQ (4-bit)
 soup export --model ./output --format gptq --calibration-data cal.jsonl  Export to GPTQ (4-bit)
 soup deploy ollama --model m.gguf --name x    Deploy GGUF to Ollama
@@ -109,7 +109,7 @@ soup data topics <path> [--clusters N|auto]   Cluster + c-TF-IDF labels + covera
 soup data canary insert <path> -o <out> --manifest <m>  Insert K secrets to later prove memorization (manifest = SECRET)
 soup data canary check --manifest <m> --base <model>    Rank each secret's loss vs never-inserted controls; exit 2 = leak
 soup data stats <path>                        Extended statistics
-soup data generate --prompt "..." --count 100 Generate synthetic data
+soup data generate --prompt "..." --count 100  Generate synthetic data
 soup data generate ... --provider ollama      Use local Ollama instance
 soup data generate ... --provider anthropic   Use Claude API
 soup data generate ... --provider vllm        Use local vLLM server
@@ -139,7 +139,7 @@ soup data push --input d.jsonl --hf-dataset user/name  Upload local JSONL as HF 
 soup data push --input d.jsonl --hf-dataset u/n --hub modelscope|modelers  Upload to an alternative hub
 soup data registry                           List all registered datasets
 soup data demo                                List bundled demo JSONL fixtures
-soup data demo alpaca_demo --output ./d.jsonl Copy a bundled demo JSONL fixture
+soup data demo alpaca_demo --output ./d.jsonl  Copy a bundled demo JSONL fixture
 soup data ingest <file>                         PDF/DOCX/MD/TXT -> JSONL (one row per page/heading)
 soup data preprocess <config>                   AOT-tokenize and cache for reuse across runs
 soup data recipe <path>                         Validate / execute a Data Recipe DAG
@@ -150,7 +150,7 @@ soup data score --input rows.jsonl            Composite quality scorecard (PII +
 soup data decontaminate --input rows.jsonl --benchmarks mmlu,gsm8k  Drop benchmark-overlap rows
 soup data toxicity --input rows.jsonl -o tox.jsonl  Flag abuse-keyword matches (heuristic)
 soup data langdetect --input rows.jsonl -o tagged.jsonl  Tag each row with language code
-soup data pii --input rows.jsonl -o pii.jsonl Flag rows containing email/phone/SSN/credit-card
+soup data pii --input rows.jsonl -o pii.jsonl  Flag rows containing email/phone/SSN/credit-card
 soup data educational --input rows.jsonl -o scored.jsonl  Score educational value per row
 soup train --config soup.yaml --tracker mlflow  MLflow / SwanLab / Trackio integration
 soup profile --config soup.yaml              Estimate memory/speed before training
@@ -168,7 +168,8 @@ soup adapters diff <a> <b>                      Per-layer ΔW Frobenius diff + e
 soup loop init <model> --eval <s> --baseline <b> [--pre-wired]  Create .soup/loop.yaml (data flywheel; --pre-wired = real stages)
 soup loop status                              Counters + status + pre_wired flag
 soup loop watch [--detach] [--max-iter N] [--pre-wired] [--pack-cans]  Harvest → train → gate → deploy daemon (pre-wired stages + Soup Can packing)
-soup loop pause / soup loop resume           Atomic status flip
+soup loop pause                              Atomic status flip: pause watch daemon at next iteration boundary
+soup loop resume                             Atomic status flip: resume a paused loop
 soup loop canary <adapter> --traffic 5%      Promote canary + auto-rollback on MAJOR
 soup loop replay [<iter-id>] [--extract <dir>]  Replay / unpack a recorded iteration manifest
 soup serve --model m --adapters chat=./c code=./d  Multi-adapter serving
@@ -176,7 +177,7 @@ soup migrate --from llamafactory config.yaml  Import config from LLaMA-Factory
 soup migrate --from axolotl config.yml        Import config from Axolotl
 soup migrate --from unsloth notebook.ipynb    Import config from Unsloth notebook
 soup migrate --from llamafactory c.yaml --dry-run  Preview without writing
-soup recipes list                             List all 175 ready-made recipes
+soup recipes list                             List all 174 ready-made recipes
 soup recipes show llama3.1-8b-sft            Print recipe YAML
 soup recipes use llama3.1-8b-sft             Copy recipe to soup.yaml
 soup recipes search "reasoning"              Search by keyword/task/size
@@ -246,7 +247,9 @@ soup --log-level quiet|normal|verbose|debug   Global logging tier (Rich-formatte
 soup ui [--port 7860]                         Web UI (experiments, training, data)
 soup ui --public [--auth-token T]             Phone-scannable Web UI (v0.53.9); /docs + /openapi.json are loopback-only
 soup tokenizer train --input c.jsonl --vocab-size N  Train BPE tokenizer (v0.53.9)
-soup bench <model> --p50 --p95                Bench with tail-latency percentiles (v0.53.9)
+soup bench <model>                            Inference speed + memory (same as `soup bench infer <model>`)
+soup bench infer <model> --p50 --p95          Bench with tail-latency percentiles (v0.53.9)
+soup bench train --config soup.yaml --steps 20 --warmup 3 -o bench-train.json  Timed SFT steps; exits 1 when the model was not training (#836)
 soup bench <model> --backend auto             Auto-detect transformers/mlx backend (v0.53.9)
 soup serve --reasoning-parser deepseek-r1     Strip <think> blocks from responses (v0.53.9)
 soup doctor [--nccl] [--disk] [--config F]    Check environment (optionally check NCCL bandwidth, media type; --disk ~9s cold / ~2.4s warm).
@@ -254,12 +257,12 @@ soup doctor [--nccl] [--disk] [--config F]    Check environment (optionally chec
 soup monitor                                  NVIDIA / Apple Silicon GPU monitor: util / temp / VRAM / power
 soup quickstart [--dry-run]                   Full demo
 soup plugins list|install|enable|disable      Manage Soup plugins
-soup llama cli|mtmd-cli|gguf-split|server|quantize ... Proxy to the llama.cpp binaries
+soup llama cli|mtmd-cli|gguf-split|server|quantize ...  Proxy to the llama.cpp binaries
 soup quantize <model> --to <fmt>              Quantize a model — ergonomic alias for `soup export --format <fmt>`
 soup bom emit --name <n> --base-sha <hex> --config-sha <hex> --format cyclonedx|spdx|both  CycloneDX ML-BOM / SPDX AI bill of materials
 soup adapters scan <adapter>                  Spectral backdoor scan (rank-1 dominance + outlier detection)
-soup adapters sign <adapter> [--backend unsigned|ed25519] [--key <pem>|--generate-key <pem>]  Merkle manifest + ed25519 sign
-soup adapters verify <adapter> [--strict] [--public-key <pem>]  Verify manifest + ed25519 signature
+soup adapters sign <adapter> [--backend unsigned|ed25519|sigstore] [--key <pem>|--generate-key <pem>] [--interactive-oidc]  Merkle manifest + ed25519/Sigstore sign
+soup adapters verify <adapter> [--strict] [--public-key <pem>] [--cert-identity <san> --cert-oidc-issuer <url>]  Verify manifest + ed25519/Sigstore signature
 soup adapters check-safetensors <adapter> [--strict]  Refuse pickle / PyTorch-classic weights
 soup adapters merge ... [--license <id>] [--license-override <reason>] [--allow-unscanned]  License + backdoor-scan gates (auto-detect license; scan FAIL refused)
 soup adapters arithmetic "coder + 0.5*math - toxic" --adapter coder=<p> --adapter math=<p> --adapter toxic=<p> -o <out> [--allow-unscanned --allow-cross-base]  Task-vector algebra over LoRA adapters (add/scale/negate; same-rank; scan + same-base gated) (v0.71.34)
@@ -281,7 +284,8 @@ soup train  # data.format='raft'  Answer-only span-mask RAFT training (golden+di
 soup ra-dit --retriever-config <r.yaml> --generator-config <g.yaml> [--retriever-model <m>] [--plan-only]  One-shot two-stage RA-DIT: train retriever → record pairing → train generator
 soup eval citation <data> [--style bracket|inline|footnote] [--shuffle-seed N] [--output o.json]  Citation precision/recall/F1 over predictions or RAFT rows
 soup steer train --base <m> --method caa|iti|repe --name <id> --pairs <jsonl>  Fit a CAA/ITI/RepE activation-steering vector from {positive, negative} pairs
-soup steer apply --name <id> --strength <s>  Preview a stored steering vector; soup steer list lists them
+soup steer apply --name <id> --strength <s>  Preview a stored steering vector
+soup steer list                              List locally-stored steering vectors
 soup serve --steer <name> [--steer-strength <s>]  Apply a steering vector at decode time via a forward hook (transformers backend)
 soup serve --bank <bank.json> [--bank-strength <s>]  Multi-tenant VeRA/VB-LoRA serving; active user per request via X-User-Id header, ContextVar-isolated (v0.71.12 / v0.71.17)
 soup serve --mole <dir>                              Serve a trained MoLE: base + N frozen task LoRAs + mole_gate.pt, blended per-token at decode (transformers-only) (v0.71.17)
@@ -323,7 +327,8 @@ soup adapters branch <name> --from-registry <id> | --attach-to-registry <id>  Br
 soup adapters bisect <ckpt>... --eval-command "..."  Binary search over training history (v0.67.0)
 soup lock write --base-sha <h> --dataset-sha <h> --env-hash <h>  Write soup.lock (v0.67.0)
 soup lock write --base-sha <h> --dataset-sha <h> --env-lock soup-env.lock  Auto-derive --env-hash from soup-env.lock (v0.71.1)
-soup lock show / soup lock check              Show + drift-check (exit 2 on drift, 3 on usage/missing lock)
+soup lock show [PATH]                        Print tracked lock file
+soup lock check [PATH] --base-sha <h> --dataset-sha <h> --env-hash <h> --base-model <m>  Refuse with exit 2 on drift, 3 on usage/missing lock
 soup compile <program.py> --eval <suite> [--optimizer mipro|gepa|textgrad|copro|bootstrap_fewshot] [--plan-only]  DSPy / GEPA / TextGrad prompt-program compiler — live (v0.71.13; pip install "soup-cli[compile]")
 soup distill-prompt --traces <jsonl> --teacher <m> --student <m> --strategy sft|preference|kl [--provider ollama|anthropic|vllm] [--base-url <url>] [--temperature F] [--max-rows N]  Distill prompt-heavy traces via a live teacher (v0.71.13)
 soup compile-tools <spec.json|yaml> --eval <jsonl> [--optimizer textgrad|gepa] [--plan-only]  TextGrad / GEPA tool-schema optimiser — live (v0.71.13; pip install "soup-cli[compile]")
@@ -354,7 +359,7 @@ soup train  # task='moe_lora_routing' + mole_task_adapters  MoLE per-token gate 
 soup train  # task='distill' + distill_mode=token|sequence  Token logit-KL or sequence-level teacher-continuation KD — LIVE (v0.71.12)
 soup train  # task=classifier|reranker|cross_encoder + lora  LoRA-adapter classifier (frozen encoder) — LIVE (v0.71.12)
 soup train  # use_mod | expand_layers | use_longlora  Mixture-of-Depths / LLaMA Pro / LongLoRA S² (Llama/Qwen/Mistral[/Phi]) — LIVE (v0.71.12)
-soup train  # task='tts' + tts_family + modality='audio_out'  TTS fine-tune via SFT CE over pre-encoded codec tokens; emotion templating; live-codec hw-gated — LIVE (v0.71.20)
+soup train  # task='tts' + tts_family + modality='audio_out'  TTS codec-string SFT; pre-encoded + Orpheus/SNAC + Llasa/XCodec2 live; Sesame CSM refused (native trainer required) — LIVE (v0.71.20)
 soup train  # task in {sft,tts} + moe_expert_quant=nf4|int8_rowwise [+moe_lora]  bnb per-expert quant of fused-MoE experts (CUDA); refused on other tasks, which never applied it (#798) — LIVE (v0.71.20)
 soup train  # task in {sft,tts} + train_router_only=true [+moe_lora]  Freeze MoE experts, train only the gating router; refused on other tasks (#798). moe_lora needs lora.dropout: 0.0 on fused-expert MoEs — LIVE (v0.71.20)
 soup train  # quantization='bitnet_1.58'  BitNet 1.58 training is not implemented; config load refuses it
@@ -468,7 +473,7 @@ mutating tools (`train_start`, `export`) are gated behind `--allow-mutating`
 **Execution Security & Boundaries:**
 - **Flag Safety:** `--allow-execute` is default-off and dangerous. `--allow-mutating` alone can NEVER trigger subprocess execution.
 - **One-Time Confirmation Tokens:** Authorization requires a server-issued random token. Client confirmation is UX-only; security relies entirely on the server-side token state.
-- **Subprocess Isolation:** Execution runs the Soup CLI as an isolated subprocess (`shell=False`, `stdin=DEVNULL`, `cwd` pinned to server startup directory). Child stdout/stderr is redirected to `.soup/mcp-runs/<run_id>.log` to avoid corrupting the MCP JSON-RPC stdio stream.
+- **Subprocess Isolation:** Execution runs the Soup CLI as an isolated subprocess (`shell=False`, `stdin=DEVNULL`, `cwd` pinned to server startup directory). Child stdout/stderr is redirected to `.soup/mcp-runs/<run_id>.log` to avoid corrupting the MCP JSON-RPC stdio stream. Execution is refused if `.soup` or `.soup/mcp-runs` is a symbolic link or junction, or if a hard link exists at the run log path.
 - **Concurrency & Disconnects:** Enforces 1 active execution at a time, gated on a persisted run whose process is still alive — so a **restarted** server does not launch a second training while a child from a previous server is still running, and a stale record whose process is gone never blocks execution. A `launching` record (committed before the child process exists, pid not yet written) blocks restart capacity too: it is indistinguishable from "about to spawn", so treating it as live is the safe direction after a crash in that window. If a server crash leaves that row behind, `soup mcp runs reconcile --expunge-launching` removes rows older than five minutes and prints every removed `run_id`; use `--older-than-seconds N` to choose another positive threshold. The command refuses the whole operation if any candidate records a PID that is still alive. Launches run in background (fire-and-forget). Disconnecting the MCP client does not terminate an already-running subprocess.
 - **Config Snapshotting & Input Revalidation:** At plan time (`train_start`), the validated config is snapshotted to `.soup/mcp-runs/<run_id>/config.yaml`, and execution uses this snapshot rather than the original mutable config path. External protected inputs (such as datasets and model/checkpoint directories or files) are not frozen in the snapshot; instead, their content digests (computed via SHA-256 for regular files, or deterministic recursive content hashing over sorted relative file paths for directory trees, bounded by file-count and total-byte safety limits) are recorded at plan time and revalidated immediately before spawn. Modifying an external protected input between plan and execute invalidates the token. Modifying the original config path after planning has no effect because execution strictly uses the snapshotted config. Snapshotting freezes only the configuration itself, not external filesystem assets.
 - **Every Local Input Is Pinned:** A train plan pins every local file or directory the run reads (model, datasets, reward/teacher/PRM models, reward `.py` files, unlearning sets); an input outside the working directory is refused at plan time, and an input that did not exist at plan time must still not exist at execution.
@@ -486,7 +491,11 @@ Soup gate and verdict commands follow a unified, CI-friendly exit-code contract:
 
 The taxonomy applies consistently across `soup ship`, `soup eval gate`, `soup eval against`, `soup eval checklist`, `soup eval behavior`, `soup eval quant-check`, `soup lock check`, `soup expect`, `soup data validate`, and `soup data lint`.
 
+`soup eval checklist` requires `--evidence`. `soup eval behavior` also requires
+`--evidence` unless `--base-model` selects the live path. Omitting the required
+evidence exits `3` and names the JSON input to provide; it never reports a neutral
+pass for a gate that measured nothing.
+
 ### Gate Verdict Drift vs. Operational Drift
 
 `soup lock check` operates as a CI gate command where exit `2` (`EXIT_GATE_FAILED`) indicates that the lock closure has drifted from the configuration (requiring regeneration via `soup lock write`), and exit `3` (`EXIT_USAGE_ERROR`) indicates an unparseable or missing lock file. In contrast, operational and environment commands (`soup env check`, `soup apply`, and `soup drift-alarm`) belong to the operational drift family where runtime divergence or ABI mismatch signals exit `3` (with exit `2` reserved for invalid arguments or path errors in those commands). Operational inspection tools such as `soup adapters audit` deliberately reside outside the gate taxonomy, exiting `1` on usage errors so CI can distinguish an agreement (`0`) or diverged (`2`) verdict from invocation errors.
-

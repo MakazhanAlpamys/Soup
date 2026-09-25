@@ -430,6 +430,9 @@ class TestV028PrecisionWiring:
         monkeypatch.setattr(
             "soup_cli.utils.advanced_precision.apply_fp8_attention", _gate
         )
+        # quantization_aware: fp8 is set too, and a missing torchao now stops the
+        # run (#835 ruling); this test is about fp8_attention, so stub that half.
+        monkeypatch.setattr("soup_cli.utils.fp8.apply_fp8_training", lambda *_a, **_k: True)
         result = apply_v028_speed_memory(
             model=object(),
             tcfg=self._tcfg(quantization_aware="fp8", fp8_attention=True),
@@ -444,6 +447,9 @@ class TestV028PrecisionWiring:
             "soup_cli.utils.advanced_precision.apply_fp8_attention",
             lambda model, recipe="tensorwise": 4,
         )
+        # quantization_aware: fp8 is set too, and a missing torchao now stops the
+        # run (#835 ruling); this test is about fp8_attention, so stub that half.
+        monkeypatch.setattr("soup_cli.utils.fp8.apply_fp8_training", lambda *_a, **_k: True)
         result = apply_v028_speed_memory(
             model=object(),
             tcfg=self._tcfg(quantization_aware="fp8", fp8_attention=True),
@@ -1770,6 +1776,9 @@ class TestReviewFollowupsPrecision:
         # patch targets the defining module.
         monkeypatch.setattr(advanced_precision, "apply_fp8_attention", _gate)
         monkeypatch.setattr(advanced_precision, "apply_nvfp4", _gate)
+        # quantization_aware: fp8 is set too, and a missing torchao now stops the
+        # run (#835 ruling); this test is about fp8_attention, so stub that half.
+        monkeypatch.setattr("soup_cli.utils.fp8.apply_fp8_training", lambda *_a, **_k: True)
         cfg = load_config_from_string(
             "base: test-llama\n"
             "task: sft\n"
@@ -2118,7 +2127,7 @@ class TestReviewFollowupsAppleAdapter:
         with pytest.raises(ValueError, match="cap"):
             apple_adapter.convert_apple_adapter(plan)
 
-    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX symlink")
+    @pytest.mark.requires_symlink
     def test_symlinked_weights_rejected(self, tmp_path, monkeypatch):
         import os
 
@@ -2265,7 +2274,7 @@ class TestReviewFollowupsDelinearize:
         (src / "config.json").write_text(json.dumps(config), encoding="utf-8")
         assert read_num_experts(str(src)) == expected
 
-    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX symlink")
+    @pytest.mark.requires_symlink
     def test_symlinked_shard_rejected(self, tmp_path, monkeypatch):
         import os
 
@@ -2288,7 +2297,7 @@ class TestReviewFollowupsDelinearize:
         with pytest.raises(ValueError, match="symlink"):
             run_delinearize(plan, num_experts=4)
 
-    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX symlink")
+    @pytest.mark.requires_symlink
     def test_symlinked_config_json_skipped(self, tmp_path, monkeypatch):
         import os
 

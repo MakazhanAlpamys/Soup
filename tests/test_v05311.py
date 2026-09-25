@@ -599,11 +599,20 @@ class TestGRPOTrainerVariantFactory:
         inputs = {
             "per_token_logps": torch.zeros(2, 4),
             "old_per_token_logps": torch.zeros(2, 4),
+            # #1232: beta 0.1 needs the reference trl puts in the batch whenever
+            # beta != 0. Without it the kernel refuses, the #159 fallback runs,
+            # and the fake's 99.0 comes back -- which this test used to accept.
+            "ref_per_token_logps": torch.zeros(2, 4),
             "advantages": torch.tensor([1.0, -1.0]),
         }
         # Variant kernel should compute a real (non-99.0) loss.
         result = trainer.compute_loss(model=None, inputs=inputs)
         assert isinstance(result, torch.Tensor)
+        assert not trainer._soup_fallback_warned, "fell back to the base loss"
+        assert float(result) != 99.0
+        # gspo at ratio 1 with advantages +1 / -1 is 0, and a reference equal
+        # to the policy adds exactly 0 KL.
+        assert float(result) == 0.0
 
     def test_variant_falls_back_on_missing_inputs(self):
         """When TRL renames inputs, fall back to original loss (defence-in-depth)."""
@@ -1030,6 +1039,9 @@ class TestReviewFixCoverage:
         inputs = {
             "per_token_logps": torch.zeros(2, 4),
             "old_per_token_logps": torch.zeros(2, 4),
+            # #1232: the reference trl supplies whenever beta != 0; without it
+            # the kernel refuses and the fake's (99.0, {"fake": True}) returns.
+            "ref_per_token_logps": torch.zeros(2, 4),
             "advantages": torch.tensor([1.0, -1.0]),
         }
         result = trainer.compute_loss(
@@ -1040,8 +1052,11 @@ class TestReviewFixCoverage:
         # forward pass.
         assert isinstance(result, tuple)
         assert len(result) == 2
-        loss, _outputs = result
+        loss, outputs = result
         assert isinstance(loss, torch.Tensor)
+        assert not trainer._soup_fallback_warned, "fell back to the base loss"
+        assert outputs is None, outputs
+        assert float(loss) == 0.0
 
     # --- HIGH: source-grep regression — callback wired into grpo.py ---
 

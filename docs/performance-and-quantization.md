@@ -2,11 +2,12 @@
 
 [← Back to the Soup README](../README.md)
 
-> QAT, FP8, the Quant Menu (I + II), KV-cache, NVFP4, save formats, Cut Cross-Entropy, gradient checkpointing, kernel auto-composition, activation offloading, and multi-GPU / DeepSpeed / FSDP.
+> QAT, experimental QuEST, FP8, the Quant Menu (I + II), KV-cache, NVFP4, save formats, Cut Cross-Entropy, gradient checkpointing, kernel auto-composition, activation offloading, and multi-GPU / DeepSpeed / FSDP.
 
 **Contents:**
 
 - [Quantization-Aware Training (QAT)](#quantization-aware-training-qat)
+- [Experimental QuEST mixed W4/A4+A16 route](#experimental-quest-mixed-w4a4a16-route)
 - [FP8 Training (Ada+)](#fp8-training-ada)
 - [Cut Cross-Entropy (Large-Vocab Models)](#cut-cross-entropy-large-vocab-models)
 - [Gradient Checkpointing Tiers](#gradient-checkpointing-tiers)
@@ -67,6 +68,107 @@ output: ./output
 QAT works with all training tasks (SFT, DPO, GRPO, PPO, KTO, ORPO, SimPO, IPO, Pretrain) and vision modality. Not compatible with the unsloth backend. After QAT training, export to GGUF normally with `soup export`.
 
 
+## Experimental QuEST mixed W4/A4+A16 route
+
+`quantization_aware: quest` enables the exact experimental route retained for
+[#674](https://github.com/MakazhanAlpamys/Soup/issues/674): all 168 transformer
+linear weights use group-128 fake W4; 161 activations use group-128 fake A4;
+and the seven attention/MLP linears in decoder block 23 keep A16 activations.
+Both operands use a full-width normalized Hadamard transform. Activation clips
+are selected from five fixed candidates on the first 32 tokenized **training**
+rows only.
+
+```yaml
+base: ahxt/LiteLlama-460M-1T
+task: sft
+backend: transformers
+modality: text
+
+data:
+  train: ./data/train.jsonl
+
+training:
+  quantization_aware: quest
+  quantization: none
+  batch_size: 2
+  lora:
+    r: 0
+
+output: ./output
+```
+
+This first slice fails closed unless the loaded model has the measured 24-block
+Llama topology with exactly those 168 linears, compatible power-of-two input
+widths, and FP32 master weights. **That gate is topological only:** model
+identity is not checked, so any matching 24-block / 168-linear Llama receives
+the route even though the retained quality measurement used only
+`ahxt/LiteLlama-460M-1T`. It also requires one visible Ampere-or-newer CUDA GPU.
+DDP, DataParallel, DeepSpeed, FSDP, layer streaming, LoRA, activation offloading,
+NVFP4, other backends/tasks/modalities, and pre-quantized loading are not
+accepted. On a multi-GPU host, expose one card to the process, for example:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 soup train --config soup.yaml
+```
+
+`use_cut_ce: true` remains supported: Cut Cross-Entropy is patched before model
+loading and does not depend on the v0.28 post-load path that QuEST bypasses.
+
+The final artifact and each periodic checkpoint contain
+`quest_mixed_precision.json`. The closed, versioned sidecar records every A4
+and A16 route, clipping scale, calibration-row digest, transform, grid,
+surrogate, and route provenance. The provenance explains why this topology was
+selected; it makes no training-quality claim about the artifact beside it.
+Resume is refused if the executable route metadata differs.
+For Hub models, `base_model` remains the repo ID. For a local base, new
+format-v2 metadata records a `local-sha256:` identity derived from the
+`config.json`, optional `generation_config.json`, standard tokenizer assets
+(including `additional_chat_templates/*.jinja`), and the weight file that
+Transformers selects (or its index and referenced shards). The identity uses
+relative file names and content, so moving the same base keeps resume valid;
+changing a selected file refuses resume. Soup checks the identity before and
+after loading the model. The sidecar and `config.json["soup_quest"]` contain
+the identity, not the source directory.
+Local models or tokenizers using custom `auto_map` code are refused by this
+fingerprint route because code loaded from elsewhere would not be covered.
+Local tokenizers declaring `fast_tokenizer_files` are also refused because
+their versioned tokenizer JSON files are not covered by this fingerprint.
+
+Format-v1 sidecars remain readable. Since they did not record a content hash,
+their first resume still compares the original base path string; a successful
+resume writes v2 metadata for subsequent checkpoints. A v1 artifact cannot
+prove that a relocated base is the same one, and existing v1 sidecars may
+already disclose the old local path.
+Because generic Transformers cannot infer fake-quant execution from the master
+weights, load the executable route explicitly:
+
+```python
+from soup_cli.utils.quest import load_mixed_quest_artifact
+
+model = load_mixed_quest_artifact("./output")
+```
+
+### Evidence boundary
+
+This is an engineering integration of an **evaluation-only** result, not a
+validated training recipe. The [mixed-route record](../benchmarks/gate-674-quest-mixed-route.md)
+used one model and no backward passes or optimizer updates. Its seven-A16 route
+measured a 0.086344 nat/target gap to fixed FP, with a paired 95% interval of
+[0.080241, 0.093190], over 704 examples / 25,017 targets. It is therefore:
+
+- not pure W4A4;
+- not evidence of mixed-route training quality or cross-model generality;
+- not upstream QuEST numerical parity;
+- not packed INT4, and not a speed or memory-efficiency claim.
+
+The implementation keeps FP32 masters. The Hadamard and fake-quant grid arithmetic
+run under the trainer's CUDA autocast: BF16 by default on the Ampere-or-newer GPUs
+this route requires. `training.auto_mixed_precision: true` is refused for QuEST
+because it can select FP16, which the #674 gate did not measure. Activation
+calibration always runs under BF16. Treat this as a reproducible research path,
+not as a cheaper deployment format.
+
+
 ## FP8 Training (Ada+)
 
 For Ada, Hopper and Blackwell GPUs (RTX 40/50-series, L4, L40S, RTX 6000 Ada, H100 / H200, B100 / B200), train with float8 matmuls for ~2x speedup vs bf16 at comparable quality. This extends QAT infrastructure via `torchao.float8`:
@@ -99,7 +201,7 @@ training:
 
 Omitting `fp8_recipe` defaults to `tensorwise` (identical to v0.28.0 behavior).
 
-Bool `true` stays on the int8 QAT path for backward compatibility. FP8 requires CUDA + an Ada or newer GPU (compute capability ≥ 8.9) and is rejected on unsloth/mlx backends. The `rowwise` and `rowwise_with_gw_hp` recipes run a separate torch kernel with its own limits: it needs a torch that dispatches it on the card (Ada 8.9: torch ≥ 2.7; Hopper 9.x and Blackwell datacenter 10.x: any supported torch; RTX 50-series 12.x: torch ≥ 2.8; 11.x: torch ≥ 2.10; no release through 2.14 runs it on 13.x), it is **never built on Windows**, and before torch 2.11 it is only built against CUDA 12 or newer. `tensorwise` has none of these limits. When FP8 is requested and this card, OS or torch build cannot run it, **the run stops at setup** with the reason (`FP8HardwareUnsupportedError`), before any layer is converted, on every trainer that reaches the converter; it never trains on without FP8. (SFT's audio, layer-streaming and unsloth setup branches do not call the converter at all, so they still accept the flag without applying it — pre-existing, tracked separately.) `fp8_attention` asks the same gate (#835). Wired across every transformer-backend trainer (SFT, DPO, GRPO, KTO, ORPO, SimPO, IPO, PPO, Reward-Model, Embedding, Pretrain).
+Bool `true` stays on the int8 QAT path for backward compatibility. FP8 requires CUDA + an Ada or newer GPU (compute capability ≥ 8.9) and is rejected at config load on the mlx backend. (`soup train` refuses it on the unsloth backend: "QAT is not compatible with the unsloth backend".) `soup train --dry-run` reports this machine's card as a note and exits 0, since FP8 configs are often written for another machine; a missing torchao still fails it. The `rowwise` and `rowwise_with_gw_hp` recipes run a separate torch kernel with its own limits: it needs a torch that dispatches it on the card (Ada 8.9: torch ≥ 2.7; Hopper 9.x and Blackwell datacenter 10.x: any supported torch; RTX 50-series 12.x: torch ≥ 2.8; 11.x: torch ≥ 2.10; no release through 2.14 runs it on 13.x), it is **never built on Windows**, and before torch 2.11 it is only built against CUDA 12 or newer. `tensorwise` has none of these limits. When FP8 is requested and this card, OS or torch build cannot run it, **the run stops at setup** with the reason (`FP8HardwareUnsupportedError`), before any layer is converted, on every trainer that reaches the converter; it never trains on without FP8. **A missing torchao stops the run the same way** (`FP8DependencyMissingError`, naming `pip install "soup-cli[qat]"`), on a card that could run FP8 too. Until this release the trainers printed a yellow advisory and trained in bf16 under a config that said FP8 (#835). `soup train` asks both questions, card first, before it loads the model, so it stops with the same reason and no download. (SFT's audio and layer-streaming setup branches do not call the converter at all, so they still accept the flag without applying it; tracked in #1124.) `fp8_attention` asks the same gate (#835). Wired across every transformer-backend trainer (SFT, DPO, GRPO, KTO, ORPO, SimPO, IPO, PPO, Reward-Model, Embedding, Pretrain).
 
 
 ## Cut Cross-Entropy (Large-Vocab Models)
@@ -212,8 +314,8 @@ the model. This avoids both FSDP failure modes: integer storage and mixed
 adapter/storage dtypes.
 
 **Pre-quantized + QAT.** `gptq` / `awq` / `hqq:*` / `aqlm` / `eetq` / `mxfp4` /
-`fp8` all carry their own scale; combining with `quantization_aware` (int8 QAT or
-`'fp8'`) is rejected at config-load.
+`fp8` all carry their own scale; combining with `quantization_aware` (int8 QAT,
+`'fp8'`, or the experimental `'quest'` route) is rejected at config-load.
 
 **Multi-trainer support.** Quant Menu is wired across all 12 transformer-backend
 trainers (SFT / DPO / GRPO / KTO / ORPO / SimPO / IPO / PPO / RewardModel /
@@ -556,6 +658,8 @@ output: ./output
 > ```
 >
 > `0` means the adapter is lost. Fixed on `main` by PR #1010 (the wrapper now reports canonical names, so peft 0.20 and 0.21 both save every tensor; no `peft<0.21` pin); the next release carries it. Until you run a Soup with that fix, `pip install "peft<0.21"` is the workaround.
+>
+> Since #1011, a streamed run also checks every checkpoint and the final save: if `adapter_model.safetensors` is missing, carries the wrapper's `.inner.` keys, or holds a different number of LoRA tensors than the model trained, the run stops with a `RuntimeError` instead of reporting success. The manual check above is only needed for adapters saved before that.
 
 **Troubleshooting:**
 - **"trainable LoRA parameters remain on the meta device"** — PEFT attached an
@@ -627,7 +731,7 @@ does not make it free.
   host memory.)
 
 **Roadmap:**
-- A published 14B-on-8 GB reference benchmark — the **memory** half is done: a Qwen2.5-14B-shaped NF4 run at batch 1 x seq 384 trains end to end on an RTX 5070 Laptop 8 GB / 32 GB box with the store page-locked, measured peak 2.94 GB against a 3.39 GB prediction ([record](../benchmarks/gate-901-14b-on-8gb.md), #901). It is a synthetic *shape* with random weights, so no throughput or quality figure is quoted; a real Qwen2.5-14B-Instruct run on an 8 GB card is still wanted
+- A published 14B-on-8 GB reference benchmark — the **memory** half is done: a Qwen2.5-14B-shaped NF4 run at batch 1 x seq 384 trains end to end on an RTX 5070 Laptop 8 GB / 32 GB box with the store page-locked, measured peak 2.94 GB against a 3.39 GB prediction ([record](../benchmarks/gate-901-14b-on-8gb.md), #901). It is a synthetic *shape* with random weights, so no throughput or quality figure is quoted; a real Qwen2.5-14B-Instruct run on an RTX 3070 8 GB, reported by @hasheng on #901, pinned the 9.93 GB store (10.74 GB page-locked), measured a 2.92 GB peak against a 3.39 GB prediction, and trained 18 of 18 steps
 - GRPO and PPO are explicitly **not** planned: rollouts need generation, which re-reads the model per token
 
 **Disk pre-flight and shard cache.** Before Soup materialises or shards a checkpoint, it
@@ -727,6 +831,8 @@ PPO, GRPO, or Online DPO data is rendered. The saved tokenizer keeps the same te
 for inference. Tasks that do not render chat (`pretrain`, `embedding`, `classifier`,
 `reranker`, `cross_encoder`, `prm`, `asr`, `moe_lora_routing`, and `unlearn`) reject
 `data.chat_template` instead of silently ignoring it.
+An unregistered template name is refused by `soup train` and `soup data preprocess`
+before the model loads, and the message lists the known names.
 
 Raw Jinja strings are validated: null bytes / >64KB / filesystem-touching directives (`{% include %}`, `{% import %}`, `{% from %}`, `{% macro %}`, `{% extends %}`) are rejected at config-load.
 
@@ -992,9 +1098,11 @@ Both reject silently-no-op combinations: setting either flag without `moe_lora=t
 
 | flag | applied by | elsewhere |
 |---|---|---|
-| `moe_lora` | `sft`, `pretrain`, `tts`, and (since #798) `dpo`, `kto`, `orpo`, `simpo`, `grpo` | — |
+| `moe_lora` | `sft`, `pretrain`, `tts`, (since #798) `dpo`, `kto`, `orpo`, `simpo`, `grpo`, (since #1099) `ipo`, `bco`, `reward_model`, `ppo`, `embedding`, `online_dpo`, and (since #1151) `distill`, `unlearn`, and `classifier`, `reranker`, `cross_encoder` with `classifier_lora: true` | refused at config load, naming the reason, on `asr`, `moe_lora_routing`, `prm`, the classifier family without `classifier_lora: true` and `lora.r > 0`, `backend: unsloth` (any task), and `task: sft` with `modality: vision` or `audio` |
 | `moe_expert_quant`, `train_router_only` | `sft`, `tts` | refused at config load, naming the task |
 | `moe_aux_loss_coeff` | `sft`, `tts`, `pretrain` | a **non-default** value is refused; the default `0.01` still loads, because every stored config and eleven shipped recipes write it |
+
+**`moe_lora` on the remaining LoRA tasks (#1099).** #798 left it loading but unread on `ipo`, `bco`, `reward_model`, `ppo` and `embedding`, and `online_dpo` had the same gap. All six build their adapter through the same `build_lora_config` path, so they were wired to the same helper rather than refused. On `embedding` it applies only with `lora.r >= 1`; at `r: 0` that trainer full-fine-tunes and builds no adapter for the flag to select. #1151 closed the remainder: `distill` and `unlearn` build their adapter the same way and are wired to the same helper, and so is `classifier` / `reranker` / `cross_encoder` (one trainer) on its opt-in adapter path. Without `classifier_lora: true` and `lora.r > 0` that trainer full-fine-tunes and builds no adapter, so there the flag is refused at config load; `asr`, which trains only Whisper (no experts), `moe_lora_routing`, which builds no LoRA adapter, and `prm`, which fine-tunes every base parameter, refuse the flag at config load. Two paths refuse it whatever the task: `backend: unsloth`, whose setup attaches a fixed attention list, and `task: sft` with `modality: vision` or `audio`, whose setup builds its adapter without the MoE step. Every path now either reads `moe_lora` or refuses it, except `backend: mlx`, where it loads and `soup doctor --config` reports it as ignored; a source ratchet keeps a new adapter-building trainer from missing it. `train_router_only` and `moe_expert_quant` require `moe_lora: true`, so on `backend: unsloth` they now fail to load with the same message. `preference` is covered through the trainers it dispatches to, and `tts` through the SFT trainer it subclasses.
 
 **`moe_lora` requires `lora.dropout: 0.0` on a fused-expert MoE.** transformers 5.x keeps a Qwen3-MoE's experts as fused 3-D parameters (`mlp.experts.gate_up_proj`), which peft adapts through `lora.ParamWrapper`, and that wrapper raises `lora.ParamWrapper does not work with lora_dropout != 0.` With the schema default of `0.05` the LoRA attach failed outright, so `moe_lora` did not work on any task — including `sft`. Soup now stops at the attach with a message naming the flag, instead of letting peft's reach the user, and all 31 shipped MoE recipes pin `lora.dropout: 0.0`. The check is made against the loaded model, not at config load: whether the experts are fused depends on the checkpoint and the transformers version, and a model with one module per expert takes dropout normally. A dense base is untouched — there the flag is a no-op.
 
@@ -1011,7 +1119,7 @@ Both reject silently-no-op combinations: setting either flag without `moe_lora=t
 
 So `minimax-m3-sft` and `minimax-m3-dpo` still train attention-only LoRA: peft has no v4→v5 conversion mapping for those model types, so their experts are never targeted and the attach succeeds quietly. Extending target resolution per architecture is #1070. The nine `kimi-k2.x` and `mistral-large-3` recipes are untested rather than known-good — no tiny stand-in for those configs exists in the installed transformers.
 
-**`target_modules: auto` on a MoE base.** `resolve_lora_target_modules` has no mapping for `qwen3_moe`, so `auto` resolved to `None` and peft refused with `No target_modules passed but also no target_parameters found`. With `moe_lora: true` the targets come from the model scan instead, which is what the 15 DPO/GRPO recipes needed.
+**`target_modules: auto` on a MoE base.** Until #1070 `resolve_lora_target_modules` had no mapping for any MoE architecture Soup ships, so `auto` resolved to `None` and peft refused with `No target_modules passed but also no target_parameters found`. Those architectures now resolve to their attention projections (see `docs/peft-and-efficiency.md`); a MoE architecture neither Soup nor peft maps is refused at setup, naming it. With `moe_lora: true` the targets come from the model scan instead, and that is applied *before* the refusal is decided, so `moe_lora` still works on an unmapped MoE such as `qwen2_moe`.
 
 
 ## Unsloth Dynamic 2.0 GGUF Ladder (v0.53.0)
@@ -1041,7 +1149,7 @@ soup serve --model ./output --kv-cache-type q8_0     # 8-bit quantized KV cache 
 Three TrainingConfig bools extend the v0.28.0 FP8 menu. `fp8_attention` and `nvfp4` are LIVE
 torchao converters as of v0.71.21 (hardware-gated):
 
-- `fp8_attention: true` — requires `quantization_aware: fp8` AND a non-MLX backend. Converts the attention projections (q/k/v/o and fused variants) to torchao float8 training on Ada or newer GPUs (the same gate as `quantization_aware: fp8`). A card, OS or torch build the gate refuses stops the run at setup; missing torchao degrades to a clear advisory; a conversion-phase failure raises an honest "model may be PARTIALLY converted" error instead of training on a half-converted model.
+- `fp8_attention: true` — requires `quantization_aware: fp8` AND a non-MLX backend. Converts the attention projections (q/k/v/o and fused variants) to torchao float8 training on Ada or newer GPUs (the same gate as `quantization_aware: fp8`). A card, OS or torch build the gate refuses stops the run at setup, and so does a missing torchao (#835); a conversion-phase failure raises an honest "model may be PARTIALLY converted" error instead of training on a half-converted model.
 - `nvfp4: true` — Blackwell-only FP4 training via torchao `NVFP4TrainingConfig` + `quantize_`, which replaces `nn.Linear` with `NVFP4Linear` and quantises the forward **and backward** GEMMs. (Through v0.75.0 Soup asked for `NVFP4Config`, a name torchao has never exported, so the flag degraded to a yellow advisory and a bf16 run — #826.) Gated to supported tasks (rejected on `task: distill` and tasks without v0.28 speed/memory wiring) + non-MLX + `modality: text`; the SM ≥ 10 runtime check fires at trainer construction. The fix makes the flag **reach** NVFP4 training — the linears really are replaced by `NVFP4Linear`. A training step on top of that has torchao's own requirements, which Soup does not check for you: the kernels are triton, and `nvfp4_mm_triton` raises `ValueError: requires M, K, N all divisible by 128` for a shape it cannot serve (`torchao/prototype/moe_training/nvfp4_training/nvfp4_linear.py`), so a model whose hidden/intermediate sizes are not multiples of 128 will fail there rather than train slowly.
 - `unsloth_bnb_4bit: true` — promotes "Unsloth Dynamic 4-bit" from an implicit `backend=unsloth + quantization=4bit` combo to a named flag. Mutual rejection of inconsistent combos at config load.
 
@@ -1051,8 +1159,8 @@ Cross-validator ordering picks the most actionable error: `quantization_aware='f
 ## LF / Axolotl Quant Parity (v0.53.0)
 
 - `bnb_4bit_use_double_quant` — controls BNB's double-quantization. **Defaults to `true`** (matching every 4-bit load path — resident, layer-streaming, and the `soup merge` 4bit save formats), and is now honoured everywhere (#321): set `false` to disable it and it actually reaches BNB. Explicitly setting it requires `quantization: 4bit`; combinations with the Quant Menu formats (gptq / awq / hqq:Nbit / aqlm / eetq / mxfp4 / fp8) are rejected at config load.
-- `llm_int8: true` — an explicit 8-bit assertion. Unlike v0.41.0 `load_in_8bit` (which **rewrites** `quantization` to `8bit`), `llm_int8` enforces that the user has ALSO set `quantization: 8bit`. Mismatch raises with an actionable message.
-- `quantize_ref_model: true` / `quantize_reward_model: true` — extend the v0.40.5 Quant Menu wiring to the reference / reward models inside preference and RLHF training. `quantize_ref_model` accepts any task with a reference policy (`dpo / ipo / simpo / orpo / bco / kto / preference / grpo / ppo`); `quantize_reward_model` accepts `ppo / reward_model`.
+- `quantize_reward_model: true` — live for `ppo` and `reward_model` training, extending the v0.40.5 Quant Menu wiring to reward models (`trainer/ppo.py`, `trainer/reward_model.py`).
+- `quantize_ref_model: true` — accepted for reference-policy tasks (`dpo / ipo / simpo / orpo / bco / kto / preference / grpo / ppo`), but read by nothing. Staged field: warns in v0.76 and is refused as of v0.77 (#808).
 
 
 ## Advanced Save Formats (v0.53.0)

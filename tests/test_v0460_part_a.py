@@ -435,32 +435,26 @@ def test_cli_autopilot_unknown_target_exits_2(tmp_path, monkeypatch):
     assert result.exit_code == 2, result.output
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="symlink ACL on Windows")
+@pytest.mark.requires_symlink
 def test_write_recipe_symlink_target_rejected(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     real = tmp_path / "real.yaml"
     real.write_text("", encoding="utf-8")
     link = tmp_path / "recipe.yaml"
-    try:
-        os.symlink(real, link)
-    except (OSError, NotImplementedError):
-        pytest.skip("symlink unavailable")
+    os.symlink(real, link)
     profile = get_profile("mac-m3")
     with pytest.raises(ValueError, match="symlink"):
         write_recipe(profile, base="m/r", output_dir="./out",
                      recipe_path="recipe.yaml")
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="symlink ACL on Windows")
+@pytest.mark.requires_symlink
 def test_write_deploy_script_symlink_target_rejected(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     real = tmp_path / "real.sh"
     real.write_text("", encoding="utf-8")
     link = tmp_path / "deploy.sh"
-    try:
-        os.symlink(real, link)
-    except (OSError, NotImplementedError):
-        pytest.skip("symlink unavailable")
+    os.symlink(real, link)
     profile = get_profile("mac-m3")
     with pytest.raises(ValueError, match="symlink"):
         write_deploy_script(profile, model_path="./out",

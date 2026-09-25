@@ -35,6 +35,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Mapping, Optional, Sequence, 
 from urllib.parse import urlsplit
 
 from soup_cli.utils.paths import is_under_cwd
+from soup_cli.utils.safe_regex import check_config_regex
 
 if TYPE_CHECKING:  # pragma: no cover
     from soup_cli.utils.recipe_dag import RecipeDAG, RecipeNode
@@ -509,6 +510,10 @@ def _node_validator(
                 f"validator node {node.name!r}: regex too long"
             )
         try:
+            check_config_regex(
+                regex_src,
+                f"recipe.nodes[{node.name!r}].config.regex",
+            )
             compiled = re.compile(regex_src)
         except re.error as exc:
             raise ValueError(

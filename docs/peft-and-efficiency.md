@@ -219,11 +219,56 @@ than silently substituting ordinary LoRA. PiSSA and LoftQ additionally require
 LoftQ performs the low-bit conversion itself, so an already quantized base is
 invalid for either initializer.
 
-On the Transformers backend, `target_modules: auto` has an explicit Qwen3.5-family
-fallback because PEFT does not yet map `qwen3_5_text`. Soup targets `q_proj` and
-`v_proj` in full-attention layers plus `in_proj_qkv` and `out_proj` in the fused
-linear-attention layers. Explicit target lists still win unchanged. The MLX backend
-keeps its separate full-key default (`self_attn.q_proj`, `self_attn.v_proj`).
+On the Transformers backend, `target_modules: auto` is resolved in this order, and
+an explicit target list always wins unchanged:
+
+1. **Architectures PEFT maps itself** (`llama`, `mistral`, `qwen2`, …) are left to
+   PEFT's own default.
+2. **Architectures Soup maps** are resolved from `utils/peft_wiring.py`. The Qwen3.5
+   family targets `q_proj` and `v_proj` in full-attention layers plus `in_proj_qkv`
+   and `out_proj` in the fused linear-attention layers, because PEFT does not map
+   `qwen3_5_text`. The MoE architectures Soup ships recipes for (`qwen3_moe`,
+   `deepseek_v3`, `deepseek_v4`, `glm4_moe`, `glm_moe_dsa`, `granitemoehybrid`,
+   `kimi_k2`/`kimi_k25`, `gpt_oss`, `minimax_m2`, `minimax_m3_vl`) target their
+   attention projections; PEFT maps none of them (#1070). MiniMax-M3 uses a regex
+   scoped to its language tower, so a text fine-tune does not adapt the vision
+   encoder. `glm4_moe` is GLM-4.6 and is *not* `glm_moe_dsa` (GLM-5 / GLM-5.1):
+   the two have different attention shapes.
+3. **Anything else fails closed.** `auto` on an architecture neither PEFT nor Soup
+   maps is refused at setup, naming the `model_type`, rather than reaching PEFT's
+   `No target_modules passed`. This is not new behaviour — PEFT refused those too —
+   only a clearer message. It covers dense models as well as MoE ones: at the time of
+   writing `phi3`, `smollm3`, `lfm2` and several vision/audio architectures in the
+   catalogue land here. Give an explicit `target_modules` list, or for a MoE model set
+   `training.moe_lora: true`, which supplies expert targets and is checked *before*
+   the refusal. `training.lora.target_parameters` on its own also suffices.
+
+**`granitemoehybrid` is adapted only in part, and says so at setup.** Granite 4.0
+is a hybrid: on `ibm-granite/granite-4.0-tiny-base-preview` only 4 of the 40
+decoder layers carry a `self_attn` at all (`config.layer_types` is 36
+`linear_attention` + 4 `full_attention`), so the attention-projection entry above
+reaches a tenth of the decoder. The other 36 layers are Mamba-2 blocks
+(`mamba.in_proj`, `mamba.out_proj`), and every layer's shared-expert projections
+(`shared_mlp.input_linear`, `shared_mlp.output_linear`) and fused routed experts
+are left alone as well — consistent with every other row of that table, where the
+policy is attention projections only. Training prints a yellow
+`Partial LoRA coverage:` line naming the model type, the counted fraction and what
+was skipped, so the small adapter is not a surprise at merge time. If you want to
+reach the state-space or shared-expert projections, name them explicitly:
+
+```yaml
+training:
+  lora:
+    target_modules: [q_proj, k_proj, v_proj, o_proj, in_proj, out_proj]
+```
+
+That list is correct as module names on this architecture — it is what
+`named_modules()` reports — but Soup has not measured whether adapting a
+state-space projection trains well, and it is not the default for that reason.
+Treat it as the way to reach those layers, not as a recommendation to.
+
+The MLX backend keeps its separate full-key default (`self_attn.q_proj`,
+`self_attn.v_proj`).
 
 Qwen4-Exp routed experts are raw 3-D parameters rather than `nn.Linear` modules, so
 `target_modules: auto` / `all-linear` deliberately does not include them. Opt into
@@ -633,10 +678,12 @@ Records peak memory each step. When pressure crosses the threshold, recommends a
 
 ## Training Intelligence (Forgetting + Checkpoint Quality)
 
-The `forgetting_*`, `checkpoint_*`, and `early_stop_on_regression` settings are
+The `forgetting_*`, `checkpoint_*`, `early_stop_on_regression`, and `convergence_*` settings are
 reserved for planned in-training callbacks. They are accepted by the schema but
-are not enforced during training in this build. `soup train` warns when one is
-set away from its default, and Autopilot does not enable or advertise them.
+are not enforced during training in this build. `soup train` prints an advisory note
+when one is set away from its default, directing users to `--gate <suite.yaml>`.
+(Other unconsumed configuration fields staged for features that have not landed emit
+a load-time warning in v0.76 and are refused as of v0.77 per #808).
 
 Use the live eval gate for regression detection and automatic stopping today:
 

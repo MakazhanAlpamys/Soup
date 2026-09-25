@@ -1355,7 +1355,7 @@ def quant_check_cmd(
                 "Supported: directories containing safetensors / HuggingFace "
                 "model files or registry:// refs.[/]"
             )
-            raise typer.Exit(3)
+            raise typer.Exit(EXIT_USAGE_ERROR)
 
     before_path = Path(resolved_before)
     after_path = Path(resolved_after)
@@ -1380,7 +1380,7 @@ def quant_check_cmd(
                 f"[red]Failed to load --before model ({resolved_before}): {exc} "
                 "(pass --allow-stub to score with deterministic stubs instead)[/]"
             )
-            raise typer.Exit(1) from exc
+            raise typer.Exit(EXIT_RUNTIME_ERROR) from exc
         if fmt != "json":
             console.print(
                 f"[yellow]Failed to load --before model ({exc}); using deterministic stub.[/]"
@@ -1396,7 +1396,7 @@ def quant_check_cmd(
                 f"[red]Failed to load --after model ({resolved_after}): {exc} "
                 "(pass --allow-stub to score with deterministic stubs instead)[/]"
             )
-            raise typer.Exit(1) from exc
+            raise typer.Exit(EXIT_RUNTIME_ERROR) from exc
         if fmt != "json":
             console.print(
                 f"[yellow]Failed to load --after model ({exc}); using deterministic stub.[/]"

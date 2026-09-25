@@ -27,8 +27,6 @@ advisories so a training kick-off never crashes on instrumentation.
 
 from __future__ import annotations
 
-from soup_cli.utils.torchao_compat import TORCHAO_MIN_VERSION
-
 # Attention-projection module names (last FQN component). Covers the
 # separate-QKV Llama/Mistral/Qwen/Phi shape, GPT-2's fused ``c_attn``,
 # Phi-3 / GPT-NeoX fused variants, and encoder-style ``out_proj``.
@@ -229,8 +227,10 @@ def apply_fp8_attention(model: object, *, recipe: str = "tensorwise") -> int:
         TypeError: ``model`` is None or ``recipe`` is not a string.
         ValueError: ``recipe`` is empty, or the model has no attention
             projections at all (silent-no-op footgun).
-        RuntimeError: torchao is missing or the GPU fails the FP8 gate
-            (BETA hw gate — friendly message, never a silent no-op).
+        FP8HardwareUnsupportedError: the GPU fails the FP8 gate.
+        FP8DependencyMissingError: torchao's float8 recipe is not installed
+            (#835 ruling: the run stops, it does not train without FP8).
+        RuntimeError: the conversion failed partway.
     """
     if model is None:
         raise TypeError("model must not be None")
@@ -257,10 +257,7 @@ def apply_fp8_attention(model: object, *, recipe: str = "tensorwise") -> int:
     # (review fix: an NGC container with TE but no torchao must hit the
     # friendly gate, not an uncaught ImportError below).
     if not _torchao_available():
-        raise RuntimeError(
-            "fp8_attention requires torchao's float8 recipe "
-            f"(pip install 'torchao>={TORCHAO_MIN_VERSION}')."
-        )
+        raise fp8.FP8DependencyMissingError(f"fp8_attention: {fp8.FP8_TORCHAO_MISSING}")
 
     import torch.nn as nn
 
@@ -285,9 +282,8 @@ def apply_fp8_attention(model: object, *, recipe: str = "tensorwise") -> int:
             from torchao.float8 import convert_to_float8_training
             from torchao.float8.config import Float8LinearConfig
         except ImportError as exc:
-            raise RuntimeError(
-                "fp8_attention requires torchao's float8 recipe "
-                f"(pip install 'torchao>={TORCHAO_MIN_VERSION}')."
+            raise fp8.FP8DependencyMissingError(
+                f"fp8_attention: {fp8.FP8_TORCHAO_MISSING}"
             ) from exc
 
         pending_set = frozenset(pending)

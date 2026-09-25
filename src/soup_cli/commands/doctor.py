@@ -366,6 +366,7 @@ def _check_config_support(config_path: str) -> None:
     """
     from soup_cli.config.backend_support import (
         DEFAULT_BACKEND,
+        DEFAULT_MODALITY,
         check_config,
         unsupported_for,
     )
@@ -393,17 +394,20 @@ def _check_config_support(config_path: str) -> None:
         raise typer.Exit(2) from exc
 
     backend = getattr(cfg, "backend", DEFAULT_BACKEND)
+    modality = getattr(cfg, "modality", DEFAULT_MODALITY)
     gaps = check_config(cfg)
 
+    modality_str = f" modality=[bold]{modality}[/]" if modality != DEFAULT_MODALITY else ""
     console.print(
         f"\n[bold]Config check[/] - task=[bold]{cfg.task}[/] "
-        f"backend=[bold]{backend}[/]"
+        f"backend=[bold]{backend}[/]{modality_str}"
     )
     if not gaps:
-        known = unsupported_for(cfg.task, backend)
+        known = unsupported_for(cfg.task, backend, modality)
+        modality_msg = f" modality={modality}" if modality != DEFAULT_MODALITY else ""
         console.print(
             f"  [green]None of the {len(known)} setting(s) known to be unread "
-            f"on task={cfg.task} backend={backend} is set in this config.[/]"
+            f"on task={cfg.task} backend={backend}{modality_msg} is set in this config.[/]"
         )
         return
 
@@ -418,9 +422,10 @@ def _check_config_support(config_path: str) -> None:
     for entry in gaps:
         table.add_row(entry.field, f"[yellow]{entry.status}[/]", entry.describe())
     console.print(table)
+    modality_summary = f" (modality={modality})" if modality != DEFAULT_MODALITY else ""
     console.print(
         f"  [yellow]{len(gaps)} setting(s) written here are not read on "
-        f"backend={backend}.[/]"
+        f"backend={backend}{modality_summary}.[/]"
     )
 
 

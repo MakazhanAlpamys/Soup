@@ -2,14 +2,16 @@
 
 Computes a deterministic SHA-256 over the adapter's file list + per-file
 content hashes (Merkle-style root) and stores it alongside the adapter as
-``.soup-signature.json``. Two backends:
+``.soup-signature.json``. Three backends:
 
-- ``UNSIGNED`` (default in v0.60.0): writes the manifest + empty signature.
-  Useful for offline tamper detection — if the weights change, ``verify``
-  fails because the recomputed root no longer matches the recorded root.
-- ``SIGSTORE``: deferred to v0.60.1 (mirrors v0.27.0 MII / v0.59.0 Part B
-  stub-then-live pattern). Schema lives now so CI pipelines can integrate.
-- ``ED25519``: deferred to v0.60.1; requires ``cryptography`` lazy import.
+- ``UNSIGNED`` (default): writes the manifest + empty signature. Useful for
+  offline tamper detection — if the weights change, ``verify`` fails because
+  the recomputed root no longer matches the recorded root.
+- ``ED25519``: offline detached signature over the Merkle root, with lazy
+  ``cryptography`` import and optional out-of-band trusted public key.
+- ``SIGSTORE``: keyless OIDC signing through Fulcio/Rekor. The complete
+  Sigstore bundle is persisted and verification requires an out-of-band
+  certificate identity and OIDC issuer.
 
 The signature file format is intentionally JSON so operators can diff /
 audit / cat without parsing a binary blob. Atomic writes via
@@ -92,6 +94,7 @@ class SignatureRecord:
     signed_at: str
     manifest: AdapterManifest
     public_key: str = ""
+    sigstore_bundle: str = ""
 
 
 @dataclass(frozen=True)
@@ -341,20 +344,22 @@ def sign_adapter(
     backend: object = SignBackend.UNSIGNED,
     key_path: Optional[str] = None,
     generate_key_path: Optional[str] = None,
+    sigstore_interactive: bool = False,
 ) -> SignatureRecord:
     """Compute the manifest, sign it, and write ``.soup-signature.json``.
 
     Args:
         adapter_dir: cwd-contained adapter directory.
-        backend: ``"unsigned"`` (Merkle-root tamper detection) or ``"ed25519"``
-            (real detached signature over the Merkle root — v0.71.2 #185).
-            ``"sigstore"`` raises ``NotImplementedError`` (needs OIDC + Rekor;
-            infra-blocked).
+        backend: ``"unsigned"`` (Merkle-root tamper detection),
+            ``"ed25519"`` (offline detached signature), or ``"sigstore"``
+            (keyless OIDC + Fulcio/Rekor bundle over the Merkle root).
         key_path: ed25519 private-key PEM path (``ed25519`` backend). When None,
             falls back to ``SOUP_SIGNING_KEY`` env, then ``generate_key_path``.
         generate_key_path: when set (and no key resolved), generate a fresh
             ed25519 keypair, persist the private key here (PEM, 0600), and sign
-            with it. Mirrors the CLI ``--generate-key`` ergonomic.
+            with it.
+        sigstore_interactive: explicitly permit the browser OIDC flow. False by
+            default so headless runners fail instead of hanging.
 
     Returns:
         ``SignatureRecord`` describing what was written.
@@ -362,9 +367,28 @@ def sign_adapter(
     from datetime import datetime, timezone
 
     chosen = _resolve_backend(backend)
+    if not isinstance(sigstore_interactive, bool):
+        raise TypeError("sigstore_interactive must be bool")
+    if sigstore_interactive and chosen != SignBackend.SIGSTORE:
+        raise ValueError("--interactive-oidc requires --backend sigstore")
     manifest = compute_adapter_manifest(adapter_dir)
 
+    # Validate the final record path before any external signer can create a
+    # public transparency-log entry. A directory/symlink here would otherwise
+    # fail only after Sigstore/Fulcio/Rekor signing completed.
+    sig_path = os.path.join(adapter_dir, _SIGNATURE_FILENAME)
+    try:
+        st = os.lstat(sig_path)
+    except FileNotFoundError:
+        pass
+    else:
+        if stat.S_ISLNK(st.st_mode):
+            raise ValueError(f"{_SIGNATURE_FILENAME}: must not be a symlink")
+        if not stat.S_ISREG(st.st_mode):
+            raise ValueError(f"{_SIGNATURE_FILENAME}: must be a regular file")
+
     public_key = ""
+    sigstore_bundle = ""
     if chosen == SignBackend.UNSIGNED:
         signature = ""
     elif chosen == SignBackend.ED25519:
@@ -381,11 +405,16 @@ def sign_adapter(
         # contents (the root is a hash over every file).
         signature = sign_payload(private_key, manifest.merkle_root.encode("utf-8"))
         public_key = public_key_pem(private_key)
-    else:
-        raise NotImplementedError(
-            f"signing backend {chosen.value!r} is deferred / infra-blocked "
-            "(needs OIDC + Fulcio/Rekor network)"
+    elif chosen == SignBackend.SIGSTORE:
+        from soup_cli.utils.sigstore_signing import sign_payload_sigstore
+
+        signature = ""
+        sigstore_bundle = sign_payload_sigstore(
+            manifest.merkle_root.encode("utf-8"),
+            interactive=sigstore_interactive,
         )
+    else:  # pragma: no cover - enum exhaustiveness
+        raise AssertionError(f"unhandled signing backend: {chosen.value}")
 
     signed_at = datetime.now(tz=timezone.utc).isoformat()
     record = SignatureRecord(
@@ -395,6 +424,7 @@ def sign_adapter(
         signed_at=signed_at,
         manifest=manifest,
         public_key=public_key,
+        sigstore_bundle=sigstore_bundle,
     )
     payload = {
         "backend": record.backend,
@@ -404,6 +434,8 @@ def sign_adapter(
         "signed_at": record.signed_at,
         "manifest": _manifest_to_dict(manifest),
     }
+    if record.sigstore_bundle:
+        payload["sigstore_bundle"] = record.sigstore_bundle
     sig_path = os.path.join(adapter_dir, _SIGNATURE_FILENAME)
     atomic_write_text(
         json.dumps(payload, indent=2, sort_keys=True),
@@ -448,6 +480,7 @@ def _load_signature(adapter_dir: str) -> Optional[SignatureRecord]:
         signed_at=str(payload.get("signed_at", "")),
         manifest=manifest,
         public_key=str(payload.get("public_key", "")),
+        sigstore_bundle=str(payload.get("sigstore_bundle", "")),
     )
 
 
@@ -473,6 +506,8 @@ def verify_adapter(
     *,
     strict: bool = False,
     trusted_public_key: Optional[str] = None,
+    sigstore_identity: Optional[str] = None,
+    sigstore_oidc_issuer: Optional[str] = None,
 ) -> VerifyReport:
     """Verify that the adapter's files match the recorded manifest.
 
@@ -491,7 +526,9 @@ def verify_adapter(
         ``VerifyReport``. ``valid=True`` requires a present signature file
         AND a recomputed Merkle root that matches the recorded one. For the
         ``ed25519`` backend it additionally requires the embedded detached
-        signature to verify against the embedded (or trusted) public key.
+        signature to verify against the embedded (or trusted) public key. For
+        ``sigstore``, verification additionally requires an out-of-band trusted
+        certificate identity plus OIDC issuer and verifies the bundle against both.
         Unsigned adapters fail verification in both modes — strict raises,
         lenient reports.
     """
@@ -499,6 +536,10 @@ def verify_adapter(
         raise TypeError("strict must be bool")
     if trusted_public_key is not None and not isinstance(trusted_public_key, str):
         raise TypeError("trusted_public_key must be str or None")
+    if sigstore_identity is not None and not isinstance(sigstore_identity, str):
+        raise TypeError("sigstore_identity must be str or None")
+    if sigstore_oidc_issuer is not None and not isinstance(sigstore_oidc_issuer, str):
+        raise TypeError("sigstore_oidc_issuer must be str or None")
     enforce_under_cwd_and_no_symlink(adapter_dir, "adapter")
 
     name = os.path.basename(os.path.normpath(adapter_dir))
@@ -517,6 +558,10 @@ def verify_adapter(
     # Recompute manifest from current files
     current = compute_adapter_manifest(adapter_dir)
     findings: list[str] = []
+    if sigstore_identity is not None and sigstore_oidc_issuer is None:
+        findings.append("--cert-identity requires --cert-oidc-issuer")
+    if sigstore_oidc_issuer is not None and sigstore_identity is None:
+        findings.append("--cert-oidc-issuer requires --cert-identity")
     if current.merkle_root != record.merkle_root:
         findings.append(
             f"merkle root mismatch: recorded {record.merkle_root[:16]}..., "
@@ -577,6 +622,32 @@ def verify_adapter(
                 public_key, record.merkle_root.encode("utf-8"), record.signature
             ):
                 findings.append("ed25519 signature invalid")
+
+    if sigstore_identity is not None and record.backend != SignBackend.SIGSTORE.value:
+        findings.append(
+            "--cert-identity requires a sigstore signature; "
+            f"record backend is {record.backend!r}"
+        )
+    if record.backend == SignBackend.SIGSTORE.value:
+        if not record.sigstore_bundle:
+            findings.append("sigstore backend but no bundle recorded")
+        elif not sigstore_identity or not sigstore_oidc_issuer:
+            findings.append(
+                "sigstore verification requires trusted --cert-identity and "
+                "--cert-oidc-issuer values supplied out of band"
+            )
+        else:
+            from soup_cli.utils.sigstore_signing import verify_payload_sigstore
+
+            try:
+                verify_payload_sigstore(
+                    record.merkle_root.encode("utf-8"),
+                    record.sigstore_bundle,
+                    identity=sigstore_identity,
+                    issuer=sigstore_oidc_issuer,
+                )
+            except (RuntimeError, ValueError) as exc:
+                findings.append(str(exc))
 
     if findings:
         reason = f"signature mismatch: {findings[0]}"

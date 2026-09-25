@@ -214,13 +214,21 @@ class TestMoeLoraReachesTheExpertFfns:
         assert experts, f"{task}: no expert module carries an adapter: {adapted}"
 
     @pytest.mark.parametrize("task", _MOE_TASKS)
-    def test_without_the_flag_the_attach_fails_on_this_model(self, task, monkeypatch):
-        """The control the ruling asked for, and it is stronger than expected: on a
-        fused-expert Qwen3-MoE, ``target_modules: auto`` (what all 15 recipes use)
-        resolves to None, and peft refuses. So these recipes could not attach LoRA
-        at all, rather than quietly training attention-only."""
-        with pytest.raises(ValueError, match="target_modules"):
-            _attach_lora(task, monkeypatch, moe_lora=False, expect_failure=True)
+    def test_without_the_flag_no_expert_is_adapted(self, task, monkeypatch):
+        """The control the ruling asked for: ``moe_lora`` is what reaches the experts.
+
+        Until #1070 this asserted the attach FAILED -- on a fused-expert Qwen3-MoE,
+        ``target_modules: auto`` resolved to None and peft refused. #1102 maps
+        ``qwen3_moe``'s attention projections, so ``auto`` now attaches, and it
+        attaches attention-only. That keeps the control's point rather than
+        dropping it: the experts are adapted only when ``moe_lora`` asks for them,
+        and the companion test above proves it does."""
+        adapted = _adapted(_attach_lora(task, monkeypatch, moe_lora=False))
+
+        assert adapted, f"{task}: target_modules: auto attached nothing"
+        assert not [n for n in adapted if "experts" in n], (
+            f"{task}: experts adapted without moe_lora: {adapted}"
+        )
 
     @pytest.mark.parametrize("task", _MOE_TASKS)
     def test_a_non_moe_base_is_untouched_by_the_flag(self, task, monkeypatch):

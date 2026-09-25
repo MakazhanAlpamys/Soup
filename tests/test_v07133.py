@@ -771,6 +771,7 @@ class TestDraftRegistry:
         assert "hf/target-5" in targets
         assert f"hf/target-{_MAX_REGISTRY_ENTRIES + 4}" in targets
 
+    @pytest.mark.requires_symlink
     def test_registry_symlink_is_not_followed_on_read(self, draft_registry, tmp_path):
         """O_NOFOLLOW: a symlink at the registry path must degrade to empty,
         not leak an arbitrary file's parsed content into serve --auto-spec."""
@@ -780,10 +781,7 @@ class TestDraftRegistry:
         secret.write_text(
             '{"drafts": [{"target": "leaked", "draft": "/tmp"}]}', encoding="utf-8"
         )
-        try:
-            draft_registry.symlink_to(secret)
-        except OSError:
-            pytest.skip("symlink creation not permitted on this platform")
+        draft_registry.symlink_to(secret)
         assert list_drafts() == []
 
     def test_atomic_write_leaves_no_temp_file(self, draft_registry, tmp_path):

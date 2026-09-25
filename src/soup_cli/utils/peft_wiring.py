@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -47,6 +48,196 @@ QWEN4_EXP_TEXT_LORA_TARGET_PARAMETERS = (
 )
 
 
+#: PEFT has no LoRA mapping for any MoE text architecture Soup ships a recipe
+#: for: every ``model_type`` below returns ``None`` from peft 0.20's
+#: ``TRANSFORMERS_MODELS_TO_LORA_TARGET_MODULES_MAPPING``, so
+#: ``target_modules: auto`` reached peft as ``None`` and the attach raised
+#: ``No target_modules passed but also no target_parameters found`` (#1070).
+#:
+#: Measured while building this table, and worth knowing before extending it:
+#: peft's default mapping is unreachable for a MoE model whether or not it has
+#: an entry. ``LoraModel._prepare_adapter_config`` applies the default only
+#: ``if peft_config.target_modules is None``, and peft's MoE config conversion
+#: has already replaced ``None`` with an empty ``set()`` by then. Traced on
+#: peft 0.20 / transformers 5.16.1 with tiny CPU models:
+#:
+#:     [llama]     before=None    after={'q_proj', 'v_proj'}  -> attach OK
+#:     [mixtral]   before=set()   after=set()                 -> ValueError
+#:     [qwen3_moe] before=set()   after=set()                 -> ValueError
+#:
+#: ``mixtral`` is the one MoE ``model_type`` peft DOES map, and it fails anyway.
+#: It is deliberately absent from this table -- Soup ships no ``mixtral`` recipe,
+#: and delegating keeps today's behaviour rather than widening #1070's fix into
+#: an architecture nobody reported.
+#:
+#: Each entry is the attention projections that architecture actually defines,
+#: enumerated by building the base's config from the Hub, shrinking it, and
+#: instantiating it on the meta device (see the PR for the probe). Routed
+#: experts are deliberately absent: on ``qwen3_moe``, ``deepseek_v3`` and
+#: ``deepseek_v4`` they are 3-D ``nn.Parameter`` tensors that ``target_modules``
+#: cannot address at all, and adapting them is ``target_parameters`` work
+#: (#798). This is the safe linear-module baseline, the same policy as
+#: :data:`QWEN35_TEXT_LORA_TARGETS`.
+_DEEPSEEK_V3_ATTENTION = (
+    "q_a_proj",
+    "q_b_proj",
+    "kv_a_proj_with_mqa",
+    "kv_b_proj",
+    "o_proj",
+)
+
+MOE_TEXT_LORA_TARGETS: dict[str, Any] = {
+    "qwen3_moe": ("q_proj", "k_proj", "v_proj", "o_proj"),
+    # GLM-4.6 (``zai-org/GLM-4.6``, 92 layers). Ordinary attention, the same
+    # four projections as ``qwen3_moe``: enumerated on the meta device, every
+    # layer carries ``self_attn.{q,k,v,o}_proj`` and nothing else that is a
+    # ``nn.Linear``. The ``q_norm`` / ``k_norm`` siblings are RMSNorms, not
+    # Linears, so a suffix list cannot reach them by accident. Not ``glm_moe_dsa``
+    # (GLM-5/5.1): that one is V3-shaped attention plus the DSA indexer, and its
+    # names are different. Previously invisible to the ratchet because the
+    # recipe named ``THUDM/glm-4.6``, which 404s (#1132 repoints it).
+    "glm4_moe": ("q_proj", "k_proj", "v_proj", "o_proj"),
+    # Granite 4.0 (``ibm-granite/granite-4.0-tiny-base-preview``) is a HYBRID:
+    # ``config.layer_types`` is 36 ``linear_attention`` blocks and only 4
+    # ``full_attention`` ones, and only those 4 of the 40 decoder layers define a
+    # ``self_attn`` at all (measured: layers 5, 15, 25, 35). So this entry adapts
+    # a TENTH of the decoder, which is why ``granitemoehybrid`` also has a row in
+    # :data:`PARTIAL_COVERAGE_NOTES` -- a comment here is not where a user reads
+    # why their adapter is small.
+    #
+    # The other 36 layers are Mamba-2 blocks (``mamba.in_proj`` 36,
+    # ``mamba.out_proj`` 36, plus a ``conv1d``) and every layer carries
+    # ``shared_mlp.input_linear`` / ``shared_mlp.output_linear`` (40 each). They
+    # are deliberately NOT adapted: this table is the attention-projection
+    # baseline on every other row, and whether LoRA on a state-space projection
+    # trains well is a separate decision from #1070's "auto resolved to nothing".
+    # A user who wants them writes an explicit ``target_modules`` list.
+    # Routed experts are fused 3-D ``block_sparse_moe.experts`` parameters, so
+    # ``target_modules`` cannot reach them here either (#798).
+    "granitemoehybrid": ("q_proj", "k_proj", "v_proj", "o_proj"),
+    # Two MoE bases whose recipes set no MoE flag at all, so the flag-based
+    # sizing of this table missed them; found by attaching every shipped config
+    # on the meta device. Both keep their experts as fused 3-D parameters, like
+    # qwen3_moe, and expose the same four attention projections.
+    "gpt_oss": ("q_proj", "k_proj", "v_proj", "o_proj"),
+    "minimax_m2": ("q_proj", "k_proj", "v_proj", "o_proj"),
+    "deepseek_v3": _DEEPSEEK_V3_ATTENTION,
+    # V4 splits the output projection and drops the MQA compression on the
+    # key/value side, so its names are not V3's.
+    "deepseek_v4": ("q_a_proj", "q_b_proj", "kv_proj", "o_a_proj", "o_b_proj"),
+    # GLM-5.1 is V3-shaped attention plus a DSA indexer (``wq_b``, ``wk``,
+    # ``weights_proj``). The indexer is left alone: it selects which tokens
+    # attend, and adapting it is a different decision from adapting attention.
+    "glm_moe_dsa": _DEEPSEEK_V3_ATTENTION,
+    # Kimi K2.5/K2.6 declare ``architectures: ["DeepseekV3ForCausalLM"]`` and an
+    # ``auto_map`` onto ``modeling_deepseek.DeepseekV3ForCausalLM`` in their
+    # ``text_config``, so the text tower is V3's module layout. Taken from the
+    # config rather than enumerated, because the repo needs trust_remote_code
+    # and this table is not worth executing remote code for.
+    "kimi_k25": _DEEPSEEK_V3_ATTENTION,
+    # ``kimi_k2`` is both the text tower of K2.5/K2.6 and the OUTER type of
+    # Kimi-K2-Thinking, a shipped base with no MoE flag in its recipe -- so it is
+    # sweep-derived, not only defensive. (The first version of this table had it
+    # for the text tower and covered Kimi-K2-Thinking by luck; #1102 review, F3.)
+    "kimi_k2": _DEEPSEEK_V3_ATTENTION,
+    # A vision-language wrapper: ``vision_tower`` has its own ``q_proj`` /
+    # ``k_proj`` / ``v_proj``, so a suffix list would silently adapt the image
+    # encoder for a text fine-tune. peft treats a string as a regex, which is
+    # how the language tower is named without a name-match fallback.
+    # ``.*`` in front, because peft fullmatches a STRING target against the whole
+    # module key, and the key under the class vision SFT loads
+    # (``AutoModelForImageTextToText``) is ``model.language_model...``. My first
+    # version anchored at ``language_model`` and matched nothing (#1102 review,
+    # F2); its tests passed because they used hand-written keys without the
+    # ``model.`` prefix, not keys read off the model.
+    "minimax_m3_vl": r".*language_model\..*\.self_attn\.(q_proj|k_proj|v_proj|o_proj)",
+    # Defensive, not sweep-derived: no shipped base reports this type. It is the
+    # text tower MiniMax-M3's wrapper exposes, and a config loaded without the
+    # wrapper reaches the resolver as this type instead of ``minimax_m3_vl``.
+    "minimax_m3_vl_text": ("q_proj", "k_proj", "v_proj", "o_proj"),
+}
+
+#: Entries of :data:`MOE_TEXT_LORA_TARGETS` that cover only PART of the decoder,
+#: each with what is left unadapted. A declared table rather than a branch in the
+#: resolver: the next hybrid architecture is a row here, and an entry that grows
+#: partial coverage is a reviewed edit instead of an ``if`` someone forgets.
+#:
+#: The note is PRINTED, not just commented, because "your LoRA touched a tenth of
+#: the model" is not something a user can be expected to infer from a silent
+#: ``target_modules: auto``.
+PARTIAL_COVERAGE_NOTES: dict[str, str] = {
+    "granitemoehybrid": (
+        "the remaining layers are Mamba-2 blocks (mamba.in_proj / mamba.out_proj), "
+        "and every layer's shared-expert projections (shared_mlp.input_linear / "
+        "shared_mlp.output_linear) and fused routed experts are unadapted too. "
+        "Set training.lora.target_modules explicitly to include them."
+    ),
+}
+
+#: A decoder-layer index in a module key: ``model.layers.7.self_attn`` -> ``7``.
+_DECODER_LAYER_RE = re.compile(r"(?:^|\.)layers\.(\d+)(?:\.|$)")
+
+
+def _self_attention_coverage(model: Any) -> tuple[int, int] | None:
+    """``(layers defining a self_attn, decoder layers)``, or ``None`` if unknown.
+
+    COUNTED off the model when the caller passed one, so the notice describes the
+    checkpoint in hand rather than the one this table was measured on -- the
+    granite-4.0 family ships several depths, and a hard-coded "4 of 40" would be
+    wrong on all but one of them. ``stream_setup`` resolves from a bare config, so
+    ``config.layer_types`` is the fallback; a model with neither gets the notice
+    without a fraction rather than no notice.
+
+    Only consulted for a ``model_type`` in :data:`PARTIAL_COVERAGE_NOTES`, i.e.
+    for a text-only decoder, so ``layers.N`` is unambiguous here. A hybrid VL
+    wrapper would need the tower prefix taken into account first.
+    """
+    try:
+        named_modules = getattr(model, "named_modules", None)
+        if callable(named_modules):
+            total: set[str] = set()
+            attentive: set[str] = set()
+            for name, _module in named_modules():
+                match = _DECODER_LAYER_RE.search(str(name))
+                if match is None:
+                    continue
+                total.add(match.group(1))
+                if str(name).endswith(".self_attn"):
+                    attentive.add(match.group(1))
+            if total:
+                return len(attentive), len(total)
+    except Exception:  # noqa: BLE001 -- a notice never breaks a training run
+        logger.debug("self-attention coverage not countable", exc_info=True)
+
+    config = getattr(model, "config", model)
+    config = getattr(config, "text_config", None) or config
+    layer_types = getattr(config, "layer_types", None)
+    if isinstance(layer_types, (list, tuple)) and layer_types:
+        return sum(1 for kind in layer_types if kind == "full_attention"), len(layer_types)
+    return None
+
+
+def _note_partial_coverage(model_type: Any, model: Any, console: Any) -> None:
+    """Print the partial-coverage advisory for ``model_type``, if it has one."""
+    note = PARTIAL_COVERAGE_NOTES.get(model_type)
+    if note is None or console is None:
+        return
+    coverage = _self_attention_coverage(model)
+    scope = (
+        f"{coverage[0]} of {coverage[1]} decoder layers"
+        if coverage is not None
+        else "only the layers that define one"
+    )
+    try:
+        console.print(
+            f"[yellow]Partial LoRA coverage:[/yellow] {model_type} -- "
+            f"target_modules: auto adapts the attention projections of {scope}; "
+            f"{note}"
+        )
+    except Exception:  # noqa: BLE001 -- never crash on console issues.
+        logger.debug("partial-coverage notice not printed", exc_info=True)
+
+
 def _model_types(model: Any) -> set[Any]:
     """Return outer/text model types without importing Transformers."""
     config = getattr(model, "config", model)
@@ -57,7 +248,59 @@ def _model_types(model: Any) -> set[Any]:
     }
 
 
-def resolve_lora_target_modules(model: Any, configured: Any) -> Any:
+def _peft_has_a_default_for(model_types: set[Any]) -> bool:
+    """Does PEFT map any of these ``model_type`` values to LoRA targets itself?
+
+    Asked rather than assumed, so an architecture PEFT knows is never refused
+    here: that over-refusal is the mistake #1074's review caught one axis over.
+    A PEFT too old or too new to expose the mapping is treated as "yes", which
+    keeps the old delegate-and-let-PEFT-decide behaviour.
+
+    Deliberately conservative rather than accurate. A mapped MoE architecture
+    (``mixtral``) still fails to attach, because peft's MoE conversion empties
+    ``target_modules`` before the default is consulted -- see the note on
+    :data:`MOE_TEXT_LORA_TARGETS`. Answering "yes" there means Soup delegates and
+    the user sees peft's error, exactly as before #1070, instead of Soup
+    refusing an architecture it was never asked about.
+    """
+    try:
+        from peft.utils.constants import (
+            TRANSFORMERS_MODELS_TO_LORA_TARGET_MODULES_MAPPING as PEFT_DEFAULTS,
+        )
+    except Exception:  # noqa: BLE001 — PEFT layout is not a promise
+        return True
+    return any(PEFT_DEFAULTS.get(value) for value in model_types if value is not None)
+
+
+class UnmappedTargets:
+    """``target_modules: auto`` mapped to nothing Soup or peft knows (#1070).
+
+    Returned by :func:`resolve_lora_target_modules` instead of raising, so the
+    refusal is decided by :func:`build_lora_config` -- the last step every
+    trainer takes before ``get_peft_model``. Deciding it in the resolver refused
+    before a later step could supply targets: ``moe_lora`` replaces
+    ``target_modules`` *after* the resolver at every MoE-wired call site, and
+    ``target_parameters`` alone is enough for peft. Measured on a real
+    ``qwen2_moe`` with ``moe_lora: true``: main attached 7 modules, and the
+    raise-in-the-resolver version refused it (#1102 review, F1).
+
+    Falsy, like the ``None`` it stands in for, so code that tests
+    ``if target_modules`` treats it as "no modules" rather than as a list.
+    """
+
+    __slots__ = ("model_types",)
+
+    def __init__(self, model_types: list[str]) -> None:
+        self.model_types = model_types
+
+    def __bool__(self) -> bool:
+        return False
+
+    def __repr__(self) -> str:
+        return f"UnmappedTargets({self.model_types!r})"
+
+
+def resolve_lora_target_modules(model: Any, configured: Any, console: Any = None) -> Any:
     """Resolve ``target_modules: auto`` for models PEFT does not know yet.
 
     Existing architectures remain delegated to PEFT by returning ``None``.
@@ -65,6 +308,15 @@ def resolve_lora_target_modules(model: Any, configured: Any) -> Any:
     config (``qwen3_5``) around ``qwen3_5_text`` and its MoE counterpart, so
     inspect both configs without importing Transformers or PEFT at module load.
     Qwen4-Exp's causal-LM loader exposes ``qwen4_exp_text`` directly.
+
+    An architecture neither Soup nor peft maps returns :class:`UnmappedTargets`
+    rather than raising; :func:`build_lora_config` decides, once a ``moe_lora``
+    override and ``target_parameters`` have had their chance (#1070).
+
+    ``console`` is optional so the pure resolution stays callable without one.
+    When it is supplied and the resolved entry covers only part of the decoder
+    (:data:`PARTIAL_COVERAGE_NOTES`), the advisory is printed here -- this is the
+    one place that knows WHICH entry was chosen.
     """
     if configured != "auto" and configured != ["auto"]:
         return configured
@@ -79,7 +331,30 @@ def resolve_lora_target_modules(model: Any, configured: Any) -> Any:
         return list(QWEN35_TEXT_LORA_TARGETS)
     if "qwen4_exp_text" in model_types:
         return QWEN4_EXP_TEXT_LORA_TARGETS
-    return None
+    # The MoE table. The wrapper ``model_type`` is preferred over the text one
+    # where both are present, because a vision-language wrapper names its
+    # language tower in the module path and the text-only entry does not.
+    for value in (getattr(getattr(model, "config", model), "model_type", None),):
+        if value in MOE_TEXT_LORA_TARGETS:
+            _note_partial_coverage(value, model, console)
+            return _as_targets(MOE_TEXT_LORA_TARGETS[value])
+    for value in sorted(str(v) for v in model_types if v is not None):
+        if value in MOE_TEXT_LORA_TARGETS:
+            _note_partial_coverage(value, model, console)
+            return _as_targets(MOE_TEXT_LORA_TARGETS[value])
+
+    named = sorted(value for value in model_types if isinstance(value, str))
+    if not named or _peft_has_a_default_for(model_types):
+        # No ``model_type`` string to name is not the same as an architecture we
+        # know to be unmappable -- a config that does not declare one, or a test
+        # double standing in for a model, is delegated exactly as before #1070.
+        return None
+    return UnmappedTargets(named)
+
+
+def _as_targets(entry: Any) -> Any:
+    """A tuple becomes a fresh list; a string is a PEFT regex and stays one."""
+    return entry if isinstance(entry, str) else list(entry)
 
 
 def resolve_lora_target_parameters(model: Any, configured: Any) -> Any:
@@ -182,6 +457,30 @@ def build_peft_config_spec(
     }
 
 
+def _settle_unmapped(target_modules: Any, target_parameters: Any) -> Any:
+    """Refuse an unmappable ``auto`` here, where the final targets are known.
+
+    Reached only if no ``moe_lora`` override replaced the value. With
+    ``target_parameters`` peft has something to attach to, so the modules half
+    is simply empty. Without them, refuse by name -- a better message than
+    peft's ``No target_modules passed``, and one that no longer points a dense
+    model at a MoE-only table (#1102 review, F5).
+    """
+    if not isinstance(target_modules, UnmappedTargets):
+        return target_modules
+    if target_parameters:
+        return None
+    raise ValueError(
+        "training.lora.target_modules='auto' has no mapping for model_type="
+        f"{target_modules.model_types!r}: neither Soup's table nor peft's own "
+        "defaults cover it, so there is nothing to attach a LoRA adapter to. "
+        "Give an explicit training.lora.target_modules list -- the module "
+        "names are in model.named_modules() -- or, for a Mixture-of-Experts "
+        "model, set training.moe_lora: true. The architectures Soup maps are "
+        "in utils/peft_wiring.py (#1070)."
+    )
+
+
 def build_lora_config(
     lora_cfg: Any,
     *,
@@ -197,6 +496,7 @@ def build_lora_config(
     """
     import peft
 
+    target_modules = _settle_unmapped(target_modules, target_parameters)
     spec = build_peft_config_spec(
         lora_cfg,
         target_modules=target_modules,

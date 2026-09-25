@@ -252,6 +252,7 @@ def test_previous_run_is_rotated_to_backup(tmp_path):
     assert json.loads(new_lines[0])["backend"] == "mlx"
 
 
+@pytest.mark.requires_symlink
 def test_rotation_refuses_to_overwrite_a_symlink_backup(tmp_path):
     path = tmp_path / "rewind.jsonl"
     victim = tmp_path / "victim.txt"
@@ -261,10 +262,7 @@ def test_rotation_refuses_to_overwrite_a_symlink_backup(tmp_path):
     first.close()
 
     backup = tmp_path / "rewind.jsonl.1"
-    try:
-        backup.symlink_to(victim)
-    except (NotImplementedError, OSError):  # unprivileged Windows
-        pytest.skip("symlink creation not supported on this platform/user")
+    backup.symlink_to(victim)
 
     second = _make_log(tmp_path, path=path, backend="mlx")
     second.record_batch(step=1, micro=0, rows=[1], row_loss=[1.0], row_tokens=[10])
