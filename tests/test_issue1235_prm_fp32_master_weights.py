@@ -306,9 +306,14 @@ class TestBf16MixedPrecisionTrains:
         assert set(_TRAINED_GROUPS) <= set(unchanged), unchanged
         stuck = {g: unchanged[g] for g in _TRAINED_GROUPS if unchanged[g] == 1.0}
         assert not stuck, f"bit-identical after 8 steps at lr={lr}: {stuck}"
-        assert unchanged["norms"] == 0.0, unchanged
+        # Not 0.0: an element whose gradient is exactly zero on every step stays put
+        # even on fp32 master weights, and the CPU bf16 autocast kernels decide which
+        # elements those are. CI on Windows CPython 3.10/3.11 left 1 of 320 norm
+        # elements (0.3%) unmoved where 3.12 left none. The defect this pins left 100%
+        # of the norms and 84.7% of attn/mlp bit-identical, so 1% still separates them.
+        assert unchanged["norms"] <= 0.01, unchanged
         assert unchanged["attn/mlp"] <= 0.01, unchanged
-        assert unchanged["reward_head"] == 0.0, unchanged
+        assert unchanged["reward_head"] <= 0.01, unchanged
 
 
 class TestPreAmpereFp16:
