@@ -370,6 +370,20 @@ def model_size_from_name(model_name: str) -> float:
     if million:
         return float(million.group(1)) / 1000.0
 
+    # Common encoder / embedding checkpoints (BGE, E5, GTE, BERT, RoBERTa, MiniLM)
+    # carry -small / -base / -large suffixes rather than "Nb" or "Nm" (#1234).
+    encoder_prefixes = ("bge-", "e5-", "gte-", "bert-", "roberta-", "minilm")
+    if any(p in name_lower for p in encoder_prefixes):
+        if "large" in name_lower:
+            return 0.335
+        if "base" in name_lower:
+            return 0.11
+        if "small" in name_lower:
+            return 0.033
+        if "mini" in name_lower or "tiny" in name_lower:
+            return 0.022
+        return 0.11
+
     return 7.0  # default guess
 
 

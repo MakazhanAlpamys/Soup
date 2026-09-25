@@ -100,6 +100,30 @@ class EmbeddingTrainerWrapper:
             f" / {total:,} total ({pct:.2f}%)"
         )
 
+        # --- Dataset ---
+        train_ds = Dataset.from_list(dataset["train"])
+        eval_ds = None
+        if "val" in dataset and dataset["val"]:
+            eval_ds = Dataset.from_list(dataset["val"])
+
+        # --- Output dir ---
+        output_dir = Path(cfg.output)
+        if cfg.experiment_name:
+            output_dir = output_dir / cfg.experiment_name
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        # --- Determine loss function ---
+        loss_type = tcfg.embedding_loss
+        margin = tcfg.embedding_margin
+        has_negatives = "negative" in train_ds.column_names
+
+        if loss_type == "triplet" and not has_negatives:
+            console.print(
+                "[yellow]Warning: triplet loss requires 'negative' field. "
+                "Falling back to contrastive loss.[/]"
+            )
+            loss_type = "contrastive"
+
         # --- Batch size ---
         batch_size = tcfg.batch_size
         if batch_size == "auto":
@@ -114,21 +138,27 @@ class EmbeddingTrainerWrapper:
                 quantization=tcfg.quantization,
                 lora_r=tcfg.lora.r,
             )
-            # Embedding processes pairs/triplets → roughly 2-3x memory per sample
-            batch_size = max(1, batch_size // 3)
+            # Embedding processes pairs/triplets → roughly 2-3x memory per sample.
+            # Contrastive in-batch negatives need batch_size >= 2 (#1234).
+            min_batch = 2 if loss_type == "contrastive" else 1
+            batch_size = max(min_batch, batch_size // 3)
             console.print(f"[green]Auto batch size (embedding):[/] {batch_size}")
+        elif (batch_size == 1 or str(batch_size) == "1") and loss_type == "contrastive":
+            raise ValueError(
+                "contrastive in-batch negatives need batch_size >= 2; "
+                "use triplet (with negatives) or cosine for batch 1"
+            )
 
-        # --- Dataset ---
-        train_ds = Dataset.from_list(dataset["train"])
-        eval_ds = None
-        if "val" in dataset and dataset["val"]:
-            eval_ds = Dataset.from_list(dataset["val"])
+        if loss_type == "contrastive" and len(train_ds) < 2:
+            raise ValueError(
+                "contrastive in-batch negatives need at least 2 training samples; "
+                f"got {len(train_ds)}"
+            )
 
-        # --- Output dir ---
-        output_dir = Path(cfg.output)
-        if cfg.experiment_name:
-            output_dir = output_dir / cfg.experiment_name
-        output_dir.mkdir(parents=True, exist_ok=True)
+        console.print(
+            f"[green]Embedding config:[/] loss={loss_type}, margin={margin}, "
+            f"pooling={tcfg.embedding_pooling}"
+        )
 
         # --- Calculate warmup steps from ratio ---
         total_steps = (
@@ -136,23 +166,6 @@ class EmbeddingTrainerWrapper:
             * tcfg.epochs
         )
         warmup_steps = int(total_steps * tcfg.warmup_ratio)
-
-        # --- Determine loss function ---
-        loss_type = tcfg.embedding_loss
-        margin = tcfg.embedding_margin
-        has_negatives = "negative" in train_ds.column_names
-
-        if loss_type == "triplet" and not has_negatives:
-            console.print(
-                "[yellow]Warning: triplet loss requires 'negative' field. "
-                "Falling back to contrastive loss.[/]"
-            )
-            loss_type = "contrastive"
-
-        console.print(
-            f"[green]Embedding config:[/] loss={loss_type}, margin={margin}, "
-            f"pooling={tcfg.embedding_pooling}"
-        )
 
         # --- Training args ---
         _bf16, _fp16 = bf16_fp16_flags(self.device)
@@ -174,6 +187,7 @@ class EmbeddingTrainerWrapper:
             "fp16": _fp16,
             "report_to": self.report_to,
             "remove_unused_columns": False,
+            "dataloader_drop_last": (loss_type == "contrastive"),
             "deepspeed": self.deepspeed_config,
             **training_seed_kwargs(tcfg),
         }
@@ -420,6 +434,10 @@ class EmbeddingTrainerWrapper:
             "total_steps": self.trainer.state.global_step,
         }
 
+    @property
+    def args(self):
+        return self.trainer.args if self.trainer is not None else None
+
 
 def _pool_embeddings(last_hidden_state, attention_mask, pooling: str):
     """Apply pooling strategy to hidden states."""
@@ -575,6 +593,10 @@ class _EmbeddingTrainer:
         else:
             # Contrastive loss (InfoNCE / in-batch negatives)
             similarity = torch.matmul(anchor_emb, pos_emb.T) / self._temperature
+            if similarity.size(0) < 2:
+                raise ValueError(
+                    f"contrastive in-batch negatives need batch_size >= 2; got {similarity.size(0)}"
+                )
             labels = torch.arange(similarity.size(0), device=similarity.device)
             loss = nn_func.cross_entropy(similarity, labels)
 
@@ -603,3 +625,6 @@ class _EmbeddingTrainer:
     @property
     def args(self):
         return self._trainer.args
+
+    def compute_loss(self, model, inputs, return_outputs=False):
+        return self._compute_embedding_loss(model, inputs, return_outputs)

@@ -5780,6 +5780,20 @@ class SoupConfig(BaseModel):
         return self
 
     @model_validator(mode="after")
+    def _validate_embedding_contrastive_batch_size(self) -> "SoupConfig":
+        """#1234 — contrastive in-batch negatives need batch_size >= 2."""
+        if self.task == "embedding":
+            tcfg = self.training
+            loss = getattr(tcfg, "embedding_loss", "contrastive")
+            bs = getattr(tcfg, "batch_size", "auto")
+            if loss == "contrastive" and (bs == 1 or str(bs) == "1"):
+                raise ValueError(
+                    "contrastive in-batch negatives need batch_size >= 2; "
+                    "use triplet (with negatives) or cosine for batch 1"
+                )
+        return self
+
+    @model_validator(mode="after")
     def _validate_lora_target_parameters_scope(self) -> "SoupConfig":
         """#573 — raw-parameter LoRA is live in resident SFT/pretrain only."""
         targets = self.training.lora.target_parameters
