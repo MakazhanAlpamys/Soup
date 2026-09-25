@@ -133,6 +133,7 @@ def test_unreachable_judge_exits_nonzero_and_writes_no_rows(tmp_path, monkeypatc
     assert "6 of 6 judge calls failed" in output
     assert "--judge-provider ollama (http://127.0.0.1:9)" in output
     assert "ollama provider request failed" in output
+    assert "ConnectError" in output
 
 
 _FAILURES = [
@@ -184,6 +185,7 @@ def test_partial_outage_keeps_only_successful_rows(
     assert "Judge calls: 3 of 6 failed" in output
     assert "3 of 6 judge calls failed" in output
     assert "HTTP 500" in output
+    assert "synth complete with judge failures" in output
 
 
 @pytest.mark.parametrize("threshold", ["0.0", "1.0"])
@@ -319,6 +321,7 @@ def test_anthropic_partial_outage_keeps_successful_rows(tmp_path, monkeypatch) -
     assert _empty_answer_rows(rows) == []
     assert "3 of 6 judge calls failed" in output
     assert "anthropic provider request failed" in output
+    assert "synth complete with judge failures" in output
 
 
 def test_healthy_judge_control(tmp_path, monkeypatch, stub_judge) -> None:
@@ -332,6 +335,7 @@ def test_healthy_judge_control(tmp_path, monkeypatch, stub_judge) -> None:
     assert result.exit_code == 0, output
     assert len(_dataset_rows(tmp_path)) == 6
     assert "Data Forge — synth complete" in output
+    assert "with judge failures" not in output
     assert "judge calls failed" not in output
     assert "Judge calls:" not in output
 
