@@ -644,23 +644,25 @@ masking it out. Both are gated to the SFT-family of tasks.
 
 ## EBFT / GDPO Loss Variants
 
-Entropy-regularised SFT (`ebft_variant: structured | strided`) and generalised
-DPO (`gdpo_variant: standard | length_normalized | margin`) — both attach
-idempotently via `compute_loss` wrappers and auto-fire when the corresponding
-variant field is set on `TrainingConfig`.
+Generalised DPO (`gdpo_variant: standard | length_normalized | margin`) is attached
+idempotently to the DPO trainer when the field is set on `TrainingConfig`:
 
 ```yaml
-# SFT with EBFT structured
-training:
-  ebft_variant: structured
-  ebft_temperature: 1.0
-
 # DPO with GDPO length_normalized
 task: dpo
 training:
   gdpo_variant: length_normalized
   dpo_beta: 0.1
 ```
+
+EBFT (`ebft_variant: structured | strided`) is refused at config load
+([#1230](https://github.com/MakazhanAlpamys/Soup/issues/1230)): it is not yet a
+distinct objective. The term it added scored each position's logits against that
+position's own input token, with no causal shift, so it rewarded copying the input
+over predicting the next token; shifted onto the next token it is the model's own
+cross-entropy, so the loss would count cross-entropy twice. A config that set it
+never trained correctly. Remove `ebft_variant` and `ebft_temperature`; the refusal
+stays until the intended EBFT objective is implemented from its reference.
 
 
 ## GRPO Objective Variants
@@ -1701,7 +1703,7 @@ The cross-validator rejects `task='distill'` without `teacher_model`, and reject
 
 ## EBFT + GDPO (BETA, v0.52.0)
 
-Energy-Based Fine-Tuning (axolotl) lands as `training.ebft_variant ∈ {structured, strided}` + `training.ebft_temperature` (bounded `[1e-4, 100.0]`). Gated to `task: sft`. Generalized DPO lands as `training.gdpo_variant ∈ {standard, length_normalized, margin}` — gated to `task ∈ {dpo, preference}`. Live loss kernels in v0.52.1.
+Generalized DPO lands as `training.gdpo_variant ∈ {standard, length_normalized, margin}` — gated to `task ∈ {dpo, preference}` and attached to the DPO trainer. Energy-Based Fine-Tuning (`training.ebft_variant ∈ {structured, strided}` + `training.ebft_temperature`) is refused at config load ([#1230](https://github.com/MakazhanAlpamys/Soup/issues/1230)): its term had no causal shift, so it rewarded copying the input, and shifted it would duplicate the cross-entropy. See [EBFT / GDPO Loss Variants](#ebft--gdpo-loss-variants).
 
 
 ## gpt-oss `reasoning_effort` + `train_on_eot` (v0.52.0)

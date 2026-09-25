@@ -2197,6 +2197,7 @@ class SFTTrainerWrapper(StreamingSetupMixin):
         attach_plugin_callback(self.trainer, console)
 
         # v0.53.2 #135 — EBFT compute_loss hook (no-op if ebft_variant unset).
+        # Always a no-op today: ebft_variant is refused at config load (#1230).
         from soup_cli.utils.ebft_gdpo import attach_ebft_compute_loss
         attach_ebft_compute_loss(self.trainer, self.config.training)
 
