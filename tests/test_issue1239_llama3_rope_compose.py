@@ -16,8 +16,9 @@ before.
 ``rope_scaling_type: longrope`` is refused at config load, in every spelling:
 its per-dimension ``short_factor`` / ``long_factor`` vectors exist only on
 checkpoints already scaled with LongRoPE, and extending those is refused, so it
-can no longer extend anything. Fine-tuning a LongRoPE checkpoint at its native
-length with ``rope_scaling_type`` unset keeps working.
+cannot extend anything; the refusal points at the types that can. Fine-tuning a
+LongRoPE checkpoint at its native length with ``rope_scaling_type`` unset keeps
+working, and a control trains one for real.
 
 Reference inverse frequencies come from transformers' own llama3 init
 (``ROPE_INIT_FUNCTIONS["llama3"]``, i.e. ``_compute_llama3_parameters``), never
@@ -339,6 +340,19 @@ class TestComposeLlama3RopeParameters:
                 native, max_position_embeddings=NATIVE_MAX, target_length=TARGET
             )
 
+    def test_an_integral_float_original_length_is_kept_as_an_int(self) -> None:
+        """transformers accepts ``8192.0`` there (it only warns), so this does too."""
+        from soup_cli.utils.long_context import compose_llama3_rope_parameters
+
+        block = compose_llama3_rope_parameters(
+            {**NATIVE_LLAMA31, "original_max_position_embeddings": 8192.0},
+            max_position_embeddings=NATIVE_MAX,
+            target_length=TARGET,
+        )
+
+        assert block["original_max_position_embeddings"] == 8192
+        assert type(block["original_max_position_embeddings"]) is int
+
 
 # ---------------------------------------------------------------------------
 # apply_long_context_config — compose or refuse, before any mutation
@@ -469,6 +483,49 @@ class TestApplyLongContextConfigOnScaledCheckpoints:
             apply_long_context_config(config, TARGET, "yarn")
         assert _snapshot(config) == before
 
+    def test_autodetect_reads_the_type_the_way_transformers_does(self) -> None:
+        """With both keys present transformers builds from ``rope_type``; the None
+        auto-detect follows it, so a stale legacy ``type`` cannot turn a llama3
+        block into a refused ``dynamic`` request."""
+        from soup_cli.utils.long_context import apply_long_context_config
+
+        config = SimpleNamespace(
+            max_position_embeddings=NATIVE_MAX,
+            rope_parameters={**NATIVE_LLAMA31, "type": "linear"},
+        )
+
+        assert apply_long_context_config(config, TARGET, None) == COMPOSED_LLAMA31
+
+    @pytest.mark.parametrize(
+        "override",
+        [{"factor": None}, {"low_freq_factor": True}, {"original_max_position_embeddings": 0}],
+        ids=["no-factor", "bool-low", "zero-original"],
+    )
+    @pytest.mark.parametrize("requested", ["llama3", None])
+    def test_a_malformed_native_llama3_block_is_refused_with_the_setting_and_a_way_out(
+        self, override: dict, requested
+    ) -> None:
+        from soup_cli.utils.long_context import apply_long_context_config
+
+        config = SimpleNamespace(
+            max_position_embeddings=NATIVE_MAX,
+            rope_parameters={**NATIVE_LLAMA31, **override},
+        )
+        before = _snapshot(config)
+
+        with pytest.raises(ValueError) as exc_info:
+            apply_long_context_config(config, TARGET, requested)
+
+        shown = "'llama3'" if requested else "None (auto-detected 'llama3')"
+        _message_names(
+            exc_info,
+            f"training.rope_scaling_type={shown}",
+            "#1239",
+            next(iter(override)),
+            f"at or below {NATIVE_MAX}",
+        )
+        assert _snapshot(config) == before
+
 
 # ---------------------------------------------------------------------------
 # Controls — behaviour that must NOT change
@@ -569,13 +626,14 @@ class TestControls:
 # longrope — refused at config load
 # ---------------------------------------------------------------------------
 
-# What the refusal must say: why longrope can extend nothing, the issue, and
-# what to do instead.
+# What the refusal must say: why longrope can extend nothing, the issue, how to
+# extend a checkpoint instead, and how to fine-tune a LongRoPE one.
 _LONGROPE_REASONS = (
     "#1239",
-    "can no longer extend any checkpoint",
+    "cannot extend any checkpoint",
     "exist only on checkpoints already scaled with LongRoPE",
     "extending an already-scaled checkpoint is refused",
+    "To extend a checkpoint without RoPE scaling, use linear, dynamic, yarn or llama3",
     "leave rope_scaling_type unset",
 )
 
@@ -819,6 +877,7 @@ _CHAT_ROWS = {
     ]
     * 2
 }
+_TEXT_ROWS = {"train": [{"text": "hello world hi yo"}] * 2}
 
 
 def _rotary(model):
@@ -925,8 +984,10 @@ class TestTrainers:
     ) -> None:
         """Control: refusing rope_scaling_type=longrope must not refuse the checkpoint.
 
-        Unset rope_scaling_type and train at the full native window: the model is
-        built with the checkpoint's own LongRoPE block, untouched.
+        Unset rope_scaling_type, set data.max_length to the full native window and
+        run the real setup() and train(): optimizer steps happen with a finite loss,
+        and the model keeps the checkpoint's own LongRoPE block. The rows are short,
+        so the short-factor half of LongRoPE is the one exercised.
         """
         import torch
         from transformers import AutoConfig, AutoModelForCausalLM
@@ -949,7 +1010,12 @@ class TestTrainers:
             from soup_cli.trainer.pretrain import PretrainTrainerWrapper
 
             wrapper = PretrainTrainerWrapper(config, device="cpu")
-            wrapper._setup_transformers(config, config.training)
+            wrapper.setup(deepcopy(_TEXT_ROWS))
+        result = wrapper.train()
+
+        assert result["total_steps"] >= 1, result
+        assert result["loss_summary_kind"] != "unavailable", result
+        assert math.isfinite(result["final_loss"]) and result["final_loss"] > 0, result
 
         native_config = AutoConfig.from_pretrained(longrope_checkpoint)
         native_rotary = _rotary(AutoModelForCausalLM.from_pretrained(longrope_checkpoint))

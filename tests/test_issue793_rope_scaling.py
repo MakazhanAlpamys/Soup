@@ -153,7 +153,7 @@ def test_pretrain_constructs_the_model_with_scaled_rope(tiny_llama) -> None:
     assert _rotary_embedding(wrapper.model).rope_type == "linear"
 
 
-def test_longrope_refuses_to_invent_model_specific_factor_vectors() -> None:
+def test_longrope_is_refused_on_a_checkpoint_without_factor_vectors() -> None:
     from transformers import LlamaConfig
 
     from soup_cli.utils.long_context import apply_long_context_config
