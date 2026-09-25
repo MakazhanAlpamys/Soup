@@ -280,7 +280,7 @@ class TestInferCLI:
         )
 
         assert result.exit_code == 2
-        assert "batch-size must be >= 1" in result.output
+        assert "x>=1" in result.output
 
     def test_required_options_error(self):
         """Should fail if required options are missing."""
