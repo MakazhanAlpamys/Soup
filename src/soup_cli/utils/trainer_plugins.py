@@ -140,7 +140,11 @@ def _instantiate_cce_plugin() -> Any:
     log that CCE is intended.
     """
 
-    class _CCEAdvisoryCallback:
+    from soup_cli.utils.lisa import _try_import_callback_base
+
+    base = _try_import_callback_base()
+
+    class _CCEAdvisoryCallback(base):
         plugin_name = "cce_plugin"
 
         def on_train_begin(self, args=None, state=None, control=None, **kwargs):  # noqa: ARG002

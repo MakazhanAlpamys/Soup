@@ -6679,7 +6679,16 @@ class SoupConfig(BaseModel):
                 f"preference_loss in {{dpo, ipo}}; got task={self.task!r}, "
                 f"preference_loss={tcfg.preference_loss!r}."
             )
+        # LoRA gate for ref-model regeneration (#1229).
+        if regen is not None and tcfg.lora.r > 0:
+            raise ValueError(
+                "dpo_ref_regen_epochs is not supported with LoRA (training.lora.r > 0): "
+                "TRL builds no separate reference model under LoRA (the reference is "
+                "the base model with adapter disabled), so reference regeneration cannot "
+                "update the reference. Remove dpo_ref_regen_epochs."
+            )
         return self
+
 
     @model_validator(mode="after")
     def _validate_preference_loss_weights(self) -> "SoupConfig":

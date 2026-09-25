@@ -20,10 +20,27 @@ unit-testable on CI without GPUs.
 from __future__ import annotations
 
 import math
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
+
+if TYPE_CHECKING:
+    from transformers import TrainerCallback
+
+    class BetaScheduleCallback(TrainerCallback):
+        pass
+
+    class RefModelRegenCallback(TrainerCallback):
+        pass
 
 # Allowed schedule shapes, kept as a frozenset for runtime immutability.
 SUPPORTED_SCHEDULES: frozenset[str] = frozenset({"linear", "cosine", "exponential"})
+
+__all__ = [
+    "BetaScheduleCallback",
+    "RefModelRegenCallback",
+    "SUPPORTED_SCHEDULES",
+    "build_dpo_variant_callbacks",
+    "compute_beta_at_step",
+]
 
 
 def _validate_finite_positive(name: str, value: float) -> None:
@@ -85,12 +102,12 @@ def compute_beta_at_step(
     return float(math.exp(log_start + (log_end - log_start) * progress))
 
 
-class BetaScheduleCallback:
-    """Duck-typed ``TrainerCallback``: updates ``trainer.beta`` per step.
+class _BetaScheduleCallback_body:  # type: ignore[misc]  # noqa: N801
+    """HF ``TrainerCallback``: updates ``trainer.beta`` per step.
 
-    The HF ``TrainerCallback`` signature is matched without importing
-    ``transformers`` at module scope so this object is constructible in
-    a torch-less environment for unit testing.
+    Subclasses the lazily-resolved ``TrainerCallback`` so it inherits the no-op
+    default for every Trainer event; only ``on_train_begin`` and
+    ``on_step_begin`` are overridden.
 
     Use ``attach(trainer)`` once, then add the callback to the trainer.
     Without ``attach``, ``on_step_begin`` is a no-op (defence-in-depth).
@@ -154,8 +171,8 @@ class BetaScheduleCallback:
             return
 
 
-class RefModelRegenCallback:
-    """Duck-typed callback: deep-copy student weights into ref_model on epoch.
+class _RefModelRegenCallback_body:  # type: ignore[misc]  # noqa: N801
+    """HF ``TrainerCallback``: deep-copy student weights into ref_model on epoch.
 
     On every Nth epoch (1-indexed; epoch 0 is skipped to avoid copying
     untrained weights), copies the current ``trainer.model`` state_dict
@@ -237,8 +254,9 @@ def build_dpo_variant_callbacks(
     """
     callbacks: list = []
     if schedule is not None and beta_end is not None:
+        beta_cls = globals().get("BetaScheduleCallback") or __getattr__("BetaScheduleCallback")
         callbacks.append(
-            BetaScheduleCallback(
+            beta_cls(
                 beta_start=beta_start,
                 beta_end=beta_end,
                 total_steps=total_steps,
@@ -246,5 +264,42 @@ def build_dpo_variant_callbacks(
             )
         )
     if ref_regen_epochs is not None:
-        callbacks.append(RefModelRegenCallback(every_n_epochs=ref_regen_epochs))
+        regen_cls = globals().get("RefModelRegenCallback") or __getattr__("RefModelRegenCallback")
+        callbacks.append(regen_cls(every_n_epochs=ref_regen_epochs))
     return callbacks
+
+
+def _try_import_callback_base():
+    """Return HF ``TrainerCallback`` (or ``object`` when transformers is absent).
+
+    Imported inside the function so the module has no top-level transformers
+    dependency; the class below still inherits every no-op event stub the HF
+    dispatch loop requires. Mirrors ``monitoring/curriculum_callback.py``.
+    """
+    try:
+        from transformers import TrainerCallback  # noqa: PLC0415
+
+        return TrainerCallback
+    except Exception:  # noqa: BLE001 — transformers optional in slim test envs.
+        return object
+
+
+_LAZY_CALLBACKS = {
+    "BetaScheduleCallback": _BetaScheduleCallback_body,
+    "RefModelRegenCallback": _RefModelRegenCallback_body,
+}
+_BODY_SKIP = frozenset(("__dict__", "__weakref__"))
+
+
+def __getattr__(name: str):  # PEP 562
+    body = _LAZY_CALLBACKS.get(name)
+    if body is not None:
+        base = _try_import_callback_base()
+        ns = {k: v for k, v in vars(body).items() if k not in _BODY_SKIP}
+        cls = type(name, (base,), ns)
+        cls.__module__ = __name__
+        cls.__qualname__ = name
+        globals()[name] = cls
+        return cls
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
