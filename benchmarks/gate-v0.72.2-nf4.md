@@ -297,7 +297,7 @@ valid resident baseline at 3B on this box** — resident bf16 OOMs (v0.72.0) and
 resident NF4 spills. The honest claim remains the one v0.72.0 made at 0.5B, not
 a 3B speed-up ratio.
 
-Remaining row pending: the 8B headline.
+Remaining row pending: the 8B headline. — SATISFIED 2026-09-20; see the measured post-#331 row below.
 
 ---
 
@@ -350,8 +350,24 @@ Measured post-#331 row, added — the rows above stay verbatim:
 
 Machine row: `results/issue361-post-repair-8b-nf4.json` (`--json` output of
 [`harness/issue361_nf4_throughput.py`](harness/issue361_nf4_throughput.py),
-committed as written, run from `9635673` on the RTX 3050 Laptop 4 GB @umran666
+committed as written, on the RTX 3050 Laptop 4 GB @umran666
 used for every number in this record).
+
+Run-from note, reconciling the SHAs. The machine row records the harness
+commit `9635673`; the run was from `main` at `1f1f1438` plus the #1014
+harness, which landed on `main` as `3e610c68` — both above the `f8226214`
+floor. An earlier issue comment said `main` at `2d1714b`; the numbers are
+identical, so it is one run with two SHAs attached, and this record
+governs.
+
+Invocation: `python benchmarks/harness/issue361_nf4_throughput.py
+--weights C:\llama31-8b-instruct --shards <scratch dir> --json
+benchmarks/results/issue361-post-repair-8b-nf4.json`, every other flag the
+protocol default (batch 1, S=512, 10 warm-up + 50 measured,
+`PagedAdamW8bit`, double buffering, same-session ceiling). The shard dir
+was a scratch location, since deleted; it is not recorded in the JSON.
+No run was discarded: the slowest measured step (3479 ms against a
+2431.5 ms median) is retained in the JSON's `step_time_ms.max`.
 
 **Read this row with its clock.** The pre-repair row ran at 952 MHz / 70 C, this
 one at 1935–1957 MHz / 59 C — the same card at roughly half its clock, running
@@ -366,10 +382,20 @@ the two tok/s figures directly.
 The memory pattern changed between the rows: large-layer streaming moved
 `embed_tokens` + `lm_head` into the pinned store, so the store grew by exactly
 two 0.525B bf16 tensors (2 x 0.525e9 x 2B = 2.10 GB, matching the 5.70 - 3.60
-GB delta) while peak VRAM *fell* (3.32 GB reserved on the old row, 2.40 GB
+GB delta) while peak VRAM *fell* (3.32 GB allocated on the old row, 2.40 GB
 allocated / 2.66 GB reserved on this one). Even the ceiling-fraction
 comparison is therefore not like-for-like on efficiency — stated here, not
 only in the issue thread.
+
+**Stack delta, recorded without attribution.** The old row ran torch
+2.5.1+cu121 · bitsandbytes 0.49.2 · transformers 4.57.6 · peft 0.18.1 ·
+trl 0.19.1; this one ran torch 2.6.0+cu124 · bitsandbytes 0.50.2 ·
+transformers 5.16.1 · peft 0.21.0 · trl 0.29.1 (see the JSON's `versions`).
+The clock accounts for the tok/s delta and the memory-pattern change for
+the store/peak delta; no attribution to the bitsandbytes minor move is
+claimed — but it is stated here because the gate's NF4 claim rests on
+identical bitsandbytes kernels, and the two 4-bit compute paths'
+disagreement is an open finding (#776).
 
 The rest of this section (the PENDING text, the owed-by line, the expected
 direction) stays as it was written:

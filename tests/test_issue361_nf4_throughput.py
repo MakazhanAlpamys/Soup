@@ -370,7 +370,12 @@ class TestThePinGuardIsWired:
 class TestGateRecordCarriesThePendingLabel:
     """The gate file is the row's future home: it must keep saying the
     headline predates the #331 repair and name this harness as the protocol,
-    so a number pasted there before the card run has something to contradict."""
+    so a number pasted there before the card run has something to contradict.
+
+    Since 2026-09-20 the reservation is satisfied, so this class now pins
+    the pre-registration as history: the pending wording stays verbatim
+    (marked satisfied) beside the measured row rather than being rewritten.
+    """
 
     def test_the_pending_label_and_harness_pointer_are_present(self) -> None:
         gate = _REPO_ROOT / "benchmarks" / "gate-v0.72.2-nf4.md"
