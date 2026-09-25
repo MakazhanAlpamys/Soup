@@ -1455,10 +1455,19 @@ def train(
             console.print("[yellow]Cancelled.[/]")
             raise typer.Exit()
 
+    # #1223: a split nothing evaluates is not withheld -- generation tasks train
+    # on every row unless training.eval_steps asks for evaluation.
+    from soup_cli.utils.eval_schedule import loader_data_config, validation_notice
+
+    run_data_config = loader_data_config(cfg)
+    val_notice = validation_notice(cfg)
+
     if dry_run:
         console.print("[yellow]Dry run - validating data...[/]")
+        if val_notice:
+            console.print(f"[yellow]Note:[/] {val_notice}")
         dataset = load_dataset(
-            cfg.data,
+            run_data_config,
             preserve_source_columns=cfg.task == "grpo",
         )
         console.print(f"[green]Data OK:[/] {len(dataset['train'])} train samples")
@@ -1469,8 +1478,10 @@ def train(
 
     # Load data
     console.print("[dim]Loading dataset...[/]")
+    if val_notice:
+        console.print(f"[yellow]Note:[/] {val_notice}")
     dataset = load_dataset(
-        cfg.data,
+        run_data_config,
         preserve_source_columns=cfg.task == "grpo",
     )
     console.print(
