@@ -2,7 +2,9 @@
 
 Verifies:
 1. `soup reward stress format` reports gameable and exits 2.
-2. `soup reward stress accuracy --references g.jsonl` flags answer_spray at default threshold.
+2. `soup reward stress <verifier.py> --references g.jsonl` flags answer_spray at default threshold
+   for a verifier that pays partial credit when the gold appears anywhere (the built-in
+   `accuracy` paid that credit until #1226 removed it).
 3. `soup reward stress verifiable --verifiable-domain math --references g.jsonl`
    reports robust (exit 0).
 4. Each attack family contributes more than one distinct string and n reflects distinct attempts.

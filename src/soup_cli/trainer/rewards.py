@@ -210,8 +210,9 @@ def accuracy_reward(completions: list[list[dict]], **kwargs) -> list[float]:
     :mod:`soup_cli.utils.final_answer`: the answer after the last '####', in the last
     \\boxed{}, or after 'answer is' / 'answer:'; an unmarked completion by its last line and
     its last number. A numeric gold is compared by value ('42' equals '#### 42.0'), any other
-    gold as case-insensitive text. There is no partial credit (#1226): the old 0.5 for "the
-    gold appears somewhere in the completion" paid '#### 420' for a gold of 42.
+    gold as normalised text (case, whitespace and LaTeX wrappers ignored). There is no partial
+    credit (#1226): the old 0.5 for "the gold appears somewhere in the completion" paid
+    '#### 420' for a gold of 42.
 
     Args:
         completions: list of message lists, each containing a completion with 'content'.
@@ -278,11 +279,13 @@ def math_verify_reward(
     tolerance: float = 1e-4,
     **kwargs,
 ) -> list[float]:
-    """RLVR math reward: compare the completion's numeric final answer with the gold's.
+    """RLVR math reward: compare the completion's final answer with the gold's.
 
     Both sides are read by :mod:`soup_cli.utils.final_answer`, so a GSM8K-shaped gold such as
-    '6*7=42\\n#### 42' is the number 42 (#1226). Security: never uses ``eval()``; only plain
-    numeric literals are accepted, and a non-numeric answer scores 0.0.
+    '6*7=42\\n#### 42' is the number 42 (#1226). A numeric gold scores 1.0 within ``tolerance``
+    and 0.6 within max(100 x ``tolerance``, 1e-2). A gold that is not a number, such as
+    '\\frac{14}{3}' or 'p - q', is compared as normalised text: 1.0 on an exact match, else
+    0.0. Security: never uses ``eval()``; nothing is evaluated.
     """
     answers = kwargs.get("answer", [])
     rewards: list[float] = []
@@ -290,13 +293,18 @@ def math_verify_reward(
         content = completion[-1]["content"] if completion else ""
         reference = None if expected is None else final_answer.parse_reference(str(expected))
         parsed = final_answer.parse_completion(content)
-        gold = None if reference is None else reference.number
-        predicted = None if parsed is None else parsed.number
-        if predicted is None or gold is None:
+        if reference is None or parsed is None:
+            rewards.append(0.0)
+            continue
+        if reference.number is None:
+            matched = final_answer.answers_match(parsed, reference)
+            rewards.append(1.0 if matched else 0.0)
+            continue
+        if parsed.number is None:
             rewards.append(0.0)
             continue
         try:
-            error = float(abs(predicted - gold))
+            error = float(abs(parsed.number - reference.number))
         except ArithmeticError:  # an exponent beyond Decimal's range cannot be compared
             rewards.append(0.0)
             continue

@@ -9,37 +9,28 @@ now go through the one parser in ``soup_cli.utils.final_answer``.
 The variant list below was written BEFORE the implementation, and the tests iterate all of it.
 The boxed-answer fix for #357 matched the ticket's exact string and missed ``\\boxed {C}``, one
 space to the left (#396), so no spelling here is checked in isolation.
+
+The GRPO data side (loader -> validation -> reward, refusals, the validation summary, shipped
+data, answer spray) is in ``test_issue1226_grpo_gold_validation.py``.
 """
 
 from __future__ import annotations
 
-import importlib
-import json
-import re
 import time
 from collections import Counter
 from decimal import Decimal
-from pathlib import Path
 
 import pytest
 
-from soup_cli.config.loader import load_config_from_string
-from soup_cli.config.schema import DataConfig, TrainingConfig
-from soup_cli.data.loader import load_dataset
-from soup_cli.trainer.grpo import _prepare_grpo_dataset, _validate_grpo_reward_metadata
-from soup_cli.trainer.rewards import (
-    _extract_answer,
-    accuracy_reward,
-    load_reward_fn,
-    load_reward_fns,
-    math_verify_reward,
-    validate_reward_funcs,
-)
+from soup_cli.config.schema import TrainingConfig
+from soup_cli.trainer.grpo import _validate_grpo_reward_metadata
+from soup_cli.trainer.rewards import _extract_answer, accuracy_reward, math_verify_reward
 
-_REPO = Path(__file__).resolve().parents[1]
+MINUS = "\N{MINUS SIGN}"  # U+2212, which models emit for a negative sign
 
 # ===========================================================================
-# THE VARIANT LIST - enumerated before any code was written.
+# THE VARIANT LIST - enumerated before any code was written. G/C/W 1-17 came first; the entries
+# marked "review" were added before the second round of code (the review of this fix).
 # ===========================================================================
 
 # Gold spellings whose final answer is 42. G1-G9 are the table in #1226; G10+ are neighbours.
@@ -62,6 +53,21 @@ GOLDS_42 = {
     "G16 marker + period": "6*7=42\n#### 42.",
     "G17 explicit plus sign": "+42",
     "G18 markdown bold": "**Answer:** 42",
+    # review: siblings of G13 / G18, the newline form, and a markdown heading before the answer
+    "G19 bold label, colon outside": "**Answer**: 42",
+    "G20 bold final label": "**Final Answer**: 42",
+    "G21 inline math \\(...\\)": r"\(42\)",
+    "G22 display math \\[...\\]": r"\[42\]",
+    "G23 phrase + inline math": r"The answer is \(42\).",
+    "G24 answer on the next line": "Answer:\n42",
+    "G25 bold label, answer below": "**Answer:**\n\n42",
+    "G26 heading before a box": "#### Final Answer\n" + r"\boxed{42}",
+    "G27 heading before a phrase": "#### Step 1: multiply\n6*7 = 42\nThe answer is 42.",
+    "G28 answer-label heading, answer below": "#### Final Answer\n42",
+    "G29 heading with an inline label": "#### Answer: 42",
+    "G30 marker, then a box": r"#### \boxed{42}",
+    "G31 phrase, answer on the next line": "The answer is\n42",
+    "G32 dollars around the bare answer": "$42$",
 }
 
 # Completions that state the correct answer (42). C1-C10 are the table in #1226.
@@ -89,6 +95,24 @@ CORRECT_42 = {
     "C21 marker + exclamation": "#### 42!",
     "C22 the last box is the final answer": r"First guess \boxed{41}; corrected: \boxed{42}",
     "C23 answer phrase + unit": "The answer is 42 apples.",
+    # review
+    "C24 bold label, colon outside": "6 * 7\n**Answer**: 42",
+    "C25 bold final label": "**Final Answer**: 42",
+    "C26 marker + inline math": r"#### \(42\)",
+    "C27 phrase + display math": r"The answer is \[42\]",
+    "C28 answer on the next line": "6 * 7\nAnswer:\n42",
+    "C29 bold label, answer below": "**Answer:**\n\n42",
+    "C30 heading before a box": "#### Step 1\n6 * 7 = 42\n" + r"\boxed{42}",
+    "C31 heading before a phrase": "#### Step 1: multiply\n6*7 = 42\nThe answer is 42.",
+    "C32 answer-label heading, answer below": "#### Final Answer\n42",
+    "C33 heading with an inline label": "#### Answer: 42",
+    "C34 marker, then a box": r"#### \boxed{42}",
+    "C35 phrase, answer on the next line": "The answer is\n42",
+    "C36 the clause names the right answer first": "The answer is 42 apples, not 41.",
+    "C37 worded clause, digits in an aside": "The answer is: forty-two (42).",
+    "C38 dollars around the bare answer": "$42$",
+    "C39 italic label": "*Answer*: 42",
+    "C40 a later box supersedes a marker": "#### 41\n" + r"\boxed{42}",
 }
 
 # Completions that state a WRONG answer (gold 42). W1-W2 are from #1226. None may score above 0.
@@ -110,6 +134,16 @@ WRONG_42 = {
     "W15 attached variable": r"\boxed{42x}",
     "W16 power": r"\boxed{42^2}",
     "W17 empty": "",
+    # review: the answer clause is read first, so a gold named AFTER it is not the answer
+    "W18 clause names the gold after the answer": "The answer is 41 apples, not 42.",
+    "W19 colon form of W18": "Answer: 41 apples, not 42",
+    "W20 gold in a parenthetical aside": "The answer is 41 apples (not 42).",
+    "W21 gold in the next sentence": "The answer is 41 apples. 42 was my first guess.",
+    "W22 gold after a semicolon": "The final answer is 41 apples; 42 is wrong.",
+    "W23 a later box supersedes a right marker": "#### 42\n" + r"\boxed{41}",
+    "W24 self-correction after a marker": "#### 42\nWait, the answer is 41.",
+    "W25 bold label, wrong": "**Answer**: 41",
+    "W26 answer-label heading, wrong answer below": "#### Final Answer\n41",
 }
 
 # Other values: thousands separators, negatives, decimals. (gold spellings, correct, wrong)
@@ -123,6 +157,7 @@ NUMERIC_GROUPS = {
             "The answer is 1,000.",
             r"\boxed{1{,}000}",
             r"\boxed{1,\!000}",
+            r"\boxed{1\;000}",
             "#### $1,000",
             "The total is 1,000.",
         ],
@@ -134,12 +169,12 @@ NUMERIC_GROUPS = {
         ["#### 1,000,001", "#### 100,000"],
     ),
     "-42": (
-        ["-42", "#### -42", r"\boxed{-42}", "The answer is -42.", "\u221242"],
+        ["-42", "#### -42", r"\boxed{-42}", "The answer is -42.", MINUS + "42", r"\(-42\)"],
         [
             "#### -42",
             r"\boxed{-42}",
             "The answer is -42.",
-            "#### \u221242",
+            "#### " + MINUS + "42",
             "It drops to -42.",
             r"\boxed{ -42 }",
             "#### -$42",
@@ -153,12 +188,12 @@ NUMERIC_GROUPS = {
     ),
     "-3.25": (
         ["-3.25", "#### -3.25"],
-        ["#### -3.25", r"\boxed{-3.25}", "Answer: -3.25"],
+        ["#### -3.25", r"\boxed{-3.25}", "Answer: -3.25", r"\[-3.25\]"],
         ["#### 3.25", "#### -3.2"],
     ),
 }
 
-# Non-numeric golds (accuracy only): (gold, completion, expected accuracy).
+# Non-numeric golds: (gold, completion, expected). Both rewards compare them as normalised text.
 STRING_GOLD_CASES = [
     ("Paris", "#### Paris", 1.0),
     ("Paris", r"\boxed{Paris}", 1.0),
@@ -167,6 +202,7 @@ STRING_GOLD_CASES = [
     ("Paris", "paris", 1.0),
     ("Paris", "Answer: PARIS", 1.0),
     ("Paris", "Let me think.\nParis", 1.0),
+    ("Paris", "**Answer**: Paris", 1.0),
     ("Paris", "#### London", 0.0),
     ("Paris", "The answer is London, not Paris.", 0.0),
     ("Paris", "Not Paris.", 0.0),
@@ -180,6 +216,24 @@ STRING_GOLD_CASES = [
     (r"\boxed{\frac{1}{2}}", r"so x = \boxed{\frac{1}{2}}", 1.0),
     (r"\frac{1}{2}", r"$\frac{1}{2}$", 1.0),
     (r"\frac{1}{2}", r"\boxed{\frac{1}{3}}", 0.0),
+    # review (maintainer ruling): LaTeX golds, as in MATH-500
+    (r"\frac{14}{3}", r"\boxed{\frac{14}{3}}", 1.0),
+    (r"\frac{14}{3}", r"\boxed{\dfrac{14}{3}}", 1.0),
+    (r"\dfrac{14}{3}", r"\boxed{\tfrac{14}{3}}", 1.0),
+    (r"\frac{14}{3}", r"\boxed{\frac {14} {3}}", 1.0),
+    (r"\frac{14}{3}", r"The answer is $\frac{14}{3}$.", 1.0),
+    (r"\frac{14}{3}", r"The answer is \(\frac{14}{3}\).", 1.0),
+    (r"\frac{14}{3}", r"\boxed{\frac{3}{14}}", 0.0),
+    (r"\left( 3, \frac{\pi}{2} \right)", r"\boxed{(3,\frac{\pi}{2})}", 1.0),
+    (r"\left( 3, \frac{\pi}{2} \right)", r"The answer is \left(3, \frac{\pi}{2}\right).", 1.0),
+    (r"\left( 3, \frac{\pi}{2} \right)", r"\boxed{(3,\frac{\pi}{4})}", 0.0),
+    ("p - q", r"\boxed{p-q}", 1.0),
+    (r"\(p - q\)", r"\boxed{p - q}", 1.0),
+    ("p - q", r"\boxed{q-p}", 0.0),
+    (r"90^\circ", r"\boxed{90^\circ}", 1.0),
+    (r"90^\circ", r"\boxed{90}", 0.0),  # no unit or degree stripping
+    (r"x \leftarrow y", r"\boxed{x \leftarrow y}", 1.0),  # \left is not stripped from \leftarrow
+    (r"x \leftarrow y", r"\boxed{x arrow y}", 0.0),
 ]
 
 # The partial-credit policy, pinned: (completion, gold, accuracy before #1226, accuracy now).
@@ -188,8 +242,10 @@ STRING_GOLD_CASES = [
 POLICY_CHANGES = [
     ("The answer is 42 degrees", "42", 0.5, 1.0),
     ("Six times seven is 42.", "42", 0.5, 1.0),
+    ("Not 42.", "42", 0.5, 1.0),  # ruling: an unmarked completion is read by its last number
     (r"Not 42, so \boxed{41}", "42", 0.5, 0.0),
     ("#### 420", "42", 0.5, 0.0),
+    ("The answer is 41 apples, not 42.", "42", 0.5, 0.0),
     ("The capital of France is Paris.", "Paris", 0.5, 0.0),
     # A '####' or \boxed{} answer must BE the number: a unit after it is not stripped.
     ("#### 42 apples", "42", 0.5, 0.0),
@@ -228,13 +284,6 @@ CONTROL_MATH = [
 # ===========================================================================
 # helpers
 # ===========================================================================
-
-_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
-
-
-def _plain(text: str) -> str:
-    """ANSI-stripped, whitespace-collapsed CLI output, safe to substring-match."""
-    return " ".join(_ANSI_RE.sub("", text).split())
 
 
 def _msg(text: str) -> list[list[dict]]:
@@ -289,10 +338,9 @@ class TestIssueRepro:
         assert accuracy_reward(_msg("#### 420"), answer=["42"]) == [0.0]
 
     def test_nested_braces_extract_the_whole_fraction(self):
-        assert _extract_answer(r"so x = \boxed{\frac{1}{2}}") == r"\frac{1}{2}"
-        assert accuracy_reward(
-            _msg(r"so x = \boxed{\frac{1}{2}}"), answer=[r"\frac{1}{2}"]
-        ) == [1.0]
+        text = r"so x = \boxed{\frac{1}{2}}"
+        assert _extract_answer(text) == r"\frac{1}{2}"
+        assert accuracy_reward(_msg(text), answer=[r"\frac{1}{2}"]) == [1.0]
 
 
 # ===========================================================================
@@ -318,10 +366,10 @@ class TestSpellingMatrix:
         assert _scores(completion, gold) == (0.0, 0.0)
 
     @pytest.mark.parametrize(("gold", "completion", "expected"), STRING_GOLD_CASES)
-    def test_non_numeric_golds_compare_as_text(self, gold, completion, expected):
-        assert accuracy_reward(_msg(completion), answer=[gold]) == [expected]
-        # A gold that is not a number can never be paid by the numeric reward.
-        assert math_verify_reward(_msg(completion), answer=[gold]) == [0.0]
+    def test_non_numeric_golds_compare_as_normalised_text_in_both_rewards(
+        self, gold, completion, expected
+    ):
+        assert _scores(completion, gold) == (expected, expected)
 
 
 # ===========================================================================
@@ -360,9 +408,10 @@ REFLEXIVE_SPELLINGS = list(GOLDS_42.values()) + [
     r"\boxed{1{,}000}",
     "The answer is -3.25.",
     r"\boxed{\frac{1}{2}}",
+    r"\boxed{\left( 3, \frac{\pi}{2} \right)}",
     "Answer: Paris",
     "#### 76 years",
-    "\u221242",
+    MINUS + "42",
 ]
 
 
@@ -376,9 +425,9 @@ class TestOneParser:
         assert reference is not None and completion is not None
         assert completion.text.casefold() == reference.text.casefold()
         assert accuracy_reward(_msg(spelling), answer=[spelling]) == [1.0]
+        assert math_verify_reward(_msg(spelling), answer=[spelling]) == [1.0]
         if reference.number is not None:
             assert completion.number == reference.number
-            assert math_verify_reward(_msg(spelling), answer=[spelling]) == [1.0]
 
     def test_rewards_and_validation_parse_through_the_shared_helper(self, monkeypatch):
         from soup_cli.utils import final_answer
@@ -432,7 +481,8 @@ EXPLICIT_ANSWERS = [
     (r"\boxed{\$42}", "42"),
     (r"\boxed{1{,}000}", "1,000"),
     (r"\boxed{1,\!000}", "1,000"),
-    ("#### 41\n" + r"\boxed{42}", "41"),  # a marker still outranks a box, as before
+    ("#### 41\n" + r"\boxed{42}", "42"),  # a box AFTER a marker supersedes it
+    (r"\boxed{41}" + "\n#### 42", "42"),  # a marker after a box still wins
     ("The answer is 42.", "42"),
     ("Answer: 42", "42"),
     ("answer: 42", "42"),
@@ -442,21 +492,46 @@ EXPLICIT_ANSWERS = [
     ("The answer is 41, not 42.", "41"),
     ("The answer is 42 (six times seven).", "42"),
     ("The answer is -42.", "-42"),
-    ("The answer is \u221242.", "-42"),
+    ("The answer is " + MINUS + "42.", "-42"),
     ("The answer is Paris.", "Paris"),
     ("The answer is New York.", "New York"),
+    # review
+    ("**Answer**: 42", "42"),
+    ("**Final Answer**: 42", "42"),
+    ("*Answer*: 42", "42"),
+    ("__Answer__: 42", "42"),
+    (r"#### \(42\)", "42"),
+    (r"The answer is \[42\].", "42"),
+    ("Answer:\n42", "42"),
+    ("**Answer:**\n\n42", "42"),
+    ("The answer is\n42", "42"),
+    ("#### Final Answer\n" + r"\boxed{42}", "42"),
+    ("#### Step 1: multiply\n6*7 = 42\nThe answer is 42.", "42"),
+    ("#### Final Answer\n42", "42"),
+    ("#### Final Answer:\n\n42", "42"),
+    ("#### Answer: 42", "42"),
+    (r"#### \boxed{42}", "42"),
+    ("#### 42\nWait, the answer is 41.", "41"),
+    ("The answer is 41 apples, not 42.", "41 apples"),
+    (r"The answer is \left( 3, \frac{\pi}{2} \right).", r"( 3, \frac{\pi}{2} )"),
+    ("The answer is (3, 4).", "(3, 4)"),
+    (r"\boxed{\dfrac{14}{3}}", r"\frac{14}{3}"),
+    (r"\boxed{\tfrac{1}{2}}", r"\frac{1}{2}"),
+    (r"The answer is x \leftarrow y.", r"x \leftarrow y"),
 ]
 
 NO_EXPLICIT_ANSWER = [
     "Just plain text", "Six times seven is 42.", "", "#### ", r"\boxed{}",
     r"\boxed{\frac{1}{2}", "the answer isn't 41; it's 42", "What is the answer?",
+    "The answers: 41 and 42",
 ]
 
 NUMBERS = [
-    ("42", "42"), ("42.0", "42"), ("-42", "-42"), ("+42", "42"), ("\u221242", "-42"),
+    ("42", "42"), ("42.0", "42"), ("-42", "-42"), ("+42", "42"), (MINUS + "42", "-42"),
     ("1,000", "1000"), ("1,000,000", "1000000"), ("1,000.5", "1000.5"), (".5", "0.5"),
     ("-.5", "-0.5"), ("1e5", "100000"), ("1E-3", "0.001"), ("042", "42"), ("42.", "42"),
     ("$42", "42"), (r"\$42", "42"), ("  42  ", "42"), ("1{,}000", "1000"),
+    (r"1\;000", "1000"), (r"\(42\)", "42"), (r"\[-3.5\]", "-3.5"),
 ]
 
 NOT_NUMBERS = [
@@ -504,10 +579,12 @@ class TestSharedHelper:
         # A reference is never read as free text: its answer must be stated.
         unit = parse_reference("The answer is 42 apples.")
         assert (unit.text, unit.number) == ("42 apples", None)
+        latex = parse_reference(r"\left( 3, \dfrac{\pi}{2} \right)")
+        assert (latex.text, latex.number) == (r"( 3, \frac{\pi}{2} )", None)
 
     @pytest.mark.parametrize(
         "text",
-        ["", "   ", "Step 1: multiply.\nStep 2: report.", "6*7=42\n####", r"\boxed{}"],
+        ["", "   ", "Step 1: multiply.\nStep 2: report.", "6*7=42\n####", r"\boxed{}", "Answer:"],
     )
     def test_a_reference_with_no_statable_answer_is_none(self, text):
         from soup_cli.utils.final_answer import parse_reference
@@ -521,6 +598,12 @@ class TestSharedHelper:
         assert (prose.text, prose.number) == ("Six times seven is 42", Decimal(42))
         unit = parse_completion("The answer is 42 apples.")
         assert (unit.text, unit.number) == ("42 apples", Decimal(42))
+        # The answer clause is read first: a number AFTER the clause is not the answer.
+        after = parse_completion("The answer is 41 apples, not 42.")
+        assert (after.text, after.number) == ("41 apples", Decimal(41))
+        # With no digits in the clause, the completion's last number is read instead.
+        worded = parse_completion("The answer is: forty-two (42).")
+        assert (worded.text, worded.number) == ("forty-two", Decimal(42))
         # A delimited answer is authoritative: no fallback to other numbers in the text.
         marker = parse_completion("6*7 = 42\n#### 42 apples")
         assert (marker.text, marker.number) == ("42 apples", None)
@@ -528,6 +611,39 @@ class TestSharedHelper:
         assert (last_line.text, last_line.number) == ("Paris", None)
         assert parse_completion("") is None
         assert parse_completion("  \n ") is None
+
+    @pytest.mark.parametrize(
+        ("left", "right"),
+        [
+            (r"\frac{14}{3}", r"\frac {14} {3}"),
+            (r"\dfrac{14}{3}", r"\tfrac{14}{3}"),
+            (r"\left( 3, \frac{\pi}{2} \right)", r"(3,\frac{\pi}{2})"),
+            (r"\(p - q\)", "p-q"),
+            ("New York", "new york"),
+        ],
+    )
+    def test_text_answers_compare_ignoring_whitespace_case_and_latex_wrappers(self, left, right):
+        from soup_cli.utils.final_answer import answers_match, parse_reference
+
+        assert answers_match(parse_reference(right), parse_reference(left))
+        assert answers_match(parse_reference(left), parse_reference(right))
+
+
+# ===========================================================================
+# exact numbers: Decimal, not float
+# ===========================================================================
+
+
+class TestExactNumbers:
+    def test_integers_beyond_two_to_the_53_do_not_collide(self):
+        big, neighbour = "12345678901234567890", "12345678901234567891"
+        assert float(big) == float(neighbour)  # what a float comparison would have seen
+        assert _scores(r"\boxed{" + big + "}", neighbour) == (0.0, 0.0)
+        assert _scores(r"\boxed{" + big + "}", big) == (1.0, 1.0)
+
+    def test_an_exponent_beyond_decimal_range_scores_zero_instead_of_raising(self):
+        assert math_verify_reward(_msg("#### 1e999999999"), answer=["1"]) == [0.0]
+        assert math_verify_reward(_msg("#### 1e999999999"), answer=["1e999999999"]) == [1.0]
 
 
 # ===========================================================================
@@ -546,231 +662,6 @@ class TestControlUnchanged:
 
 
 # ===========================================================================
-# the real data path: loader -> _prepare_grpo_dataset -> validation -> reward
-# ===========================================================================
-
-_GROUP = [
-    "Six times seven is 42.\n#### 42",
-    r"6*7 = \boxed{42}",
-    "The product is 42.\n#### 42",
-    "I think it is 41.\n#### 41",
-]
-
-
-def _alpaca_rows() -> list[dict]:
-    return [
-        {"instruction": f"What is 6*7? (v{i})", "input": "", "output": "6*7=42\n#### 42"}
-        for i in range(4)
-    ]
-
-
-def _sharegpt_rows() -> list[dict]:
-    return [
-        {
-            "conversations": [
-                {"from": "human", "value": f"What is 6*7? (v{i})"},
-                {"from": "gpt", "value": r"6 times 7 is \boxed{42}"},
-            ]
-        }
-        for i in range(4)
-    ]
-
-
-def _chatml_rows() -> list[dict]:
-    return [
-        {
-            "messages": [
-                {"role": "user", "content": f"What is 6*7? (v{i})"},
-                {"role": "assistant", "content": "The answer is 42."},
-            ]
-        }
-        for i in range(4)
-    ]
-
-
-def _write_jsonl(path: Path, rows: list[dict]) -> Path:
-    path.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
-    return path
-
-
-class TestGrpoDataPath:
-    @pytest.mark.parametrize(
-        ("fmt", "make_rows"),
-        [("alpaca", _alpaca_rows), ("sharegpt", _sharegpt_rows), ("chatml", _chatml_rows)],
-    )
-    @pytest.mark.parametrize(("reward_fn", "domain"), [("accuracy", None), ("verifiable", "math")])
-    def test_three_correct_one_wrong_group_has_reward_variance(
-        self, tmp_path, fmt, make_rows, reward_fn, domain
-    ):
-        path = _write_jsonl(tmp_path / "train.jsonl", make_rows())
-        loaded = load_dataset(
-            DataConfig(train=str(path), format=fmt, val_split=0), preserve_source_columns=True
-        )
-        prepared = _prepare_grpo_dataset(loaded["train"])
-        tcfg = TrainingConfig(reward_fn=reward_fn, verifiable_domain=domain)
-        _validate_grpo_reward_metadata(prepared, tcfg, split="train")
-
-        reward = validate_reward_funcs(
-            load_reward_fns(tcfg.reward_fn, verifiable_domain=tcfg.verifiable_domain)
-        )[0]
-        gold = prepared[0]["answer"]
-        rewards = reward(
-            completions=[_msg(text)[0] for text in _GROUP], answer=[gold] * len(_GROUP)
-        )
-        assert rewards == [1.0, 1.0, 1.0, 0.0]
-        assert len(set(rewards)) > 1  # non-zero group variance: GRPO gets an advantage signal
-
-
-# ===========================================================================
-# a gold that cannot be parsed is refused before generation
-# ===========================================================================
-
-
-class TestUnparseableGoldRefused:
-    @pytest.mark.parametrize(
-        ("reward_fn", "domain", "reward_name", "gold"),
-        [
-            ("verifiable", "math", "verifiable/math", "Paris"),
-            ("verifiable", "math", "verifiable/math", "The answer is forty-two."),
-            ("verifiable", "math", "verifiable/math", r"\frac{1}{2}"),
-            ("verifiable", "math", "verifiable/math", "6*7 is\nforty-two"),
-            ("verifiable", "math", "verifiable/math", "6*7=42\n####"),
-            ("accuracy", None, "accuracy", "Step 1: multiply six by seven.\nStep 2: report it."),
-            ("accuracy", None, "accuracy", "6*7=42\n####"),
-            ("accuracy", None, "accuracy", r"\boxed{}"),
-            ("accuracy,format", None, "accuracy", "Line one\nLine two"),
-        ],
-    )
-    def test_refusal_names_the_row_and_the_field(self, reward_fn, domain, reward_name, gold):
-        tcfg = TrainingConfig(reward_fn=reward_fn, verifiable_domain=domain)
-        rows = [
-            {"prompt": "q0", "answer": "#### 42"},
-            {"prompt": "q1", "answer": "42"},
-            {"prompt": "q2", "answer": gold},
-        ]
-        with pytest.raises(ValueError) as excinfo:
-            _validate_grpo_reward_metadata(rows, tcfg, split="train")
-        message = str(excinfo.value)
-        assert "GRPO train row 2 'answer'" in message
-        assert f"reward {reward_name!r}" in message
-        assert "####" in message and r"\boxed{}" in message  # says how to fix it
-
-    def test_refusal_names_the_split(self):
-        with pytest.raises(ValueError, match=r"GRPO validation row 0 'answer'"):
-            _validate_grpo_reward_metadata(
-                [{"prompt": "q", "answer": "Paris"}],
-                TrainingConfig(reward_fn="verifiable", verifiable_domain="math"),
-                split="validation",
-            )
-
-    @pytest.mark.parametrize(
-        ("reward_fn", "domain", "gold"),
-        [
-            ("accuracy", None, "Paris"),
-            ("accuracy", None, "The answer is forty-two."),
-            ("accuracy", None, r"\frac{1}{2}"),
-            ("accuracy", None, 42),
-            ("verifiable", "math", 42),
-            ("verifiable", "math", 3.5),
-            ("verifiable", "math", "1,000"),
-            ("verifiable", "code", "multi\nline stdout"),
-        ]
-        + [("accuracy", None, gold) for gold in GOLDS_42.values()]
-        + [("verifiable", "math", gold) for gold in GOLDS_42.values()],
-    )
-    def test_parseable_golds_pass(self, reward_fn, domain, gold):
-        _validate_grpo_reward_metadata(
-            [{"prompt": "q", "answer": gold}],
-            TrainingConfig(reward_fn=reward_fn, verifiable_domain=domain),
-            split="train",
-        )
-
-
-# ===========================================================================
-# the repo's own GRPO data still validates, and now gets a signal
-# ===========================================================================
-
-
-class TestShippedDataStillValidates:
-    def test_the_grpo_reasoning_example_validates_with_its_own_reward(self):
-        from soup_cli.utils.final_answer import parse_reference
-
-        example = _REPO / "examples" / "configs" / "grpo_reasoning.yaml"
-        cfg = load_config_from_string(example.read_text(encoding="utf-8"))
-        assert cfg.training.reward_fn == "accuracy"
-        data = DataConfig(
-            train=str(_REPO / "examples" / "data" / "reasoning_math.jsonl"),
-            format="alpaca",
-            val_split=0,
-        )
-        prepared = _prepare_grpo_dataset(load_dataset(data, preserve_source_columns=True)["train"])
-        _validate_grpo_reward_metadata(prepared, cfg.training, split="train")
-
-        parsed = [parse_reference(row["answer"]) for row in prepared]
-        assert [p.text for p in parsed] == ["17", "c = 5", "6", "x = 7", "30"]
-        assert [p.number for p in parsed] == [Decimal(17), None, Decimal(6), None, Decimal(30)]
-
-    @pytest.mark.parametrize(
-        ("module", "reward_fn", "domain"),
-        [
-            ("calculator", "verifiable", "math"),
-            ("guess_number", "verifiable", "math"),
-            ("retrieval_qa", "accuracy", None),
-        ],
-    )
-    def test_bundled_rollout_envs_validate_and_pay_a_just_the_value_reply(
-        self, module, reward_fn, domain
-    ):
-        rows = importlib.import_module(f"soup_cli.envs.{module}").rollout([])
-        prepared = _prepare_grpo_dataset([dict(row) for row in rows])
-        tcfg = TrainingConfig(reward_fn=reward_fn, verifiable_domain=domain)
-        _validate_grpo_reward_metadata(prepared, tcfg, split="rollout")
-
-        # Every env prompt says "Reply with just the value/number".
-        reward = load_reward_fns(reward_fn, verifiable_domain=domain)[0]
-        golds = [row["answer"] for row in prepared]
-        assert reward([_msg(gold)[0] for gold in golds], answer=golds) == [1.0] * len(golds)
-
-
-# ===========================================================================
-# the reward-hacking surface: answer spray no longer pays
-# ===========================================================================
-
-
-class TestAnswerSprayNoLongerPays:
-    def test_builtin_accuracy_rejects_every_answer_spray_variant(self):
-        import soup_cli.utils.reward_stress as rst
-
-        report = rst.run_stress(load_reward_fn("accuracy"), ["42", "17", "1000", "-3"])
-        per_attack = {attack.kind: attack for attack in report.attacks}
-        assert per_attack["answer_spray"].accepted == 0
-        assert report.gameable is False
-        assert report.reference_accept == 1.0
-
-    def test_reward_stress_cli_reports_builtin_accuracy_robust(self, tmp_path, monkeypatch):
-        from typer.testing import CliRunner
-
-        from soup_cli.cli import app as soup_app
-
-        monkeypatch.chdir(tmp_path)
-        refs = _write_jsonl(tmp_path / "refs.jsonl", [{"answer": "42"}, {"answer": "17"}])
-        report_path = tmp_path / "report.json"
-        result = CliRunner().invoke(
-            soup_app,
-            [
-                "reward", "stress", "accuracy",
-                "--references", str(refs),
-                "--output-report", str(report_path),
-            ],
-        )
-        assert result.exit_code == 0, (result.output, repr(result.exception))
-        assert "robust (not gameable)" in _plain(result.output).lower()
-        report = json.loads(report_path.read_text(encoding="utf-8"))
-        per_attack = {attack["kind"]: attack for attack in report["attacks"]}
-        assert per_attack["answer_spray"]["accepted"] == 0
-
-
-# ===========================================================================
 # untrusted model output cannot make the parser quadratic
 # ===========================================================================
 
@@ -786,9 +677,14 @@ class TestAdversarialInputsStayLinear:
             "1," * 50_000,
             " " * 100_000 + "x",
             "{" * 100_000,
+            "answer" + " " * 200_000 + "x",
+            "**answer" * 50_000,
+            "The answer is " + "(" * 200_000,
+            "#### Final Answer\n" * 20_000,
         ],
         ids=["open-boxes", "open-boxes-around-a-close", "phrases", "markers", "commas",
-             "whitespace", "braces"],
+             "whitespace", "braces", "phrase-whitespace", "bold-labels", "open-parens",
+             "answer-headings"],
     )
     def test_parsing_is_fast_on_adversarial_output(self, text):
         start = time.perf_counter()

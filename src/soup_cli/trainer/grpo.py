@@ -859,10 +859,6 @@ def _validate_grpo_reward_metadata(
     for row_index, row in enumerate(data):
         for reward_name, alternatives in requirements:
             if any(_has_grpo_reward_metadata(row.get(field)) for field in alternatives):
-                if reward_name in _GOLD_PARSING_REWARDS:
-                    _require_readable_gold(
-                        row["answer"], reward_name, split=split, row_index=row_index
-                    )
                 continue
             fields = " or ".join(repr(field) for field in alternatives)
             raise ValueError(
@@ -872,22 +868,47 @@ def _validate_grpo_reward_metadata(
                 "'answer'."
             )
 
+    gold_rewards = [name for name, _ in requirements if name in _GOLD_PARSING_REWARDS]
+    # Seed rows that a rollout backend replaces are never scored (#565 still wants them
+    # present); the rollout's own rows are validated as split "rollout".
+    if gold_rewards and not (split == "train" and tcfg.rollout_backend is not None):
+        _check_golds_are_readable(data, list(dict.fromkeys(gold_rewards)), split=split)
 
-def _require_readable_gold(
-    value: object, reward_name: str, *, split: str, row_index: int
-) -> None:
-    """Refuse a gold the reward's parser cannot read, naming the row and the field."""
-    reference = final_answer.parse_reference(str(value))
-    numeric = reward_name == "verifiable/math"
-    if reference is not None and (reference.number is not None or not numeric):
-        return
-    stated = "a numeric final answer" if numeric else "a final answer"
-    bare = "a bare number such as 42" if numeric else "a bare one-line answer"
-    raise ValueError(
-        f"GRPO {split} row {row_index} 'answer' does not state {stated} that reward "
-        f"{reward_name!r} can compare against, so every completion would score 0.0. "
-        "Put the answer after '####', inside \\boxed{}, or after 'The answer is', or make "
-        f"the field {bare}."
+
+def _check_golds_are_readable(data: list[dict], reward_names: list[str], *, split: str) -> None:
+    """Refuse golds with no extractable final answer; report the ones compared as text."""
+    unreadable: list[int] = []
+    text_golds = 0
+    for row_index, row in enumerate(data):
+        reference = final_answer.parse_reference(str(row["answer"]))
+        if reference is None:
+            unreadable.append(row_index)
+        elif reference.number is None:
+            text_golds += 1
+    if unreadable:
+        raise ValueError(_unreadable_gold_message(unreadable, len(data), reward_names, split))
+    if text_golds:
+        console.print(
+            f"[dim]GRPO {split}: {text_golds} of {len(data)} golds are non-numeric and are "
+            "compared as normalised text.[/]"
+        )
+
+
+def _unreadable_gold_message(
+    rows: list[int], total: int, reward_names: list[str], split: str
+) -> str:
+    names = " and ".join(repr(name) for name in reward_names)
+    label = "reward" if len(reward_names) == 1 else "rewards"
+    more = (
+        f" {len(rows) - 1} more of the {total} rows have the same problem." if len(rows) > 1 else ""
+    )
+    return (
+        f"GRPO {split} row {rows[0]} 'answer' states no final answer that {label} {names} can "
+        f"compare against, so every completion would score 0.0.{more} The field comes from an "
+        "'answer' column, an Alpaca 'output' or the final assistant turn; rows count from 0 "
+        "after the train/validation split. Put the answer after '####', inside \\boxed{}, or "
+        "after 'The answer is' or 'Answer:', make the field the bare answer on one line, or "
+        "drop the row."
     )
 
 

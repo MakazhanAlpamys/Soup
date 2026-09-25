@@ -1197,12 +1197,29 @@ soup train --config soup.yaml
 - `format` — checks for structured `<think>...</think>` reasoning blocks
 
 `accuracy` and verifiable `math` read the completion and the gold with the same parser. The final
-answer is what follows the last `####`, the content of the last `\boxed{}` (a space before the
-brace and nested braces such as `\boxed{\frac{1}{2}}` are fine), or what follows `The answer is` /
-`Answer:`. A completion with none of these is read by its last line and its last number. A numeric
-gold is compared by value, so `#### 1,000`, `\boxed{1000}` and `The answer is $1000.` all match a
-gold of `1000`; any other gold is compared as case-insensitive text. `$`, trailing punctuation and
-LaTeX thousands separators such as `1{,}000` are ignored; units and `\text{}` are not stripped.
+answer is, in this order of precedence:
+
+1. the rest of the line after the last `####` (a `#### Final Answer` heading means the next line);
+2. the content of the last `\boxed{}` (a space before the brace and nested braces such as
+   `\boxed{\frac{1}{2}}` are fine);
+3. what follows the last `The answer is` or `Answer:` (also `**Answer**:`, and the answer may be
+   on the next line), up to the end of its clause: a `, `, `; ` or `. ` outside brackets, or ` (`.
+   So `The answer is Washington, D.C.` reads `Washington`, while `The answer is (3, 4).` reads
+   `(3, 4)`.
+
+A box outranks a phrase, and a `\boxed{}` or phrase that comes after a `####` line outranks it (the
+line was a markdown heading, or an answer the text went on to correct). A completion with none of
+these is read by its last line and its last number, so `Six times seven is 42.` and even `Not 42.`
+read as 42; only the final number counts, so listing candidates earns nothing. After a phrase,
+the number is read from the phrase's own clause first: `The answer is 41 apples, not 42.` reads 41.
+
+A numeric gold is compared by value, so `#### 1,000`, `\boxed{1000}` and `The answer is $1000.`
+all match a gold of `1000`. Any other gold (`\frac{14}{3}`, `p - q`, `Paris`) is compared as text,
+ignoring case and whitespace, `$`, `\(...\)` and `\[...\]`, `\left` / `\right`, and `\dfrac` /
+`\tfrac` versus `\frac`; so `\boxed{\dfrac{14}{3}}` matches a gold of `\frac{14}{3}`. Both sides
+also drop the trailing punctuation `. , ; : !`, LaTeX thousands separators such as `1{,}000`, and a
+Unicode minus sign. Units, `^\circ`, `\text{}` and `x = ` prefixes are not stripped, and nothing is
+evaluated (`\frac{1}{2}` does not equal `0.5`).
 
 For GRPO, Soup preserves source dataset columns and TRL passes them to reward functions as
 keyword arguments. An Alpaca `output` or the final assistant turn in ShareGPT/ChatML is also
@@ -1215,10 +1232,13 @@ validate their inputs before generation:
 | verifiable `code` | `expected` or `answer` |
 | verifiable `json_schema` | `schema` |
 
-A gold states its final answer with `####`, `\boxed{}` or `The answer is`, or by being the bare
-answer on one line (`42`, `Paris`); `math` also needs that answer to be a number. A row whose gold
-does not is refused before generation with its split, row number and field, because a gold the
-reward cannot read would score every completion 0.0 and give GRPO no signal.
+A gold states its final answer with `####`, `\boxed{}`, `The answer is` or `Answer:`, or by being
+the bare answer on one line (`42`, `Paris`, `\frac{14}{3}`). A row whose gold states none (for
+example a multi-line reference solution with no marked answer) is refused before generation, with
+its split, row number and field and a count of the other rows with the same problem, because such
+a gold would score every completion 0.0 and give GRPO no signal. A dataset that mixes numeric and
+LaTeX golds, such as MATH-500, loads under `math` too; validation prints how many golds are
+non-numeric and therefore compared as normalised text.
 
 **Custom reward functions** — point to a Python file:
 ```python
@@ -1322,7 +1342,7 @@ Three built-in domains:
 
 | Domain | What it checks |
 |---|---|
-| `math` | Extracts the final numeric answer (supports `####`, `\boxed{}`) and compares via `float()` equality — no `eval()` on user output |
+| `math` | Reads the final answer of the completion and of the gold with the shared parser described under "Built-in reward functions" (`####`, `\boxed{}`, `The answer is` / `Answer:`, else the completion's last number). A numeric gold scores 1.0 within 1e-4 and 0.6 within 1e-2 (compared as exact decimals); any other gold scores 1.0 on a normalised text match. Nothing is evaluated: no `eval()` on user output |
 | `code` | Executes generated Python with a 5s timeout, 512 MB RLIMIT on POSIX, `python -I -S`, socket patch, ephemeral cwd. Output capped at 10KB. Warning panel on first use |
 | `json_schema` | Validates output against a JSON Schema provided per-example in the dataset |
 
