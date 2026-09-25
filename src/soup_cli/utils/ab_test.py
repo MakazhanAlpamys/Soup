@@ -71,7 +71,10 @@ HIGHER_IS_BETTER: Mapping[str, bool] = MappingProxyType(
 #                          (bound 0.0521); 20 rows reach 0.0534. Alpha 0.10:
 #                          worst 0.0994 (bound 0.1029).
 #   0.01 <= alpha < 0.05 -> 40 rows. Alpha 0.01: worst 0.01088 at ratio 0.4
-#                          (bound 0.01094); 30 rows reach 0.0114. Alpha 0.025:
+#                          (bound 0.01094) in this sweep, but up to 0.0116 on
+#                          other seeds: a floor near 0.0108 set by the
+#                          estimated variance, which 50/60 rows do not lower
+#                          (#1265); 30 rows reach 0.0114. Alpha 0.025:
 #                          worst 0.0261 (bound 0.0265); 30 rows reach 0.0269.
 #   alpha < 0.01        -> 40 rows, NOT calibrated: at alpha 0.005 the worst is
 #                          0.0058, above its bound 0.0057. `soup ab` warns.

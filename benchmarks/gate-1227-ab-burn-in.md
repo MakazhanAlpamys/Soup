@@ -80,10 +80,13 @@ stays 40 with a warning, because 40 rows do not pass at alpha 0.005 over 1000 ro
   at 200 rows and 0.0278 at 1000 (alpha 0.05), because those rejections come late, long after
   any burn-in. The same holds at alpha 0.01: past 40 rows the worst case moves only from
   0.01088 to 0.01075 (N = 60), a floor set around ratio 0.25.
-- **The alpha 0.01 tier passes narrowly:** 0.01088 against 0.01094, about 0.2 standard errors.
-  An independent review of the earlier code measured the same cells at 0.0101–0.0116 in other
-  seed sets. Treat the true worst case as roughly alpha + 10%, which is within the tolerance
-  the criterion allows, not below alpha.
+- **The alpha 0.01 tier passes only in this seed set:** 0.01088 against 0.01094, about 0.2
+  standard errors. An independent review measured 0.0113 (ratio 0.30) and 0.0116 (ratio 0.50)
+  in two of three other seed sets, with a pooled worst case near 0.0108. That is a floor set by
+  the estimated variance, not by the burn-in: 50 and 60 rows do not lower it, and the same runs
+  with the true variance give 0.0095. So at alpha 0.01 the false-positive rate under peeking is
+  about 0.0108, roughly 8% above the nominal level; the bound's tolerance is +9.4%, not +10%.
+  40 rows are kept because more rows buy nothing, and removing the floor is #1265.
 - **With the true variance plugged in**, the same statistic stays below alpha everywhere: worst
   0.0468 at alpha 0.05 and 0.0095 at alpha 0.01, over 1000 rows. What the burn-in leaves is
   the variance estimate's effect, not the mixture's.
