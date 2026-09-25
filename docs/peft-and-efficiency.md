@@ -634,6 +634,10 @@ training:
 
 Picks `bf16` on Ampere+, `fp16` on Turing or known fp16-stable models (Qwen2 / Qwen2.5 / Phi-3 / Phi-3.5), `no` on pre-Pascal. Multi-version pairs (`qwen2.5` vs `qwen2`, `phi-3.5` vs `phi-3`) match the longest substring deterministically.
 
+The experimental QuEST route (`quantization_aware: quest`) refuses this flag at
+config load because its evidence covers BF16, not FP16; see the
+[QuEST evidence boundary](performance-and-quantization.md#evidence-boundary).
+
 ### Loss Spike Auto-Recovery
 
 Extends the watchdog: instead of stopping on a spike, writes `<output>/spike_recovery.json` with decayed LR and attempt count for re-launch. Capped at 3 attempts by default.

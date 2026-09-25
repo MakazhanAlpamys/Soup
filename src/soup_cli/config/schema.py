@@ -4622,12 +4622,6 @@ class SoupConfig(BaseModel):
         tcfg = self.training
         if tcfg.quantization_aware != "quest":
             return self
-        if tcfg.auto_mixed_precision:
-            raise ValueError(
-                "training.quantization_aware='quest' requires "
-                "training.auto_mixed_precision=false; the QuEST route has only "
-                "been measured under BF16"
-            )
         if self.task != "sft":
             raise ValueError("quantization_aware='quest' requires task='sft'")
         if self.backend != "transformers":
@@ -4636,6 +4630,12 @@ class SoupConfig(BaseModel):
             )
         if self.modality != "text":
             raise ValueError("quantization_aware='quest' requires modality='text'")
+        if tcfg.auto_mixed_precision:
+            raise ValueError(
+                "training.quantization_aware='quest' requires "
+                "training.auto_mixed_precision=false; the QuEST route has only "
+                "been measured under BF16"
+            )
         if tcfg.quantization != "none":
             raise ValueError(
                 "quantization_aware='quest' requires training.quantization='none'"
