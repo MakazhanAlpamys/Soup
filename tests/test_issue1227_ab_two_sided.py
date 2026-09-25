@@ -15,13 +15,14 @@ log-ratios, or substituting ``|z|``, does not have that property; the peeking
 simulations below are what catch the ``|z|`` shortcut.
 
 That argument needs a known variance, and ``soup ab`` estimates it from the rows.
-From a handful of rows the estimate is too noisy: re-running after every pair
-rejected a true H0 up to 0.163 of the time at alpha 0.05. So no verdict is given
-until each arm has ``min_rows_per_arm(alpha)`` rows: 20 at alpha >= 0.05, 40
-below (not calibrated below alpha 0.01). Each is the smallest burn-in that a
-Monte-Carlo sweep over effect_size / sigma 0.1 to 5 found to keep Type-I within
-alpha plus Monte-Carlo error at every ratio (worst 0.0513 at alpha 0.05, 0.0108
-at alpha 0.01).
+From a handful of rows the estimate is too noisy: without a burn-in, re-running
+after every pair would reject a true H0 up to 0.164 of the time at alpha 0.05. So
+no verdict is given until each arm has ``min_rows_per_arm(alpha)`` rows: 30 at
+alpha >= 0.05, 40 below (not calibrated below alpha 0.01). Each is the smallest
+burn-in that the sweep in benchmarks/gate-1227-ab-burn-in.md (effect_size / sigma
+0.1 to 5, runs followed to 1000 rows per arm) found to keep Type-I within alpha
+plus Monte-Carlo error at every ratio: worst 0.0512 at alpha 0.05, 0.0109 at
+alpha 0.01. The simulations here stop at 200 rows per arm to stay CI-sized.
 """
 
 from __future__ import annotations
@@ -47,10 +48,12 @@ def _plain(text: str) -> str:
     return " ".join(_BOX_RE.sub(" ", _ANSI_RE.sub("", text)).split())
 
 
-# The reproduction data from the issue: twenty control rows around 0.80.
-_JUDGE_CONTROL = [0.80, 0.82, 0.78, 0.81, 0.79] * 4
-_LATENCY_CONTROL = [1.20, 1.25, 1.18, 1.22, 1.21] * 4
-_RETRY_CONTROL = [0.20, 0.22, 0.18, 0.21, 0.19] * 4
+# The reproduction data from the issue, rows around 0.80, repeated to 40 rows per
+# arm: the issue's own 20 rows are now inside the burn-in (30 rows at alpha 0.05,
+# 40 below), so they would only ever give `continue`.
+_JUDGE_CONTROL = [0.80, 0.82, 0.78, 0.81, 0.79] * 8
+_LATENCY_CONTROL = [1.20, 1.25, 1.18, 1.22, 1.21] * 8
+_RETRY_CONTROL = [0.20, 0.22, 0.18, 0.21, 0.19] * 8
 
 
 def _shifted(values, shift):
@@ -197,16 +200,17 @@ def _min_rows(alpha=0.05):
 class TestBurnIn:
     @pytest.mark.parametrize(
         ("alpha", "rows"),
-        [(0.5, 20), (0.10, 20), (0.05, 20), (0.0499, 40), (0.025, 40), (0.01, 40),
+        [(0.5, 30), (0.10, 30), (0.05, 30), (0.0499, 40), (0.025, 40), (0.01, 40),
          (0.0099, 40), (0.001, 40)],
     )
     def test_burn_in_table_is_the_calibrated_one(self, alpha, rows):
-        """alpha >= 0.05: 20 rows; 0.01 <= alpha < 0.05: 40; below 0.01: 40, uncalibrated.
+        """alpha >= 0.05: 30 rows; 0.01 <= alpha < 0.05: 40; below 0.01: 40, uncalibrated.
 
-        Each is the smallest N in {10, 15, 20, 30, 40} whose Type-I rate under
+        Each is the smallest N in {20, 30, 40, 50, 60} whose Type-I rate under
         peeking stays within alpha + 3 binomial SE at every effect_size / sigma
-        from 0.1 to 5 (100,000 runs per ratio). Changing one means re-running
-        that sweep, not editing this table.
+        from 0.1 to 5, with runs followed to 1000 rows per arm and to 200
+        (benchmarks/gate-1227-ab-burn-in.md). Changing one means re-running
+        benchmarks/harness/ab_burn_in_sweep.py, not editing this table.
         """
         assert _min_rows(alpha) == rows
 
@@ -218,6 +222,12 @@ class TestBurnIn:
         from soup_cli.utils.ab_test import burn_in_is_calibrated
 
         assert burn_in_is_calibrated(alpha) is calibrated
+
+    def test_calibrated_horizon_is_1000_rows_per_arm(self):
+        """The sweep followed runs to 1000 rows per arm; past that `soup ab` warns."""
+        from soup_cli.utils.ab_test import CALIBRATED_HORIZON_ROWS
+
+        assert CALIBRATED_HORIZON_ROWS == 1000
 
     @pytest.mark.parametrize(
         ("bad", "message"),
@@ -431,11 +441,12 @@ class TestCli:
         out = _plain(result.output)
         assert "reject_h0" in out
         assert "direction worse" in out
-        assert "burn_in 20 rows per arm (alpha 0.05)" in out
+        assert "burn_in 30 rows per arm (alpha 0.05)" in out
         assert "rollback" in out.lower()
         assert "No significant difference" not in out
         assert "promote" not in out.lower()
         assert "not calibrated" not in out
+        assert "calibrated up to" not in out
 
         assert len(captured) == 1
         payload = captured[0]["payload"]
@@ -495,13 +506,13 @@ class TestCli:
         out = _plain(result.output)
         assert "decision continue" in out
         assert "direction n/a" in out
-        assert "Burn-in: no verdict before 20 rows per arm at alpha 0.05" in out
+        assert "Burn-in: no verdict before 30 rows per arm at alpha 0.05" in out
         assert "control has 5, treatment 5" in out
         assert "rollback" not in out.lower()
         assert captured == []  # a `continue` never pages anyone
 
     def test_alpha_0_01_states_its_40_row_burn_in(self, tmp_path, monkeypatch):
-        control = _judge_rows(30)  # past the alpha-0.05 burn-in, short of alpha 0.01's
+        control = _judge_rows(30)  # enough at alpha 0.05, short of alpha 0.01's 40 rows
         result, captured = _run_cli(
             tmp_path, monkeypatch, "judge_score", control, _shifted(control, -0.30),
             extra=("--alpha", "0.01"),
@@ -532,18 +543,44 @@ class TestCli:
         assert "direction worse" in out
         assert captured[0]["payload"]["direction"] == "worse"
 
+    @pytest.mark.parametrize(
+        ("n_control", "n_treatment", "warned"),
+        [(1000, 1000, False), (1001, 1001, True), (1001, 40, True)],
+    )
+    def test_past_1000_rows_per_arm_warns_that_the_calibration_ends(
+        self, tmp_path, monkeypatch, n_control, n_treatment, warned
+    ):
+        pattern = [0.80, 0.82, 0.78, 0.81, 0.79] * 201
+        result, captured = _run_cli(
+            tmp_path, monkeypatch, "judge_score",
+            pattern[:n_control], _shifted(pattern[:n_treatment], -0.30),
+        )
+        assert result.exit_code == 0, (result.output, repr(result.exception))
+        out = _plain(result.output)
+        warning = "Warning: Type-I control under peeking is calibrated up to 1000 rows per arm"
+        assert (warning in out) is warned, out
+        if warned:
+            assert f"This input has {max(n_control, n_treatment)} rows in an arm" in out
+        # The warning qualifies the verdict; it does not suppress it.
+        assert "direction worse" in out
+        assert captured[0]["payload"]["direction"] == "worse"
+
 
 # ---------------------------------------------------------------------------
 # Type-I error under peeking (seeded Monte-Carlo, vectorised with numpy)
 # ---------------------------------------------------------------------------
 #
 # The operator re-runs `soup ab` after every new (control, treatment) pair,
-# n = 2..200 rows per arm, and stops at the first terminal verdict. Calling
+# n = 2..200 rows per arm, and stops at the first terminal verdict. (The
+# calibration in benchmarks/gate-1227-ab-burn-in.md follows runs to 1000 rows;
+# these stop at 200 to stay CI-sized, with the same burn-in.) Calling
 # `msprt_step` on the raw rows at every peek is O(n) per call (about 45 s for
 # a few thousand runs), so the rows' running means and Bessel-corrected
 # variances are computed with numpy and handed to `_verdict_from_summary`,
-# the decision code `msprt_step` itself delegates to. The anchor at the end of
-# the first simulation proves those are `msprt_step`'s verdicts.
+# the decision code `msprt_step` itself delegates to. Two checks tie that back
+# to `msprt_step`: the anchor at the end of the first simulation compares
+# single peeks, and `test_msprt_step_replays_the_simulated_runs` replays whole
+# runs through it, one peek at a time.
 
 _REPS = 3000
 _ALPHA = 0.05
@@ -612,9 +649,9 @@ class TestTypeOneErrorUnderPeeking:
 
         effect_size / sigma = 0.25: the effect you look for is small next to the
         row-to-row noise, the usual A/B regime. Measured over 100,000 runs with
-        the burn-in (the #1227 sweep): 0.0347 for the mixture, 0.0848 for a |z|
-        substitution, 0.0405 for the old one-sided test. 3000 runs put the bound
-        at 0.0619.
+        the 30-row burn-in and a 200-row horizon (benchmarks/gate-1227-ab-burn-in.md):
+        0.0358 for the mixture, 0.0850 for a |z| substitution, 0.0412 for the old
+        one-sided test. 3000 runs put the bound at 0.0619.
         """
         np = pytest.importorskip("numpy")
         from soup_cli.utils.ab_test import MsprtConfig, _verdict_from_summary, msprt_step
@@ -664,8 +701,8 @@ class TestTypeOneErrorUnderPeeking:
         """The martingale argument itself, with the variance estimate taken out.
 
         effect_size / sigma = 0.4. Measured over 100,000 runs with the true
-        variance and the burn-in (the #1227 sweep): 0.0420 for the mixture,
-        0.0905 for |z|. 3000 runs put the bound at 0.0619.
+        variance, the 30-row burn-in and a 200-row horizon: 0.0406 for the
+        mixture, 0.0862 for |z|. 3000 runs put the bound at 0.0619.
         """
         np = pytest.importorskip("numpy")
         from soup_cli.utils.ab_test import MsprtConfig
@@ -679,16 +716,17 @@ class TestTypeOneErrorUnderPeeking:
 
     @pytest.mark.parametrize(
         ("ratio", "seed"),
-        [(0.4, 2028), (1.0, 2029), (2.0, 2030)],
+        [(0.35, 2028), (1.0, 2029), (2.0, 2030)],
     )
     def test_burn_in_keeps_type_one_error_within_alpha_with_few_rows(self, ratio, seed):
         """The small-sample case: the variance estimated from as few as 2 rows.
 
-        Measured over 100,000 runs (the #1227 sweep), Type-I with the 20-row
-        burn-in / without any: 0.0513 / 0.1154 at effect_size / sigma 0.4 (the
-        worst ratio for the burn-in), 0.0230 / 0.1628 at 1.0, 0.0006 / 0.1348 at
-        2.0. 2000 runs put the bound at 0.0646, so removing the burn-in fails
-        every case.
+        Measured over 100,000 runs with a 200-row horizon, Type-I with the
+        30-row burn-in / without any: 0.0492 / 0.1066 at effect_size / sigma
+        0.35 (the worst ratio for the burn-in at this horizon), 0.0114 / 0.1637
+        at 1.0, 0.0001 / 0.1349 at 2.0. 2000 runs put the bound at 0.0646, so
+        removing the burn-in fails every case, and no verdict may come before 30
+        rows per arm, so the old 20-row burn-in fails too.
         """
         np = pytest.importorskip("numpy")
         from soup_cli.utils.ab_test import MsprtConfig
@@ -702,22 +740,22 @@ class TestTypeOneErrorUnderPeeking:
             f"Type-I rate {rate:.4f} at effect_size / sigma {ratio} exceeds alpha "
             f"{_ALPHA} + tolerance {tolerance:.4f}"
         )
-        _assert_no_verdict_before(sim["outcomes"], 20)
+        _assert_no_verdict_before(sim["outcomes"], 30)
 
     @pytest.mark.parametrize(
         ("ratio", "seed"),
-        [(0.425, 2031), (0.55, 2032)],
+        [(0.45, 2031), (0.7, 2032)],
     )
     def test_alpha_0_01_burn_in_keeps_type_one_error_within_alpha(self, ratio, seed):
         """alpha 0.01 uses the 40-row burn-in.
 
-        Measured over 100,000 runs (the sweep's finer grid), Type-I at alpha 0.01
-        with 40 / 20 rows: 0.01059 / 0.01155 at effect_size / sigma 0.425 (the
-        worst ratio for 40 rows; 400,000 runs there give 0.01004 for 40 rows) and
-        0.01016 / 0.01294 at 0.55 (the worst for 20 rows). At CI size the rate
-        alone cannot tell 40 rows from 20: 2000 runs put the bound at 0.0167. So
-        the test also checks where the verdicts start, never before 40 rows per
-        arm. Forcing 20 rows at alpha 0.01 fails that check.
+        Measured over 100,000 runs with a 200-row horizon, Type-I at alpha 0.01
+        with 40 / 20 rows: 0.01045 / 0.01164 at effect_size / sigma 0.45 (the
+        worst ratio for 40 rows at this horizon) and 0.00748 / 0.01224 at 0.7
+        (the worst for 20 rows). At CI size the rate alone cannot tell 40 rows
+        from 20: 2000 runs put the bound at 0.0167. So the test also checks
+        where the verdicts start, never before 40 rows per arm. Forcing 20 rows
+        at alpha 0.01 fails that check.
         """
         np = pytest.importorskip("numpy")
         from soup_cli.utils.ab_test import MsprtConfig
@@ -732,6 +770,47 @@ class TestTypeOneErrorUnderPeeking:
             f"Type-I rate {rate:.4f} at effect_size / sigma {ratio} exceeds alpha "
             f"{alpha} + tolerance {tolerance:.4f}"
         )
+
+    def test_msprt_step_replays_the_simulated_runs(self):
+        """Whole runs through the real `msprt_step` give the simulation's first verdicts.
+
+        The simulations drive `_verdict_from_summary`. This replays 30 seeded runs
+        of the ratio-0.4 simulation through `msprt_step` on the raw rows, one
+        peek at a time, and requires the same first verdict: decision, direction
+        and row count. A decision rule living in `msprt_step` alone (an accept
+        turned into continue between 21 and 59 rows, say) changes the stopping
+        behaviour the Type-I rate is computed from, and only this sees it.
+        """
+        np = pytest.importorskip("numpy")
+        from soup_cli.utils.ab_test import MsprtConfig, msprt_step
+
+        config = MsprtConfig(metric="judge_score", alpha=_ALPHA, beta=0.20, effect_size=0.1)
+        sim = _peek_until_decided(np, config, sigma=0.1 / 0.4, reps=400, seed=2033)
+        picked = np.random.default_rng(3).choice(400, 30, replace=False).tolist()
+        expected = [sim["outcomes"][run] for run in picked]
+        # Not vacuous: most replayed runs decide, and some decide inside the window
+        # between the burn-in and 60 rows where such a rule would act.
+        assert sum(v is not None for v in expected) >= 25
+        assert sum(v is not None and v.n_control < 60 for v in expected) >= 10
+
+        for run, want in zip(picked, expected):
+            replayed = None
+            for idx in range(1, 200):  # idx + 1 = 2..200 rows per arm
+                verdict = msprt_step(
+                    config,
+                    control=sim["control"][run, : idx + 1].tolist(),
+                    treatment=sim["treatment"][run, : idx + 1].tolist(),
+                )
+                if verdict.decision != "continue":
+                    replayed = verdict
+                    break
+            assert _first_verdict_key(replayed) == _first_verdict_key(want), run
+
+
+def _first_verdict_key(verdict):
+    if verdict is None:
+        return None
+    return verdict.decision, verdict.direction, verdict.n_control
 
 
 def _assert_no_verdict_before(outcomes, rows):

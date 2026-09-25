@@ -355,8 +355,9 @@ from soup_cli.commands import ab as _ab_cmd  # noqa: E402
 app.command(
     name="ab",
     help=(
-        "mSPRT sequential A/B harness on latency / judge_score / retry_rate "
-        "with early-stop guarantees (v0.63.0)."
+        "Two-sided mSPRT sequential A/B harness on latency / judge_score / retry_rate: "
+        "reports whether the treatment is better or worse, after an alpha-dependent "
+        "burn-in (v0.63.0)."
     ),
 )(_ab_cmd.ab)
 

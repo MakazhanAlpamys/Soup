@@ -14,11 +14,12 @@ Why mSPRT and not a t-test:
 The test is two-sided (#1227). The statistic is a symmetric two-point
 mixture: the average of Wald's likelihood ratios for a treatment-minus-control
 difference of `+effect_size` and of `-effect_size`, averaged as ratios (in log
-space, via logsumexp), never as log-ratios and never via `|z|`. Each point
-ratio is a martingale under H0 and so is their average, so the boundaries
-`log(beta/(1-alpha))` (accept H0) and `log((1-beta)/alpha)` (reject H0) keep
-their any-time meaning. A `reject_h0` reports its direction, `better` or
-`worse`, from the metric's polarity in `HIGHER_IS_BETTER`.
+space, via logsumexp), never as log-ratios and never via `|z|`. Averaging keeps
+what each ratio has: E[LR_n] = 1 under H0 at every n. The boundaries are
+`log(beta/(1-alpha))` (accept H0) and `log((1-beta)/alpha)` (reject H0); with a
+known variance the simulated Type-I rate of this test under peeking stays below
+alpha (benchmarks/gate-1227-ab-burn-in.md). A `reject_h0` reports its direction,
+`better` or `worse`, from the metric's polarity in `HIGHER_IS_BETTER`.
 
 Three known limitations:
 1. Single metric per pass — multi-metric correction (Bonferroni / Holm)
@@ -26,12 +27,13 @@ Three known limitations:
 2. Assumes Gaussian-like data. For binary metrics (e.g. retry_rate as
    a boolean), the operator should pre-aggregate per-prompt rates so the
    resulting per-prompt averages are approximately Gaussian.
-3. The variance is estimated from the rows, not known. The martingale
-   argument holds for a known variance; with only a few rows per arm the
-   estimate is too noisy for it. So no verdict is given (`continue`) until
+3. The variance is estimated from the rows, not known, and from a handful of
+   rows the estimate is too noisy. So no verdict is given (`continue`) until
    each arm has `min_rows_per_arm(alpha)` rows; `BURN_IN_ROWS_BY_ALPHA` says
-   how those were chosen and what Type-I rate remains. Below alpha 0.01 the
-   burn-in is not calibrated (`burn_in_is_calibrated`).
+   how those were chosen and what Type-I rate remains. The calibration holds
+   up to `CALIBRATED_HORIZON_ROWS` rows per arm and for alpha >= 0.01
+   (`burn_in_is_calibrated`). A variance-robust statistic that would need no
+   burn-in is #1265.
 """
 
 from __future__ import annotations
@@ -56,27 +58,32 @@ HIGHER_IS_BETTER: Mapping[str, bool] = MappingProxyType(
 # Burn-in (#1227): rows per arm required before any verdict, by the Type-I level
 # alpha. While either arm has fewer, the verdict is `continue` whatever the
 # log-likelihood ratio says. The pooled variance is estimated from the rows, and
-# from a handful of them it can come out far too small; the likelihood ratio is
-# then no martingale, and an operator who re-runs after every new pair rejected
-# a true H0 up to 0.163 of the time at alpha 0.05 (effect_size / sigma 1.25, no
-# burn-in). Calibrated by a Monte-Carlo sweep of that peeking procedure (H0, a
-# look after every pair up to 200 rows per arm, beta 0.20, effect_size / sigma
-# from 0.1 to 5, 100,000 runs per ratio): each N is the smallest candidate in
-# {10, 15, 20, 30, 40} whose Type-I rate stays within alpha + 3 binomial
-# standard errors at every ratio.
-#   alpha >= 0.05       -> 20 rows. Alpha 0.05: worst 0.0513 at ratio 0.4
-#                          (bound 0.0521); 15 rows reach 0.0536. Alpha 0.10:
-#                          worst 0.0986 (bound 0.1028).
-#   0.01 <= alpha < 0.05 -> 40 rows. Alpha 0.01: worst 0.0108 at ratio 0.45
-#                          (bound 0.0109; 400,000 runs at the worst ratio of a
-#                          finer grid give 0.0100); 30 rows reach 0.0114, 20
-#                          rows 0.0129. Alpha 0.025: worst 0.0246 (bound 0.0265).
+# from a handful of them it can come out far too small, so without a burn-in an
+# operator who re-runs after every new pair would reject a true H0 up to 0.164
+# of the time at alpha 0.05. Calibrated by a Monte-Carlo sweep of that peeking
+# procedure: H0, a look after every pair, the first verdict stops the run,
+# beta 0.20, 22 values of effect_size / sigma from 0.1 to 5, 100,000 runs per
+# ratio, and a horizon of 1000 rows per arm (200 checked too). Each value is the
+# smallest candidate in {20, 30, 40, 50, 60} whose Type-I rate stays within
+# alpha + 3 binomial standard errors at every ratio, at both horizons, at every
+# alpha measured in its range.
+#   alpha >= 0.05       -> 30 rows. Alpha 0.05: worst 0.0512 at ratio 0.35
+#                          (bound 0.0521); 20 rows reach 0.0534. Alpha 0.10:
+#                          worst 0.0994 (bound 0.1029).
+#   0.01 <= alpha < 0.05 -> 40 rows. Alpha 0.01: worst 0.01088 at ratio 0.4
+#                          (bound 0.01094); 30 rows reach 0.0114. Alpha 0.025:
+#                          worst 0.0261 (bound 0.0265); 30 rows reach 0.0269.
 #   alpha < 0.01        -> 40 rows, NOT calibrated: at alpha 0.005 the worst is
 #                          0.0058, above its bound 0.0057. `soup ab` warns.
-# The summary table is in the #1227 pull request, and the full sweep log is
-# attached there.
-BURN_IN_ROWS_BY_ALPHA: tuple[tuple[float, int], ...] = ((0.05, 20), (0.01, 40))
+# With the true variance the same sweep stays below alpha (worst 0.0468 at 0.05,
+# 0.0095 at 0.01). Record: benchmarks/gate-1227-ab-burn-in.md; script:
+# benchmarks/harness/ab_burn_in_sweep.py; results and log:
+# benchmarks/results/gate-1227-ab-burn-in/. Changing a value means re-running it.
+BURN_IN_ROWS_BY_ALPHA: tuple[tuple[float, int], ...] = ((0.05, 30), (0.01, 40))
 _BURN_IN_ROWS_UNCALIBRATED = 40
+# The sweep followed runs up to this many rows per arm; past it the Type-I
+# figures above are not established, and `soup ab` says so.
+CALIBRATED_HORIZON_ROWS = 1000
 _MAX_METRIC_NAME_LEN = 32
 _MAX_SAMPLES_PER_ARM = 1_000_000
 _VALID_DECISIONS: frozenset[str] = frozenset(
@@ -124,7 +131,7 @@ def _require_unit_open(value: object, *, field: str) -> float:
 def min_rows_per_arm(alpha: float) -> int:
     """Rows each arm needs before `soup ab` gives any verdict at Type-I level ``alpha``.
 
-    From ``BURN_IN_ROWS_BY_ALPHA``: 20 at alpha >= 0.05, 40 below. Below alpha
+    From ``BURN_IN_ROWS_BY_ALPHA``: 30 at alpha >= 0.05, 40 below. Below alpha
     0.01 the value is 40 but not calibrated; see :func:`burn_in_is_calibrated`.
     """
     value = _require_unit_open(alpha, field="alpha")
@@ -277,15 +284,16 @@ def _verdict_from_summary(
     #            - 0.5 * mu_h1**2 * n_eff / (n_eff + 1)
     #
     # and for H1: delta = -d the first term flips sign. With a known variance
-    # each LR is a martingale under H0 (E[LR_n] = 1), and so is their average,
-    # which is what makes the statistic below keep Wald's boundaries at every
-    # stopping time per the optional stopping theorem (here the variance is
-    # estimated; see limitation 3 in the module docstring).
+    # E[LR_n] = 1 under H0 at every n for each ratio, and so for their average.
+    # (The n_eff / (n_eff + 1) shrink moves the alternative with n, so neither
+    # is exactly a martingale; the Type-I rate under peeking is measured, not
+    # derived: benchmarks/gate-1227-ab-burn-in.md. Here the variance is also
+    # estimated; see limitation 3 in the module docstring.)
     #
     # It must be the average of the RATIOS. The mean of the log-ratios is just
     # -drift (it ignores the data), and |z| in the one-sided formula is the
-    # larger of the two log-ratios, which is not a martingale and inflates
-    # Type-I error under peeking.
+    # larger of the two log-ratios, whose expectation exceeds 1 and which
+    # roughly doubles the Type-I rate under peeking.
     #
     # (Code-review CRITICAL fix v0.63.0: earlier draft used a malformed
     # mixture-prior LLR with the wrong sign on the log term, which drove
@@ -438,6 +446,7 @@ def run_msprt(
 
 __all__ = [
     "BURN_IN_ROWS_BY_ALPHA",
+    "CALIBRATED_HORIZON_ROWS",
     "HIGHER_IS_BETTER",
     "MsprtConfig",
     "MsprtVerdict",

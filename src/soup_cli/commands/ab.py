@@ -12,6 +12,7 @@ from rich.table import Table
 
 from soup_cli.commands._webhook_cli import emit_webhooks, validate_webhook_flags
 from soup_cli.utils.ab_test import (
+    CALIBRATED_HORIZON_ROWS,
     HIGHER_IS_BETTER,
     MsprtConfig,
     burn_in_is_calibrated,
@@ -32,7 +33,12 @@ def ab(
         help="Metric: latency | judge_score | retry_rate.",
     ),
     alpha: float = typer.Option(
-        0.05, "--alpha", help="Type-I error (false positive) rate (0, 1).",
+        0.05, "--alpha",
+        help=(
+            "Type-I error (false positive) rate (0, 1) of the two-sided test. Also sets "
+            "the burn-in: no verdict before 30 rows per arm at 0.05 and above, 40 below "
+            "(not calibrated below 0.01)."
+        ),
     ),
     beta: float = typer.Option(
         0.20, "--beta", help="Type-II error (false negative) rate (0, 1).",
@@ -84,8 +90,9 @@ def ab(
         console.print(f"[red]{escape(str(exc))}[/]")
         raise typer.Exit(1) from exc
 
-    # The burn-in depends on alpha, and below alpha 0.01 it is not calibrated
-    # (#1227): say so before the verdict, and show the rows actually required.
+    # The burn-in depends on alpha, and its calibration stops below alpha 0.01
+    # and past CALIBRATED_HORIZON_ROWS rows per arm (#1227): say so before the
+    # verdict, and show the rows actually required.
     rows_needed = min_rows_per_arm(cfg.alpha)
     if not burn_in_is_calibrated(cfg.alpha):
         console.print(
@@ -94,6 +101,17 @@ def ab(
                 f"alpha 0.01. At --alpha {cfg.alpha:g} the burn-in is {rows_needed} rows "
                 "per arm, the value calibrated for alpha 0.01, and a test re-run after "
                 "every new row may reject a true H0 more often than --alpha.[/]",
+                border_style="yellow",
+            )
+        )
+    largest_arm = max(verdict.n_control, verdict.n_treatment)
+    if largest_arm > CALIBRATED_HORIZON_ROWS:
+        console.print(
+            Panel(
+                f"[yellow]Warning: Type-I control under peeking is calibrated up to "
+                f"{CALIBRATED_HORIZON_ROWS} rows per arm. This input has {largest_arm} rows "
+                "in an arm; a test re-run after every new row past that point may reject "
+                "a true H0 more often than --alpha.[/]",
                 border_style="yellow",
             )
         )
