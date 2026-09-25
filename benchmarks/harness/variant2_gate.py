@@ -51,7 +51,8 @@ import subprocess
 import sys
 import time
 from dataclasses import asdict, dataclass
-from importlib.metadata import PackageNotFoundError, version as distribution_version
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as distribution_version
 from pathlib import Path
 from types import ModuleType
 from typing import Any, Callable

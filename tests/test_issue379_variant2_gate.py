@@ -457,8 +457,6 @@ class TestRunArm:
         control = TinyLoraArm(((1.0, 0.0), (0.0, 1.0)), rewired=0)
         repaired = TinyLoraArm(((1.5, 0.0), (0.0, 1.0)), rewired=14)
         input_ids = torch.tensor([[1.0, 2.0], [-1.0, 0.5]])
-        labels = torch.zeros_like(input_ids)
-
         control_result = _harness._run_arm(
             label="control",
             model=control,
