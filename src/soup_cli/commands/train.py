@@ -889,6 +889,9 @@ def train(
     if hf_resume and not push_as:
         console.print("[red]--hf-resume requires --push-as <repo>[/]")
         raise typer.Exit(1)
+    if hf_resume and cfg.task in UNSUPPORTED_RESUME_TASKS:
+        console.print(f"[red]--hf-resume is not supported for task {cfg.task!r}[/]")
+        raise typer.Exit(1)
 
     # --- Eval-gate shortcut: --gate <path> sets training.eval_gate ---
     if gate:
@@ -2324,6 +2327,9 @@ def _resolve_checkpoint(
     return None
 
 
+UNSUPPORTED_RESUME_TASKS: frozenset[str] = frozenset({"unlearn"})
+
+
 def _resolve_resume_or_exit(resume: str, cfg: "SoupConfig") -> str | None:
     """Resolve ``--resume`` against ``cfg``, printing status and exiting on
     failure. Extracted out of ``train()`` (#634 review) so the
@@ -2335,6 +2341,9 @@ def _resolve_resume_or_exit(resume: str, cfg: "SoupConfig") -> str | None:
     """
     if not resume:
         return None
+    if cfg.task in UNSUPPORTED_RESUME_TASKS:
+        console.print(f"[red]--resume is not supported for task {cfg.task!r}[/]")
+        raise typer.Exit(1)
     resume_from = _resolve_checkpoint(resume, cfg.output, cfg.experiment_name, backend=cfg.backend)
     if resume_from:
         console.print(f"[green]Resuming from:[/] {resume_from}")

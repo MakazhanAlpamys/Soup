@@ -279,7 +279,14 @@ class PRMTrainerWrapper:
             f"head=Linear({hidden_size}, 1)"
         )
 
-    def train(self, **_kwargs) -> dict:
+    def train(
+        self,
+        display=None,
+        tracker=None,
+        run_id=None,
+        resume_from_checkpoint: Optional[str] = None,
+        **_kwargs,
+    ) -> dict:
         """Run training with the PRM Trainer subclass."""
         if self.model is None:
             raise RuntimeError("PRMTrainerWrapper.train() called before setup()")
@@ -355,6 +362,20 @@ class PRMTrainerWrapper:
             from soup_cli.utils.deepspeed import attach_empty_param_group_guard
 
             attach_empty_param_group_guard(self.trainer)
+
+        # #1220: resolve "auto" resume if passed directly to train()
+        if resume_from_checkpoint and str(resume_from_checkpoint).lower() == "auto":
+            checkpoints = sorted(
+                [
+                    d for d in output_dir.iterdir()
+                    if d.is_dir() and d.name.startswith("checkpoint-")
+                ],
+                key=lambda d: int(d.name.split("-")[-1]) if d.name.split("-")[-1].isdigit() else 0,
+            )
+            resume_from_checkpoint = str(checkpoints[-1]) if checkpoints else None
+        elif resume_from_checkpoint:
+            resume_from_checkpoint = str(resume_from_checkpoint)
+
         console.print("[green]Starting PRM training...[/]")
         start = time.time()
         align_trainable_dtype_for_fp16(
@@ -362,7 +383,7 @@ class PRMTrainerWrapper:
             fp16=getattr(self.trainer.args, "fp16", False),
             bf16=getattr(self.trainer.args, "bf16", False),
         )
-        result = self.trainer.train()
+        result = self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)
         self.trainer.save_model(str(output_dir))
         # v0.71.30 — save the tokenizer alongside the model so the PRM
         # checkpoint is loadable standalone (soup shrink / PRMScorer /
