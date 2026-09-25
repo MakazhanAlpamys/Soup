@@ -2,7 +2,11 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    # `release/**` is here so a release branch gets the matrix on the exact
+    # tree that will be tagged. A pull request builds the MERGE of head and
+    # main, which for a release cut from an older tag is not the tree that
+    # ships, so a PR run cannot stand in for this one.
+    branches: [main, 'release/**']
   pull_request:
     branches: [main]
 
@@ -168,6 +172,36 @@ jobs:
         # execute them. Without this step, replacing the whole MLX per-row loss
         # with a constant 0.0 left the suite green (#1018 review).
         run: pytest -o addopts= -q tests/test_rewind_mlx.py
+  torchao-contract:
+    # #826: every torchao class Soup names is resolved against the REAL package
+    # here. The 3x3 matrix cannot do it -- `torchao` is not in `[dev]`, so those
+    # cells skip these tests, which is how three names torchao never exported
+    # (NVFP4Config, Int8DynActInt4Config, Float8DynActFloat8Config) survived
+    # behind a stub and a MagicMock.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install the QAT extra (torchao) beside the dev stack
+        # One spec with both extras: `-e ".[dev]" ".[qat]"` asks pip for
+        # soup-cli twice, once editable and once not, and resolution fails.
+        run: pip install -e ".[dev,qat]" "torch>=2.6.0"
+      - name: Prove torchao is actually importable, so the tests do not skip
+        run: python -c "import torchao; print(torchao.__version__)"
+      - name: Resolve every torchao class Soup asks for
+        # test_v07121.py runs here too, and not only in the matrix: it is the
+        # suite that fakes torchao, so with the real package installed it is
+        # the one that catches a resolver which answers from a cached
+        # `torchao.*` submodule after the root import has been made to fail.
+        # That exact regression shipped in this PR's first push and was found
+        # by hand; running both files in one job is what makes it a CI failure
+        # next time.
+        run: |
+          pytest -o addopts= -q \
+            tests/test_issue826_torchao_class_names.py \
+            tests/test_v07121.py
   pytorch-smoke:
     # #596: exercise the real PyTorch SFT + DPO training pipeline on every PR.
     # Keep this separate from the 3x3 matrix so the expensive model-backed
@@ -319,6 +353,13 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
+      # The Web UI escaping tests run `safe_html.js` under node, and skip when
+      # node is absent. Runner images happen to ship one, so the skip would be
+      # silent: pin it, or the only tests that execute the real escaping logic
+      # can disappear without anything turning red.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
       - name: Pin the HF cache to a deterministic path
         # Set here and not in the job-level `env:` block: the `runner` context
         # is not available there (only github / needs / strategy / matrix /

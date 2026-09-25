@@ -290,6 +290,7 @@
     "training.use_galore": false,
     "training.use_liger": false,
     "training.use_longlora": false,
+    "training.use_lorafa": false,
     "training.use_mod": false,
     "training.use_ring_attention": false,
     "training.verifiable_domain": null,

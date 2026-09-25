@@ -402,7 +402,7 @@ CPU-instant):
 | Suite | What it checks | Scorer |
 |-------|----------------|--------|
 | `mini_mmlu` / `mini_common_sense` / `mini_instruction` / `mini_arithmetic` | general knowledge / reasoning / instruction-following / numeracy | answer-extraction + exact/boundary match |
-| `mini_tool_call` | function-calling still works (right tool named) | `tool_call_name_match` |
+| `mini_tool_call` | function selection still works (right tool named, or exact `NO_TOOL` when no call is needed) | `tool_call_name_match` + exact abstention |
 | `mini_format_json` | JSON validity (a structured object, not a bare scalar) | container-only JSON check |
 | `mini_safety` | refusal-rate on harmful prompts (under-refusal = regression) | refusal heuristic |
 | `mini_over_refusal` | benign prompts are NOT refused (over-refusal = regression) | refusal heuristic (inverse) |
@@ -411,6 +411,10 @@ Each suite is >20 items so a single-item flip (1/N < 0.05) trips the default thr
 of being rounded away. The scorer is answer-**extraction** — a spurious substring inside a word
 (`"B"` in "**B**erlin") no longer scores, which is a **breaking** change from the v0.25.0
 substring scorer (an existing run's verdict can flip; recompute any committed `--baseline`).
+As of v0.76.0, `mini_tool_call` mixes tool calls with direct-answer prompts and requires the
+literal response `NO_TOOL` for the latter. This deliberately moves the suite away from its former
+1.000 ceiling; baseline provenance revision 2 prevents scores from the earlier scale from being
+compared silently with the new fixture.
 `mini_safety` and `mini_over_refusal` form a dual gate: under-refusal regresses safety, over-refusal
 regresses utility (neither axis can be gamed alone). `--general-suite <names>` with any non-bundled
 name routes through the lm-eval harness. Pairwise judge win-rate (`--task-mode pairwise`) shipped
@@ -764,6 +768,12 @@ Paths are containment-checked, and `registry://` refs are resolved with an optio
 
 ### Custom Eval Format
 
+Regex-scored custom tasks reject structurally unsafe patterns before matching
+model output and name `eval.custom.expected` in the error. The diagnose
+`format` probe applies the same check to `regex_pattern` without running a
+canary search. Ordinary patterns, including single-character alternation,
+remain valid.
+
 ```jsonl
 {"prompt": "What is 2+2?", "expected": "4", "category": "math", "scoring": "exact"}
 {"prompt": "Explain gravity", "expected": "force.*attraction", "scoring": "regex"}
@@ -836,6 +846,10 @@ soup eval behavior my_run --battery xstest \
 # Harmful prompts ship REDACTED — pull real sets from upstream papers.
 ```
 
+Without the live `--base-model` path, `--evidence` is required. An evidence-less
+run is an input error (exit `3`), not a neutral OK report; the error names the
+expected `pre_responses`, `post_responses`, and `oracle` arrays.
+
 Word-boundary regex agreement (no `"safe" in "unsafe"` false positives); OK/MINOR/MAJOR thresholds match the v0.26 / v0.56 taxonomy.
 
 **Capability auto-suite** — pre-bundled profile selector with friendly `lm-eval-harness` task ids:
@@ -872,6 +886,10 @@ tests:
 ```bash
 soup eval checklist tests.yaml --evidence responses.json
 ```
+
+`--evidence` is required and maps each CheckList test name to its response
+strings. Omitting it exits `3` instead of rendering an OK result with zero
+measurements.
 
 `mft` = response must contain a keyword as a whole word (`"sand"` won't pass for `"and"`); `inv` = all paraphrases must agree; `dir` = directional expectation under perturbation.
 

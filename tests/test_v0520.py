@@ -419,6 +419,35 @@ class TestDistillUtils:
                 task="distill", backend="mlx", teacher_model="t/model",
             )
 
+    def test_validate_distill_compat_unsloth(self):
+        from soup_cli.utils.distill import validate_distill_compat
+
+        # Pin the reason and the supported backend, not just the word "unsloth",
+        # so a refusal that drops the explanation or the transformers pointer
+        # still fails this test.
+        with pytest.raises(
+            ValueError, match=r"backend=unsloth: .*Use backend=transformers"
+        ):
+            validate_distill_compat(
+                task="distill", backend="unsloth", teacher_model="t/model",
+            )
+
+    def test_soup_config_refuses_distill_on_unsloth(self):
+        from pydantic import ValidationError
+
+        from soup_cli.config.schema import SoupConfig
+
+        with pytest.raises(
+            ValidationError, match=r"backend=unsloth: .*Use backend=transformers"
+        ):
+            SoupConfig(
+                base="s/model",
+                task="distill",
+                backend="unsloth",
+                data={"train": "./d.jsonl"},
+                training={"teacher_model": "t/model"},
+            )
+
     def test_build_distill_trainer_lifted_in_v0532(self):
         """v0.52.0 shipped as a NotImplementedError stub; v0.53.2 #133 lifts it
         to a live factory returning DistillTrainerWrapper. The argless call

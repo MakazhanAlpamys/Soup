@@ -55,6 +55,18 @@ jobs:
         # origin/main, and merge-tree / merge-base would then raise instead
         # of returning a verdict.
         run: git fetch --no-tags origin main:refs/remotes/origin/main
+      - name: Take the gate script from main, not from the PR
+        # Two reasons, and the first is the one contributors hit. A branch
+        # cut before #1017 does not contain this script at all, so the step
+        # below died with `[Errno 2] No such file or directory` and the gate
+        # went red for a reason the author could not act on -- one of them
+        # vendored main's 605-line copy into their PR to get a green mark.
+        # The second is that this job holds checks:write on a same-repo
+        # branch, so running the head's copy means running code the PR
+        # controls. merge-tree operates on commits, so overwriting the file
+        # in the working tree cannot change the verdict; a PR that edits the
+        # script is gated by main's version, which is what a gate should do.
+        run: git checkout origin/main -- scripts/merge_freshness.py
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"

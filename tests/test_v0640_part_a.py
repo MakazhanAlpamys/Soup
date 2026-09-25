@@ -18,7 +18,6 @@ from __future__ import annotations
 import dataclasses
 import json
 import os
-import sys
 
 import pytest
 from typer.testing import CliRunner
@@ -558,7 +557,7 @@ def test_write_report_outside_cwd_rejected(tmp_path, monkeypatch):
         write_report(report, str(outside))
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="POSIX symlinks")
+@pytest.mark.requires_symlink
 def test_write_report_symlink_rejected(tmp_path, monkeypatch):
     from soup_cli.utils.tunability import (
         CandidateBase,

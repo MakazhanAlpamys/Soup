@@ -611,10 +611,28 @@ signature from an untrusted key marks the adapter invalid. With `--public-key`,
 an adapter whose signature record is not `ed25519` is also invalid. Signing keys and
 trusted public keys are symlink-rejected and size-capped but **not**
 cwd-contained (keys are secrets that live outside the project). Signature
-persists as `.soup-signature.json` (atomic write). `sigstore` keyless signing
-stays infra-blocked (needs an OIDC identity provider + Fulcio/Rekor network —
-it can't be honestly validated offline). `--strict` mode exits 3 on any verify
-failure (CI gate code distinct from generic errors).
+persists as `.soup-signature.json` (atomic write).
+
+The **`sigstore` backend is also live** with `pip install soup-cli[sigstore]`.
+It uses an ambient OIDC identity when one is available (for example GitHub
+Actions), requests a Fulcio certificate, submits to Rekor, and stores the
+complete Sigstore bundle with the adapter signature record. Browser OIDC is
+**not** opened implicitly on headless/default runs; opt in explicitly with
+`--interactive-oidc`. Verification is deliberately fail-closed and requires
+both certificate identity and OIDC issuer supplied out of band:
+
+```bash
+soup adapters sign ./adapter --backend sigstore
+soup adapters verify ./adapter \
+  --cert-identity 'https://github.com/acme/repo/.github/workflows/release.yml@refs/heads/main' \
+  --cert-oidc-issuer 'https://token.actions.githubusercontent.com'
+```
+
+The identity embedded in the bundle is **not** trusted automatically; doing so
+would reduce authentication to self-consistency. Identity and issuer are one
+certificate policy: either value without the other is refused. `--strict` mode
+exits 3 on any verify failure
+(CI gate code distinct from generic errors).
 
 
 ## Strict Safetensors Mode (`soup adapters check-safetensors`)

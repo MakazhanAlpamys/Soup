@@ -214,7 +214,7 @@ class TestStrictSafetensors:
         with pytest.raises(TypeError):
             check_strict_safetensors(str(adapter), strict="yes")  # type: ignore[arg-type]
 
-    @pytest.mark.skipif(os.name == "nt", reason="POSIX symlink semantics")
+    @pytest.mark.requires_symlink
     def test_symlinked_unsafe_file_rejected(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         adapter = tmp_path / "symlink_adapter"

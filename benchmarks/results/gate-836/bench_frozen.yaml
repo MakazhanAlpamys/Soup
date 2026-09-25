@@ -1,0 +1,29 @@
+# Same fixture, no adapter, and a Spectrum pattern that matches no module:
+# every parameter stays frozen, so there is nothing to train.
+base: HuggingFaceTB/SmolLM2-135M-Instruct
+task: sft
+backend: transformers
+
+data:
+  train: bench_fixture.jsonl
+  format: alpaca
+  max_length: 512
+
+training:
+  epochs: 1
+  lr: 2e-4
+  batch_size: 4
+  gradient_accumulation_steps: 1
+  quantization: none
+  optimizer: adamw_torch
+  scheduler: linear
+  warmup_ratio: 0.0
+  weight_decay: 0.0
+  logging_steps: 1
+  save_steps: 1000
+  seed: 1234
+  data_seed: 1234
+  unfrozen_parameters:
+    - "^no_module_is_named_this$"
+
+output: ./output_bench836_frozen/

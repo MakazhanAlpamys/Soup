@@ -531,6 +531,9 @@ training:
 Loss = student CE + (T**2) × KL(teacher_logits / T  ||  student_logits / T).
 Teacher is loaded once, frozen via `requires_grad_(False)` + `.eval()`, and its
 inputs / logits are auto-bridged across CPU / CUDA devices.
+
+Distillation runs on `backend: transformers` only; `backend: mlx` and
+`backend: unsloth` are refused at config load.
 Gradient accumulation uses the number of shifted, non-masked training targets across the complete
 optimizer window. Splitting the same rows into unequal-length microbatches therefore preserves the
 full-batch token mean instead of weighting every microbatch equally.
@@ -1674,7 +1677,7 @@ training:
   distill_temperature: 2.0
 ```
 
-The cross-validator rejects `task='distill'` without `teacher_model`, and rejects `teacher_model` / `distill_*` fields when `task` is anything other than `distill`.
+The cross-validator rejects `task='distill'` without `teacher_model`, and rejects `teacher_model` / `distill_*` fields when `task` is anything other than `distill`. It also refuses `task='distill'` on `backend: mlx` and `backend: unsloth` at config load; distillation runs on `backend: transformers` only.
 
 
 ## EBFT + GDPO (BETA, v0.52.0)

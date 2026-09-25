@@ -13,6 +13,7 @@ from rich.panel import Panel
 from rich.table import Table
 
 from soup_cli.utils.constants import GITHUB_URL
+from soup_cli.utils.torchao_compat import TORCHAO_MIN_VERSION
 
 console = Console()
 
@@ -39,7 +40,7 @@ DEPS = [
     ("httpx", "httpx", "0.24.0", False),
     ("unsloth", "unsloth", "2024.8", False),
     ("PIL", "Pillow", "9.0.0", False),
-    ("torchao", "torchao", "0.4.0", False),
+    ("torchao", "torchao", TORCHAO_MIN_VERSION, False),
     ("sglang", "sglang", "0.2.0", False),
     ("librosa", "librosa", "0.10.0", False),
 ]

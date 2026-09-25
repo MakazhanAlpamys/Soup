@@ -272,11 +272,11 @@ class TestPartCPreprocess:
     def test_cache_key_deterministic(self):
         a = dp.make_preprocess_cache_key(
             dataset_path="d.jsonl", tokenizer_name="x/y", max_length=512,
-            format_name="alpaca",
+            format_name="alpaca", mask_mode="responses_only",
         )
         b = dp.make_preprocess_cache_key(
             dataset_path="d.jsonl", tokenizer_name="x/y", max_length=512,
-            format_name="alpaca",
+            format_name="alpaca", mask_mode="responses_only",
         )
         assert a == b
         assert len(a) == 16
@@ -284,24 +284,24 @@ class TestPartCPreprocess:
     def test_cache_key_changes_on_each_arg(self):
         baseline = dp.make_preprocess_cache_key(
             dataset_path="d.jsonl", tokenizer_name="x/y", max_length=512,
-            format_name="alpaca",
+            format_name="alpaca", mask_mode="responses_only",
         )
         # Different dataset path → different key.
         diff_path = dp.make_preprocess_cache_key(
             dataset_path="other.jsonl", tokenizer_name="x/y", max_length=512,
-            format_name="alpaca",
+            format_name="alpaca", mask_mode="responses_only",
         )
         diff_tok = dp.make_preprocess_cache_key(
             dataset_path="d.jsonl", tokenizer_name="z/w", max_length=512,
-            format_name="alpaca",
+            format_name="alpaca", mask_mode="responses_only",
         )
         diff_len = dp.make_preprocess_cache_key(
             dataset_path="d.jsonl", tokenizer_name="x/y", max_length=1024,
-            format_name="alpaca",
+            format_name="alpaca", mask_mode="responses_only",
         )
         diff_fmt = dp.make_preprocess_cache_key(
             dataset_path="d.jsonl", tokenizer_name="x/y", max_length=512,
-            format_name="sharegpt",
+            format_name="sharegpt", mask_mode="responses_only",
         )
         assert len({baseline, diff_path, diff_tok, diff_len, diff_fmt}) == 5
 
@@ -309,22 +309,22 @@ class TestPartCPreprocess:
         with pytest.raises(ValueError):
             dp.make_preprocess_cache_key(
                 dataset_path="", tokenizer_name="x", max_length=1,
-                format_name="a",
+                format_name="a", mask_mode="responses_only",
             )
         with pytest.raises(ValueError, match="null bytes"):
             dp.make_preprocess_cache_key(
                 dataset_path="d\x00", tokenizer_name="x", max_length=1,
-                format_name="a",
+                format_name="a", mask_mode="responses_only",
             )
         with pytest.raises(ValueError, match="bool"):
             dp.make_preprocess_cache_key(
                 dataset_path="d", tokenizer_name="x", max_length=True,
-                format_name="a",
+                format_name="a", mask_mode="responses_only",
             )
         with pytest.raises(ValueError):
             dp.make_preprocess_cache_key(
                 dataset_path="d", tokenizer_name="x", max_length=0,
-                format_name="a",
+                format_name="a", mask_mode="responses_only",
             )
 
     def test_tokenized_path_schema(self):
@@ -1026,16 +1026,14 @@ class TestSecurityReviewFixes:
         with pytest.raises(Exception, match="probs"):
             DataConfig(train="d.jsonl", interleave="probs")
 
+    @pytest.mark.requires_symlink
     def test_ingest_symlink_rejected(self, tmp_path, monkeypatch):
         # Security M2: lstat-based symlink rejection (TOCTOU defence).
         monkeypatch.chdir(tmp_path)
         target = tmp_path / "real.txt"
         target.write_text("hello", encoding="utf-8")
         link = tmp_path / "link.txt"
-        try:
-            link.symlink_to(target)
-        except (OSError, NotImplementedError):
-            pytest.skip("symlinks not supported on this platform")
+        link.symlink_to(target)
         runner = CliRunner()
         result = runner.invoke(app, ["data", "ingest", "link.txt"])
         assert result.exit_code == 1

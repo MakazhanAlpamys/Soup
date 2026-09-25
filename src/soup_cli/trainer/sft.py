@@ -174,7 +174,15 @@ def _validate_pretokenized_targets(dataset: Any, *, split: str, max_length: int)
     )
 
     if "labels" not in getattr(dataset, "column_names", ()):
-        return
+        # #1054: skipping here let a label-less cache through to TRL, whose
+        # collator then falls back to ``labels = input_ids`` and trained on the
+        # prompt. A pre-tokenized cache without labels is never trustworthy.
+        raise ValueError(
+            f"pre_tokenized {split} dataset has no 'labels' column — its loss "
+            "mask is unknown and TRL would train on every token. Re-run "
+            "`soup data preprocess` with a current Soup version, or add a "
+            "'labels' column to a dataset you built yourself."
+        )
     for row_index in range(len(dataset)):
         try:
             ensure_causal_loss_target(
@@ -450,7 +458,7 @@ def _make_vision_trainer(
 
 
 def _maybe_load_pretokenized(
-    dcfg, base: str, console_obj: Console,
+    dcfg, base: str, console_obj: Console, tcfg=None,
 ) -> Optional[Tuple[object, object]]:
     """v0.53.7 #86 — short-circuit tokenization when caller pre-tokenized via
     ``soup data preprocess``.
@@ -461,8 +469,9 @@ def _maybe_load_pretokenized(
 
     Cache-hash gate: when ``<tokenized_path>/metadata.json`` exists, its
     ``cache_key`` is cross-checked against the current
-    ``(base, max_length, format, train)`` config via
-    :func:`make_preprocess_cache_key`. Mismatch raises ``ValueError`` with
+    ``(train, base, max_length, format, chat_template, mask_mode)`` config via
+    :func:`make_preprocess_cache_key` — every input that changes what a cached
+    row looks like. Mismatch raises ``ValueError`` with
     the keyword ``"cache hash mismatch"`` so users know to re-run
     ``soup data preprocess``. Missing ``metadata.json`` falls back to
     "trusted" mode with a yellow advisory.
@@ -470,10 +479,12 @@ def _maybe_load_pretokenized(
     if dcfg.format != "pre_tokenized" or not dcfg.tokenized_path:
         return None
 
+    from soup_cli.data.chat_templates import resolve_chat_template
     from soup_cli.utils.data_pipeline import (
         load_pretokenized_dataset,
         make_preprocess_cache_key,
         preprocess_dataset_key_input,
+        preprocess_mask_mode,
     )
 
     tokenized_path = dcfg.tokenized_path
@@ -501,12 +512,26 @@ def _maybe_load_pretokenized(
             tokenizer_name=base,
             max_length=dcfg.max_length,
             format_name=source_format,
+            # #1067: unlike the format, the template is restated in this config. It
+            # has to match, since training saves the tokenizer with this template.
+            chat_template=resolve_chat_template(dcfg.chat_template),
+            mask_mode=preprocess_mask_mode(dcfg, tcfg),
         )
         if stored_key != current_key:
+            # A cache without the field was written before that input joined the
+            # key, so name the reason rather than leaving two hashes to compare
+            # by eye. Oldest gap first: a cache missing both predates #1067, and
+            # saying so places it further back than naming #1054 alone would.
+            if "chat_template" not in metadata:
+                predates = "the cache predates chat_template keying (#1067); "
+            elif "mask_mode" not in metadata:
+                predates = "the cache predates loss-mask keying (#1054); "
+            else:
+                predates = ""
             raise ValueError(
                 "pre_tokenized cache hash mismatch: was generated with "
                 f"{stored_key!r}, current config implies {current_key!r}; "
-                "re-run `soup data preprocess`"
+                f"{predates}re-run `soup data preprocess`"
             )
     else:
         console_obj.print(
@@ -585,6 +610,8 @@ class SFTTrainerWrapper(StreamingSetupMixin):
         self.tokenizer = None
         self.trainer = None
         self._is_raft = False  # set in setup() when data.format == 'raft'
+        self._quest_metadata: Optional[dict[str, Any]] = None
+        self._quest_base_identity_before: Optional[str] = None
         # Resolve once — raises ValueError if model needs custom code but
         # the user did not opt in. Result is cached on the wrapper for use
         # by every from_pretrained() call below.
@@ -812,7 +839,7 @@ class SFTTrainerWrapper(StreamingSetupMixin):
         self._raft_epoch_shuffle = self._is_raft and bool(
             getattr(cfg.data, "raft_epoch_shuffle", False)
         )
-        pretok = _maybe_load_pretokenized(cfg.data, cfg.base, console)
+        pretok = _maybe_load_pretokenized(cfg.data, cfg.base, console, tcfg)
         if pretok is not None:
             train_ds, eval_ds = pretok
             _validate_pretokenized_targets(
@@ -859,6 +886,13 @@ class SFTTrainerWrapper(StreamingSetupMixin):
         if cfg.experiment_name:
             output_dir = output_dir / cfg.experiment_name
         output_dir.mkdir(parents=True, exist_ok=True)
+
+        # #674 — QuEST calibration needs the actual tokenized training rows,
+        # so this route is installed here rather than in _setup_transformers.
+        # The schema requires an explicit batch size, therefore the earlier
+        # auto-probe cannot silently size the unconverted model.
+        if tcfg.quantization_aware == "quest":
+            self._setup_quest(train_ds)
 
         # --- Calculate warmup steps from ratio ---
         import math
@@ -963,6 +997,11 @@ class SFTTrainerWrapper(StreamingSetupMixin):
         # TrainingArguments field: the optimizer is built and attached after the
         # trainer exists (attach_loraplus_optimizer), so it must NOT be forwarded
         # here (#724).
+
+        # LoRA-FA — freezes LoRA A matrices and trains B matrices. Not a
+        # TrainingArguments field: the optimizer is built and attached after the
+        # trainer exists (attach_lorafa_optimizer), so it must NOT be forwarded
+        # here (#725).
 
         # GaLore — memory-efficient full-parameter training
         if tcfg.use_galore:
@@ -1193,6 +1232,68 @@ class SFTTrainerWrapper(StreamingSetupMixin):
         from soup_cli.utils.peft_wiring import attach_compile_prefix_callback
 
         attach_compile_prefix_callback(self.trainer, tcfg, self._output_dir, console)
+        if self._quest_metadata is not None:
+            from soup_cli.utils.quest import QuestMetadataCallback
+
+            self.trainer.add_callback(
+                QuestMetadataCallback(self._output_dir, self._quest_metadata)
+            )
+
+    def _setup_quest(self, train_ds: Any) -> None:
+        """Calibrate and install #674's explicit mixed fake-quant route."""
+        from soup_cli.trainer.stream_setup import _distributed_launch
+
+        if self.deepspeed_config or self.fsdp_config or _distributed_launch():
+            raise ValueError(
+                "quantization_aware='quest' first slice is single-GPU only; "
+                "DDP, DeepSpeed and FSDP have not been measured"
+            )
+        from soup_cli.utils.quest import (
+            CALIBRATION_EXAMPLES,
+            calibrate_activation_scales,
+            calibration_rows_sha256,
+            install_mixed_quest,
+            resolve_base_model_identity,
+            validate_cuda_hardware,
+        )
+
+        gpu_name, capability = validate_cuda_hardware()
+        console.print(
+            "[cyan]QuEST calibration:[/] selecting fixed activation clips on "
+            "the first 32 tokenized training rows"
+        )
+        if len(train_ds) < CALIBRATION_EXAMPLES:
+            raise ValueError(
+                f"QuEST calibration requires at least {CALIBRATION_EXAMPLES} "
+                f"training rows; got {len(train_ds)}"
+            )
+        # Snapshot once. A lazy/custom dataset must not be able to return one
+        # set of rows for scale selection and another for the persisted digest.
+        calibration_rows = [
+            train_ds[index] for index in range(CALIBRATION_EXAMPLES)
+        ]
+        calibration_sha256 = calibration_rows_sha256(calibration_rows)
+        scales = calibrate_activation_scales(self.model, calibration_rows)
+        base_identity = resolve_base_model_identity(self.config.base)
+        before = getattr(self, "_quest_base_identity_before", None)
+        if before is not None and before != base_identity:
+            raise ValueError("QuEST local base changed while the model was loading")
+        self._quest_metadata = install_mixed_quest(
+            self.model,
+            activation_scales=scales,
+            base_model=base_identity,
+            calibration_sha256=calibration_sha256,
+        )
+        # Store a second copy in HF config so generic artifact inspection says
+        # what ran even before a Soup-aware loader reads the full sidecar.
+        self.model.config.soup_quest = self._quest_metadata
+        console.print(
+            "[green]QuEST mixed route enabled:[/] 168 W4 weights; 161 A4 + "
+            f"7 A16 activations; group=128 on {gpu_name} "
+            f"(SM {capability[0]}.{capability[1]})\n"
+            "[yellow]Experimental:[/] route provenance is evaluation-only; "
+            "this is not pure W4A4 or packed INT4"
+        )
 
     def _prepare_raft_dataset(self, dataset: dict, cfg, tcfg):
         """v0.71.10 #199 — build pre-tokenised RAFT rows (answer-only mask).
@@ -1432,6 +1533,16 @@ class SFTTrainerWrapper(StreamingSetupMixin):
 
         from soup_cli.utils.moe import detect_moe_model
 
+        if tcfg.quantization_aware == "quest":
+            # Fail before ``device_map='auto'`` can shard the model across
+            # several visible cards; this first engineering slice is explicitly
+            # single-GPU and its dense Hadamard route has not been measured
+            # under DDP, DataParallel, DeepSpeed or FSDP.
+            from soup_cli.utils.quest import resolve_base_model_identity, validate_cuda_hardware
+
+            validate_cuda_hardware()
+            self._quest_base_identity_before = resolve_base_model_identity(cfg.base)
+
         # Liger Kernel — apply fused ops BEFORE model loading
         if tcfg.use_liger:
             from soup_cli.utils.liger import apply_liger_kernel
@@ -1661,7 +1772,7 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             )
 
             target_modules = resolve_lora_target_modules(
-                self.model, tcfg.lora.target_modules
+                self.model, tcfg.lora.target_modules, console
             )
             target_parameters = resolve_lora_target_parameters(
                 self.model, tcfg.lora.target_parameters
@@ -1718,6 +1829,10 @@ class SFTTrainerWrapper(StreamingSetupMixin):
         - ``nvfp4=True``                → NVFP4 quantization (v0.71.21 #141)
         - ``False`` / None              → no-op
         """
+        if tcfg.quantization_aware == "quest":
+            # Installed by _setup_quest after train_ds exists. Doing anything
+            # here would either calibrate against no data or quantize twice.
+            return
         if tcfg.quantization_aware and tcfg.quantization_aware != "fp8":
             from soup_cli.utils.qat import prepare_model_for_qat
 
@@ -1824,7 +1939,7 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             resolve_lora_target_modules,
         )
 
-        target_modules = resolve_lora_target_modules(self.model, tcfg.lora.target_modules)
+        target_modules = resolve_lora_target_modules(self.model, tcfg.lora.target_modules, console)
 
         lora_config = build_lora_config(
             tcfg.lora,
@@ -1946,7 +2061,7 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             resolve_lora_target_modules,
         )
 
-        target_modules = resolve_lora_target_modules(self.model, tcfg.lora.target_modules)
+        target_modules = resolve_lora_target_modules(self.model, tcfg.lora.target_modules, console)
 
         lora_config = build_lora_config(
             tcfg.lora,
@@ -2058,12 +2173,15 @@ class SFTTrainerWrapper(StreamingSetupMixin):
         from soup_cli.utils.peft_wiring import (
             attach_curriculum_callback,
             attach_lisa_callback,
+            attach_lorafa_optimizer,
             attach_loraplus_optimizer,
             attach_plugin_callback,
             attach_relora_callback,
         )
         # LoRA+ optimizer (#724) — build and attach now that the trainer exists.
         attach_loraplus_optimizer(self.trainer, self.config.training)
+        # LoRA-FA optimizer (#725) — build and attach now that the trainer exists.
+        attach_lorafa_optimizer(self.trainer, self.config.training)
         attach_relora_callback(self.trainer, self.config.training)
         # LISA layerwise importance sampling (v0.71.34 #267).
         attach_lisa_callback(self.trainer, self.config.training)
@@ -2084,6 +2202,19 @@ class SFTTrainerWrapper(StreamingSetupMixin):
         from soup_cli.utils.paths import is_under_cwd
 
         tcfg = self.config.training
+        if self._quest_metadata is not None:
+            from soup_cli.utils.quest import validate_resume_metadata, write_metadata
+
+            if resume_from_checkpoint is not None:
+                validate_resume_metadata(
+                    resume_from_checkpoint,
+                    self._quest_metadata,
+                    legacy_base_model=self.config.base,
+                )
+            # Write only after a resumed checkpoint has proved compatible. A
+            # rejected resume must not overwrite the root artifact's previous
+            # route declaration during setup.
+            write_metadata(self._output_dir, self._quest_metadata)
         offload_save_dir: Optional[str] = None
         if tcfg.activation_offloading == "disk":
             candidate = str(Path(self._output_dir) / "_activation_offload")
@@ -2098,6 +2229,7 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             offload_save_dir = candidate
         # v0.72.3 — the shared context releases the streaming weight source even
         # if training raises (see StreamingSetupMixin._training_context).
+        self._attach_streamed_save_guard()
         with self._training_context(
             offload_context(tcfg.activation_offloading, save_dir=offload_save_dir)
         ) as train_ctx:
@@ -2135,6 +2267,11 @@ class SFTTrainerWrapper(StreamingSetupMixin):
 
         # Save final model (LoRA adapter)
         self.trainer.save_model(self._output_dir)
+        if self._quest_metadata is not None:
+            from soup_cli.utils.quest import write_metadata
+
+            write_metadata(self._output_dir, self._quest_metadata)
+        self._assert_streamed_adapter_saved(self._output_dir)
         # #335 — under torch.compile the Trainer saves THROUGH the wrapper, so
         # every key gains `_orig_mod.` and PeftModel.from_pretrained then matches
         # none of them: it warns and leaves lora_B at zero init, i.e. the run
@@ -2178,6 +2315,11 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             "duration_secs": duration,
             "output_dir": self._output_dir,
             "total_steps": self.trainer.state.global_step,
+            **(
+                {"quest_mixed_precision": self._quest_metadata}
+                if self._quest_metadata is not None
+                else {}
+            ),
         }
 
 

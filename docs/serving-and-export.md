@@ -209,6 +209,64 @@ soup bench ./output --prompts-file bench_suite.jsonl
 
 This acts as a built-in "speedometer," outputting Tokens-Per-Second (TPS), Total Latency, and Peak VRAM allocations into a clean status table.
 
+`soup bench <model>` is shorthand for `soup bench infer <model>`; both take the same flags.
+
+### Training benchmark
+
+`soup bench train` runs a short, fixed-length SFT job from your config and writes a JSON report.
+It exists so a throughput number carries evidence that the model was training while it was
+measured (#836):
+
+```bash
+soup bench train --config soup.yaml --steps 20 --warmup 3 -o bench-train.json
+```
+
+The run trains for exactly `--steps` optimizer steps, logs every step, saves nothing, and writes
+into a scratch directory, not the config's `output`. The first `--warmup` steps are measured but
+left out of the timing. It measures `task: sft` on the transformers backend and refuses any other
+task or backend by name.
+
+It exits **1** in two different ways, and only one of them leaves a report:
+
+- **Pre-flight refusals write no report.** A task or backend it does not measure, `--steps` not
+  above `--warmup`, and a model with zero trainable parameters are all refused before training
+  starts. Nothing is written to `-o`; the reason is printed.
+- **Post-run check failures write the report**, with `valid: false` and one entry per failed
+  check in `failures`. A run that did not train is a result, and the file keeps the evidence.
+
+The checks, all run on the finished report (`trainable_parameters` is also the pre-flight
+refusal above, so in ordinary use it fires there and writes nothing):
+
+| check | fails when |
+|---|---|
+| `trainable_parameters` | no `requires_grad` tensor has real storage (`meta` ones are counted apart). Checked before training too, because the Trainer would otherwise die in autograd without naming the cause |
+| `grad_norm` | a counted step logged `grad_norm == 0.0` or a non-finite norm. A backend that logs no norm is `"not reported by this backend"`, never `0.0` |
+| `parameters_changed` | the trainable parameters are bit-identical before the first step and after the last. This check needs no `grad_norm`, so it also covers backends that log none |
+| `step_count` | fewer optimizer steps ran than were requested |
+
+Only post-warm-up steps are checked for `grad_norm`. Under fp16 the GradScaler can skip its first
+steps on overflow and log a non-finite norm; raise `--warmup` past them rather than reading that
+as divergence.
+
+Report fields:
+
+| field | meaning |
+|---|---|
+| `valid`, `failures` | the verdict, and one `{check, message}` per failed check |
+| `checks` | `trainable_parameters` (count), `grad_norm` (state), `parameters_changed` (bool) |
+| `timing` | `median_seconds`, `p95_seconds` (nearest-rank), `counted_steps`, `warmup_steps_discarded`, `total_seconds`, and `step_seconds`: every counted step's time in run order, so a run that changed mode mid-flight shows where |
+| `tokens` | `useful` (supervised: `labels != -100`), `total`, and `utilisation` (`useful / total`), counted from the batches `training_step` received |
+| `throughput` | `useful_tokens_per_second` and `total_tokens_per_second` |
+| `memory` | `max_memory_allocated_bytes` and `max_memory_reserved_bytes`, kept separate and read after `reset_peak_memory_stats`. Both are `null` off CUDA. Never read from `nvidia-smi` |
+| `provenance` | device, card, CUDA runtime, compute capability, driver version, SM clock during the counted steps (`sm_clock_mhz_busy`: `min`, `median`, `max` and `sample_count` of `nvidia-smi` samples kept only from the post-warm-up steps. Queries start on a 100 ms schedule, and a slower query skips ticks. Each is timestamped at the midpoint of its query, taken for torch's own device by PCI bus id (nvidia-smi's first GPU when torch does not report one); memory is never read this way. With no sample in the window the numbers are `null`, and `unavailable_reason` says why: `"not a CUDA run"`, `"no nvidia-smi tool found"`, `"nvidia-smi returned no readable SM clock"`, or `"no sample fell inside the counted steps"` (a run too short for the schedule). It is `null` whenever there are numbers), platform, Python, package versions (torch, transformers, peft, trl, bitsandbytes, accelerate), dtype, optimizer, seed, data seed |
+| `config_hash`, `resolved_config` | sha256 of the fully resolved config, and the config itself, so a schema-default change that moves a run shows up (#716) |
+| `steps_requested`, `steps_measured` | what was asked for and what ran |
+
+A step's time runs from the previous step's end to its own end, so data loading counts. The first
+step runs from its own start. On CUDA each boundary is read after `torch.cuda.synchronize()`.
+`parameters_changed` proves that something moved, not that the model learned anything useful. It
+is a floor, not a quality gate.
+
 
 ## Inference Server
 
@@ -591,6 +649,11 @@ soup ui
 - **Chat Upgrade** — SSE streaming via proxy, typing indicator, cancel button, markdown renderer (bold, italic, code blocks), chat export as JSON
 - **Config Builder** — recipe dropdown (173 recipes), config schema API for dynamic form generation
 
+Gradient norm is nullable: backends or steps that do not report it store and
+stream `null`, and the Web UI chart leaves a gap instead of drawing a false
+zero. An actually logged `0.0` remains a measured value and appears in the
+terminal panel.
+
 **Security:** The Web UI generates a random auth token at startup (printed to console). Every private endpoint — mutating (start/stop training, delete runs, inspect data, validate config) and reading (runs, metrics, system, recipes, SSE streams) — requires an `Authorization: Bearer <token>` header. `/` and `/api/health` stay open so the dashboard can load. CORS is restricted to the served origin. Data inspection is sandboxed to the working directory.
 
 YAML-entry request bodies are capped at 1 MiB on `/api/config/validate`,
@@ -819,5 +882,12 @@ Three POST routes are now available on `soup serve`:
 
 Tool routes, `/v1/thumbs` and adapter activate/deactivate accept requests only when the
 `Host` header names the bound address (any loopback name for a loopback bind) and any
-`Origin` header names the same; otherwise they answer 421 or 403. Inference routes are not
-restricted, so a reverse proxy can still front them.
+`Origin` header names the same; otherwise they answer 421 or 403.
+
+The generation routes (`/v1/chat/completions`, `/v1/messages`) and the adapter listing
+(`GET /v1/adapters`) carry the narrower half of that check: a request whose `Origin` names
+another site is refused with 403, so a page the operator merely visits cannot drive
+generation on their server or enumerate the loaded adapters — CORS alone would only stop
+that page *reading* the reply, not sending the request. Requests that carry no `Origin` at
+all — curl, the OpenAI/Anthropic SDKs, a reverse proxy — are unaffected, and `Host` is not
+checked on these routes, so a proxy can still front them under its own hostname.
