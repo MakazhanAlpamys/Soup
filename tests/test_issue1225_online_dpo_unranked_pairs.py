@@ -657,18 +657,50 @@ class TestAnUnrankedStretch:
         """Documented behaviour: a step in which nothing was ranked adds no
         gradient, but the optimizer still steps, so AdamW momentum and weight
         decay move the weights and the learning-rate schedule advances."""
+        from transformers import TrainerCallback
+
+        class _Weights(TrainerCallback):
+            """The trainable weights before training and after every step."""
+
+            def __init__(self, params):
+                self.params = params
+                self.snapshots = []
+
+            def _take(self):
+                self.snapshots.append([p.detach().clone() for p in self.params])
+
+            def on_train_begin(self, args, state, control, **kwargs):
+                self._take()
+
+            def on_step_end(self, args, state, control, **kwargs):
+                self._take()
+
         wrapper = _build(
             tmp_path, monkeypatch, _Ranked(), batch_size=2, n_prompts=12,
             extra="  gradient_accumulation_steps: 1\n  logging_steps: 1\n",
         )
         trainer = wrapper.trainer
         trainer.judge = _sequence_judge(self._ANSWERS)
+        weights = _Weights([p for p in trainer.model.parameters() if p.requires_grad])
+        trainer.add_callback(weights)
         wrapper.train()
 
         steps = _step_logs(trainer)
         unranked = [entry for entry in steps if entry["judge/invalid_rate"] == 1.0]
+        # the gradient that reaches the optimizer is exactly zero
         assert [entry["grad_norm"] for entry in unranked] == [0.0, 0.0, 0.0, 0.0]
         assert all(entry["grad_norm"] > 0 for entry in steps if entry not in unranked)
+        # and the optimizer still steps: every step moved the weights
+        moved = [
+            max(float((after - before).abs().max()) for before, after in zip(prev, curr))
+            for prev, curr in zip(weights.snapshots, weights.snapshots[1:])
+        ]
+        assert len(moved) == 6
+        assert all(change > 0 for change in moved), moved
+        # steps 5-6 follow two ranked steps, so Adam momentum moves the weights
+        # far more than weight decay alone did on steps 1-2
+        assert min(moved[4], moved[5]) > 10 * max(moved[0], moved[1]), moved
+        # the schedule advanced through the unranked steps too
         assert trainer.state.global_step == 6
         assert len({entry["learning_rate"] for entry in steps}) == 6
 
@@ -861,8 +893,14 @@ class TestJudgeLabel:
             # soup.yaml is shareable: control bytes must not reach the terminal
             ("ollama://llama3.1/\x1b]0;owned\x07", "ollama://llama3.1/]0;owned"),
             ("ollama://llama3.1\nERROR forged line\x7f", "ollama://llama3.1 ERROR forged line"),
+            # an unbalanced ']' made urlparse raise
+            ("ollama://m\x1b]0;x\x07", "ollama://m]0;x"),
+            ("http://localhost:8000/judge@v2", "http://localhost:8000/judge@v2"),
         ],
-        ids=["ollama", "local-server", "userinfo", "unset", "esc-bel", "newline-del"],
+        ids=[
+            "ollama", "local-server", "userinfo", "unset", "esc-bel", "newline-del",
+            "unbalanced-bracket", "at-in-path",
+        ],
     )
     def test_the_label_names_the_judge_without_its_credentials(self, url, expected):
         from soup_cli.trainer.online_dpo_ranking import judge_label

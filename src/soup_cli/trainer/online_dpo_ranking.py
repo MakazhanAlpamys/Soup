@@ -29,13 +29,17 @@ Import-light: torch is imported inside the functions that need it.
 """
 
 import logging
+import re
 from functools import lru_cache
 from typing import Optional
-from urllib.parse import urlparse
 
 from soup_cli.utils.terminal import strip_control
 
 logger = logging.getLogger(__name__)
+
+# The ``user:password@`` part of a URL: everything between ``//`` and an ``@``
+# with no ``/`` in between (an ``@`` in the path is not userinfo).
+_USERINFO_RE = re.compile(r"(//)[^/@]*@")
 
 # Training stops once this many pairs in a row, counted over consecutive steps
 # in which the judge ranked nothing, could not be ranked. Counted in pairs
@@ -109,10 +113,8 @@ def judge_label(url: Optional[str]) -> str:
     url = " ".join(strip_control(url or "").split())
     if not url:
         return "the configured judge"
-    netloc = urlparse(url).netloc
-    if "@" in netloc:
-        return url.replace(netloc, "***@" + netloc.rsplit("@", 1)[1], 1)
-    return url
+    # a pattern rather than urlparse, which raises on a malformed netloc
+    return _USERINFO_RE.sub(r"\1***@", url, count=1)
 
 
 def _rank_equals(rank, value: int) -> bool:

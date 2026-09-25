@@ -112,8 +112,9 @@ class _SoupTrainerCallback_body:  # noqa: N801
         # tracker to synthetic zeroes (#541).
         #: None until a loss is logged, not 0.0: a training log can arrive
         #: without one (an Online DPO window in which the judge ranked no pair,
-        #: #1225), and a stored 0.0 would read as the run's lowest loss to
-        #: `soup runs clean` and `soup why`.
+        #: #1225). A stored 0.0 would be the run's lowest loss to `soup runs
+        #: clean` and `soup runs replay`, and would switch off `soup why`'s
+        #: plateau and divergence checks.
         self._last_loss: Optional[float] = None
         self._last_lr = 0.0
         # A missing norm is not a measured zero. Keep the last measured value
