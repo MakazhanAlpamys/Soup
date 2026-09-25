@@ -394,6 +394,8 @@ class DataConfig(BaseModel):
         "raft",
         # v0.71.32 — ASR (Whisper): rows are {"audio": path, "text": transcript}
         "asr",
+        # Issue #1219 — Cross-encoder paired sequence classification
+        "cross_encoder",
     ] = Field(
         default="auto",
         description="Data format",

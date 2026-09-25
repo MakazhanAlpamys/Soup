@@ -34,6 +34,8 @@ FORMAT_SIGNATURES = {
     "audio": {"audio", "messages"},
     # v0.71.32 — ASR (Whisper): audio path + reference transcript.
     "asr": {"audio", "text"},
+    # Issue #1219 — Cross-encoder paired text classification.
+    "cross_encoder": {"text_a", "text_b"},
     "plaintext": {"text"},
     "tool-calling": {"messages", "tools", "tool_calls"},
 }
@@ -56,11 +58,13 @@ def detect_format(data: list[dict]) -> str:
     # would otherwise win and silently drop the audio path. plaintext last.
     check_order = [
         "alpaca", "llava", "sharegpt4v", "kto", "dpo", "embedding",
-        "tool-calling", "audio", "asr", "sharegpt", "chatml", "plaintext",
+        "tool-calling", "audio", "asr", "sharegpt", "chatml", "cross_encoder", "plaintext",
     ]
     for fmt in check_order:
         required_keys = FORMAT_SIGNATURES[fmt]
         if required_keys.issubset(keys):
+            return fmt
+        if fmt == "cross_encoder" and {"question", "answer"}.issubset(keys):
             return fmt
 
     raise ValueError(
@@ -73,6 +77,7 @@ def detect_format(data: list[dict]) -> str:
         f"embedding (anchor, positive), "
         f"audio (audio, messages), "
         f"tool-calling (messages, tools, tool_calls), "
+        f"cross_encoder (text_a, text_b or question, answer), "
         f"plaintext (text)"
     )
 
@@ -88,6 +93,8 @@ VALID_FORMATS = (
     "raft",
     # v0.71.32 — ASR (Whisper): {"audio": path, "text": transcript}.
     "asr",
+    # Issue #1219 — Cross-encoder paired text classification.
+    "cross_encoder",
 )
 
 # A malformed row makes a converter raise one of these; the drop contract is
@@ -136,6 +143,8 @@ def _dispatch_conversion(row: dict, fmt: str) -> dict:
         return _convert_raft(row)
     elif fmt == "asr":
         return _convert_asr(row)
+    elif fmt == "cross_encoder":
+        return _convert_cross_encoder(row)
     else:
         return _convert_vision(row)
 
@@ -350,6 +359,39 @@ def _convert_asr(row: dict) -> dict:
 
     audio, text = _validate_asr_row(row)
     return {"audio": audio, "text": text}
+
+
+def _convert_cross_encoder(row: dict) -> dict:
+    """Convert cross-encoder paired row (Issue #1219).
+
+    Input:  {"text_a": ..., "text_b": ..., "label": ...}
+        or: {"question": ..., "answer": ..., "label": ...}
+    Output: dict with the pair fields and optional label preserved.
+    """
+    if "text_a" in row and "text_b" in row:
+        a, b = row["text_a"], row["text_b"]
+        if not isinstance(a, str) or not isinstance(b, str):
+            raise TypeError(
+                "cross_encoder rows require 'text_a' and 'text_b' to be str; "
+                f"got text_a={type(a).__name__}, text_b={type(b).__name__}"
+            )
+        res = {"text_a": a, "text_b": b}
+    elif "question" in row and "answer" in row:
+        q, ans = row["question"], row["answer"]
+        if not isinstance(q, str) or not isinstance(ans, str):
+            raise TypeError(
+                "cross_encoder rows require 'question' and 'answer' to be str; "
+                f"got question={type(q).__name__}, answer={type(ans).__name__}"
+            )
+        res = {"question": q, "answer": ans}
+    else:
+        raise ValueError(
+            "cross_encoder row requires 'text_a' + 'text_b' (or 'question' + "
+            f"'answer'). Row keys: {sorted(row)!r}"
+        )
+    if "label" in row:
+        res["label"] = row["label"]
+    return res
 
 
 def _convert_vision(row: dict) -> dict:

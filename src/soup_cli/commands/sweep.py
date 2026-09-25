@@ -435,7 +435,7 @@ def _run_single(base_cfg, params: dict, run_name: str, config_path: Path) -> dic
     _reject_unknown_sweep_params(config_dict)
 
     from soup_cli.config.schema import SoupConfig
-    from soup_cli.data.loader import load_dataset
+    from soup_cli.data.loader import load_dataset, task_preserves_source_columns
     from soup_cli.experiment.tracker import ExperimentTracker
     from soup_cli.monitoring.display import TrainingDisplay
     from soup_cli.trainer.sft import SFTTrainerWrapper
@@ -450,7 +450,7 @@ def _run_single(base_cfg, params: dict, run_name: str, config_path: Path) -> dic
     # Load data
     dataset = load_dataset(
         cfg.data,
-        preserve_source_columns=cfg.task == "grpo",
+        preserve_source_columns=task_preserves_source_columns(cfg.task),
     )
     console.print(f"[dim]Loaded {len(dataset['train'])} train samples[/]")
 
