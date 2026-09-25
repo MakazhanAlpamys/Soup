@@ -2,7 +2,7 @@
 
 [← Back to the Soup README](../README.md)
 
-> QAT, experimental QuEST, FP8, the Quant Menu (I + II), KV-cache, NVFP4, save formats, Cut Cross-Entropy, gradient checkpointing, kernel auto-composition, activation offloading, and multi-GPU / DeepSpeed / FSDP.
+> Quantization-aware training (FP8 and the experimental QuEST route), the Quant Menu (I + II), KV-cache, NVFP4, save formats, Cut Cross-Entropy, gradient checkpointing, kernel auto-composition, activation offloading, and multi-GPU / DeepSpeed / FSDP.
 
 **Contents:**
 
@@ -34,38 +34,39 @@
 
 ## Quantization-Aware Training (QAT)
 
-Train with simulated quantization for significantly better post-quantization quality compared to standard QLoRA:
+`training.quantization_aware` selects one of two quantization-aware training
+routes, each described in its own section:
 
-```bash
-# Install QAT support
-pip install "soup-cli[qat]"
-```
+- `quantization_aware: fp8`: [FP8 training](#fp8-training-ada) on Ada or newer GPUs.
+- `quantization_aware: quest`: the [experimental QuEST mixed W4/A4+A16 route](#experimental-quest-mixed-w4a4a16-route).
 
-```yaml
-base: meta-llama/Llama-3.1-8B-Instruct
-task: sft
+**`quantization_aware: true` (int8 QAT) is refused at config load, on every
+task and backend ([#1222](https://github.com/MakazhanAlpamys/Soup/issues/1222)).**
+It never ran quantization-aware training:
 
-data:
-  train: ./data/train.jsonl
-  format: alpaca
+- Where it was applied (the transformers model setup of the SFT, DPO, KTO,
+  ORPO, IPO, BCO, SimPO, GRPO, PPO and pretraining trainers, which
+  `task: tts` and `task: preference` also run), it ran torchao's
+  post-training int8 weight-only quantization over every Linear layer after
+  LoRA, the adapter's own layers included, and froze them all. A LoRA run had
+  zero trainable parameters, and every run tried (SFT, SFT with gradient
+  checkpointing, full fine-tuning, DPO) exited with an error.
+- Elsewhere it was not applied at all. `backend: mlx` ignored it with a warning
+  and trained without it. `backend: unsloth` never applied it: `soup train`
+  refused the combination, and `soup sweep` and `soup bench train` trained
+  without it. The other tasks' trainers never read it, and neither did layer
+  streaming or SFT's audio path, so those runs trained without it too.
 
-training:
-  epochs: 3
-  lr: 2e-5
-  quantization: 4bit
-  quantization_aware: true  # Enable QAT
-  lora:
-    r: 64
-    alpha: 16
+A config that sets it now stops at load, whichever group it was in, with a
+message naming `training.quantization_aware`; remove the key or set it to
+`false`. The `fp8` and `quest` routes are unaffected, because they use their
+own code paths. Real int8 QAT (fake quantization during training, plus an
+export that quantizes the base the same way) is a separate feature and is not
+available yet.
 
-output: ./output
-```
-
-**When to use QAT vs post-training quantization:**
-- **QAT** (`quantization_aware: true`): Better quality when you plan to deploy with aggressive quantization (int8/int4). ~5-10% slower training, but the model learns to compensate for quantization noise.
-- **Post-training quantization** (default): Faster training, good enough for most use cases. Quantize after training with `soup export --quant q4_k_m`.
-
-QAT works with all training tasks (SFT, DPO, GRPO, PPO, KTO, ORPO, SimPO, IPO, Pretrain) and vision modality. Not compatible with the unsloth backend. After QAT training, export to GGUF normally with `soup export`.
+To ship a smaller model today, use post-training quantization, the default:
+train normally, then quantize at export, for example with
+`soup export --quant q4_k_m`.
 
 
 ## Experimental QuEST mixed W4/A4+A16 route
@@ -201,7 +202,7 @@ training:
 
 Omitting `fp8_recipe` defaults to `tensorwise` (identical to v0.28.0 behavior).
 
-Bool `true` stays on the int8 QAT path for backward compatibility. FP8 requires CUDA + an Ada or newer GPU (compute capability ≥ 8.9) and is rejected at config load on the mlx backend. (`soup train` refuses it on the unsloth backend: "QAT is not compatible with the unsloth backend".) `soup train --dry-run` reports this machine's card as a note and exits 0, since FP8 configs are often written for another machine; a missing torchao still fails it. The `rowwise` and `rowwise_with_gw_hp` recipes run a separate torch kernel with its own limits: it needs a torch that dispatches it on the card (Ada 8.9: torch ≥ 2.7; Hopper 9.x and Blackwell datacenter 10.x: any supported torch; RTX 50-series 12.x: torch ≥ 2.8; 11.x: torch ≥ 2.10; no release through 2.14 runs it on 13.x), it is **never built on Windows**, and before torch 2.11 it is only built against CUDA 12 or newer. `tensorwise` has none of these limits. When FP8 is requested and this card, OS or torch build cannot run it, **the run stops at setup** with the reason (`FP8HardwareUnsupportedError`), before any layer is converted, on every trainer that reaches the converter; it never trains on without FP8. **A missing torchao stops the run the same way** (`FP8DependencyMissingError`, naming `pip install "soup-cli[qat]"`), on a card that could run FP8 too. Until this release the trainers printed a yellow advisory and trained in bf16 under a config that said FP8 (#835). `soup train` asks both questions, card first, before it loads the model, so it stops with the same reason and no download. (SFT's audio and layer-streaming setup branches do not call the converter at all, so they still accept the flag without applying it; tracked in #1124.) `fp8_attention` asks the same gate (#835). Wired across every transformer-backend trainer (SFT, DPO, GRPO, KTO, ORPO, SimPO, IPO, PPO, Reward-Model, Embedding, Pretrain).
+Bool `true` is not a spelling of FP8: it selected the int8 path, which is refused at config load ([#1222](https://github.com/MakazhanAlpamys/Soup/issues/1222)). FP8 requires CUDA + an Ada or newer GPU (compute capability ≥ 8.9) and is rejected at config load on the mlx backend. (`soup train` refuses it on the unsloth backend: "QAT is not compatible with the unsloth backend".) `soup train --dry-run` reports this machine's card as a note and exits 0, since FP8 configs are often written for another machine; a missing torchao still fails it. The `rowwise` and `rowwise_with_gw_hp` recipes run a separate torch kernel with its own limits: it needs a torch that dispatches it on the card (Ada 8.9: torch ≥ 2.7; Hopper 9.x and Blackwell datacenter 10.x: any supported torch; RTX 50-series 12.x: torch ≥ 2.8; 11.x: torch ≥ 2.10; no release through 2.14 runs it on 13.x), it is **never built on Windows**, and before torch 2.11 it is only built against CUDA 12 or newer. `tensorwise` has none of these limits. When FP8 is requested and this card, OS or torch build cannot run it, **the run stops at setup** with the reason (`FP8HardwareUnsupportedError`), before any layer is converted, on every trainer that reaches the converter; it never trains on without FP8. **A missing torchao stops the run the same way** (`FP8DependencyMissingError`, naming `pip install "soup-cli[qat]"`), on a card that could run FP8 too. Until this release the trainers printed a yellow advisory and trained in bf16 under a config that said FP8 (#835). `soup train` asks both questions, card first, before it loads the model, so it stops with the same reason and no download. (SFT's audio and layer-streaming setup branches do not call the converter at all, so they still accept the flag without applying it; tracked in #1124.) `fp8_attention` asks the same gate (#835). Wired across every transformer-backend trainer (SFT, DPO, GRPO, KTO, ORPO, SimPO, IPO, PPO, Reward-Model, Embedding, Pretrain).
 
 
 ## Cut Cross-Entropy (Large-Vocab Models)
@@ -314,8 +315,10 @@ the model. This avoids both FSDP failure modes: integer storage and mixed
 adapter/storage dtypes.
 
 **Pre-quantized + QAT.** `gptq` / `awq` / `hqq:*` / `aqlm` / `eetq` / `mxfp4` /
-`fp8` all carry their own scale; combining with `quantization_aware` (int8 QAT,
-`'fp8'`, or the experimental `'quest'` route) is rejected at config-load.
+`fp8` all carry their own scale; combining with `quantization_aware` (`'fp8'`
+or the experimental `'quest'` route) is rejected at config-load. `true` is
+refused on its own, whatever the format
+([#1222](https://github.com/MakazhanAlpamys/Soup/issues/1222)).
 
 **Multi-trainer support.** Quant Menu is wired across all 12 transformer-backend
 trainers (SFT / DPO / GRPO / KTO / ORPO / SimPO / IPO / PPO / RewardModel /

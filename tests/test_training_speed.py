@@ -590,13 +590,14 @@ class TestFP8Config:
         cfg = SoupConfig(base="test/model", data={"train": "./data.jsonl"})
         assert cfg.training.quantization_aware is False
 
-    def test_quantization_aware_bool_true(self):
-        cfg = SoupConfig(
-            base="test/model",
-            data={"train": "./data.jsonl"},
-            training={"quantization_aware": True},
-        )
-        assert cfg.training.quantization_aware is True
+    def test_quantization_aware_bool_true_is_refused(self):
+        """The bool form (int8 QAT) is refused at load since #1222."""
+        with pytest.raises(ValidationError, match="#1222"):
+            SoupConfig(
+                base="test/model",
+                data={"train": "./data.jsonl"},
+                training={"quantization_aware": True},
+            )
 
     def test_quantization_aware_fp8(self):
         cfg = SoupConfig(
@@ -1294,15 +1295,15 @@ class TestV028SFTOnlyValidator:
         )
         assert cfg.task == "dpo"
 
-    def test_quantization_aware_bool_true_allowed_on_dpo(self):
-        """Int8 QAT (bool True) still works on non-SFT — only fp8 is restricted."""
-        cfg = SoupConfig(
-            base="m",
-            task="dpo",
-            data={"train": "./d.jsonl", "format": "dpo"},
-            training={"quantization_aware": True},
-        )
-        assert cfg.training.quantization_aware is True
+    def test_quantization_aware_bool_true_refused_on_dpo(self):
+        """Int8 QAT (bool True) is refused on non-SFT tasks too (#1222)."""
+        with pytest.raises(ValidationError, match="#1222"):
+            SoupConfig(
+                base="m",
+                task="dpo",
+                data={"train": "./d.jsonl", "format": "dpo"},
+                training={"quantization_aware": True},
+            )
 
     def test_gradient_checkpointing_tier_allowed_on_dpo(self):
         """Tier strings fall back to truthy (bool True) in non-SFT wrappers — no crash."""
