@@ -6,6 +6,8 @@ import json
 from dataclasses import dataclass, field
 from typing import Optional
 
+from soup_cli.eval.newest_row import newest_score_per_benchmark
+
 
 @dataclass
 class LeaderboardEntry:
@@ -90,13 +92,9 @@ def compare_runs(
     results_1 = tracker.get_eval_results(run_id=run_id_1)
     results_2 = tracker.get_eval_results(run_id=run_id_2)
 
-    scores_1: dict[str, float] = {}
-    for row in results_1:
-        scores_1[row["benchmark"]] = row["score"]
-
-    scores_2: dict[str, float] = {}
-    for row in results_2:
-        scores_2[row["benchmark"]] = row["score"]
+    # Newest score per benchmark (created_at, then id) — not the oldest overwrite.
+    scores_1 = newest_score_per_benchmark(results_1)
+    scores_2 = newest_score_per_benchmark(results_2)
 
     all_benchmarks = sorted(set(scores_1.keys()) | set(scores_2.keys()))
 

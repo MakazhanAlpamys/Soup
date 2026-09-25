@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from soup_cli.eval.newest_row import newest_score_per_benchmark
+
 
 @dataclass(frozen=True)
 class ConfigChange:
@@ -56,9 +58,13 @@ def config_diff(left: dict, right: dict) -> list[ConfigChange]:
 def eval_delta(
     left: list[dict], right: list[dict],
 ) -> list[dict]:
-    """Compute per-benchmark delta given two eval_results lists."""
-    left_map = {row.get("benchmark"): row.get("score") for row in left}
-    right_map = {row.get("benchmark"): row.get("score") for row in right}
+    """Compute per-benchmark delta given two eval_results lists.
+
+    When a side has multiple rows for one benchmark, the newest score wins
+    (``created_at``, then ``id``) — same rule as the eval gate (#1270).
+    """
+    left_map = newest_score_per_benchmark(left)
+    right_map = newest_score_per_benchmark(right)
 
     deltas: list[dict] = []
     for bench in sorted(set(left_map) | set(right_map)):
