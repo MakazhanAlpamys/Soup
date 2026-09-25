@@ -41,30 +41,48 @@ def converts(monkeypatch):
     """Stub torchao.float8; returns the list of recorded conversions."""
     calls: list[str] = []
 
-    float8 = ModuleType("torchao.float8")
-
     def _convert(model, config=None, module_filter_fn=None):
         calls.append(config)
 
-    float8.convert_to_float8_training = _convert
+    package_names = {
+        "torchao",
+        "torchao.float8",
+        "torchao.prototype",
+        "torchao.prototype.safetensors",
+    }
+    module_names = package_names | {
+        "torchao.float8.config",
+        "torchao.prototype.safetensors.safetensors_support",
+    }
+    modules = {name: ModuleType(name) for name in module_names}
+    for name, module in modules.items():
+        is_package = name in package_names
+        if is_package:
+            module.__path__ = []
+        module.__spec__ = importlib.machinery.ModuleSpec(name, None, is_package=is_package)
 
-    config_mod = ModuleType("torchao.float8.config")
+    float8 = modules["torchao.float8"]
+    float8.convert_to_float8_training = _convert
+    float8.config = modules["torchao.float8.config"]
 
     class Float8LinearConfig:
         @staticmethod
         def from_recipe_name(name):
             return name
 
-    config_mod.Float8LinearConfig = Float8LinearConfig
+    float8.config.Float8LinearConfig = Float8LinearConfig
 
-    torchao = ModuleType("torchao")
-    # A spec, because setup code asks importlib.util.find_spec("torchao"), which
-    # raises on a module whose __spec__ is None.
-    for module in (torchao, float8, config_mod):
-        module.__spec__ = importlib.machinery.ModuleSpec(module.__name__, None)
-    monkeypatch.setitem(sys.modules, "torchao", torchao)
-    monkeypatch.setitem(sys.modules, "torchao.float8", float8)
-    monkeypatch.setitem(sys.modules, "torchao.float8.config", config_mod)
+    prototype = modules["torchao.prototype"]
+    safetensors = modules["torchao.prototype.safetensors"]
+    safetensors_support = modules["torchao.prototype.safetensors.safetensors_support"]
+    safetensors_support.flatten_tensor_state_dict = lambda *args, **kwargs: None
+    safetensors.safetensors_support = safetensors_support
+    prototype.safetensors = safetensors
+    modules["torchao"].prototype = prototype
+    modules["torchao"].float8 = float8
+
+    for name, module in modules.items():
+        monkeypatch.setitem(sys.modules, name, module)
     return calls
 
 
@@ -332,6 +350,8 @@ class TestQuantizationAwareFp8:
 
         _card(monkeypatch, (9, 0))
         monkeypatch.setattr("soup_cli.utils.fp8.is_fp8_available", lambda: True)
+        for name in [n for n in sys.modules if n == "torchao" or n.startswith("torchao.")]:
+            monkeypatch.delitem(sys.modules, name, raising=False)
         monkeypatch.setitem(sys.modules, "torchao", None)
         with pytest.raises(FP8DependencyMissingError):
             apply_fp8_training(_Attn())
@@ -865,6 +885,8 @@ class TestTheTorchaoProbeItself:
     def test_no_torchao_at_all_is_not_available(self, monkeypatch):
         from soup_cli.utils.fp8 import is_torchao_float8_available
 
+        for name in [n for n in sys.modules if n == "torchao" or n.startswith("torchao.")]:
+            monkeypatch.delitem(sys.modules, name, raising=False)
         monkeypatch.setitem(sys.modules, "torchao", None)
 
         assert is_torchao_float8_available() is False
