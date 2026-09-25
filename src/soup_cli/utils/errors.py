@@ -1,5 +1,6 @@
 """Friendly error handling — maps raw exceptions to actionable messages."""
 
+import re
 import traceback
 
 from rich.console import Console
@@ -227,18 +228,61 @@ ERROR_MAP = [
     ),
 
 
-    # Auth errors
-    (
-        "401",
-        "Authentication failed.",
-        "Check your API key or token (HF_TOKEN, OPENAI_API_KEY, WANDB_API_KEY).",
-    ),
-    (
-        "403",
-        "Access denied.",
-        "Check your permissions. Some models require accepting a license on HuggingFace.",
-    ),
+    # Auth errors — matched by HTTP status, never by bare "401"/"403" digits
+    # in the message (a row number, tensor size or checkpoint dir would match).
+    # See `_http_status_from_exception` / `_HTTP_STATUS_TEXT_RE` below.
 ]
+
+# HTTP-ish phrasing that safely indicates a real 401/403 status in the
+# message text. Bare digits ("train row 401", "checkpoint-4010") must not
+# match, and neither must a word-boundary-only `\b401\b` (see #1267).
+_HTTP_STATUS_TEXT_RE = re.compile(
+    r"(?:client error|http error|http status|error code|http)\D{0,20}\b(401|403)\b"
+    r"|\b(401|403)\b\D{0,20}(?:unauthorized|forbidden|client error)",
+    re.IGNORECASE,
+)
+
+_AUTH_401 = (
+    "Authentication failed.",
+    "Check your API key or token (HF_TOKEN, OPENAI_API_KEY, WANDB_API_KEY).",
+)
+_DENIED_403 = (
+    "Access denied.",
+    "Check your permissions. Some models require accepting a license on HuggingFace.",
+)
+
+
+def _http_status_from_exception(exc: BaseException) -> int | None:
+    """Best-effort extraction of an HTTP status code from an exception.
+
+    Walks the exception and its `__cause__`/`__context__` chain (peft and
+    transformers wrap hub errors), reading the status from the response
+    object (requests/httpx/huggingface_hub), `e.code` (urllib) or a direct
+    `status_code` attribute.
+    """
+    seen = set()
+    cur = exc
+    while cur is not None and id(cur) not in seen:
+        seen.add(id(cur))
+        response = getattr(cur, "response", None)
+        for source in (response, cur):
+            for attr in ("status_code", "code"):
+                value = getattr(source, attr, None)
+                if isinstance(value, int) and not isinstance(value, bool):
+                    return value
+        cur = cur.__cause__ or cur.__context__
+    return None
+
+
+def _auth_status(exc: Exception) -> int | None:
+    """Return 401/403 if the exception (object or HTTP phrasing) is one."""
+    status = _http_status_from_exception(exc)
+    if status in (401, 403):
+        return status
+    match = _HTTP_STATUS_TEXT_RE.search(str(exc))
+    if match:
+        return int(match.group(1) or match.group(2))
+    return None
 
 
 def format_friendly_error(exc: Exception, verbose: bool = False) -> None:
@@ -249,6 +293,25 @@ def format_friendly_error(exc: Exception, verbose: bool = False) -> None:
     """
     exc_str = str(exc)
     exc_type = type(exc).__name__
+
+    # Genuine HTTP 401/403 decided from the exception object (status code)
+    # or explicit HTTP phrasing — before the generic HTTPError entry so a
+    # real auth failure gets the specific hint. #1267
+    auth_status = _auth_status(exc)
+    if auth_status is not None:
+        short_msg, fix = _AUTH_401 if auth_status == 401 else _DENIED_403
+        console.print(f"\n[bold red]Error:[/] {for_terminal(short_msg)}")
+        console.print(f"[green]Fix:[/] {fix}")
+        if verbose:
+            console.print()
+            console.print(
+                Panel(
+                    for_terminal(traceback.format_exc()),
+                    title="[dim]Full Traceback[/]",
+                    border_style="dim",
+                )
+            )
+        return
 
     # Search for known error patterns
     for pattern, short_msg, fix in ERROR_MAP:

@@ -296,3 +296,86 @@ def test_exception_text_is_not_parsed_as_markup(exc, verbose):
     assert "soup-cli[audio]" in output
     assert "\x1b" not in output
     assert "\x07" not in output
+
+
+# --- #1267: 401/403 must be decided from the exception object or HTTP
+# phrasing, never from bare digits in the message ---
+
+def _run_format(exc):
+    buf = StringIO()
+    test_console = Console(file=buf, stderr=False)
+    with patch("soup_cli.utils.errors.console", test_console):
+        format_friendly_error(exc, verbose=False)
+    return buf.getvalue()
+
+
+def test_403_status_code_from_response_object():
+    """A wrapped HTTP error carrying a 403 response gets the permission hint."""
+
+    class FakeResponse:
+        status_code = 403
+
+    class FakeHTTPError(Exception):
+        response = FakeResponse()
+
+    output = _run_format(FakeHTTPError("404 Client Error for url: x"))
+    assert "Access denied" in output
+
+
+def test_401_via_cause_chain():
+    """peft/transformers wrap hub errors; the cause's response counts."""
+
+    class FakeResponse:
+        status_code = 401
+
+    class FakeHTTPError(Exception):
+        response = FakeResponse()
+
+    try:
+        try:
+            raise FakeHTTPError("boom")
+        except FakeHTTPError as inner:
+            raise RuntimeError("wrapped") from inner
+    except RuntimeError as wrapped:
+        output = _run_format(wrapped)
+    assert "Authentication failed" in output
+
+
+def test_http_401_text_phrasings_still_match():
+    """Genuine HTTP phrasings keep their hints."""
+    for msg in (
+        "Client error '401 Unauthorized' for url 'https://x'",
+        "401 Client Error: Unauthorized for url: https://x",
+        "HTTP Error 401: Unauthorized",
+        "Error code: 401",
+    ):
+        assert "Authentication failed" in _run_format(Exception(msg)), msg
+    for msg in (
+        "Client error '403 Forbidden' for url 'https://x'",
+        "403 Client Error: Forbidden",
+        "HTTP Error 403: Forbidden",
+    ):
+        assert "Access denied" in _run_format(Exception(msg)), msg
+
+
+@pytest.mark.parametrize(
+    "msg",
+    [
+        "The size of tensor a (4013) must match the size of tensor b (4096)",
+        "mat1 and mat2 shapes cannot be multiplied (2x4030 and 4096x8)",
+        "index 40132 is out of bounds for dimension 0 with size 32000",
+        "train row 401: no causal-loss target remains after tokenization",
+        "train row 403: no causal-loss target remains after tokenization",
+        "no causal-loss target remains ... at data.max_length=4030",
+        "Can't find 'adapter_config.json' at 'adapters/code-20260403'",
+        "Can't find 'adapter_config.json' at 'output/checkpoint-4010'",
+        "[Errno 13] Permission denied: '...\\runs\\20260401'",
+        "404 Client Error. Revision Not Found (revision 9c1f4012 in the URL)",
+        "404 Client Error. Entry Not Found (Request ID: Root=1-68d4b2c1-4a4039d2)",
+    ],
+)
+def test_bare_digits_no_longer_reported_as_auth(msg):
+    """Digits 401/403 inside numbers, rows, paths and hashes are not auth."""
+    output = _run_format(Exception(msg))
+    assert "Authentication failed" not in output, msg
+    assert "Access denied" not in output, msg
