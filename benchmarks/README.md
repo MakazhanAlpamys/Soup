@@ -141,6 +141,12 @@ figure, and why the fit decision refuses rather than warns.
 - **Derived figures are labelled as arithmetic.** Where a line says "1M tokens =
   2.3 h", that is division, not a measured wall-clock run.
 
+## Additional #379 Reconstructions
+
+| File | Historical scope | Verdict | Requirements and limitations |
+|---|---|---|---|
+| depth_vs_bytes.py | STEP 6 / rejected per-layer-bytes hypothesis | Historical reconstruction validator for the NF4 transition bracket (163.8-171.5 MiB/layer) with exact bf16 control; accepts measured JSON rows | CPU/static record replay; live synthetic Llama CUDA measurement requires the historical torch/bitsandbytes stack; one point or non-finite data fails |
+
 ## Reproducing
 
 The implementation ships in Soup under Apache-2.0. Reproduction commands are in
