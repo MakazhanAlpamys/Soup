@@ -33,9 +33,14 @@ def _pairwise_diversity(samples: Sequence[str], *, n: int = 3) -> float:
     overlap = 0.0
     for i in range(len(cleaned)):
         for j in range(i + 1, len(cleaned)):
-            a = ngrams(cleaned[i], n) or [tuple(cleaned[i])]
-            b = ngrams(cleaned[j], n) or [tuple(cleaned[j])]
-            overlap += jaccard(a, b)
+            a = ngrams(cleaned[i], n) or ([tuple(cleaned[i])] if cleaned[i] else [])
+            b = ngrams(cleaned[j], n) or ([tuple(cleaned[j])] if cleaned[j] else [])
+            if not a and not b:
+                overlap += 1.0
+            elif not a or not b:
+                overlap += 0.0
+            else:
+                overlap += jaccard(a, b)
             pairs += 1
     if pairs == 0:
         return 1.0

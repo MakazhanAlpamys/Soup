@@ -9,7 +9,7 @@ Pure functions — no I/O, no torch.
 
 from __future__ import annotations
 
-import re
+import unicodedata
 from collections.abc import Mapping, Sequence
 from typing import List
 
@@ -22,6 +22,18 @@ STOPWORDS = frozenset(
         "this", "to", "was", "were", "will", "with", "you",
     }
 )
+
+
+def _is_no_space(c: str) -> bool:
+    cp = ord(c)
+    return (
+        (0x4E00 <= cp <= 0x9FFF)
+        or (0x3400 <= cp <= 0x4DBF)
+        or (0x20000 <= cp <= 0x2A6DF)
+        or (0x3040 <= cp <= 0x309F)
+        or (0x30A0 <= cp <= 0x30FF)
+        or (0x0E00 <= cp <= 0x0E7F)
+    )
 
 
 def row_text(row: Mapping[str, object]) -> str:
@@ -52,15 +64,55 @@ def row_text(row: Mapping[str, object]) -> str:
     return ""
 
 
-def tokenize(text: str) -> List[str]:
-    """Tokenise to lowercase alphanumeric runs, filtering stop-words.
+def tokenize(text: str, *, filter_stopwords: bool = True) -> List[str]:
+    """Tokenise to lowercase word/subword runs across Latin and non-Latin scripts.
+
+    Normalises Unicode (NFC, lowercase, dotless/dotted I handling), supports
+    non-Latin alphabetic scripts (Cyrillic, Greek, Arabic, Hebrew, Devanagari,
+    etc.), non-spaced scripts (CJK, Kana, Thai via character bigrams), and
+    digits. When ``filter_stopwords=True``, filters English stopwords and short
+    ASCII words <= 2 characters.
 
     Returns an empty list for empty / non-string input.
     """
-    if not text:
+    if not text or not isinstance(text, str):
         return []
-    return [
-        token
-        for token in re.findall(r"[A-Za-z][A-Za-z0-9_-]{1,30}", text.lower())
-        if token not in STOPWORDS and len(token) > 2
-    ]
+    norm = (
+        unicodedata.normalize("NFC", text)
+        .replace("İ", "i")
+        .lower()
+        .replace("\u0307", "")
+    )
+    raw_tokens: List[str] = []
+    current: List[str] = []
+
+    for ch in norm:
+        cat = unicodedata.category(ch)
+        if cat[0] in ("L", "M", "N") or ch in ("_", "-"):
+            current.append(ch)
+        else:
+            if current:
+                raw_tokens.append("".join(current))
+                current = []
+    if current:
+        raw_tokens.append("".join(current))
+
+    result: List[str] = []
+    for tok in raw_tokens:
+        clean = tok.strip("-_")
+        if not clean:
+            continue
+        if any(_is_no_space(c) for c in clean):
+            if len(clean) == 1:
+                result.append(clean)
+            else:
+                for i in range(len(clean) - 1):
+                    result.append(clean[i : i + 2])
+        else:
+            if filter_stopwords:
+                if clean in STOPWORDS:
+                    continue
+                if clean.isascii() and clean.isalpha() and len(clean) <= 2:
+                    continue
+            result.append(clean)
+    return result

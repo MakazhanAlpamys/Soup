@@ -53,8 +53,10 @@ def token_f1(predicted: str, target: str) -> float:
     Shared by the advise baseline probe (#161) and the diagnose forgetting
     probe (#165). Returns ``0.0`` when either side has no alphanumeric tokens.
     """
-    pred = re.findall(r"[A-Za-z0-9]+", predicted.lower())
-    gold = re.findall(r"[A-Za-z0-9]+", target.lower())
+    from soup_cli.utils._eval_text import tokenize
+
+    pred = tokenize(predicted, filter_stopwords=False)
+    gold = tokenize(target, filter_stopwords=False)
     if not pred or not gold:
         return 0.0
     counts: Dict[str, int] = {}
