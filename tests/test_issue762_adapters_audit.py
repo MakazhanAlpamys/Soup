@@ -21,6 +21,8 @@ import pathlib
 
 import pytest
 
+from tests.conftest import strip_ansi
+
 pytestmark = pytest.mark.unit
 
 
@@ -707,6 +709,7 @@ class TestEverySettingCanActuallyDiverge:
     #: gradient_checkpointing is unset so the schema default False applies.
     DIVERGENT = [
         ("optimizer", {"optimizer": "SGD"}),
+        ("learning_rate", {"peak_lr": 2e-4}),
         ("scheduler", {"scheduler": "linear"}),
         ("warmup_ratio", {"warmup_updates": 7}),
         ("weight_decay", {"weight_decay": 0.5}),
@@ -869,6 +872,7 @@ class TestPathsAreRefusedBeforeTheyAreFollowed:
         assert "Path refused" in res.output, res.output
         assert "No adapter_config.json" not in res.output
 
+    @pytest.mark.requires_symlink
     def test_a_symlinked_adapter_directory_is_refused(self, tmp_path):
 
         from soup_cli.commands.adapters import app
@@ -877,10 +881,7 @@ class TestPathsAreRefusedBeforeTheyAreFollowed:
         real.mkdir()
         (real / "adapter_config.json").write_text(json.dumps(_mlx_record()))
         link = tmp_path / "link"
-        try:
-            link.symlink_to(real, target_is_directory=True)
-        except (OSError, NotImplementedError):  # unprivileged Windows
-            pytest.skip("symlink creation not permitted on this platform")
+        link.symlink_to(real, target_is_directory=True)
 
         cfg = self._config_file(tmp_path)
         res = _runner().invoke(app, ["audit", "link", "--config", cfg.name])
@@ -1612,8 +1613,8 @@ class TestTheSummaryCountsWhatItFound:
         for key in ("max_grad_norm", "weight_decay"):
             del record[key]
         res = self._run(tmp_path, record)
-        assert "1 divergence(s)" in res.output, res.output
-        assert "2 unchecked" in res.output, res.output
+        assert "1 divergence(s)" in strip_ansi(res.output), res.output
+        assert "2 unchecked" in strip_ansi(res.output), res.output
 
 
 class TestAdapterSuppliedTextCannotDriveTheTerminal:
@@ -2018,4 +2019,4 @@ class TestAMalformedLoraBlockIsAVerdictNotAPathError:
 
         res = _runner().invoke(app, ["audit", ".", "--config", "soup.yaml"])
         assert res.exit_code == 2, res.output
-        assert "1 divergence(s)" in res.output
+        assert "1 divergence(s)" in strip_ansi(res.output)

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 import pytest
@@ -470,9 +469,7 @@ class TestMaxCandidatesCap:
 
 
 class TestCacheSymlinkRejection:
-    @pytest.mark.skipif(
-        os.name == "nt", reason="symlink rejection POSIX-only"
-    )
+    @pytest.mark.requires_symlink
     def test_load_cache_rejects_symlink_target(self, tmp_path):
         from soup_cli.utils.deploy_measure import load_cache
 
@@ -483,9 +480,7 @@ class TestCacheSymlinkRejection:
         # load_cache must refuse to follow the symlink — returns {}
         assert load_cache(str(link)) == {}
 
-    @pytest.mark.skipif(
-        os.name == "nt", reason="symlink rejection POSIX-only"
-    )
+    @pytest.mark.requires_symlink
     def test_save_cache_refuses_symlink_target(self, tmp_path):
         from soup_cli.utils.deploy_measure import save_cache
 

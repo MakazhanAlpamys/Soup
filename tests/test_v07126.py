@@ -233,7 +233,7 @@ class TestMitigationLogWriter:
         assert "hf_abcdefgh12345" not in text
         assert "<redacted>" in text
 
-    @pytest.mark.skipif(os.name == "nt", reason="symlink needs privilege on Windows")
+    @pytest.mark.requires_symlink
     def test_rotation_refuses_symlink_backup(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         from soup_cli.utils.reward_hack_control import MitigationLogWriter
@@ -2218,7 +2218,7 @@ class TestReviewFixesCode:
 class TestReviewFixesSecurity:
     """Regression tests for the security-review findings."""
 
-    @pytest.mark.skipif(os.name == "nt", reason="symlink needs privilege on Windows")
+    @pytest.mark.requires_symlink
     def test_restore_refuses_symlink_optimizer(self, tmp_path, monkeypatch):
         # HIGH #1 — torch.load(weights_only=False) on an attacker-symlinked
         # optimizer.pt is RCE; restore must refuse a symlinked file.

@@ -10,7 +10,7 @@ from rich.console import Console
 from soup_cli.config.schema import DataConfig
 from soup_cli.data.formats import (
     detect_format,
-    format_to_messages,
+    format_to_messages_with_reason,
     is_audio_format,
     is_vision_format,
 )
@@ -158,6 +158,7 @@ def _format_rows(
     fmt: str,
     *,
     preserve_source_columns: bool = False,
+    source: str | None = None,
 ) -> list[dict]:
     """Normalize rows, optionally retaining columns used by GRPO rewards.
 
@@ -169,14 +170,51 @@ def _format_rows(
     unchanged for every other task.
     """
     formatted: list[dict] = []
-    for raw_row in raw_data:
-        normalized = format_to_messages(raw_row, fmt)
+    dropped = 0
+    first_drop: tuple[int, str] | None = None
+    for index, raw_row in enumerate(raw_data):
+        # #1181: the same drop decision as format_to_messages, plus the reason,
+        # so a dropped row is counted and named instead of vanishing.
+        normalized, reason = format_to_messages_with_reason(raw_row, fmt)
         if normalized is None:
+            dropped += 1
+            if first_drop is None:
+                first_drop = (index, reason or "")
             continue
         if preserve_source_columns:
             normalized = {**raw_row, **normalized}
         formatted.append(normalized)
+    if dropped and first_drop is not None:
+        _report_dropped_rows(dropped, len(raw_data), fmt, first_drop, source)
     return formatted
+
+
+def _report_dropped_rows(
+    dropped: int,
+    total: int,
+    fmt: str,
+    first_drop: tuple[int, str],
+    source: str | None,
+) -> None:
+    """One warning for the rows the format converter dropped (#1181).
+
+    The drop is the loader's documented contract (one bad line must not abort a
+    load); the silence was the defect. Same shape as the media paths' "rows
+    skipped" lines, with the first row's index and the converter's own reason.
+    """
+    from rich.markup import escape
+
+    index, reason = first_drop
+    message = (
+        f"[yellow]Warning: {dropped} of {total} rows dropped: they do not convert "
+        f"as {escape(repr(fmt))}. First: row {index}: {escape(reason)}.[/]"
+    )
+    if source:
+        message += (
+            f"\n  List them all with: soup data validate {escape(source)} --format "
+            f"{escape(fmt)}"
+        )
+    console.print(message)
 
 
 def _load_replay_rows(
@@ -213,6 +251,7 @@ def _load_replay_rows(
         raw,
         fmt,
         preserve_source_columns=preserve_source_columns,
+        source=str(replay_path),
     )
 
     if is_vision_format(fmt):
@@ -388,6 +427,7 @@ def load_dataset(
         raw_data,
         fmt,
         preserve_source_columns=preserve_source_columns,
+        source=str(path),
     )
 
     # Validate image paths for vision formats
@@ -433,6 +473,7 @@ def _load_one_local_dataset(
         raw_data,
         fmt,
         preserve_source_columns=preserve_source_columns,
+        source=str(path),
     )
 
     if is_vision_format(fmt):

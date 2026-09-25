@@ -35,6 +35,21 @@ TORCHAO_PTQ_SCHEMES: frozenset[str] = frozenset({
     "NVFP4",
 })
 
+#: Per-scheme closed kwarg allowlist for ``--quant-config`` (security review H1),
+#: module level so the #826 contract test can check each key against the fields
+#: of the class it is passed to instead of keeping its own copy.
+#:
+#: ``inner_k_tiles`` is absent on purpose: ``Int4WeightOnlyConfig(inner_k_tiles=8)``
+#: raises ``TypeError`` on torchao 0.18.0, so advertising it promised a knob that
+#: cannot be passed.
+TORCHAO_SCHEME_KWARGS: dict[str, frozenset[str]] = {
+    "Int4WeightOnly": frozenset({"group_size"}),
+    "Int8DynActInt4": frozenset({"group_size"}),
+    "Float8DynActFloat8": frozenset(),
+    "NVFP4": frozenset(),
+}
+
+
 _MAX_SAVE_FORMAT_LEN: int = 32
 _MAX_TORCHAO_SCHEME_LEN: int = 48
 
@@ -375,35 +390,16 @@ def export_torchao(
             f"quant_config_data must be Mapping, got {type(quant_config_data).__name__}"
         )
 
-    from torchao import quantization as ao_q  # type: ignore[import-not-found]
     from transformers import (  # type: ignore[import-not-found]
         AutoModelForCausalLM,
         AutoTokenizer,
     )
 
-    scheme_factory_map = {
-        "Int4WeightOnly": "Int4WeightOnlyConfig",
-        "Int8DynActInt4": "Int8DynActInt4Config",
-        "Float8DynActFloat8": "Float8DynActFloat8Config",
-        "NVFP4": "NVFP4Config",
-    }
-    factory_name = scheme_factory_map[canonical_scheme]
-    if not hasattr(ao_q, factory_name):
-        raise RuntimeError(
-            f"torchao does not expose {factory_name}; "
-            f"upgrade torchao or pick a different scheme."
-        )
 
     # Build the config from quant_config_data if provided; else defaults.
     # Apply a per-scheme closed key allowlist to defeat kwarg injection
     # (security review H1).
-    scheme_kwarg_allowlist: dict[str, frozenset[str]] = {
-        "Int4WeightOnly": frozenset({"group_size", "inner_k_tiles"}),
-        "Int8DynActInt4": frozenset({"group_size"}),
-        "Float8DynActFloat8": frozenset(),
-        "NVFP4": frozenset(),
-    }
-    allowed = scheme_kwarg_allowlist.get(canonical_scheme, frozenset())
+    allowed = TORCHAO_SCHEME_KWARGS.get(canonical_scheme, frozenset())
     raw_kwargs = dict(quant_config_data or {})
     raw_kwargs.pop("scheme", None)
     bad_keys = [
@@ -420,22 +416,23 @@ def export_torchao(
             f"quant_config keys not allowed for scheme {canonical_scheme}: "
             f"{bad_keys}. Allowed: {allowed_str}"
         )
-    config_obj = getattr(ao_q, factory_name)(**raw_kwargs)
+    # #826: three of these four names never existed in torchao. Each scheme
+    # resolves through the module that defines it, so a rename says which path
+    # went missing instead of telling the user to upgrade past the newest
+    # release. Resolved AFTER the kwarg allowlist, so a rejected key is still a
+    # ValueError about the key rather than an import error about torchao.
+    from soup_cli.utils.torchao_compat import resolve_torchao_class
+
+    factory = resolve_torchao_class(canonical_scheme)
+    config_obj = factory(**raw_kwargs)
 
     os.makedirs(output_dir, exist_ok=True)
 
     model = AutoModelForCausalLM.from_pretrained(
         model_dir, trust_remote_code=trust_remote_code,
     )
-    # torchao quantize in-place. Some torchao versions ship `quantize_` at
-    # top level; others under quantization. Try both.
-    try:
-        import torchao  # type: ignore[import-not-found]
-        quantize_fn = getattr(torchao, "quantize_", None) or getattr(ao_q, "quantize_")
-    except (ImportError, AttributeError) as exc:
-        raise RuntimeError(
-            f"torchao.quantize_ entry point not found: {type(exc).__name__}"
-        ) from exc
+    # torchao quantize in-place, through the same resolver (#826).
+    quantize_fn = resolve_torchao_class("quantize_")
 
     quantize_fn(model, config_obj)
     model.save_pretrained(output_dir)

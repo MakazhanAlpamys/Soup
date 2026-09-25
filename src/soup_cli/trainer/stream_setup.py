@@ -423,6 +423,13 @@ class StreamingSetupMixin:
     #: step; 2 for a loss whose forward concatenates chosen and rejected.
     _STREAM_ROWS_PER_EXAMPLE = 1
 
+    #: True for a loss that runs a second forward before each step's backward
+    #: (the reference pass of DPO and KTO). On an untied checkpoint that
+    #: forward refills the large slot the output head's autograd view points
+    #: into, so the head takes a private copy of its weight and the VRAM
+    #: pre-flight charges a second large slot for it (#1049).
+    _STREAM_REFILL_BEFORE_BACKWARD = False
+
     #: Set by :meth:`_setup_streaming_transformers`; absent on a resident run.
     _stream_runtime = None
 
@@ -538,10 +545,11 @@ class StreamingSetupMixin:
             expandable_segments_status,
             extras_resident_bytes,
             large_layer_buffer_bytes,
+            large_layer_specs,
             large_layer_store_bytes,
             quantised_layer_suffixes,
         )
-        from soup_cli.utils.moe import detect_moe_model, get_moe_target_modules
+        from soup_cli.utils.moe import resolve_moe_lora_targets
         from soup_cli.utils.qwen4_ple import external_tensor_bytes
         from soup_cli.utils.spectrum_scan import resolve_model_weights
 
@@ -672,7 +680,11 @@ class StreamingSetupMixin:
         # construction for no memory saving.
         quant_suffixes = ()
         moe_targets = None
-        is_moe = False
+        # #798: the ONE helper that turns moe_lora into targets, and refuses a
+        # dropout peft cannot honour on fused experts. This path kept its own
+        # copy of the block, which is why it was the one path with no refusal.
+        # The probe is a meta skeleton and is the only model available here, so
+        # the call happens while it is alive rather than at the attach below.
         if quant == QUANT_NF4:
             probe = build_meta_skeleton(
                 cfg.base,
@@ -680,9 +692,7 @@ class StreamingSetupMixin:
                 quant=quant,
                 trust_remote_code=self._trust_remote_code,
             )
-            is_moe = detect_moe_model(probe)
-            if tcfg.moe_lora and is_moe:
-                moe_targets = get_moe_target_modules(probe)
+            moe_targets = resolve_moe_lora_targets(probe, tcfg, None, console=console)
             quant_suffixes = quantised_layer_suffixes(probe)
             del probe
         elif tcfg.moe_lora:
@@ -692,9 +702,7 @@ class StreamingSetupMixin:
                 quant=quant,
                 trust_remote_code=self._trust_remote_code,
             )
-            is_moe = detect_moe_model(probe)
-            if is_moe:
-                moe_targets = get_moe_target_modules(probe)
+            moe_targets = resolve_moe_lora_targets(probe, tcfg, None, console=console)
             del probe
 
         console.print(f"[dim]Preparing layer shards -> {shard_dir}[/]")
@@ -725,6 +733,9 @@ class StreamingSetupMixin:
         embed_bytes = extras_resident_bytes(shard_dir)
         large_store_bytes = large_layer_store_bytes(shard_dir, index)
         large_buffer_bytes = large_layer_buffer_bytes(shard_dir, index)
+        large_budget_bytes = self._stream_large_budget_bytes(
+            large_buffer_bytes, len(large_layer_specs(shard_dir, index))
+        )
         ngram_bytes = external_tensor_bytes(getattr(index, "external_tensors", None) or {})
 
         free_ram = free_ram_bytes()
@@ -890,7 +901,7 @@ class StreamingSetupMixin:
             model_config=model_config,
             layer_bytes=layer_bytes,
             embed_bytes=embed_bytes,
-            large_layer_bytes=large_buffer_bytes,
+            large_layer_bytes=large_budget_bytes,
             index=index,
             on_cuda=on_cuda,
         )
@@ -909,12 +920,12 @@ class StreamingSetupMixin:
             resolve_lora_target_modules,
         )
 
-        target_modules = resolve_lora_target_modules(model_config, tcfg.lora.target_modules)
-        if tcfg.moe_lora and is_moe and moe_targets:
+        target_modules = resolve_lora_target_modules(
+            model_config, tcfg.lora.target_modules, console
+        )
+        if moe_targets:
+            # Already announced by resolve_moe_lora_targets when the probe ran.
             target_modules = moe_targets
-            console.print(
-                f"[green]ScatterMoE LoRA:[/] targeting {len(moe_targets)} module patterns"
-            )
         lora_config = build_lora_config(
             tcfg.lora,
             target_modules=target_modules,
@@ -959,6 +970,7 @@ class StreamingSetupMixin:
             tier=tier,
             weights_dir=weights_dir,
             ngram_source=ngram_source,
+            refill_before_backward=self._STREAM_REFILL_BEFORE_BACKWARD,
         )
         self.model = model
         self._stream_runtime = runtime
@@ -977,6 +989,44 @@ class StreamingSetupMixin:
             f"[green]Layer streaming ready:[/] {stats['n_layers']} layers, "
             f"{source_line}, {buffer_line}"
         )
+
+    def _stream_large_budget_bytes(self, slot_bytes: int, n_large_keys: int) -> int:
+        """Large-layer bytes the VRAM pre-flight charges.
+
+        One reusable slot, sized to the larger of ``embed_tokens`` and an untied
+        ``lm_head`` (#324). An untied checkpoint (two large keys) under a loss
+        with a second forward per step also holds a private copy of the head's
+        weight for the whole graph (#1049). It is charged as a second full slot.
+        That is the head's size when the head is the larger matrix and an
+        over-count otherwise, which keeps ``estimate_stream_peak_vram`` on the
+        side it promises never to leave.
+        """
+        if self._STREAM_REFILL_BEFORE_BACKWARD and n_large_keys > 1:
+            return 2 * slot_bytes
+        return slot_bytes
+
+    def _attach_streamed_save_guard(self) -> None:
+        """Check every ``checkpoint-*`` adapter a streamed run writes (#1011)."""
+        if getattr(self, "_stream_runtime", None) is None:
+            return
+        from soup_cli.utils.layer_stream_runtime import build_streamed_save_guard_callback
+
+        self.trainer.add_callback(build_streamed_save_guard_callback())
+
+    def _assert_streamed_adapter_saved(self, output_dir: str) -> None:
+        """Check the final adapter a streamed run wrote (#1011).
+
+        ``save_model`` dispatches no ``on_save``, so the callback above does not
+        see this save. Gated on ``args.should_save``, the condition ``save_model``
+        gates the write on.
+        """
+        if getattr(self, "_stream_runtime", None) is None:
+            return
+        if not getattr(self.trainer.args, "should_save", True):
+            return
+        from soup_cli.utils.layer_stream_runtime import assert_streamed_adapter_saved
+
+        assert_streamed_adapter_saved(self.trainer.model, output_dir)
 
     def _close_stream_runtime(self) -> None:
         """Release the streaming weight source, if this run had one."""

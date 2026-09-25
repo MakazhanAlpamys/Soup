@@ -18,6 +18,7 @@ from soup_cli.utils.diagnose._common import (
     require_prompts,
 )
 from soup_cli.utils.diagnose.report import FailureScore, classify_score
+from soup_cli.utils.safe_regex import check_config_regex
 
 _VALID_KINDS = frozenset({"json", "regex", "tool_call"})
 _MAX_REGEX_LEN = 2048
@@ -42,15 +43,9 @@ def matches_regex(text: str, pattern: str) -> bool:
     if "\x00" in text or "\x00" in pattern:
         return False
     try:
+        check_config_regex(pattern, "diagnose.regex_pattern")
         compiled = re.compile(pattern)
     except re.error:
-        return False
-    # Best-effort ReDoS probe — catastrophic-backtracking patterns surface
-    # on a benign 128-char canary before they ever touch a real model
-    # output (mirrors v0.41.0 Part B / v0.55.0 policy).
-    try:
-        compiled.search("a" * 128)
-    except (re.error, RuntimeError):
         return False
     return bool(compiled.search(text))
 

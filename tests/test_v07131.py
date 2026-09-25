@@ -1135,7 +1135,7 @@ class TestBestOfNCli:
                  "--judge", "ollama://m", "-o", "o.jsonl"],
             )
             assert result.exit_code == 2, (result.output, repr(result.exception))
-            assert "n must be" in result.output or "between 2" in result.output
+            assert "n must be" in _plain(result.output) or "between 2" in _plain(result.output)
         finally:
             os.remove(path)
 
@@ -1352,7 +1352,7 @@ class TestBestOfNCli:
             )
 
             assert result.exit_code == 2
-            assert "line 2" in result.output
+            assert "line 2" in _plain(result.output)
             assert "private" not in result.output
 
     def test_blank_lines_are_ignored_but_source_lines_remain_physical(
