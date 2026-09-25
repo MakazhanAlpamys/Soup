@@ -250,6 +250,7 @@ def _build_row_labels(
     train_on_responses_only: bool,
     train_on_messages_with_train_field: bool,
     include_eot: bool,
+    mask_history: bool = False,
 ) -> dict:
     """Build ``{input_ids, labels}`` via the SAME masking-strategy dispatch
     ``data.sft_format.build_format_row`` uses at train time (per-message
@@ -268,7 +269,8 @@ def _build_row_labels(
         return build_per_message_train_labels(messages, tokenizer, max_length=max_length)
     if train_on_responses_only:
         return build_assistant_only_labels(
-            messages, tokenizer, max_length=max_length, include_eot=include_eot
+            messages, tokenizer, max_length=max_length, include_eot=include_eot,
+            mask_history=mask_history,
         )
     # #788: legacy full-sequence path — call the SAME builder the trainer uses
     # (build_full_sequence_labels) so --show-mask reflects the one-BOS,
@@ -389,6 +391,7 @@ def check_eos_in_labels(
     include_eot: bool = False,
     train_on_responses_only: bool = True,
     train_on_messages_with_train_field: bool = False,
+    mask_history: bool = False,
 ) -> DoctorCheck:
     """The #1 'model never stops generating' bug. MAJOR when >=50% of rows
     have at least one assistant turn whose trained span never trains an
@@ -421,6 +424,7 @@ def check_eos_in_labels(
                 train_on_responses_only=train_on_responses_only,
                 train_on_messages_with_train_field=train_on_messages_with_train_field,
                 include_eot=include_eot,
+                mask_history=mask_history,
             )
         except Exception:  # noqa: BLE001 — a row the template can't render (e.g. an
             # unsupported system role — jinja2.TemplateError, not a ValueError/
@@ -473,6 +477,7 @@ def check_bos_duplication(
     max_length: int,
     train_on_responses_only: bool = True,
     train_on_messages_with_train_field: bool = False,
+    mask_history: bool = False,
 ) -> DoctorCheck:
     """MAJOR when >=50% of rows start with two consecutive BOS tokens (the
     template AND the tokenizer both prepend one — a classic double-BOS
@@ -506,6 +511,7 @@ def check_bos_duplication(
                 train_on_responses_only=train_on_responses_only,
                 train_on_messages_with_train_field=train_on_messages_with_train_field,
                 include_eot=False,
+                mask_history=mask_history,
             )
         except Exception:  # noqa: BLE001 — a row the template can't render is
             # reported by template_render/system_role; skip it here.
@@ -664,6 +670,7 @@ def run_doctor(
     include_eot: bool = False,
     train_on_responses_only: bool = True,
     train_on_messages_with_train_field: bool = False,
+    mask_history: bool = False,
 ) -> DoctorReport:
     """Run the full chat-template compat report over a sample of ``raw_rows``.
 
@@ -690,6 +697,14 @@ def run_doctor(
         raise TypeError("train_on_responses_only must be bool")
     if not isinstance(train_on_messages_with_train_field, bool):
         raise TypeError("train_on_messages_with_train_field must be bool")
+    if not isinstance(mask_history, bool):
+        raise TypeError("mask_history must be bool")
+    if mask_history and not train_on_responses_only:
+        raise ValueError(
+            "mask_history requires train_on_responses_only — data.mask_history "
+            "narrows the assistant-only loss mask (soup.yaml schema rule: "
+            "data.mask_history requires data.train_on_responses_only: true)"
+        )
 
     from soup_cli.data.formats import format_to_messages
 
@@ -717,11 +732,13 @@ def run_doctor(
             tokenizer, normalized, max_length=max_length, include_eot=include_eot,
             train_on_responses_only=train_on_responses_only,
             train_on_messages_with_train_field=train_on_messages_with_train_field,
+            mask_history=mask_history,
         ),
         check_bos_duplication(
             tokenizer, normalized, max_length=max_length,
             train_on_responses_only=train_on_responses_only,
             train_on_messages_with_train_field=train_on_messages_with_train_field,
+            mask_history=mask_history,
         ),
         check_system_role(tokenizer, normalized),
         check_unknown_roles(normalized),
@@ -804,6 +821,7 @@ def _build_chat_preview_row(
     train_on_responses_only: bool,
     train_on_messages_with_train_field: bool,
     include_eot: bool,
+    mask_history: bool = False,
 ) -> Optional[Tuple[str, Tuple[MaskedToken, ...]]]:
     from soup_cli.data.formats import format_to_messages
 
@@ -822,6 +840,7 @@ def _build_chat_preview_row(
             train_on_responses_only=train_on_responses_only,
             train_on_messages_with_train_field=train_on_messages_with_train_field,
             include_eot=include_eot,
+            mask_history=mask_history,
         )
     except Exception:  # noqa: BLE001 — a row the template can't render (e.g. an
         # unsupported system role) is a per-row skip, not a crash — mirrors the
@@ -867,6 +886,7 @@ def render_mask_preview(
     train_on_responses_only: bool = True,
     train_on_messages_with_train_field: bool = False,
     include_eot: bool = False,
+    mask_history: bool = False,
 ) -> List[MaskPreviewRow]:
     """Render up to ``n`` rows with per-token trained/masked colouring.
 
@@ -880,6 +900,14 @@ def render_mask_preview(
         raise ValueError("n must be a positive int")
     if n > _MAX_PREVIEW_ROWS:
         raise ValueError(f"n must be <= {_MAX_PREVIEW_ROWS}")
+    if not isinstance(mask_history, bool):
+        raise TypeError("mask_history must be bool")
+    if mask_history and not train_on_responses_only:
+        raise ValueError(
+            "mask_history requires train_on_responses_only — it narrows the "
+            "assistant-only loss mask (data.mask_history requires "
+            "data.train_on_responses_only: true)"
+        )
 
     previews: List[MaskPreviewRow] = []
     for row_index, row in enumerate(raw_rows[:_MAX_MASK_SCAN_ROWS]):
@@ -896,6 +924,7 @@ def render_mask_preview(
                 train_on_responses_only=train_on_responses_only,
                 train_on_messages_with_train_field=train_on_messages_with_train_field,
                 include_eot=include_eot,
+                mask_history=mask_history,
             )
         if result is None:
             continue

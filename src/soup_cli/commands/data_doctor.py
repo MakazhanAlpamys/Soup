@@ -151,6 +151,10 @@ def doctor(
         False, "--train-on-messages-with-train-field",
         help="Per-message train:bool field masking (mirrors the same soup.yaml flag).",
     ),
+    mask_history: bool = typer.Option(
+        False, "--mask-history/--no-mask-history",
+        help="Train only the LAST assistant turn (mirrors data.mask_history).",
+    ),
     train_on_eot: bool = typer.Option(
         False, "--train-on-eot",
         help="Extend the trained span through the trailing EOS/EOT token.",
@@ -176,6 +180,19 @@ def doctor(
     if not file_path.exists():
         console.print(f"[red]File not found: {file_path}[/]")
         raise typer.Exit(code=1)
+
+    # Mirrors the soup.yaml schema rule "data.mask_history requires
+    # data.train_on_responses_only: true" (#1251) — refuse the flag combo
+    # up front, before any tokenizer load or dataset work.
+    if mask_history and not train_on_responses_only:
+        console.print(
+            "[red]Error:[/] [bold]--mask-history[/] requires "
+            "[bold]--train-on-responses-only[/] — it narrows the assistant-only "
+            "loss mask to the last assistant turn, and there is no mask to "
+            "narrow without --no-train-on-responses-only's legacy full-sequence "
+            "path. Re-run with --train-on-responses-only, or drop --mask-history."
+        )
+        raise typer.Exit(code=EXIT_USAGE_ERROR)
 
     data = load_raw_data(file_path)
     if not data:
@@ -208,6 +225,7 @@ def doctor(
                 sample_size=sample, include_eot=train_on_eot,
                 train_on_responses_only=train_on_responses_only,
                 train_on_messages_with_train_field=train_on_messages_with_train_field,
+                mask_history=mask_history,
             )
         except ValueError as exc:
             console.print(f"[red]Error:[/] {escape(str(exc))}")
@@ -230,6 +248,7 @@ def doctor(
                 train_on_responses_only=train_on_responses_only,
                 train_on_messages_with_train_field=train_on_messages_with_train_field,
                 include_eot=train_on_eot,
+                mask_history=mask_history,
             )
         except ValueError as exc:
             console.print(f"[red]Error:[/] {escape(str(exc))}")
