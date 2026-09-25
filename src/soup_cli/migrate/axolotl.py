@@ -66,12 +66,15 @@ def migrate_axolotl(config_path: Path) -> Dict[str, Any]:
     # --- Task ---
     rl_type = raw.get("rl")
     if rl_type:
-        task = _RL_MAP.get(rl_type, "sft")
         if rl_type not in _RL_MAP:
-            warnings.append(
-                f"No Soup task matches axolotl rl: {rl_type}. Falling back "
-                "to task: sft."
+            supported = ", ".join(sorted(_RL_MAP))
+            raise ValueError(
+                f"No Soup task matches axolotl rl: {rl_type}. Supported rl "
+                f"values are {supported}. Soup's training.ebft_variant: "
+                "structured | strided on task: sft is a separate SFT loss "
+                "hook and does not reproduce this axolotl trainer."
             )
+        task = _RL_MAP[rl_type]
     else:
         task = "sft"
 
