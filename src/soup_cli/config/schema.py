@@ -4010,7 +4010,8 @@ class TrainingConfig(BaseModel):
                 f"training.loraplus_lr_ratio cannot be combined with "
                 f"training.optimizer={self.optimizer!r}: LoRA+ builds its optimizer "
                 f"without the model, and transformers can only build {self.optimizer} "
-                f"from the model. Use an AdamW-family optimizer or remove loraplus_lr_ratio."
+                f"from the model. Use an optimizer transformers can build without the "
+                f"model (for example adamw_torch) or remove loraplus_lr_ratio."
             )
         # attach_loraplus_optimizer also refuses this at runtime; here it fails
         # before the model is downloaded.
