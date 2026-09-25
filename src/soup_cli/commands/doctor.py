@@ -496,8 +496,21 @@ def _torch_gpu_arch_supported(torch, major: int, minor: int) -> bool:
     target = major * 10 + minor
     for arch in arch_list:
         if arch.startswith("sm_"):
-            sm_target = arch.removeprefix("sm_").rstrip("a")
-            if sm_target == f"{major}{minor}":
+            sm_target = arch.removeprefix("sm_")
+            suffixed = sm_target.endswith("a")
+            sm_target = sm_target.rstrip("a")
+            try:
+                target_major = int(sm_target) // 10
+                target_minor = int(sm_target) % 10
+            except ValueError:
+                continue
+            if suffixed and sm_target == f"{major}{minor}":
+                return True
+            if (
+                not suffixed
+                and target_major == major
+                and target_minor <= minor
+            ):
                 return True
         if arch.startswith("compute_"):
             try:

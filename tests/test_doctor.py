@@ -163,6 +163,44 @@ def test_torch_gpu_arch_supported_accepts_exact_sm_target():
     assert _torch_gpu_arch_supported(fake_torch, 12, 0) is True
 
 
+def test_torch_gpu_arch_supported_accepts_later_minor_same_major():
+    from types import SimpleNamespace
+
+    from soup_cli.commands.doctor import _torch_gpu_arch_supported
+
+    fake_torch = SimpleNamespace(
+        cuda=SimpleNamespace(
+            get_arch_list=lambda: ["sm_75", "sm_80", "sm_86", "sm_90"],
+        )
+    )
+
+    assert _torch_gpu_arch_supported(fake_torch, 8, 9) is True
+
+
+def test_torch_gpu_arch_supported_rejects_earlier_minor_same_major():
+    from types import SimpleNamespace
+
+    from soup_cli.commands.doctor import _torch_gpu_arch_supported
+
+    fake_torch = SimpleNamespace(
+        cuda=SimpleNamespace(get_arch_list=lambda: ["sm_86"])
+    )
+
+    assert _torch_gpu_arch_supported(fake_torch, 8, 0) is False
+
+
+def test_torch_gpu_arch_supported_keeps_suffixed_arch_exact():
+    from types import SimpleNamespace
+
+    from soup_cli.commands.doctor import _torch_gpu_arch_supported
+
+    fake_torch = SimpleNamespace(
+        cuda=SimpleNamespace(get_arch_list=lambda: ["sm_100a"])
+    )
+
+    assert _torch_gpu_arch_supported(fake_torch, 10, 3) is False
+
+
 def test_torch_gpu_arch_supported_accepts_lower_ptx_target():
     from types import SimpleNamespace
 
