@@ -120,9 +120,6 @@ class RLSignalBuffer:
         function sees the *same* completions, so overwriting on each call
         is correct. A call made inside :meth:`paused` is dropped.
         """
-        with self._lock:
-            if self._paused:
-                return
         texts: list[str] = []
         if completions is not None:
             try:
@@ -134,6 +131,8 @@ class RLSignalBuffer:
         coerced = _coerce_rewards(rewards)
         name = func_name if isinstance(func_name, str) and func_name else "reward"
         with self._lock:
+            # Checked where the write happens, under the same lock paused()
+            # takes, so a record cannot slip in as a pause begins.
             if self._paused:
                 return
             if texts:
