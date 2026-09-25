@@ -1,5 +1,6 @@
 """Friendly error handling — maps raw exceptions to actionable messages."""
 
+import re
 import traceback
 
 from rich.console import Console
@@ -223,20 +224,77 @@ ERROR_MAP = [
             "if you trust the model source."
         ),
     ),
+]
 
 
-    # Auth errors
-    (
-        "401",
+# 401/403 must be decided from the exception OBJECT (or explicit HTTP
+# phrasing), never from bare digits — "train row 401:", a checkpoint path
+# holding "4010", or a hash slice were all reported as auth failures and the
+# real message was hidden (#1267). The old bare "401"/"403" ERROR_MAP entries
+# are gone; this rule runs before the map so a genuine status also beats the
+# generic "HTTPError" entry.
+_AUTH_HINTS = {
+    401: (
         "Authentication failed.",
         "Check your API key or token (HF_TOKEN, OPENAI_API_KEY, WANDB_API_KEY).",
     ),
-    (
-        "403",
+    403: (
         "Access denied.",
         "Check your permissions. Some models require accepting a license on HuggingFace.",
     ),
-]
+}
+
+# Text fallback for stacks that only put the status in the message. Every
+# pattern requires HTTP context around the digits, so a row number, tensor
+# size, path component, or hash slice cannot match.
+_AUTH_STATUS_TEXT = (
+    (re.compile(r"401\s+(?:Unauthorized|Client Error)"), 401),
+    (re.compile(r"HTTP\s+(?:Error\s+)?[:=]?\s*401\b"), 401),
+    (re.compile(r"Error code:\s*401\b"), 401),
+    (re.compile(r"403\s+(?:Forbidden|Client Error)"), 403),
+    (re.compile(r"HTTP\s+(?:Error\s+)?[:=]?\s*403\b"), 403),
+    (re.compile(r"Error code:\s*403\b"), 403),
+)
+
+# These carry 401/403 but have their own, more specific ERROR_MAP entries that
+# must keep winning, so the status rule declines them outright.
+_STATUS_DECLINE_TYPES = ("GatedRepoError", "RepositoryNotFoundError")
+
+
+def _exception_chain(exc: Exception):
+    """Yield exc and the exceptions it wraps, without looping."""
+    seen = set()
+    current = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        yield current
+        current = current.__cause__ or current.__context__
+
+
+def _auth_status(exc: Exception):
+    """Return 401/403 when the exception is genuinely an auth failure.
+
+    The status is read from the exception object first — `response.status_code`
+    (requests / httpx / huggingface_hub), `.code` (urllib), or a direct
+    `.status_code` — walking `__cause__`/`__context__` because peft and
+    transformers wrap hub errors. Only when no object carries a status does the
+    HTTP-phrasing text fallback apply.
+    """
+    chain = list(_exception_chain(exc))
+    if any(type(e).__name__ in _STATUS_DECLINE_TYPES for e in chain):
+        return None
+    for e in chain:
+        status = getattr(getattr(e, "response", None), "status_code", None)
+        if isinstance(status, int) and status in _AUTH_HINTS:
+            return status
+        for attr in ("code", "status_code"):
+            status = getattr(e, attr, None)
+            if isinstance(status, int) and status in _AUTH_HINTS:
+                return status
+    for pattern, status in _AUTH_STATUS_TEXT:
+        if pattern.search(str(exc)):
+            return status
+    return None
 
 
 def format_friendly_error(exc: Exception, verbose: bool = False) -> None:
@@ -248,22 +306,32 @@ def format_friendly_error(exc: Exception, verbose: bool = False) -> None:
     exc_str = str(exc)
     exc_type = type(exc).__name__
 
+    matched = None
+    status = _auth_status(exc)
+    if status is not None:
+        matched = _AUTH_HINTS[status]
+
     # Search for known error patterns
-    for pattern, short_msg, fix in ERROR_MAP:
-        if pattern in exc_str or pattern in exc_type:
-            error_msg = short_msg or exc_str
-            console.print(f"\n[bold red]Error:[/] {error_msg}")
-            console.print(f"[green]Fix:[/] {fix}")
-            if verbose:
-                console.print()
-                console.print(
-                    Panel(
-                        traceback.format_exc(),
-                        title="[dim]Full Traceback[/]",
-                        border_style="dim",
-                    )
+    if matched is None:
+        for pattern, short_msg, fix in ERROR_MAP:
+            if pattern in exc_str or pattern in exc_type:
+                matched = (short_msg or exc_str, fix)
+                break
+
+    if matched is not None:
+        error_msg, fix = matched
+        console.print(f"\n[bold red]Error:[/] {error_msg}")
+        console.print(f"[green]Fix:[/] {fix}")
+        if verbose:
+            console.print()
+            console.print(
+                Panel(
+                    traceback.format_exc(),
+                    title="[dim]Full Traceback[/]",
+                    border_style="dim",
                 )
-            return
+            )
+        return
 
     # Unknown error — show type + message
     console.print(f"\n[bold red]Error:[/] {exc_type}: {exc_str}")
