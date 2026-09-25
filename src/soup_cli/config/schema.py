@@ -1,5 +1,6 @@
 """Pydantic schemas for soup.yaml config — single source of truth."""
 
+import math
 import re
 from typing import Any, Dict, List, Literal, Optional, Union
 
@@ -1384,8 +1385,27 @@ class TrainingConfig(BaseModel):
     )
     # GRPO-specific
     grpo_beta: float = Field(
-        default=0.1, gt=0, description="GRPO beta — KL penalty coefficient"
+        default=0.1,
+        ge=0.0,
+        description=(
+            "GRPO beta — KL penalty coefficient (default 0.1). Set to 0 to "
+            "disable the KL penalty entirely (KL-free recipes like DAPO and "
+            "Dr. GRPO, #1247)."
+        ),
     )
+
+    @field_validator("grpo_beta", mode="before")
+    @classmethod
+    def _validate_grpo_beta_field(cls, v: Any) -> Any:
+        if isinstance(v, bool):
+            raise ValueError("grpo_beta must not be a boolean")
+        if isinstance(v, (int, float)):
+            fval = float(v)
+            if math.isnan(fval) or math.isinf(fval):
+                raise ValueError("grpo_beta must be finite")
+            if fval < 0.0:
+                raise ValueError("grpo_beta must be >= 0")
+        return v
     num_generations: int = Field(
         default=4, ge=2, description="Number of generations per prompt for GRPO"
     )
@@ -4385,6 +4405,14 @@ def _validate_reward_hack_controller(tcfg: Any) -> None:
                 "reward_hack_mitigation kl_control/pid_lagrangian is mutually "
                 "exclusive with ref_model_ema_alpha (both drive the KL/ref "
                 "dynamics); pick one"
+            )
+        beta_val = getattr(tcfg, "grpo_beta", None)
+        if beta_val is not None and not isinstance(beta_val, bool) and float(beta_val) == 0.0:
+            raise ValueError(
+                "grpo_beta: 0 is mutually exclusive with "
+                f"reward_hack_mitigation={tcfg.reward_hack_mitigation!r} "
+                "(the mitigation controller requires a positive beta to steer); "
+                "use grpo_beta > 0 or disable mitigation"
             )
     # v0.71.26 Stage 2 — PID / rollback tunables require pid_lagrangian mode.
     if tcfg.reward_hack_mitigation != "pid_lagrangian":
