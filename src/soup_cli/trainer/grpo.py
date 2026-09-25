@@ -48,7 +48,7 @@ def make_grpo_trainer_variant(base_cls: type, variant: str) -> type:
 @lru_cache(maxsize=8)
 def _make_grpo_trainer_variant_cached(base_cls: type, variant: str) -> type:
     """Cached factory body — keyed on already-normalised variant."""
-    from soup_cli.utils.grpo_variants import apply_variant_loss
+    from soup_cli.utils.grpo_variants import apply_variant_loss, variant_kl_metric
 
     class _GRPOTrainerVariant(base_cls):  # type: ignore[misc, valid-type]
         """GRPOTrainer subclass that routes compute_loss through Soup's variants."""
@@ -162,6 +162,19 @@ def _make_grpo_trainer_variant_cached(base_cls: type, variant: str) -> type:
                 return None
 
             mode = "train" if getattr(getattr(self, "model", model), "training", True) else "eval"
+            # #1263: this loss replaces trl's, which is where trl logs the ``kl``
+            # metric, so log it here the same way (same key, same gather).
+            mean_kl = variant_kl_metric(
+                self._soup_grpo_variant,
+                logp_new=logp_new,
+                advantages=advantages,
+                beta=beta,
+                completion_mask=mask,
+                reference_logp=ref_logp,
+            )
+            metrics = getattr(self, "_metrics", None)
+            if mean_kl is not None and metrics is not None:
+                metrics[mode]["kl"].append(self.accelerator.gather(mean_kl).nanmean().item())
             normalizer = (
                 getattr(self, "current_gradient_accumulation_steps", 1.0)
                 if mode == "train"
