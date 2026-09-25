@@ -59,6 +59,7 @@ def make_args(tmp_path: Path) -> argparse.Namespace:
         batch=1,
         buffers=2,
         curve_steps=2,
+        self_test=False,
     )
 
 
@@ -128,6 +129,11 @@ def install_measurement_stubs(
         lambda *args, **kwargs: 1,
     )
     monkeypatch.setattr(
+        module.bitexact,
+        "lora_config",
+        lambda: SimpleNamespace(),
+    )
+    monkeypatch.setattr(
         module,
         "capture_lora_state",
         lambda model: {"lora_A": torch.ones(1)},
@@ -192,11 +198,17 @@ def install_measurement_stubs(
         "install_historical_control",
         lambda runtime: None,
     )
+    monkeypatch.setattr(
+        module,
+        "runtime_versions",
+        lambda: ("stub-bnb", "stub-peft", "stub-transformers"),
+    )
 
+    generator_type = torch.Generator
     monkeypatch.setattr(
         torch,
         "Generator",
-        lambda device=None: torch.Generator(device="cpu"),
+        lambda device=None: generator_type(device="cpu"),
     )
 
 
@@ -323,3 +335,34 @@ def test_main_executes_real_measurement_path(
     monkeypatch.setattr(module, "parse_args", lambda: args)
 
     assert module.main() == 0
+
+
+def test_run_measurement_restores_historical_runtime_control(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    weights = tmp_path / "weights"
+    weights.mkdir()
+    install_measurement_stubs(
+        monkeypatch,
+        streamed_curves=([1.0, 2.0], [1.0, 2.1]),
+        resident_curves=([1.0, 2.0], [1.0, 2.0]),
+    )
+
+    import soup_cli.utils.layer_stream_runtime as layer_runtime
+
+    original = object()
+    installed: list[object] = []
+    monkeypatch.setattr(layer_runtime, "install_dequant_forward", original)
+
+    def install(runtime: object) -> None:
+        installed.append(runtime)
+        runtime.install_dequant_forward = object()
+
+    monkeypatch.setattr(module, "install_historical_control", install)
+    args = make_args(tmp_path)
+    args.weights = str(weights)
+
+    assert module.run_measurement(args) == 0
+    assert installed == [layer_runtime]
+    assert layer_runtime.install_dequant_forward is original

@@ -76,6 +76,16 @@ def cuda_available() -> bool:
     return bitexact.cuda_available()
 
 
+def runtime_versions() -> tuple[str, str, str]:
+    """Return benchmark dependency versions after the CUDA boundary."""
+
+    import bitsandbytes as bnb
+    import peft
+    import transformers
+
+    return bnb.__version__, peft.__version__, transformers.__version__
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
@@ -461,13 +471,10 @@ def run_measurement(args: argparse.Namespace) -> int:
     print(f"torch         {torch.__version__}")
     print(f"gpu           {torch.cuda.get_device_name(0)}")
 
-    import bitsandbytes as bnb
-    import peft
-    import transformers
-
-    print(f"bitsandbytes  {bnb.__version__}")
-    print(f"transformers  {transformers.__version__}")
-    print(f"peft          {peft.__version__}")
+    bnb_version, peft_version, transformers_version = runtime_versions()
+    print(f"bitsandbytes  {bnb_version}")
+    print(f"transformers  {transformers_version}")
+    print(f"peft          {peft_version}")
     print(f"weights       {weights}")
     print(f"seq           {args.seq}")
     print(f"batch         {args.batch}")
