@@ -827,6 +827,7 @@ class TestSecurityHardening:
             assert "\x1b" not in res.output
             assert "PWNED" not in res.output
 
+    @pytest.mark.requires_symlink
     def test_data_train_symlink_out_of_cwd_not_hashed(self, tmp_path):
         """A symlinked data.train must not be followed when computing data_sha."""
         import os
@@ -837,10 +838,7 @@ class TestSecurityHardening:
         with runner.isolated_filesystem():
             outside = tmp_path / "secret.txt"
             outside.write_text("secret", encoding="utf-8")
-            try:
-                os.symlink(outside, "train.jsonl")
-            except (OSError, NotImplementedError):
-                pytest.skip("symlink not permitted on this platform")
+            os.symlink(outside, "train.jsonl")
             cfg = load_config_from_string(_CONFIG_MIN)  # data.train = train.jsonl
             prov = _compute_provenance(cfg)
             # config_sha always present; data_sha omitted for the symlink.

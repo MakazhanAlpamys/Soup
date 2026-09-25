@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import json
 import os
 import re
 from pathlib import Path
@@ -43,6 +44,8 @@ _UNWIRED_TRAINING_TUNABLES = (
     "checkpoint_eval_tasks",
     "checkpoint_keep_top",
     "early_stop_patience",
+    "convergence_window",
+    "convergence_rel_tol",
 )
 
 
@@ -77,6 +80,32 @@ def _format_training_complete_loss(result: dict) -> str:
     ):
         return f"Loss: [bold]{result['final_loss']:.4f}[/]"
     return f"Loss: [bold]{result['initial_loss']:.4f} -> {result['final_loss']:.4f}[/]"
+
+
+def _train_sample_count(dcfg, dataset) -> int:
+    """Rows training will actually consume (#1054).
+
+    For ``format: pre_tokenized`` the rows come from the Arrow cache at
+    ``data.tokenized_path`` (loaded later, in the trainer), not from
+    ``load_dataset`` — which sees the ORIGINAL ``data.train`` file and drops
+    every row for want of an ``input_ids`` column, printing "0 train samples"
+    for a run that then trains on the whole cache. Read the count preprocess
+    recorded instead, falling back to the loader's view if it is unavailable or
+    not a plausible count (a negative ``row_count`` is a corrupt or hand-edited
+    metadata.json, and printing "Loaded: -3 train samples" helps nobody).
+    """
+    rows = len(dataset.get("train", []))
+    if dcfg.format != "pre_tokenized" or not dcfg.tokenized_path:
+        return rows
+    try:
+        with open(
+            os.path.join(dcfg.tokenized_path, "metadata.json"), encoding="utf-8"
+        ) as f:
+            count = json.load(f).get("row_count")
+    except (OSError, ValueError):
+        return rows
+    valid = isinstance(count, int) and not isinstance(count, bool) and count >= 0
+    return count if valid else rows
 
 
 def _build_hardware_fit_input(cfg):
@@ -674,6 +703,17 @@ def train(
         console.print(f"[red]{markup_escape(str(exc))}[/]")
         raise typer.Exit(code=2) from exc
 
+    # An unregistered data.chat_template name raises KeyError in the trainer,
+    # after the model has loaded. Check it before anything is downloaded.
+    from soup_cli.data.chat_templates import resolve_chat_template
+    from soup_cli.utils.terminal import for_terminal
+
+    try:
+        resolve_chat_template(cfg.data.chat_template)
+    except KeyError as exc:
+        console.print(f"[red]Invalid data.chat_template:[/] {for_terminal(exc.args[0])}")
+        raise typer.Exit(1) from exc
+
     # v0.72.3 — --resume / --hf-resume now work with layer streaming. v0.72.0-.2
     # refused them because a streamed model's `named_parameters()` carry an
     # `.inner.` segment that `load_state_dict` narrows away, so PEFT matched
@@ -1188,7 +1228,9 @@ def train(
         backend_label = "unsloth [green](fast mode)[/]"
 
     quant_label = cfg.training.quantization
-    if cfg.training.quantization_aware:
+    if cfg.training.quantization_aware == "quest":
+        quant_label = "mixed W4/A4+A16 (QuEST fake quant)"
+    elif cfg.training.quantization_aware:
         quant_label += " + QAT"
 
     # v0.53.2 review-fix: classifier-family tasks train a sequence-classification
@@ -1253,14 +1295,34 @@ def train(
             raise typer.Exit(1)
 
     # Validate QAT configuration
-    if cfg.training.quantization_aware:
+    if (
+        cfg.training.quantization_aware is True
+        or cfg.training.quantization_aware == "fp8"
+    ):
         from soup_cli.utils.qat import validate_qat_config
 
         qat_errors = validate_qat_config(
             cfg.training.quantization, cfg.backend, cfg.modality,
+            quantization_aware=cfg.training.quantization_aware,
+            fp8_recipe=cfg.training.fp8_recipe,
+            check_card=not dry_run,
         )
         for err in qat_errors:
-            console.print(f"[red]QAT error:[/] {err}")
+            console.print(f"[red]QAT error:[/] {markup_escape(err)}")
+        if dry_run and cfg.training.quantization_aware == "fp8" and cfg.backend != "unsloth":
+            # #1154 review: a dry run validates the config, and FP8 configs are
+            # routinely written on a laptop for a remote card, so the local card
+            # is a note here -- printed before any error exit, so a dry run that
+            # also lacks torchao still shows the whole picture. The real run
+            # still stops on the card. (Unsloth: its refusal is the answer.)
+            from soup_cli.utils.fp8 import fp8_training_supported
+
+            card_ok, card_reason = fp8_training_supported(cfg.training.fp8_recipe)
+            if not card_ok:
+                console.print(
+                    "[yellow]Note:[/] this machine could not run it: "
+                    f"{markup_escape(card_reason)}"
+                )
         if qat_errors:
             raise typer.Exit(1)
 
@@ -1404,7 +1466,9 @@ def train(
         cfg.data,
         preserve_source_columns=cfg.task == "grpo",
     )
-    console.print(f"[green]Loaded:[/] {len(dataset['train'])} train samples")
+    console.print(
+        f"[green]Loaded:[/] {_train_sample_count(cfg.data, dataset)} train samples"
+    )
 
     # Capture the --tracker CLI value BEFORE the local ExperimentTracker
     # shadows it (v0.43.0 review fix — name-collision regression).

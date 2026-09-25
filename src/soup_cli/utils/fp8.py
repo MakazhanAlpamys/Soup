@@ -12,7 +12,8 @@ Requires:
   B100, B200. Rowwise recipes also need a torch that dispatches their kernel on
   the card (Ada >= 2.7, RTX 50 >= 2.8, 11.x >= 2.10) and never run on Windows
   (#835).
-- torchao >= 0.5.0 OR transformer-engine >= 1.0
+- torchao (the floor is TORCHAO_MIN_VERSION in utils/torchao_compat.py, #826)
+  OR transformer-engine >= 1.0
 - CUDA 12.0+
 """
 
@@ -20,7 +21,18 @@ from __future__ import annotations
 
 from typing import Literal, Union
 
+from soup_cli.utils.torchao_compat import TORCHAO_MIN_VERSION
+
 QuantizationAwareLike = Union[bool, Literal["fp8"]]
+
+
+def is_torchao_float8_available() -> bool:
+    """True when torchao's float8 converter, the one Soup applies, is importable."""
+    try:
+        from torchao.float8 import convert_to_float8_training  # noqa: F401
+    except ImportError:
+        return False
+    return True
 
 
 def is_fp8_available() -> bool:
@@ -91,6 +103,24 @@ _FP8_GPU_REFUSAL = (
     "FP8 training requires an Ada or newer GPU (compute capability >= 8.9): "
     "RTX 40/50-series, L4, L40S, RTX 6000 Ada, Hopper (H100/H200) or "
     "Blackwell (B100/B200)."
+)
+
+
+class FP8DependencyMissingError(RuntimeError):
+    """An explicitly requested FP8 setting whose converter, torchao, is not installed.
+
+    The sibling of :class:`FP8HardwareUnsupportedError`, and stopped the same way
+    (#835 ruling, 2026-09-19): whether the reason is the card or a missing
+    package does not change what the user asked for, and a run that trains in
+    bf16 under a config saying FP8 records settings that did not happen.
+    """
+
+
+#: One message for both FP8 paths, naming the fix rather than the internals.
+FP8_TORCHAO_MISSING = (
+    "FP8 was requested (quantization_aware: fp8 or fp8_attention: true), but "
+    "torchao's float8 training is not installed, so nothing would be converted. "
+    'Install it with: pip install "soup-cli[qat]"'
 )
 
 
@@ -220,13 +250,14 @@ def apply_fp8_training(
         recipe: Scaling recipe name. Default ``"tensorwise"``.
 
     Returns:
-        True on success, False if the torchao/transformer-engine dependency is
-        missing or the conversion failed. A card that cannot run ``recipe``
-        raises instead, whether or not the dependency is present.
+        True on success, False if the conversion itself failed.
 
     Raises:
         FP8HardwareUnsupportedError: this card, OS or torch build cannot run
             ``recipe`` (#835). Nothing is converted, and the run must stop.
+        FP8DependencyMissingError: torchao's float8 training is not installed
+            (#835 ruling). Checked after the card, so an unsupported card is
+            named as the reason rather than a package that would not help.
     """
     # The hardware gate runs FIRST, before the dependency probe (#1044 review).
     # torchao is not a default dependency, so "absent" is the common case: asking
@@ -238,16 +269,21 @@ def apply_fp8_training(
         raise FP8HardwareUnsupportedError(reason)
 
     if not is_fp8_available():
-        return False
+        raise FP8DependencyMissingError(FP8_TORCHAO_MISSING)
 
     try:
         from torchao.float8 import convert_to_float8_training
         from torchao.float8.config import Float8LinearConfig
+    except ImportError as exc:
+        # transformer-engine alone satisfies is_fp8_available(), but this
+        # converter is torchao's: that box is missing torchao just the same.
+        raise FP8DependencyMissingError(FP8_TORCHAO_MISSING) from exc
 
+    try:
         config = Float8LinearConfig.from_recipe_name(recipe)
         convert_to_float8_training(model, config=config)
         return True
-    except (ImportError, RuntimeError, ValueError):
+    except (RuntimeError, ValueError):
         return False
 
 
@@ -302,7 +338,7 @@ def validate_fp8_config(
     if not is_fp8_available():
         errors.append(
             "FP8 training dependencies are not installed. "
-            "Install with: pip install torchao (>=0.5.0)"
+            f"Install with: pip install torchao (>={TORCHAO_MIN_VERSION})"
         )
 
     return errors

@@ -95,7 +95,8 @@ def test_apply_v028_speed_memory_no_exception(task: str, feature: str, monkeypat
     # A card that CAN run FP8 (#835/#1044): since the hardware gate moved ahead
     # of the dependency probe, an explicit FP8 request on a machine without CUDA
     # -- every CI runner here -- is refused rather than degraded, which is the
-    # ruling. This row is about the OTHER half: a missing torchao still degrades.
+    # ruling. The fp8 row is the OTHER half, INVERTED by the 2026-09-19 ruling:
+    # a missing torchao used to degrade here and now stops the run, per trainer.
     import sys
 
     import torch
@@ -108,6 +109,17 @@ def test_apply_v028_speed_memory_no_exception(task: str, feature: str, monkeypat
     monkeypatch.setattr(torch.version, "cuda", "12.4")
 
     tcfg = _make_tcfg(feature)
+    if feature == "fp8":
+        from soup_cli.utils.fp8 import FP8DependencyMissingError
+
+        # Missing whether or not this CI job installs torchao.
+        monkeypatch.setattr("soup_cli.utils.fp8.is_fp8_available", lambda: False)
+        with pytest.raises(FP8DependencyMissingError):
+            vf.apply_v028_speed_memory(
+                model=MagicMock(), tcfg=tcfg, base_model="meta-llama/Llama-3.2-1B",
+                console=None,
+            )
+        return
     result = vf.apply_v028_speed_memory(
         model=MagicMock(),
         tcfg=tcfg,
@@ -367,18 +379,11 @@ def test_trainer_module_calls_apply_v028_speed_memory(module_path: str) -> None:
 
     mod = importlib.import_module(module_path)
     src = inspect.getsource(mod)
-    # SFT predates the shared helper extraction (v0.33.0 #43) and inlines
-    # apply_cut_ce / apply_fp8_training / kernel_picker directly; the other
-    # 10 trainers all delegate to apply_v028_speed_memory.
-    has_helper = "apply_v028_speed_memory" in src
-    has_inline_features = (
-        "apply_cut_ce" in src
-        and "apply_fp8_training" in src
-    )
-    assert has_helper or has_inline_features, (
-        f"{module_path} does not call apply_v028_speed_memory or the "
-        "underlying feature patchers directly — v0.28.0 features will "
-        "silently no-op for this trainer."
+    # v0.33.0 #43 / #800 — all 11 transformer-backend trainers delegate
+    # to apply_v028_speed_memory.
+    assert "apply_v028_speed_memory" in src, (
+        f"{module_path} does not call apply_v028_speed_memory — "
+        "v0.28.0 features will silently no-op for this trainer."
     )
 
 

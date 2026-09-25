@@ -206,7 +206,7 @@ def validate_tts_compat(*, task: str, modality: str, backend: str) -> None:
 #
 # Two TTS training workflows are supported (see ``trainer/tts.py``):
 #
-# * **Pre-encoded chat mode** (``data.format`` in {chat, sharegpt, chatml, auto}):
+# * **Pre-encoded chat mode** (``data.format`` in {sharegpt, chatml, auto}):
 #   the operator runs the family's audio codec OFFLINE so the assistant turn
 #   already contains the discrete codec-token string. Training is then plain
 #   next-token cross-entropy — identical to SFT — and runs on any GPU. This is
@@ -219,8 +219,7 @@ def validate_tts_compat(*, task: str, modality: str, backend: str) -> None:
 #   is missing.
 TTS_CODEC_PACKAGES: Mapping[str, str] = MappingProxyType({
     "orpheus": "snac",
-    "sesame_csm": "moshi",
-    "llasa": "xcodec2",
+    "llasa": "torchaudio",
     "spark": "sparktts",
     "oute": "outetts",
 })
@@ -236,9 +235,15 @@ _TTS_EMOTION_TEMPLATE: Mapping[str, str] = MappingProxyType({
 
 
 def tts_codec_package(family: str) -> str:
-    """Return the pip package the live-codec path needs for ``family``."""
+    """Return the installable live-codec package, rejecting stale claims."""
     canonical = validate_tts_family(family)
-    return TTS_CODEC_PACKAGES[canonical]
+    try:
+        return TTS_CODEC_PACKAGES[canonical]
+    except KeyError as exc:
+        raise RuntimeError(
+            f"TTS family {canonical!r} has no Soup-compatible installable "
+            "live-codec package; see #265 for the upstream compatibility gate."
+        ) from exc
 
 
 def format_tts_messages(

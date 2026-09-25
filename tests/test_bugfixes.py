@@ -6,6 +6,7 @@ from unittest.mock import patch
 import pytest
 
 from soup_cli.config.schema import SoupConfig
+from tests.conftest import strip_ansi
 
 # --- BUG-001: Windows UnicodeEncodeError (no Unicode arrows/dashes in output) ---
 
@@ -1126,7 +1127,7 @@ class TestValidateAutoDetect:
         result = runner.invoke(app, ["data", "validate", str(filepath)])
         assert result.exit_code == 0
         assert "Auto-detected format: alpaca" in result.output
-        assert "2/2 rows valid" in result.output
+        assert "2/2 rows valid" in strip_ansi(result.output)
 
     def test_validate_plaintext_auto_detect(self, tmp_path):
         """Plaintext data should be auto-detected without --format flag."""
@@ -1146,7 +1147,7 @@ class TestValidateAutoDetect:
         result = runner.invoke(app, ["data", "validate", str(filepath)])
         assert result.exit_code == 0
         assert "Auto-detected format: plaintext" in result.output
-        assert "2/2 rows valid" in result.output
+        assert "2/2 rows valid" in strip_ansi(result.output)
 
     def test_validate_explicit_format_still_works(self, tmp_path):
         """Explicit --format flag should override auto-detection."""
@@ -1170,7 +1171,7 @@ class TestValidateAutoDetect:
         )
         assert result.exit_code == 0
         assert "Auto-detected" not in result.output
-        assert "1/1 rows valid" in result.output
+        assert "1/1 rows valid" in strip_ansi(result.output)
 
     def test_validate_dpo_auto_detect(self, tmp_path):
         """DPO data should be auto-detected."""

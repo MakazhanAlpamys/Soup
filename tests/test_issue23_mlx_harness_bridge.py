@@ -139,7 +139,9 @@ def test_harness_drives_rich_and_persists_metrics_without_losing_throughput(
     assert metrics == [(5, 3.639, 0.432), (10, 1.976, 5.481)]
     assert [event.step for event in state.events.snapshot()] == [5, 10]
     output = capsys.readouterr().out
+    # ansi-ok: harness bridge formatted text, not CLI console
     assert "454 trained tokens / 20.0s, whole-run average" in output
+    # ansi-ok: harness bridge formatted text, not CLI console
     assert "22.7 tok/s" in output
     assert state.reloads == [((state.harness.DEFAULT_MODEL,), {
         "adapter_path": str(state.artifacts / "out"),

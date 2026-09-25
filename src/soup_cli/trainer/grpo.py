@@ -127,7 +127,14 @@ def _make_grpo_trainer_variant_cached(base_cls: type, variant: str) -> type:
                 self._warn_fallback("missing per-token log-prob inputs")
                 return None
 
-            beta_attr = getattr(getattr(self, "args", None), "beta", None)
+            # #1232: the KL weight is trl's own ``self.beta``. trl reads that
+            # attribute to decide whether to run the reference forward and to
+            # weight the KL in its stock loss, so the reference is in ``inputs``
+            # exactly when this loss needs it; the reward-hack controller writes
+            # it at runtime. ``args.beta`` covers bases without the attribute.
+            beta_attr = getattr(self, "beta", None)
+            if beta_attr is None:
+                beta_attr = getattr(getattr(self, "args", None), "beta", None)
             beta = float(beta_attr) if beta_attr is not None else 0.0
             delta = getattr(self, "_soup_grpo_delta", None)
             ref_logp = _read_attr(inputs, "ref_per_token_logps")
@@ -619,14 +626,29 @@ class GRPOTrainerWrapper:
             cfg.data,
         )
         if tcfg.quantization in ("4bit", "8bit", "mxfp4"):
-            self.model = prepare_model_for_kbit_training(self.model)
+            from soup_cli.utils.layer_stream import should_enable_hf_gradient_checkpointing
+
+            self.model = prepare_model_for_kbit_training(
+                self.model,
+                use_gradient_checkpointing=should_enable_hf_gradient_checkpointing(
+                    tcfg.gradient_checkpointing, stream_layers=tcfg.stream_layers
+                ),
+            )
 
         from soup_cli.utils.peft_wiring import (
             build_lora_config,
             resolve_lora_target_modules,
         )
 
-        target_modules = resolve_lora_target_modules(self.model, tcfg.lora.target_modules)
+        target_modules = resolve_lora_target_modules(self.model, tcfg.lora.target_modules, console)
+        # #798: moe_lora picks the expert-FFN targets. Without this the flag
+        # was accepted and ignored here, and on a fused-expert MoE the auto
+        # resolution leaves peft with nothing to attach.
+        from soup_cli.utils.moe import resolve_moe_lora_targets
+
+        target_modules = resolve_moe_lora_targets(
+            self.model, tcfg, target_modules, console
+        )
 
         lora_config = build_lora_config(
             tcfg.lora,

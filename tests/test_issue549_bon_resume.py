@@ -10,6 +10,8 @@ from types import SimpleNamespace
 import pytest
 from typer.testing import CliRunner
 
+from tests.conftest import strip_ansi
+
 
 def _args(tmp_path, *extra: str) -> list[str]:
     return [
@@ -84,7 +86,7 @@ def test_late_failure_resumes_without_replaying_completed_prefix(tmp_path, monke
 
     first = CliRunner().invoke(app, _args(tmp_path))
     assert first.exit_code == 1, (first.output, repr(first.exception))
-    assert "1/3 prompts" in first.output
+    assert "1/3 prompts" in strip_ansi(first.output)
     assert "--resume" in first.output
     assert "simulated late" not in first.output
     assert not (tmp_path / "sft.jsonl").exists()
@@ -164,7 +166,7 @@ def test_late_value_error_reports_checkpoint_recovery(
     result = CliRunner().invoke(app, _args(tmp_path))
 
     assert result.exit_code == 1, (result.output, repr(result.exception))
-    assert "1/2 prompts" in result.output
+    assert "1/2 prompts" in strip_ansi(result.output)
     assert "--resume" in result.output
     assert "sft.jsonl.checkpoint.jsonl" in result.output
     assert "private" not in result.output
@@ -372,6 +374,7 @@ def test_checkpoint_rejects_duplicate_or_reordered_indexes(tmp_path, monkeypatch
         raise AssertionError("non-sequential checkpoint must fail closed")
 
 
+@pytest.mark.requires_symlink
 def test_checkpoint_symlink_is_rejected(tmp_path, monkeypatch):
     import pytest
 
@@ -381,10 +384,7 @@ def test_checkpoint_symlink_is_rejected(tmp_path, monkeypatch):
     target = tmp_path / "target.jsonl"
     target.write_text("{}\n", encoding="utf-8")
     link = tmp_path / "checkpoint.jsonl"
-    try:
-        link.symlink_to(target)
-    except OSError:
-        pytest.skip("symlink creation is unavailable")
+    link.symlink_to(target)
     with pytest.raises(ValueError, match="symlink"):
         load_checkpoint(str(link), digest="d", total=1)
 

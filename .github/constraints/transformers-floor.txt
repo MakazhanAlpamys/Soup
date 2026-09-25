@@ -6,6 +6,7 @@
 # Plotext 6.0.0 is pinned here so one CI cell exercises the real Figure API rather
 # than relying only on the fake 5.x/6.x contract doubles in the unit suite.
 torch==2.6.0
+torchaudio==2.6.0
 transformers==5.16.1
 trl==0.29.0
 peft==0.20.0

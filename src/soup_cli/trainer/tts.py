@@ -1,16 +1,17 @@
 """v0.71.20 #131 — Live TTS (text-to-speech) fine-tuning trainer.
 
-``TTSTrainerWrapper`` lifts the v0.52.0 ``build_tts_trainer`` schema stub. The
-five upstream TTS families (orpheus / sesame_csm / llasa / spark / oute) are
-all decoder language models. A TTS fine-tune trains the LM with next-token
-cross-entropy over interleaved ``[text][audio-codec-token]`` sequences — the
-exact objective the SFT trainer already implements. So this wrapper reuses
-:class:`~soup_cli.trainer.sft.SFTTrainerWrapper` for model/tokenizer/LoRA/CE
-and layers TTS-specific behaviour on top:
+``TTSTrainerWrapper`` lifts the v0.52.0 ``build_tts_trainer`` schema stub.
+The codec-string families (orpheus / llasa / spark / oute) can train as
+decoder language models with next-token cross-entropy over interleaved
+``[text][audio-codec-token]`` sequences, so this wrapper reuses
+:class:`~soup_cli.trainer.sft.SFTTrainerWrapper`. Sesame CSM is deliberately
+excluded from that claim: current CSM uses parallel Mimi codebooks plus text
+through a multimodal processor and needs a dedicated trainer. This wrapper
+layers TTS-specific behaviour on top:
 
-* **Pre-encoded chat mode** (live, validated): the operator runs the family's
-  audio codec OFFLINE, so the assistant turn already carries the codec-token
-  string. Training is then plain SFT cross-entropy and runs on any GPU.
+* **Pre-encoded chat mode** (live, validated for codec-string families): the
+  operator runs the audio codec OFFLINE, so the assistant turn already carries
+  the codec-token string. Training is then plain SFT cross-entropy and runs on any GPU.
   Soup's per-family contribution here is (a) emotion-control templating for
   emotion-conditioned families and (b) registration of operator-supplied
   codec special tokens (``data.new_special_tokens``) with an embedding resize.
@@ -73,19 +74,27 @@ class TTSTrainerWrapper(SFTTrainerWrapper):
             self._require_tts_codec(family)
             from soup_cli.utils.tts_codec import encode_tts_dataset
 
+            codec_name = "XCodec2" if family == "llasa" else tts_codec_package(family)
             console.print(
                 f"[green]TTS live-codec:[/] encoding audio with the "
-                f"{tts_codec_package(family)!r} codec (family={family})"
+                f"{codec_name!r} codec (family={family})"
             )
             # device is set by the SFTTrainerWrapper.__init__; getattr keeps a
             # bare object.__new__ test fixture (no device) working — default
             # None falls through to CPU encoding in encode_tts_dataset.
-            dataset = encode_tts_dataset(
-                dataset,
-                family,
-                device=getattr(self, "device", None),
-                console=console,
-            )
+            encode_device = getattr(self, "device", None)
+            try:
+                dataset = encode_tts_dataset(
+                    dataset,
+                    family,
+                    device=encode_device,
+                    console=console,
+                )
+            finally:
+                if family == "llasa":
+                    from soup_cli.utils.tts_codec import clear_xcodec2_cache
+
+                    clear_xcodec2_cache(encode_device)
 
         # Pre-encoded chat mode: plain SFT cross-entropy over the codec tokens.
         console.print(
@@ -99,13 +108,36 @@ class TTSTrainerWrapper(SFTTrainerWrapper):
         """Raise a friendly per-family error when the live codec is absent."""
         import importlib.util
 
+        if family == "sesame_csm":
+            from soup_cli.utils.tts_codec import csm_live_codec_error
+
+            raise csm_live_codec_error()
+        if family == "llasa":
+            try:
+                __import__("torchaudio")
+            except (ImportError, OSError) as exc:
+                raise RuntimeError(
+                    "Llasa live-codec needs a torchaudio build that matches the "
+                    "installed torch release for the Transformers-native XCodec2 "
+                    "feature extractor. Install the audio extra with "
+                    "pip install \"soup-cli[audio]\", and pin matching torch/"
+                    "torchaudio versions if your resolver does not."
+                ) from exc
+            try:
+                from transformers import Xcodec2Model  # noqa: F401
+            except ImportError as exc:
+                raise RuntimeError(
+                    "Llasa live-codec needs Transformers-native XCodec2 support "
+                    "(transformers>=5.16.1, the Soup train-extra floor)."
+                ) from exc
+            return
         pkg = tts_codec_package(family)
         if importlib.util.find_spec(pkg) is None:
             raise RuntimeError(
                 f"TTS family '{family}' live-codec training requires the "
                 f"'{pkg}' package (audio codec). Install it with "
                 f"`pip install {pkg}`, or pre-encode your audio to codec "
-                "tokens offline and train with data.format=chat."
+                "tokens offline and train with data.format=chatml."
             )
 
     def _apply_tts_templating(
