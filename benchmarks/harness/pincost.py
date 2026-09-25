@@ -28,6 +28,11 @@ No model download is required when ``--weights`` points to a local checkpoint
 or an already-resolved local cache.
 
 A machine without CUDA exits 0 with an explicit skip.
+
+The default verdict is deliberately not a reproduction claim unless the
+measured pinned/pageable ratio is at least 1.5x and exceeds the observed
+run-to-run spread. The historical 6.56x value is reference context, not a
+required exact threshold.
 """
 
 from __future__ import annotations
@@ -52,6 +57,36 @@ DEFAULT_REPEATS = 3
 DEFAULT_SEED = 3
 INPUT_SEED = 17
 DEVICE = "cuda"
+MIN_PINNING_RATIO = 1.5
+
+
+class MeasurementInvalidError(RuntimeError):
+    """The timing data cannot support a pinning verdict."""
+
+
+def pinning_verdict(
+    pinned_rates: list[float],
+    pageable_rates: list[float],
+) -> tuple[bool, float, float, float, float]:
+    """Return verdict, medians, ratio, and maximum relative spread."""
+    import math
+
+    if not pinned_rates or not pageable_rates:
+        raise MeasurementInvalidError("both timing arms must have measurements")
+    values = [*pinned_rates, *pageable_rates]
+    if any(not math.isfinite(value) or value <= 0 for value in values):
+        raise MeasurementInvalidError("timing measurements must be finite and positive")
+
+    pinned_median = float(median(pinned_rates))
+    pageable_median = float(median(pageable_rates))
+    ratio = pinned_median / pageable_median
+    spreads = [
+        (max(rates) - min(rates)) / median(rates)
+        for rates in (pinned_rates, pageable_rates)
+    ]
+    spread = max(spreads)
+    reproduced = ratio >= MIN_PINNING_RATIO and ratio > 1.0 + spread
+    return reproduced, pinned_median, pageable_median, ratio, spread
 
 
 def parse_args() -> argparse.Namespace:
@@ -568,20 +603,10 @@ def run_measurement(args: argparse.Namespace) -> int:
                 gc.collect()
                 torch.cuda.empty_cache()
 
-    pinned_median = float(
-        median(pinned_rates)
+    reproduced, pinned_median, pageable_median, direct_ratio, spread = (
+        pinning_verdict(pinned_rates, pageable_rates)
     )
-    pageable_median = float(
-        median(pageable_rates)
-    )
-
-    direct_ratio = (
-        pinned_median / pageable_median
-    )
-
-    inverse_ratio = (
-        pageable_median / pinned_median
-    )
+    inverse_ratio = pageable_median / pinned_median
 
     print()
     print(
@@ -600,11 +625,21 @@ def run_measurement(args: argparse.Namespace) -> int:
         f"pin=False/pin=True ratio "
         f"{inverse_ratio:.2f}x"
     )
+    print(f"run-to-run spread       {spread:.2%}")
     print(
         "Historical reference:    "
         "425.07 tok/s vs 64.79 tok/s, 6.56x"
     )
-    print("RESULT: pinning cost measured")
+    if reproduced:
+        print("RESULT: historical pinning cost relationship reproduced")
+        return 0
+
+    print("ERROR: measured pinning advantage is absent or too small")
+    print(
+        f"Required: ratio >= {MIN_PINNING_RATIO:.2f}x and above the "
+        "observed spread"
+    )
+    return 1
 
     return 0
 
@@ -617,6 +652,9 @@ def main() -> int:
             return run_self_test()
 
         return run_measurement(args)
+    except MeasurementInvalidError as exc:
+        print(f"ERROR: invalid measurement: {exc}")
+        return 3
     except Exception as exc:
         print(
             f"ERROR: pincost.py failed: "
