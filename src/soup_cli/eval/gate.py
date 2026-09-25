@@ -265,22 +265,38 @@ def _emit_baseline_warning(
     logger.warning("%s", message)
 
 
-def _registry_provenance(rows: list[dict]) -> Optional[dict[str, object]]:
-    """Best-effort stamp from eval_results ``details_json`` rows."""
-    for row in rows:
-        raw = row.get("details_json")
-        if not raw:
-            continue
-        try:
-            details = json.loads(raw) if isinstance(raw, str) else raw
-        except (TypeError, ValueError, json.JSONDecodeError):
-            continue
-        if not isinstance(details, Mapping):
-            continue
-        prov = details.get(_BASELINE_PROVENANCE_KEY)
-        if isinstance(prov, Mapping):
-            return dict(prov)
+def _row_provenance(row: Mapping[str, object]) -> Optional[dict[str, object]]:
+    """Best-effort stamp from one eval_results row's ``details_json``."""
+    raw = row.get("details_json")
+    if not raw:
+        return None
+    try:
+        details = json.loads(raw) if isinstance(raw, str) else raw
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return None
+    if not isinstance(details, Mapping):
+        return None
+    prov = details.get(_BASELINE_PROVENANCE_KEY)
+    if isinstance(prov, Mapping):
+        return dict(prov)
     return None
+
+
+def _newest_row_per_benchmark(rows: list[dict]) -> dict[str, dict]:
+    """Keep the newest scored row for each benchmark.
+
+    ``rows`` arrive newest first (``created_at DESC, rowid DESC``), so the
+    first row seen for a benchmark is the one that counts. Score and
+    provenance must both come from that row: a re-measurement replaces the
+    stale score instead of only silencing its warning (#1224).
+    """
+    newest: dict[str, dict] = {}
+    for row in rows:
+        name = row.get("benchmark")
+        if not name or row.get("score") is None or name in newest:
+            continue
+        newest[name] = row
+    return newest
 
 
 def resolve_baseline(
@@ -317,16 +333,22 @@ def resolve_baseline(
                     f"registry baseline not found: {ref} (use `soup registry list`)"
                 )
             rows = store.get_eval_results(entry_id)
-        scores = {
-            row.get("benchmark", ""): float(row.get("score", 0.0))
-            for row in rows
-            if row.get("benchmark") and row.get("score") is not None
-        }
+        newest = _newest_row_per_benchmark(rows)
+        scores = {name: float(row["score"]) for name, row in newest.items()}
         # Registry rows predate the stamp (or carry it inside details_json).
-        provenance = _registry_provenance(rows)
-        message = _provenance_warning(provenance)
-        if message is not None and scores:
-            _emit_baseline_warning(message, warn=warn)
+        # Checked per benchmark: re-measuring one benchmark says nothing about
+        # the scale of another that was not re-measured. Benchmarks sharing a
+        # problem share one warning, which names them.
+        stale: dict[str, list[str]] = {}
+        for name, row in newest.items():
+            message = _provenance_warning(_row_provenance(row))
+            if message is not None:
+                stale.setdefault(message, []).append(name)
+        for message, names in stale.items():
+            _emit_baseline_warning(
+                f"{message} Affected benchmark(s): {', '.join(sorted(names))}.",
+                warn=warn,
+            )
         return scores
 
     # Filesystem path
