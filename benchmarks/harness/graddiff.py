@@ -1,25 +1,32 @@
 #!/usr/bin/env python3
-"""Reproduce the STEP 2b gradient-difference investigation.
+"""Reconstruct the historical STEP 2b GRADDIFF investigation.
 
-This is the published GRADDIFF slice from issue #379. The recorded experiment
-compared all LoRA gradients after one backward, then ran each model's own
-5-step loss curve twice.
+This harness is a reconstruction of the published GRADDIFF slice from issue
+#379. It does not replace the historical protocol with a newer repeated-
+backward variant. The documented H100 observation was:
 
-Historical observation on the H100:
 - Qwen2.5-32B-Instruct NF4, bf16 compute
 - first backward: streamed vs resident LoRA gradients were 256/256 exact
 - streamed self-curve: not identical on the second run
-- resident self-curve: identical
+- resident self-curve identical: a deliberate reconstruction/control condition
+  used by this harness, not a claim about the recorded measurement
 
-That first result was initially misleading. The later STEP 2b measurements
-showed that the streamed backward becomes non-reproducible from the second
-backward onward, while the resident backward remains deterministic.
+The historical record is the source of truth for the expected pattern. The
+reconstruction choices below intentionally mirror the original experiment's
+structure and keep the default behavior aligned with that historical target:
 
-This harness intentionally tests the original GRADDIFF experiment rather than
-silently replacing it with the later repeated-backward protocol. Therefore its
-CUDA default succeeds only when the historical pattern is actually observed.
-On repaired main, where that historical divergence is absent, the harness
-should report that the historical result was not reproduced and exit non-zero.
+- sequence length: 128 tokens per sample
+- training curve: 5 batches, each used twice for the streamed and resident
+  self-checks
+- optimizer: AdamW with learning rate 1.0e-3
+- one backward comparison followed by two self-curves for each model replica
+
+The later STEP 2b measurements showed that the streamed backward becomes non-
+reproducible from the second backward onward while the resident backward remains
+deterministic. This harness therefore succeeds only when the historical
+GRADDIFF pattern is observed on the default path with the shipped repair
+disabled. On repaired main, where that historical divergence is absent, it
+reports that the historical result was not reproduced and exits non-zero.
 
 Requirements
 ------------
@@ -30,17 +37,26 @@ Requirements
 - No model download is performed
 
 A machine without CUDA exits 0 with an explicit skip.
+
+Exit codes
+----------
+0 historical GRADDIFF pattern reproduced (or CUDA skip)
+1 historical pattern not reproduced
+2 invalid CLI/input
+3 invalid or non-finite measurement
 """
 
 from __future__ import annotations
 
 import argparse
 import gc
+import math
 import sys
 from pathlib import Path
 from typing import Any
 
 import bitexact
+from mechanism_cost import install_historical_control
 
 DTYPE = "bfloat16"
 DEFAULT_SEQ = 128
@@ -50,6 +66,10 @@ DEFAULT_CURVE_STEPS = 5
 DEFAULT_SEED = 3
 INPUT_SEED = 17
 DEVICE = "cuda"
+
+
+class MeasurementInvalidError(RuntimeError):
+    """The run cannot support a numerical verdict."""
 
 
 def cuda_available() -> bool:
@@ -210,12 +230,12 @@ def compare_gradients(
             )
 
         if not torch.isfinite(streamed_gradient).all():
-            raise RuntimeError(
+            raise MeasurementInvalidError(
                 f"streamed gradient contains non-finite values: {name}"
             )
 
         if not torch.isfinite(reference_gradient).all():
-            raise RuntimeError(
+            raise MeasurementInvalidError(
                 f"reference gradient contains non-finite values: {name}"
             )
 
@@ -294,7 +314,13 @@ def curve_diff(
     max_abs = 0.0
     max_rel = 0.0
 
-    for left, right in zip(first, second, strict=True):
+    for index, (left, right) in enumerate(zip(first, second, strict=True)):
+        if not math.isfinite(left) or not math.isfinite(right):
+            raise MeasurementInvalidError(
+                "loss curve contains non-finite values: "
+                f"left[{index}]={left!r}, right[{index}]={right!r}"
+            )
+
         difference = abs(left - right)
         max_abs = max(max_abs, difference)
         max_rel = max(
@@ -303,6 +329,27 @@ def curve_diff(
         )
 
     return first == second, max_abs, max_rel
+
+
+def historical_pattern_reproduced(
+    exact: int,
+    total: int,
+    streamed_equal: bool,
+    resident_equal: bool,
+) -> bool:
+    """Return the historical GRADDIFF verdict for the recorded control pattern."""
+
+    return (
+        exact == total
+        and total > 0
+        and not streamed_equal
+        and resident_equal
+    )
+
+
+def historical_pattern_exit_code(historical_pattern: bool) -> int:
+    """Return the CLI exit code for the historical GRADDIFF verdict."""
+    return 0 if historical_pattern else 1
 
 
 def run_self_test() -> int:
@@ -334,6 +381,9 @@ def run_self_test() -> int:
             f"({type(exc).__name__}: {exc})"
         )
         return 0
+    except MeasurementInvalidError as exc:
+        print(f"ERROR: invalid measurement: {exc}")
+        return 3
     except Exception as exc:
         raise RuntimeError(
             "negative acceptance test failed: unexpected exception "
@@ -348,7 +398,6 @@ def run_self_test() -> int:
 
 def run_measurement(args: argparse.Namespace) -> int:
     import torch
-    from peft import LoraConfig, TaskType
 
     from soup_cli.utils.layer_shard import shard_checkpoint
     from soup_cli.utils.layer_stream_runtime import (
@@ -437,33 +486,33 @@ def run_measurement(args: argparse.Namespace) -> int:
         quant_device=DEVICE,
     )
 
-    lora_config = LoraConfig(
-        r=16,
-        lora_alpha=32,
-        lora_dropout=0.0,
-        bias="none",
-        target_modules=["q_proj", "v_proj"],
-        task_type=TaskType.CAUSAL_LM,
-    )
+    lora_config = bitexact.lora_config()
 
-    streamed, runtime = build_streamed_model(
-        model_id=str(weights),
-        shard_dir=str(shard_dir),
-        index=index,
-        lora_config=lora_config,
-        device=DEVICE,
-        dtype=DTYPE,
-        buffers=args.buffers,
-        pin=True,
-        seed=DEFAULT_SEED,
-        quant="nf4",
-        double_quant=True,
-        tier="ram",
-    )
+    import soup_cli.utils.layer_stream_runtime as layer_runtime
 
+    original_install_dequant_forward = layer_runtime.install_dequant_forward
+    streamed = None
+    runtime = None
     reference = None
 
     try:
+        install_historical_control(layer_runtime)
+
+        streamed, runtime = build_streamed_model(
+            model_id=str(weights),
+            shard_dir=str(shard_dir),
+            index=index,
+            lora_config=lora_config,
+            device=DEVICE,
+            dtype=DTYPE,
+            buffers=args.buffers,
+            pin=True,
+            seed=DEFAULT_SEED,
+            quant="nf4",
+            double_quant=True,
+            tier="ram",
+        )
+
         actual_pinned = getattr(runtime, "pinned", None)
 
         if actual_pinned is not True:
@@ -525,6 +574,11 @@ def run_measurement(args: argparse.Namespace) -> int:
             reference,
             input_ids,
         )
+
+        if not torch.isfinite(streamed_loss) or not torch.isfinite(reference_loss):
+            raise MeasurementInvalidError(
+                "initial streamed/reference loss is non-finite"
+            )
 
         if not torch.equal(streamed_loss, reference_loss):
             diff = float(
@@ -615,11 +669,11 @@ def run_measurement(args: argparse.Namespace) -> int:
             f"max_abs={resident_abs:.6e} max_rel={resident_rel:.6e}"
         )
 
-        historical_pattern = (
-            exact == total
-            and total > 0
-            and not streamed_equal
-            and resident_equal
+        historical_pattern = historical_pattern_reproduced(
+            exact,
+            total,
+            streamed_equal,
+            resident_equal,
         )
 
         print()
@@ -628,7 +682,7 @@ def run_measurement(args: argparse.Namespace) -> int:
             print(
                 "RESULT: historical GRADDIFF pattern reproduced"
             )
-            return 0
+            return historical_pattern_exit_code(True)
 
         print(
             "ERROR: historical GRADDIFF pattern was not reproduced"
@@ -638,14 +692,17 @@ def run_measurement(args: argparse.Namespace) -> int:
             "streamed self-curve non-identical, "
             "resident self-curve identical"
         )
-        return 1
+        return historical_pattern_exit_code(False)
 
     finally:
         if reference is not None:
             del reference
 
-        runtime.close()
-        del streamed
+        layer_runtime.install_dequant_forward = original_install_dequant_forward
+        if runtime is not None:
+            runtime.close()
+        if streamed is not None:
+            del streamed
 
         gc.collect()
         torch.cuda.empty_cache()
