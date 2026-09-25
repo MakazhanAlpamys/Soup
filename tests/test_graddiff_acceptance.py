@@ -9,6 +9,8 @@ from types import SimpleNamespace
 import pytest
 import torch
 
+from tests.conftest import strip_ansi
+
 MODULE_PATH = (
     Path(__file__).resolve().parents[1]
     / "benchmarks"
@@ -26,6 +28,11 @@ assert SPEC is not None and SPEC.loader is not None
 
 module = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(module)
+
+
+def _plain(text: str) -> str:
+    """ANSI-stripped, whitespace-collapsed CLI output for assertions."""
+    return " ".join(strip_ansi(text).split())
 
 
 class FakeRuntime:
@@ -232,11 +239,12 @@ def test_run_measurement_reaches_abc_and_returns_historical_success(
     result = module.run_measurement(args)
 
     output = capsys.readouterr().out
+    plain = _plain(output)
 
-    assert "A grads: 1/1 bit-exact" in output
-    assert "B streamed self-identical: False" in output
-    assert "C resident self-identical: True" in output
-    assert "RESULT: historical GRADDIFF pattern reproduced" in output
+    assert "A grads: 1/1 bit-exact" in plain
+    assert "B streamed self-identical: False" in plain
+    assert "C resident self-identical: True" in plain
+    assert "RESULT: historical GRADDIFF pattern reproduced" in plain
     assert result == 0
 
 
@@ -260,11 +268,12 @@ def test_run_measurement_rejects_non_historical_verdict(
     result = module.run_measurement(args)
 
     output = capsys.readouterr().out
+    plain = _plain(output)
 
-    assert "A grads: 1/1 bit-exact" in output
-    assert "B streamed self-identical: True" in output
-    assert "C resident self-identical: True" in output
-    assert "historical GRADDIFF pattern was not reproduced" in output
+    assert "A grads: 1/1 bit-exact" in plain
+    assert "B streamed self-identical: True" in plain
+    assert "C resident self-identical: True" in plain
+    assert "historical GRADDIFF pattern was not reproduced" in plain
     assert result == 1
 
 
@@ -290,10 +299,11 @@ def test_run_measurement_rejects_non_matching_gradients(
     result = module.run_measurement(args)
 
     output = capsys.readouterr().out
+    plain = _plain(output)
 
-    assert "A grads: 0/1 bit-exact" in output
-    assert "B streamed self-identical: False" in output
-    assert "C resident self-identical: True" in output
+    assert "A grads: 0/1 bit-exact" in plain
+    assert "B streamed self-identical: False" in plain
+    assert "C resident self-identical: True" in plain
     assert result == 1
 
 
