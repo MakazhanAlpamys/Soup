@@ -12,6 +12,22 @@ reproducing 70+ versions of notes.
 
 ## [Unreleased]
 
+## [0.75.1] - 2026-09-21
+
+### Fixed
+
+- **A layer-streamed LoRA adapter saved as ZERO tensors under peft 0.21.0 (#1005 in #1010).** peft 0.21 selects an adapter's tensors by the prefixes it reads off `model.named_modules()` and keeps the matching `state_dict()` entries, where 0.20 filtered by the `lora_` substring; the streaming wrapper's module and parameter names carried `.inner.` while its `state_dict()` keys were canonical, so `trainer.save_model()`, every `save_steps` checkpoint and `get_peft_model_state_dict()` returned nothing, and nothing raised. The wrapper now enumerates the inner layer's tree at its own prefix (`named_modules()` / `named_children()`, with `train()` / `apply()` / `_apply()` reaching the inner layer explicitly), so names and keys are one spelling — which also keeps transformers' weight-decay grouping, built from `named_children()`, from silently dropping every LoRA parameter into the no-decay group. **Any adapter saved with `stream_layers: true` on peft>=0.21 before this fix holds zero tensors (a 40-byte `adapter_model.safetensors`, no error at save time) and cannot be recovered — re-train it on a Soup with this fix, or with `peft<0.21`.** Naming only; nothing on the streamed forward path changes. Ten peft-version-independent tests pin names == keys against a resident LoRA model; the four tests that documented the old asymmetry are inverted rather than deleted. No `peft<0.21` pin.
+
+- **A Ctrl+C arriving immediately after the Lambda controller started could still leave the instance running (#1073 in #1078).** `submit_lambda_run` spawned the controller outside the `try` that absorbs interrupts, so a SIGINT delivered between `Popen` returning and the waiting loop being entered — or one landing on the "still waiting" notice, which is written from the interrupt handler — unwound the parent while the controller was still terminating the paid instance in its `finally` block. The spawn and the notice now sit inside the guarded region: once the child exists, every path leads back to `proc.wait()` and the controller's exit code remains what the function returns. An interrupt raised before the child exists still propagates unchanged, and a `wait()` failure that is not an interrupt still surfaces rather than being retried.
+
+- `soup runs clean` now accepts `--no-keep-weights` to delete whole non-best checkpoints; `--keep-weights` (the default) keeps weights on every supported Click version — on Click 8.1 it previously deleted whole checkpoints (#1057)
+
+- **Cloud runs keep their outputs and their cleanup (#1058).** `soup train --cloud modal` now writes run outputs to the `soup-outputs` Modal volume and downloads them to the local output directory when the run ends (also after a failed run); previously checkpoints were lost with the container. `soup train --cloud lambda --cloud-submit`: pressing Ctrl+C now waits for the controller to terminate the Lambda instance; previously the controller was killed 0.25 s later and the instance could keep running (Linux/macOS).
+
+### Security
+
+- **Hardening across the CLI, the inference server, the Web UI, MCP execution, config parsing and `.can` handling — [GHSA-63h4-gvp4-r26g](https://github.com/MakazhanAlpamys/Soup/security/advisories/GHSA-63h4-gvp4-r26g).** Eight issues: Hugging Face credentials presented to a non-HF hub and `OPENAI_API_KEY` presented to any https judge host; `soup adapters verify --public-key` accepting a record whose backend is not ed25519; the Web UI rendering dataset and run content as HTML with no Content-Security-Policy; `soup serve` tool and adapter routes checking neither `Host` nor `Origin`; `soup mcp serve --allow-execute` not pinning every approved input; config regexes able to hang loading or training (the old guard ran the untrusted pattern against a probe); credential option values written to the audit log; and unbounded reads and YAML alias expansion when reading an untrusted `.can`. The advisory carries the affected range of each issue and says which credentials to rotate.
+
 ## [0.75.0] - 2026-09-12
 
 ### Added

@@ -171,8 +171,8 @@
 
       <!-- Tool Outputs Page -->
       <!-- v0.53.10 #155 — polls /api/tool-outputs every 3s. XSS-safe (uses
-           textContent, not innerHTML). Bearer token threaded via the
-           existing window._authToken bootstrap (v0.53.9 #95). -->
+           textContent, not innerHTML). Bearer token added by authFetch in
+           app.js, which holds it in a closure (#1136). -->
       <div id="page-tools" class="page">
         <div class="page-header">
           <h1 class="page-title">Tool Outputs</h1>

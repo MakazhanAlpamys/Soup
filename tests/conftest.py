@@ -13,9 +13,34 @@ import pytest
 GPU_SKIP_REASON = "needs a CUDA device (run the GPU subset with: pytest -m gpu --no-cov)"
 
 
+def _probe_initial_device_count() -> int:
+    """Probe the visible CUDA device count before any test initialises CUDA (#1128).
+
+    Under CUDA_VISIBLE_DEVICES="", PyTorch may report device_count() == 0 pre-init
+    but report 1 if a CUDA tensor is allocated post-init. Pinning the pre-init
+    count at session start keeps the gpu marker deterministic across the suite.
+    """
+    try:
+        import torch
+    except Exception:
+        return 0
+    try:
+        return int(torch.cuda.device_count()) if torch.cuda.is_available() else 0
+    except Exception:  # noqa: BLE001 — broken CUDA install or driver
+        return 0
+
+
+_INITIAL_CUDA_DEVICE_COUNT: int = _probe_initial_device_count()
+
+
+def _cuda_device_available() -> bool:
+    """Check if a usable CUDA device was visible at session start (#1128)."""
+    return _INITIAL_CUDA_DEVICE_COUNT > 0
+
+
 @functools.lru_cache(maxsize=None)
 def cuda_available() -> bool:
-    """THE one CUDA probe for the test suite (#833). Probed once per session.
+    """The build probe for test bodies; the gpu marker uses _cuda_device_available() (#833).
 
     Fifteen modules had grown a private copy of this, and nine of them turned it
     into an identical ``requires_cuda`` skipif, so ``pytest -m gpu`` had nothing
@@ -65,21 +90,45 @@ def can_symlink() -> bool:
     return True
 
 
+#: Why a ``requires_hardlink`` test was skipped (#1158).
+HARDLINK_SKIP_REASON = "this filesystem does not support hard links"
+
+
+@functools.lru_cache(maxsize=None)
+def can_hardlink() -> bool:
+    """Whether this filesystem/account supports creating hard links (#1158).
+
+    Probed once per session.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        target = os.path.join(tmp, "target")
+        with open(target, "w", encoding="utf-8"):
+            pass
+        try:
+            os.link(target, os.path.join(tmp, "link"))
+        except (OSError, NotImplementedError, AttributeError):
+            return False
+    return True
+
+
 def pytest_runtest_setup(item: pytest.Item) -> None:
-    """The one collection hook. Both capability markers go through here.
+    """The one collection hook. All capability markers go through here (#832, #833, #1158).
 
     pytest calls a plugin hook once per definition, and a module can only hold one
     ``pytest_runtest_setup`` -- a second ``def`` silently replaces the first, taking its
-    marker with it. Keeping the two checks in one function is what makes that impossible
+    marker with it. Keeping the checks in one function is what makes that impossible
     rather than merely unlikely, so add the next capability marker here too.
     """
     gpu = item.get_closest_marker("gpu")
-    if gpu is not None and not cuda_available():
+    if gpu is not None and not _cuda_device_available():
         why = gpu.kwargs.get("reason")
         pytest.skip(f"{GPU_SKIP_REASON}: {why}" if why else GPU_SKIP_REASON)
 
     if item.get_closest_marker("requires_symlink") is not None and not can_symlink():
         pytest.skip(SYMLINK_SKIP_REASON)
+
+    if item.get_closest_marker("requires_hardlink") is not None and not can_hardlink():
+        pytest.skip(HARDLINK_SKIP_REASON)
 
 
 @pytest.fixture(autouse=True)

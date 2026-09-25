@@ -2,9 +2,8 @@
 
 Schema helpers for two unsloth/axolotl features:
 
-1. ``long_context_grpo`` — wires Tiled MLP (v0.56.0 Part A) when available,
-   otherwise accepts as-is so users can opt in early. Schema-only in v0.50.0;
-   live Tiled MLP integration deferred to v0.56.0.
+1. ``long_context_grpo`` — compatibility gate for long-context GRPO rollouts.
+   Accepted by the schema but not consumed by any trainer in this build (#808).
 2. ``vllm_sleep_mode`` — between-rollouts vLLM standby (memory savings during
    the optimisation step). Requires vLLM ≥ 0.7 and is delegated to the vLLM
    AsyncEngineArgs ``enable_sleep_mode`` flag.

@@ -144,7 +144,7 @@ liger = ["liger-kernel>=0.3.0"]
 ring-attn = ["ring-flash-attn>=0.1.0"]
 onnx = ["optimum[onnxruntime]>=1.16.0"]
 tensorrt = ["tensorrt_llm>=0.9.0"]
-audio = ["librosa>=0.10.0", "soundfile>=0.12.0"]
+audio = ["librosa>=0.10.0", "soundfile>=0.12.0", "torchaudio>=2.6.0,<3.0.0"]
 awq = ["autoawq>=0.2.0"]
 gptq = ["auto-gptq>=0.7.0"]
 sglang = ["sglang>=0.2.0", "fastapi>=0.104.0", "uvicorn>=0.24.0", "httpx>=0.24.0"]
@@ -166,10 +166,11 @@ remote = ["fsspec>=2024.1.0", "s3fs>=2024.1.0", "gcsfs>=2024.1.0", "adlfs>=2024.
 mix = ["scikit-optimize>=0.9.0"]
 # v0.53.10 #113 — optional language detection and PII analysis.
 data-pro = ["langdetect>=1.0.9", "presidio-analyzer>=2.2.0"]
-# v0.71.2 #179/#185 — ed25519 detached signing for `soup attest` / `soup
-# adapters sign`. Pure-offline; Sigstore keyless (OIDC + Fulcio/Rekor network)
-# stays infra-blocked and is NOT bundled here.
+# v0.71.2 #185 — small offline ed25519 signing extra.
 sign = ["cryptography>=41.0.0"]
+# #185 — Sigstore keyless OIDC/Fulcio/Rekor stack. Kept separate so
+# air-gapped ed25519 users do not pull the network/transparency dependencies.
+sigstore = ["sigstore>=4.4.0,<5.0.0"]
 # v0.71.3 #181 — reportlab PDF rendering for `soup train --annex-xi *.pdf`.
 pdf = ["reportlab>=4.0.0"]
 # v0.71.3 #180 — codecarbon offline energy/CO2 measurement for
@@ -264,5 +265,6 @@ markers = [
     "integration: tests that touch real subprocess, SQLite, filesystem, or HTTP",
     "gpu: needs a CUDA device; skipped without one (see tests/conftest.py, #833). Run: pytest -m gpu --no-cov",
     "requires_symlink: creates a symlink; skipped when this account cannot (see tests/conftest.py, #832)",
+    "requires_hardlink: creates a hardlink; skipped when this account or filesystem cannot",
 ]
 addopts = "-m 'not smoke' --cov=soup_cli --cov-fail-under=77 --cov-report=term-missing:skip-covered"
