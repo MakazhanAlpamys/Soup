@@ -260,7 +260,7 @@ def format_friendly_error(exc: Exception, verbose: bool = False) -> None:
                 console.print()
                 console.print(
                     Panel(
-                        traceback.format_exc(),
+                        for_terminal(traceback.format_exc()),
                         title="[dim]Full Traceback[/]",
                         border_style="dim",
                     )
@@ -274,7 +274,7 @@ def format_friendly_error(exc: Exception, verbose: bool = False) -> None:
         console.print()
         console.print(
             Panel(
-                traceback.format_exc(),
+                for_terminal(traceback.format_exc()),
                 title="[dim]Full Traceback[/]",
                 border_style="dim",
             )

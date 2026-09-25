@@ -266,20 +266,32 @@ def test_trust_remote_code_error():
 _HINT = 'pip install "soup-cli[audio]"'
 
 
+@pytest.mark.parametrize("verbose", [False, True], ids=["plain", "verbose"])
 @pytest.mark.parametrize(
     "exc",
     [
         FileNotFoundError(f"No such file or directory: \x1b]0;pwned\x07 {_HINT}"),
         ImportError(f"XCodec2 needs torchaudio: \x1b]0;pwned\x07 {_HINT}"),
+        # Message contains Rich markup close tag: must not be parsed as markup
+        # (on main this raises rich.errors.MarkupError, and under --verbose the
+        # last traceback line reintroduces it one panel lower).
+        RuntimeError(f"broken [/] pipe {_HINT}"),
     ],
-    ids=["known-pattern", "unknown-error"],
+    ids=["known-pattern", "unknown-error", "markup-close-tag"],
 )
-def test_exception_text_is_not_parsed_as_markup(exc):
-    """#1200: `[extra]` in exception text survives and control bytes are stripped."""
+def test_exception_text_is_not_parsed_as_markup(exc, verbose):
+    """#1200: `[extra]` in exception text survives, control bytes are stripped,
+    and a `[/]` in the message never raises MarkupError — in both the plain and
+    the --verbose panel, whose traceback ends with the same exception text."""
     buf = StringIO()
     test_console = Console(file=buf, force_terminal=True, color_system="truecolor", width=300)
+    # Raise-and-catch so traceback.format_exc() carries the exception text into
+    # the verbose panel, matching how cli.py calls the handler from an except block.
     with patch("soup_cli.utils.errors.console", test_console):
-        format_friendly_error(exc, verbose=False)
+        try:
+            raise exc
+        except Exception as caught:
+            format_friendly_error(caught, verbose=verbose)
     output = strip_ansi(buf.getvalue())
     assert "soup-cli[audio]" in output
     assert "\x1b" not in output
