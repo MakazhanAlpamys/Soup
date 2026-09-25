@@ -18,6 +18,13 @@ judge has ranked nothing for :data:`MAX_CONSECUTIVE_UNRANKED_PAIRS` pairs.
 run in which the judge ranked no pair at all fails instead of saving an
 adapter as if it had trained.
 
+A micro-batch in which nothing was ranked adds no gradient, but it is not
+skipped: the optimizer still steps, so AdamW momentum and weight decay keep
+moving the weights and the learning-rate schedule advances. Skipping
+``optimizer.step`` from inside the Trainer is fragile, especially under
+DeepSpeed, whose engine steps inside ``backward``. The drift is bounded by the
+stop after :data:`MAX_CONSECUTIVE_UNRANKED_PAIRS` unranked pairs.
+
 Import-light: torch is imported inside the functions that need it.
 """
 
@@ -25,6 +32,8 @@ import logging
 from functools import lru_cache
 from typing import Optional
 from urllib.parse import urlparse
+
+from soup_cli.utils.terminal import strip_control
 
 logger = logging.getLogger(__name__)
 
@@ -89,7 +98,15 @@ def report_unranked_pairs(trainer) -> Optional[str]:
 
 
 def judge_label(url: Optional[str]) -> str:
-    """The judge URL for a message, with any ``user:password@`` part masked."""
+    """The judge URL for a message: printable, on one line, credentials masked.
+
+    ``training.online_dpo_judge`` comes from a shareable ``soup.yaml`` and ends
+    up in a WARNING and in :class:`JudgeUnusableError`, so control bytes (an
+    ESC would start a terminal escape sequence) are stripped with the shared
+    :func:`soup_cli.utils.terminal.strip_control`, and line breaks are
+    collapsed so the URL cannot forge a log line of its own.
+    """
+    url = " ".join(strip_control(url or "").split())
     if not url:
         return "the configured judge"
     netloc = urlparse(url).netloc
@@ -167,8 +184,9 @@ class _PairStep:
             raise RuntimeError(
                 "Online DPO cannot tell the pairs its judge ranked from the ones it could "
                 "not (#1225): the installed trl did not call trainer.judge.judge() and "
-                "trainer._forward() the way trl 0.29 does, so an unranked pair may have "
-                "been trained. Install trl 0.29.x."
+                "trainer._forward() the way trl 0.29 does, so an unranked pair could not "
+                "be kept out of the gradient. The step was stopped before the optimizer "
+                "applied it. Install trl 0.29.x."
             )
 
 
@@ -227,6 +245,53 @@ def _ranked_pair_stats(rows) -> dict:
     }
 
 
+class _LossAccount:
+    """Micro-batches seen, those with a ranked pair, and the sum of their losses.
+
+    A micro-batch is one process's batch in one ``training_step``; its loss is
+    the mean over its ranked pairs, the value trl's step optimises.
+    """
+
+    def __init__(self) -> None:
+        self.units = 0
+        self.ranked_units = 0
+        self.loss_sum = 0.0
+
+    def add(self, keep, losses, pairs_per_unit: int) -> None:
+        """Add one gathered step: ``keep`` and ``losses`` hold one row per pair."""
+        import torch
+
+        units = keep.numel() // pairs_per_unit
+        keep = keep[: units * pairs_per_unit].view(units, pairs_per_unit) > 0.5
+        losses = losses[: units * pairs_per_unit].view(units, pairs_per_unit)
+        kept = keep.sum(1)
+        ranked = kept > 0
+        # torch.where, not a product: an unranked pair's loss may be inf or NaN
+        sums = torch.where(keep, losses, torch.zeros_like(losses)).sum(1)
+        self.units += units
+        self.ranked_units += int(ranked.sum())
+        self.loss_sum += float((sums[ranked] / kept[ranked]).sum())
+
+    def fix(self, logs: dict, key: str, digits: Optional[int] = None) -> dict:
+        """``logs`` with ``key`` over the ranked micro-batches only.
+
+        The Trainer averages what every ``training_step`` returned, and a
+        micro-batch with no ranked pair returns 0. When every micro-batch had a
+        ranked pair there is nothing to correct and ``logs`` is returned
+        untouched; when none had, ``key`` is dropped rather than reported as a
+        loss nothing was trained on.
+        """
+        if self.ranked_units == self.units:
+            return logs
+        fixed = dict(logs)
+        if not self.ranked_units:
+            del fixed[key]
+            return fixed
+        mean = self.loss_sum / self.ranked_units
+        fixed[key] = round(mean, digits) if digits is not None else mean
+        return fixed
+
+
 def make_ranked_pairs_trainer(base_cls: type) -> type:
     """An ``OnlineDPOTrainer`` subclass that trains only the pairs its judge ranked.
 
@@ -235,11 +300,14 @@ def make_ranked_pairs_trainer(base_cls: type) -> type:
 
     * a gradient hook on the policy log-probs gives unranked pairs exactly zero
       gradient and makes the rest a mean over the ranked pairs of the batch; a
-      batch with no ranked pair adds nothing. Under gradient accumulation each
-      micro-batch is averaged over its own ranked pairs, which is what trl
-      would do if the unranked pairs had never been generated;
+      batch with no ranked pair adds no gradient (the optimizer still steps,
+      see the module docstring). Under gradient accumulation each micro-batch
+      is averaged over its own ranked pairs, which is what trl would do if the
+      unranked pairs had never been generated;
     * the returned loss and trl's chosen/rejected statistics describe the
-      ranked pairs only, and ``judge/invalid_rate`` logs the unranked share;
+      ranked pairs only; the logged ``loss`` and ``train_loss`` average the
+      micro-batches that ranked a pair, and are left out when none did;
+      ``judge/invalid_rate`` logs the unranked share;
     * a WARNING the first time a pair is unranked and on every step in which
       nothing was ranked, and :class:`JudgeUnusableError` once
       :data:`MAX_CONSECUTIVE_UNRANKED_PAIRS` pairs in a row were unranked.
@@ -266,6 +334,9 @@ def _make_ranked_pairs_trainer_cached(base_cls: type) -> type:
             self._soup_unranked_pairs = 0
             self._soup_unranked_streak = 0
             self._soup_warned_partial = False
+            # losses of the micro-batches since the last log, and over the run
+            self._soup_window = _LossAccount()
+            self._soup_run = _LossAccount()
 
         def training_step(self, model, inputs, num_items_in_batch=None):
             judge = self.judge
@@ -306,6 +377,18 @@ def _make_ranked_pairs_trainer_cached(base_cls: type) -> type:
                 for key in empty:
                     self.stats.setdefault(key, [])
 
+        def log(self, logs, *args, **kwargs):
+            # A micro-batch with no ranked pair returns a loss of 0, which the
+            # Trainer would average into `loss` and `train_loss`, and a 0.0
+            # final loss would win a sweep. Both are reported over the
+            # micro-batches that ranked a pair instead, and left out when none did.
+            if "loss" in logs:
+                logs = self._soup_window.fix(logs, "loss", digits=4)
+                self._soup_window = _LossAccount()
+            if "train_loss" in logs:
+                logs = self._soup_run.fix(logs, "train_loss")
+            return super().log(logs, *args, **kwargs)
+
         def _soup_settle(self, step: _PairStep, loss, stat_sizes: dict):
             import torch
 
@@ -313,9 +396,13 @@ def _make_ranked_pairs_trainer_cached(base_cls: type) -> type:
             losses, pair_rows = _pair_terms(step, self.beta, self.args.loss_type)
             keep = torch.tensor(step.keep, dtype=torch.float32, device=pair_rows.device)
             gathered = self.accelerator.gather(
-                torch.cat([keep.unsqueeze(1), pair_rows.float()], dim=1)
+                torch.cat(
+                    [keep.unsqueeze(1), losses.float().unsqueeze(1), pair_rows.float()], dim=1
+                )
             )
-            ranked_rows = gathered[gathered[:, 0] > 0.5, 1:]
+            for account in (self._soup_window, self._soup_run):
+                account.add(gathered[:, 0], gathered[:, 1], len(step.keep))
+            ranked_rows = gathered[gathered[:, 0] > 0.5, 2:]
             judged, ranked = int(gathered.shape[0]), int(ranked_rows.shape[0])
             self.stats.setdefault(INVALID_RATE_KEY, []).append((judged - ranked) / judged)
             self._soup_judged_pairs += judged

@@ -110,7 +110,11 @@ class _SoupTrainerCallback_body:  # noqa: N801
         # step. It has runtime/throughput fields but no loss/LR/grad norm. Keep
         # the last real values so that event cannot reset the dashboards and
         # tracker to synthetic zeroes (#541).
-        self._last_loss = 0.0
+        #: None until a loss is logged, not 0.0: a training log can arrive
+        #: without one (an Online DPO window in which the judge ranked no pair,
+        #: #1225), and a stored 0.0 would read as the run's lowest loss to
+        #: `soup runs clean` and `soup why`.
+        self._last_loss: Optional[float] = None
         self._last_lr = 0.0
         # A missing norm is not a measured zero. Keep the last measured value
         # only for the live panel; persisted metrics use the current log.

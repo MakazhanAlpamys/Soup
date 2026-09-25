@@ -506,7 +506,8 @@ class TestAJudgeThatRanksNothingIsVisible:
         assert trainer._soup_judged_pairs == 4
         assert trainer._soup_unranked_pairs == 4
         warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
-        assert any("could not rank any" in text for text in warnings), warnings
+        # one WARNING per step in which nothing was ranked: two steps, two records
+        assert sum("could not rank any" in text for text in warnings) == 2, warnings
         assert not (tmp_path / "out" / "adapter_model.safetensors").exists()
 
     def test_partial_ties_warn_once_and_log_their_rate(
@@ -548,6 +549,211 @@ class TestAJudgeThatRanksNothingIsVisible:
 
 
 # ---------------------------------------------------------------------------
+# A stretch in which the judge ranked nothing: what the optimizer and the
+# reported loss see
+# ---------------------------------------------------------------------------
+
+
+def _sequence_judge(answers):
+    """A trl pairwise judge that gives ``answers[k]`` on its k-th call."""
+    from soup_cli.eval.judge import _base_pairwise_judge_cls
+
+    base = _base_pairwise_judge_cls()
+
+    class _Sequence(base):  # type: ignore[misc, valid-type]
+        def __init__(self, sequence):
+            self.sequence = [list(answer) for answer in sequence]
+            self.calls = 0
+
+        def judge(self, prompts, completions, shuffle_order=True):
+            answer = self.sequence[self.calls]
+            self.calls += 1
+            return list(answer)
+
+    return _Sequence(answers)
+
+
+def _record_returned_losses(trainer, monkeypatch):
+    """Record what every ``training_step`` hands back to the Trainer."""
+    returned = []
+    original = trainer.training_step
+
+    def spy(*args, **kwargs):
+        loss = original(*args, **kwargs)
+        returned.append(float(loss))
+        return loss
+
+    monkeypatch.setattr(trainer, "training_step", spy)
+    return returned
+
+
+def _step_logs(trainer):
+    return [entry for entry in trainer.state.log_history if "judge/invalid_rate" in entry]
+
+
+def _train_loss(trainer):
+    return [entry for entry in trainer.state.log_history if "train_loss" in entry][-1][
+        "train_loss"
+    ]
+
+
+@needs_pairwise_judge
+class TestAnUnrankedStretch:
+    # batch 2, one pair per prompt: steps 1-2 and 5-6 rank nothing
+    _ANSWERS = [[-1, -1], [-1, -1], [0, 1], [1, 0], [-1, -1], [-1, -1]]
+
+    def test_it_never_lowers_the_logged_final_or_tracked_loss(self, tmp_path, monkeypatch):
+        from unittest.mock import MagicMock
+
+        from soup_cli.experiment.tracker import ExperimentTracker
+        from soup_cli.utils.replay import summarise
+
+        wrapper = _build(
+            tmp_path, monkeypatch, _Ranked(), batch_size=2, n_prompts=12,
+            extra="  gradient_accumulation_steps: 1\n  logging_steps: 1\n",
+        )
+        trainer = wrapper.trainer
+        trainer.judge = _sequence_judge(self._ANSWERS)
+        returned = _record_returned_losses(trainer, monkeypatch)
+        tracker = ExperimentTracker(db_path=tmp_path / "runs.db")
+        try:
+            run_id = tracker.start_run(
+                config_dict={}, device="cpu", device_name="cpu", gpu_info={}
+            )
+            result = wrapper.train(display=MagicMock(), tracker=tracker, run_id=run_id)
+            rows = tracker.get_metrics(run_id)
+        finally:
+            tracker.close()
+
+        steps = _step_logs(trainer)
+        assert [entry["judge/invalid_rate"] for entry in steps] == [1.0, 1.0, 0.0, 0.0, 1.0, 1.0]
+        # a step that ranked nothing reports no loss rather than 0
+        assert ["loss" in entry for entry in steps] == [False, False, True, True, False, False]
+        ranked = [entry["loss"] for entry in steps if "loss" in entry]
+        assert ranked == [
+            pytest.approx(returned[2], abs=1e-4),
+            pytest.approx(returned[3], abs=1e-4),
+        ]
+        assert min(ranked) > 0.1
+        # the run mean is the mean of the ranked steps; the four unranked steps
+        # returned 0 and would have divided it by three
+        assert _train_loss(trainer) == pytest.approx((returned[2] + returned[3]) / 2, abs=1e-6)
+        # what the CLI prints, the tracker stores as final_loss and sweep ranks
+        assert result["loss_summary_kind"] == "delta"
+        assert result["initial_loss"] == ranked[0]
+        assert result["final_loss"] == ranked[1]
+        # the tracker's per-step series: nothing before the first measured loss,
+        # and no row lower than a measured one (soup runs clean keeps the
+        # checkpoint at the lowest row; soup why reports it as the best)
+        tracked = [row["loss"] for row in rows]
+        assert tracked[:2] == [None, None]
+        assert tracked[2:4] == ranked
+        assert all(value >= min(ranked) for value in tracked if value is not None)
+        assert summarise(rows).min_loss == min(ranked)
+
+    def test_it_still_steps_the_optimizer_with_an_exactly_zero_gradient(
+        self, tmp_path, monkeypatch
+    ):
+        """Documented behaviour: a step in which nothing was ranked adds no
+        gradient, but the optimizer still steps, so AdamW momentum and weight
+        decay move the weights and the learning-rate schedule advances."""
+        wrapper = _build(
+            tmp_path, monkeypatch, _Ranked(), batch_size=2, n_prompts=12,
+            extra="  gradient_accumulation_steps: 1\n  logging_steps: 1\n",
+        )
+        trainer = wrapper.trainer
+        trainer.judge = _sequence_judge(self._ANSWERS)
+        wrapper.train()
+
+        steps = _step_logs(trainer)
+        unranked = [entry for entry in steps if entry["judge/invalid_rate"] == 1.0]
+        assert [entry["grad_norm"] for entry in unranked] == [0.0, 0.0, 0.0, 0.0]
+        assert all(entry["grad_norm"] > 0 for entry in steps if entry not in unranked)
+        assert trainer.state.global_step == 6
+        assert len({entry["learning_rate"] for entry in steps}) == 6
+
+    def test_a_window_mixing_ranked_and_unranked_steps_logs_the_ranked_mean(
+        self, tmp_path, monkeypatch
+    ):
+        wrapper = _build(
+            tmp_path, monkeypatch, _Ranked(), batch_size=2, n_prompts=8,
+            extra="  gradient_accumulation_steps: 1\n  logging_steps: 2\n",
+        )
+        trainer = wrapper.trainer
+        trainer.judge = _sequence_judge([[0, 1], [-1, -1], [-1, -1], [1, 0]])
+        returned = _record_returned_losses(trainer, monkeypatch)
+        wrapper.train()
+
+        steps = _step_logs(trainer)
+        assert [entry["judge/invalid_rate"] for entry in steps] == [0.5, 0.5]
+        # each window holds one step that trained and one that did not; the
+        # Trainer alone would log half of the trained step's loss
+        assert [entry["loss"] for entry in steps] == [
+            pytest.approx(returned[0], abs=1e-4),
+            pytest.approx(returned[3], abs=1e-4),
+        ]
+        assert steps[0]["loss"] != pytest.approx(returned[0] / 2, abs=1e-3)
+        assert _train_loss(trainer) == pytest.approx((returned[0] + returned[3]) / 2, abs=1e-6)
+
+
+class TestNoSyntheticZeroLoss:
+    """A training log may now arrive without ``loss`` (a window in which the
+    judge ranked nothing). The callback must not turn that into a 0.0."""
+
+    @staticmethod
+    def _callback():
+        from unittest.mock import MagicMock
+
+        from soup_cli.monitoring.callback import SoupTrainerCallback
+
+        display, tracker = MagicMock(), MagicMock()
+        callback = SoupTrainerCallback(display=display, tracker=tracker, run_id="run_1")
+        return callback, display, tracker
+
+    @staticmethod
+    def _log(callback, step, logs):
+        from unittest.mock import MagicMock
+
+        state = MagicMock()
+        state.global_step, state.max_steps, state.epoch = step, 6, step / 6
+        callback.on_log(MagicMock(), state, MagicMock(), logs=logs)
+
+    def test_a_log_without_a_loss_records_none_until_a_loss_is_measured(self):
+        callback, display, tracker = self._callback()
+        unranked = {"learning_rate": 1e-4, "grad_norm": 0.0, "judge/invalid_rate": 1.0}
+
+        self._log(callback, 1, unranked)
+        assert tracker.log_metrics.call_args.kwargs["loss"] is None
+        assert display.update.call_args.kwargs["loss"] is None
+
+        self._log(callback, 2, {"loss": 0.6931, "learning_rate": 9e-5, "grad_norm": 0.03})
+        assert tracker.log_metrics.call_args.kwargs["loss"] == 0.6931
+
+        # later on, the last measured loss is carried, as for HF's summary log
+        self._log(callback, 3, unranked)
+        assert tracker.log_metrics.call_args.kwargs["loss"] == 0.6931
+
+    def test_the_live_panel_shows_a_missing_loss_as_a_dash(self):
+        from io import StringIO
+
+        from rich.console import Console
+
+        from soup_cli.config.loader import load_config_from_string
+        from soup_cli.monitoring.display import TrainingDisplay
+
+        cfg = load_config_from_string(
+            "base: hf-internal-testing/tiny-random-gpt2\ntask: online_dpo\n"
+            "data:\n  train: x.jsonl\n"
+            'training:\n  online_dpo_judge: "ollama://m"\n'
+        )
+        display = TrainingDisplay(cfg)
+        display.update(step=1, epoch=0.2, loss=None, lr=1e-4)
+        buffer = StringIO()
+        Console(file=buffer, width=120).print(display._render())
+        assert "Loss: - LR: 1.00e-04" in _plain(buffer.getvalue())
+
+
+# ---------------------------------------------------------------------------
 # Contract checks
 # ---------------------------------------------------------------------------
 
@@ -557,6 +763,22 @@ class TestContract:
     def test_a_judge_returning_the_wrong_number_of_ranks_is_refused(self, replay):
         with pytest.raises(ValueError, match="returned 3 ranks for 4 completion pairs"):
             replay.step(_fixed_judge([0, 1, 0]))
+
+    def test_a_trl_that_bypasses_the_capture_is_refused_before_the_optimizer_step(
+        self, replay
+    ):
+        """If trl stopped routing the policy forward through ``_forward``, the
+        unranked pairs could not be kept out of the gradient: the step must
+        fail instead of training them."""
+        import functools
+
+        trainer = replay.trainer
+        trainer._forward = functools.partial(_base_trainer_cls()._forward, trainer)
+        try:
+            with pytest.raises(RuntimeError, match="could not be kept out of the gradient"):
+                replay.step(_fixed_judge([0, -1, 1, -1]))
+        finally:
+            del trainer._forward
 
     @pytest.mark.parametrize(
         ("ranks", "rate"),
@@ -636,7 +858,11 @@ class TestJudgeLabel:
             ("http://localhost:8000/Qwen2.5", "http://localhost:8000/Qwen2.5"),
             ("https://user:s3cret@judge.example.com/m", "https://***@judge.example.com/m"),
             (None, "the configured judge"),
+            # soup.yaml is shareable: control bytes must not reach the terminal
+            ("ollama://llama3.1/\x1b]0;owned\x07", "ollama://llama3.1/]0;owned"),
+            ("ollama://llama3.1\nERROR forged line\x7f", "ollama://llama3.1 ERROR forged line"),
         ],
+        ids=["ollama", "local-server", "userinfo", "unset", "esc-bel", "newline-del"],
     )
     def test_the_label_names_the_judge_without_its_credentials(self, url, expected):
         from soup_cli.trainer.online_dpo_ranking import judge_label
