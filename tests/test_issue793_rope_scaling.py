@@ -165,7 +165,9 @@ def test_longrope_refuses_to_invent_model_specific_factor_vectors() -> None:
         num_attention_heads=4,
         max_position_embeddings=64,
     )
-    with pytest.raises(ValueError, match="requires model-native short_factor, long_factor"):
+    # #1239: the vectors exist only on already-LongRoPE-scaled checkpoints, which
+    # may not be extended either, so the refusal no longer suggests finding one.
+    with pytest.raises(ValueError, match="exist only on checkpoints already scaled with LongRoPE"):
         apply_long_context_config(config, 256, "longrope")
 
 

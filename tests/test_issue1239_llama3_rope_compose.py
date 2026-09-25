@@ -13,6 +13,12 @@ before the model is built, and the message names the checkpoint's
 ``rope_type`` and ``factor``. Checkpoints without RoPE scaling extend exactly as
 before.
 
+``rope_scaling_type: longrope`` is refused at config load, in every spelling:
+its per-dimension ``short_factor`` / ``long_factor`` vectors exist only on
+checkpoints already scaled with LongRoPE, and extending those is refused, so it
+can no longer extend anything. Fine-tuning a LongRoPE checkpoint at its native
+length with ``rope_scaling_type`` unset keeps working.
+
 Reference inverse frequencies come from transformers' own llama3 init
 (``ROPE_INIT_FUNCTIONS["llama3"]``, i.e. ``_compute_llama3_parameters``), never
 from a re-implementation. The tiny models are config-built (hidden 64, one
@@ -540,21 +546,13 @@ class TestControls:
         assert config.rope_parameters == expected
         assert config.max_position_embeddings == 16384
 
-    @pytest.mark.parametrize("shape", ["no-rope-attributes", "llama2-style", "mistral-style"])
-    def test_longrope_on_a_checkpoint_without_vectors_keeps_its_old_refusal(
-        self, shape: str
-    ) -> None:
-        from soup_cli.utils.long_context import apply_long_context_config
-
-        configs = _default_rope_configs()
-        if shape not in configs:
-            pytest.skip("transformers is only in the [train] extra")
-        with pytest.raises(ValueError, match="requires model-native short_factor, long_factor"):
-            apply_long_context_config(configs[shape], 16384, "longrope")
-
     @pytest.mark.parametrize("requested", REQUESTED_TYPES)
     @pytest.mark.parametrize("target", [NATIVE_MAX, 8192])
-    @pytest.mark.parametrize("native", [NATIVE_LLAMA31, NATIVE_YARN], ids=["llama3", "yarn"])
+    @pytest.mark.parametrize(
+        "native",
+        [NATIVE_LLAMA31, NATIVE_YARN, NATIVE_LONGROPE],
+        ids=["llama3", "yarn", "longrope"],
+    )
     def test_a_target_at_or_below_max_is_still_a_no_op(
         self, native: dict, target: int, requested
     ) -> None:
@@ -564,6 +562,118 @@ class TestControls:
         before = _snapshot(config)
 
         assert apply_long_context_config(config, target, requested) is None
+        assert _snapshot(config) == before
+
+
+# ---------------------------------------------------------------------------
+# longrope — refused at config load
+# ---------------------------------------------------------------------------
+
+# What the refusal must say: why longrope can extend nothing, the issue, and
+# what to do instead.
+_LONGROPE_REASONS = (
+    "#1239",
+    "can no longer extend any checkpoint",
+    "exist only on checkpoints already scaled with LongRoPE",
+    "extending an already-scaled checkpoint is refused",
+    "leave rope_scaling_type unset",
+)
+
+
+def _yaml_config(
+    training: dict, *, task: str = "sft", backend: str = "transformers", max_length: int = 2048
+) -> str:
+    return yaml.safe_dump(
+        {
+            "base": "microsoft/Phi-3-mini-128k-instruct",
+            "task": task,
+            "backend": backend,
+            "data": {"train": "train.jsonl", "max_length": max_length},
+            "training": training,
+        }
+    )
+
+
+class TestLongropeIsRefusedAtConfigLoad:
+    @pytest.mark.parametrize(
+        "spelling",
+        ["longrope", "LongRoPE", "LONGROPE", " longrope ", "long_rope", "long-rope", "Long RoPE"],
+    )
+    def test_every_spelling_is_refused_with_the_reason(self, spelling: str) -> None:
+        with pytest.raises(ValueError) as exc_info:
+            load_config_from_string(_yaml_config({"rope_scaling_type": spelling}))
+
+        _message_names(exc_info, "rope_scaling_type", *_LONGROPE_REASONS)
+
+    @pytest.mark.parametrize(
+        ("task", "backend", "max_length"),
+        [
+            ("sft", "transformers", 2048),
+            ("sft", "transformers", 262144),
+            ("pretrain", "transformers", 4096),
+            ("dpo", "transformers", 2048),
+            ("sft", "unsloth", 2048),
+        ],
+        ids=["sft-short", "sft-long", "pretrain", "dpo", "unsloth"],
+    )
+    def test_the_refusal_is_unconditional(self, task: str, backend: str, max_length: int) -> None:
+        """Not tied to a task, a backend, or whether max_length extends anything."""
+        with pytest.raises(ValueError) as exc_info:
+            load_config_from_string(
+                _yaml_config(
+                    {"rope_scaling_type": "longrope"},
+                    task=task,
+                    backend=backend,
+                    max_length=max_length,
+                )
+            )
+
+        _message_names(exc_info, *_LONGROPE_REASONS)
+
+    def test_the_training_model_refuses_it_directly(self) -> None:
+        from pydantic import ValidationError
+
+        from soup_cli.config.schema import TrainingConfig
+
+        with pytest.raises(ValidationError) as exc_info:
+            TrainingConfig(rope_scaling_type="longrope")
+
+        _message_names(exc_info, *_LONGROPE_REASONS)
+
+    def test_an_unknown_type_is_no_longer_offered_longrope(self) -> None:
+        with pytest.raises(ValueError) as exc_info:
+            load_config_from_string(_yaml_config({"rope_scaling_type": "ntk"}))
+
+        message = str(exc_info.value)
+        for offered in ("'linear'", "'dynamic'", "'yarn'", "'llama3'"):
+            assert offered in message, (offered, message)
+        assert "longrope" not in message.lower()
+
+    @pytest.mark.parametrize("kind", ["linear", "dynamic", "yarn", "llama3", None])
+    def test_the_other_types_and_unset_still_load(self, kind) -> None:
+        """Control: only longrope is refused."""
+        training = {} if kind is None else {"rope_scaling_type": kind}
+        config = load_config_from_string(_yaml_config(training))
+
+        assert config.training.rope_scaling_type == kind
+
+    @pytest.mark.parametrize("shape", ["no-rope-attributes", "llama2-style", "mistral-style"])
+    def test_the_runtime_helper_gives_the_same_answer(self, shape: str) -> None:
+        """A direct call on a checkpoint without scaling no longer advises choosing
+        a LongRoPE checkpoint, which the #1239 rule refuses to extend."""
+        from soup_cli.utils.long_context import apply_long_context_config
+
+        configs = _default_rope_configs()
+        if shape not in configs:
+            pytest.skip("transformers is only in the [train] extra")
+        config = configs[shape]
+        before = _snapshot(config)
+
+        with pytest.raises(ValueError) as exc_info:
+            apply_long_context_config(config, 16384, "longrope")
+
+        _message_names(exc_info, *_LONGROPE_REASONS)
+        assert "choose a checkpoint that ships LongRoPE factors" not in str(exc_info.value)
         assert _snapshot(config) == before
 
 
@@ -630,6 +740,40 @@ def yarn_checkpoint(tmp_path_factory) -> str:
 
 
 @pytest.fixture(scope="module")
+def longrope_checkpoint(tmp_path_factory) -> str:
+    """A config-built Phi-3 shaped like Phi-3-mini-128k: LongRoPE over 4096, window 131072."""
+    _requires_train_extra()
+    import torch
+    from transformers import Phi3Config, Phi3ForCausalLM
+
+    half = 32  # head_dim 64 -> 32 frequency pairs, one factor each
+    torch.manual_seed(0)
+    config = Phi3Config(
+        vocab_size=64,
+        hidden_size=64,
+        intermediate_size=64,
+        num_hidden_layers=1,
+        num_attention_heads=1,
+        num_key_value_heads=1,
+        max_position_embeddings=NATIVE_MAX,
+        original_max_position_embeddings=4096,
+        rope_parameters={
+            "rope_type": "longrope",
+            "short_factor": [1.0] * half,
+            "long_factor": [1.0 + 15.0 * k / (half - 1) for k in range(half)],
+            "rope_theta": 10000.0,
+        },
+        pad_token_id=3,
+        bos_token_id=1,
+        eos_token_id=2,
+    )
+    directory = tmp_path_factory.mktemp("tiny-phi3-longrope")
+    Phi3ForCausalLM(config).save_pretrained(directory)
+    _write_tiny_tokenizer(directory)
+    return str(directory)
+
+
+@pytest.fixture(scope="module")
 def default_rope_checkpoint(tmp_path_factory) -> str:
     _requires_train_extra()
     return _save_tiny_checkpoint(
@@ -640,12 +784,21 @@ def default_rope_checkpoint(tmp_path_factory) -> str:
 
 
 def _config(
-    base: str, output, *, task: str = "sft", rope_type: str = "llama3", max_length: int = TARGET
+    base: str,
+    output,
+    *,
+    task: str = "sft",
+    rope_type: str | None = "llama3",
+    max_length: int = TARGET,
+    target_modules: tuple[str, ...] = ("q_proj", "v_proj"),
 ):
-    lora = {"r": 4, "alpha": 8, "target_modules": ["q_proj", "v_proj"]}
+    lora = {"r": 4, "alpha": 8, "target_modules": list(target_modules)}
     data = {"train": "unused.jsonl", "max_length": max_length}
     if task == "sft":
         data["chat_template"] = "chatml"
+    training = {"quantization": "none", "batch_size": 1, "epochs": 1, "lora": lora}
+    if rope_type is not None:  # None leaves the key out: the setting is unset
+        training["rope_scaling_type"] = rope_type
     return load_config_from_string(
         yaml.safe_dump(
             {
@@ -653,13 +806,7 @@ def _config(
                 "task": task,
                 "backend": "transformers",
                 "data": data,
-                "training": {
-                    "rope_scaling_type": rope_type,
-                    "quantization": "none",
-                    "batch_size": 1,
-                    "epochs": 1,
-                    "lora": lora,
-                },
+                "training": training,
                 "output": str(output),
             }
         )
@@ -707,7 +854,8 @@ class TestTrainers:
 
         _assert_built_with_the_composed_block(wrapper.model)
 
-    @pytest.mark.parametrize("requested", ["linear", "dynamic", "yarn", "longrope"])
+    # longrope never reaches setup: config load refuses it (TestLongropeIsRefusedAtConfigLoad).
+    @pytest.mark.parametrize("requested", ["linear", "dynamic", "yarn"])
     def test_sft_setup_refuses_before_the_model_is_built(
         self, llama31_checkpoint, tmp_path, requested: str
     ) -> None:
@@ -770,6 +918,48 @@ class TestTrainers:
         assert wrapper.model.config.max_position_embeddings == NATIVE_MAX
         assert wrapper.model.config.rope_parameters == NATIVE_LLAMA31
         assert torch.equal(_rotary(wrapper.model).inv_freq, _native_inv_freq())
+
+    @pytest.mark.parametrize("task", ["sft", "pretrain"])
+    def test_a_longrope_checkpoint_fine_tunes_at_its_native_length(
+        self, longrope_checkpoint, tmp_path, task: str
+    ) -> None:
+        """Control: refusing rope_scaling_type=longrope must not refuse the checkpoint.
+
+        Unset rope_scaling_type and train at the full native window: the model is
+        built with the checkpoint's own LongRoPE block, untouched.
+        """
+        import torch
+        from transformers import AutoConfig, AutoModelForCausalLM
+
+        config = _config(
+            longrope_checkpoint,
+            tmp_path / "out",
+            task=task,
+            rope_type=None,
+            max_length=NATIVE_MAX,
+            target_modules=("qkv_proj",),
+        )
+        assert config.training.rope_scaling_type is None
+        if task == "sft":
+            from soup_cli.trainer.sft import SFTTrainerWrapper
+
+            wrapper = SFTTrainerWrapper(config, device="cpu")
+            wrapper.setup(deepcopy(_CHAT_ROWS))
+        else:
+            from soup_cli.trainer.pretrain import PretrainTrainerWrapper
+
+            wrapper = PretrainTrainerWrapper(config, device="cpu")
+            wrapper._setup_transformers(config, config.training)
+
+        native_config = AutoConfig.from_pretrained(longrope_checkpoint)
+        native_rotary = _rotary(AutoModelForCausalLM.from_pretrained(longrope_checkpoint))
+        built_rotary = _rotary(wrapper.model)
+
+        assert native_config.rope_parameters["rope_type"] == "longrope"
+        assert wrapper.model.config.rope_parameters == native_config.rope_parameters
+        assert wrapper.model.config.max_position_embeddings == NATIVE_MAX
+        assert torch.equal(built_rotary.inv_freq, native_rotary.inv_freq)
+        assert built_rotary.attention_scaling == native_rotary.attention_scaling
 
     def test_sft_default_rope_checkpoint_extends_exactly_as_before(
         self, default_rope_checkpoint, tmp_path

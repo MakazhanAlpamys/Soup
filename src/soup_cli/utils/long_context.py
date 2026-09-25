@@ -8,7 +8,8 @@ windows beyond their pre-training length. Supports multiple scaling strategies:
 - yarn: YaRN (Yet another RoPE extensioN) — best quality for 4-8x extension
   (v0.49.0 Part A — math kernel + config-emit; HF Transformers owns the
   actual rotation under the hood)
-- longrope: LongRoPE — progressive extension with search-based factors
+- longrope: LongRoPE — progressive extension with search-based factors.
+  Refused since #1239: its factors exist only on already-scaled checkpoints.
 - llama3: Llama 3.1 frequency-band NTK-aware scaling (v0.49.0 Part D)
 
 Also handles gradient checkpointing configuration for memory efficiency
@@ -21,7 +22,8 @@ import math
 from collections.abc import Mapping
 from typing import Any
 
-# Supported RoPE scaling methods (v0.49.0 adds "llama3").
+# Supported RoPE scaling methods (v0.49.0 adds "llama3"). get_rope_scaling_config
+# can still emit "longrope"; soup.yaml and apply_long_context_config refuse it (#1239).
 ROPE_SCALING_TYPES = ("linear", "dynamic", "yarn", "longrope", "llama3")
 
 # Values that remain meaningful when switching from one RoPE algorithm to
@@ -32,6 +34,19 @@ _ROPE_TYPE_AGNOSTIC_KEYS = ("rope_theta", "partial_rotary_factor")
 # The RoPE type transformers assumes when a checkpoint ships no scaling block.
 # Any other native type is a block Soup must not silently replace (#1239).
 _UNSCALED_ROPE_TYPE = "default"
+
+# #1239: LongRoPE's per-dimension factors were searched for one extension and
+# ship only with checkpoints already scaled by it, which may not be extended
+# again, so the type can extend nothing. Config load (schema.py) and
+# apply_long_context_config both refuse it with this text.
+LONGROPE_REFUSAL = (
+    "training.rope_scaling_type='longrope' is refused (#1239): it can no longer "
+    "extend any checkpoint. Its per-dimension short_factor and long_factor vectors "
+    "exist only on checkpoints already scaled with LongRoPE, and extending an "
+    "already-scaled checkpoint is refused, because replacing its RoPE block would "
+    "discard the scaling it was trained with. To fine-tune a LongRoPE checkpoint "
+    "(Phi-3-mini-128k, for example) at its native length, leave rope_scaling_type unset."
+)
 
 # Default context lengths for known model families.
 MODEL_DEFAULT_CONTEXT: dict[str, int] = {
@@ -504,8 +519,10 @@ def apply_long_context_config(
     than ``default``) is never replaced (#1239). ``llama3`` on a native
     ``llama3`` block composes through :func:`compose_llama3_rope_parameters`;
     every other combination raises ``ValueError`` before ``model_config`` is
-    touched, naming the checkpoint's ``rope_type`` and ``factor``. A
-    ``target_length`` at or below ``max_position_embeddings`` stays a no-op.
+    touched, naming the checkpoint's ``rope_type`` and ``factor``. ``longrope``
+    is refused on a checkpoint without scaling too (:data:`LONGROPE_REFUSAL`),
+    so it extends nothing. A ``target_length`` at or below
+    ``max_position_embeddings`` stays a no-op.
     """
     original_length = getattr(
         model_config,
@@ -539,6 +556,8 @@ def apply_long_context_config(
     # so rebuilding a block over that length discards the scaling it was trained with.
     native_type = _native_rope_type(existing)
     if native_type.lower() == _UNSCALED_ROPE_TYPE:
+        if rope_scaling_type == "longrope":
+            raise ValueError(LONGROPE_REFUSAL)
         rope_config = get_rope_scaling_config(
             scaling_type=rope_scaling_type,
             target_length=target_length,
@@ -565,16 +584,6 @@ def apply_long_context_config(
         )
     if not rope_config:
         return None
-    if rope_scaling_type == "longrope":
-        missing = [name for name in ("short_factor", "long_factor") if name not in existing]
-        if missing:
-            raise ValueError(
-                "rope_scaling_type='longrope' requires model-native "
-                f"{', '.join(missing)} vectors; choose a checkpoint that ships "
-                "LongRoPE factors or use linear, dynamic, yarn, or llama3"
-            )
-        rope_config["short_factor"] = existing["short_factor"]
-        rope_config["long_factor"] = existing["long_factor"]
     merged = {
         name: existing[name]
         for name in _ROPE_TYPE_AGNOSTIC_KEYS

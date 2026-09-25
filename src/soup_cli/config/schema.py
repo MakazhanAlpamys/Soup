@@ -22,6 +22,10 @@ from soup_cli.utils.layer_stream import (
     SUPPORTED_STREAM_TASKS as _STREAM_SUPPORTED_TASKS,
 )
 
+# The longrope refusal (#1239) lives with the runtime so config load and
+# apply_long_context_config say the same thing (long_context has no torch).
+from soup_cli.utils.long_context import LONGROPE_REFUSAL
+
 # Stdlib-only structural check shared by every regex a config can carry.
 from soup_cli.utils.safe_regex import check_config_regex
 
@@ -2902,12 +2906,12 @@ class TrainingConfig(BaseModel):
     )
     # Long-context — RoPE scaling
     rope_scaling_type: Optional[
-        Literal["linear", "dynamic", "yarn", "longrope", "llama3"]
+        Literal["linear", "dynamic", "yarn", "llama3"]
     ] = Field(
         default=None,
         description=(
-            "RoPE scaling method for long-context: linear, dynamic, yarn, longrope, "
-            "llama3 (v0.49.0)."
+            "RoPE scaling method for long-context: linear, dynamic, yarn or llama3 "
+            "(v0.49.0). 'longrope' is refused at config load (#1239)."
         ),
     )
     # v0.49.0 Part A — YaRN-specific tunables (only meaningful when
@@ -3771,6 +3775,18 @@ class TrainingConfig(BaseModel):
             raise ValueError(
                 "bool is not a valid value for a YaRN tunable (use a real number)"
             )
+        return value
+
+    @field_validator("rope_scaling_type", mode="before")
+    @classmethod
+    def _refuse_longrope(cls, value: Any) -> Any:
+        """#1239 — ``longrope`` can extend no checkpoint, so it is refused in any
+        spelling ahead of the Literal check, with the reason instead of a list of
+        the other types."""
+        if isinstance(value, str):
+            squashed = "".join(value.split()).lower().replace("_", "").replace("-", "")
+            if squashed == "longrope":
+                raise ValueError(LONGROPE_REFUSAL)
         return value
 
     @model_validator(mode="after")
