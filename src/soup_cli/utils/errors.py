@@ -1,11 +1,67 @@
 """Friendly error handling — maps raw exceptions to actionable messages."""
 
+import re
 import traceback
 
 from rich.console import Console
 from rich.panel import Panel
 
 console = Console(stderr=True)
+
+
+def _http_status_error(exc: Exception) -> int | None:
+    """Return an authentication status carried by an exception or its wrappers."""
+    pending = [exc]
+    seen: set[int] = set()
+    while pending:
+        current = pending.pop()
+        if id(current) in seen:
+            continue
+        seen.add(id(current))
+
+        response = getattr(current, "response", None)
+        status = getattr(response, "status_code", None)
+        if status is None:
+            status = getattr(current, "status_code", None)
+        if status is None:
+            status = getattr(current, "code", None)
+        if status in (401, 403):
+            return status
+
+        message = str(current)
+        unauthorized = re.search(
+            r"\b401\s+(?:Unauthorized|Client Error)\b|\bHTTP Error 401\b|"
+            r"\bHTTP 401\b|\bError code:\s*401\b",
+            message,
+            re.I,
+        )
+        if unauthorized:
+            return 401
+        forbidden = re.search(
+            r"\b403\s+(?:Forbidden|Client Error)\b|\bHTTP Error 403\b|"
+            r"\bHTTP 403\b|\bError code:\s*403\b",
+            message,
+            re.I,
+        )
+        if forbidden:
+            return 403
+
+        for wrapped in (current.__cause__, current.__context__):
+            if wrapped is not None:
+                pending.append(wrapped)
+    return None
+
+
+_AUTH_ERROR_HINTS = {
+    401: (
+        "Authentication failed.",
+        "Check your API key or token (HF_TOKEN, OPENAI_API_KEY, WANDB_API_KEY).",
+    ),
+    403: (
+        "Access denied.",
+        "Check your permissions. Some models require accepting a license on HuggingFace.",
+    ),
+}
 
 # v0.71.0 — the heavy training stack (torch / transformers / peft / trl /
 # datasets / bitsandbytes / accelerate) moved out of the core install into the
@@ -225,17 +281,6 @@ ERROR_MAP = [
     ),
 
 
-    # Auth errors
-    (
-        "401",
-        "Authentication failed.",
-        "Check your API key or token (HF_TOKEN, OPENAI_API_KEY, WANDB_API_KEY).",
-    ),
-    (
-        "403",
-        "Access denied.",
-        "Check your permissions. Some models require accepting a license on HuggingFace.",
-    ),
 ]
 
 
@@ -247,6 +292,22 @@ def format_friendly_error(exc: Exception, verbose: bool = False) -> None:
     """
     exc_str = str(exc)
     exc_type = type(exc).__name__
+
+    status = _http_status_error(exc)
+    if status is not None:
+        error_msg, fix = _AUTH_ERROR_HINTS[status]
+        console.print(f"\n[bold red]Error:[/] {error_msg}")
+        console.print(f"[green]Fix:[/] {fix}")
+        if verbose:
+            console.print()
+            console.print(
+                Panel(
+                    traceback.format_exc(),
+                    title="[dim]Full Traceback[/]",
+                    border_style="dim",
+                )
+            )
+        return
 
     # Search for known error patterns
     for pattern, short_msg, fix in ERROR_MAP:

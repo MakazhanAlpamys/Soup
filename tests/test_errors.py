@@ -1,6 +1,7 @@
 """Tests for friendly error handling and --verbose flag."""
 
 from io import StringIO
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -175,6 +176,42 @@ def test_auth_401_error():
         format_friendly_error(exc, verbose=False)
     output = buf.getvalue()
     assert "Authentication failed" in output
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "train row 401: target was truncated",
+        "tensor size 4013 does not match 4096",
+        "checkpoint-4010 was not found",
+        "request to /projects/40172 failed with status 403",
+    ],
+)
+def test_bare_auth_digits_do_not_hide_original_error(message):
+    """Numbers in unrelated error messages must not trigger auth hints."""
+    buf = StringIO()
+    test_console = Console(file=buf, stderr=False)
+    with patch("soup_cli.utils.errors.console", test_console):
+        format_friendly_error(ValueError(message), verbose=False)
+    output = buf.getvalue()
+    assert message in output
+    assert "Authentication failed" not in output
+    assert "Access denied" not in output
+
+
+@pytest.mark.parametrize(
+    ("status", "expected"),
+    [(401, "Authentication failed"), (403, "Access denied")],
+)
+def test_http_status_attribute_gets_auth_hint(status, expected):
+    """HTTP exceptions with structured status codes keep specific guidance."""
+    exc = Exception("request failed")
+    exc.response = SimpleNamespace(status_code=status)
+    buf = StringIO()
+    test_console = Console(file=buf, stderr=False)
+    with patch("soup_cli.utils.errors.console", test_console):
+        format_friendly_error(exc, verbose=False)
+    assert expected in buf.getvalue()
 
 
 def test_file_not_found_error():
