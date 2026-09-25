@@ -61,6 +61,7 @@ def _tracked_files() -> list[Path]:
         )
     except (subprocess.CalledProcessError, FileNotFoundError):
         pytest.skip("guard requires a git checkout")
+
     return [REPO_ROOT / line for line in out.stdout.splitlines() if line]
 
 
@@ -70,6 +71,7 @@ def _read_text(path: Path) -> str | None:
         raw = path.read_bytes()
     except OSError:
         return None
+
     try:
         return raw.decode("utf-8").replace("\r\n", "\n").replace("\r", "\n")
     except UnicodeDecodeError:
@@ -80,7 +82,7 @@ def find_conflict_markers(text: str) -> list[tuple[int, str]]:
     """Return ``(lineno, marker_kind)`` for each conflict-marker line.
 
     ``marker_kind`` is one of ``"<<<<<<<"``, ``"|||||||"``,
-    ``"======="``, ``">>>>>>>``.
+    ``"======="``, ``">>>>>>>"``.
 
     A standalone ``=======`` with no companion angle-bracket marker in the same
     text is NOT returned — that is the setext-heading / ReST case the guard must
@@ -89,6 +91,7 @@ def find_conflict_markers(text: str) -> list[tuple[int, str]]:
     starts = [m.start() for m in _START.finditer(text)]
     bases = [m.start() for m in _DIFF3_BASE.finditer(text)]
     ends = [m.start() for m in _END.finditer(text)]
+
     has_block_context = bool(starts or ends)
 
     found: list[tuple[int, str]] = []
@@ -116,13 +119,18 @@ def find_conflict_markers(text: str) -> list[tuple[int, str]]:
 
 def _scan_repo() -> list[str]:
     problems: list[str] = []
+
     for path in _tracked_files():
         text = _read_text(path)
+
         if text is None:
             continue
+
         rel = path.relative_to(REPO_ROOT).as_posix()
+
         for lineno, kind in find_conflict_markers(text):
             problems.append(f"{rel}:{lineno}: stray conflict marker {kind}")
+
     return problems
 
 
@@ -141,6 +149,7 @@ class TestNoCommittedConflictMarkers:
 
     def test_no_tracked_file_carries_a_conflict_marker(self):
         problems = _scan_repo()
+
         assert not problems, (
             "These tracked files contain a committed Git conflict marker. "
             "Resolve the conflict and remove the marker lines before merging "
@@ -170,7 +179,29 @@ class TestNoCommittedConflictMarkers:
         assert any(
             problem.startswith("docs/performance-and-quantization.md:")
             for problem in problems
+        ), problems[:5]
+
+    def test_the_repo_scan_checks_every_tracked_text_file(self, monkeypatch):
+        """Plant a marker in every file the scan reads; every text file must be reported."""
+        original_read_text = _read_text
+
+        def planted(path):
+            text = original_read_text(path)
+            return None if text is None else "<<<<<<< planted\n" + text
+
+        monkeypatch.setattr(
+            "tests.test_no_committed_conflict_markers._read_text",
+            planted,
         )
+
+        reported = {problem.rsplit(":", 2)[0] for problem in _scan_repo()}
+        expected = {
+            path.relative_to(REPO_ROOT).as_posix()
+            for path in _tracked_files()
+            if original_read_text(path) is not None
+        }
+
+        assert reported == expected, sorted(expected - reported)[:10]
 
 
 class TestTheScannerCanActuallyFail:
@@ -191,6 +222,7 @@ class TestTheScannerCanActuallyFail:
             "theirs\n"
             ">>>>>>> topic\n"
         )
+
         found = find_conflict_markers(text)
         assert (3, "|||||||") in found, found
 
@@ -211,7 +243,6 @@ class TestTheScannerCanActuallyFail:
         )
 
         text = _read_text(target)
-
         assert text is not None
 
         found = find_conflict_markers(text)
@@ -274,7 +305,6 @@ class TestFailureNamesFileAndLine:
         )
 
         rel = "doc.md"
-
         problems = [
             f"{rel}:{lineno}: stray conflict marker {kind}"
             for lineno, kind in find_conflict_markers(
