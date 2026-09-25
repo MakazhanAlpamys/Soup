@@ -141,6 +141,12 @@ figure, and why the fit decision refuses rather than warns.
 - **Derived figures are labelled as arithmetic.** Where a line says "1M tokens =
   2.3 h", that is division, not a measured wall-clock run.
 
+## Additional #379 Reconstructions
+
+| File | Historical scope | Verdict | Requirements and limitations |
+|---|---|---|---|
+| repeat_backward.py | STEP 2b / Measurements 3-4 | Repeated streamed backwards against one resident NF4 reference; requires first-pass exactness and later corruption, with canonical gradients and finite checks | CUDA GPU + local checkpoint required for live measurement; seq 128, batch 1, two buffers, five repeats; no downloads |
+
 ## Reproducing
 
 The implementation ships in Soup under Apache-2.0. Reproduction commands are in
