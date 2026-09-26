@@ -193,9 +193,6 @@
   "model_type": "qwen3_5",
   "routed_experts": 0
  },
- "SparkAudio/Spark-TTS-0.5B": {
-  "unresolvable": "the repo has no config.json"
- },
  "THUDM/glm-4.6": {
   "unresolvable": "repo not found or not publicly readable (see #677)"
  },

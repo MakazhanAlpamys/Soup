@@ -944,7 +944,6 @@ class TestV0520Recipes:
     NEW_RECIPES = (
         "orpheus-tts-sft",
         "llasa-tts",
-        "spark-tts",
         "oute-tts",
     )
 
@@ -960,7 +959,6 @@ class TestV0520Recipes:
         "name,expected_family", [
             ("orpheus-tts-sft", "orpheus"),
             ("llasa-tts", "llasa"),
-            ("spark-tts", "spark"),
             ("oute-tts", "oute"),
         ],
     )
@@ -1091,7 +1089,7 @@ class TestTddReviewGaps:
         from soup_cli.recipes.catalog import RECIPES
 
         new = (
-            "orpheus-tts-sft", "llasa-tts", "spark-tts", "oute-tts",
+            "orpheus-tts-sft", "llasa-tts", "oute-tts",
         )
         for name in new:
             base = RECIPES[name].model

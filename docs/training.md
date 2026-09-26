@@ -1666,13 +1666,18 @@ that pairing — then Soup resamples to 16 kHz and calls the
 Transformers-native `HKUSTAudio/xcodec2-hf` codec, and
 renders the resulting ids as `<|s_ID|>` between Llasa's speech-generation
 boundary tokens. Audio remains duration/byte-capped and is read through an
-`O_NOFOLLOW` fd. Spark and Oute remain dependency-gated pending their #265
-slice. Sesame CSM fails earlier with an architecture-specific message because
+`O_NOFOLLOW` fd. Spark and Oute raw-audio live encoding now fails closed:
+Spark-TTS has no installable `sparktts` package and its official environment pins
+Torch/Transformers below Soup's supported stack; current `outetts` pins
+Transformers 4.52.3 and Oute preparation also needs transcript/word alignment.
+For those two families, pre-encode in the upstream environment and train the
+resulting codec-token chat with `data.format: chatml`. Sesame CSM fails earlier
+with an architecture-specific message because
 its 32 parallel Mimi codebooks require a native multimodal trainer, not a
 codec-string adapter.
 
-Four ready-made codec-string recipes ship: `orpheus-tts-sft`, `llasa-tts`,
-`spark-tts`, `oute-tts` — copy with `soup recipes use <name>`. Cross-validators
+Three ready-made codec-string recipes ship: `orpheus-tts-sft`, `llasa-tts`,
+`oute-tts` — copy with `soup recipes use <name>`. Cross-validators
 reject the `mlx` backend, `modality != audio_out`, and emotion tags outside the
 per-family allowlist.
 

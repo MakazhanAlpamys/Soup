@@ -177,7 +177,7 @@ soup migrate --from llamafactory config.yaml  Import config from LLaMA-Factory
 soup migrate --from axolotl config.yml        Import config from Axolotl
 soup migrate --from unsloth notebook.ipynb    Import config from Unsloth notebook
 soup migrate --from llamafactory c.yaml --dry-run  Preview without writing
-soup recipes list                             List all 174 ready-made recipes
+soup recipes list                             List all 173 ready-made recipes
 soup recipes show llama3.1-8b-sft            Print recipe YAML
 soup recipes use llama3.1-8b-sft             Copy recipe to soup.yaml
 soup recipes search "reasoning"              Search by keyword/task/size
@@ -359,7 +359,7 @@ soup train  # task='moe_lora_routing' + mole_task_adapters  MoLE per-token gate 
 soup train  # task='distill' + distill_mode=token|sequence  Token logit-KL or sequence-level teacher-continuation KD — LIVE (v0.71.12)
 soup train  # task=classifier|reranker|cross_encoder + lora  LoRA-adapter classifier (frozen encoder) — LIVE (v0.71.12)
 soup train  # use_mod | expand_layers | use_longlora  Mixture-of-Depths / LLaMA Pro / LongLoRA S² (Llama/Qwen/Mistral[/Phi]) — LIVE (v0.71.12)
-soup train  # task='tts' + tts_family + modality='audio_out'  TTS codec-string SFT; pre-encoded + Orpheus/SNAC + Llasa/XCodec2 live; Sesame CSM refused (native trainer required) — LIVE (v0.71.20)
+soup train  # task='tts' + tts_family + modality='audio_out'  TTS pre-encoded codec-token SFT + emotion templating; Orpheus/Llasa live-codec; Spark/Oute raw-audio refused (upstream pins); Sesame CSM refused — LIVE (v0.71.20)
 soup train  # task in {sft,tts} + moe_expert_quant=nf4|int8_rowwise [+moe_lora]  bnb per-expert quant of fused-MoE experts (CUDA); refused on other tasks, which never applied it (#798) — LIVE (v0.71.20)
 soup train  # task in {sft,tts} + train_router_only=true [+moe_lora]  Freeze MoE experts, train only the gating router; refused on other tasks (#798). moe_lora needs lora.dropout: 0.0 on fused-expert MoEs — LIVE (v0.71.20)
 soup train  # quantization='bitnet_1.58'  BitNet 1.58 training is not implemented; config load refuses it

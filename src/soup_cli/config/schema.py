@@ -5160,6 +5160,10 @@ class SoupConfig(BaseModel):
                     "model's native CSM/AutoProcessor training path until Soup has "
                     "a dedicated CSM trainer."
                 )
+            if self.data.format == "audio" and tcfg.tts_family in {"spark", "oute"}:
+                from soup_cli.utils.tts_codec import incompatible_live_codec_error
+
+                raise ValueError(str(incompatible_live_codec_error(tcfg.tts_family)))
             if tcfg.tts_emotion is not None:
                 try:
                     validate_emotion_tag(tcfg.tts_emotion, family=tcfg.tts_family)
