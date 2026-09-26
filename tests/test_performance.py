@@ -726,7 +726,8 @@ class TestCombinedPerformanceConfig:
         assert dumped["training"]["rope_scaling_type"] == "yarn"
 
     def test_rope_scaling_all_types_accepted(self):
-        for scaling_type in ("linear", "dynamic", "yarn", "longrope"):
+        # longrope is refused at config load (#1239): test_issue1239_llama3_rope_compose.py.
+        for scaling_type in ("linear", "dynamic", "yarn"):
             cfg = SoupConfig(
                 base="test/model",
                 data={"train": "./data.jsonl"},

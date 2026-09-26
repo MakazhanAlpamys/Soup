@@ -714,7 +714,8 @@ class TestCoverageGapFixes:
 
 
 class TestRopeScalingTypeLiteral:
-    @pytest.mark.parametrize("rt", ["linear", "dynamic", "yarn", "longrope", "llama3"])
+    # longrope is refused at config load (#1239): test_issue1239_llama3_rope_compose.py.
+    @pytest.mark.parametrize("rt", ["linear", "dynamic", "yarn", "llama3"])
     def test_all_types_accepted(self, rt):
         yaml_in = f"""
 base: meta-llama/Llama-3.1-8B

@@ -312,14 +312,18 @@ class TestApplyLongContextLlama3Autodetect:
                           "low_freq_factor": 1.0, "high_freq_factor": 4.0},
         )
         # Caller explicitly asks for linear — must not silently switch to llama3.
-        result = apply_long_context_config(
-            model_config,
-            target_length=16384,
-            rope_scaling_type="linear",
-            model_name="meta-llama/Llama-3.1-8B",
-        )
-        assert result is not None
-        assert result["rope_type"] == "linear"
+        # #1239: nor may linear silently replace the checkpoint's own llama3
+        # block, so the explicit pick is refused by name rather than rewritten.
+        with pytest.raises(ValueError, match="rope_scaling_type='linear'") as exc_info:
+            apply_long_context_config(
+                model_config,
+                target_length=16384,
+                rope_scaling_type="linear",
+                model_name="meta-llama/Llama-3.1-8B",
+            )
+        assert "rope_type='llama3', factor=8.0" in str(exc_info.value)
+        assert model_config.max_position_embeddings == 8192
+        assert not hasattr(model_config, "rope_parameters")
 
     def test_rope_scaling_with_rope_type_alias(self):
         """v0.49.0 detect helper also accepts the newer ``rope_type`` key."""

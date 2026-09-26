@@ -1015,7 +1015,7 @@ training:
   gradient_checkpointing: true  # Required for long sequences
 
   # Long-context (128k+ tokens)
-  rope_scaling_type: dynamic  # RoPE scaling: linear, dynamic, yarn, longrope
+  rope_scaling_type: dynamic  # RoPE scaling: linear, dynamic, yarn, llama3
   # use_ring_attention: true  # Sequence parallelism across GPUs
 
 data:
