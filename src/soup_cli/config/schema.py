@@ -2978,7 +2978,7 @@ class TrainingConfig(BaseModel):
                 "from the last tokens of the sequence, and no grouped attention "
                 "is applied. It stays refused until real S^2 attention exists. "
                 "To extend the context, set training.rope_scaling_type (linear, "
-                "dynamic, yarn, longrope or llama3) and train plain LoRA; "
+                "dynamic, yarn or llama3) and train plain LoRA; "
                 "remove use_longlora or set it to false."
             )
         return value

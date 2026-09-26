@@ -122,6 +122,31 @@ def test_the_message_names_the_setting_the_reason_the_alternative_and_the_issue(
     assert "remove use_longlora or set it to false" in message
 
 
+def test_every_rope_type_the_message_recommends_extends_a_plain_checkpoint():
+    """The message tells users which ``rope_scaling_type`` values extend the
+    context. Each one must extend a checkpoint with no RoPE scaling of its own,
+    which is what the Llama / Mistral / Qwen bases ``use_longlora`` accepted
+    are. ``longrope`` cannot: it needs the checkpoint's own ``short_factor`` /
+    ``long_factor`` vectors."""
+    from types import SimpleNamespace
+
+    from soup_cli.utils.long_context import apply_long_context_config
+
+    with pytest.raises(ValueError) as excinfo:
+        load_config_from_string(_yaml("true"))
+    flat = " ".join(str(excinfo.value).split())
+    named = re.search(r"rope_scaling_type \(([^)]*)\)", flat)
+    assert named, flat
+    rope_types = [part.strip() for part in re.split(r",|\bor\b", named.group(1)) if part.strip()]
+    assert rope_types, flat
+    for rope_type in rope_types:
+        config = SimpleNamespace(
+            max_position_embeddings=8192,
+            rope_parameters={"rope_theta": 500000.0, "rope_type": "default"},
+        )
+        assert apply_long_context_config(config, 32768, rope_type), rope_type
+
+
 @pytest.mark.parametrize("spelling", YAML_SPELLINGS_READ_AS_TRUE)
 def test_the_loader_refuses_every_spelling_read_as_true(spelling):
     with pytest.raises(ValueError) as excinfo:
