@@ -555,6 +555,7 @@ Listed by first contribution. PR numbers link the work.
 
 - **Mohd Uwaish** ([@mohdUwaish59](https://github.com/mohdUwaish59))
   - First contribution: The Web UI kept its bearer token in `sessionStorage`, readable by any script in the page. It now lives only in a request-wrapper closure, and the tests run `app.js` under node to prove the token reaches no storage, cookie, history entry or global name, and that every request site still sends it ([#1136](https://github.com/MakazhanAlpamys/Soup/issues/1136), [#1190](https://github.com/MakazhanAlpamys/Soup/pull/1190))
+  - `soup train --find-lr` failed with a misleading "Invalid --find-lr-output" whenever the dataset had fewer rows than `--find-lr-steps`. The sweep now shrinks to the rows it has over the full LR range, refuses below four points before the model loads, and blames the output path only for real path errors; the refusal is re-raised past the synthetic-curve fallback instead of being turned into a report; 13 of 14 mutations fail a test ([#1189](https://github.com/MakazhanAlpamys/Soup/issues/1189), [#1244](https://github.com/MakazhanAlpamys/Soup/pull/1244))
 
 ---
 
