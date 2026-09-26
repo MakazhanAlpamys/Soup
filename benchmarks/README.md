@@ -141,6 +141,12 @@ figure, and why the fit decision refuses rather than warns.
 - **Derived figures are labelled as arithmetic.** Where a line says "1M tokens =
   2.3 h", that is division, not a measured wall-clock run.
 
+## Additional #379 Reconstructions
+
+| File | Historical scope | Verdict | Requirements and limitations |
+|---|---|---|---|
+| layercount.py | STEP 6 / rejected layer-count hypothesis | Historical reconstruction validator requiring a multi-point synthetic layer-count sweep whose streamed/resident gradients stay exact; one point cannot pass | CPU/static record replay; live synthetic CUDA measurement requires the historical torch/bitsandbytes stack; exact counts and finite metadata are required |
+
 ## Reproducing
 
 The implementation ships in Soup under Apache-2.0. Reproduction commands are in
