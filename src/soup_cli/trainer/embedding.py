@@ -143,17 +143,31 @@ class EmbeddingTrainerWrapper:
             min_batch = 2 if loss_type == "contrastive" else 1
             batch_size = max(min_batch, batch_size // 3)
             console.print(f"[green]Auto batch size (embedding):[/] {batch_size}")
-        elif (batch_size == 1 or str(batch_size) == "1") and loss_type == "contrastive":
+        elif (
+            (
+                batch_size == 1
+                or str(batch_size) == "1"
+                or (isinstance(batch_size, int) and batch_size < 2)
+            )
+            and loss_type == "contrastive"
+        ):
             raise ValueError(
                 "contrastive in-batch negatives need batch_size >= 2; "
                 "use triplet (with negatives) or cosine for batch 1"
             )
 
-        if loss_type == "contrastive" and len(train_ds) < 2:
-            raise ValueError(
-                "contrastive in-batch negatives need at least 2 training samples; "
-                f"got {len(train_ds)}"
-            )
+        if loss_type == "contrastive":
+            if len(train_ds) < 2:
+                raise ValueError(
+                    "contrastive in-batch negatives need at least 2 training samples; "
+                    f"got {len(train_ds)}"
+                )
+            if batch_size > len(train_ds):
+                batch_size = len(train_ds)
+                console.print(
+                    f"[yellow]Batch size capped at training set size ({batch_size}) "
+                    "so dataloader_drop_last does not drop all samples.[/]"
+                )
 
         console.print(
             f"[green]Embedding config:[/] loss={loss_type}, margin={margin}, "
@@ -541,6 +555,17 @@ class _EmbeddingTrainer:
         """Compute contrastive, triplet, or cosine loss on embeddings."""
         import torch
         from torch.nn import functional as nn_func
+
+        # Fail fast if contrastive batch is degenerate (< 2) before running model forwards (#1234)
+        if (
+            self._loss_type == "contrastive"
+            or (self._loss_type == "triplet" and "negative_input_ids" not in inputs)
+        ):
+            batch_sz = inputs["anchor_input_ids"].size(0)
+            if batch_sz < 2:
+                raise ValueError(
+                    f"contrastive in-batch negatives need batch_size >= 2; got {batch_sz}"
+                )
 
         # Encode anchor
         anchor_out = model(

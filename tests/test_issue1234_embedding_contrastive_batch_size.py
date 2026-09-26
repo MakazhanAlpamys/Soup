@@ -232,6 +232,39 @@ class TestAutoBatchSizeFlooring:
         assert wrapper.args.per_device_train_batch_size == 1
         assert wrapper.args.dataloader_drop_last is False
 
+    def test_contrastive_batch_size_capped_at_dataset_size_with_drop_last(
+        self, tmp_path, monkeypatch
+    ):
+        from soup_cli.trainer.embedding import EmbeddingTrainerWrapper
+
+        model_path = _tiny_bert_dir(tmp_path)
+        monkeypatch.chdir(tmp_path)
+
+        cfg_dict = {
+            "base": model_path,
+            "task": "embedding",
+            "data": {"train": "train.jsonl", "max_length": 64},
+            "training": {
+                "batch_size": 4,
+                "embedding_loss": "contrastive",
+                "quantization": "none",
+                "lora": {"r": 8, "alpha": 16, "target_modules": ["query", "value"]},
+            },
+            "output": str(tmp_path / "out"),
+        }
+        cfg = load_config_from_string(yaml.safe_dump(cfg_dict))
+        wrapper = EmbeddingTrainerWrapper(cfg, device="cpu")
+        dataset = {
+            "train": [
+                {"anchor": "hello", "positive": "world"},
+                {"anchor": "hi", "positive": "there"},
+                {"anchor": "good", "positive": "day"},
+            ]
+        }
+        wrapper.setup(dataset)
+        assert wrapper.args.per_device_train_batch_size == 3
+        assert wrapper.args.dataloader_drop_last is True
+
 
 class TestRealCpuEmbeddingTraining:
     """Verify that template training block on CPU updates weights and has non-zero loss."""
@@ -323,11 +356,12 @@ class TestRuntimeGuard:
         wrapper.setup(dataset)
 
         # Force a single-item input batch to compute_loss
+        device = next(wrapper.model.parameters()).device
         single_inputs = {
-            "anchor_input_ids": torch.ones((1, 4), dtype=torch.long),
-            "anchor_attention_mask": torch.ones((1, 4), dtype=torch.long),
-            "positive_input_ids": torch.ones((1, 4), dtype=torch.long),
-            "positive_attention_mask": torch.ones((1, 4), dtype=torch.long),
+            "anchor_input_ids": torch.ones((1, 4), dtype=torch.long, device=device),
+            "anchor_attention_mask": torch.ones((1, 4), dtype=torch.long, device=device),
+            "positive_input_ids": torch.ones((1, 4), dtype=torch.long, device=device),
+            "positive_attention_mask": torch.ones((1, 4), dtype=torch.long, device=device),
         }
         with pytest.raises(ValueError) as excinfo:
             wrapper.trainer.compute_loss(wrapper.model, single_inputs)
