@@ -556,9 +556,43 @@ def attach_relora_callback(trainer: Any, tcfg: Any) -> bool:
     # rather than a silent skip. Matches project policy (v0.34.0 / v0.39.0).
     if relora_steps is None:
         return False
+
+    args = getattr(trainer, "args", None)
+    try:
+        world_size = int(getattr(args, "world_size", 1)) if args is not None else 1
+    except (TypeError, ValueError):
+        world_size = 1
+    if world_size > 1:
+        raise ValueError(
+            "ReLoRA is not supported with world_size > 1 "
+            f"(got world_size={world_size}): restarts are single-process only."
+        )
+    if getattr(trainer, "is_deepspeed_enabled", False) is True:
+        raise ValueError(
+            "ReLoRA is not supported with DeepSpeed "
+            "(is_deepspeed_enabled=True): restarts cannot merge sharded bases."
+        )
+    if getattr(trainer, "is_fsdp_enabled", False) is True:
+        raise ValueError(
+            "ReLoRA is not supported with FSDP "
+            "(is_fsdp_enabled=True): restarts cannot merge sharded bases."
+        )
+
     # Pydantic schema guarantees these fields exist on `TrainingConfig`. Read
     # them directly so a misnamed attr fails loudly with `AttributeError`.
-    from soup_cli.utils.relora import ReLoRACallback, ReLoRAPolicy
+    from soup_cli.utils.relora import (
+        ReLoRACallback,
+        ReLoRAPolicy,
+        _preflight_writable_bases,
+    )
+
+    model = getattr(trainer, "model", None)
+    try:
+        import torch.nn as nn
+    except ImportError:
+        nn = None
+    if nn is not None and isinstance(model, nn.Module):
+        _preflight_writable_bases(model)
 
     policy = ReLoRAPolicy(
         steps=int(relora_steps),
@@ -566,6 +600,11 @@ def attach_relora_callback(trainer: Any, tcfg: Any) -> bool:
         reset_optimizer=bool(tcfg.relora_reset_optimizer),
         prune_ratio=float(tcfg.relora_prune_ratio),
     )
+    if "relora_prune_ratio" in getattr(tcfg, "model_fields_set", ()):
+        logger.warning(
+            "training.relora_prune_ratio is ignored: ReLoRA restarts no longer prune "
+            "adapter weights"
+        )
     trainer.add_callback(ReLoRACallback(policy=policy))
     return True
 

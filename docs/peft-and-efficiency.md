@@ -305,7 +305,7 @@ Five PEFT-surface improvements that LlamaFactory and Axolotl maintain:
 
 ```yaml
 training:
-  quantization: none            # required: PiSSA initializes from float weights
+  quantization: none            # required: schema default is 4bit; ReLoRA/PiSSA need float
   lora:
     init_strategy: pissa          # 'random' (default), 'pissa', 'olora'
     rank_pattern:                 # per-target-module rank override
@@ -313,10 +313,10 @@ training:
       v_proj: 16
     alpha_pattern:                # per-target-module alpha override
       q_proj: 16
-  relora_steps: 500               # magnitude-prune LoRA every 500 steps
+  relora_steps: 500               # merge+reinit restart every 500 steps
   relora_warmup_ratio: 0.1        # skip first 10% of training
-  relora_prune_ratio: 0.9         # zero out smallest 90% by magnitude
-  relora_reset_optimizer: true    # clear optimizer state on each fire
+  relora_prune_ratio: 0.9         # deprecated; kept for old YAML (ignored)
+  relora_reset_optimizer: true    # clear optimizer state after each restart
 ```
 
 **PiSSA** initializes the LoRA pair from the SVD of the base weight, giving faster
@@ -324,10 +324,23 @@ early convergence than random init at the cost of one extra SVD pass on the firs
 epoch. `init_strategy: olora` is also accepted; setting the legacy `use_olora: true`
 auto-aligns for back-compat.
 
-**ReLoRA** fires every N global steps, magnitude-prunes the LoRA adapter weights
-(keeping the top `1 - relora_prune_ratio` by absolute value), and optionally clears
-optimizer state for the pruned parameters so momentum doesn't fight the new sparse
-weights. Useful for very long training runs where the LoRA capacity saturates.
+**ReLoRA is a behaviour break.** Soup's `training.quantization` **defaults to `4bit`**.
+ReLoRA restarts merge the LoRA update into the base weight, so `relora_steps` now
+**requires an explicit `quantization: none`** in soup.yaml. A config that previously
+set only `relora_steps` is refused at parse. No shipped recipe, template, or example
+sets `relora_steps`.
+
+ReLoRA fires every N global steps, merges the LoRA update (B @ A, with PEFT
+scaling) into the frozen base weight, reinitializes `lora_A` (Kaiming) and
+`lora_B` (zeros), optionally clears optimizer state for those adapter parameters,
+and runs a short learning-rate re-warmup. Restarts accumulate faithfully only
+on an fp32 base; bf16/fp16 bases lose merge delta to rounding. Embedding
+adapters (empty `lora_A`, typically `embed_tokens`) are skipped; Linear LoRA is
+merged even though peft puts empty `lora_embedding_A`/`lora_embedding_B` dicts
+on every `LoraLayer`. Useful for very long training runs where adapter capacity
+saturates. `relora_prune_ratio` is retained for backward-compatible YAML but no
+longer prunes adapter weights. Merged base deltas are in-memory only; run
+`soup merge` to export a dense checkpoint.
 
 **Per-pattern rank/alpha** map module name patterns to integer ranks. Useful in MoE
 configs where expert FFNs need lower rank than attention. Caps: 256 keys × value 1024.
@@ -344,8 +357,10 @@ deprecated in favour of the YAML registry.
 **Multi-trainer scope** — ReLoRA and the surgical patches are wired into every
 transformer-backend trainer: `sft`, `dpo`, `grpo`, `kto`, `orpo`, `simpo`, `ipo`,
 `ppo`, `reward_model`, `pretrain`, `embedding`, `bco`, plus the unified
-`task: preference` dispatcher. Schema cross-validator only rejects MLX backend
-(the callback is HF Trainer-specific).
+`task: preference` dispatcher. Schema cross-validator rejects MLX backend,
+quantization other than `none`, `stream_layers`, `lora.use_vera`, `lora.use_dora`,
+and `use_fsdp2_compile` (the callback is HF Trainer-specific and restart requires
+a writable float base).
 
 
 ## DoRA (Weight-Decomposed LoRA)
