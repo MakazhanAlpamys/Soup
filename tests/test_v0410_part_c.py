@@ -131,9 +131,25 @@ class TestSchemaBlockExpansion:
             TrainingConfig(expand_layers=4)
 
     def test_expand_layers_with_freeze_accepted(self):
-        cfg = TrainingConfig(expand_layers=4, freeze_trainable_layers=4)
+        cfg = TrainingConfig(
+            expand_layers=4, freeze_trainable_layers=4, quantization="none"
+        )
         assert cfg.expand_layers == 4
         assert cfg.freeze_trainable_layers == 4
+
+    @pytest.mark.parametrize("quantization", ["4bit", "8bit", "gptq", "hqq:4bit"])
+    @pytest.mark.parametrize("freeze", [4, -4, 0])
+    def test_expand_layers_refused_on_quantized_base(self, quantization, freeze):
+        with pytest.raises(ValidationError, match="quantization"):
+            TrainingConfig(
+                expand_layers=4,
+                freeze_trainable_layers=freeze,
+                quantization=quantization,
+            )
+
+    def test_expand_layers_refused_on_default_quantization(self):
+        with pytest.raises(ValidationError, match="quantization: none"):
+            TrainingConfig(expand_layers=2, freeze_trainable_layers=2)
 
     def test_freeze_trainable_layers_alone_ok(self):
         cfg = TrainingConfig(freeze_trainable_layers=-4)

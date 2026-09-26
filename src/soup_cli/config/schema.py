@@ -3960,6 +3960,14 @@ class TrainingConfig(BaseModel):
                 "freezes the original layers and trains only the new blocks). "
                 "Set freeze_trainable_layers: <signed int>."
             )
+        if self.expand_layers is not None and self.quantization != "none":
+            raise ValueError(
+                "training.expand_layers (LLaMA Pro block expansion) needs an "
+                "unquantized base: the new blocks must start as exact zeros and "
+                "be trainable, which a quantized weight cannot do, but "
+                f"training.quantization is {self.quantization!r}. "
+                "Set quantization: none."
+            )
         return self
 
     @model_validator(mode="after")
