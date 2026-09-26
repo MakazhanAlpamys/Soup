@@ -347,8 +347,10 @@ def decide_performance_flags(
     """
     del gpu_name  # reserved for future GPU-specific overrides
     is_ampere_or_newer = compute_capability >= 8.0
-    liger_available = check_liger_available()
-    flash_attn_available = check_flash_attn_available() is not None
+    # Short-circuit the probes: below 8.0 neither flag can be enabled, so
+    # there is no reason to pay the import probe on a CPU box or old card.
+    liger_available = is_ampere_or_newer and check_liger_available()
+    flash_attn_available = is_ampere_or_newer and check_flash_attn_available() is not None
     long_sequence = max_length > 8192
     tight_vram = 0.0 < vram_headroom_gb < 4.0
     return {

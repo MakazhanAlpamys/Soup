@@ -72,6 +72,8 @@ soup autopilot --model <id> --data d.jsonl --goal chat --dry-run
 
 Autopilot writes a ready-to-run `soup.yaml`. Edit it by hand if needed, then `soup train`.
 
+For the goals that train with SFT, Autopilot turns on FlashAttention and Liger only when the GPU has compute capability 8.0 or higher and the package is installed. When the card qualifies but a package is missing, the Autopilot Decisions panel names the package and the command that installs it.
+
 
 ## Apple Silicon (MLX Backend)
 
