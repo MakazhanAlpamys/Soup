@@ -263,7 +263,25 @@ Baselines may be a registry reference (`registry://<name-or-id>`), a file path, 
 
 ## Sequential A/B Harness (`soup ab`)
 
-Proper sequential testing with early-stop guarantees on `latency` / `judge_score` / `retry_rate`. Uses Wald's classic SPRT for the point alternative — the log-likelihood ratio is a martingale under H0, so Type-I error is controlled at every stopping time per the optional stopping theorem (unlike a naive repeated t-test, which inflates Type-I if you peek at the data).
+Proper sequential testing with early-stop guarantees on `latency` / `judge_score` / `retry_rate`. The test is two-sided: the statistic averages Wald's likelihood ratios for a treatment-minus-control difference of `+effect-size` and of `-effect-size` (a symmetric two-point mixture). Under H0 each ratio has expectation 1 at every step, and so does their average. With a known variance, a simulation of peeking after every new pair keeps the false-positive rate below `--alpha`, unlike a naive repeated t-test, which inflates it.
+
+`soup ab` estimates the variance from the rows, and from a handful of rows that estimate is too noisy. Without a burn-in, re-running after every new pair, the two-sided test would reject a true H0 up to 16% of the time at `--alpha 0.05` (the one-sided test it replaces: 11%) when `--effect-size` is close to the metric's row-to-row standard deviation. So `soup ab` gives no verdict, only `continue`, until each arm has enough rows. That burn-in depends on `--alpha`, and the verdict table shows the value in use:
+
+| `--alpha` | rows per arm before a verdict | worst simulated false-positive rate, up to 1000 rows per arm |
+|---|---|---|
+| 0.05 and above | 30 | 0.051 at `--alpha 0.05` |
+| from 0.01 to below 0.05 | 40 | 0.011 at `--alpha 0.01` |
+| below 0.01 | 40, **not calibrated** | 0.0058 at `--alpha 0.005` |
+
+The values come from a simulation of that re-run-after-every-pair procedure: beta 0.20, `--effect-size` from 0.1 to 5 standard deviations, and runs followed up to 1000 rows per arm (200 checked too). Each value is the smallest that keeps the false-positive rate within Monte-Carlo error of `--alpha` at every effect size, at every alpha the simulation checked in its range (0.05 and 0.10; 0.01 and 0.025). The record, script and results are in [`benchmarks/gate-1227-ab-burn-in.md`](../benchmarks/gate-1227-ab-burn-in.md).
+
+The calibration has two limits, and `soup ab` prints a warning past either:
+
+- **At `--alpha 0.01` the rate sits slightly above the level asked for**, near 0.011 across seeds, because the variance is estimated from the rows; more rows do not lower it. A statistic without that floor is [#1265](https://github.com/MakazhanAlpamys/Soup/issues/1265).
+- **Below `--alpha 0.01` it is not calibrated.** At `--alpha 0.005`, 40 rows leave a simulated rate slightly above the level asked for.
+- **It holds up to 1000 rows per arm.** Past that, a test that keeps being re-run has not been measured.
+
+A variance-robust statistic, which would need no burn-in, is tracked in [#1265](https://github.com/MakazhanAlpamys/Soup/issues/1265).
 
 ```bash
 soup ab --input ab.jsonl --metric latency --effect-size 0.5
@@ -271,9 +289,11 @@ soup ab --input ab.jsonl --metric latency --effect-size 0.5
 soup ab --input ab.jsonl --metric judge_score --alpha 0.01 --beta 0.10 --effect-size 0.1
 ```
 
-Input rows look like `{"arm": "control", "latency": 1.23}` or `{"arm": "treatment", "judge_score": 0.91}`. Decision is one of `continue` (keep collecting samples), `reject_h0` (real difference detected), `accept_h0` (no significant difference). Composes with `soup loop canary` (v0.58) — promote or roll back as soon as the LLR clears a decision boundary.
+Input rows look like `{"arm": "control", "latency": 1.23}` or `{"arm": "treatment", "judge_score": 0.91}`. Decision is one of `continue` (keep collecting samples), `reject_h0` (real difference detected, in either direction), `accept_h0` (no significant difference). A `reject_h0` also reports a `direction`, `better` or `worse`, read through the metric's polarity: `judge_score` is higher-is-better, `latency` and `retry_rate` are lower-is-better. Composes with `soup loop canary` (v0.58): the panel recommends promoting a `better` treatment and a rollback only for a `worse` one.
 
-`soup ab` accepts `--slack-url` / `--discord-url` (v0.71.5) and pings the webhook **only when the test actually decides** (`reject_h0` / `accept_h0`) — a still-running `continue` stays quiet so you're not paged on every peek. Same SSRF-hardened validator as `soup drift-alarm`.
+`soup ab` exits `0` on every decision, including a `worse` one; to gate a pipeline on a regression, read `direction` from the output or the webhook payload.
+
+`soup ab` accepts `--slack-url` / `--discord-url` (v0.71.5) and pings the webhook **only when the test actually decides** (`reject_h0` / `accept_h0`) — a still-running `continue` stays quiet so you're not paged on every peek. The payload carries `decision` and `direction` (`null` on `accept_h0`). Same SSRF-hardened validator as `soup drift-alarm`.
 
 
 ## Drift Alarm (`soup drift-alarm`)
