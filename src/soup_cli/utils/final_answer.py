@@ -92,8 +92,12 @@ _NUMBER_RE = re.compile(_NUMBER_PATTERN)
 _VALUE_TOKEN_RE = re.compile(
     r"[()\[\]{}]|(?<![\w\\{}^/.])(" + _NUMBER_PATTERN + r")(?![\w{}^/])"
 )
-# After ", " or "; " inside a clause: a number next means a list that goes on ("41, 42 or 43").
-_NUMBER_AHEAD_RE = re.compile(r"\s*(?:\$|\\[(\[])?\s*[-+\u2212]?\.?\d")
+# After ", " or "; " inside a clause: a number next means a list that goes on ("41, 42 or 43",
+# "41, $42$"). Only one ``\s*`` can match a given whitespace run, because the second one follows
+# a mandatory "$", "\(" or "\[", so a run that no number follows costs linear time. With
+# ``\s*(?:...)?\s*`` every split of the run was retried: one completion ending in a comma and
+# 40,000 spaces took over 90 s to score.
+_NUMBER_AHEAD_RE = re.compile(r"\s*(?:(?:\$|\\[(\[])\s*)?[-+\u2212]?\.?\d")
 _DIGIT_RE = re.compile(r"\d")
 
 _EDGE_CHARS = " \t\r\n*"

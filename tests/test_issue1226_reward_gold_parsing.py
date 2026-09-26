@@ -780,10 +780,11 @@ class TestAdversarialInputsStayLinear:
             "**answer" * 50_000,
             "The answer is " + "(" * 200_000,
             "#### Final Answer\n" * 20_000,
+            "The answer is 42," + " " * 20_000 + "x",  # see test_issue1226_clause_scanner_*
         ],
         ids=["open-boxes", "open-boxes-around-a-close", "phrases", "markers", "commas",
              "whitespace", "braces", "phrase-whitespace", "bold-labels", "open-parens",
-             "answer-headings"],
+             "answer-headings", "clause-whitespace"],
     )
     def test_parsing_is_fast_on_adversarial_output(self, text):
         start = time.perf_counter()
