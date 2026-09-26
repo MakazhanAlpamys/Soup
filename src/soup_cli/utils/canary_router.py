@@ -15,11 +15,15 @@ plugs into `route()` directly.
 from __future__ import annotations
 
 import hashlib
+import json
 import math
+import os
 import threading
 from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Mapping, Optional
+
+from soup_cli.utils.paths import atomic_write_text, enforce_under_cwd_and_no_symlink
 
 
 @dataclass(frozen=True)
@@ -64,6 +68,9 @@ class RouteDecision:
 
 
 _HASH_MOD = 10_000  # buckets — gives ±0.01 % granularity on the split
+_DEFAULT_STATS_PATH = os.path.join(".soup", "canary-stats.json")
+_MAX_STATS_BYTES = 64 * 1024
+_STATS_LOCK = threading.Lock()
 
 
 def _bucket_for_key(key: str) -> int:
@@ -193,3 +200,89 @@ class BucketStats:
                     "canary_major": self.canary_major,
                 }
             )
+
+
+def default_stats_path() -> str:
+    """Return the canary outcome path next to the default loop state."""
+    return _DEFAULT_STATS_PATH
+
+
+def read_bucket_stats(
+    *,
+    stable: str,
+    canary: str,
+    rollout_id: Optional[str] = None,
+    path: Optional[str] = None,
+) -> BucketStats:
+    """Load counters for one rollout, returning empty stats for another rollout.
+
+    The adapter identities prevent samples from an older promotion being reused
+    after an operator selects a different canary.
+    """
+    policy = CanaryPolicy(stable=stable, canary=canary, traffic_pct=0.0)
+    target = path or default_stats_path()
+    enforce_under_cwd_and_no_symlink(target, "canary stats path")
+    try:
+        if os.path.getsize(target) > _MAX_STATS_BYTES:
+            raise ValueError("canary stats file exceeds 64 KiB cap")
+        with open(target, "r", encoding="utf-8") as fh:
+            payload = json.load(fh)
+    except FileNotFoundError:
+        return BucketStats()
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("canary stats file is unreadable") from exc
+    if not isinstance(payload, dict):
+        raise ValueError("canary stats root must be an object")
+    if (
+        payload.get("stable") != policy.stable
+        or payload.get("canary") != policy.canary
+        or payload.get("rollout_id") != rollout_id
+    ):
+        return BucketStats()
+    values = {}
+    for name in ("stable_ok", "stable_major", "canary_ok", "canary_major"):
+        value = payload.get(name, 0)
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise ValueError(f"{name} must be a non-negative int")
+        values[name] = value
+    return BucketStats(**values)
+
+
+def record_bucket_outcome(
+    policy: CanaryPolicy,
+    bucket: str,
+    ok: bool,
+    *,
+    rollout_id: Optional[str] = None,
+    path: Optional[str] = None,
+) -> None:
+    """Atomically add one served request outcome to the active rollout."""
+    if not isinstance(policy, CanaryPolicy):
+        raise TypeError("policy must be CanaryPolicy")
+    if policy.canary is None:
+        return
+    if rollout_id is not None and (
+        not isinstance(rollout_id, str) or not rollout_id or "\x00" in rollout_id
+    ):
+        raise ValueError("rollout_id must be a non-empty NUL-free string or None")
+    target = path or default_stats_path()
+    with _STATS_LOCK:
+        stats = read_bucket_stats(
+            stable=policy.stable,
+            canary=policy.canary,
+            rollout_id=rollout_id,
+            path=target,
+        )
+        stats.record(bucket, ok)
+        payload = {
+            "stable": policy.stable,
+            "canary": policy.canary,
+            "rollout_id": rollout_id,
+            **dict(stats.snapshot()),
+        }
+        atomic_write_text(
+            json.dumps(payload, allow_nan=False, indent=2, sort_keys=True),
+            target,
+            prefix=".canary_stats_",
+            field="canary stats path",
+        )

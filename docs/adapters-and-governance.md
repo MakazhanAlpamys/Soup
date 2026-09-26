@@ -121,8 +121,9 @@ soup loop replay iter-20260515T120000-abcdef01 --extract ./iter-dump
 # Background subprocess (writes PID, no shell)
 soup loop watch --detach
 
-# Promote a canary at 5% traffic with auto-rollback on MAJOR verdict
-soup loop canary registry://candidate --traffic 5% --autoroll-on-regress
+# Start serve with the candidate loaded, then promote it at 5% traffic.
+soup serve --model ./base --adapters candidate=./candidate
+soup loop canary candidate --traffic 5% --autoroll-on-regress
 
 # Pause/resume the daemon between iterations (atomic state flip)
 soup loop pause
@@ -132,7 +133,22 @@ soup loop resume
 soup loop replay iter-20260515T120000-abcdef01
 ```
 
-State lives in `.soup/loop.yaml` (atomic write, cwd-contained, symlink-rejected). Per-iteration manifests under `.soup-loops/<iter-id>/iteration.json` are laid out so a v0.26 Soup Can can wrap them directly. The canary router is deterministic (SHA-256 hash of conversation id) and sticky-on-rollback — a flaky verdict can't ping-pong traffic between adapters.
+State lives in `.soup/loop.yaml` (atomic write, cwd-contained, symlink-rejected). Per-iteration manifests under `.soup-loops/<iter-id>/iteration.json` are laid out so a v0.26 Soup Can can wrap them directly.
+
+Canary routing is available on the transformers backend when the candidate name was
+loaded with `soup serve --adapters`. Send a stable key as the
+`conversation_id` field or `X-Conversation-Id` header on
+`POST /v1/chat/completions`; requests without a key keep the normal active-adapter
+behavior. The router hashes the key, so every request in one conversation stays in
+the same stable or canary bucket. An explicit `adapter` field still takes precedence.
+
+Completed generations and generation errors are accumulated separately for the two
+buckets in `.soup/canary-stats.json`. `soup loop watch` evaluates those observations
+after at least 30 canary samples. If the canary success rate trails the stable rate by
+more than five percentage points, the verdict is `MAJOR`; with
+`--autoroll-on-regress`, the watcher atomically clears the canary and its traffic share
+from `loop.yaml`. `/v1/adapters/activate/<name>` remains an explicit 100% cutover and
+does not change the canary policy.
 
 
 ## Knowledge Editing (`soup edit set`, ROME / MEMIT / AlphaEdit)
