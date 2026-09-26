@@ -699,9 +699,12 @@ def run_doctor(
         raise TypeError("train_on_messages_with_train_field must be bool")
     if not isinstance(mask_history, bool):
         raise TypeError("mask_history must be bool")
-    if mask_history and not train_on_responses_only:
+    if mask_history and (
+        train_on_messages_with_train_field or not train_on_responses_only
+    ):
         raise ValueError(
-            "mask_history requires train_on_responses_only — data.mask_history "
+            "mask_history requires train_on_responses_only and cannot combine "
+            "with train_on_messages_with_train_field — data.mask_history "
             "narrows the assistant-only loss mask (soup.yaml schema rule: "
             "data.mask_history requires data.train_on_responses_only: true)"
         )
@@ -902,9 +905,12 @@ def render_mask_preview(
         raise ValueError(f"n must be <= {_MAX_PREVIEW_ROWS}")
     if not isinstance(mask_history, bool):
         raise TypeError("mask_history must be bool")
-    if mask_history and not train_on_responses_only:
+    if mask_history and (
+        train_on_messages_with_train_field or not train_on_responses_only
+    ):
         raise ValueError(
-            "mask_history requires train_on_responses_only — it narrows the "
+            "mask_history requires train_on_responses_only and cannot combine "
+            "with train_on_messages_with_train_field — it narrows the "
             "assistant-only loss mask (data.mask_history requires "
             "data.train_on_responses_only: true)"
         )

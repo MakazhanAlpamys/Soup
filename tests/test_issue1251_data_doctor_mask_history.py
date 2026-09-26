@@ -86,10 +86,6 @@ def _trained_positions(tok, messages, *, mask_history):
     return sum(1 for token in previews[0].tokens if token.trained)
 
 
-def _assistant_token_count(tok, content):
-    return len(tok(content, add_special_tokens=False)["input_ids"])
-
-
 def _expected_trained_positions(messages, tok, *, mask_history):
     """Ground truth from the SAME builder the trainer uses."""
     from soup_cli.data.loss_mask import build_assistant_only_labels
@@ -176,11 +172,10 @@ class TestEngineRefusesMaskHistoryWithoutResponsesOnly:
 
 class TestCliRefusesMaskHistoryWithoutResponsesOnly:
     def test_combo_is_refused_and_names_both_flags(self, tmp_path, monkeypatch):
-        import re
-
         from typer.testing import CliRunner
 
         from soup_cli.cli import app
+        from tests.conftest import strip_ansi
 
         monkeypatch.chdir(tmp_path)
         path = tmp_path / "d.jsonl"
@@ -195,6 +190,109 @@ class TestCliRefusesMaskHistoryWithoutResponsesOnly:
             ],
         )
         assert result.exit_code == 3
-        text = re.compile(r"\x1b\[[0-9;]*m").sub("", result.output)
+        text = " ".join(strip_ansi(result.output).split())
         assert "--mask-history" in text
         assert "--train-on-responses-only" in text
+
+
+# ---------------------------------------------------------------------------
+# CLI end-to-end: the flag a user types must reach the engine (#1251,
+# acceptance item 2 — a no-op flag must fail a test).
+# ---------------------------------------------------------------------------
+
+_EOS_LAST_ONLY = (
+    "{% for m in messages %}<|{{ m['role'] }}|> {{ m['content'] }} <|end|> "
+    "{% if loop.last %}</s>{% endif %}{% endfor %}"
+)
+
+
+def _invoke_doctor(monkeypatch, tmp_path, template, *extra):
+    from typer.testing import CliRunner
+
+    import soup_cli.utils.data_doctor as engine
+    from soup_cli.cli import app
+
+    tok = _tokenizer(template)
+    monkeypatch.setattr(
+        engine, "resolve_tokenizer", lambda model, *, trust_remote_code=False: tok
+    )
+    trained = []
+    real = engine.render_mask_preview
+
+    def spy(*args, **kwargs):
+        rows = real(*args, **kwargs)
+        trained.extend(sum(t.trained for t in row.tokens) for row in rows)
+        return rows
+
+    monkeypatch.setattr(engine, "render_mask_preview", spy)
+    monkeypatch.chdir(tmp_path)
+    path = tmp_path / "d.jsonl"
+    path.write_text(json.dumps({"messages": _THREE_TURN}) + "\n", encoding="utf-8")
+    result = CliRunner().invoke(
+        app, ["data", "doctor", str(path), "--model", "fake/model", *extra]
+    )
+    return result, trained
+
+
+@pytest.mark.parametrize(("extra", "expected"), [((), 13), (("--mask-history",), 6)])
+def test_cli_show_mask_honours_the_flag(monkeypatch, tmp_path, extra, expected):
+    _, trained = _invoke_doctor(monkeypatch, tmp_path, _BODY, "--show-mask", "1", *extra)
+    assert trained == [expected]
+
+
+@pytest.mark.parametrize(("extra", "exit_code"), [((), 2), (("--mask-history",), 0)])
+def test_cli_report_honours_the_flag(monkeypatch, tmp_path, extra, exit_code):
+    # EOS closes only the last turn: training every turn leaves earlier turns
+    # without one (eos_in_labels MAJOR, exit 2); training only the last is OK.
+    result, _ = _invoke_doctor(monkeypatch, tmp_path, _EOS_LAST_ONLY, *extra)
+    assert result.exit_code == exit_code, result.output
+
+
+# ---------------------------------------------------------------------------
+# --mask-history --train-on-messages-with-train-field must be refused too
+# (soup.yaml refuses the pair in every spelling; the doctor must match).
+# ---------------------------------------------------------------------------
+
+
+def test_cli_refuses_mask_history_with_the_train_field(tmp_path, monkeypatch):
+    from typer.testing import CliRunner
+
+    import soup_cli.utils.data_doctor as engine
+    from soup_cli.cli import app
+    from tests.conftest import strip_ansi
+
+    # A local tokenizer, so a regression shows up as a wrong exit code
+    # rather than as an attempt to download "fake/model".
+    tok = _tokenizer(_BODY)
+    monkeypatch.setattr(
+        engine, "resolve_tokenizer", lambda model, *, trust_remote_code=False: tok
+    )
+    monkeypatch.chdir(tmp_path)
+    path = tmp_path / "d.jsonl"
+    path.write_text(json.dumps({"messages": _TWO_TURN}) + "\n", encoding="utf-8")
+    result = CliRunner().invoke(
+        app,
+        [
+            "data", "doctor", str(path), "--model", "fake/model",
+            "--mask-history", "--train-on-messages-with-train-field",
+        ],
+    )
+    assert result.exit_code == 3, (result.output, repr(result.exception))
+    plain = " ".join(strip_ansi(result.output).split())
+    assert "--mask-history" in plain
+    assert "--train-on-messages-with-train-field" in plain
+
+
+@pytest.mark.parametrize("entry", ["run_doctor", "render_mask_preview"])
+def test_engine_refuses_mask_history_with_the_train_field(entry):
+    from soup_cli.utils import data_doctor as engine
+
+    kwargs = {
+        "fmt": "chatml",
+        "mask_history": True,
+        "train_on_messages_with_train_field": True,
+    }
+    if entry == "render_mask_preview":
+        kwargs["n"] = 1
+    with pytest.raises(ValueError, match="train_on_messages_with_train_field"):
+        getattr(engine, entry)([_row(_TWO_TURN)], _tokenizer(_BODY), **kwargs)

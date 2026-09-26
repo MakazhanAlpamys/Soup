@@ -181,16 +181,27 @@ def doctor(
         console.print(f"[red]File not found: {file_path}[/]")
         raise typer.Exit(code=1)
 
-    # Mirrors the soup.yaml schema rule "data.mask_history requires
-    # data.train_on_responses_only: true" (#1251) — refuse the flag combo
-    # up front, before any tokenizer load or dataset work.
-    if mask_history and not train_on_responses_only:
+    # Mirrors the soup.yaml schema rules (#1251): "data.mask_history
+    # requires data.train_on_responses_only: true", and mask_history is
+    # mutually exclusive with train_on_messages_with_train_field — refuse
+    # the flag combos up front, before any tokenizer load or dataset work.
+    if mask_history and (
+        train_on_messages_with_train_field or not train_on_responses_only
+    ):
+        conflict = (
+            "--train-on-messages-with-train-field"
+            if train_on_messages_with_train_field
+            else "--no-train-on-responses-only"
+        )
         console.print(
-            "[red]Error:[/] [bold]--mask-history[/] requires "
-            "[bold]--train-on-responses-only[/] — it narrows the assistant-only "
-            "loss mask to the last assistant turn, and there is no mask to "
-            "narrow without --no-train-on-responses-only's legacy full-sequence "
-            "path. Re-run with --train-on-responses-only, or drop --mask-history."
+            f"[red]Error:[/] [bold]--mask-history[/] narrows the assistant-only "
+            f"loss mask to the last assistant turn, but [bold]{conflict}[/] "
+            "takes a different path: with --no-train-on-responses-only every "
+            "token trains (the legacy full-sequence path), and with "
+            "--train-on-messages-with-train-field the per-message train:bool "
+            "field decides. soup.yaml refuses both combinations. Re-run with "
+            "--train-on-responses-only and without "
+            "--train-on-messages-with-train-field, or drop --mask-history."
         )
         raise typer.Exit(code=EXIT_USAGE_ERROR)
 
