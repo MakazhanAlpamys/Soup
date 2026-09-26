@@ -79,10 +79,23 @@ def migrate_unsloth(notebook_path: Path) -> Dict[str, Any]:
     base: Optional[str] = None
     max_seq_length: Optional[int] = None
     load_in_4bit: Optional[bool] = None
+    load_in_8bit: Optional[bool] = None
+    load_in_16bit: Optional[bool] = None
+    full_finetuning: Optional[bool] = None
     lora_params: Dict[str, Any] = {}
     training_params: Dict[str, Any] = {}
     task = "sft"
     output_dir = "./output"
+
+    # Collect variable assignments from notebook code
+    assignments: Dict[str, Any] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            val = _ast_to_value(node.value)
+            if val is not _SENTINEL:
+                for target in node.targets:
+                    if isinstance(target, ast.Name):
+                        assignments[target.id] = val
 
     # Walk AST to extract function call arguments
     for node in ast.walk(tree):
@@ -95,17 +108,34 @@ def migrate_unsloth(notebook_path: Path) -> Dict[str, Any]:
 
         if func_name == "from_pretrained":
             # FastLanguageModel.from_pretrained(...)
-            kwargs = _extract_kwargs(node)
+            unresolved: List[tuple[str, str]] = []
+            kwargs = _extract_kwargs(node, scope=assignments, unresolved_names=unresolved)
+            for kw_arg, var_name in unresolved:
+                if kw_arg in ("load_in_4bit", "load_in_8bit", "load_in_16bit", "full_finetuning"):
+                    warnings.append(
+                        f"Could not read precision argument '{kw_arg}' "
+                        f"(passed as variable '{var_name}')."
+                    )
+            if node.args:
+                arg_val = _ast_to_value(node.args[0])
+                if arg_val is not _SENTINEL and isinstance(arg_val, str):
+                    base = arg_val
             if "model_name" in kwargs:
                 base = kwargs["model_name"]
             if "max_seq_length" in kwargs:
                 max_seq_length = kwargs["max_seq_length"]
             if "load_in_4bit" in kwargs:
                 load_in_4bit = kwargs["load_in_4bit"]
+            if "load_in_8bit" in kwargs:
+                load_in_8bit = kwargs["load_in_8bit"]
+            if "load_in_16bit" in kwargs:
+                load_in_16bit = kwargs["load_in_16bit"]
+            if "full_finetuning" in kwargs:
+                full_finetuning = kwargs["full_finetuning"]
 
         elif func_name == "get_peft_model":
             # FastLanguageModel.get_peft_model(...)
-            kwargs = _extract_kwargs(node)
+            kwargs = _extract_kwargs(node, scope=assignments)
             if "r" in kwargs:
                 lora_params["r"] = kwargs["r"]
             if "lora_alpha" in kwargs:
@@ -122,7 +152,7 @@ def migrate_unsloth(notebook_path: Path) -> Dict[str, Any]:
         elif func_name in _TRAINER_MAP:
             # SFTTrainer(...), DPOTrainer(...), etc.
             task = _TRAINER_MAP[func_name]
-            kwargs = _extract_kwargs(node)
+            kwargs = _extract_kwargs(node, scope=assignments)
             if kwargs.get("packing"):
                 warnings.append(
                     "packing=True is not supported in Soup. "
@@ -133,7 +163,7 @@ def migrate_unsloth(notebook_path: Path) -> Dict[str, Any]:
             # TrainingArguments(...), DPOConfig(...), etc.
             if func_name in _CONFIG_MAP:
                 task = _CONFIG_MAP[func_name]
-            kwargs = _extract_kwargs(node)
+            kwargs = _extract_kwargs(node, scope=assignments)
             if "per_device_train_batch_size" in kwargs:
                 training_params["batch_size"] = kwargs["per_device_train_batch_size"]
             if "num_train_epochs" in kwargs:
@@ -162,12 +192,35 @@ def migrate_unsloth(notebook_path: Path) -> Dict[str, Any]:
 
     # Build result
     data_format = _TASK_FORMAT_MAP.get(task, "auto")
+
+    # Resolve quantization & full fine-tuning
+    if full_finetuning:
+        quantization = "none"
+    elif load_in_16bit:
+        quantization = "none"
+    elif load_in_8bit:
+        quantization = "8bit"
+    elif load_in_4bit is False:
+        quantization = "none"
+    else:
+        quantization = "4bit"
+
     training: Dict[str, Any] = {**training_params}
+    training["quantization"] = quantization
 
-    if load_in_4bit:
-        training["quantization"] = "4bit"
-
-    if lora_params:
+    if full_finetuning:
+        if task in ("sft", "embedding"):
+            warnings.append(
+                f"full_finetuning=True in Unsloth — no LoRA will be used "
+                f"for task '{task}' (lora.r: 0)."
+            )
+            training["lora"] = {"r": 0}
+        else:
+            raise ValueError(
+                f"full_finetuning is requested, but task '{task}' does not support full "
+                "fine-tuning in Soup. Only sft and embedding support full fine-tuning (lora.r=0)."
+            )
+    elif lora_params:
         training["lora"] = lora_params
 
     data: Dict[str, Any] = {
@@ -200,10 +253,15 @@ def _get_func_name(node: ast.Call) -> Optional[str]:
     return None
 
 
-def _extract_kwargs(node: ast.Call) -> Dict[str, Any]:
+def _extract_kwargs(
+    node: ast.Call,
+    scope: Optional[Dict[str, Any]] = None,
+    unresolved_names: Optional[List[tuple[str, str]]] = None,
+) -> Dict[str, Any]:
     """Extract keyword arguments from a function Call node as Python values.
 
-    Only extracts simple literal values (str, int, float, bool, list, None).
+    Extracts simple literal values (str, int, float, bool, list, None) or
+    resolves variable names present in scope.
     """
     result: Dict[str, Any] = {}
     for kw in node.keywords:
@@ -212,6 +270,12 @@ def _extract_kwargs(node: ast.Call) -> Dict[str, Any]:
         value = _ast_to_value(kw.value)
         if value is not _SENTINEL:
             result[kw.arg] = value
+        elif isinstance(kw.value, ast.Name):
+            if scope and kw.value.id in scope:
+                result[kw.arg] = scope[kw.value.id]
+            else:
+                if unresolved_names is not None:
+                    unresolved_names.append((kw.arg, kw.value.id))
     return result
 
 

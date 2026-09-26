@@ -655,7 +655,9 @@ class TestLlamaFactoryMigration:
             migrate_llamafactory(cfg_file)
 
     def test_full_finetuning_no_lora(self, tmp_path):
-        """finetuning_type: full → no lora section."""
+        """finetuning_type: full → lora.r: 0 and quantization: none on loaded config."""
+        from soup_cli.config.loader import load_config_from_string
+        from soup_cli.migrate.common import config_to_yaml
         from soup_cli.migrate.llamafactory import migrate_llamafactory
 
         cfg_file = tmp_path / "config.yaml"
@@ -669,7 +671,12 @@ class TestLlamaFactoryMigration:
             encoding="utf-8",
         )
         result = migrate_llamafactory(cfg_file)
-        assert "lora" not in result.get("training", {})
+        assert result["training"]["lora"]["r"] == 0
+        assert result["training"]["quantization"] == "none"
+
+        loaded = load_config_from_string(config_to_yaml(result))
+        assert loaded.training.lora.r == 0
+        assert loaded.training.quantization == "none"
 
     def test_quantization_8bit(self, tmp_path):
         """quantization_bit: 8 → quantization: 8bit."""
