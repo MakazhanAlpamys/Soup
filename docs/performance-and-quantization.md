@@ -375,6 +375,15 @@ soup train --config soup.yaml
 
 **How it works.** LoRA adapters + their gradients + optimizer state stay resident in VRAM (they are small). The frozen base lives in CPU RAM, page-locked when the machine allows it, and is streamed: each decoder layer is copied into one of two pre-allocated VRAM buffers on a dedicated CUDA stream while the previous layer is still computing, so the load overlaps the compute. Vocabulary-sized `embed_tokens` and an untied `lm_head` use one additional shared slot: the embedding is loaded for the model input, then the same allocation is reused for the output head after the last decoder layer. Each decoder layer is read **twice** per step — once in the forward pass and once when the backward pass recomputes it — because `dL/dx = Wᵀ · dL/dy` needs the weights to reach the layers below. That is physics, not an implementation detail, and it is why streaming costs time.
 
+For streamed NF4 on CUDA, Soup follows bitsandbytes' own 4-bit dispatch. When
+bitsandbytes selects its custom fused GEMM, Soup executes that GEMM through a
+checkpoint-visible autograd Function so pooled packed weights cannot outlive their
+slot ownership. When bitsandbytes selects dequantisation plus `F.linear` at larger
+training shapes, Soup keeps that path and avoids adding a third dequantisation to a
+checkpointed step. The fused arm reduces saved-weight VRAM but its backward still
+dequantises because bitsandbytes exposes no transposed 4-bit GEMM; it is therefore a
+bounded memory/time trade, not a claim that #842's full kernel ceiling is complete.
+
 **Qwen3.8-Flash-Next / Qwen4-Exp PLE.** The frozen PLE N-gram table is not a
 decoder-layer weight for storage purposes: putting it in the PLE layer's shard
 would make the shared layer buffer as large as the whole table. Soup keeps the

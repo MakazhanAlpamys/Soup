@@ -439,12 +439,10 @@ def _copy_lora(src, dst):
 class TestFloat16StreamingIsBitExact:
     """Acceptance item 4 of #385.
 
-    The reference matches the streamed model's computation path. For NF4 that
-    means a genuinely NF4-quantised resident reference with
-    ``install_dequant_forward`` applied. With ``bitsandbytes`` 0.50.2, NF4 may
-    dispatch through a different fused kernel depending on CUDA architecture
-    and projection shape, so comparing the native resident path would measure
-    kernel-path differences rather than layer streaming.
+    The reference is a genuinely NF4-quantised resident model using native
+    bitsandbytes dispatch. Streamed NF4 follows that same fused-versus-dequantized
+    decision, so this comparison isolates layer streaming without changing the
+    resident arithmetic.
     """
 
     def _run(self, tmp_path, dtype: str, quant: str) -> float:
@@ -455,7 +453,6 @@ class TestFloat16StreamingIsBitExact:
         from soup_cli.utils.layer_stream_runtime import (
             build_meta_skeleton,
             build_streamed_model,
-            install_dequant_forward,
             quantised_layer_suffixes,
         )
 
@@ -496,7 +493,6 @@ class TestFloat16StreamingIsBitExact:
                     weights, quantization_config=build_nf4_config(dtype),
                     dtype=getattr(torch, dtype), device_map={"": "cuda"},
                 )
-                assert install_dequant_forward(base) > 0
             base.config.use_cache = False
             for param in base.parameters():
                 param.requires_grad = False

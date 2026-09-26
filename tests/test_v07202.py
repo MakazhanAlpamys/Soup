@@ -1911,14 +1911,11 @@ class TestNF4ParityOnCuda:
         _randomise_lora_b(resident)
         assert _sync_adapters(model, resident) > 0, "vacuous: no adapters copied"
 
-        # 128 tokens, NOT 16: below 64 this fixture's [64x64] projections are
-        # served by bitsandbytes' FUSED gemm_4bit kernel, while the streamed path
-        # always dequantises (#331), so the two arms run different kernels and
-        # differ by exactly one bf16 ulp — measured 3.906250e-03 = 2^-8 at 16
-        # tokens. At 64 all 14 4-bit linears take _dequant_linear_fallback and
-        # parity returns to 0.0; the window boundary and the exactness boundary
-        # were measured to coincide exactly. 128 is that boundary with margin.
-        # TestFixtureIsOutsideTheFusedKernelWindow in test_v07300.py pins it.
+        # 128 tokens exercises bitsandbytes' dequant+linear dispatch. Since
+        # #842 the streamed arm follows the same native dispatch at every M:
+        # Soup's checkpoint-visible Function owns the fused arm, while this
+        # larger shape keeps #331's dequant+linear arm without a third
+        # dequantisation. The #842 GPU matrix also pins the fused shape.
         ids = torch.randint(
             0, 64, (1, 128), generator=torch.Generator().manual_seed(11)
         ).cuda()

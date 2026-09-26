@@ -175,6 +175,200 @@ def rebuild_params4bit(key: str, buffers: Mapping[str, Any], spec: Any, codes: M
     )
 
 
+_CHECKPOINT_VISIBLE_NF4_FUNCTION = None
+
+
+def _checkpoint_visible_nf4_function():
+    """Lazy custom autograd Function whose saved state is visible to checkpoint (#842)."""
+    global _CHECKPOINT_VISIBLE_NF4_FUNCTION
+    if _CHECKPOINT_VISIBLE_NF4_FUNCTION is not None:
+        return _CHECKPOINT_VISIBLE_NF4_FUNCTION
+
+    import bitsandbytes.functional as bnb_functional
+    import torch
+
+    class CheckpointVisibleNF4Matmul(torch.autograd.Function):
+        @staticmethod
+        @torch.amp.custom_fwd(device_type="cuda")
+        def forward(
+            ctx,
+            x,
+            packed,
+            absmax,
+            state2_absmax,
+            state2_code,
+            offset,
+            bias,
+            shape,
+            weight_dtype,
+            blocksize,
+            quant_type,
+            nested,
+            state2_blocksize,
+        ):
+            # #331/#842: every tensor the backward needs goes through
+            # save_for_backward. Non-reentrant checkpoint can therefore discard
+            # these references and recreate them after the streaming slot has
+            # been refilled with the correct layer during recompute.
+            ctx.save_for_backward(packed, absmax, state2_absmax, state2_code, offset)
+            ctx.shape = tuple(int(dim) for dim in shape)
+            ctx.weight_dtype = weight_dtype
+            ctx.blocksize = int(blocksize)
+            ctx.quant_type = str(quant_type)
+            ctx.nested = bool(nested)
+            ctx.state2_blocksize = int(state2_blocksize)
+            ctx.bias_dtype = None if bias is None else bias.dtype
+            ctx.owner_check = getattr(packed, "_soup_stream_owner_check", None)
+
+            if ctx.nested:
+                return torch.ops.bitsandbytes.gemm_4bit.default(
+                    x,
+                    packed,
+                    ctx.shape,
+                    state2_absmax,
+                    ctx.blocksize,
+                    ctx.quant_type,
+                    bias=bias,
+                    absmax_8bit=absmax,
+                    absmax_code=state2_code,
+                    absmax_offset=offset,
+                )
+            return torch.ops.bitsandbytes.gemm_4bit.default(
+                x, packed, ctx.shape, absmax, ctx.blocksize, ctx.quant_type, bias=bias
+            )
+
+        @staticmethod
+        @torch.amp.custom_bwd(device_type="cuda")
+        def backward(ctx, grad_output):
+            # Recompute must have reloaded this layer into its slot, and the
+            # one-ahead prefetcher must not recycle that slot before its
+            # backward finishes. A deeper lookahead would otherwise make the
+            # aliases below silently describe another layer (#842).
+            if ctx.owner_check is not None:
+                ctx.owner_check()
+            packed, absmax, state2_absmax, state2_code, offset = ctx.saved_tensors
+            state2 = None
+            q_offset = None
+            if ctx.nested:
+                state2 = bnb_functional.QuantState(
+                    absmax=state2_absmax,
+                    code=state2_code,
+                    blocksize=ctx.state2_blocksize,
+                    dtype=torch.float32,
+                )
+                q_offset = offset
+            quant_state = bnb_functional.QuantState(
+                absmax=absmax,
+                shape=torch.Size(ctx.shape),
+                dtype=ctx.weight_dtype,
+                blocksize=ctx.blocksize,
+                quant_type=ctx.quant_type,
+                offset=q_offset,
+                state2=state2,
+            )
+            # bitsandbytes 0.50.x exposes a fused forward GEMM but no transposed
+            # 4-bit GEMM for dX. Keep this fallback explicit: it is correct and
+            # checkpoint-visible, but #842 remains open until this dense
+            # dequantisation is replaced by a real transposed kernel.
+            grad_x = None
+            if ctx.needs_input_grad[0]:
+                weight = bnb_functional.dequantize_4bit(packed, quant_state).to(
+                    grad_output.dtype
+                )
+                grad_x = torch.matmul(grad_output, weight)
+            grad_bias = None
+            if ctx.needs_input_grad[6] and ctx.bias_dtype is not None:
+                grad_bias = grad_output.reshape(-1, grad_output.shape[-1]).sum(
+                    dim=0, dtype=ctx.bias_dtype
+                )
+            return (
+                grad_x,
+                None,
+                None,
+                None,
+                None,
+                None,
+                grad_bias,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+
+    _CHECKPOINT_VISIBLE_NF4_FUNCTION = CheckpointVisibleNF4Matmul
+    return CheckpointVisibleNF4Matmul
+
+
+def checkpoint_visible_nf4_linear(
+    x: Any, packed: Any, quant_state: Any, bias: Any = None
+) -> Any:
+    """Fused NF4 forward with checkpoint-visible packed state (#842)."""
+    empty = packed.new_empty((0,))
+    state2_absmax = empty
+    state2_code = empty
+    offset = empty
+    state2_blocksize = 0
+    if quant_state.nested:
+        state2_absmax = quant_state.state2.absmax
+        state2_code = quant_state.state2.code
+        offset = quant_state.offset
+        state2_blocksize = int(quant_state.state2.blocksize)
+    return _checkpoint_visible_nf4_function().apply(
+        x,
+        packed,
+        quant_state.absmax,
+        state2_absmax,
+        state2_code,
+        offset,
+        bias,
+        tuple(quant_state.shape),
+        quant_state.dtype,
+        int(quant_state.blocksize),
+        str(quant_state.quant_type),
+        bool(quant_state.nested),
+        state2_blocksize,
+    )
+
+
+def _can_use_checkpoint_visible_nf4_gemm(x: Any, quant_state: Any) -> bool:
+    """Match bitsandbytes' own decision to use its custom 4-bit CUDA GEMM.
+
+    The private dispatch names are intentionally read from bitsandbytes rather
+    than copying a card-specific M window. If those private names move, prefer
+    the checkpoint-visible Function: it remains exact, though potentially
+    slower, and the compatibility test makes the upstream change visible.
+    """
+    if getattr(getattr(x, "device", None), "type", None) != "cuda":
+        return False
+    if bool(getattr(quant_state, "nested", False)):
+        state2 = getattr(quant_state, "state2", None)
+        if state2 is None or int(getattr(state2, "blocksize", 0)) != 256:
+            return False
+    try:
+        import torch
+
+        torch.ops.bitsandbytes.gemm_4bit.default
+    except (ImportError, AttributeError, RuntimeError):
+        return False
+    try:
+        from bitsandbytes.backends.cuda import ops as bnb_cuda_ops
+
+        custom_max_m = bnb_cuda_ops._gemm_4bit_custom_max_m
+        use_custom_fn = bnb_cuda_ops._gemm_4bit_use_custom_fn
+    except (ImportError, AttributeError, RuntimeError):
+        return True
+
+    k = int(x.shape[-1])
+    m = int(x.numel() // k)
+    n = int(quant_state.shape[0])
+    blocksize = int(quant_state.blocksize)
+    if m > int(custom_max_m) or k % blocksize != 0:
+        return False
+    return bool(use_custom_fn(x.device.index, x.dtype, m, n, k))
+
+
 def install_dequant_forward(module: Any) -> int:
     """#331 — keep a STREAMED NF4 weight out of ``bitsandbytes``' ``MatMul4Bit``.
 
@@ -195,17 +389,21 @@ def install_dequant_forward(module: Any) -> int:
     forward-to-backward span, so any copy keeps one layer alive for that span and
     costs O(model). On real 32B, peak VRAM 4 220 -> 19 720 MiB.
 
-    So the weight never enters that autograd Function. It is dequantised inside the
-    checkpointed region and multiplied natively; ``F.linear`` saves the dequantised
-    tensor through the ordinary mechanism, which checkpointing DOES discard and
-    recompute, and the transient lives only inside the recomputed block — O(window).
+    The streamed weight still never enters bitsandbytes' ``MatMul4Bit`` Function.
+    When bitsandbytes' own CUDA dispatch selects its custom 4-bit GEMM, #842 routes
+    that same operation through Soup's autograd Function: packed bytes and every
+    quantisation tensor go through ``save_for_backward``, so non-reentrant
+    checkpointing can discard and recompute them after the pool refills the correct
+    layer. Whenever bitsandbytes selects its dequantise + linear fallback, Soup
+    keeps the v0.73.0 path rather than paying a third dequantisation in backward.
+    Missing private dispatch symbols fail toward the Function: exact but possibly
+    slower, never toward an alias-unsafe ``MatMul4Bit``.
 
-    This changes the computation path used by the patched NF4 module. With
-    bitsandbytes 0.50.2, the native fused ``MatMul4Bit`` path and explicit
-    ``dequantize_4bit`` + ``F.linear`` can differ depending on the CUDA
-    architecture and projection shape. The dequantise + linear path is retained
-    for correctness under checkpointing (#331); this path choice is not assumed
-    to be numerically free.
+    The #842 Function is deliberately only the first half of the intended kernel.
+    bitsandbytes exposes a fused forward GEMM but no transposed 4-bit GEMM for
+    ``grad_x = grad_y @ W``; its backward also dequantises. Soup therefore keeps
+    that dense-dequant backward explicitly until a transposed kernel exists. Do
+    not claim the full #842 throughput ceiling from the fused-forward path alone.
 
     Returns the number of modules patched, so a caller can assert it patched
     something. Zero would mean the model carries no 4-bit linears at all.
@@ -233,8 +431,16 @@ def install_dequant_forward(module: Any) -> int:
         if bias is not None:
             bias = bias.to(x.dtype)
 
-        # THE repair: dequantise here, inside whatever checkpointed region this
-        # forward is running in, and let F.linear save the dense weight properly.
+        # Match bnb's own private dispatch. Only the custom-GEMM arm needs
+        # Soup's Function; on bnb's dequant+linear arm the old path below has
+        # identical arithmetic and avoids an extra backward dequantisation.
+        if _can_use_checkpoint_visible_nf4_gemm(x, quant_state):
+            return checkpoint_visible_nf4_linear(
+                x, self.weight, quant_state, bias
+            ).to(inp_dtype)
+
+        # Compatibility path: dequantise inside the checkpointed region and let
+        # F.linear save the dense weight properly.
         weight = dequantize_4bit(self.weight, quant_state).to(x.dtype)
         return functional.linear(x, weight, bias).to(inp_dtype)
 
@@ -1054,6 +1260,13 @@ def _build_streamed_layer_class():
             self.use_checkpoint = bool(use_checkpoint)
             self.quant_specs = dict(quant_specs or {})
             self.codes = dict(codes or {})
+            # #841 — each wrapper returns to the same pool slot on every visit.
+            # Cache the tensor/Params4bit substitution views for that slot rather
+            # than reconstructing Python wrappers and QuantState objects on every
+            # forward and checkpoint recompute. The views share storage with the
+            # pool tensors, so later layer loads update their contents in place.
+            self._cached_substitution_buffers = None
+            self._cached_substitution_weights = None
             # v0.72.5 (#331) — a streamed NF4 weight must not reach MatMul4Bit,
             # which captures it outside save_for_backward and so aliases the pool
             # across the checkpoint boundary. See install_dequant_forward.
@@ -1278,19 +1491,41 @@ def _build_streamed_layer_class():
             # Weights arrive with requires_grad=False, so autograd allocates no
             # grad buffers for them — but W STAYS IN THE GRAPH for W^T . dL/dy,
             # which is how the lower adapters receive gradient at all.
-            if not self.quant_specs:
-                return {meta: buffers[ckpt] for meta, ckpt in self.name_map.items()}
-            # NF4: a Params4bit VIEW is rebuilt over the pooled buffer on every
-            # call (plan P3). The packed bytes are never copied or re-quantised
-            # — only the small Python wrapper is reconstructed.
+            #
+            # #841 — a wrapper revisits the same pool-slot mapping every forward
+            # and checkpoint recompute. Only the tensors' CONTENTS change when a
+            # layer is loaded. Reuse the mapping and Params4bit/QuantState views
+            # while the mapping object is identical; rebuilding them is pure
+            # Python/object churn and does not create fresher storage.
+            if (
+                self._cached_substitution_buffers is buffers
+                and self._cached_substitution_weights is not None
+            ):
+                return self._cached_substitution_weights
+
             weights = {}
             for meta, ckpt in self.name_map.items():
                 spec = self.quant_specs.get(ckpt)
                 if spec is None:
                     weights[meta] = buffers[ckpt]
                 else:
-                    weights[meta] = rebuild_params4bit(ckpt, buffers, spec, self.codes)
+                    weight = rebuild_params4bit(ckpt, buffers, spec, self.codes)
+                    weight._soup_stream_owner_check = self._assert_nf4_slot_owner
+                    weights[meta] = weight
+            self._cached_substitution_buffers = buffers
+            self._cached_substitution_weights = weights
             return weights
+
+        def _assert_nf4_slot_owner(self) -> None:
+            slot = self.pool.slot_for(self.idx)
+            owner = self.pool.owner[slot]
+            if owner != self.idx:
+                raise RuntimeError(
+                    "streamed NF4 backward found a recycled weight slot: "
+                    f"slot {slot} holds layer {owner}, expected layer {self.idx}. "
+                    "The prefetch lookahead exceeded the checkpoint-visible "
+                    "alias lifetime."
+                )
 
         def _body(self, hidden_states: Any, *args: Any, **kwargs: Any) -> Any:
             buffers = self.pool.wait(self.idx)
