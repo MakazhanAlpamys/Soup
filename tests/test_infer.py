@@ -5,6 +5,87 @@ from unittest.mock import MagicMock, PropertyMock
 
 import pytest
 
+from tests.conftest import strip_ansi
+
+
+class _BatchTokenizer:
+    def __init__(self, *, templated: bool):
+        self.chat_template = "dummy" if templated else None
+        self.pad_token_id = 0
+        self.padding_side = "right"
+        self.calls = []
+        self.padding_sides = []
+        self.template_calls = []
+
+    def apply_chat_template(self, messages, **kwargs):
+        self.template_calls.append((messages, kwargs))
+        return f"templated:{messages[0]['content']}"
+
+    def __call__(
+        self,
+        texts,
+        *,
+        add_special_tokens=True,
+        padding=False,
+        return_tensors=None,
+    ):
+        import torch
+
+        is_batch = isinstance(texts, list)
+        text_rows = texts if is_batch else [texts]
+        self.calls.append(
+            {
+                "is_batch": is_batch,
+                "add_special_tokens": add_special_tokens,
+                "padding": padding,
+                "return_tensors": return_tensors,
+            }
+        )
+        self.padding_sides.append(self.padding_side)
+        rows = [list(range(1, len(text) % 3 + 2)) for text in text_rows]
+        width = max(len(row) for row in rows)
+        padded = []
+        masks = []
+        for row in rows:
+            pad_count = width - len(row)
+            if self.padding_side == "left":
+                padded.append([self.pad_token_id] * pad_count + row)
+                masks.append([0] * pad_count + [1] * len(row))
+            else:
+                padded.append(row + [self.pad_token_id] * pad_count)
+                masks.append([1] * len(row) + [0] * pad_count)
+        return {
+            "input_ids": torch.tensor(padded),
+            "attention_mask": torch.tensor(masks),
+        }
+
+    def decode(self, token_ids, skip_special_tokens=True):
+        return f"response-{int(token_ids[-1])}"
+
+
+class _DeterministicBatchModel:
+    def __init__(self):
+        import torch
+
+        self.device = torch.device("cpu")
+        self.generate_calls = []
+
+    def generate(self, input_ids, attention_mask, **kwargs):
+        import torch
+
+        self.generate_calls.append(
+            {
+                "input_ids": input_ids.clone(),
+                "attention_mask": attention_mask.clone(),
+                "kwargs": kwargs,
+            }
+        )
+        generated = []
+        for row, mask in zip(input_ids, attention_mask, strict=True):
+            signature = int(row[mask.bool()].sum())
+            generated.append(torch.tensor([[100 + signature]]))
+        return torch.cat([input_ids, torch.cat(generated)], dim=1)
+
 # ─── Prompt Reading Tests ───────────────────────────────────────────────────
 
 
@@ -172,6 +253,34 @@ class TestInferCLI:
         result = runner.invoke(app, ["infer", "--help"])
         assert result.exit_code == 0
         assert "batch inference" in result.output.lower()
+        assert "--batch-size" in strip_ansi(result.output)
+
+    @pytest.mark.parametrize("batch_size", [0, -1])
+    def test_batch_size_must_be_positive(self, tmp_path, batch_size, monkeypatch):
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        prompts_file = tmp_path / "prompts.jsonl"
+        prompts_file.write_text(json.dumps({"prompt": "test"}) + "\n")
+        monkeypatch.setattr(
+            "soup_cli.commands.infer._load_model",
+            lambda *args, **kwargs: (object(), object()),
+        )
+
+        result = CliRunner().invoke(
+            app,
+            [
+                "infer",
+                "--model", str(tmp_path),
+                "--input", str(prompts_file),
+                "--output", str(tmp_path / "out.jsonl"),
+                "--batch-size", str(batch_size),
+            ],
+        )
+
+        assert result.exit_code == 2
+        assert "x>=1" in result.output
 
     def test_required_options_error(self):
         """Should fail if required options are missing."""
@@ -411,6 +520,445 @@ class TestGenerate:
         assert "System: Be helpful" in tokenizer_call_args
         assert "User: What is 2+2?" in tokenizer_call_args
         assert "Assistant:" in tokenizer_call_args
+
+
+class TestGenerateBatch:
+    def test_batch_template_errors_are_not_silently_fallback(self):
+        from soup_cli.commands.infer import _generate_batch
+
+        class BrokenTemplateTokenizer(_BatchTokenizer):
+            def apply_chat_template(self, messages, **kwargs):
+                raise ValueError("broken chat template")
+
+        with pytest.raises(ValueError, match="broken chat template"):
+            _generate_batch(
+                _DeterministicBatchModel(),
+                BrokenTemplateTokenizer(templated=True),
+                ["first", "second"],
+                max_tokens=1,
+                temperature=0,
+            )
+
+    def test_batch_generation_uses_left_padding_and_one_call(self):
+        from soup_cli.commands.infer import _generate_batch
+
+        model = _DeterministicBatchModel()
+        tokenizer = _BatchTokenizer(templated=True)
+
+        results = _generate_batch(
+            model,
+            tokenizer,
+            ["xx", "xxxx"],
+            max_tokens=4,
+            temperature=0,
+        )
+
+        assert len(results) == 2
+        assert len(model.generate_calls) == 1
+        assert tokenizer.padding_side == "right"
+        assert tokenizer.padding_sides[-1] == "left"
+        assert tokenizer.calls[-1] == {
+            "is_batch": True,
+            "add_special_tokens": False,
+            "padding": True,
+            "return_tensors": "pt",
+        }
+        assert model.generate_calls[0]["input_ids"][0, 0].item() == 0
+
+    def test_batch_generation_counts_tokens_before_padding(self):
+        import torch
+
+        from soup_cli.commands.infer import _generate_batch
+
+        class VariableLengthBatchModel:
+            device = torch.device("cpu")
+
+            def generate(self, input_ids, attention_mask, **kwargs):
+                generated = []
+                lengths = [2, 5]
+
+                for index, (row, mask) in enumerate(
+                    zip(input_ids, attention_mask, strict=True)
+                ):
+                    signature = int(row[mask.bool()].sum())
+                    tokens = [
+                        100 + signature + offset
+                        for offset in range(lengths[index])
+                    ]
+                    generated.append(torch.tensor([tokens], dtype=torch.long))
+
+                max_length = max(lengths)
+                padded = [
+                    torch.cat(
+                        [
+                            tokens,
+                            torch.zeros(
+                                (1, max_length - tokens.shape[1]),
+                                dtype=torch.long,
+                            ),
+                        ],
+                        dim=1,
+                    )
+                    for tokens in generated
+                ]
+                return torch.cat([input_ids, torch.cat(padded)], dim=1)
+
+        model = VariableLengthBatchModel()
+        tokenizer = _BatchTokenizer(templated=True)
+
+        results = _generate_batch(
+            model,
+            tokenizer,
+            ["first", "second"],
+            max_tokens=5,
+            temperature=0,
+        )
+
+        assert [token_count for _, token_count in results] == [2, 5]
+
+
+    def test_batch_generation_stops_counting_at_eos(self):
+        import torch
+
+        from soup_cli.commands.infer import _generate_batch
+
+        class EosBatchModel:
+            device = torch.device("cpu")
+
+            def generate(self, input_ids, attention_mask, **kwargs):
+                generated = []
+                for index, (row, mask) in enumerate(
+                    zip(input_ids, attention_mask, strict=True)
+                ):
+                    signature = int(row[mask.bool()].sum())
+                    if index == 0:
+                        tokens = [
+                            100 + signature,
+                            99,
+                            101 + signature,
+                            102 + signature,
+                            103 + signature,
+                        ]
+                    else:
+                        tokens = [
+                            110 + signature,
+                            111 + signature,
+                            112 + signature,
+                            113 + signature,
+                            114 + signature,
+                        ]
+                    generated.append(torch.tensor([tokens], dtype=torch.long))
+
+                return torch.cat([input_ids, torch.cat(generated)], dim=1)
+
+        model = EosBatchModel()
+        tokenizer = _BatchTokenizer(templated=True)
+        tokenizer.eos_token_id = 99
+
+        results = _generate_batch(
+            model,
+            tokenizer,
+            ["first", "second"],
+            max_tokens=5,
+            temperature=0,
+        )
+
+        assert [token_count for _, token_count in results] == [2, 5]
+
+
+    def test_batch_generation_uses_attention_mask_for_padding(self):
+        import torch
+
+        from soup_cli.commands.infer import _generate_batch
+
+        class MaskCheckingModel:
+            device = torch.device("cpu")
+
+            def generate(self, input_ids, attention_mask, **kwargs):
+                assert torch.equal(
+                    attention_mask == 0,
+                    input_ids == 99,
+                )
+                generated = torch.tensor(
+                    [[101], [102]],
+                    dtype=torch.long,
+                )
+                return torch.cat([input_ids, generated], dim=1)
+
+        model = MaskCheckingModel()
+        tokenizer = _BatchTokenizer(templated=True)
+        tokenizer.pad_token_id = 99
+
+        results = _generate_batch(
+            model,
+            tokenizer,
+            ["x", "xx"],
+            max_tokens=1,
+            temperature=0,
+        )
+
+        assert [response for response, _ in results] == [
+            "response-101",
+            "response-102",
+        ]
+
+
+    def test_batch_generation_restores_original_padding_side(self):
+        from soup_cli.commands.infer import _generate_batch
+
+        model = _DeterministicBatchModel()
+        tokenizer = _BatchTokenizer(templated=True)
+
+        _generate_batch(model, tokenizer, ["first", "second"], temperature=0)
+
+        assert tokenizer.padding_sides[-1] == "left"
+        assert tokenizer.padding_side == "right"
+
+    def test_templated_and_untemplated_batch_encoding(self):
+        from soup_cli.commands.infer import _generate_batch
+
+        for templated, expected_special_tokens in ((True, False), (False, True)):
+            model = _DeterministicBatchModel()
+            tokenizer = _BatchTokenizer(templated=templated)
+
+            _generate_batch(model, tokenizer, ["one", "two"], temperature=0)
+
+            assert tokenizer.calls[-1]["add_special_tokens"] is expected_special_tokens
+
+    def test_batch_generation_preserves_prompt_response_order(self):
+        import torch
+
+        from soup_cli.commands.infer import _generate_batch
+
+        class OrderedBatchModel:
+            device = torch.device("cpu")
+
+            def generate(self, input_ids, attention_mask, **kwargs):
+                generated = [
+                    torch.tensor([[101 + index]], dtype=torch.long)
+                    for index in range(input_ids.shape[0])
+                ]
+                return torch.cat([input_ids, torch.cat(generated)], dim=1)
+
+        model = OrderedBatchModel()
+        tokenizer = _BatchTokenizer(templated=True)
+
+        results = _generate_batch(
+            model,
+            tokenizer,
+            ["first", "second"],
+            max_tokens=1,
+            temperature=0,
+        )
+
+        assert [response for response, _ in results] == [
+            "response-101",
+            "response-102",
+        ]
+
+
+    def test_batch_size_one_uses_legacy_generate_path(self, tmp_path, monkeypatch):
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        prompts_path = tmp_path / "prompts.jsonl"
+        prompts_path.write_text(json.dumps({"prompt": "hello"}) + "\n")
+        output_path = tmp_path / "output.jsonl"
+        monkeypatch.chdir(tmp_path)
+
+        monkeypatch.setattr(
+            "soup_cli.commands.infer._load_model",
+            lambda *args, **kwargs: (object(), object()),
+        )
+
+        calls = []
+
+        def fake_generate(model, tokenizer, messages, *, max_tokens, temperature):
+            calls.append(messages)
+            return "legacy-response", 3
+
+        def fail_generate_batch(*args, **kwargs):
+            raise AssertionError("_generate_batch must not be used for batch_size=1")
+
+        monkeypatch.setattr("soup_cli.commands.infer._generate", fake_generate)
+        monkeypatch.setattr(
+            "soup_cli.commands.infer._generate_batch",
+            fail_generate_batch,
+        )
+
+        result = CliRunner().invoke(
+            app,
+            [
+                "infer",
+                "--model", "fake/model",
+                "--input", str(prompts_path),
+                "--output", str(output_path),
+                "--device", "cpu",
+                "--batch-size", "1",
+            ],
+        )
+
+        assert result.exit_code == 0, result.output
+        assert len(calls) == 1
+        assert json.loads(output_path.read_text()) == {
+            "prompt": "hello",
+            "response": "legacy-response",
+            "tokens_generated": 3,
+        }
+
+
+    def test_default_batch_size_uses_legacy_generate_path(self, tmp_path, monkeypatch):
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        prompts_path = tmp_path / "prompts.jsonl"
+        prompts_path.write_text(json.dumps({"prompt": "hello"}) + "\n")
+        output_path = tmp_path / "output.jsonl"
+        monkeypatch.chdir(tmp_path)
+
+        monkeypatch.setattr(
+            "soup_cli.commands.infer._load_model",
+            lambda *args, **kwargs: (object(), object()),
+        )
+
+        calls = []
+
+        def fake_generate(model, tokenizer, messages, *, max_tokens, temperature):
+            calls.append(messages)
+            return "legacy-response", 3
+
+        def fail_generate_batch(*args, **kwargs):
+            raise AssertionError("_generate_batch must not be used for default batch_size=1")
+
+        monkeypatch.setattr("soup_cli.commands.infer._generate", fake_generate)
+        monkeypatch.setattr(
+            "soup_cli.commands.infer._generate_batch",
+            fail_generate_batch,
+        )
+
+        result = CliRunner().invoke(
+            app,
+            [
+                "infer",
+                "--model", "fake/model",
+                "--input", str(prompts_path),
+                "--output", str(output_path),
+                "--device", "cpu",
+            ],
+        )
+
+        assert result.exit_code == 0, result.output
+        assert len(calls) == 1
+        assert json.loads(output_path.read_text()) == {
+            "prompt": "hello",
+            "response": "legacy-response",
+            "tokens_generated": 3,
+        }
+
+
+    def test_cli_batches_partial_chunk_in_input_order(self, tmp_path, monkeypatch):
+        import torch
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        prompts_path = tmp_path / "prompts.jsonl"
+        prompts = [f"prompt-{index}" for index in range(5)]
+        prompts_path.write_text(
+            "".join(json.dumps({"prompt": prompt}) + "\n" for prompt in prompts)
+        )
+        output_path = tmp_path / "output.jsonl"
+        class UniqueBatchModel:
+            device = torch.device("cpu")
+
+            def __init__(self):
+                self.next_token = 101
+                self.generate_calls = []
+
+            def generate(self, input_ids, attention_mask, **kwargs):
+                self.generate_calls.append(input_ids.clone())
+                rows = []
+                for _ in range(input_ids.shape[0]):
+                    rows.append(torch.tensor([[self.next_token]]))
+                    self.next_token += 1
+                return torch.cat([input_ids, torch.cat(rows)], dim=1)
+
+        model = UniqueBatchModel()
+        tokenizer = _BatchTokenizer(templated=True)
+        monkeypatch.setattr(
+            "soup_cli.commands.infer._load_model",
+            lambda *args, **kwargs: (model, tokenizer),
+        )
+        monkeypatch.chdir(tmp_path)
+
+        result = CliRunner().invoke(
+            app,
+            [
+                "infer",
+                "--model", "fake/model",
+                "--input", str(prompts_path),
+                "--output", str(output_path),
+                "--device", "cpu",
+                "--batch-size", "2",
+                "--temperature", "0",
+            ],
+        )
+
+        assert result.exit_code == 0, result.output
+        rows = [json.loads(line) for line in output_path.read_text().splitlines()]
+        assert [(row["prompt"], row["response"]) for row in rows] == [
+            (prompt, f"response-{101 + index}")
+            for index, prompt in enumerate(prompts)
+        ]
+        assert len(model.generate_calls) == 3
+
+    def test_batch_size_one_and_eight_have_identical_outputs(
+        self, tmp_path, monkeypatch
+    ):
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        prompts = [f"prompt-{index}" for index in range(5)]
+        prompts_path = tmp_path / "prompts.jsonl"
+        prompts_path.write_text(
+            "".join(json.dumps({"prompt": prompt}) + "\n" for prompt in prompts)
+        )
+        monkeypatch.chdir(tmp_path)
+        outputs = []
+        models = []
+        for batch_size in (1, 8):
+            model = _DeterministicBatchModel()
+            tokenizer = _BatchTokenizer(templated=True)
+            monkeypatch.setattr(
+                "soup_cli.commands.infer._load_model",
+                lambda *args, model=model, tokenizer=tokenizer, **kwargs: (
+                    model,
+                    tokenizer,
+                ),
+            )
+            output_path = tmp_path / f"output-{batch_size}.jsonl"
+            result = CliRunner().invoke(
+                app,
+                [
+                    "infer",
+                    "--model", "fake/model",
+                    "--input", str(prompts_path),
+                    "--output", str(output_path),
+                    "--device", "cpu",
+                    "--batch-size", str(batch_size),
+                    "--temperature", "0",
+                ],
+            )
+            assert result.exit_code == 0, result.output
+            outputs.append([json.loads(line) for line in output_path.read_text().splitlines()])
+            models.append(model)
+
+        assert outputs[0] == outputs[1]
+        assert len(models[0].generate_calls) == 5
+        assert len(models[1].generate_calls) == 1
 
 
 # ─── Import Tests ─────────────────────────────────────────────────────────

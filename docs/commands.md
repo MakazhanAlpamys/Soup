@@ -27,7 +27,7 @@ soup train --config soup.yaml --push-as user/repo  Auto-push each checkpoint to 
 soup train --config soup.yaml --push-as user/repo --hf-resume  Resume from latest HF checkpoint branch
 soup train --config soup.yaml --find-lr        LR range finder: write recommended LR JSON
 soup train --config soup.yaml --cloud modal|lambda --gpu a100  Render a cloud GPU controller (plan-only; --cloud-submit submits live)
-soup infer --model ./output --input p.jsonl   Batch inference
+soup infer --model ./output --input p.jsonl [--batch-size N]   Batch inference; default batch size is 1; fp16/bf16 batching may not be bit-exact with batch size 1
 soup infer --task asr --model <whisper|adapter> --input a.jsonl --output o.jsonl [--audio-dir d --asr-language en --asr-task transcribe|translate]  Whisper transcription + WER/CER
 soup chat --model ./output                    Interactive chat
 soup push --model ./output --repo user/name   Upload to HuggingFace
