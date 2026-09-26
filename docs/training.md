@@ -269,7 +269,8 @@ above.
 ## Which tasks apply `training.quantization`
 
 `quantization` defaults to `4bit`, but not every trainer reads it. These eight load the base
-(and, for `distill`, the teacher) at checkpoint precision whatever the field says:
+(and, for `distill`, the teacher) unquantised whatever the field says; `prm` loads it as fp32
+master weights (see [Process Reward Model](#process-reward-model-prm)):
 
 | task | quantization | notes |
 |---|---|---|
@@ -727,6 +728,19 @@ reward head, and computes MSE between predicted scalars at step-boundary tokens
 and the per-step labels. The reward head is saved inside the model checkpoint
 (`reward_head.*` in `model.safetensors`) and the tokenizer is saved alongside it,
 so the resulting directory is loadable standalone.
+
+PRM trains every base parameter along with the head, so all of them load as fp32
+master weights on every device. On CUDA, autocast runs the forward pass in bf16 (fp16 on
+pre-Ampere cards); on MPS it uses bf16 where the runtime supports it; CPU trains in fp32.
+With the default optimizer (AdamW), budget about 16 bytes per parameter before
+activations (fp32 weights, fp32 gradients and two fp32 AdamW moments), which is what the
+VRAM pre-flight predicts for `task: prm` when `batch_size` is an integer (with the
+default `batch_size: auto` the pre-flight does not run). The saved checkpoint is fp32, and
+without DeepSpeed loading the fp32 base needs about twice the host RAM of a bf16 load. Under DeepSpeed,
+each rank loads the base in fp32 on the host before the engine exists (4 bytes per
+parameter of host RAM per rank); the engine then casts it to its bf16/fp16 dtype, keeps
+its own fp32 master copy and saves a 16-bit checkpoint. A bf16 base without master
+weights would round most updates away at these learning rates (#1235).
 
 
 ## PRM-guided GRPO (process-supervised RL)
