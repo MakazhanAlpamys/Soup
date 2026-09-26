@@ -237,3 +237,65 @@ def test_shrink_cli_saves_a_pruned_qwen2(tmp_path, monkeypatch):
     report = json.loads((out_dir / "shrink_report.json").read_text(encoding="utf-8"))
     assert report["layers_before"] == 6 and report["layers_after"] == 4
     assert "Layers: 6 -> 4" in plain, plain
+
+
+def test_a_default_moe_layout_stays_default_after_the_prune(tmp_path):
+    """Llama4-text fills ``moe_layers`` with every layer by default. After the
+    prune it must name every KEPT layer, or the saved config carries an index
+    past ``num_hidden_layers`` and the shrunk model cannot be shrunk again."""
+    import torch
+    from transformers import AutoModelForCausalLM
+
+    from soup_cli.utils.shrink import prune_model_layers
+
+    config_name, extra = _LLAMA4_TEXT
+    config = getattr(transformers, config_name)(**_COMMON, **extra)
+    torch.manual_seed(0)
+    model = AutoModelForCausalLM.from_config(config)
+
+    prune_model_layers(model, 1, 1)
+    assert model.config.moe_layers == list(range(5))
+
+    model.save_pretrained(str(tmp_path))
+    again = AutoModelForCausalLM.from_pretrained(str(tmp_path))
+    prune_model_layers(again, 1, 1)
+    assert again.config.num_hidden_layers == 4
+
+
+def test_shrink_cli_refuses_an_index_valued_layout_before_loading(tmp_path, monkeypatch):
+    """The refusal needs only config.json, so it comes before the weights are
+    loaded and scored, and ``--plan-only`` does not print a plan the real run
+    would refuse."""
+    import json
+
+    from tokenizers import ByteLevelBPETokenizer
+    from transformers import AutoModelForCausalLM, PreTrainedTokenizerFast
+    from typer.testing import CliRunner
+
+    from soup_cli.cli import app
+    from tests.conftest import strip_ansi
+
+    monkeypatch.chdir(tmp_path)
+    lines = ["the quick brown fox jumps over the lazy dog", "pruning drops a block of layers"]
+    bpe = ByteLevelBPETokenizer()
+    bpe.train_from_iterator(lines, vocab_size=300, min_frequency=1, special_tokens=["<eos>"])
+    tok = PreTrainedTokenizerFast(tokenizer_object=bpe, eos_token="<eos>", pad_token="<eos>")
+    config_name, extra = _QWEN2_MOE
+    config = getattr(transformers, config_name)(
+        **{**_COMMON, "vocab_size": len(tok)}, **extra, mlp_only_layers=[3]
+    )
+    AutoModelForCausalLM.from_config(config).save_pretrained("moe")
+    tok.save_pretrained("moe")
+    (tmp_path / "calib.jsonl").write_text(
+        "\n".join(json.dumps({"text": line}) for line in lines), encoding="utf-8"
+    )
+
+    r = CliRunner().invoke(
+        app,
+        ["shrink", "--model", "moe", "--drop-layers", "1", "--calib", "calib.jsonl",
+         "--device", "cpu", "--plan-only"],
+    )
+    plain = " ".join(strip_ansi(r.output).split())
+    assert r.exit_code == 1, (plain, repr(r.exception))
+    assert "mlp_only_layers" in plain, plain
+    assert "Scoring importance" not in plain, plain

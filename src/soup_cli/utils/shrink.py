@@ -207,6 +207,25 @@ def layer_list(model: object) -> Any:
         raise ValueError("model has no .model.layers ModuleList") from exc
 
 
+def check_layer_index_config(config: object, n_layers: int) -> None:
+    """Refuse a config whose MoE layout names layers by index.
+
+    Any attribute in :data:`_LAYER_INDEX_CONFIG_DEFAULTS` that is not at its
+    default for ``n_layers`` holds layer numbers a prune cannot remap.
+    """
+    for attr, default_for in _LAYER_INDEX_CONFIG_DEFAULTS.items():
+        value = getattr(config, attr, None)
+        if value is None:
+            continue
+        if isinstance(value, (list, tuple)):
+            value = list(value)
+        if value != default_for(n_layers):
+            raise ValueError(
+                f"cannot prune a model whose config sets {attr}={value!r}: it holds "
+                "layer indices that would point at the wrong layers after the drop"
+            )
+
+
 def prune_model_layers(model: object, start: int, block_size: int) -> None:
     """Drop decoder layers ``[start, start + block_size)`` in place.
 
@@ -239,23 +258,18 @@ def prune_model_layers(model: object, start: int, block_size: int) -> None:
             "(the first and last layer are protected)"
         )
     config = model.config  # type: ignore[attr-defined]
-    for attr, default_for in _LAYER_INDEX_CONFIG_DEFAULTS.items():
-        value = getattr(config, attr, None)
-        if value is None:
-            continue
-        if isinstance(value, (list, tuple)):
-            value = list(value)
-        if value != default_for(n_total):
-            raise ValueError(
-                f"cannot prune a model whose config sets {attr}={value!r}: it holds "
-                "layer indices that would point at the wrong layers after the drop"
-            )
+    check_layer_index_config(config, n_total)
     kept_idx = [i for i in range(n_total) if not (start <= i < end)]
     model.model.layers = nn.ModuleList(layers[i] for i in kept_idx)  # type: ignore[attr-defined]
     for attr in _PER_LAYER_CONFIG_ATTRS:
         values = getattr(config, attr, None)
         if isinstance(values, (list, tuple)) and len(values) == n_total:
             setattr(config, attr, [values[i] for i in kept_idx])
+    # Every index-valued attribute is at its default (checked above); keep it the
+    # default for the NEW layer count, e.g. Llama4-text ``moe_layers``.
+    for attr, default_for in _LAYER_INDEX_CONFIG_DEFAULTS.items():
+        if getattr(config, attr, None) is not None:
+            setattr(config, attr, default_for(len(kept_idx)))
     config.num_hidden_layers = len(kept_idx)
 
 

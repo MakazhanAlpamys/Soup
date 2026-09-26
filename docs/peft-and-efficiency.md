@@ -71,6 +71,7 @@ soup shrink --model HuggingFaceTB/SmolLM2-135M-Instruct --drop-ratio 0.25 \
   `<dir>/shrink_report.json`.
 
 **Arch support (v1):** Llama / Qwen / SmolLM. Others are a friendly reject.
+MoE configs that place their MoE layers by layer number (a non-default `mlp_only_layers` or `decoder_sparse_step` on Qwen MoE models, `moe_layers` or `interleave_moe_layer_step` on Llama4-text) are refused before the model is loaded, because a prune cannot renumber them. Per-layer lists such as `layer_types` and `no_rope_layers` are sliced along with the layers.
 The importance pass loads the model, so live-validated on ≤ 3 B; larger models
 work but are unvalidated on the reference hardware. Perplexity is an unweighted
 mean of per-example perplexities — valid for the before/after *ratio* the
