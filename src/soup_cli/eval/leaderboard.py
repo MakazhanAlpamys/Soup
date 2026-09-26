@@ -6,6 +6,8 @@ import json
 from dataclasses import dataclass, field
 from typing import Optional
 
+from soup_cli.eval.results import newest_eval_rows
+
 
 @dataclass
 class LeaderboardEntry:
@@ -64,7 +66,9 @@ def build_leaderboard_from_tracker(
     eval_results = tracker.get_eval_results(run_id=run_id)
 
     entries = []
-    for row in eval_results:
+    for row in newest_eval_rows(
+        eval_results, key_fields=("model_path", "benchmark")
+    ):
         entries.append(LeaderboardEntry(
             model_path=row.get("model_path", ""),
             benchmark=row.get("benchmark", ""),
@@ -91,11 +95,11 @@ def compare_runs(
     results_2 = tracker.get_eval_results(run_id=run_id_2)
 
     scores_1: dict[str, float] = {}
-    for row in results_1:
+    for row in newest_eval_rows(results_1):
         scores_1[row["benchmark"]] = row["score"]
 
     scores_2: dict[str, float] = {}
-    for row in results_2:
+    for row in newest_eval_rows(results_2):
         scores_2[row["benchmark"]] = row["score"]
 
     all_benchmarks = sorted(set(scores_1.keys()) | set(scores_2.keys()))
