@@ -345,18 +345,30 @@ def model_size_from_name(model_name: str) -> float:
         if marker in name_lower:
             return size
 
-    # Longer markers first: "1.7b" contains "7b", so a naive scan would call a
-    # 1.7B model a 7B one (and over-predict its VRAM by 4x).
-    size_markers = [
-        ("70b", 70), ("65b", 65), ("34b", 34), ("33b", 33),
-        ("13b", 13), ("8b", 8), ("3b", 3),
-        ("1.5b", 1.5), ("1.7b", 1.7), ("0.5b", 0.5), ("0.6b", 0.6),
-        ("7b", 7), ("1b", 1),
-    ]
+    # MoE models specify expert count and expert size (e.g. Mixtral 8x7B, 8x22B,
+    # or generic NxMb). Handle explicitly before standard billion tokens:
+    # 8x7B has ~46.7B total parameters, 8x22B has ~141.0B total parameters (#1198).
+    moe_match = re.search(r"(?<![a-z0-9.])(\d+)x(\d+(?:\.\d+)?)b(?![a-z0-9])", name_lower)
+    if moe_match:
+        n_exp = int(moe_match.group(1))
+        exp_sz = float(moe_match.group(2))
+        if (n_exp, exp_sz) == (8, 7.0):
+            return 46.7
+        if (n_exp, exp_sz) == (8, 22.0):
+            return 141.0
+        return n_exp * exp_sz
 
-    for marker, size in size_markers:
-        if marker in name_lower:
-            return size
+    # Strip active-parameter tokens like "-a22b", "-a3b", "-a17b" (e.g. Qwen3-235B-A22B
+    # or Qwen3.5-35B-A3B) so the total-parameter token is parsed rather than the
+    # active-parameter count (#1198).
+    cleaned = re.sub(r"[-_]a(?:ct(?:ive)?)?[-_]?\d+(?:\.\d+)?b(?![a-z0-9])", "", name_lower)
+
+    # Parse total parameter size token in billions (e.g. 72b, 32b, 14b, 405b, 4b, 1.7b).
+    # Uses boundary lookarounds to avoid substring false matches (such as "11b" matching
+    # "1b", "17b" or "27b" matching "7b", or "0.8b" matching "8b") (#1198).
+    b_match = re.search(r"(?<![a-z0-9.])(\d+(?:\.\d+)?)b(?![a-z0-9])", cleaned)
+    if b_match:
+        return float(b_match.group(1))
 
     # Sub-billion checkpoints carry their size in MILLIONS (SmolLM2-135M,
     # SmolVLM-256M, ...). Without this they fell through to the 7B default and
