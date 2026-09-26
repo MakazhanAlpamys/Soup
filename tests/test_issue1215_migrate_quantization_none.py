@@ -7,7 +7,6 @@ and validates output with load_config_from_string.
 from __future__ import annotations
 
 import json
-import re
 from pathlib import Path
 
 import pytest
@@ -24,9 +23,6 @@ from tests.conftest import strip_ansi
 runner = CliRunner()
 
 
-def _normalize_ws(text: str) -> str:
-    """Strip ANSI codes and collapse multiple whitespace characters into one."""
-    return re.sub(r"\s+", " ", strip_ansi(text)).strip()
 
 
 class TestAxolotlQuantizationAndFullFinetuning:
@@ -377,8 +373,8 @@ class TestMigrateCLIDryRunOutput:
             "--dry-run",
         ])
         assert result.exit_code == 0
-        normalized = _normalize_ws(result.output)
-        assert "quantization: none" in normalized or "quantization=none" in normalized
+        clean = strip_ansi(result.output)
+        assert "quantization: none" in clean or "quantization=none" in clean
 
     def test_cli_dry_run_full_finetune_prints_r_zero(self, tmp_path: Path, monkeypatch) -> None:
         monkeypatch.chdir(tmp_path)
@@ -397,5 +393,5 @@ class TestMigrateCLIDryRunOutput:
             "--dry-run",
         ])
         assert result.exit_code == 0
-        normalized = _normalize_ws(result.output)
-        assert "r: 0" in normalized or "lora.r=0" in normalized
+        clean = strip_ansi(result.output)
+        assert "r: 0" in clean or "lora.r=0" in clean
