@@ -6,14 +6,18 @@ Asserts that supervised token positions (labels != -100) match between
 - train_on_messages_with_train_field
 - train_on_eot
 - pre-tokenized cache
-- packing_strategy: bfd, bfd-requeue, wrapped
-- padding_free
 - pretrain with packing is unaffected
 """
 
 from __future__ import annotations
 
 import pytest
+
+pytest.importorskip("torch")
+pytest.importorskip("trl")
+pytest.importorskip("transformers")
+pytest.importorskip("peft")
+
 import yaml
 from datasets import Dataset
 
@@ -21,11 +25,6 @@ from soup_cli.config.loader import load_config_from_string
 from soup_cli.trainer.pretrain import PretrainTrainerWrapper
 from soup_cli.trainer.sft import SFTTrainerWrapper
 from tests.test_issue691_sft_packing import _tiny_causal_model_dir
-
-pytest.importorskip("torch")
-pytest.importorskip("trl")
-pytest.importorskip("transformers")
-pytest.importorskip("peft")
 
 
 def _count_supervised_and_real_tokens(dataloader):
@@ -183,6 +182,24 @@ class TestSFTPackingLossMask:
 
         assert sup_true == sup_false
 
+    def test_eval_split_packing_preserves_mask(self, tmp_path, monkeypatch):
+        row = {
+            "messages": [
+                {"role": "system", "content": "sys prompt"},
+                {"role": "user", "content": "hello there"},
+                {"role": "assistant", "content": "world reply"},
+            ]
+        }
+        counts = {}
+        for packing in (False, True):
+            wrapper = _build_sft_wrapper(tmp_path / str(packing), monkeypatch, packing=packing)
+            wrapper.setup({"train": [row] * 8, "val": [row] * 4})
+            assert wrapper.trainer.eval_dataset is not None
+            counts[packing], _ = _count_supervised_and_real_tokens(
+                wrapper.trainer.get_eval_dataloader()
+            )
+        assert counts[True] == counts[False], counts
+
 
 class TestPretrainPackingUnaffected:
     def test_pretrain_with_packing(self, tmp_path, monkeypatch):
@@ -214,3 +231,4 @@ class TestPretrainPackingUnaffected:
         # Pretrain packing works as expected
         dataloader = wrapper.trainer.get_train_dataloader()
         assert dataloader is not None
+        assert "assistant_masks" not in wrapper.trainer.train_dataset.column_names
