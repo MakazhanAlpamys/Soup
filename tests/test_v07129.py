@@ -492,7 +492,7 @@ class TestShrinkCli:
             ["shrink", "--model", "x", "--drop-layers", "2", "--calib", str(outside)],
         )
         assert r.exit_code == 1, (r.output, repr(r.exception))
-        assert "cwd" in r.output.lower()
+        assert "must stay under cwd" in " ".join(r.output.split())
 
     def test_rejects_bad_tolerance(self, tmp_path, monkeypatch):
         from typer.testing import CliRunner
@@ -673,12 +673,17 @@ class TestHeal:
         outside = tmp_path / "outside_heal.jsonl"
         outside.write_text('{"text":"hi"}\n', encoding="utf-8")
         monkeypatch.chdir(work)
-        model_dir = _write_tiny_model(work / "m", layers=6)
+        # Local dummy dir is enough: heal-path containment runs before any
+        # Hub / from_pretrained call. Do not use _write_tiny_model here —
+        # that helper downloads a tokenizer.
+        model_dir = work / "m"
+        model_dir.mkdir()
         calib = work / "calib.jsonl"
         calib.write_text('{"text":"hi there friend"}\n', encoding="utf-8")
+        monkeypatch.setenv("HF_HUB_OFFLINE", "1")
         r = CliRunner().invoke(
             app,
-            ["shrink", "--model", model_dir, "--drop-layers", "2",
+            ["shrink", "--model", str(model_dir), "--drop-layers", "2",
              "--calib", "calib.jsonl", "--heal", str(outside), "--device", "cpu"],
         )
         assert r.exit_code == 1, (r.output, repr(r.exception))
@@ -734,7 +739,15 @@ class TestRegistryAttach:
 # ---------------------------------------------------------------------------
 class TestReviewFixes:
     def test_output_dir_outside_cwd_rejected(self, tmp_path, monkeypatch):
-        """--output-dir must be cwd-contained (arbitrary-write guard)."""
+        """--output-dir must be cwd-contained (arbitrary-write guard).
+
+        This is a local path-containment property. ``soup shrink`` refuses
+        ``--output-dir`` before any Hugging Face Hub call
+        (``_shrink_impl`` checks it first). The test must not download a
+        tokenizer via ``_write_tiny_model`` — that helper is what used to
+        reach ``list_repo_tree`` and turn a containment assertion into a
+        network flake (#1076).
+        """
         from typer.testing import CliRunner
 
         from soup_cli.cli import app
@@ -744,15 +757,28 @@ class TestReviewFixes:
         monkeypatch.chdir(work)
         calib = work / "calib.jsonl"
         calib.write_text('{"text":"hi there friend"}\n', encoding="utf-8")
-        model_dir = _write_tiny_model(work / "m", layers=6)
+        # Empty local dir is enough: the refusal runs before model load.
+        model_dir = work / "m"
+        model_dir.mkdir()
+        monkeypatch.setenv("HF_HUB_OFFLINE", "1")
+
+        def _from_pretrained_must_not_run(*_a, **_k):
+            raise AssertionError(
+                "AutoConfig.from_pretrained must not run before the output-dir refusal"
+            )
+
+        monkeypatch.setattr(
+            "soup_cli.commands.shrink.AutoConfig.from_pretrained",
+            _from_pretrained_must_not_run,
+        )
         r = CliRunner().invoke(
             app,
-            ["shrink", "--model", model_dir, "--drop-layers", "2",
+            ["shrink", "--model", str(model_dir), "--drop-layers", "2",
              "--calib", "calib.jsonl", "--device", "cpu",
              "--output-dir", str(tmp_path / "escape")],
         )
         assert r.exit_code == 1, (r.output, repr(r.exception))
-        assert "cwd" in r.output.lower()
+        assert "must stay under cwd" in " ".join(r.output.split())
 
     def test_heal_epochs_clamp_rejects_absurd_combo(self):
         """Huge --heal-steps over a tiny heal set is refused, not silently run."""
