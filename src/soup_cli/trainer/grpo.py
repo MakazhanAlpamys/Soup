@@ -13,6 +13,7 @@ from rich.console import Console
 from soup_cli.config.schema import SoupConfig, TrainingConfig
 from soup_cli.data.chat_templates import apply_chat_template_override
 from soup_cli.trainer.loss_summary import summarize_training_loss
+from soup_cli.utils import final_answer
 from soup_cli.utils.gpu import (
     bf16_fp16_flags,
     estimate_batch_size,
@@ -827,6 +828,11 @@ def _copy_grpo_metadata(row: dict, entry: dict) -> None:
             entry[key] = value
 
 
+# Rewards that compare a completion's final answer with the gold's (#1226). A gold they cannot
+# read would score every completion 0.0, so the group advantage would be zero with no warning.
+_GOLD_PARSING_REWARDS = frozenset({"accuracy", "verifiable/math"})
+
+
 def _validate_grpo_reward_metadata(
     data: list[dict],
     tcfg: TrainingConfig,
@@ -861,6 +867,53 @@ def _validate_grpo_reward_metadata(
                 "dataset or include an assistant response that Soup can use as "
                 "'answer'."
             )
+
+    gold_rewards = [name for name, _ in requirements if name in _GOLD_PARSING_REWARDS]
+    # Seed rows that a rollout backend replaces are never scored (#565 still wants them
+    # present); the rollout's own rows are validated as split "rollout".
+    if gold_rewards and not (split == "train" and tcfg.rollout_backend is not None):
+        _check_golds_are_readable(data, list(dict.fromkeys(gold_rewards)), split=split)
+
+
+def _check_golds_are_readable(data: list[dict], reward_names: list[str], *, split: str) -> None:
+    """Refuse golds with no single extractable final answer (none, a "####" line that may be a
+    markdown heading, or a hedge such as "The answer is either 41 or 42."); report the ones
+    compared as text."""
+    unreadable: list[int] = []
+    text_golds = 0
+    for row_index, row in enumerate(data):
+        reference = final_answer.parse_reference(str(row["answer"]))
+        if reference is None:
+            unreadable.append(row_index)
+        elif reference.number is None:
+            text_golds += 1
+    if unreadable:
+        raise ValueError(_unreadable_gold_message(unreadable, len(data), reward_names, split))
+    if text_golds:
+        console.print(
+            f"[dim]GRPO {split}: {text_golds} of {len(data)} golds are non-numeric and are "
+            "compared as normalised text.[/]"
+        )
+
+
+def _unreadable_gold_message(
+    rows: list[int], total: int, reward_names: list[str], split: str
+) -> str:
+    names = " and ".join(repr(name) for name in reward_names)
+    label = "reward" if len(reward_names) == 1 else "rewards"
+    more = (
+        f" {len(rows) - 1} more of the {total} rows have the same problem." if len(rows) > 1 else ""
+    )
+    return (
+        f"GRPO {split} row {rows[0]} 'answer' states no single final answer that {label} "
+        f"{names} can compare against: it states none (a '####' line that is not a number and "
+        "has more text after it reads as a markdown heading), or its answer phrase names more "
+        "than one number (a hedge such as 'The answer is either 41 or 42.'), so every "
+        f"completion would score 0.0.{more} The field comes from an 'answer' column, an Alpaca "
+        "'output' or the final assistant turn; rows count from 0 after the train/validation "
+        "split. Put one answer after '####' on the last line, inside \\boxed{}, or after 'The "
+        "answer is' or 'Answer:', make the field the bare answer on one line, or drop the row."
+    )
 
 
 def _has_grpo_reward_metadata(value: object) -> bool:
