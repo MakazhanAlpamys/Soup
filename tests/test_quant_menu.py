@@ -57,7 +57,9 @@ training:
         assert cfg.training.gptq_disable_exllama is False
 
     def test_gptq_quantization_aware_combo_rejected(self):
-        # GPTQ + int8 QAT does not compose — torchao.quant_api expects bf16/fp16.
+        # GPTQ + QAT/FP8 prepare does not compose — the checkpoint carries its
+        # own scale. `fp8`, because `true` is refused on its own (#1222) before
+        # this cross-validator runs.
         with pytest.raises(
             ValueError,
             match="gptq.*quantization_aware|quantization_aware.*gptq|incompatible",
@@ -69,7 +71,7 @@ task: sft
 data: {train: d.jsonl}
 training:
   quantization: gptq
-  quantization_aware: true
+  quantization_aware: fp8
 """
             )
 
@@ -143,7 +145,7 @@ training: {quantization: awq}
 base: m
 task: sft
 data: {train: d.jsonl}
-training: {quantization: awq, quantization_aware: true}
+training: {quantization: awq, quantization_aware: fp8}
 """
             )
 
@@ -241,7 +243,7 @@ training: {quantization: aqlm}
 base: m
 task: sft
 data: {train: d.jsonl}
-training: {quantization: aqlm, quantization_aware: true}
+training: {quantization: aqlm, quantization_aware: fp8}
 """
             )
 

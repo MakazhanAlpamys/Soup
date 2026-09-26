@@ -200,6 +200,63 @@ def _audit_optimizer(training: Dict[str, Any], record: Dict[str, Any]) -> AuditR
     )
 
 
+def _audit_learning_rate(
+    training: Dict[str, Any], record: Dict[str, Any], kind: str
+) -> AuditRow:
+    """Compare the configured LR with the peak the optimizer plan used.
+
+    The MLX record also contains ``learning_rate``, but that value is copied
+    straight from the config when the record is written.  It is not evidence
+    that the optimizer received it.  ``peak_lr`` comes from the resolved
+    :class:`OptimizerPlan` instead and is the value passed to the schedule.
+
+    Warmup does not change the comparand: ``training.lr`` names the schedule's
+    target/peak, while warmup only controls how many updates it takes to reach
+    that value.  Comparing against an early schedule sample would therefore
+    report a correct warmup run as a divergence.
+    """
+    asked = training.get("lr", 2e-5)
+    ran = record.get("peak_lr")
+    if ran is None:
+        if kind == "peft":
+            detail = (
+                "effective learning rate was not checked: PEFT's "
+                "adapter_config.json does not record the optimizer schedule "
+                "or its peak learning rate on the transformers backend"
+            )
+        else:
+            detail = (
+                "effective learning rate was not checked because peak_lr is "
+                "not in the record"
+            )
+        return AuditRow("learning_rate", asked, None, UNKNOWN, detail)
+
+    if not _is_number(asked) or not _is_number(ran):
+        return AuditRow(
+            "learning_rate",
+            asked,
+            ran,
+            DIVERGED,
+            f"training.lr={asked!r} and recorded peak_lr={ran!r} must both "
+            "be finite numbers before they can be compared",
+        )
+
+    # Both values originate from one configured float on a conforming MLX
+    # run and survive YAML/JSON parsing exactly.  A tolerance would turn a
+    # small but real recipe change into agreement, which is the mutation this
+    # audit row exists to catch.
+    if float(asked) == float(ran):
+        return AuditRow("learning_rate", asked, ran, OK)
+    return AuditRow(
+        "learning_rate",
+        asked,
+        ran,
+        DIVERGED,
+        f"training.lr={asked!r} is the requested schedule peak, but the "
+        f"optimizer plan recorded peak_lr={ran!r}",
+    )
+
+
 def _audit_warmup(training: Dict[str, Any], record: Dict[str, Any]) -> AuditRow:
     """The motivating case: a ratio that rounds away.
 
@@ -397,6 +454,7 @@ def audit_adapter(config: Dict[str, Any], record: Dict[str, Any]) -> AuditResult
     rows: List[AuditRow] = []
 
     rows.append(_audit_optimizer(training, record))
+    rows.append(_audit_learning_rate(training, record, kind))
     # mlx_optim stores `str(scheduler).strip().lower()`, so `scheduler: Cosine`
     # in a config would report DIVERGED against a record saying `cosine`.
     # _audit_optimizer already normalises; this did not.
@@ -469,8 +527,9 @@ def unknown_reason(kind: str) -> Optional[str]:
     if kind == "peft":
         return (
             "This adapter carries PEFT's own adapter_config.json, which records "
-            "LoRA shape and nothing about the optimizer, schedule or masking. "
-            "Those settings cannot be audited on the transformers path."
+            "LoRA shape and nothing about the effective learning rate, optimizer, "
+            "schedule or masking. Those settings were not checked on the "
+            "transformers path."
         )
     if kind == "unknown":
         return "Unrecognised adapter_config.json; only settings it names can be checked."

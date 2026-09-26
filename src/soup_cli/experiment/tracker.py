@@ -345,16 +345,15 @@ class ExperimentTracker:
         epoch: float = 0.0,
         loss: float = 0.0,
         lr: float = 0.0,
-        grad_norm: float = 0.0,
+        grad_norm: Optional[float] = None,
         speed: float = 0.0,
         gpu_mem: str = "",
         val_loss: Optional[float] = None,
     ) -> None:
         """Log a single metrics row for the given run.
 
-        ``val_loss`` defaults to ``None`` rather than ``0.0``: most rows are
-        training steps with no evaluation attached, and a zero there would be
-        indistinguishable from a genuinely measured zero.
+        ``val_loss`` and ``grad_norm`` default to ``None`` rather than ``0.0``:
+        an omitted measurement must not look like a genuinely measured zero.
         """
         now = datetime.now().isoformat()
         conn = self._get_conn()
@@ -609,16 +608,21 @@ class ExperimentTracker:
         conn.commit()
 
     def get_eval_results(self, run_id: Optional[str] = None) -> list[dict]:
-        """Get eval results, optionally filtered by run_id."""
+        """Get eval results, optionally filtered by run_id, newest first.
+
+        Rows sharing a ``created_at`` fall back to insertion order (``rowid``),
+        so "newest" is deterministic rather than SQLite's unspecified order.
+        """
         conn = self._get_conn()
         if run_id:
             rows = conn.execute(
-                "SELECT * FROM eval_results WHERE run_id = ? ORDER BY created_at DESC",
+                "SELECT * FROM eval_results WHERE run_id = ? "
+                "ORDER BY created_at DESC, rowid DESC",
                 (run_id,),
             ).fetchall()
         else:
             rows = conn.execute(
-                "SELECT * FROM eval_results ORDER BY created_at DESC"
+                "SELECT * FROM eval_results ORDER BY created_at DESC, rowid DESC"
             ).fetchall()
         return [dict(row) for row in rows]
 

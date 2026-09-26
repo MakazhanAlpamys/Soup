@@ -1,0 +1,100 @@
+name: CodSpeed
+
+# Deliberately its own workflow, not a job in ci.yml (#1065): ci.yml's jobs are
+# this repo's required checks, and a third-party benchmarking service must never
+# be able to redden one. This workflow is not in the required set and must not
+# be added to it: the job is off until someone turns it on (below), and even
+# then it has to block nothing.
+#
+# WHAT IT MEASURES: a warm-process re-import of soup_cli.config.schema
+# (tests/test_cli_import_benchmark.py), NOT the cold start #780 measured
+# (interpreter start plus every import). The numbers are not comparable with
+# #780's table, and a new transitive import is barely visible in them;
+# tests/test_cli_startup_is_light.py is the guard for that.
+#
+# PERMISSIONS. Widen only by arguing with this list:
+#   contents: read   actions/checkout needs it to fetch the PR head. Nothing in
+#                    this workflow writes to the repository.
+#   id-token: write  CodSpeedHQ/action exchanges a short-lived GitHub OIDC token
+#                    for its upload credentials. This is public-repo auth, so no
+#                    CODSPEED_TOKEN secret is stored. Without it the upload has
+#                    nothing to authenticate with.
+#   pull-requests: write is deliberately NOT requested. The PR comment is posted
+#                    by the separately installed CodSpeed GitHub App under the
+#                    App's own permissions, not by this token.
+#
+# THE JOB IS SKIPPED UNLESS THE REPOSITORY VARIABLE CODSPEED_ENABLED IS `true`
+# (#1086 review). Without the CodSpeed GitHub App the upload cannot succeed
+# anywhere, so an always-on job would be red on every push to `main` and every
+# PR: a red that can never turn green tells nobody anything. This workflow
+# cannot detect whether the App is installed: the 401's reason string
+# ("Repository not found or the user does not have access to it") is the same
+# for an uninstalled App and for a missing OIDC token, and neither this
+# workflow's token nor a maintainer's PAT can tell them apart
+# (`repos/.../installation` and `user/installations` both 401/403 for a
+# non-admin). So the switch is explicit. A job-level skip shows as "skipped",
+# not as a pass, so it does not bring back the unearned green a silent step
+# skip would.
+#
+# TO TURN IT ON: install the CodSpeed GitHub App on this repository, then set
+# the repository variable CODSPEED_ENABLED to `true` (Settings > Secrets and
+# variables > Actions > Variables). Remove or unset it to turn it off again.
+#
+# FORK PRs NEVER RUN IT, EVEN WITH THE APP INSTALLED. GitHub does not grant
+# id-token: write to a pull_request run triggered from a fork, whatever this
+# file requests. That is a platform restriction, not a CodSpeed one; observed
+# on #1086, a fork PR: the job's GITHUB_TOKEN listed only `Contents: read` and
+# `Metadata: read`, and the upload failed 401. Most contributions here come
+# from forks, so in practice comparisons appear for `main` pushes and
+# same-repository branch PRs only, until someone decides a CODSPEED_TOKEN
+# secret, and the trust it implies for a fork's workflow run, is worth it.
+#
+# THE LAST STEP is for a run that does start and still fails to upload (the
+# App uninstalled later, or CodSpeed unreachable): it says so instead of
+# leaving a bare red.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  benchmark:
+    if: >-
+      vars.CODSPEED_ENABLED == 'true' && (github.event_name == 'push' ||
+      github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # Core dependencies only, no torch/transformers/[dev]'s heavier extras --
+      # the import this benchmarks is paid on every install, ML or not. The
+      # plugin is installed here and not in [dev] on purpose (#1086 review).
+      - run: pip install -e . pytest pytest-codspeed
+      # Pinned to a commit because this is the only third-party action here that
+      # can mint an OIDC token. That commit is the v5.2.1 release; `v5` pointed
+      # at it when this was written.
+      - name: Benchmark (warm-process re-import, not #780's cold start) and report to CodSpeed
+        id: codspeed
+        uses: CodSpeedHQ/action@373d6868929f444bc08d901fd0eb0ad52a8875ea # v5.2.1
+        with:
+          mode: simulation
+          run: pytest tests/test_cli_import_benchmark.py --codspeed -o addopts=""
+      - name: Say why this run could not report to CodSpeed
+        if: failure() && steps.codspeed.outcome == 'failure'
+        run: >-
+          echo "::error title=CodSpeed could not report::The benchmark ran; the upload to
+          CodSpeed could not authenticate, so nothing was reported. CODSPEED_ENABLED is set,
+          so either the CodSpeed GitHub App is not installed on this repository, or CodSpeed
+          itself is unreachable/misconfigured -- both look identical from here
+          (repos/.../installation is 401 either way to a non-admin token). This job is not a
+          required check and blocks nothing."

@@ -22,7 +22,6 @@ from an in-memory vocab, so ``apply_chat_template`` is the genuine Jinja
 renderer and the BOS/EOS come from a genuine ``tokenizers`` post-processor.
 """
 
-import hashlib
 
 import pytest
 
@@ -405,19 +404,17 @@ class TestPreprocessCacheKey:
         Fails if someone drops the schema token and reverts to the old format.
         """
         from soup_cli.utils.data_pipeline import make_preprocess_cache_key
+        from tests.preprocess_cache_blob import blob_key
 
         args = dict(
             dataset_path="data/train.jsonl",
             tokenizer_name="meta-llama/Llama-3.1-8B",
             max_length=2048,
             format_name="chatml",
+            mask_mode="responses_only",
+            task="sft",
         )
-        old_blob = (
-            f"{args['dataset_path']}\x1f{args['tokenizer_name']}"
-            f"\x1f{args['max_length']}\x1f{args['format_name']}"
-        )
-        old_key = hashlib.sha256(old_blob.encode("utf-8")).hexdigest()[:16]
-        assert make_preprocess_cache_key(**args) != old_key
+        assert make_preprocess_cache_key(**args) != blob_key("", **args)
 
 
 class TestDataDoctorLegacyMatchesTraining:

@@ -120,7 +120,7 @@ class TestSFTTrainerInit:
             LoraConfig=lambda **kwargs: SimpleNamespace(**kwargs),
             TaskType=SimpleNamespace(CAUSAL_LM="CAUSAL_LM"),
             get_peft_model=lambda model_obj, _cfg: model_obj,
-            prepare_model_for_kbit_training=lambda model_obj: model_obj,
+            prepare_model_for_kbit_training=lambda model_obj, **kwargs: model_obj,
         )
         monkeypatch.setitem(sys.modules, "transformers", fake_transformers)
         monkeypatch.setitem(sys.modules, "peft", fake_peft)
@@ -239,7 +239,7 @@ class TestSFTTrainerInit:
         fake_peft = types.SimpleNamespace(
             LoraConfig=lambda **kwargs: SimpleNamespace(**kwargs),
             get_peft_model=lambda m, cfg: m,
-            prepare_model_for_kbit_training=lambda m: m,
+            prepare_model_for_kbit_training=lambda m, **kwargs: m,
         )
 
         monkeypatch.setitem(sys.modules, "transformers", fake_transformers)
@@ -335,7 +335,7 @@ class TestSFTTrainerInit:
         fake_peft = types.SimpleNamespace(
             LoraConfig=lambda **kwargs: SimpleNamespace(**kwargs),
             get_peft_model=lambda m, cfg: m,
-            prepare_model_for_kbit_training=lambda m: m,
+            prepare_model_for_kbit_training=lambda m, **kwargs: m,
         )
 
         monkeypatch.setitem(sys.modules, "transformers", fake_transformers)
@@ -463,7 +463,7 @@ class TestDPOTrainerInit:
             LoraConfig=lambda **kwargs: SimpleNamespace(**kwargs),
             TaskType=SimpleNamespace(CAUSAL_LM="CAUSAL_LM"),
             get_peft_model=lambda model_obj, _cfg: model_obj,
-            prepare_model_for_kbit_training=lambda model_obj: model_obj,
+            prepare_model_for_kbit_training=lambda model_obj, **kwargs: model_obj,
         )
 
         monkeypatch.setitem(sys.modules, "transformers", fake_transformers)
@@ -585,7 +585,7 @@ class TestGRPOTrainerInit:
             LoraConfig=lambda **kwargs: SimpleNamespace(**kwargs),
             TaskType=SimpleNamespace(CAUSAL_LM="CAUSAL_LM"),
             get_peft_model=lambda model_obj, _cfg: model_obj,
-            prepare_model_for_kbit_training=lambda model_obj: model_obj,
+            prepare_model_for_kbit_training=lambda model_obj, **kwargs: model_obj,
         )
 
         monkeypatch.setitem(sys.modules, "transformers", fake_transformers)
@@ -721,7 +721,7 @@ class TestIPOTrainerInit:
             LoraConfig=lambda **kwargs: SimpleNamespace(**kwargs),
             TaskType=SimpleNamespace(CAUSAL_LM="CAUSAL_LM"),
             get_peft_model=lambda model_obj, _cfg: model_obj,
-            prepare_model_for_kbit_training=lambda model_obj: model_obj,
+            prepare_model_for_kbit_training=lambda model_obj, **kwargs: model_obj,
         )
 
         monkeypatch.setitem(sys.modules, "transformers", fake_transformers)
@@ -830,7 +830,7 @@ class TestKTOTrainerInit:
             LoraConfig=lambda **kwargs: SimpleNamespace(**kwargs),
             TaskType=SimpleNamespace(CAUSAL_LM="CAUSAL_LM"),
             get_peft_model=lambda model_obj, _cfg: model_obj,
-            prepare_model_for_kbit_training=lambda model_obj: model_obj,
+            prepare_model_for_kbit_training=lambda model_obj, **kwargs: model_obj,
         )
 
         monkeypatch.setitem(sys.modules, "transformers", fake_transformers)
@@ -939,7 +939,7 @@ class TestBCOTrainerInit:
             LoraConfig=lambda **kwargs: SimpleNamespace(**kwargs),
             TaskType=SimpleNamespace(CAUSAL_LM="CAUSAL_LM"),
             get_peft_model=lambda model_obj, _cfg: model_obj,
-            prepare_model_for_kbit_training=lambda model_obj: model_obj,
+            prepare_model_for_kbit_training=lambda model_obj, **kwargs: model_obj,
         )
 
         monkeypatch.setitem(sys.modules, "transformers", fake_transformers)
@@ -1048,7 +1048,7 @@ class TestORPOTrainerInit:
             LoraConfig=lambda **kwargs: SimpleNamespace(**kwargs),
             TaskType=SimpleNamespace(CAUSAL_LM="CAUSAL_LM"),
             get_peft_model=lambda model_obj, _cfg: model_obj,
-            prepare_model_for_kbit_training=lambda model_obj: model_obj,
+            prepare_model_for_kbit_training=lambda model_obj, **kwargs: model_obj,
         )
 
         monkeypatch.setitem(sys.modules, "transformers", fake_transformers)
@@ -1157,7 +1157,7 @@ class TestSIMPOTrainerInit:
             LoraConfig=lambda **kwargs: SimpleNamespace(**kwargs),
             TaskType=SimpleNamespace(CAUSAL_LM="CAUSAL_LM"),
             get_peft_model=lambda model_obj, _cfg: model_obj,
-            prepare_model_for_kbit_training=lambda model_obj: model_obj,
+            prepare_model_for_kbit_training=lambda model_obj, **kwargs: model_obj,
         )
 
         monkeypatch.setitem(sys.modules, "transformers", fake_transformers)

@@ -289,9 +289,18 @@ class TestApplyFp8Attention:
 
 
 def _install_fake_torchao_quant(monkeypatch, record, *, with_nvfp4=True):
+    """Stub torchao at the paths it really uses (#826).
+
+    The old version of this helper defined ``torchao.quantization.NVFP4Config``,
+    a name torchao has never exported, so these tests passed while the shipped
+    code could not resolve anything. The NVFP4 *training* config lives under
+    ``torchao.prototype.moe_training.nvfp4_training.nvfp4_training``;
+    ``tests/test_issue826_torchao_class_names.py`` checks the paths against the
+    installed package so a stub cannot drift from it again.
+    """
     fake_q = types.ModuleType("torchao.quantization")
 
-    class _NVFP4Config:
+    class _NVFP4TrainingConfig:
         pass
 
     def _quantize(model, config):
@@ -299,12 +308,22 @@ def _install_fake_torchao_quant(monkeypatch, record, *, with_nvfp4=True):
         record["config"] = config
 
     fake_q.quantize_ = _quantize
-    if with_nvfp4:
-        fake_q.NVFP4Config = _NVFP4Config
     fake_root = types.ModuleType("torchao")
     fake_root.quantization = fake_q
     monkeypatch.setitem(sys.modules, "torchao", fake_root)
     monkeypatch.setitem(sys.modules, "torchao.quantization", fake_q)
+
+    training_path = "torchao.prototype.moe_training.nvfp4_training.nvfp4_training"
+    fake_training = types.ModuleType(training_path)
+    if with_nvfp4:
+        fake_training.NVFP4TrainingConfig = _NVFP4TrainingConfig
+    for path in (
+        "torchao.prototype",
+        "torchao.prototype.moe_training",
+        "torchao.prototype.moe_training.nvfp4_training",
+    ):
+        monkeypatch.setitem(sys.modules, path, types.ModuleType(path))
+    monkeypatch.setitem(sys.modules, training_path, fake_training)
 
 
 class TestApplyNvfp4:
@@ -333,7 +352,7 @@ class TestApplyNvfp4:
         with pytest.raises(RuntimeError, match="torchao"):
             apply_nvfp4(_tiny_attn_model())
 
-    def test_old_torchao_missing_nvfp4config(self, monkeypatch):
+    def test_a_torchao_without_the_training_config_is_named(self, monkeypatch):
         from soup_cli.utils.advanced_precision import apply_nvfp4
 
         record: dict = {}
@@ -341,7 +360,7 @@ class TestApplyNvfp4:
         monkeypatch.setattr(
             "soup_cli.utils.advanced_precision.is_blackwell_gpu", lambda: True
         )
-        with pytest.raises(RuntimeError, match="NVFP4Config"):
+        with pytest.raises(RuntimeError, match="NVFP4TrainingConfig"):
             apply_nvfp4(_tiny_attn_model())
 
     def test_happy_path_quantizes(self, monkeypatch):
@@ -356,7 +375,7 @@ class TestApplyNvfp4:
         count = apply_nvfp4(model)
         assert count == 5  # 4 attention + 1 mlp linear
         assert record["model"] is model
-        assert type(record["config"]).__name__ == "_NVFP4Config"
+        assert type(record["config"]).__name__ == "_NVFP4TrainingConfig"
 
 
 # ---------------------------------------------------------------------------
@@ -411,6 +430,9 @@ class TestV028PrecisionWiring:
         monkeypatch.setattr(
             "soup_cli.utils.advanced_precision.apply_fp8_attention", _gate
         )
+        # quantization_aware: fp8 is set too, and a missing torchao now stops the
+        # run (#835 ruling); this test is about fp8_attention, so stub that half.
+        monkeypatch.setattr("soup_cli.utils.fp8.apply_fp8_training", lambda *_a, **_k: True)
         result = apply_v028_speed_memory(
             model=object(),
             tcfg=self._tcfg(quantization_aware="fp8", fp8_attention=True),
@@ -425,6 +447,9 @@ class TestV028PrecisionWiring:
             "soup_cli.utils.advanced_precision.apply_fp8_attention",
             lambda model, recipe="tensorwise": 4,
         )
+        # quantization_aware: fp8 is set too, and a missing torchao now stops the
+        # run (#835 ruling); this test is about fp8_attention, so stub that half.
+        monkeypatch.setattr("soup_cli.utils.fp8.apply_fp8_training", lambda *_a, **_k: True)
         result = apply_v028_speed_memory(
             model=object(),
             tcfg=self._tcfg(quantization_aware="fp8", fp8_attention=True),
@@ -1726,16 +1751,11 @@ class TestReviewFollowupsPrecision:
     def test_nvfp4_missing_quantize_friendly(self, monkeypatch):
         from soup_cli.utils.advanced_precision import apply_nvfp4
 
-        fake_q = types.ModuleType("torchao.quantization")
-
-        class _NVFP4Config:
-            pass
-
-        fake_q.NVFP4Config = _NVFP4Config  # no quantize_
-        fake_root = types.ModuleType("torchao")
-        fake_root.quantization = fake_q
-        monkeypatch.setitem(sys.modules, "torchao", fake_root)
-        monkeypatch.setitem(sys.modules, "torchao.quantization", fake_q)
+        record: dict = {}
+        _install_fake_torchao_quant(monkeypatch, record)
+        # the training config resolves, but quantize_ is gone
+        fake_q = sys.modules["torchao.quantization"]
+        monkeypatch.delattr(fake_q, "quantize_")
         monkeypatch.setattr(
             "soup_cli.utils.advanced_precision.is_blackwell_gpu", lambda: True
         )
@@ -1756,6 +1776,9 @@ class TestReviewFollowupsPrecision:
         # patch targets the defining module.
         monkeypatch.setattr(advanced_precision, "apply_fp8_attention", _gate)
         monkeypatch.setattr(advanced_precision, "apply_nvfp4", _gate)
+        # quantization_aware: fp8 is set too, and a missing torchao now stops the
+        # run (#835 ruling); this test is about fp8_attention, so stub that half.
+        monkeypatch.setattr("soup_cli.utils.fp8.apply_fp8_training", lambda *_a, **_k: True)
         cfg = load_config_from_string(
             "base: test-llama\n"
             "task: sft\n"
@@ -2104,7 +2127,7 @@ class TestReviewFollowupsAppleAdapter:
         with pytest.raises(ValueError, match="cap"):
             apple_adapter.convert_apple_adapter(plan)
 
-    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX symlink")
+    @pytest.mark.requires_symlink
     def test_symlinked_weights_rejected(self, tmp_path, monkeypatch):
         import os
 
@@ -2251,7 +2274,7 @@ class TestReviewFollowupsDelinearize:
         (src / "config.json").write_text(json.dumps(config), encoding="utf-8")
         assert read_num_experts(str(src)) == expected
 
-    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX symlink")
+    @pytest.mark.requires_symlink
     def test_symlinked_shard_rejected(self, tmp_path, monkeypatch):
         import os
 
@@ -2274,7 +2297,7 @@ class TestReviewFollowupsDelinearize:
         with pytest.raises(ValueError, match="symlink"):
             run_delinearize(plan, num_experts=4)
 
-    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX symlink")
+    @pytest.mark.requires_symlink
     def test_symlinked_config_json_skipped(self, tmp_path, monkeypatch):
         import os
 

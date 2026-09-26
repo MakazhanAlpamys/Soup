@@ -347,6 +347,18 @@ def consume_auth_ticket(ticket: str) -> bool:
     return False
 
 
+def _bearer_matches(header_value: str) -> bool:
+    """Verify Bearer token against configured token in constant time.
+
+    Encodes both values to UTF-8 bytes before comparing, because
+    secrets.compare_digest raises TypeError if passed non-ASCII str arguments
+    (e.g. when Starlette decodes header bytes >= 0x80 using Latin-1).
+    """
+    with _auth_token_lock:
+        expected = f"Bearer {_auth_token}".encode("utf-8")
+    return secrets.compare_digest(header_value.encode("utf-8"), expected)
+
+
 def _is_loopback(host: str) -> bool:
     """Return True if host is a loopback address or localhost."""
     if host.lower() == "localhost":
@@ -444,19 +456,15 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
     def _verify_token(request: Request):
         """Verify Bearer token on API endpoints."""
         auth = request.headers.get("Authorization", "")
-        with _auth_token_lock:
-            expected = f"Bearer {_auth_token}"
         # Constant-time compare — a plain != leaks the token byte-by-byte via
         # response timing when `soup ui --public` is exposed on a LAN.
-        if not secrets.compare_digest(auth, expected):
+        if not _bearer_matches(auth):
             raise HTTPException(status_code=401, detail="Unauthorized")
 
     def _verify_token_or_ticket(request: Request):
         """Verify Bearer token or consume a single-use ticket for SSE streaming."""
         auth = request.headers.get("Authorization", "")
-        with _auth_token_lock:
-            expected = f"Bearer {_auth_token}"
-        if auth and secrets.compare_digest(auth, expected):
+        if auth and _bearer_matches(auth):
             return
 
         ticket = request.query_params.get("ticket", "")

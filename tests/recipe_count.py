@@ -9,7 +9,7 @@ the catalog, in ``tests/test_recipe_count_is_synced.py``.
 
 from __future__ import annotations
 
-EXPECTED_RECIPE_COUNT = 175
+EXPECTED_RECIPE_COUNT = 174
 
 
 def recipe_count_hint(actual: int) -> str:
@@ -17,7 +17,8 @@ def recipe_count_hint(actual: int) -> str:
     return (
         f"RECIPES has {actual} entries but tests/recipe_count.py pins "
         f"EXPECTED_RECIPE_COUNT = {EXPECTED_RECIPE_COUNT}. If you added or removed a "
-        "recipe on purpose, set EXPECTED_RECIPE_COUNT to the new count and update the "
-        "documentation sites that tests/test_recipe_count_is_synced.py lists "
-        "(it names each file and line that still states the old number)."
+        "recipe on purpose, set EXPECTED_RECIPE_COUNT to the new count, then run "
+        "python scripts/sync_recipe_count.py to update the documentation sites "
+        "that state it (tests/test_recipe_count_is_synced.py lists them, and names "
+        "each file and line that still holds the old number)."
     )

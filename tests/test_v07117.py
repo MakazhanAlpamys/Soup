@@ -626,7 +626,7 @@ class TestMoleServeManifest:
         with pytest.raises(ValueError):
             load_mole_manifest("mole_out")
 
-    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX symlink only")
+    @pytest.mark.requires_symlink
     def test_load_symlink_rejected(self, tmp_path, monkeypatch):
         from soup_cli.utils.mole_routing import (
             load_mole_manifest,

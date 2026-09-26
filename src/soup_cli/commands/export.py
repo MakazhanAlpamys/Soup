@@ -1326,6 +1326,7 @@ def _export_torchao_cli(
         load_quant_config,
         validate_torchao_scheme,
     )
+    from soup_cli.utils.torchao_compat import TORCHAO_MIN_VERSION
 
     try:
         cfg_data = load_quant_config(quant_config)
@@ -1369,7 +1370,7 @@ def _export_torchao_cli(
         console.print(f"[red]TorchAO export failed: {exc}[/]")
         console.print(
             "Try: [bold]pip install torchao[/] "
-            "(NVFP4 requires torchao>=0.5)"
+            f"(Soup needs torchao>={TORCHAO_MIN_VERSION})"
         )
         raise typer.Exit(1)
     except (TypeError, ValueError, FileNotFoundError) as exc:

@@ -1,10 +1,21 @@
-"""Tests for Quantization-Aware Training (QAT) — config, validation, trainer integration."""
+"""Tests for Quantization-Aware Training (QAT) — config, validation, trainer integration.
+
+``quantization_aware: true`` (int8 QAT) is refused at config load since #1222.
+Where it was applied, the path behind it ran torchao's post-training int8
+weight-only quantization over the model, LoRA adapter included, and left
+nothing trainable; elsewhere it was not applied at all. The tests that used to
+show ``true`` loading now show it refused; the refusal itself, its message and
+the ``fp8`` / ``quest`` controls live in ``tests/test_issue1222_refuse_int8_qat.py``.
+"""
 
 from unittest.mock import MagicMock, patch
 
 import pytest
+from pydantic import ValidationError
+from typer.testing import CliRunner
 
 from soup_cli.config.schema import SoupConfig
+from tests.conftest import strip_ansi
 
 # ─── Config Tests ───────────────────────────────────────────────────────────
 
@@ -20,15 +31,6 @@ class TestQATConfig:
         )
         assert cfg.training.quantization_aware is False
 
-    def test_qat_enabled(self):
-        """quantization_aware: true should be valid."""
-        cfg = SoupConfig(
-            base="some-model",
-            data={"train": "./data.jsonl"},
-            training={"quantization_aware": True},
-        )
-        assert cfg.training.quantization_aware is True
-
     def test_qat_disabled_explicitly(self):
         """quantization_aware: false should be valid."""
         cfg = SoupConfig(
@@ -38,86 +40,43 @@ class TestQATConfig:
         )
         assert cfg.training.quantization_aware is False
 
-    def test_qat_with_4bit_quantization(self):
-        """QAT should work alongside 4bit quantization."""
-        cfg = SoupConfig(
-            base="some-model",
-            data={"train": "./data.jsonl"},
-            training={"quantization": "4bit", "quantization_aware": True},
-        )
-        assert cfg.training.quantization == "4bit"
-        assert cfg.training.quantization_aware is True
-
-    def test_qat_with_none_quantization(self):
-        """QAT should work with no quantization (full precision)."""
-        cfg = SoupConfig(
-            base="some-model",
-            data={"train": "./data.jsonl"},
-            training={"quantization": "none", "quantization_aware": True},
-        )
-        assert cfg.training.quantization == "none"
-        assert cfg.training.quantization_aware is True
-
     def test_qat_in_model_dump(self):
         """quantization_aware field should appear in model_dump output."""
         cfg = SoupConfig(
             base="some-model",
             data={"train": "./data.jsonl"},
-            training={"quantization_aware": True},
+            training={"quantization_aware": False},
         )
         dump = cfg.model_dump()
-        assert dump["training"]["quantization_aware"] is True
+        assert dump["training"]["quantization_aware"] is False
 
-    def test_qat_with_sft_task(self):
-        """QAT should work with SFT task."""
-        cfg = SoupConfig(
-            base="some-model",
-            task="sft",
-            data={"train": "./data.jsonl"},
-            training={"quantization_aware": True},
-        )
-        assert cfg.task == "sft"
-        assert cfg.training.quantization_aware is True
-
-    def test_qat_with_dpo_task(self):
-        """QAT should work with DPO task."""
-        cfg = SoupConfig(
-            base="some-model",
-            task="dpo",
-            data={"train": "./data.jsonl"},
-            training={"quantization_aware": True},
-        )
-        assert cfg.task == "dpo"
-        assert cfg.training.quantization_aware is True
-
-    def test_qat_with_grpo_task(self):
-        """QAT should work with GRPO task."""
-        cfg = SoupConfig(
-            base="some-model",
-            task="grpo",
-            data={"train": "./data.jsonl"},
-            training={"quantization_aware": True},
-        )
-        assert cfg.task == "grpo"
-        assert cfg.training.quantization_aware is True
-
-    def test_full_qat_config(self):
-        """Full config with QAT should validate."""
-        cfg = SoupConfig(
-            base="meta-llama/Llama-3.1-8B-Instruct",
-            task="sft",
-            data={"train": "./data.jsonl", "format": "alpaca", "max_length": 4096},
-            training={
-                "epochs": 3,
-                "lr": 2e-5,
-                "quantization": "4bit",
-                "quantization_aware": True,
-                "lora": {"r": 64, "alpha": 16},
-            },
-        )
-        assert cfg.training.quantization_aware is True
-        assert cfg.training.quantization == "4bit"
-        assert cfg.data.max_length == 4096
+    # Each case used to assert that `true` loaded next to these settings.
+    @pytest.mark.parametrize(
+        ("task", "data", "training"),
+        [
+            ("sft", {}, {}),
+            ("sft", {}, {"quantization": "4bit"}),
+            ("sft", {}, {"quantization": "none"}),
+            ("dpo", {}, {}),
+            ("grpo", {}, {}),
+            (
+                "sft",
+                {"format": "alpaca", "max_length": 4096},
+                {"epochs": 3, "lr": 2e-5, "quantization": "4bit",
+                 "lora": {"r": 64, "alpha": 16}},
+            ),
+        ],
+        ids=["default", "4bit", "none", "dpo", "grpo", "full-config"],
+    )
+    def test_qat_true_is_refused(self, task, data, training):
+        """#1222 — int8 QAT is not implemented, so `true` does not load."""
+        with pytest.raises(ValidationError, match="#1222"):
+            SoupConfig(
+                base="meta-llama/Llama-3.1-8B-Instruct",
+                task=task,
+                data={"train": "./data.jsonl", **data},
+                training={**training, "quantization_aware": True},
+            )
 
 
 # ─── Validation Tests ──────────────────────────────────────────────────────
@@ -209,7 +168,12 @@ class TestQATUtils:
         assert isinstance(result, bool)
 
     def test_prepare_model_for_qat_calls_quantize(self):
-        """prepare_model_for_qat should call torchao quantize_."""
+        """prepare_model_for_qat should call torchao quantize_.
+
+        The helper is kept, but since #1222 no config that loads can reach it:
+        ``tests/test_issue1222_refuse_int8_qat.py`` drives the SFT dispatcher
+        with every value that still loads and asserts it is never called.
+        """
         mock_model = MagicMock()
         mock_config = MagicMock()
         mock_quantize = MagicMock()
@@ -253,57 +217,36 @@ class TestQATUtils:
 # ─── Trainer Integration Tests ──────────────────────────────────────────────
 
 
+class TestTrainerConfigsWithQATTrueAreRefused:
+    """The SFT / DPO / GRPO wrappers used to be built from a `true` config and
+    then called the int8 helper. Since #1222 that config cannot be built."""
+
+    @pytest.mark.parametrize(
+        ("task", "max_length"), [("sft", 2048), ("dpo", 2048), ("grpo", 4096)]
+    )
+    def test_the_config_cannot_be_built(self, task, max_length):
+        with pytest.raises(ValidationError, match="#1222"):
+            SoupConfig(
+                base="some-model",
+                task=task,
+                data={"train": "./data.jsonl", "max_length": max_length},
+                training={
+                    "quantization_aware": True,
+                    "quantization": "4bit",
+                    "lora": {"r": 64, "alpha": 16},
+                },
+            )
+
+
 class TestSFTQATIntegration:
     """Test SFT trainer with QAT."""
 
-    def test_sft_wrapper_init_with_qat(self):
-        """SFTTrainerWrapper should accept QAT config."""
-        from soup_cli.trainer.sft import SFTTrainerWrapper
-
-        cfg = SoupConfig(
-            base="some-model",
-            data={"train": "./data.jsonl"},
-            training={"quantization_aware": True},
-        )
-        wrapper = SFTTrainerWrapper(cfg, device="cuda")
-        assert wrapper.config.training.quantization_aware is True
-
-    def test_sft_setup_transformers_calls_qat(self):
-        """_setup_transformers should call prepare_model_for_qat when QAT enabled."""
-        from soup_cli.trainer.sft import SFTTrainerWrapper
-
-        cfg = SoupConfig(
-            base="some-model",
-            data={"train": "./data.jsonl", "max_length": 2048},
-            training={
-                "quantization_aware": True,
-                "quantization": "4bit",
-                "lora": {"r": 64, "alpha": 16, "dropout": 0.05},
-            },
-        )
-        wrapper = SFTTrainerWrapper(cfg, device="cuda")
-
-        mock_model = MagicMock()
-        mock_tokenizer = MagicMock()
-        mock_tokenizer.pad_token = "pad"
-
-        # Simulate model/tokenizer already loaded (skip HF download)
-        wrapper.model = mock_model
-        wrapper.tokenizer = mock_tokenizer
-
-        # Only test that QAT gets called when quantization_aware is True
-        with patch("soup_cli.utils.qat.prepare_model_for_qat",
-                   return_value=mock_model) as mock_qat:
-            # The QAT call happens at the end of _setup_transformers,
-            # after LoRA. We test it directly since mocking the full
-            # transformers pipeline is fragile.
-            from soup_cli.utils.qat import prepare_model_for_qat
-            if cfg.training.quantization_aware:
-                wrapper.model = prepare_model_for_qat(wrapper.model)
-            mock_qat.assert_called_once_with(mock_model)
-
     def test_sft_setup_transformers_no_qat_when_disabled(self):
-        """_setup_transformers should not call QAT when disabled."""
+        """_setup_transformers' QAT step must not call the int8 helper when disabled.
+
+        Drives the dispatcher that step runs, ``_apply_quantization_aware``,
+        instead of re-implementing its guard in the test.
+        """
         from soup_cli.trainer.sft import SFTTrainerWrapper
 
         cfg = SoupConfig(
@@ -316,98 +259,13 @@ class TestSFTQATIntegration:
             },
         )
         wrapper = SFTTrainerWrapper(cfg, device="cuda")
+        wrapper.model = MagicMock()
 
-        # Test the QAT guard condition directly
-        with patch("soup_cli.utils.qat.prepare_model_for_qat") as mock_qat:
-            # Simulate what _setup_transformers does at the end
-            if cfg.training.quantization_aware:
-                from soup_cli.utils.qat import prepare_model_for_qat
-                wrapper.model = prepare_model_for_qat(wrapper.model)
-            mock_qat.assert_not_called()
-
-
-class TestDPOQATIntegration:
-    """Test DPO trainer with QAT."""
-
-    def test_dpo_wrapper_init_with_qat(self):
-        """DPOTrainerWrapper should accept QAT config."""
-        from soup_cli.trainer.dpo import DPOTrainerWrapper
-
-        cfg = SoupConfig(
-            base="some-model",
-            task="dpo",
-            data={"train": "./data.jsonl"},
-            training={"quantization_aware": True},
-        )
-        wrapper = DPOTrainerWrapper(cfg, device="cuda")
-        assert wrapper.config.training.quantization_aware is True
-
-    def test_dpo_setup_transformers_calls_qat(self):
-        """DPO trainer should call prepare_model_for_qat when QAT is enabled."""
-        from soup_cli.trainer.dpo import DPOTrainerWrapper
-
-        cfg = SoupConfig(
-            base="some-model",
-            task="dpo",
-            data={"train": "./data.jsonl", "max_length": 2048},
-            training={
-                "quantization_aware": True,
-                "quantization": "4bit",
-                "lora": {"r": 64, "alpha": 16},
-            },
-        )
-        wrapper = DPOTrainerWrapper(cfg, device="cuda")
-        mock_model = MagicMock()
-        wrapper.model = mock_model
-
-        with patch("soup_cli.utils.qat.prepare_model_for_qat",
-                   return_value=mock_model) as mock_qat:
-            if cfg.training.quantization_aware:
-                from soup_cli.utils.qat import prepare_model_for_qat
-                wrapper.model = prepare_model_for_qat(wrapper.model)
-            mock_qat.assert_called_once_with(mock_model)
-
-
-class TestGRPOQATIntegration:
-    """Test GRPO trainer with QAT."""
-
-    def test_grpo_wrapper_init_with_qat(self):
-        """GRPOTrainerWrapper should accept QAT config."""
-        from soup_cli.trainer.grpo import GRPOTrainerWrapper
-
-        cfg = SoupConfig(
-            base="some-model",
-            task="grpo",
-            data={"train": "./data.jsonl"},
-            training={"quantization_aware": True},
-        )
-        wrapper = GRPOTrainerWrapper(cfg, device="cuda")
-        assert wrapper.config.training.quantization_aware is True
-
-    def test_grpo_setup_transformers_calls_qat(self):
-        """GRPO trainer should call prepare_model_for_qat when QAT is enabled."""
-        from soup_cli.trainer.grpo import GRPOTrainerWrapper
-
-        cfg = SoupConfig(
-            base="some-model",
-            task="grpo",
-            data={"train": "./data.jsonl", "max_length": 4096},
-            training={
-                "quantization_aware": True,
-                "quantization": "4bit",
-                "lora": {"r": 64, "alpha": 16},
-            },
-        )
-        wrapper = GRPOTrainerWrapper(cfg, device="cuda")
-        mock_model = MagicMock()
-        wrapper.model = mock_model
-
-        with patch("soup_cli.utils.qat.prepare_model_for_qat",
-                   return_value=mock_model) as mock_qat:
-            if cfg.training.quantization_aware:
-                from soup_cli.utils.qat import prepare_model_for_qat
-                wrapper.model = prepare_model_for_qat(wrapper.model)
-            mock_qat.assert_called_once_with(mock_model)
+        with patch("soup_cli.utils.qat.prepare_model_for_qat") as mock_qat, patch(
+            "soup_cli.utils.v028_features.apply_v028_speed_memory"
+        ):
+            wrapper._apply_quantization_aware(cfg.training)
+        mock_qat.assert_not_called()
 
 
 # ─── Vision + QAT Tests ────────────────────────────────────────────────────
@@ -416,17 +274,16 @@ class TestGRPOQATIntegration:
 class TestVisionQATIntegration:
     """Test QAT with vision modality."""
 
-    def test_vision_qat_config(self):
-        """Vision + QAT config should validate."""
-        cfg = SoupConfig(
-            base="meta-llama/Llama-3.2-11B-Vision-Instruct",
-            task="sft",
-            modality="vision",
-            data={"train": "./data.jsonl", "format": "llava", "image_dir": "./images"},
-            training={"quantization_aware": True, "quantization": "4bit"},
-        )
-        assert cfg.modality == "vision"
-        assert cfg.training.quantization_aware is True
+    def test_vision_qat_true_is_refused(self):
+        """Vision used to accept `true` too; #1222 refuses it on every modality."""
+        with pytest.raises(ValidationError, match="#1222"):
+            SoupConfig(
+                base="meta-llama/Llama-3.2-11B-Vision-Instruct",
+                task="sft",
+                modality="vision",
+                data={"train": "./data.jsonl", "format": "llava", "image_dir": "./images"},
+                training={"quantization_aware": True, "quantization": "4bit"},
+            )
 
 
 # ─── Export Compatibility Tests ─────────────────────────────────────────────
@@ -449,32 +306,58 @@ class TestQATExportCompatibility:
 # ─── Train Command Tests ───────────────────────────────────────────────────
 
 
+def _setup_panel(tmp_path, monkeypatch, quantization_aware: str) -> str:
+    """Run ``soup train --dry-run`` on a small SFT config; return its plain output.
+
+    The label under test is the one ``commands/train.py`` renders, not a copy
+    of its logic. The panel prints before the QAT pre-flight, whose verdict
+    depends on torchao and on the card, so that verdict (the exit code) is not
+    asserted here -- only that the command did not crash.
+    """
+    from soup_cli.cli import app
+
+    monkeypatch.setenv("HF_HUB_OFFLINE", "1")
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "train.jsonl").write_text(
+        '{"messages": [{"role": "user", "content": "q"}, '
+        '{"role": "assistant", "content": "a"}]}\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "soup.yaml").write_text(
+        "base: some-model\ntask: sft\n"
+        "data:\n  train: train.jsonl\n  format: chatml\n"
+        f"training:\n  quantization: none\n  quantization_aware: {quantization_aware}\n"
+        "  lora: {r: 8, alpha: 16}\n"
+        "output: ./out\n",
+        encoding="utf-8",
+    )
+    result = CliRunner().invoke(app, ["train", "--config", "soup.yaml", "--dry-run"])
+    assert result.exception is None or isinstance(result.exception, SystemExit), (
+        result.output,
+        repr(result.exception),
+    )
+    output = " ".join(strip_ansi(result.output).split())
+    assert "Training Setup" in output, output
+    return output
+
+
 class TestTrainCommandQAT:
     """Test train command QAT display and validation."""
 
-    def test_qat_label_shown_in_panel(self):
-        """Train panel should show '+ QAT' when enabled."""
-        cfg = SoupConfig(
-            base="some-model",
-            data={"train": "./data.jsonl"},
-            training={"quantization": "4bit", "quantization_aware": True},
-        )
-        quant_label = cfg.training.quantization
-        if cfg.training.quantization_aware:
-            quant_label += " + QAT"
-        assert quant_label == "4bit + QAT"
+    def test_qat_label_shown_in_panel(self, tmp_path, monkeypatch):
+        """Train panel should show '+ QAT' when enabled.
 
-    def test_qat_label_not_shown_when_disabled(self):
+        `true` is refused at load (#1222), so `fp8` is the value that reaches
+        this label now; `quest` has a label of its own.
+        """
+        output = _setup_panel(tmp_path, monkeypatch, "fp8")
+        assert "Quant: none + QAT" in output, output
+
+    def test_qat_label_not_shown_when_disabled(self, tmp_path, monkeypatch):
         """Train panel should show plain quant when QAT disabled."""
-        cfg = SoupConfig(
-            base="some-model",
-            data={"train": "./data.jsonl"},
-            training={"quantization": "4bit", "quantization_aware": False},
-        )
-        quant_label = cfg.training.quantization
-        if cfg.training.quantization_aware:
-            quant_label += " + QAT"
-        assert quant_label == "4bit"
+        output = _setup_panel(tmp_path, monkeypatch, "false")
+        assert "Quant: none" in output, output
+        assert "+ QAT" not in output, output
 
     def test_qat_with_unsloth_validation_fails(self):
         """QAT + unsloth should produce validation errors."""

@@ -273,7 +273,13 @@ class ClassifierTrainerWrapper:
             )
 
             target_modules = resolve_lora_target_modules(
-                self.model, tcfg.lora.target_modules
+                self.model, tcfg.lora.target_modules, console
+            )
+            # #1151: moe_lora picks the expert-FFN targets; see sft.py.
+            from soup_cli.utils.moe import resolve_moe_lora_targets
+
+            target_modules = resolve_moe_lora_targets(
+                self.model, tcfg, target_modules, console
             )
             lora_config = build_lora_config(
                 tcfg.lora,
@@ -377,6 +383,10 @@ class ClassifierTrainerWrapper:
             from soup_cli.utils.deepspeed import attach_empty_param_group_guard
 
             attach_empty_param_group_guard(self.trainer)
+        # LoRA+ optimizer (#724/#745) — build and attach now that the trainer exists.
+        from soup_cli.utils.peft_wiring import attach_loraplus_optimizer
+
+        attach_loraplus_optimizer(self.trainer, tcfg)
         self._output_dir = str(output_dir)
         self._batch_size = batch_size
 

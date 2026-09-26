@@ -36,10 +36,13 @@ class TestTtsCodecPackage:
     def test_per_family_packages(self):
         from soup_cli.utils.tts import TTS_CODEC_PACKAGES, tts_codec_package
 
-        for fam in ("orpheus", "sesame_csm", "llasa", "spark", "oute"):
+        for fam in ("orpheus", "llasa", "spark", "oute"):
             assert tts_codec_package(fam) == TTS_CODEC_PACKAGES[fam]
         assert tts_codec_package("orpheus") == "snac"
+        assert tts_codec_package("llasa") == "torchaudio"
         assert tts_codec_package("spark") == "sparktts"
+        with pytest.raises(RuntimeError, match="no Soup-compatible"):
+            tts_codec_package("sesame_csm")
 
     def test_case_insensitive(self):
         from soup_cli.utils.tts import tts_codec_package
@@ -452,7 +455,7 @@ class TestExportBitnetGguf:
                 llama_cpp_dir="missing_llama",
             )
 
-    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX symlink")
+    @pytest.mark.requires_symlink
     def test_symlink_model_rejected(self, monkeypatch, tmp_path):
         import os
 
