@@ -462,7 +462,7 @@ training:
   packing: true  # Pack short samples together (faster training)
 ```
 
-Works with SFT and Pretrain tasks. Warning emitted if `max_length < 256`.
+Works with SFT and Pretrain tasks. Packed SFT keeps the assistant-only loss mask (`train_on_responses_only`, `train_on_messages_with_train_field`, `mask_history`, or a pre-tokenised `labels` column). Warning emitted if `max_length < 256`.
 
 
 ## Curriculum Learning

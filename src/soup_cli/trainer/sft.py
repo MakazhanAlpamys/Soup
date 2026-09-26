@@ -166,6 +166,20 @@ def _map_text_sft_rows(
     )
 
 
+def _ensure_assistant_masks(dataset: Any) -> Any:
+    """Ensure `assistant_masks` column exists alongside `labels` for TRL packing (#1236)."""
+    if dataset is None:
+        return None
+    cols = getattr(dataset, "column_names", ())
+    if "labels" in cols and "assistant_masks" not in cols:
+        return dataset.map(
+            lambda row: {
+                "assistant_masks": [1 if int(x) != -100 else 0 for x in row["labels"]]
+            }
+        )
+    return dataset
+
+
 def _validate_pretokenized_targets(dataset: Any, *, split: str, max_length: int) -> None:
     """Apply the same target invariant to trusted pre-tokenized datasets."""
     from soup_cli.data.loss_mask import (
@@ -884,6 +898,11 @@ class SFTTrainerWrapper(StreamingSetupMixin):
                     split="validation",
                     max_length=cfg.data.max_length,
                 )
+
+        # #1236 - Ensure assistant_masks exists alongside labels for TRL packing
+        train_ds = _ensure_assistant_masks(train_ds)
+        if eval_ds is not None:
+            eval_ds = _ensure_assistant_masks(eval_ds)
 
         # --- Output dir ---
         output_dir = Path(cfg.output)
