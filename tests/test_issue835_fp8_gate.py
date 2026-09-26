@@ -636,14 +636,18 @@ class TestSoupTrainReachesTheStop:
         assert "soup-cli[qat]" not in out
         assert "pip install torchao" not in out
 
-    def test_int8_qat_still_asks_for_torchao(self, tmp_path, monkeypatch):
-        """Control: ``quantization_aware: true`` is the int8 path and keeps its hint."""
+    def test_int8_qat_is_refused_before_either_torchao_hint(self, tmp_path, monkeypatch):
+        """Control: ``quantization_aware: true`` used to be the int8 path, keeping its
+        own "pip install torchao" hint beside FP8's ``soup-cli[qat]`` one. Since #1222
+        it is refused when the config loads, so it reaches neither pre-flight hint.
+        FP8's own hint stays pinned by the two tests above."""
         result, out = self._train(
             tmp_path, monkeypatch, quantization_aware=True, card_ok=True, torchao=False
         )
         assert result.exit_code == 1
-        assert "pip install torchao" in out
-        assert "soup-cli[qat]" not in out
+        assert "training.quantization_aware: true is refused (#1222)" in out
+        assert "pip install" not in out
+        assert "QAT error" not in out
 
     def test_fp8_with_card_and_torchao_passes_the_preflight(self, tmp_path, monkeypatch):
         """Control: the pre-flight is not refusing every FP8 config. A dry run, so
@@ -813,13 +817,29 @@ class TestTheDryRunNoteRound3:
         assert result.exit_code == 0, out
         assert "Note: this machine could not run it: ROWWISE REFUSED" in out
 
-    def test_an_int8_dry_run_prints_no_fp8_note(self, tmp_path, monkeypatch):
+    def test_an_int8_dry_run_is_refused_at_load_with_no_fp8_note(self, tmp_path, monkeypatch):
+        """``quantization_aware: true`` no longer reaches the note: the config is
+        refused when it loads (#1222)."""
         result, out = TestSoupTrainReachesTheStop()._train(
             tmp_path, monkeypatch, quantization_aware=True, card_ok=False, torchao=True,
             dry_run=True,
         )
 
+        assert result.exit_code == 1, out
+        assert "training.quantization_aware: true is refused (#1222)" in out
+        assert "Note:" not in out
+
+    def test_a_dry_run_without_fp8_prints_no_fp8_note(self, tmp_path, monkeypatch):
+        """What the int8 case above used to pin, on a config that still loads: the
+        card note is FP8's, so a dry run that asks for no FP8 prints none, even on
+        a card that could not run FP8."""
+        result, out = TestSoupTrainReachesTheStop()._train(
+            tmp_path, monkeypatch, quantization_aware=False, card_ok=False, torchao=True,
+            dry_run=True,
+        )
+
         assert result.exit_code == 0, out
+        assert "Config valid" in out
         assert "Note:" not in out
 
     def test_an_unsloth_dry_run_prints_only_the_refusal(self, tmp_path, monkeypatch):
