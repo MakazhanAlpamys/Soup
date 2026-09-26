@@ -811,7 +811,9 @@ class TestReviewFollowUps:
         return load_config_from_string(
             f"base: org/m\ntask: sft\nmodality: {modality}\n"
             f"data:\n  train: ./x.jsonl\n  format: {fmt}\n"
-            "training:\n  moe_lora: true\n"
+            # No moe_lora: #1179 refuses it on SFT vision/audio at load, and the
+            # modality gate under test does not read it.
+            "training:\n"
             "  lora:\n    r: 8\n    alpha: 16\n    dropout: 0.0\n"
             '    target_modules: ["q_proj"]\n'
         )
@@ -824,8 +826,8 @@ class TestReviewFollowUps:
         self, monkeypatch, modality, full_sequence
     ):
         """SFT's vision and audio branches call only ``resolve_lora_target_modules``
-        and ``build_lora_config``, so a ``moe_lora: true`` vision config must not be
-        reported through the MoE rescue the trainer never runs there."""
+        and ``build_lora_config``, so a vision or audio config must not be reported
+        through the MoE and ``target_parameters`` steps the trainer never runs there."""
         import torch
 
         import soup_cli.utils.moe as moe
@@ -1124,7 +1126,7 @@ class TestConfigNamesAreSafeToo:
         assert result.exit_code == 0, (result.output, result.exception)
         assert "adapted a vision tower: [bold]v.yaml" in " ".join(result.output.split())
 
-    def test_a_parse_error_prints_literally(self, tmp_path):
+    def test_a_parse_error_prints_literally(self, tmp_path, monkeypatch):
         """The parse-error line carries the file name and pydantic's text, which
         quotes the key: both are user-controlled."""
         from typer.testing import CliRunner
@@ -1137,7 +1139,10 @@ class TestConfigNamesAreSafeToo:
             'base: org/m\ntask: sft\ndata:\n  train: ./x.jsonl\n  format: alpaca\n"[/]x": 1\n',
             encoding="utf-8",
         )
-        result = CliRunner().invoke(app, ["recipes", "verify", "--config", str(path)])
+        # Bare name: on Windows the full path puts a "\\" before "[bold]", Rich reads
+        # "\\[" as an escaped bracket, and a raw print would pass (#1117 review).
+        monkeypatch.chdir(tmp_path)
+        result = CliRunner().invoke(app, ["recipes", "verify", "--config", path.name])
 
         assert result.exit_code == 3, (result.output, result.exception)
         out = " ".join(result.output.split())
@@ -1319,3 +1324,39 @@ class TestTheSkeletonKeepsEveryLayerKind:
         config = SimpleNamespace(num_hidden_layers=len(kinds), layer_types=kinds)
 
         assert shrink_for_preflight(config).num_hidden_layers == depth
+
+
+class TestTheLoadersWarningsLeaveJsonStdoutAlone:
+    def test_json_stdout_parses_when_the_loader_warns(self, tmp_path, monkeypatch):
+        """The config loader prints a deprecated value (#759) or a staged field (#808)
+        as a warning on stdout. Under --json that line came before the document."""
+        import importlib.metadata as _md
+        import json as _json
+
+        from transformers import LlamaConfig
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+        from tests.conftest import strip_ansi
+
+        tiny = LlamaConfig(
+            vocab_size=64, hidden_size=16, intermediate_size=32, num_hidden_layers=2,
+            num_attention_heads=2, num_key_value_heads=2,
+        )
+        monkeypatch.setattr("soup_cli.utils.attach_preflight.load_hf_config", lambda _b: tiny)
+        path = tmp_path / "soup.yaml"
+        path.write_text(
+            "base: org/m\ntask: sft\ndata:\n  train: ./x.jsonl\n  format: alpaca\n"
+            # soup autopilot wrote this line into every config it generated (#759).
+            "  remove_unused_columns: true\n"
+            "training:\n  lora:\n    r: 8\n    target_modules: [q_proj, v_proj]\n",
+            encoding="utf-8",
+        )
+        click_version = tuple(int(x) for x in _md.version("click").split(".")[:2])
+        runner = CliRunner(mix_stderr=False) if click_version < (8, 2) else CliRunner()
+        result = runner.invoke(app, ["recipes", "verify", "--config", str(path), "--json"])
+
+        assert result.exit_code == 0, (result.output, result.exception)
+        rows = _json.loads(result.stdout)
+        assert rows[0]["verdict"] == "attaches", rows[0]["detail"]
+        assert "remove_unused_columns" in " ".join(strip_ansi(result.stderr).split())

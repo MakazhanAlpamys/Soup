@@ -328,19 +328,18 @@ def trainer_lora_config(model: Any, cfg: Any, console: Any = None) -> tuple[Any,
     (``prepare_inputs_for_generation`` and friends), and the adapter injection is
     what is under test, not the head.
 
-    ``moe_lora`` is applied for every task that reaches this sequence. That is
-    exact for the shipped catalogue -- no recipe sets it on a task whose trainer
-    ignores it -- and #1148 wired six more trainers; ``classifier``, ``distill``
-    and ``unlearn`` read it once #1151 lands, and ``asr`` takes its own path
-    above. The one split by
+    ``moe_lora`` is applied for every task that reaches this sequence: #1148 and
+    #1179 wired every trainer that builds an adapter, and config load refuses it
+    where none is built. ``asr`` takes its own path above. The one split by
     modality is SFT's: its vision and audio branches (``_setup_vision_transformers``,
     ``_setup_audio_transformers``) call only ``resolve_lora_target_modules`` and
     ``build_lora_config``, so for those the MoE and ``target_parameters`` steps are
     skipped here too -- the same split :func:`loader_for` makes for the class.
-    The classifier family runs the full sequence here, while ``trainer/classifier.py``
-    calls the resolver and ``build_lora_config`` (plus the MoE step once #1151 lands)
-    without ``target_parameters``. No shipped config sets ``classifier_lora``, so no
-    verdict depends on the difference today.
+    ``classifier`` (with ``classifier_lora``), ``distill`` and ``unlearn`` run the
+    resolver, the MoE step and ``build_lora_config`` but never
+    ``resolve_lora_target_parameters``, which this sequence runs for them too. No
+    shipped config sets ``lora.target_parameters``, so no verdict depends on the
+    difference today.
     """
     from soup_cli.utils.moe import resolve_moe_lora_targets
     from soup_cli.utils.peft_wiring import (
