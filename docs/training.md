@@ -644,8 +644,11 @@ masking it out. Both are gated to the SFT-family of tasks.
 
 ## EBFT / GDPO Loss Variants
 
-Generalised DPO (`gdpo_variant: standard | length_normalized | margin`) is attached
-idempotently to the DPO trainer when the field is set on `TrainingConfig`:
+Generalised DPO (`gdpo_variant: standard | length_normalized | margin`) loads for
+`task: dpo` and `task: preference`, but on the trl versions Soup supports (0.29 and
+later) it is not applied: the run trains exactly as it would without the field, and
+nothing says so ([#1309](https://github.com/MakazhanAlpamys/Soup/issues/1309)).
+The config shape:
 
 ```yaml
 # DPO with GDPO length_normalized
@@ -1703,7 +1706,7 @@ The cross-validator rejects `task='distill'` without `teacher_model`, and reject
 
 ## EBFT + GDPO (BETA, v0.52.0)
 
-Generalized DPO lands as `training.gdpo_variant ∈ {standard, length_normalized, margin}` — gated to `task ∈ {dpo, preference}` and attached to the DPO trainer. Energy-Based Fine-Tuning (`training.ebft_variant ∈ {structured, strided}` + `training.ebft_temperature`) is refused at config load ([#1230](https://github.com/MakazhanAlpamys/Soup/issues/1230)): its term had no causal shift, so it rewarded copying the input, and shifted it would duplicate the cross-entropy. See [EBFT / GDPO Loss Variants](#ebft--gdpo-loss-variants).
+Generalized DPO lands as `training.gdpo_variant ∈ {standard, length_normalized, margin}` — gated to `task ∈ {dpo, preference}`; on trl 0.29 and later it is not applied ([#1309](https://github.com/MakazhanAlpamys/Soup/issues/1309)). Energy-Based Fine-Tuning (`training.ebft_variant ∈ {structured, strided}` + `training.ebft_temperature`) is refused at config load ([#1230](https://github.com/MakazhanAlpamys/Soup/issues/1230)): its term had no causal shift, so it rewarded copying the input, and shifted it would duplicate the cross-entropy. See [EBFT / GDPO Loss Variants](#ebft--gdpo-loss-variants).
 
 
 ## gpt-oss `reasoning_effort` + `train_on_eot` (v0.52.0)

@@ -291,7 +291,10 @@ def test_the_ebft_hook_is_a_no_op_for_every_config_that_loads(text):
 
 
 class TestGdpoIsUnchanged:
-    """GDPO shares ``utils/ebft_gdpo.py`` and none of it is refused."""
+    """GDPO shares ``utils/ebft_gdpo.py``; this change leaves its config
+    surface, gates and kernel as they were. These controls do not show that
+    GDPO reaches the real DPO trainer: on trl 0.29 it does not (#1309), and
+    the fix for #1309 owns these tests if it changes what loads."""
 
     @pytest.mark.parametrize("variant", GDPO_VARIANTS)
     def test_every_gdpo_variant_still_loads_on_dpo(self, variant):
@@ -368,8 +371,8 @@ class TestGdpoIsUnchanged:
     def test_the_gdpo_hook_still_installs_from_a_loaded_config(self, variant):
         """The hook's own behaviour, on a stub trainer that exposes
         ``dpo_loss``. trl 0.29's ``DPOTrainer`` has no ``dpo_loss``, so on the
-        real trainer the hook returns False today; that is pre-existing and
-        outside this change, which leaves GDPO exactly as it was."""
+        real trainer the hook returns False today (#1309); this change leaves
+        GDPO exactly as it was."""
         import torch
 
         from soup_cli.utils.ebft_gdpo import apply_gdpo_loss, attach_gdpo_compute_loss
