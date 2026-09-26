@@ -700,6 +700,10 @@ completions it trains on. The β that the reward-hack controller sets at runtime
 paper uses, cannot be configured yet
 ([#1247](https://github.com/MakazhanAlpamys/Soup/issues/1247)).
 
+With a non-zero `grpo_beta`, a variant run logs the same `kl` metric as trl's stock
+loss: the batch mean of that per-token estimate over the completion tokens (over the
+accepted tokens only, for `rft`), as `kl` in training and `eval_kl` in evaluation.
+
 The stability callback (EMA ref-model update, replay buffer, TIS alert counter)
 attaches automatically when any of `ref_model_ema_alpha` / `replay_buffer_size`
 / `tis_threshold` / etc. is set.

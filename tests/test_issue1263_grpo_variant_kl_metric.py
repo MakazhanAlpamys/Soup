@@ -144,3 +144,43 @@ class TestTheRealTrainer:
         assert len(kl_log) == 2
         assert kl_log[0] == pytest.approx(kl_log[1], rel=1e-5, abs=1e-8)
         assert kl_log[0] > 0.0, "the policy was moved off its reference, so kl is non-zero"
+
+
+class TestTheMetricFollowsTrlsPlumbing:
+    def test_an_eval_step_records_under_eval(self):
+        """trl files the metric under ``self._metrics[mode]``; ``log()`` prefixes eval keys."""
+        torch = _torch()
+        batch = _batch(torch)
+        trainer = _variant_trainer("dapo", logps=batch["logp_new"], beta=0.1)
+        trainer.model.training = False
+        trainer._compute_loss(None, _trainer_inputs(torch, batch))
+        expected = _metric("dapo", batch, beta=0.1).item()
+        assert trainer._metrics["eval"]["kl"] == [pytest.approx(expected, rel=1e-12)]
+        assert "kl" not in trainer._metrics["train"]
+
+    @pytest.mark.parametrize("variant", VARIANTS)
+    def test_the_tool_mask_is_part_of_the_mask(self, variant):
+        """trl's metric masks with ``completion_mask * tool_mask``, as the variant's loss does."""
+        torch = _torch()
+        batch = _batch(torch)
+        tool_mask = torch.tensor(
+            [[1, 1, 0, 1, 1], [1, 0, 1, 0, 0], [0, 1, 1, 0, 0]], dtype=batch["mask"].dtype
+        )
+        inputs = _trainer_inputs(torch, batch)
+        inputs["tool_mask"] = tool_mask
+        trainer = _variant_trainer(variant, logps=batch["logp_new"], beta=0.1)
+        trainer._compute_loss(None, inputs)
+        expected = _metric(variant, batch, beta=0.1, mask=batch["mask"] * tool_mask).item()
+        assert trainer._metrics["train"]["kl"] == [pytest.approx(expected, rel=1e-12)]
+        assert expected != pytest.approx(_metric(variant, batch, beta=0.1).item(), rel=1e-6)
+
+    def test_the_metric_reads_the_current_policy_not_the_rollout_one(self):
+        """With ``old_per_token_logps`` in the batch, the KL is still the current policy's."""
+        torch = _torch()
+        batch = _batch(torch)
+        inputs = _trainer_inputs(torch, batch)
+        inputs["old_per_token_logps"] = batch["logp_old"]
+        trainer = _variant_trainer("dapo", logps=batch["logp_new"], beta=0.1)
+        trainer._compute_loss(None, inputs)
+        expected = _metric("dapo", batch, beta=0.1).item()
+        assert trainer._metrics["train"]["kl"] == [pytest.approx(expected, rel=1e-12)]
