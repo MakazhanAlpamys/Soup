@@ -13,15 +13,17 @@ from __future__ import annotations
 import json
 import math
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, NoReturn, Optional
 
 import typer
 from rich.console import Console
 from rich.markup import escape
 from rich.table import Table
 
+from soup_cli.data.formats import detect_format
 from soup_cli.data.loader import load_raw_data
 from soup_cli.utils.canary import (
+    CANARY_FORMATS,
     _harden_permissions,
     build_canary_report,
     canary_report_to_dict,
@@ -67,16 +69,75 @@ def _guard_under_cwd(target: str, label: str) -> None:
         raise typer.Exit(1)
 
 
+# What ``-o`` may be: the loader reads a ``.json`` file as ONE array and
+# ``.jsonl`` line by line; any other suffix would not load back as written.
+_OUTPUT_SUFFIXES = (".jsonl", ".json")
+
+
+def _refuse(message: str) -> NoReturn:
+    console.print(f"[red]{escape(message)}[/]")
+    raise typer.Exit(1)
+
+
+def _resolve_format(rows: list, requested: str, path: str) -> str:
+    """The format the canaries are rendered in, or refuse (#1216).
+
+    A canary row the loader cannot convert is dropped before training, and
+    ``check`` then reports OK on secrets the model never saw. So the rows
+    are written in the format the file loads as, and a format ``check``
+    cannot score is refused rather than written.
+    """
+    supported = ", ".join(CANARY_FORMATS)
+    if requested != "auto" and requested not in CANARY_FORMATS:
+        _refuse(
+            f"canary insert cannot write '{requested}' rows. "
+            f"Supported: {supported}"
+        )
+    if not rows:
+        if requested == "auto":
+            _refuse(
+                f"{path} is empty, so its format cannot be detected; "
+                f"pass --format ({supported})"
+            )
+        return requested
+    try:
+        detected = detect_format(rows)
+    except ValueError as exc:
+        _refuse(f"{exc}. canary insert supports: {supported}")
+    if requested != "auto" and requested != detected:
+        # `data.format: auto` would read the file as `detected` and drop
+        # every canary rendered as `requested`.
+        _refuse(
+            f"--format {requested} was given, but {path} is '{detected}'; "
+            "canaries written in one format are dropped when the file loads "
+            "as the other"
+        )
+    if detected not in CANARY_FORMATS:
+        _refuse(
+            f"{path} is '{detected}', which canary insert cannot write. "
+            f"Supported: {supported}"
+        )
+    return detected
+
+
 @app.command()
 def insert(
     path: str = typer.Argument(..., help="Path to dataset file"),
-    output: str = typer.Option(..., "--output", "-o", help="Output JSONL"),
+    output: str = typer.Option(
+        ..., "--output", "-o",
+        help="Output file: .jsonl, or .json for a JSON array",
+    ),
     manifest: str = typer.Option(
         ..., "--manifest",
         help="Where to write the canary manifest (CONTAINS THE SECRETS)",
     ),
     count: int = typer.Option(16, "--count", "-k", help="Number of canaries"),
     seed: int = typer.Option(0, "--seed", help="Canary generation seed"),
+    data_format: str = typer.Option(
+        "auto", "--format",
+        help="Dataset format to write the canaries in: auto (detect), "
+        + ", ".join(CANARY_FORMATS),
+    ),
 ):
     """Insert K unique canaries into a dataset and record them."""
     file_path = Path(path)
@@ -85,29 +146,38 @@ def insert(
         raise typer.Exit(1)
     _guard_under_cwd(output, "Output")
     _guard_under_cwd(manifest, "Manifest")
+    suffix = Path(output).suffix.lower()
+    if suffix not in _OUTPUT_SUFFIXES:
+        _refuse(
+            f"--output must end in {' or '.join(_OUTPUT_SUFFIXES)}, "
+            f"got {output!r}"
+        )
 
     rows = load_raw_data(file_path)
+    fmt = _resolve_format(rows, data_format, path)
     try:
         canaries = generate_canaries(count=count, seed=seed)
     except (ValueError, TypeError) as exc:
         console.print(f"[red]{escape(str(exc))}[/]")
         raise typer.Exit(1)
 
-    mixed = list(rows) + canary_rows(canaries)
+    mixed = list(rows) + canary_rows(canaries, fmt)
     # Manifest FIRST. If the dataset were written first and the manifest
     # then failed (disk full, permissions), a canary-poisoned dataset would
     # survive on disk with nothing left to identify the secrets in it — a
     # user who missed the error and trained on it could never audit what
     # was inserted. Failing before the data is written leaves no artifact.
     try:
-        write_manifest(canaries, manifest)
+        write_manifest(canaries, manifest, fmt)
     except (ValueError, OSError) as exc:
         console.print(f"[red]{escape(str(exc))}[/]")
         raise typer.Exit(1)
     try:
-        atomic_write_text(
-            "\n".join(json.dumps(row) for row in mixed) + "\n", output
-        )
+        if suffix == ".json":
+            text = json.dumps(mixed, indent=2) + "\n"
+        else:
+            text = "\n".join(json.dumps(row) for row in mixed) + "\n"
+        atomic_write_text(text, output)
     except (ValueError, OSError) as exc:
         # The manifest now describes canaries that are in no dataset. Say so
         # rather than leaving a manifest that looks authoritative.
@@ -121,7 +191,7 @@ def insert(
         raise typer.Exit(1)
 
     console.print(
-        f"[green]Inserted {len(canaries)} canaries:[/] "
+        f"[green]Inserted {len(canaries)} {fmt} canaries:[/] "
         f"{len(rows)} -> {len(mixed)} rows\n"
         f"Output: [bold]{escape(output)}[/]\n"
         f"Manifest: [bold]{escape(manifest)}[/]"
