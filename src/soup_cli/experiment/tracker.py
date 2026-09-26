@@ -608,16 +608,21 @@ class ExperimentTracker:
         conn.commit()
 
     def get_eval_results(self, run_id: Optional[str] = None) -> list[dict]:
-        """Get eval results, optionally filtered by run_id."""
+        """Get eval results, optionally filtered by run_id, newest first.
+
+        Rows sharing a ``created_at`` fall back to insertion order (``rowid``),
+        so "newest" is deterministic rather than SQLite's unspecified order.
+        """
         conn = self._get_conn()
         if run_id:
             rows = conn.execute(
-                "SELECT * FROM eval_results WHERE run_id = ? ORDER BY created_at DESC",
+                "SELECT * FROM eval_results WHERE run_id = ? "
+                "ORDER BY created_at DESC, rowid DESC",
                 (run_id,),
             ).fetchall()
         else:
             rows = conn.execute(
-                "SELECT * FROM eval_results ORDER BY created_at DESC"
+                "SELECT * FROM eval_results ORDER BY created_at DESC, rowid DESC"
             ).fetchall()
         return [dict(row) for row in rows]
 
