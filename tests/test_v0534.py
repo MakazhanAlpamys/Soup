@@ -702,6 +702,7 @@ training:
 base: meta-llama/Llama-3.1-8B
 task: sft
 training:
+  quantization: none
   expand_layers: 4
   freeze_trainable_layers: 4
 """
