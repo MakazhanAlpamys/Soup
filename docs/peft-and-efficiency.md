@@ -80,16 +80,23 @@ verdict uses, not directly comparable to `soup eval` absolute numbers.
 
 ## LongLoRA Forward Override
 
-When `use_longlora: true` is set on an SFT config with a Llama / CodeLlama /
-Mistral / Mixtral / Qwen / Phi base, the trainer wraps the model in a
-`LongLoRAForwardOverride` context that monkey-patches every attention forward
-to apply the S² shifted-sparse shift (paper §3.2) — half the heads are rolled
-by `group_size // 2` along the sequence dim. Mixtral joined the allowlist in
-v0.71.16 (a bare `mistral` token never matched the MoE variant); its attention
-is the standard separate-QKV shell — the MoE lives in the MLP — so the same
-Q/K projection-shift path is reused. Restoration on context exit is idempotent
-and best-effort safe; FlashAttention v3 builds are rejected at the schema gate
-(the custom-mask kernels conflict).
+`training.use_longlora: true` is **refused at config load**
+([#1240](https://github.com/MakazhanAlpamys/Soup/issues/1240)). The override it
+installed was not S² shifted sparse attention. It rolled the query/key
+projection outputs of half the heads along the sequence with `torch.roll`,
+which wraps the last `group_size // 2` tokens around to the front, while
+attention stayed full causal. Earlier positions could attend to keys computed
+from the last tokens of the sequence, so future tokens leaked into the training
+loss, and no grouped attention ran, so it saved no memory or compute either. A
+config that set it never trained correctly.
+
+It stays refused until real S² attention exists: RoPE first, then shift q, k
+and v of half the heads, attend causally within each group, and roll the
+output back. Every spelling read as true (`yes`, `on`, `1` ...) is refused;
+remove the key or set it to `false`. To extend the context, set
+`training.rope_scaling_type` (see
+[Long Context](#long-context--yarn-llama-31-ntk-longlora)) and train plain
+LoRA.
 
 
 ## Multipack — FFD Bin-Packing Sampler
@@ -119,7 +126,7 @@ The `JinjaTemplateAnalyzer` (also v0.37.0) walks chat-template ASTs to discover 
 
 ## Long Context — YaRN, Llama 3.1 NTK, LongLoRA
 
-Soup ships five RoPE-scaling strategies plus a LongLoRA schema gate:
+Soup ships five RoPE-scaling strategies (LongLoRA is refused, see below):
 
 ```yaml
 # soup.yaml
@@ -143,7 +150,7 @@ training:
 
 RoPE scaling is applied before model construction for the Transformers text paths of `task: sft` and `task: pretrain`. Vision, audio, layer-streaming and Unsloth setup paths do not consume these fields, nor do other training tasks. Existing type-independent model parameters such as `rope_theta` are preserved; tunables belonging to a previous RoPE algorithm are removed when the type changes. Models such as Gemma 3 that use nested per-layer RoPE sections are refused rather than partially modified. `longrope` additionally requires a checkpoint that already ships its learned `short_factor` and `long_factor` vectors; Soup refuses to invent those model-specific values.
 
-**LongLoRA S².** `training.use_longlora: true` requires `task=sft`, `backend=transformers`, a base in the architecture allowlist (Llama / CodeLlama / Mistral / Mixtral / Qwen / Phi), and `use_ring_attention=false`. The schema also rejects the combo with FlashAttention v3 installed (the S² custom-mask kernel conflicts with FA-v3 native custom-mask). During SFT setup, Soup installs the shifted-sparse attention forward override on matching attention modules.
+**LongLoRA S².** `training.use_longlora: true` is refused at config load ([#1240](https://github.com/MakazhanAlpamys/Soup/issues/1240)): the override it installed leaked future tokens into earlier positions and applied no S² grouping (see [LongLoRA Forward Override](#longlora-forward-override)). Use one of the RoPE-scaling strategies above with plain LoRA instead.
 
 ```yaml
 # Llama 3.1 with NTK-aware scaling out to 128k

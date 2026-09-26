@@ -2243,6 +2243,8 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             # plain attention). Enter defensively: an install failure on the
             # current transformers degrades to plain attention with a warning
             # instead of crashing the run. Arch compat is already schema-gated.
+            # Unreachable: use_longlora: true is refused at config load until
+            # real S² attention exists (#1240).
             if getattr(tcfg, "use_longlora", False) and self.config.backend == "transformers":
                 from soup_cli.utils.longlora import apply_longlora_forward_override
 

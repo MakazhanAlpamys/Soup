@@ -226,19 +226,26 @@ class TestDynamicNTK:
 
 
 class TestLongLoraSchema:
+    """#1240 — ``use_longlora: true`` is refused at config load until real S²
+    attention exists, so every config below stops with that refusal. The gates
+    it used to reach (architecture allowlist, task, backend, ring attention)
+    stay in ``validate_longlora_compat`` and are tested directly in
+    ``TestLongLoraHelpers``."""
+
     def test_default_off(self):
         cfg = _load("base: meta-llama/Llama-3.1-8B\ntask: sft\n")
         assert cfg.training.use_longlora is False
 
-    def test_accept_on_llama_sft(self):
+    def test_refused_on_llama_sft(self):
+        # Accepted before #1240: the override it installed leaked future tokens.
         yaml_in = """
 base: meta-llama/Llama-3.1-8B
 task: sft
 training:
   use_longlora: true
 """
-        cfg = _load(yaml_in)
-        assert cfg.training.use_longlora is True
+        with pytest.raises((ValidationError, ValueError), match="#1240"):
+            _load(yaml_in)
 
     def test_reject_non_llama(self):
         # v0.53.4 #120 — allowlist now covers Mistral / Qwen / Phi too;
@@ -249,7 +256,7 @@ task: sft
 training:
   use_longlora: true
 """
-        with pytest.raises((ValidationError, ValueError), match="LongLoRA"):
+        with pytest.raises((ValidationError, ValueError), match="#1240"):
             _load(yaml_in)
 
     def test_reject_non_sft(self):
@@ -259,7 +266,7 @@ task: dpo
 training:
   use_longlora: true
 """
-        with pytest.raises((ValidationError, ValueError), match="sft"):
+        with pytest.raises((ValidationError, ValueError), match="#1240"):
             _load(yaml_in)
 
     def test_reject_mlx(self):
@@ -270,7 +277,7 @@ backend: mlx
 training:
   use_longlora: true
 """
-        with pytest.raises((ValidationError, ValueError), match="mlx"):
+        with pytest.raises((ValidationError, ValueError), match="#1240"):
             _load(yaml_in)
 
     def test_reject_with_ring_attention(self):
@@ -283,7 +290,7 @@ training:
   use_longlora: true
   use_ring_attention: true
 """
-        with pytest.raises((ValidationError, ValueError), match="ring|LongLoRA"):
+        with pytest.raises((ValidationError, ValueError), match="#1240"):
             _load(yaml_in)
 
 
