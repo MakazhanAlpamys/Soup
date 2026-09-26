@@ -1125,7 +1125,7 @@ class TestMigrateCLI:
             "--output", "soup.yaml",
             "--yes",
         ])
-        assert result.exit_code == 1
+        assert result.exit_code == 1, (result.output, repr(result.exception))
         assert "ebft" in _plain(result.output)
         assert not (tmp_path / "soup.yaml").exists()
 
@@ -1526,3 +1526,37 @@ class TestMigrateTDDGaps:
         assert any(
             "neftune" in w.lower() for w in result.get("_warnings", [])
         )
+
+
+def test_axolotl_refused_rl_is_printed_as_text(tmp_path, monkeypatch):
+    """The refused rl value comes from the user's YAML: Rich markup and control
+    bytes in it must reach the terminal as text, not as styling or escapes."""
+    monkeypatch.chdir(tmp_path)
+    cfg_file = tmp_path / "config.yaml"
+    cfg_file.write_text(
+        'base_model: m\nrl: "[bold]x[/bold]\\e]0;t\\a"\n', encoding="utf-8"
+    )
+    result = runner.invoke(
+        app, ["migrate", "--from", "axolotl", str(cfg_file), "--dry-run"]
+    )
+    assert result.exit_code == 1, (result.output, repr(result.exception))
+    assert "rl: [bold]x[/bold]" in _plain(result.output)
+    assert "\x1b]" not in result.output
+    assert "\x07" not in result.output
+
+
+@pytest.mark.parametrize("rl_value", ["ebft", "kto_pair"])
+def test_axolotl_unmapped_rl_names_value_and_supported_list(tmp_path, rl_value):
+    """Every rl value without a Soup task is refused, not only ebft, and the
+    message lists what is supported. It does not point at
+    training.ebft_variant, which is refused at config load (#1230)."""
+    from soup_cli.migrate.axolotl import migrate_axolotl
+
+    cfg_file = tmp_path / "config.yaml"
+    cfg_file.write_text(f"base_model: m\nrl: {rl_value}\n", encoding="utf-8")
+    with pytest.raises(ValueError) as excinfo:
+        migrate_axolotl(cfg_file)
+    message = str(excinfo.value)
+    assert f"rl: {rl_value}." in message
+    assert "dpo, gdpo, grpo, ipo, kto, orpo, simpo" in message
+    assert "ebft_variant" not in message

@@ -547,6 +547,8 @@ soup migrate --from llamafactory config.yaml --dry-run
 
 Automatically maps model, LoRA, training params, quantization, and task type. Warns about unsupported features.
 
+An axolotl `rl:` value with no Soup task (for example `rl: ebft`) stops the migration: `soup migrate` exits 1 and names the value instead of writing a `task: sft` config.
+
 
 ## Data Formats
 

@@ -70,9 +70,7 @@ def migrate_axolotl(config_path: Path) -> Dict[str, Any]:
             supported = ", ".join(sorted(_RL_MAP))
             raise ValueError(
                 f"No Soup task matches axolotl rl: {rl_type}. Supported rl "
-                f"values are {supported}. Soup's training.ebft_variant: "
-                "structured | strided on task: sft is a separate SFT loss "
-                "hook and does not reproduce this axolotl trainer."
+                f"values are {supported}."
             )
         task = _RL_MAP[rl_type]
     else:
