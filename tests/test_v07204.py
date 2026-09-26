@@ -26,6 +26,7 @@ from tests.conftest import cuda_available
 # fixtures (mirroring tests/test_v07200.py so the two cannot drift)
 # ==========================================================================
 
+
 def _torch_version():
     """Reported in the KTO xfail message: the failure it tolerates is a torch
     version property, so the version is the one datum that makes the record
@@ -397,6 +398,113 @@ def _build_streamed_wrapper(
 # exercises the streamed train() step belongs to _ALL_PREFERENCE.
 _REFERENCE_USING = ("dpo", "kto")
 _ALL_PREFERENCE = ("dpo", "orpo", "simpo", "kto")
+
+
+def test_real_setup_then_train_refuses_an_unconsumed_preference_probe(
+    tmp_path, monkeypatch
+):
+    from soup_cli.trainer.stream_setup import _ProbePlan
+
+    wrapper, _, _ = _build_streamed_wrapper(
+        tmp_path, monkeypatch, task="dpo", device="cpu"
+    )
+    wrapper._pending_stream_vram_probe = _ProbePlan(
+        task="dpo",
+        batch_size=1,
+        rows=2,
+        seq_len=64,
+        vocab_size=64,
+        predicted_bytes=100,
+        available_bytes=1_000,
+    )
+    with pytest.raises(RuntimeError, match="probe was not consumed"):
+        wrapper.train()
+
+
+@pytest.mark.parametrize("task", _ALL_PREFERENCE)
+def test_real_setup_dispatches_preference_probe_to_loss_instrument(
+    tmp_path, monkeypatch, task
+):
+    import torch
+    from accelerate.state import AcceleratorState
+
+    from soup_cli.trainer.stream_setup import StreamingSetupMixin, _ProbePlan
+    from soup_cli.utils.layer_stream_runtime import StepPeak
+
+    calls = {"loss": 0, "causal": 0}
+
+    def budget(self, cfg, tcfg, **_kwargs):
+        rows = int(tcfg.batch_size) * int(self._STREAM_ROWS_PER_EXAMPLE)
+        return [], _ProbePlan(
+            task=cfg.task,
+            batch_size=int(tcfg.batch_size),
+            rows=rows,
+            seq_len=64,
+            vocab_size=64,
+            predicted_bytes=100,
+            available_bytes=1_000,
+        )
+
+    def measure_loss(model, *, step, rows, seq_len, device):
+        calls["loss"] += 1
+        loss = step()
+        assert loss.requires_grad
+        loss.backward()
+        for parameter in model.parameters():
+            parameter.grad = None
+        return StepPeak(
+            peak_bytes=200,
+            reserved_bytes=220,
+            seconds=0.01,
+            rows=rows,
+            seq_len=seq_len,
+        )
+
+    def reject_causal(*_args, **_kwargs):
+        calls["causal"] += 1
+        raise AssertionError("preference setup used the causal-LM probe")
+
+    monkeypatch.setattr(StreamingSetupMixin, "_stream_budget_lines", budget)
+    monkeypatch.setattr(
+        "soup_cli.utils.layer_stream_runtime.measure_loss_step_peak_bytes",
+        measure_loss,
+    )
+    monkeypatch.setattr(
+        "soup_cli.utils.layer_stream_runtime.measure_step_peak_bytes",
+        reject_causal,
+    )
+
+    # TrainingArguments otherwise selects MPS independently of the wrapper's
+    # explicit CPU device, and Accelerate retains that choice process-wide.
+    # Keep this CPU contract isolated between parametrized task cases.
+    AcceleratorState._reset_state(reset_partial_state=True)
+    monkeypatch.setattr(torch.backends.mps, "is_available", lambda: False)
+    wrapper = None
+    try:
+        wrapper, _, _ = _build_streamed_wrapper(
+            tmp_path, monkeypatch, task=task, device="cpu"
+        )
+        assert calls == {"loss": 1, "causal": 0}
+        assert getattr(wrapper, "_pending_stream_vram_probe", None) is None
+
+        class TrainReachedError(RuntimeError):
+            pass
+
+        def train_reached(**_kwargs):
+            raise TrainReachedError
+
+        # Exercise the wrapper's real train entry point, including its
+        # fail-closed pending-probe check.  Stopping at the inner Trainer call
+        # keeps this dispatch test independent of Accelerate's host-device
+        # singleton (notably MPS on Apple Silicon); numerical train steps are
+        # covered by the dedicated tests below.
+        monkeypatch.setattr(wrapper.trainer, "train", train_reached)
+        with pytest.raises(TrainReachedError):
+            wrapper.train()
+    finally:
+        if wrapper is not None:
+            wrapper._close_stream_runtime()
+        AcceleratorState._reset_state(reset_partial_state=True)
 
 
 class TestStreamingTaskGate:

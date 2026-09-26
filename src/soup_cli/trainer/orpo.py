@@ -238,6 +238,9 @@ class ORPOTrainerWrapper(StreamingSetupMixin):
                     self.trainer.eval_dataset, **cap_kwargs
                 )
 
+        if tcfg.stream_layers:
+            self._run_pending_stream_vram_probe()
+
         # #359 - the same exposure #336 fixed in sft.py: with LoRA the
         # no-decay optimizer group is empty, DeepSpeed drops it, and the LR
         # scheduler keeps two base_lrs until torch's strict zip raises at the
@@ -377,6 +380,7 @@ class ORPOTrainerWrapper(StreamingSetupMixin):
         resume_from_checkpoint: Optional[str] = None,
     ) -> dict:
         """Run ORPO training and return results summary."""
+        self._assert_no_pending_stream_vram_probe()
         if self.trainer is None:
             raise RuntimeError(
                 "ORPOTrainerWrapper.train() called before setup(). "

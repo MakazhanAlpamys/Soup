@@ -1885,6 +1885,68 @@ def measure_step_peak_bytes(
     )
 
 
+def measure_loss_step_peak_bytes(
+    model: Any,
+    *,
+    step: Callable[[], Any],
+    rows: int,
+    seq_len: int,
+    device: str = "cuda",
+) -> Optional[StepPeak]:
+    """Measure one caller-supplied real loss step (#840).
+
+    Unlike measure_step_peak_bytes, this instrument does not invent a
+    causal-LM loss. The caller supplies a zero-argument callable that executes
+    the trainer's actual compute_loss path; reference forwards, selective
+    log-softmax and KTO's KL forward stay inside the measured interval.
+    """
+    if not str(device).startswith("cuda"):
+        return None
+    try:
+        import torch
+    except ImportError:
+        return None
+    if not torch.cuda.is_available():
+        return None
+    if rows < 1 or seq_len < 1:
+        raise ValueError(f"rows/seq_len must be >= 1; got {rows}/{seq_len}")
+    loss = None
+    started = time.perf_counter()
+    try:
+        torch.cuda.synchronize()
+        torch.cuda.reset_peak_memory_stats(device)
+        started = time.perf_counter()
+        loss = step()
+        if isinstance(loss, tuple):
+            loss = loss[0]
+        if not hasattr(loss, "backward"):
+            raise TypeError("preference VRAM probe compute_loss returned no differentiable loss")
+        if not bool(torch.isfinite(loss.detach()).all().item()):
+            raise FloatingPointError(
+                "preference VRAM probe compute_loss returned a non-finite loss"
+            )
+        loss.mean().backward()
+        torch.cuda.synchronize()
+        elapsed = time.perf_counter() - started
+        peak = int(torch.cuda.max_memory_allocated(device))
+        reserved = int(torch.cuda.max_memory_reserved(device))
+    except Exception as exc:
+        return _classify_probe_exception(
+            exc, rows=rows, seq_len=seq_len, seconds=time.perf_counter() - started
+        )
+    finally:
+        del loss
+        _zero_probe_grads(model)
+        torch.cuda.empty_cache()
+    return StepPeak(
+        peak_bytes=peak,
+        reserved_bytes=reserved,
+        seconds=elapsed,
+        rows=rows,
+        seq_len=seq_len,
+    )
+
+
 def _zero_probe_grads(model: Any) -> None:
     """Drop the gradients the probe's backward left on the adapter.
 

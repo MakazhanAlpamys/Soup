@@ -215,6 +215,9 @@ class KTOTrainerWrapper(StreamingSetupMixin):
             processing_class=self.tokenizer,
         )
 
+        if tcfg.stream_layers:
+            self._run_pending_stream_vram_probe()
+
         # #359 - the same exposure #336 fixed in sft.py: with LoRA the
         # no-decay optimizer group is empty, DeepSpeed drops it, and the LR
         # scheduler keeps two base_lrs until torch's strict zip raises at the
@@ -356,6 +359,7 @@ class KTOTrainerWrapper(StreamingSetupMixin):
         resume_from_checkpoint: Optional[str] = None,
     ) -> dict:
         """Run KTO training and return results summary."""
+        self._assert_no_pending_stream_vram_probe()
         if self.trainer is None:
             raise RuntimeError(
                 "KTOTrainerWrapper.train() called before setup(). "
