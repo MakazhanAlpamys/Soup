@@ -343,7 +343,7 @@ class TestShippedConfigs:
             load_config_from_string(recipe.yaml_str), name
 
     def test_the_moe_recipes_are_the_ones_this_issue_names(self):
-        """15, not the 8 the issue estimated: 8 dpo + 7 grpo."""
+        """17: 9 dpo + 8 grpo (including deepseek-v4-pro-dpo and deepseek-v4-pro-grpo)."""
         import yaml
 
         from soup_cli.recipes.catalog import RECIPES
@@ -354,7 +354,7 @@ class TestShippedConfigs:
             training = cfg.get("training") or {}
             if training.get("moe_lora") and cfg.get("task") in _MOE_TASKS:
                 tasks.append(cfg["task"])
-        assert sorted(tasks) == ["dpo"] * 8 + ["grpo"] * 7, sorted(tasks)
+        assert sorted(tasks) == ["dpo"] * 9 + ["grpo"] * 8, sorted(tasks)
 
 
 
