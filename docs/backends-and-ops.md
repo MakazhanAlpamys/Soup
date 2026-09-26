@@ -459,6 +459,11 @@ soup recipes search "reasoning"
 soup recipes search --size 7b
 soup recipes search "medical"
 soup recipes search "vision"
+
+# Check every shipped config can attach its LoRA adapter (no weights downloaded)
+soup recipes verify
+soup recipes verify --config soup.yaml
+soup recipes verify --json    # one row per config on stdout, for CI
 ```
 
 **What's covered:**
