@@ -5781,8 +5781,8 @@ class SoupConfig(BaseModel):
 
     @model_validator(mode="after")
     def _validate_embedding_contrastive_batch_size(self) -> "SoupConfig":
-        """#1234 — contrastive in-batch negatives need batch_size >= 2."""
-        if self.task == "embedding":
+        """#1234 - contrastive in-batch negatives need batch_size >= 2."""
+        if self.task == "embedding" and not self.training.stream_layers:
             tcfg = self.training
             loss = getattr(tcfg, "embedding_loss", "contrastive")
             bs = getattr(tcfg, "batch_size", "auto")
