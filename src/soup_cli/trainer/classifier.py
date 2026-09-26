@@ -383,6 +383,10 @@ class ClassifierTrainerWrapper:
             from soup_cli.utils.deepspeed import attach_empty_param_group_guard
 
             attach_empty_param_group_guard(self.trainer)
+        # LoRA+ optimizer (#724/#745) — build and attach now that the trainer exists.
+        from soup_cli.utils.peft_wiring import attach_loraplus_optimizer
+
+        attach_loraplus_optimizer(self.trainer, tcfg)
         self._output_dir = str(output_dir)
         self._batch_size = batch_size
 

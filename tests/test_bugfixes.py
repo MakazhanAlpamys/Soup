@@ -733,7 +733,11 @@ class TestGRPOCPUMinNewTokens:
 
         class FakeGRPOTrainer:
             def __init__(self, **kwargs):
-                pass
+                # A real trl.GRPOTrainer is a transformers.Trainer subclass and
+                # binds its model/args kwargs as self.model / self.args in
+                # __init__; the LoRA+ attach reads both, so the double must too.
+                self.model = kwargs.get("model")
+                self.args = kwargs.get("args")
 
         with mock_patch("soup_cli.trainer.grpo.GRPOTrainerWrapper._setup_transformers"), \
              mock_patch("trl.GRPOConfig", FakeGRPOConfig), \
@@ -782,7 +786,11 @@ class TestGRPOCPUMinNewTokens:
 
         class FakeGRPOTrainer:
             def __init__(self, **kwargs):
-                pass
+                # A real trl.GRPOTrainer is a transformers.Trainer subclass and
+                # binds its model/args kwargs as self.model / self.args in
+                # __init__; the LoRA+ attach reads both, so the double must too.
+                self.model = kwargs.get("model")
+                self.args = kwargs.get("args")
 
         with mock_patch("soup_cli.trainer.grpo.GRPOTrainerWrapper._setup_transformers"), \
              mock_patch("trl.GRPOConfig", FakeGRPOConfig), \

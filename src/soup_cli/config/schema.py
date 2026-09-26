@@ -6763,6 +6763,10 @@ class SoupConfig(BaseModel):
           footgun — mirrors v0.52.0 distill / classifier task-gate).
         - ``data.forget_set`` is present when ``task='unlearn'``.
         - Backend != mlx (live wiring deferred to v0.61.1).
+        - ``loraplus_lr_ratio`` is refused (#745): unlearn drives its own
+          ``torch.optim.AdamW`` loop, not a ``Trainer``, so there is nothing
+          for ``attach_loraplus_optimizer`` to attach to and LoRA+ would be
+          silently ignored. Every other PEFT-building task wires it.
         """
         tcfg = self.training
         method = tcfg.unlearn_method
@@ -6799,6 +6803,23 @@ class SoupConfig(BaseModel):
                 "dataset id pointing at rows to unlearn)."
             )
 
+        # LoRA+ is refused here rather than wired (#745). unlearn.py drives a
+        # self-contained torch.optim.AdamW loop, not a transformers Trainer, so
+        # there is no trainer.optimizer for attach_loraplus_optimizer to
+        # replace — LoRA+ would train the B matrices at the base rate the user
+        # did not ask for, silently. Every Trainer-based task wires LoRA+; this
+        # one names the incompatibility at parse (before sharding costs time)
+        # instead of ignoring it.
+        if tcfg.loraplus_lr_ratio is not None:
+            raise ValueError(
+                "Refused: training.loraplus_lr_ratio is not supported on "
+                "task='unlearn'. Unlearning runs its own optimizer loop, not a "
+                "Trainer, so the LoRA+ split learning rate (B at lr*ratio) "
+                "cannot be applied and would be silently ignored. Remove "
+                "training.loraplus_lr_ratio, or use a Trainer-based task "
+                "(sft/dpo/kto/orpo/simpo/...) to train with LoRA+."
+            )
+
         # Delegate backend gate to the pure helper so the runtime path
         # and schema-load path stay consistent.
         from soup_cli.utils.unlearning import validate_unlearn_compat
@@ -6808,6 +6829,76 @@ class SoupConfig(BaseModel):
         except ValueError as exc:
             raise ValueError(str(exc)) from exc
         return self
+
+    @model_validator(mode="after")
+    def _validate_loraplus_has_a_trainable_lora_b(self) -> "SoupConfig":
+        """#745: refuse ``loraplus_lr_ratio`` where no LoRA B matrix trains.
+
+        LoRA+ gives the LoRA B matrices ``lr * ratio``. On these tasks there is
+        no trainable B, so the ratio is either silently ignored or fails only
+        after the base model has loaded:
+
+        - ``prm`` is a full fine-tune with no adapter (``trainer/prm.py``).
+        - ``moe_lora_routing`` loads existing adapters frozen and trains only
+          the routing gate.
+        - ``classifier`` / ``reranker`` / ``cross_encoder`` without
+          ``classifier_lora``, and ``asr`` without ``asr_lora``, full fine-tune
+          by default; the adapter exists only when the flag is on and
+          ``lora.r > 0``.
+
+        - ``lora.use_vera`` on any task: VeRA's A/B projections are frozen and
+          shared, and it trains the ``vera_lambda_b`` / ``vera_lambda_d``
+          scaling vectors instead. peft's
+          ``create_loraplus_optimizer`` puts all of them in the ``lr * ratio``
+          groups and leaves group A empty, so every trainable tensor would run
+          at ``ratio`` times the learning rate.
+
+        ``unlearn`` is refused in :meth:`_validate_unlearn_compat` for a
+        different reason (it has an adapter but no ``Trainer`` optimizer).
+        """
+        tcfg = self.training
+        if tcfg.loraplus_lr_ratio is None:
+            return self
+        task = self.task
+        if getattr(tcfg.lora, "use_vera", False):
+            raise ValueError(
+                "Refused: training.loraplus_lr_ratio needs trainable LoRA A/B "
+                "matrices. lora.use_vera trains scaling vectors, not A/B "
+                "matrices, and peft's LoRA+ optimizer would put every one of "
+                "them in the lr * ratio groups, so the whole adapter would "
+                "train at ratio times the learning rate. Remove "
+                "training.loraplus_lr_ratio or set lora.use_vera: false."
+            )
+        if task == "prm":
+            reason = (
+                "task='prm' is a full fine-tune with no LoRA adapter, so there "
+                "are no LoRA B matrices to give the higher learning rate."
+            )
+        elif task == "moe_lora_routing":
+            reason = (
+                "task='moe_lora_routing' loads its adapters frozen and trains "
+                "only the routing gate, so no LoRA B matrix is trained."
+            )
+        elif task in ("classifier", "reranker", "cross_encoder") and not (
+            tcfg.classifier_lora and tcfg.lora.r > 0
+        ):
+            reason = (
+                f"task={task!r} full fine-tunes unless training.classifier_lora "
+                "is true with lora.r > 0, so there is no LoRA adapter here. Set "
+                "training.classifier_lora: true to train a LoRA adapter."
+            )
+        elif task == "asr" and not (tcfg.asr_lora and tcfg.lora.r > 0):
+            reason = (
+                "task='asr' full fine-tunes unless training.asr_lora is true "
+                "with lora.r > 0, so there is no LoRA adapter here. Set "
+                "training.asr_lora: true to train a LoRA adapter."
+            )
+        else:
+            return self
+        raise ValueError(
+            "Refused: training.loraplus_lr_ratio needs a trainable LoRA adapter. "
+            f"{reason} Remove training.loraplus_lr_ratio for this run."
+        )
 
     @model_validator(mode="after")
     def _validate_grace_codebook_compat(self) -> "SoupConfig":
