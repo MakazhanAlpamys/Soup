@@ -33,7 +33,7 @@ placeholder.
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, NamedTuple
 
 logger = logging.getLogger(__name__)
 
@@ -120,6 +120,148 @@ def _rebuild_quant_state(meta: dict[str, Any], tensors: list[Any]) -> Any:
         offset=parts.get("offset"),
         state2=state2,
     )
+
+
+class _ProjectionState(NamedTuple):
+    weight: Any
+    bias: Any
+    lora_a: Any
+    lora_b: Any
+    scaling: float
+    qmeta: dict[str, Any] | None
+    qparts: list[Any]
+    compute_dtype: Any
+
+
+def _projection_state(
+    proj: Any, x: Any, *, allow_unadapted: bool = False
+) -> _ProjectionState | None:
+    """Return one PEFT/base projection state or None when PEFT must run.
+
+    This is shared by the single, MLP and QKV kernels so the seven delegation
+    guards, streamed QuantState repair and bitsandbytes compute-dtype handling
+    cannot drift between patchers.
+    """
+    lora_a_map = getattr(proj, "lora_A", None)
+    if lora_a_map is not None and not _is_supported_lora_projection(proj):
+        return None
+    base = proj.get_base_layer() if hasattr(proj, "get_base_layer") else proj
+    if not hasattr(base, "weight"):
+        return None
+
+    adapter = None
+    if lora_a_map is None:
+        if not allow_unadapted:
+            return None
+    else:
+        if getattr(proj, "disable_adapters", False) or getattr(proj, "merged", False):
+            return None
+        active = getattr(proj, "active_adapters", None) or []
+        if len(active) != 1:
+            return None
+        adapter = active[0]
+        if adapter not in proj.lora_A:
+            if not allow_unadapted:
+                return None
+            adapter = None
+        else:
+            if adapter in getattr(proj, "lora_variant", {}):
+                return None
+            # Dropout changes the adapter computation and mask lifetime; the
+            # hand-written kernels model only the deterministic LoRA branch.
+            if float(getattr(proj.lora_dropout[adapter], "p", 0.0)) != 0.0:
+                return None
+            # Conv1D-style/transposed storage needs the PEFT fan-in/fan-out
+            # path rather than the Linear weight orientation used below.
+            if getattr(proj, "fan_in_fan_out", False):
+                return None
+            # ``lora_bias`` adds another trained term that these Functions do
+            # not accept or differentiate.
+            if getattr(proj.lora_B[adapter], "bias", None) is not None:
+                return None
+
+    weight = base.weight
+    qstate = getattr(weight, "quant_state", None)
+    if qstate is None and getattr(base, "quant_state", None) is not None:
+        # Streamed Params4bit views can temporarily carry the state on the
+        # module rather than on the view itself. Repair the same way as the
+        # single-projection path before any sibling reads it.
+        try:
+            weight.quant_state = base.quant_state
+        except AttributeError:
+            pass
+        qstate = getattr(weight, "quant_state", None) or base.quant_state
+
+    # An unadapted sibling may still be an 8-bit/custom projection. Without a
+    # 4-bit QuantState it is not a dense floating weight and cannot use F.linear.
+    if qstate is None and not weight.is_floating_point():
+        return None
+
+    compute_dtype = None
+    qmeta = None
+    qparts: list[Any] = []
+    if qstate is not None:
+        if not getattr(base, "compute_type_is_set", True) and hasattr(base, "set_compute_type"):
+            base.set_compute_type(x)
+            base.compute_type_is_set = True
+        compute_dtype = getattr(base, "compute_dtype", None)
+        qparts, qmeta = _quant_state_parts(qstate)
+        qmeta = dict(qmeta)
+        qmeta["_count"] = len(qparts)
+
+    if adapter is None:
+        lora_a = x.new_empty(0)
+        lora_b = x.new_empty(0)
+        scaling = 0.0
+    else:
+        lora_a = proj.lora_A[adapter].weight
+        lora_b = proj.lora_B[adapter].weight
+        scaling = float(proj.scaling[adapter])
+
+    return _ProjectionState(
+        weight,
+        getattr(base, "bias", None),
+        lora_a,
+        lora_b,
+        scaling,
+        qmeta,
+        qparts,
+        compute_dtype,
+    )
+
+
+def _supported_lora_projection_types() -> tuple[type, ...]:
+    """Return PEFT projection types whose weight contracts the kernels model."""
+    from peft.tuners.lora import Linear as LoraLinear
+
+    supported: tuple[type, ...] = (LoraLinear,)
+    try:
+        from peft.tuners.lora import bnb as lora_bnb
+
+        supported = (LoraLinear, lora_bnb.Linear4bit)
+    except Exception:  # noqa: BLE001 - bitsandbytes absence is a normal install
+        pass
+    return supported
+
+
+def _is_supported_lora_projection(proj: Any) -> bool:
+    """Exclude PEFT 8-bit/custom layers whose storage math differs."""
+    return isinstance(proj, _supported_lora_projection_types())
+
+
+def _dense_weight(
+    weight: Any,
+    qmeta: dict[str, Any] | None,
+    qparts: list[Any],
+    dtype: Any,
+) -> Any:
+    """Return a dense view for one base projection without retaining it."""
+    if qmeta is None:
+        return _as_dtype(weight, dtype)
+    from bitsandbytes.functional import dequantize_4bit
+
+    state = _rebuild_quant_state(qmeta, qparts)
+    return dequantize_4bit(weight, state).to(dtype)
 
 
 def _single_projection_function() -> Any:
@@ -238,68 +380,26 @@ def _make_patched_forward(original_forward: Any) -> Any:
 
     def _fast_lora_single_forward(self, x, *args, **kwargs):
         if args or kwargs:
-            # Mixed-batch ``adapter_names`` and variant kwargs are peft's.
             return original_forward(x, *args, **kwargs)
-        if getattr(self, "disable_adapters", False) or getattr(self, "merged", False):
-            return original_forward(x)
-        active = getattr(self, "active_adapters", None) or []
-        if len(active) != 1:
-            return original_forward(x)
-        adapter = active[0]
-        if adapter not in self.lora_A:
-            return original_forward(x)
-        if adapter in getattr(self, "lora_variant", {}):
-            return original_forward(x)
-        dropout = self.lora_dropout[adapter]
-        if float(getattr(dropout, "p", 0.0)) != 0.0:
-            # The trainer will refuse dropout alongside this flag once the
-            # follow-up in #839 lands; until then a direct caller gets peft's
-            # own path rather than silently unregularised math.
+        state = _projection_state(self, x)
+        if state is None:
             return original_forward(x)
 
-        # ``fan_in_fan_out`` means the base weight is stored transposed (GPT-2's
-        # ``Conv1D``), so ``dY @ W`` and the LoRA term are both computed against
-        # the wrong layout: on a square ``attn.c_proj`` that is silently wrong
-        # and on a non-square ``mlp.c_proj`` it raises. #839 scopes Conv1D out,
-        # so hand it back to peft.
-        #
-        # This is the only structural exclusion the kernel needs. peft decides
-        # the flag from the base type and overrides a caller who sets it the
-        # other way (its own warning names the module), so on a matched target
-        # ``fan_in_fan_out`` is True exactly for a ``Conv1D`` base. A separate
-        # "is the base nn.Linear" check would be unreachable.
-        if getattr(self, "fan_in_fan_out", False):
-            return original_forward(x)
-        # ``lora_bias=True`` adds a bias on ``lora_B`` that the kernel does not
-        # carry; dropping it would silently change the output.
-        if getattr(self.lora_B[adapter], "bias", None) is not None:
-            return original_forward(x)
+        input_dtype = x.dtype
+        work_x = x
+        if state.compute_dtype is not None and work_x.dtype != state.compute_dtype:
+            work_x = work_x.to(state.compute_dtype)
 
-        lora_a = self.lora_A[adapter].weight
-        lora_b = self.lora_B[adapter].weight
-        scaling = float(self.scaling[adapter])
-        base = self.get_base_layer()
-
-        weight = base.weight
-        quant_state = getattr(weight, "quant_state", None)
-        if quant_state is None and getattr(base, "quant_state", None) is not None:
-            # Streamed layers rebuild ``Params4bit`` views; the state can live
-            # on the module until the next ``.cuda()`` move (dequant precedent).
-            weight.quant_state = base.quant_state
-            quant_state = weight.quant_state
-
-        bias = getattr(base, "bias", None)
-        if quant_state is None:
-            return fast.apply(x, weight, bias, lora_a, lora_b, scaling, None)
-
-        if not getattr(base, "compute_type_is_set", True):
-            base.set_compute_type(x)
-            base.compute_type_is_set = True
-        inp_dtype = x.dtype
-        if getattr(base, "compute_dtype", None) is not None:
-            x = x.to(base.compute_dtype)
-        out = fast.apply(x, weight, bias, lora_a, lora_b, scaling, quant_state)
-        return out.to(inp_dtype)
+        out = fast.apply(
+            work_x,
+            state.weight,
+            state.bias,
+            state.lora_a,
+            state.lora_b,
+            state.scaling,
+            None if state.qmeta is None else _rebuild_quant_state(state.qmeta, state.qparts),
+        )
+        return out if work_x is x else out.to(input_dtype)
 
     return _fast_lora_single_forward
 
@@ -313,15 +413,7 @@ def patch_fast_lora_single_projection(model: Any) -> int:
     """
     import types
 
-    from peft.tuners.lora import Linear as LoraLinear
-
-    types_to_match: tuple[type, ...] = (LoraLinear,)
-    try:
-        from peft.tuners.lora import bnb as lora_bnb
-
-        types_to_match = (LoraLinear, lora_bnb.Linear4bit)
-    except Exception:  # noqa: BLE001 - bitsandbytes absence is a normal install
-        pass
+    types_to_match = _supported_lora_projection_types()
 
     targets = []
     for child in model.modules():
