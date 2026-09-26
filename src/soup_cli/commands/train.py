@@ -15,7 +15,7 @@ from rich.markup import escape as markup_escape
 from rich.panel import Panel
 
 from soup_cli.config.loader import load_config
-from soup_cli.data.loader import load_dataset
+from soup_cli.data.loader import load_dataset, task_preserves_source_columns
 from soup_cli.monitoring.display import TrainingDisplay
 from soup_cli.utils.gpu import detect_device, get_gpu_info, resolve_quantization
 
@@ -1452,8 +1452,21 @@ def train(
         console.print("[yellow]Dry run - validating data...[/]")
         dataset = load_dataset(
             cfg.data,
-            preserve_source_columns=cfg.task == "grpo",
+            preserve_source_columns=task_preserves_source_columns(cfg.task),
         )
+        if cfg.task in ("classifier", "reranker", "cross_encoder"):
+            from soup_cli.trainer.classifier import validate_classification_dataset
+
+            try:
+                validate_classification_dataset(cfg, dataset)
+            except (ValueError, TypeError) as exc:
+                from rich.markup import escape as _esc
+
+                console.print(
+                    f"[red]Error validating {cfg.task} dataset:[/] {_esc(str(exc))}"
+                )
+                raise typer.Exit(1) from exc
+
         console.print(f"[green]Data OK:[/] {len(dataset['train'])} train samples")
         if "val" in dataset:
             console.print(f"[green]Val:[/] {len(dataset['val'])} samples")
@@ -1464,8 +1477,21 @@ def train(
     console.print("[dim]Loading dataset...[/]")
     dataset = load_dataset(
         cfg.data,
-        preserve_source_columns=cfg.task == "grpo",
+        preserve_source_columns=task_preserves_source_columns(cfg.task),
     )
+    if cfg.task in ("classifier", "reranker", "cross_encoder"):
+        from soup_cli.trainer.classifier import validate_classification_dataset
+
+        try:
+            validate_classification_dataset(cfg, dataset)
+        except (ValueError, TypeError) as exc:
+            from rich.markup import escape as _esc
+
+            console.print(
+                f"[red]Error validating {cfg.task} dataset:[/] {_esc(str(exc))}"
+            )
+            raise typer.Exit(1) from exc
+
     console.print(
         f"[green]Loaded:[/] {_train_sample_count(cfg.data, dataset)} train samples"
     )

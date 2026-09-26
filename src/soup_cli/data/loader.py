@@ -153,6 +153,23 @@ def _load_txt(path: Path) -> list[dict]:
     return [{"text": line} for line in lines]
 
 
+# Tasks that require source columns preserved across dataset format normalisation (#1219).
+# GRPO uses raw columns for custom reward functions (answer, expected, etc.).
+# The classifier family (classifier, reranker, cross_encoder) uses source columns
+# to retain label, paired text (text_a, text_b, question, answer), and metadata.
+PRESERVE_SOURCE_TASKS: frozenset[str] = frozenset({
+    "grpo",
+    "classifier",
+    "reranker",
+    "cross_encoder",
+})
+
+
+def task_preserves_source_columns(task: str) -> bool:
+    """Return whether task requires source dataset columns to be preserved."""
+    return task in PRESERVE_SOURCE_TASKS
+
+
 def _format_rows(
     raw_data: list[dict],
     fmt: str,

@@ -174,6 +174,56 @@ def _label_index(
     )
 
 
+def validate_classification_dataset(cfg: SoupConfig, dataset: dict) -> None:
+    """Validate that classification dataset splits have required fields and valid labels (#1219).
+
+    Checked at load and on --dry-run so missing or invalid labels fail before
+    model weights are initialized, reporting the exact row index.
+    """
+    if cfg.task not in ("classifier", "reranker", "cross_encoder"):
+        return
+
+    is_paired = (cfg.task == "cross_encoder")
+    tcfg = cfg.training
+    if tcfg.num_labels is None:
+        raise ValueError(
+            f"task={cfg.task!r} requires training.num_labels to be set"
+        )
+    num_labels = int(tcfg.num_labels)
+    multi_label = (tcfg.classifier_kind == "multi_label")
+    label_names = (
+        list(tcfg.label_names) if tcfg.label_names is not None else None
+    )
+
+    for split in ("train", "val"):
+        if split not in dataset or not dataset[split]:
+            continue
+        for idx, row in enumerate(dataset[split]):
+            if not isinstance(row, dict):
+                raise TypeError(
+                    f"{split} row {idx}: expected dict row, got {type(row).__name__}"
+                )
+            if is_paired:
+                try:
+                    _row_to_pair(row)
+                except Exception as exc:
+                    raise ValueError(f"{split} row {idx}: {exc}") from exc
+            else:
+                try:
+                    _row_to_text(row)
+                except Exception as exc:
+                    raise ValueError(f"{split} row {idx}: {exc}") from exc
+
+            if "label" not in row or row["label"] is None:
+                raise ValueError(
+                    f"{split} row {idx}: missing required 'label' field for task '{cfg.task}'"
+                )
+            try:
+                _normalise_label(row["label"], label_names, num_labels, multi_label)
+            except Exception as exc:
+                raise ValueError(f"{split} row {idx}: {exc}") from exc
+
+
 class ClassifierTrainerWrapper:
     """High-level wrapper for classifier / reranker / cross_encoder training."""
 
@@ -237,6 +287,7 @@ class ClassifierTrainerWrapper:
         problem_type = (
             "multi_label_classification" if multi_label else "single_label_classification"
         )
+        validate_classification_dataset(cfg, dataset)
 
         console.print(f"[dim]Loading tokenizer: {cfg.base}[/]")
         self.tokenizer = AutoTokenizer.from_pretrained(
@@ -252,6 +303,12 @@ class ClassifierTrainerWrapper:
             problem_type=problem_type,
             trust_remote_code=self._trust_remote_code,
         )
+        label_names = (
+            list(tcfg.label_names) if tcfg.label_names is not None else None
+        )
+        if label_names is not None:
+            self.model.config.id2label = {i: name for i, name in enumerate(label_names)}
+            self.model.config.label2id = {name: i for i, name in enumerate(label_names)}
 
         # v0.71.12 #146 — opt-in LoRA / PEFT path. Default-off
         # (``classifier_lora=False``) preserves the v0.53.2 full-finetune
@@ -326,6 +383,8 @@ class ClassifierTrainerWrapper:
         if "val" in dataset and dataset["val"]:
             raw_val = Dataset.from_list(dataset["val"])
             eval_ds = raw_val.map(encode, remove_columns=raw_val.column_names)
+        self.train_dataset = train_ds
+        self.eval_dataset = eval_ds
 
         output_dir = Path(cfg.output)
         if cfg.experiment_name:
