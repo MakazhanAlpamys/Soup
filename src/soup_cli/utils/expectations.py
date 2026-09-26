@@ -149,50 +149,265 @@ def _check_token_bound(value: object, *, field: str) -> int:
 
 
 # -----------------------------------------------------------------------------
-# Row helpers
+# Row helpers & Format Extraction Rules
 # -----------------------------------------------------------------------------
+
+_ASSISTANT_ROLES = frozenset({"assistant", "gpt", "chatgpt", "bot", "model"})
+
+FORMAT_EXTRACTION_RULES: Mapping[str, Mapping[str, Tuple[str, ...]]] = {
+    "alpaca": {
+        "text_fields": ("instruction", "input", "output", "system"),
+        "assistant_fields": ("output", "response"),
+    },
+    "sharegpt": {
+        "text_fields": ("conversations",),
+        "assistant_fields": ("conversations",),
+    },
+    "chatml": {
+        "text_fields": ("messages", "tools", "tool_calls"),
+        "assistant_fields": ("messages", "tool_calls"),
+    },
+    "dpo": {
+        "text_fields": ("prompt", "chosen", "rejected"),
+        "assistant_fields": ("chosen",),
+    },
+    "kto": {
+        "text_fields": ("prompt", "completion"),
+        "assistant_fields": ("completion",),
+    },
+    "llava": {
+        "text_fields": ("conversations",),
+        "assistant_fields": ("conversations",),
+    },
+    "sharegpt4v": {
+        "text_fields": ("conversations",),
+        "assistant_fields": ("conversations",),
+    },
+    "embedding": {
+        "text_fields": ("anchor", "positive", "negative"),
+        "assistant_fields": (),
+    },
+    "audio": {
+        "text_fields": ("messages",),
+        "assistant_fields": ("messages",),
+    },
+    "asr": {
+        "text_fields": ("text",),
+        "assistant_fields": ("text",),
+    },
+    "plaintext": {
+        "text_fields": ("text",),
+        "assistant_fields": ("text",),
+    },
+    "tool-calling": {
+        "text_fields": ("messages", "tools", "tool_calls"),
+        "assistant_fields": ("messages", "tool_calls"),
+    },
+}
+
+
+def _extract_content_parts(content: Any) -> List[str]:
+    """Extract strings from string or multimodal content parts list."""
+    import json
+
+    parts: List[str] = []
+    if isinstance(content, str):
+        if content:
+            parts.append(content)
+    elif isinstance(content, list):
+        for part in content:
+            if isinstance(part, str):
+                if part:
+                    parts.append(part)
+            elif isinstance(part, Mapping):
+                val = part.get("text")
+                if isinstance(val, str) and val:
+                    parts.append(val)
+                args = part.get("arguments") or part.get("input")
+                if isinstance(args, str) and args:
+                    parts.append(args)
+                elif isinstance(args, (dict, list)):
+                    parts.append(json.dumps(args))
+    return parts
+
+
+def _extract_tool_calls_text(tool_calls: Any) -> List[str]:
+    """Extract function call arguments and names from tool_calls list."""
+    import json
+
+    parts: List[str] = []
+    if isinstance(tool_calls, list):
+        for call in tool_calls:
+            if isinstance(call, Mapping):
+                func = call.get("function")
+                if isinstance(func, Mapping):
+                    args = func.get("arguments")
+                    if isinstance(args, str) and args:
+                        parts.append(args)
+                    elif isinstance(args, (dict, list)):
+                        parts.append(json.dumps(args))
+                args = call.get("arguments")
+                if isinstance(args, str) and args:
+                    parts.append(args)
+                elif isinstance(args, (dict, list)):
+                    parts.append(json.dumps(args))
+    return parts
+
+
+def _extract_messages_text(messages: Any, *, assistant_only: bool = False) -> List[str]:
+    """Extract text from a messages list (chatml, audio, tool-calling, multimodal)."""
+    parts: List[str] = []
+    if not isinstance(messages, list):
+        return parts
+    for msg in messages:
+        if not isinstance(msg, Mapping):
+            continue
+        role = msg.get("role")
+        if assistant_only and role not in _ASSISTANT_ROLES:
+            continue
+        content = msg.get("content")
+        parts.extend(_extract_content_parts(content))
+        if "tool_calls" in msg:
+            parts.extend(_extract_tool_calls_text(msg.get("tool_calls")))
+    return parts
+
+
+def _extract_conversations_text(
+    conversations: Any, *, assistant_only: bool = False
+) -> List[str]:
+    """Extract text from a conversations list (sharegpt, llava, sharegpt4v)."""
+    parts: List[str] = []
+    if not isinstance(conversations, list):
+        return parts
+    for turn in conversations:
+        if not isinstance(turn, Mapping):
+            continue
+        speaker = turn.get("from")
+        if assistant_only and speaker not in _ASSISTANT_ROLES:
+            continue
+        val = turn.get("value")
+        parts.extend(_extract_content_parts(val))
+    return parts
+
+
+def _extract_field_text_or_messages(
+    val: Any, *, assistant_only: bool = False
+) -> List[str]:
+    """Extract text from a field that may be str or list of messages/strings."""
+    if isinstance(val, str):
+        return [val] if val else []
+    if isinstance(val, list):
+        msg_parts = _extract_messages_text(val, assistant_only=assistant_only)
+        if msg_parts:
+            return msg_parts
+        str_parts: List[str] = []
+        for item in val:
+            if isinstance(item, str) and item:
+                str_parts.append(item)
+            elif isinstance(item, Mapping):
+                for k in ("content", "text", "value"):
+                    v = item.get(k)
+                    if isinstance(v, str) and v:
+                        str_parts.append(v)
+        return str_parts
+    return []
 
 
 def _extract_row_text(row: Mapping[str, Any]) -> str:
-    """Best-effort text extraction. Mirrors v0.55.0 / v0.56.0 row-text policy.
-
-    Combines all text-shaped fields so PII / refusal scans never miss content
-    hiding in either ``text``/``content``/``output``/``response`` or inside a
-    ``messages`` chat structure.
-    """
+    """Extract all text across all format fields (PII / length scans)."""
     parts: List[str] = []
-    for key in ("text", "content", "output", "response", "prompt", "instruction"):
+
+    for key in (
+        "instruction",
+        "input",
+        "output",
+        "system",
+        "response",
+        "anchor",
+        "positive",
+        "negative",
+        "text",
+        "content",
+    ):
         val = row.get(key)
         if isinstance(val, str) and val:
             parts.append(val)
-    messages = row.get("messages")
-    if isinstance(messages, list):
-        for msg in messages:
-            if isinstance(msg, Mapping):
-                content = msg.get("content")
-                if isinstance(content, str) and content:
-                    parts.append(content)
+        elif isinstance(val, list) and key in ("anchor", "positive", "negative"):
+            for s in val:
+                if isinstance(s, str) and s:
+                    parts.append(s)
+
+    for key in ("prompt", "chosen", "rejected", "completion"):
+        val = row.get(key)
+        if val is not None:
+            parts.extend(_extract_field_text_or_messages(val, assistant_only=False))
+
+    if "conversations" in row:
+        parts.extend(_extract_conversations_text(row.get("conversations"), assistant_only=False))
+
+    if "messages" in row:
+        parts.extend(_extract_messages_text(row.get("messages"), assistant_only=False))
+
+    if "tool_calls" in row:
+        parts.extend(_extract_tool_calls_text(row.get("tool_calls")))
+
+    tools = row.get("tools")
+    if isinstance(tools, list):
+        for tool in tools:
+            if isinstance(tool, Mapping):
+                func = tool.get("function")
+                if isinstance(func, Mapping):
+                    desc = func.get("description")
+                    if isinstance(desc, str) and desc:
+                        parts.append(desc)
+
     return "\n".join(parts)
 
 
 def _extract_assistant_text(row: Mapping[str, Any]) -> str:
-    """Best-effort assistant-side text extraction (for refusal scans)."""
+    """Extract assistant-side text (for refusal scans)."""
     parts: List[str] = []
+
     for key in ("output", "response"):
         val = row.get(key)
         if isinstance(val, str) and val:
             parts.append(val)
-    messages = row.get("messages")
-    if isinstance(messages, list):
-        for msg in messages:
-            if isinstance(msg, Mapping) and msg.get("role") == "assistant":
-                content = msg.get("content")
-                if isinstance(content, str) and content:
-                    parts.append(content)
-    if parts:
-        return "\n".join(parts)
-    # Fall back to general row text when the row has no chat structure.
-    return _extract_row_text(row)
+
+    if "conversations" in row:
+        parts.extend(_extract_conversations_text(row.get("conversations"), assistant_only=True))
+
+    if "messages" in row:
+        parts.extend(_extract_messages_text(row.get("messages"), assistant_only=True))
+
+    if "chosen" in row:
+        val = row.get("chosen")
+        if val is not None:
+            parts.extend(_extract_field_text_or_messages(val, assistant_only=True))
+
+    if "completion" in row:
+        val = row.get("completion")
+        if val is not None:
+            parts.extend(_extract_field_text_or_messages(val, assistant_only=True))
+
+    if not parts and ("text" in row or "content" in row):
+        is_chat_or_pref = any(
+            k in row
+            for k in (
+                "conversations",
+                "messages",
+                "instruction",
+                "output",
+                "prompt",
+                "chosen",
+                "completion",
+            )
+        )
+        if not is_chat_or_pref:
+            val = row.get("text") or row.get("content")
+            if isinstance(val, str) and val:
+                parts.append(val)
+
+    return "\n".join(parts)
 
 
 def _check_rows(rows: object) -> Sequence[Mapping[str, Any]]:
@@ -236,7 +451,12 @@ def expect_no_pii(rows: Any) -> ExpectationResult:
             num_violations += 1
             continue
         text = _extract_row_text(row)
-        if not text:
+        if not text or not text.strip():
+            num_violations += 1
+            if len(details) < _MAX_DETAILS_PER_RESULT:
+                details.append(
+                    _truncate_detail(f"rows[{index}]: no extractable text")
+                )
             continue
         try:
             hits = detect_pii(text)
@@ -283,6 +503,13 @@ def expect_token_length_between(
                 details.append(_truncate_detail(f"rows[{index}]: not a dict"))
             continue
         text = _extract_row_text(row)
+        if not text or not text.strip():
+            num_violations += 1
+            if len(details) < _MAX_DETAILS_PER_RESULT:
+                details.append(
+                    _truncate_detail(f"rows[{index}]: no extractable text")
+                )
+            continue
         token_count = len(text.split())
         if token_count < low or token_count > high:
             num_violations += 1
@@ -315,7 +542,14 @@ def expect_no_refusal_pattern(rows: Any) -> ExpectationResult:
                 details.append(_truncate_detail(f"rows[{index}]: not a dict"))
             continue
         text = _extract_assistant_text(row)
-        if text and looks_like_refusal(text):
+        if not text or not text.strip():
+            num_violations += 1
+            if len(details) < _MAX_DETAILS_PER_RESULT:
+                details.append(
+                    _truncate_detail(f"rows[{index}]: no extractable text")
+                )
+            continue
+        if looks_like_refusal(text):
             num_violations += 1
             if len(details) < _MAX_DETAILS_PER_RESULT:
                 details.append(
@@ -537,6 +771,7 @@ def run_suite(
 __all__ = [
     "ExpectationResult",
     "ExpectationSpec",
+    "FORMAT_EXTRACTION_RULES",
     "JudgeFn",
     "SUPPORTED_EXPECTATIONS",
     "SuiteReport",
