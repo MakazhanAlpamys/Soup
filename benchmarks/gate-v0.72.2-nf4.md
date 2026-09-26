@@ -297,7 +297,7 @@ valid resident baseline at 3B on this box** — resident bf16 OOMs (v0.72.0) and
 resident NF4 spills. The honest claim remains the one v0.72.0 made at 0.5B, not
 a 3B speed-up ratio.
 
-Remaining row pending: the 8B headline. — SATISFIED, recorded 2026-09-20; see the measured post-#331 row below.
+Remaining row pending: the 8B headline. — SATISFIED, measured 2026-09-19 and recorded 2026-09-20; see the measured post-#331 row below.
 
 ---
 
@@ -340,12 +340,18 @@ have printed ~52 B.
 
 ---
 
-## Post-#331 re-measurement — RECORDED 2026-09-20 ([#361](https://github.com/MakazhanAlpamys/Soup/issues/361))
+## Post-#331 re-measurement — MEASURED 2026-09-19 ([#361](https://github.com/MakazhanAlpamys/Soup/issues/361))
 
-2026-09-20 is the date this record was written, not the run. The run date is
-**not recorded**: the JSON carries no timestamp and the scratch output was
-deleted, so none is claimed. Every other heading in this file carries a
-measurement date, and this one says `RECORDED` for exactly that reason.
+The run date is recovered from the machine, not from the JSON (which carries no
+timestamp): `row-361.json` on the reference laptop was created **2026-09-19
+05:17:12 IST** and last written **05:19:13 IST** (UTC+05:30), i.e. 2026-09-18
+23:47–23:49 UTC. Two readings corroborate it: the harness's own output ends
+`ROW WRITTEN 05:19:16`, and the 121 s span between the two file times is
+consistent with the measured window (50 steps × 2431.5 ms = 121.6 s), the
+per-step flush opening the file at step 1. The row reached #361 at 2026-09-19
+00:24 UTC, 35 minutes after the run ended. This record was written 2026-09-20,
+when this PR opened; the heading carries the measurement date, as every other
+heading in this file does.
 
 Measured post-#331 row, added — the rows above stay verbatim:
 

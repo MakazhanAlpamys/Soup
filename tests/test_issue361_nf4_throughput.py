@@ -372,8 +372,8 @@ class TestGateRecordCarriesThePendingLabel:
     headline predates the #331 repair and name this harness as the protocol,
     so a number pasted there before the card run has something to contradict.
 
-    The reservation is satisfied as of 2026-09-20 — the date this record was
-    written, not the run date — so this class now pins
+    The reservation is satisfied as of 2026-09-19 — the run date, recovered
+    from `row-361.json`'s file time — so this class now pins
     the pre-registration as history: the pending wording stays verbatim
     (marked satisfied) beside the measured row rather than being rewritten.
     """
