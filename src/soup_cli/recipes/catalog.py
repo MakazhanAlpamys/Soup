@@ -2798,9 +2798,9 @@ output: ./output
     "glm-4.6-sft": RecipeMeta(
         model="THUDM/glm-4.6",
         task="sft",
-        size="9B",
+        size="357B",
         tags=("glm", "thudm", "chat", "instruction"),
-        description="GLM 4.6 instruction tuning with LoRA",
+        description="GLM 4.6 MoE instruction tuning with LoRA",
         yaml_str="""\
 base: THUDM/glm-4.6
 task: sft
@@ -2826,9 +2826,9 @@ output: ./output
     "glm-5-sft": RecipeMeta(
         model="zai-org/GLM-5",
         task="sft",
-        size="9B",
+        size="754B",
         tags=("glm", "zai-org", "chat", "next-gen"),
-        description="GLM 5 SFT (next-gen GLM family)",
+        description="GLM 5 MoE SFT (next-gen GLM family)",
         yaml_str="""\
 base: zai-org/GLM-5
 task: sft
@@ -2917,9 +2917,9 @@ output: ./output
     "minimax-m2-sft": RecipeMeta(
         model="MiniMaxAI/MiniMax-M2",
         task="sft",
-        size="9B",
+        size="230B",
         tags=("minimax", "chat", "instruction"),
-        description="MiniMax M2 SFT instruction tuning",
+        description="MiniMax M2 MoE SFT instruction tuning",
         yaml_str="""\
 base: MiniMaxAI/MiniMax-M2
 task: sft
