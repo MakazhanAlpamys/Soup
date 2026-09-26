@@ -85,3 +85,25 @@ def test_load_jsonl_with_invalid_line(tmp_path: Path):
     path.write_text(content)
     data = load_raw_data(path)
     assert len(data) == 2
+
+
+def test_load_parquet_preserves_nested_lists(tmp_path: Path):
+    """Parquet nested messages should load as Python lists."""
+    import pandas as pd
+
+    records = [
+        {
+            "messages": [
+                {"role": "user", "content": "Hello"},
+                {"role": "assistant", "content": "Hi"},
+            ]
+        }
+    ]
+
+    path = tmp_path / "chatml.parquet"
+    pd.DataFrame(records).to_parquet(path)
+
+    loaded = load_raw_data(path)
+
+    assert len(loaded) == 1
+    assert isinstance(loaded[0]["messages"], list)
