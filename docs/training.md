@@ -1735,10 +1735,10 @@ training:
   epochs: 1
 ```
 
-The gate is the only trainable parameter; it is saved as `mole_gate.pt` alongside the run.
+The gate is the only trainable parameter; it is saved as `mole_gate.pt` alongside the run, saved into every `checkpoint-N`, and restored by `--resume`.
 `compute_loss` runs N+1 forwards per step (base + each adapter under `torch.no_grad()`, blended
 by the per-token gate weights) so step time scales with the number of task adapters. Training
-only — there is no serve-time MoLE path yet. (v0.71.12)
+only - there is no serve-time MoLE path yet. (v0.71.12)
 
 
 ## Architecture Knobs — Mixture-of-Depths, LLaMA Pro, LongLoRA

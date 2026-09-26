@@ -15,7 +15,6 @@ Verifies:
 from __future__ import annotations
 
 import ast
-import glob
 import json
 import re
 from pathlib import Path
@@ -39,16 +38,35 @@ def _collapse_whitespace(text: str) -> str:
     return " ".join(text.split())
 
 
+TRAINER_DIR = Path(__file__).resolve().parent.parent / "src" / "soup_cli" / "trainer"
+
+
+def _forwards_resume(func: ast.FunctionDef) -> bool:
+    """Some call in the BODY passes the checkpoint on; the signature proves nothing."""
+    kwarg = func.args.kwarg.arg if func.args.kwarg else None
+    for stmt in func.body:
+        for node in ast.walk(stmt):
+            if not isinstance(node, ast.Call):
+                continue
+            for kw in node.keywords:
+                if kw.arg == "resume_from_checkpoint":
+                    return True
+                if kw.arg is None and isinstance(kw.value, ast.Name) and kw.value.id == kwarg:
+                    return True
+            if any(isinstance(a, ast.Name) and a.id == "resume_from_checkpoint" for a in node.args):
+                return True  # ppo.py passes it on positionally
+    return False
+
+
 class TestTrainerScanInvariants:
     """Static AST verification that every trainer wrapper handles resume_from_checkpoint."""
 
     def test_all_trainer_wrappers_forward_resume_or_refuse(self):
         """A scan over src/soup_cli/trainer/*.py fails when a wrapper's train()
-
         accepts resume_from_checkpoint (or **kwargs) without forwarding it,
         unless the task is in UNSUPPORTED_RESUME_TASKS.
         """
-        trainer_files = sorted(glob.glob("src/soup_cli/trainer/*.py"))
+        trainer_files = sorted(TRAINER_DIR.glob("*.py"))
         assert trainer_files, "No trainer files found in src/soup_cli/trainer"
 
         task_mapping = {
@@ -80,7 +98,7 @@ class TestTrainerScanInvariants:
 
         failures = []
         for file_path in trainer_files:
-            file_name = Path(file_path).name
+            file_name = file_path.name
             if file_name in (
                 "__init__.py",
                 "loss_summary.py",
@@ -96,7 +114,7 @@ class TestTrainerScanInvariants:
                 continue
 
             with open(file_path, encoding="utf-8") as f:
-                tree = ast.parse(f.read(), filename=file_path)
+                tree = ast.parse(f.read(), filename=str(file_path))
 
             for node in ast.walk(tree):
                 if not isinstance(node, ast.ClassDef):
@@ -114,18 +132,12 @@ class TestTrainerScanInvariants:
                         if not accepts_resume:
                             continue
 
-                        body_str = ast.unparse(item)
-                        forwards = (
-                            ("resume_from_checkpoint" in body_str
-                             or (kwarg and f"**{kwarg}" in body_str))
-                            and ("self.trainer.train" in body_str
-                                 or "self._inner.train" in body_str
-                                 or "train(" in body_str)
-                        )
                         task_name = task_mapping.get(file_name)
                         is_refused = task_name in UNSUPPORTED_RESUME_TASKS
+                        if is_refused:
+                            continue
 
-                        if not forwards and not is_refused:
+                        if not _forwards_resume(item):
                             failures.append(
                                 f"{file_name}::{node.name}.train() accepts resume_from_checkpoint "
                                 f"but does not forward it and task {task_name!r} is not in "
@@ -323,7 +335,7 @@ class TestMoleRoutingResume:
             "training: {\n"
             "  epochs: 1, batch_size: 2, gradient_accumulation_steps: 1, save_steps: 2,\n"
             f"  mole_task_adapters: [{adapter_a.as_posix()}, {adapter_b.as_posix()}],\n"
-            "  mole_top_k: 2, mole_temperature: 1.0, quantization: none\n"
+            "  mole_top_k: 2, mole_temperature: 1.0, lr: 0.01, quantization: none\n"
             "}\n"
             f"output: {out_dir.as_posix()}\n"
         )
@@ -377,3 +389,8 @@ class TestMoleRoutingResume:
         assert steps[-1] == 2, f"Expected 2 steps when resuming from checkpoint-2, got {steps[-1]}"
         # checkpoint-2 not modified
         assert (ckpt2 / "trainer_state.json").stat().st_mtime == mtime2_before
+
+        # Bit-exact check: gate reproduced across checkpoint-2 resume
+        resumed = torch.load(out_dir / "mole_gate.pt", map_location="cpu", weights_only=True)
+        for k in gate4_saved:
+            torch.testing.assert_close(resumed[k], gate4_saved[k], rtol=0, atol=1e-6)

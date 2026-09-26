@@ -288,6 +288,8 @@ class PRMTrainerWrapper:
         **_kwargs,
     ) -> dict:
         """Run training with the PRM Trainer subclass."""
+        # #802 contract: display, tracker, and run_id are accepted for caller
+        # uniformity but not wired here.
         if self.model is None:
             raise RuntimeError("PRMTrainerWrapper.train() called before setup()")
         from datasets import Dataset
@@ -363,17 +365,7 @@ class PRMTrainerWrapper:
 
             attach_empty_param_group_guard(self.trainer)
 
-        # #1220: resolve "auto" resume if passed directly to train()
-        if resume_from_checkpoint and str(resume_from_checkpoint).lower() == "auto":
-            checkpoints = sorted(
-                [
-                    d for d in output_dir.iterdir()
-                    if d.is_dir() and d.name.startswith("checkpoint-")
-                ],
-                key=lambda d: int(d.name.split("-")[-1]) if d.name.split("-")[-1].isdigit() else 0,
-            )
-            resume_from_checkpoint = str(checkpoints[-1]) if checkpoints else None
-        elif resume_from_checkpoint:
+        if resume_from_checkpoint:
             resume_from_checkpoint = str(resume_from_checkpoint)
 
         console.print("[green]Starting PRM training...[/]")

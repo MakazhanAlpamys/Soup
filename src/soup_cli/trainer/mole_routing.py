@@ -57,11 +57,8 @@ def make_mole_trainer_class(base_cls: type) -> type:
     class _MoleTrainer(base_cls):  # type: ignore[misc, valid-type]
         """HF Trainer subclass for MoLE per-token routing."""
 
-        def _save_checkpoint(self, model, trial, **kwargs):
-            try:
-                super()._save_checkpoint(model, trial, **kwargs)
-            except TypeError:
-                super()._save_checkpoint(model, trial)
+        def _save_checkpoint(self, model, trial):
+            super()._save_checkpoint(model, trial)
             step = int(getattr(self.state, "global_step", 0) or 0)
             if step > 0 and getattr(self.args, "should_save", True):
                 ckpt_dir = Path(self.args.output_dir) / f"checkpoint-{step}"
@@ -69,14 +66,8 @@ def make_mole_trainer_class(base_cls: type) -> type:
                 if ckpt_dir.is_dir() and gate is not None:
                     torch.save(gate.state_dict(), str(ckpt_dir / "mole_gate.pt"))
 
-        def _load_from_checkpoint(self, resume_from_checkpoint: str, model=None, **kwargs):
-            try:
-                super()._load_from_checkpoint(resume_from_checkpoint, model=model, **kwargs)
-            except TypeError:
-                try:
-                    super()._load_from_checkpoint(resume_from_checkpoint, model=model)
-                except TypeError:
-                    super()._load_from_checkpoint(resume_from_checkpoint)
+        def _load_from_checkpoint(self, resume_from_checkpoint: str, model=None):
+            super()._load_from_checkpoint(resume_from_checkpoint, model=model)
             target = model if model is not None else self.model
             if target is not None:
                 for param in target.parameters():
@@ -364,12 +355,14 @@ class MoleRoutingTrainerWrapper:
         **_kwargs,
     ) -> dict:
         """Train the gating kernel with the MoLE Trainer subclass."""
+        # #802 contract: display, tracker, and run_id are accepted for caller
+        # uniformity but not wired here.
         if self.model is None:
             raise RuntimeError(
                 "MoleRoutingTrainerWrapper.train() called before setup()"
             )
         from datasets import Dataset
-        from transformers import Trainer, TrainerCallback, TrainingArguments
+        from transformers import Trainer, TrainingArguments
 
         cfg = self.config
         tcfg = cfg.training
@@ -424,26 +417,6 @@ class MoleRoutingTrainerWrapper:
             data_collator=collator,
         )
 
-        class _MoleGateSaveCallback(TrainerCallback):
-            def __init__(self, gate):
-                self.gate = gate
-
-            def on_save(self, args, state, control, **kwargs):
-                if not getattr(args, "should_save", True):
-                    return
-                step = int(getattr(state, "global_step", 0) or 0)
-                if step <= 0:
-                    return
-                output_dir = getattr(args, "output_dir", None)
-                if output_dir:
-                    ckpt_dir = Path(output_dir) / f"checkpoint-{step}"
-                    if ckpt_dir.is_dir():
-                        import torch
-
-                        torch.save(self.gate.state_dict(), str(ckpt_dir / "mole_gate.pt"))
-
-        self.trainer.add_callback(_MoleGateSaveCallback(self.model.mole_gate))
-
         # #359 - the same exposure #336 fixed in sft.py: with LoRA the
         # no-decay optimizer group is empty, DeepSpeed drops it, and the LR
         # scheduler keeps two base_lrs until torch's strict zip raises at the
@@ -455,31 +428,8 @@ class MoleRoutingTrainerWrapper:
 
             attach_empty_param_group_guard(self.trainer)
 
-        # #1220: resolve "auto" resume if passed directly to train()
-        if resume_from_checkpoint and str(resume_from_checkpoint).lower() == "auto":
-            checkpoints = sorted(
-                [
-                    d for d in output_dir.iterdir()
-                    if d.is_dir() and d.name.startswith("checkpoint-")
-                ],
-                key=lambda d: int(d.name.split("-")[-1]) if d.name.split("-")[-1].isdigit() else 0,
-            )
-            resume_from_checkpoint = str(checkpoints[-1]) if checkpoints else None
-        elif resume_from_checkpoint:
-            resume_from_checkpoint = str(resume_from_checkpoint)
-
         if resume_from_checkpoint:
-            ckpt_dir = Path(resume_from_checkpoint)
-            if ckpt_dir.is_dir():
-                gate_path = ckpt_dir / "mole_gate.pt"
-                if gate_path.is_file():
-                    import torch
-
-                    gate_state = torch.load(gate_path, map_location="cpu", weights_only=True)
-                    self.model.mole_gate.load_state_dict(gate_state)
-                    if self.device == "cuda":
-                        self.model.mole_gate = self.model.mole_gate.to("cuda")
-                    console.print(f"[green]Restored MoLE gate from checkpoint:[/] {gate_path}")
+            resume_from_checkpoint = str(resume_from_checkpoint)
 
         console.print("[green]Starting MoLE gate training...[/]")
         align_trainable_dtype_for_fp16(

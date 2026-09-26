@@ -359,9 +359,11 @@ step-numbered `NNNNNNN_adapters.safetensors` file (or the final
 `adapters.safetensors`) directly under `output`, not a `checkpoint-N`
 directory. `--resume auto` and `--resume ./output/0011800_adapters.safetensors`
 both work; `--resume ./output/checkpoint-500` does not, because MLX never
-writes that shape. This is a weights-only warm start — mlx-lm's LoRA trainer
+writes that shape. This is a weights-only warm start - mlx-lm's LoRA trainer
 exposes no optimizer state or step count, so the resumed run starts counting
 from step 0 regardless of how far the checkpoint got.
+
+`task: unlearn` refuses `--resume` / `--hf-resume`, because it writes no checkpoints.
 
 
 ## Run Management & Cleanup

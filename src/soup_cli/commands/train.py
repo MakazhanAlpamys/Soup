@@ -70,6 +70,9 @@ def _nondefault_unwired_training_settings(training_config) -> list[str]:
     return enabled_flags + changed_tunables
 
 
+UNSUPPORTED_RESUME_TASKS: frozenset[str] = frozenset({"unlearn"})
+
+
 def _format_training_complete_loss(result: dict) -> str:
     """Render only a loss comparison that the trainer actually measured."""
     summary_kind = result.get("loss_summary_kind")
@@ -2325,10 +2328,6 @@ def _resolve_checkpoint(
     if checkpoint_path.exists() and checkpoint_path.is_dir():
         return str(checkpoint_path)
     return None
-
-
-UNSUPPORTED_RESUME_TASKS: frozenset[str] = frozenset({"unlearn"})
-
 
 def _resolve_resume_or_exit(resume: str, cfg: "SoupConfig") -> str | None:
     """Resolve ``--resume`` against ``cfg``, printing status and exiting on
