@@ -211,6 +211,10 @@ def _select_reward_fn(
     :meth:`GRPOTrainerWrapper.setup` unchanged, so the v0.71.26 reward-hack
     mitigation controller observes the PRM reward for free.
     """
+    if getattr(tcfg, "laya_reward", None) is not None:
+        from soup_cli.trainer.laya_reward import build_laya_reward_fn
+
+        return build_laya_reward_fn(tcfg, device)
     if tcfg.prm_reward is not None:
         from soup_cli.utils.prm_reward import build_prm_reward_fn
 
@@ -831,7 +835,7 @@ def _validate_grpo_reward_metadata(
     split: str,
 ) -> None:
     """Fail before generation when a built-in reward lacks required data."""
-    if tcfg.prm_reward is not None:
+    if tcfg.prm_reward is not None or getattr(tcfg, "laya_reward", None) is not None:
         return
 
     requirements: list[tuple[str, tuple[str, ...]]] = []

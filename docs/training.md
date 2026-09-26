@@ -1223,6 +1223,51 @@ Custom rewards can read any preserved source column through `kwargs`. They must 
 one finite numeric score per completion; Soup checks this contract and reports the reward name
 and count before TRL attempts to build a reward tensor.
 
+**Laya typed-decision rewards** — install the optional integration with:
+
+```bash
+pip install "soup-cli[laya]"
+```
+
+Configure one inline Laya question under `training.laya_reward`:
+
+```yaml
+training:
+  laya_reward:
+    checkpoint: convaiinnovations/laya
+    subfolder: null
+    question:
+      id: urgency
+      type: score
+      instructions: How urgent is this request?
+      criteria:
+        - not urgent
+        - soon
+        - critical
+```
+
+Version 1 supports numeric `score` and `noul` questions. The selected primitive is
+returned as one finite reward per completion; `choice` questions are intentionally
+unsupported. If TRL supplies prompt metadata, Soup passes Laya a structured state with
+`prompt` and `completion` text. When no prompt metadata is available, it passes the
+completion text directly. Message-list prompts and completions are normalized to their
+message contents, and malformed shapes or malformed Laya responses fail descriptively
+rather than becoming zero rewards.
+
+Laya is mutually exclusive with `prm_reward`, `reward_model`, and an explicitly configured
+non-null `reward_fn`. Omit `reward_fn` to replace its implicit `accuracy` default, or set
+`reward_fn: null` explicitly. The feature is available only for GRPO and PPO; PPO uses
+the existing callable `reward_fn` path and does not load Laya as a Transformer reward
+model. Local checkpoint paths must resolve under the current working directory, including
+symlink resolution. The checkpoint is loaded once per reward-function instance and
+completions are evaluated sequentially; batched Laya inference is not currently used.
+When the checkpoint is a Hub model ID, `laya.load()` downloads it through
+`huggingface_hub` using `HF_TOKEN` from the environment, outside Soup's normal
+`training.hub` settings. Laya also loads a second model onto the training device without
+Soup's VRAM pre-flight accounting, and each completion performs its own forward pass even
+though Laya exposes `predict_batch`; these are known efficiency and resource-accounting
+limitations of the initial integration.
+
 **Reward ensembles** — list several rewards, comma-separated, and they combine (GRPO only).
 This also unlocks the `rm_ensemble` reward-hack detector, which needs ≥ 2 rewards:
 ```yaml
