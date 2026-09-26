@@ -1309,6 +1309,30 @@ class TrainingConfig(BaseModel):
     scheduler: str = Field(default="cosine", description="LR scheduler type")
     save_steps: int = Field(default=100, description="Save checkpoint every N steps")
     logging_steps: int = Field(default=10, description="Log metrics every N steps")
+    # #1223 — the validation split is evaluated at the end of every epoch by
+    # default; this switches to a step schedule. Unset rather than defaulted so
+    # "evaluate each epoch" and "evaluate every N steps" stay distinguishable,
+    # and so a generation-based task can tell "asked to evaluate" from not.
+    eval_steps: Optional[int] = Field(
+        default=None,
+        ge=1,
+        description=(
+            "Evaluate the validation split every N optimizer steps (counted "
+            "after gradient accumulation, like save_steps). Unset = evaluate "
+            "at the end of every epoch. grpo evaluates only when this is set, "
+            "because an evaluation there generates completions. (#1223)"
+        ),
+    )
+
+    @field_validator("eval_steps", mode="before")
+    @classmethod
+    def _validate_eval_steps(cls, v: Any) -> Any:
+        """#1223 — `bool` subclasses `int`, so `eval_steps: true` would
+        silently become an evaluation every step."""
+        if isinstance(v, bool):
+            raise ValueError("training.eval_steps must be an int, not a bool")
+        return v
+
     # DPO-specific
     dpo_beta: float = Field(
         default=0.1, gt=0, description="DPO beta — KL penalty coefficient"
@@ -4491,6 +4515,56 @@ _MOE_AUX_LOSS_TASKS = frozenset({"sft", "tts", "pretrain"})
 #: for these tasks carries one of them literally (#795 review).
 _BNB_QUANTIZATION_VALUES = frozenset({"4bit", "8bit"})
 
+#: A ``data.train`` entry with one of these suffixes is a local file. Duplicates
+#: ``loader.SUPPORTED_EXTENSIONS`` literally (not imported: loader.py imports
+#: DataConfig from this module, an import cycle, and carries the torch-adjacent
+#: deps this module stays light of). A suffix must be one of these to count as
+#: 'local' (#468 review fix) -- "any non-empty Path.suffix" misclassified every
+#: hub name with a version number (``teknium/OpenHermes-2.5``,
+#: ``mlfoundations/dclm-baseline-1.0``) as a local file.
+_LOCAL_FILE_EXTENSIONS = frozenset({".jsonl", ".json", ".csv", ".parquet", ".txt"})
+
+
+def _classify_data_train_entry(entry: str) -> str:
+    """``'remote'`` / ``'local'`` / ``'hub'`` for one ``data.train`` entry (#459).
+
+    loader.py keeps its own copy of this rule for the load-time dispatch
+    (``loader._classify_train_entry``); the two must agree, so the RULE
+    (suffix-in-allowlist / "://"-in-entry) is the only thing either site
+    encodes.
+
+    The "://" sniff is scheme-agnostic (#468 review fix), not an
+    is_remote_uri allowlist check -- it mirrors loader.py's
+    _looks_like_remote_uri. The scheme allowlist is enforced downstream, at
+    load time, by validate_remote_uri (refuses a non-allowlisted scheme BY
+    NAME); classifying only allowlisted schemes as 'remote' here let e.g. an
+    https://... entry with a familiar suffix fall through to 'local' and reach
+    hf_load unvalidated instead.
+    """
+    from pathlib import Path
+
+    if "://" in entry:
+        return "remote"
+    if Path(entry).suffix.lower() in _LOCAL_FILE_EXTENSIONS:
+        return "local"
+    return "hub"
+
+
+def _data_may_carry_its_own_validation_split(data: "DataConfig") -> bool:
+    """#1223 — can this data source supply a validation split without
+    ``data.val_split``?
+
+    Two can: an HF-hub dataset's own ``validation`` split, which the loader
+    passes through whatever ``val_split`` says, and a pre-tokenized cache's
+    ``val`` / ``validation`` split. Whether either exists is only known at load
+    time, so a config naming one is let through here and the trainer refuses
+    at setup if no rows arrived. Local files and remote URIs carry none.
+    """
+    if data.format == "pre_tokenized" and data.tokenized_path:
+        return True
+    entries = data.train if isinstance(data.train, list) else [data.train]
+    return any(_classify_data_train_entry(entry) == "hub" for entry in entries)
+
 
 class SoupConfig(BaseModel):
     """Root config for soup.yaml."""
@@ -6279,8 +6353,6 @@ class SoupConfig(BaseModel):
           keeps refusing — there is no decided answer for how a hub split
           and a local file's row count should reconcile.
         """
-        from pathlib import Path
-
         from soup_cli.utils.data_pipeline import parse_interleave
 
         data = self.data
@@ -6311,41 +6383,11 @@ class SoupConfig(BaseModel):
                     "per-source mixture ratio)"
                 )
 
-            # #459 — classify every entry, then dispatch. Kept local to this
-            # validator (rather than exported) since loader.py has its own
-            # copy for the actual load-time dispatch; the two must agree,
-            # so keep the classification RULE (suffix-in-allowlist /
-            # "://"-in-entry) the only thing either site encodes, not the
-            # classify function itself — see loader._classify_train_entry's
-            # docstring.
-            #
-            # _local_file_extensions duplicates loader.SUPPORTED_EXTENSIONS
-            # literally (not imported — that would import loader.py, which
-            # imports DataConfig from this module, an import cycle; also
-            # loader.py intentionally carries the torch-adjacent deps this
-            # module stays light of). A suffix must be one of these to
-            # count as 'local' (#468 review fix) — "any non-empty
-            # Path.suffix" previously misclassified any hub name with a
-            # version number (``teknium/OpenHermes-2.5``,
-            # ``mlfoundations/dclm-baseline-1.0``) as a local file.
-            _local_file_extensions = {".jsonl", ".json", ".csv", ".parquet", ".txt"}
-
-            def _kind(entry: str) -> str:
-                # Scheme-agnostic "://" sniff (#468 review fix), not an
-                # is_remote_uri allowlist check — mirrors loader.py's
-                # _looks_like_remote_uri. The scheme allowlist is enforced
-                # downstream, at load time, by validate_remote_uri (refuses
-                # a non-allowlisted scheme BY NAME); classifying only
-                # allowlisted schemes as 'remote' here let e.g. an
-                # https://... entry with a familiar suffix fall through to
-                # 'local' and reach hf_load unvalidated instead.
-                if "://" in entry:
-                    return "remote"
-                if Path(entry).suffix.lower() in _local_file_extensions:
-                    return "local"
-                return "hub"
-
-            kinds = {_kind(entry) for entry in data.train}
+            # #459 — classify every entry, then dispatch. The rule lives in
+            # _classify_data_train_entry (module level since #1223, which
+            # reuses it); loader.py keeps its own copy for the load-time
+            # dispatch, and the two must agree.
+            kinds = {_classify_data_train_entry(entry) for entry in data.train}
 
             if kinds == {"hub"}:
                 if data.streaming:
@@ -7292,6 +7334,45 @@ class SoupConfig(BaseModel):
                     f"training.grad_accum_auto_tune is not supported for backend={self.backend!r} "
                     "because there is no VRAM total to measure pressure against on unified memory"
                 )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_eval_steps_compat(self) -> "SoupConfig":
+        """#1223 — refuse a ``training.eval_steps`` nothing would read.
+
+        mlx-lm runs its own validation loop over the split (#739), and three
+        tasks have no evaluation pass at all. Separately, a split of 0 on a
+        source that cannot carry its own validation split leaves no rows to
+        evaluate. A source that CAN carry one (an HF-hub dataset, a
+        pre-tokenized cache) is let through: whether it does is only known at
+        load time, and the trainer refuses at setup if no rows arrived.
+        """
+        from soup_cli.utils.eval_schedule import EVAL_STEPS_UNSUPPORTED_TASKS
+
+        if self.training.eval_steps is None:
+            return self
+        if self.backend == "mlx":
+            raise ValueError(
+                f"training.eval_steps is not supported for backend={self.backend!r} "
+                "because mlx-lm evaluates the validation split on its own cadence "
+                "(#1223)"
+            )
+        reason = EVAL_STEPS_UNSUPPORTED_TASKS.get(self.task)
+        if reason is not None:
+            raise ValueError(
+                f"training.eval_steps is not supported for task={self.task!r} "
+                f"because {reason} (#1223)"
+            )
+        if self.data.val_split == 0 and not _data_may_carry_its_own_validation_split(
+            self.data
+        ):
+            raise ValueError(
+                "training.eval_steps is set, but there is nothing to evaluate: "
+                "data.val_split is 0 and data.train names no source that carries "
+                "its own validation split (an HF-hub dataset or a pre-tokenized "
+                "cache). Set data.val_split above 0, or remove training.eval_steps "
+                "(#1223)"
+            )
         return self
 
 

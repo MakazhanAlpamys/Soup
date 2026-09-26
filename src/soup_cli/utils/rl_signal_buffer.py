@@ -22,6 +22,13 @@ Design notes:
   correct (TRL logs ``rewards/<func_name>``).
 - No torch import at module top (pure Python; the buffer stores plain
   floats + strings).
+- Evaluation stays out (#1223). GRPO's evaluation pass calls the SAME
+  wrapped reward functions on held-out prompts. Those rewards describe no
+  training step, so :func:`exclude_evaluation` pauses the buffer for the
+  duration of ``trainer.evaluate`` and every record made inside is dropped.
+  The boundary is the call itself rather than ``model.training``: TRL's
+  paged-generation path flips the model back to train mode after generating,
+  even during an evaluation.
 
 Security:
 - Bounded buffers (``_MAX_COMPLETIONS`` / ``_MAX_COMPLETION_CHARS``) so a
@@ -31,9 +38,11 @@ Security:
 
 from __future__ import annotations
 
+import contextlib
+import functools
 import math
 import threading
-from typing import Any, Optional, Sequence
+from typing import Any, Iterator, Optional, Sequence
 
 _MAX_COMPLETIONS = 1024
 _MAX_COMPLETION_CHARS = 100_000
@@ -94,6 +103,8 @@ class RLSignalBuffer:
         self._lock = threading.Lock()
         self._completions: list[str] = []
         self._per_func: dict[str, list[Optional[float]]] = {}
+        # Depth of open ``paused()`` blocks; records are dropped while > 0.
+        self._paused = 0
 
     def record(
         self,
@@ -107,7 +118,7 @@ class RLSignalBuffer:
         Completions are normalised to strings and capped at
         ``_MAX_COMPLETIONS``. Within a single GRPO step every reward
         function sees the *same* completions, so overwriting on each call
-        is correct.
+        is correct. A call made inside :meth:`paused` is dropped.
         """
         texts: list[str] = []
         if completions is not None:
@@ -120,9 +131,28 @@ class RLSignalBuffer:
         coerced = _coerce_rewards(rewards)
         name = func_name if isinstance(func_name, str) and func_name else "reward"
         with self._lock:
+            # Checked where the write happens, under the same lock paused()
+            # takes, so a record cannot slip in as a pause begins.
+            if self._paused:
+                return
             if texts:
                 self._completions = texts
             self._per_func[name] = coerced
+
+    @contextlib.contextmanager
+    def paused(self) -> Iterator[None]:
+        """Drop every :meth:`record` made inside the block (#1223).
+
+        Re-entrant, and the pause ends even if the block raises, so a failed
+        evaluation cannot leave the detectors blind for the rest of the run.
+        """
+        with self._lock:
+            self._paused += 1
+        try:
+            yield
+        finally:
+            with self._lock:
+                self._paused -= 1
 
     def snapshot(self) -> dict[str, Any]:
         """Return a consistent copy of the latest step signal.
@@ -219,3 +249,23 @@ def wrap_reward_funcs(reward_funcs: Any, buffer: RLSignalBuffer) -> Any:
     if isinstance(reward_funcs, (list, tuple)):
         return [_make_capturing(fn, buffer) for fn in reward_funcs]
     return _make_capturing(reward_funcs, buffer)
+
+
+def exclude_evaluation(trainer: Any, buffer: RLSignalBuffer) -> None:
+    """Keep ``trainer``'s evaluation passes out of ``buffer`` (#1223).
+
+    Wraps ``trainer.evaluate`` on the instance -- HF's training loop reaches it
+    through ``self.evaluate`` -- so the buffer is paused for the whole pass,
+    ``on_evaluate`` callbacks included. The detectors then only ever read
+    rewards from training generations, whatever TRL's generation cadence.
+    """
+    evaluate = getattr(trainer, "evaluate", None)
+    if not callable(evaluate):
+        return
+
+    @functools.wraps(evaluate)
+    def _evaluate(*args: Any, **kwargs: Any) -> Any:
+        with buffer.paused():
+            return evaluate(*args, **kwargs)
+
+    trainer.evaluate = _evaluate

@@ -103,6 +103,7 @@
     "training.embedding_temperature": 0.05,
     "training.epochs": 3,
     "training.eval_gate": null,
+    "training.eval_steps": null,
     "training.expand_layers": null,
     "training.forgetting_benchmark": "mini_mmlu",
     "training.forgetting_detection": false,

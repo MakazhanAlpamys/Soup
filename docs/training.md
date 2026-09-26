@@ -48,9 +48,71 @@
 - [Knowledge Distillation (BETA, v0.52.0)](#knowledge-distillation-beta-v0520)
 - [EBFT + GDPO (BETA, v0.52.0)](#ebft--gdpo-beta-v0520)
 - [gpt-oss `reasoning_effort` + `train_on_eot` (v0.52.0)](#gpt-oss-reasoning_effort--train_on_eot-v0520)
+- [Validation split & evaluation (`training.eval_steps`)](#validation-split--evaluation-trainingeval_steps)
 - [Seeds & reproducibility (`training.seed`)](#seeds--reproducibility-trainingseed)
 - [Rewind — which row spiked the loss (`soup rewind`)](#rewind--which-row-spiked-the-loss-soup-rewind)
 - [Full fine-tuning (`lora.r: 0`)](#full-fine-tuning-lorar-0)
+
+---
+
+## Validation split & evaluation (`training.eval_steps`)
+
+`data.val_split` (default `0.1`) holds that share of the rows out of training,
+and the run evaluates them:
+
+```yaml
+data:
+  val_split: 0.1    # the default
+training:
+  eval_steps: 50    # optional; unset = evaluate at the end of every epoch
+```
+
+- **Default: every epoch.** At the end of each epoch the trainer runs one pass
+  over the validation split and records `eval_loss`. It shows up as the **Val
+  loss** row on the live panel, is stored as `val_loss` in the run's metrics in
+  the experiment tracker, and is streamed as `TrainEvent.val_loss` to the Web UI.
+  The pass is a forward over the held-out rows, a few percent of the run at the
+  default split.
+- **`training.eval_steps: N`** evaluates every N optimizer steps instead,
+  counted after gradient accumulation like `save_steps`. The last step is
+  evaluated too when it is not a multiple of N, so a value larger than the run
+  still evaluates once.
+- **Batch size.** The evaluation runs at the resolved per-device train batch
+  (after `batch_size: auto`), not Hugging Face's default of 8, so a card sized
+  to train fits the evaluation too. Layer-streamed runs (`stream_layers: true`)
+  evaluate the same way, streaming the frozen layers as a training step does.
+- **`val_split: 0`** trains on every row and evaluates nothing, unless the data
+  brings its own validation split: an HF-hub dataset's `validation` split, or a
+  pre-tokenized cache's `val` / `validation` split.
+
+**Generation-based tasks (`grpo`, `ppo`, `online_dpo`).** Evaluating them means
+generating completions, which costs about as much per row as training on it. So
+they do not evaluate by default, and they do not withhold rows either:
+`data.val_split` is ignored, every row trains, and the run prints a one-line note
+saying so. On `grpo`, set `training.eval_steps` to hold the split out and
+evaluate it; TRL generates completions for the held-out prompts and logs
+`eval_loss` with the evaluation rewards. TRL needs whole groups of
+`num_generations` completions in an evaluation batch, so `grpo` evaluates at the
+largest multiple of `num_generations` that fits in the train batch, and says so
+when that differs from the train batch. The evaluation's rewards never reach the
+reward-hack detector, the mitigation controller or the echo-trap detector: they
+read training generations only. `ppo` and `online_dpo` refuse
+`training.eval_steps`: TRL's PPO loop never calls `evaluate()`, and online DPO's
+`evaluate()` crashes on prompt-only rows. A generation-based evaluation for
+those two is a separate feature.
+
+**Refused at config load.** `training.eval_steps` on `backend: mlx` (mlx-lm
+evaluates the split on its own cadence, #739), on `task: unlearn` (it trains on
+`forget_set` / `retain_set` and has no validation split), and with
+`val_split: 0` on local files, where there would be nothing to evaluate.
+
+**Evaluated but not tracked: `prm` and `moe_lora_routing`.** They attach no live
+training callback (#802), so their `eval_loss` reaches the trainer's log history
+and not the experiment tracker.
+
+Until #1223 no trainer on the transformers backend scheduled an evaluation: the
+default split was held out of training and never used, and `val_loss` stayed
+empty.
 
 ---
 

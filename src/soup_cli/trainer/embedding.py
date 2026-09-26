@@ -9,6 +9,7 @@ from rich.console import Console
 
 from soup_cli.config.schema import SoupConfig, TrainingConfig
 from soup_cli.trainer.loss_summary import summarize_training_loss
+from soup_cli.utils.eval_schedule import training_eval_kwargs
 from soup_cli.utils.gpu import (
     bf16_fp16_flags,
     estimate_batch_size,
@@ -176,6 +177,7 @@ class EmbeddingTrainerWrapper:
             "remove_unused_columns": False,
             "deepspeed": self.deepspeed_config,
             **training_seed_kwargs(tcfg),
+            **training_eval_kwargs(cfg, eval_ds, batch_size=batch_size),
         }
 
         if self.fsdp_config:
@@ -476,6 +478,20 @@ class _EmbeddingTrainer:
                 return embedding_trainer._compute_embedding_loss(
                     model, inputs, return_outputs
                 )
+
+            def prediction_step(
+                self, model, inputs, prediction_loss_only, ignore_keys=None
+            ):
+                # #1223: HF's default runs model(**inputs), and no model
+                # forward accepts the anchor_/positive_/negative_ keys this
+                # collator produces, so the first evaluation crashed. Score the
+                # same objective training optimises, under the same autocast.
+                import torch
+
+                inputs = self._prepare_inputs(inputs)
+                with torch.no_grad(), self.compute_loss_context_manager():
+                    loss = embedding_trainer._compute_embedding_loss(model, inputs)
+                return loss.detach(), None, None
 
         self._trainer = _CustomTrainer(
             model=model,

@@ -1168,6 +1168,14 @@ def attach_rl_callbacks(
         except (TypeError, ValueError) as exc:
             logger.debug("attach echo-trap callback rejected: %s", exc)
 
+    # #1223: the detectors above read ``buffer`` at every step end. An
+    # evaluation pass calls the same wrapped reward functions on held-out
+    # prompts, so keep it out of the buffer they read.
+    if buffer is not None:
+        from soup_cli.utils.rl_signal_buffer import exclude_evaluation
+
+        exclude_evaluation(trainer, buffer)
+
     return attached
 
 

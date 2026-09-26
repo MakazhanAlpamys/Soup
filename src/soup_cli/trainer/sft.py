@@ -13,6 +13,7 @@ from rich.console import Console
 from soup_cli.config.schema import SoupConfig
 from soup_cli.trainer.loss_summary import summarize_training_loss
 from soup_cli.trainer.stream_setup import StreamingSetupMixin
+from soup_cli.utils.eval_schedule import training_eval_kwargs
 from soup_cli.utils.gpu import (
     bf16_fp16_flags,
     estimate_batch_size,
@@ -940,6 +941,10 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             # than a new default. #353 moved the resolution into utils.seeding
             # so the other 17 task wrappers resolve it identically.
             **training_seed_kwargs(tcfg),
+            # #1223: evaluate the split handed to the trainer below, at the
+            # resolved train batch. Before this nothing set eval_strategy, so
+            # the default val_split was withheld and never evaluated.
+            **training_eval_kwargs(cfg, eval_ds, batch_size=batch_size),
         }
 
         # FSDP2 — alternative to DeepSpeed. The helper also enables
