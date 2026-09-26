@@ -297,7 +297,7 @@ valid resident baseline at 3B on this box** — resident bf16 OOMs (v0.72.0) and
 resident NF4 spills. The honest claim remains the one v0.72.0 made at 0.5B, not
 a 3B speed-up ratio.
 
-Remaining row pending: the 8B headline. — SATISFIED 2026-09-20; see the measured post-#331 row below.
+Remaining row pending: the 8B headline. — SATISFIED, recorded 2026-09-20; see the measured post-#331 row below.
 
 ---
 
@@ -340,7 +340,12 @@ have printed ~52 B.
 
 ---
 
-## Post-#331 re-measurement — MEASURED 2026-09-20 ([#361](https://github.com/MakazhanAlpamys/Soup/issues/361))
+## Post-#331 re-measurement — RECORDED 2026-09-20 ([#361](https://github.com/MakazhanAlpamys/Soup/issues/361))
+
+2026-09-20 is the date this record was written, not the run. The run date is
+**not recorded**: the JSON carries no timestamp and the scratch output was
+deleted, so none is claimed. Every other heading in this file carries a
+measurement date, and this one says `RECORDED` for exactly that reason.
 
 Measured post-#331 row, added — the rows above stay verbatim:
 
@@ -350,8 +355,14 @@ Measured post-#331 row, added — the rows above stay verbatim:
 
 Machine row: `results/issue361-post-repair-8b-nf4.json` (`--json` output of
 [`harness/issue361_nf4_throughput.py`](harness/issue361_nf4_throughput.py),
-committed as written, on the RTX 3050 Laptop 4 GB @umran666
-used for every number in this record).
+committed as written).
+
+Hardware for **this** row, stated separately because it is not the gate box at
+the top of this record: **Windows 11 · RTX 3050 Laptop 4 GB (CC 8.6) ·
+16.8 GB RAM · NVMe** · Python 3.10.11 (the JSON's `versions`), measured by
+@umran666 on their own laptop. The gate box is a different machine with the
+**same GPU model** — 16.9 GB RAM, Python 3.10.8 — and every row above was
+measured on it.
 
 Run-from note, reconciling the SHAs. The machine row records the harness
 commit `9635673`; the run was from `main` at `1f1f1438` plus the #1014
@@ -370,9 +381,11 @@ No run was discarded: the slowest measured step (3479 ms against a
 2431.5 ms median) is retained in the JSON's `step_time_ms.max`.
 
 **Read this row with its clock.** The pre-repair row ran at 952 MHz / 70 C, this
-one at 1935–1957 MHz / 59 C — the same card at roughly half its clock, running
-hotter, i.e. the original operating point is consistent with a throttled or
-power-limited session (AC/power plan not recorded for the old row). The 1.74x
+one at 1935–1957 MHz / 59 C — the same GPU model on a different laptop, at
+roughly half its clock and running hotter. Two readings of the old 952 MHz fit
+the evidence and this comparison cannot tell them apart: a throttled or
+power-limited session (AC/power plan not recorded for the old row), or simply
+a lower power limit and weaker cooling on that laptop. The 1.74x
 raw gain (208.6 / 119.6) is therefore a clock, not a speedup: per unit clock
 the new code is ~14% slower (1.744 / 2.033 = 0.858), matching the same-session
 ceiling fraction moving 68% -> 59% to within 1% (59/68 = 0.868). Do not compare
@@ -389,11 +402,15 @@ only in the issue thread.
 
 **Stack delta, recorded without attribution.** The old row ran torch
 2.5.1+cu121 · bitsandbytes 0.49.2 · transformers 4.57.6 · peft 0.18.1 ·
-trl 0.19.1; this one ran torch 2.6.0+cu124 · bitsandbytes 0.50.2 ·
-transformers 5.16.1 · peft 0.21.0 · trl 0.29.1 (see the JSON's `versions`).
+trl 0.19.1 · accelerate 1.12.0 · Python 3.10.8; this one ran torch
+2.6.0+cu124 · bitsandbytes 0.50.2 · transformers 5.16.1 · peft 0.21.0 ·
+trl 0.29.1 · accelerate 1.15.0 · Python 3.10.11 (see the JSON's `versions`).
 The clock accounts for the tok/s delta and the memory-pattern change for
-the store/peak delta; no attribution to the bitsandbytes minor move is
-claimed — but it is stated here because the gate's NF4 claim rests on
+the store/peak delta; the residual ~14% per-clock shortfall is **not
+attributed** — it could be the #331 repair, the memory-pattern change, or
+the stack delta just listed, and this record claims none of the three. No
+attribution to the bitsandbytes minor move is claimed either — but the
+version is stated here because the gate's NF4 claim rests on
 identical bitsandbytes kernels, and the two 4-bit compute paths'
 disagreement is an open finding (#776).
 
@@ -426,3 +443,6 @@ required: a 952 → 1935 MHz clock change accounts for the whole excess and then
 some. Per unit clock the repair direction holds (about −14%, vs −4.8% at 32B
 — different clocks, different memory patterns, so read that as same-direction,
 not same-size).
+
+Both run-it-from floors from #361 are satisfied: the run landed above
+`f8226214` and above the later `76c23541`.
