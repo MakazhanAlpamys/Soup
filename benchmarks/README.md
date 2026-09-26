@@ -141,6 +141,12 @@ figure, and why the fit decision refuses rather than warns.
 - **Derived figures are labelled as arithmetic.** Where a line says "1M tokens =
   2.3 h", that is division, not a measured wall-clock run.
 
+## Additional #379 Reconstructions
+
+| File | Historical scope | Verdict | Requirements and limitations |
+|---|---|---|---|
+| determinism.py | STEP 2b / Measurements 1-2 | Historical reconstruction validator for exact forward, resident determinism, and streamed instability; accepts a measured JSON record and never treats replay as CUDA execution | CPU/static record replay; original CUDA protocol requires the recorded H100 stack; invalid or incomplete asymmetry fails |
+
 ## Reproducing
 
 The implementation ships in Soup under Apache-2.0. Reproduction commands are in
