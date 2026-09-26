@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import ast
 import json
-import re
 from pathlib import Path
 from typing import Any
 
@@ -38,11 +37,12 @@ from soup_cli.trainer.classifier import (
     validate_classification_dataset,
 )
 from tests._windows_ci import skip_on_windows_ci
+from tests.conftest import strip_ansi
 
 
-def _clean_output(text: str) -> str:
+def _strip_ansi(text: str) -> str:
     """Strip ANSI color codes and collapse whitespace for resilient assertions."""
-    plain = re.sub(r"\x1b\[[0-9;]*[a-zA-Z]", "", text)
+    plain = strip_ansi(text)
     return " ".join(plain.split())
 
 
@@ -210,7 +210,7 @@ class TestLabelValidationUpfront:
         runner = CliRunner()
         res = runner.invoke(app, ["train", "--config", str(cfg_file), "--dry-run"])
         assert res.exit_code == 1
-        clean = _clean_output(res.output)
+        clean = _strip_ansi(res.output)
         assert "train row 1" in clean
         assert "missing required 'label' field" in clean
 
@@ -236,7 +236,7 @@ class TestLabelValidationUpfront:
         runner = CliRunner()
         res = runner.invoke(app, ["train", "--config", str(cfg_file), "--yes"])
         assert res.exit_code == 1
-        clean = _clean_output(res.output)
+        clean = _strip_ansi(res.output)
         assert "train row 0" in clean
         assert "missing required 'label' field" in clean
         assert "Setting up model + trainer" not in clean
@@ -461,7 +461,7 @@ class TestDocumentedExampleTraining:
         )
         runner = CliRunner()
         res = runner.invoke(app, ["train", "--config", str(cfg_file), "--yes"])
-        clean = _clean_output(res.output)
+        clean = _strip_ansi(res.output)
         assert res.exit_code == 0, f"Command failed: {res.output}"
         assert "Auto-detected format: plaintext" in clean
         assert "Loaded: 6 train samples" in clean

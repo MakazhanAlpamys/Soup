@@ -412,7 +412,7 @@ class TestKTODataFormatEdgeCases:
         """Data with unrecognised keys should raise ValueError."""
         from soup_cli.data.formats import detect_format
 
-        data = [{"question": "Q", "answer": "A"}]
+        data = [{"unknown_foo": "Q", "unknown_bar": "A"}]
         with pytest.raises(ValueError, match="Cannot detect format"):
             detect_format(data)
 
