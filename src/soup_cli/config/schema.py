@@ -4027,7 +4027,6 @@ class TrainingConfig(BaseModel):
         if self.use_lorafa and self.optimizer is not None and self.optimizer not in (
             "adamw_torch",
             "adamw",
-            "adamw_hf",
             "adamw_torch_fused",
         ):
             raise ValueError(

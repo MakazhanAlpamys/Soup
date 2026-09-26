@@ -189,12 +189,12 @@ class TestWeightDecayIsActuallyPassed:
 
 class TestUnsupportedNamesAreRefusedNotSilentlyAdamW:
     def test_an_optimizer_with_no_mlx_equivalent_is_refused_by_name(self):
-        """`adam_mini` is a *valid* Soup optimizer, which is the point.
+        """`grokadamw` is a *valid* Soup optimizer, which is the point.
 
         A name the schema already rejects would prove nothing about this layer.
         """
-        with pytest.raises(MlxOptimizerError, match="adam_mini"):
-            resolve_optimizer_name("adam_mini")
+        with pytest.raises(MlxOptimizerError, match="grokadamw"):
+            resolve_optimizer_name("grokadamw")
 
     def test_the_refusal_names_what_is_available(self):
         with pytest.raises(MlxOptimizerError, match="adamw"):
@@ -381,7 +381,7 @@ class TestTheWrapperPassesUpdatesNotIterations:
         _install_fake_mlx(monkeypatch)
         with pytest.raises(MlxOptimizerError, match="no MLX equivalent"):
             _run_wrapper(
-                tmp_path, rows=8, epochs=1, batch_size=1, optimizer="adam_mini",
+                tmp_path, rows=8, epochs=1, batch_size=1, optimizer="grokadamw",
                 gradient_accumulation_steps=1,
             )
 
