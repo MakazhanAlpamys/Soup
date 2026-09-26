@@ -413,21 +413,38 @@ soup attest emit \
 ```
 
 Stages are a closed allowlist: `extract` / `train` / `eval` / `export` / `publish`.
-Subject SHA must be 64-hex (sha256). The default `--sign unsigned` backend ships now;
-the **`ed25519` backend is live** (`pip install soup-cli[sign]`):
+Subject SHA must be 64-hex (sha256). The default `--sign unsigned` backend
+remains offline-only tamper metadata. The **`ed25519` backend is live** with
+`pip install soup-cli[sign]`; **Sigstore is live** with
+`pip install soup-cli[sigstore]`:
 
 ```bash
+# offline key signing
 soup attest emit --stage train --subject adapter-v1 --sha aaaa...64hex \
-  --sign ed25519 --key signing.pem --output att.json   # writes att.json.sig
-soup attest verify att.json --signature att.json.sig                 # exit 0 valid
+  --sign ed25519 --key signing.pem --output att.json
 soup attest verify att.json --signature att.json.sig --public-key trusted.pub
+
+# keyless OIDC / Fulcio / Rekor
+soup attest emit --stage train --subject adapter-v1 --sha aaaa...64hex \
+  --sign sigstore --output att.json  # add --interactive-oidc only for browser auth
+soup attest verify att.json --signature att.json.sig \
+  --cert-identity 'https://github.com/acme/repo/.github/workflows/release.yml@refs/heads/main' \
+  --cert-oidc-issuer 'https://token.actions.githubusercontent.com'
 ```
 
-`verify` re-canonicalises the statement JSON (so it's platform/newline-independent)
-and checks the ed25519 signature — exit 3 on tamper, key mismatch, or a sidecar with
-no public key. A valid signature proves the signer *asserted* the statement; it does
-not re-verify the subject digest against an artifact. Sigstore keyless signing remains
-infra-blocked (needs an OIDC identity provider + Fulcio/Rekor network).
+Both signing backends use the same `<output>.sig` JSON sidecar. For Sigstore it
+contains the complete modern Bundle (certificate, signature, and transparency
+proof). `verify` re-canonicalises the statement JSON and requires both the
+Sigstore certificate identity and OIDC issuer out of band; either value without
+the other is refused. Sigstore emission requires `--output` so the public Rekor
+entry can never outlive a discarded local bundle; browser OIDC is explicit opt-in.
+Verification exits 3 on tamper or policy mismatch, and exits 1 when Sigstore
+verification itself is unavailable (for example TUF/network failure) so an
+operational outage is not reported as tampering. Usage/input errors exit 2.
+An explicit Sigstore signing request fails closed if OIDC/Fulcio/Rekor is
+unavailable; it is never silently downgraded to unsigned. A valid signature proves the signer
+*asserted* the statement; it does not re-verify the subject digest against an
+artifact.
 
 
 ## EU AI Act Annex XI/XII Auto-Doc (`soup train --annex-xi`)

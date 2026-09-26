@@ -1,7 +1,7 @@
 """v0.71.2 — "Governance & supply-chain live" (no GPU).
 
-Closes (in this patch): #186, #187, #190, #191, #192 fully; #179 / #185 get the
-ed25519 half live (Sigstore keyless stays infra-blocked — needs OIDC + network).
+v0.71.2 closed #186/#187/#190/#191/#192 and shipped the ed25519 halves of
+#179/#185. Follow-up work makes the remaining Sigstore backends live.
 
 Test organisation (one class per concern):
 - TestSigningPrimitives        — utils/signing.py ed25519 helpers (#179/#185 core)
@@ -412,11 +412,19 @@ class TestAttestEd25519:
         sig = sign_attestation(b"x", backend="unsigned")
         assert sig == {"signature": "", "backend": "unsigned"}
 
-    def test_sign_attestation_sigstore_deferred(self):
+    def test_sign_attestation_sigstore_live_with_injected_signer(self, monkeypatch):
+        from soup_cli.utils import sigstore_signing
         from soup_cli.utils.attest import sign_attestation
 
-        with pytest.raises(NotImplementedError):
-            sign_attestation(b"x", backend="sigstore")
+        monkeypatch.setattr(
+            sigstore_signing,
+            "sign_payload_sigstore",
+            lambda payload, *, interactive=False: '{"bundle":"ok"}',
+        )
+        result = sign_attestation(b"x", backend="sigstore")
+        assert result["backend"] == "sigstore"
+        assert result["signature"] == ""
+        assert result["sigstore_bundle"] == '{"bundle":"ok"}'
 
 
 # ---------------------------------------------------------------------------
@@ -1133,7 +1141,7 @@ class TestReviewFollowups:
         )
         r = runner.invoke(app, ["verify", "stmt.json", "--signature", "stmt.json.sig"])
         assert r.exit_code == 3, r.output
-        assert "not ed25519" in r.output.lower()
+        assert "not cryptographically verifiable" in r.output.lower()
 
     def test_attest_verify_no_pubkey_exit3(self, tmp_path, monkeypatch):
         from typer.testing import CliRunner
