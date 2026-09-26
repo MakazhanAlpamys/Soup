@@ -3997,6 +3997,33 @@ class TrainingConfig(BaseModel):
             )
         return self
 
+    @model_validator(mode="after")
+    def _validate_loraplus_compat(self) -> "TrainingConfig":
+        """#1210 — refuse LoRA+ combinations that could only fail after the model loads.
+
+        attach_loraplus_optimizer asks Trainer.get_optimizer_cls_and_kwargs(args) for the
+        optimizer without a model, and transformers builds these three only from one.
+        """
+        if self.loraplus_lr_ratio is None:
+            return self
+        if self.optimizer in ("apollo_adamw", "lomo", "adalomo"):
+            raise ValueError(
+                f"training.loraplus_lr_ratio cannot be combined with "
+                f"training.optimizer={self.optimizer!r}: LoRA+ builds its optimizer "
+                f"without the model, and transformers can only build {self.optimizer} "
+                f"from the model. Use an optimizer transformers can build without the "
+                f"model (for example adamw_torch) or remove loraplus_lr_ratio."
+            )
+        # attach_loraplus_optimizer also refuses this at runtime; here it fails
+        # before the model is downloaded.
+        if self.use_galore:
+            raise ValueError(
+                "training.loraplus_lr_ratio and training.use_galore are mutually exclusive: "
+                "LoRA+ tunes LoRA A/B matrices while GaLore projects full-parameter "
+                "gradients. Enable one, not both."
+            )
+        return self
+
     # ---- v0.61.0 Part A — Unlearning ---------------------------------------
     # Schema-only release: validators here are reused by the SoupConfig
     # cross-validator + UnlearnTrainerWrapper. Live trainer in v0.61.1.

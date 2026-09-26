@@ -376,6 +376,8 @@ training:
     alpha: 16
 ```
 
+LoRA+ builds its optimizer without the model, so it is refused at config load with `optimizer: apollo_adamw`, `lomo` or `adalomo` (transformers can only build those from the model) and with `use_galore`.
+
 
 ## LoRA-FA (Frozen-A LoRA)
 
