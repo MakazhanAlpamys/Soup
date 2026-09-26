@@ -1210,18 +1210,22 @@ answer is, in this order of precedence:
    reads `(3, 4)`.
 
 A box outranks a phrase, and a `\boxed{}` or phrase that comes after a `####` line outranks it (the
-line was a markdown heading, or an answer the text went on to correct). A completion with none of
-these is read by its last line and its last number, so `Six times seven is 42.` and even `Not 42.`
-read as 42; only the final number counts, so listing candidates earns nothing.
+line was a markdown heading, or an answer the text went on to correct). That includes chatter:
+`#### Paris` followed by `I hope this answer is helpful!` reads `helpful`, so end a completion at
+its `####` line. A completion with none of these is read by its last line and its last number, so
+`Six times seven is 42.` and even `Not 42.` read as 42; only the final number counts, so listing
+candidates earns nothing.
 
 An answer phrase's number is read from its own clause: `The answer is 41 apples, not 42.` reads
 41, because the clause ends at the comma. A clause that names **more than one distinct value** is
 a hedge and states no answer: `The answer is either 41 or 42.`, `Answer: 41 or 42`,
 `The answer is 42 (or 43).` and `the answer is 41, 42 or 43` score 0.0 against every gold, and a
-gold written that way is refused. The same value twice is not a hedge (`42 (i.e. 42.0)`), and the
-digits of one bracketed or LaTeX answer (`(3, 4)`, `\frac{14}{3}`, `2^{10}`) are not separate
-values; such an answer is compared as text. `\boxed{}` and `####` answers are compared whole, so a
-list there is one answer, and it can only match a gold that is the same list.
+gold written that way is refused. Every number in the clause counts, a justification's too:
+`The answer is 42 because 6*7=42.` is a hedge, while `The answer is 42, because 6*7=42.` reads 42.
+The same value twice is not a hedge (`42 (i.e. 42.0)`), and the digits of one bracketed or LaTeX
+answer (`(3, 4)`, `\frac{14}{3}`, `2^{10}`) or of a time or a ratio (`3:45`, `1:1,000`) are not
+separate values; such an answer is compared as text. `\boxed{}` and `####` answers are compared
+whole, so a list there is one answer, and it can only match a gold that is the same list.
 
 A numeric gold is compared by value, so `#### 1,000`, `\boxed{1000}` and `The answer is $1000.`
 all match a gold of `1000`. Any other gold (`\frac{14}{3}`, `p - q`, `Paris`) is compared as text,
@@ -1244,8 +1248,10 @@ validate their inputs before generation:
 
 A gold states its final answer with `####`, `\boxed{}`, `The answer is` or `Answer:`, or by being
 the bare answer on one line (`42`, `Paris`, `\frac{14}{3}`). A row whose gold states none (for
-example a multi-line reference solution with no marked answer), or whose answer phrase hedges
-between values (`The answer is either 41 or 42.`), is refused before generation, with its split,
+example a multi-line reference solution with no marked answer, or one under a `#### Solution`
+heading: a `####` line that is not a number and has more text after it may be a markdown heading,
+so a gold cannot rely on it), or whose answer phrase hedges between values
+(`The answer is either 41 or 42.`), is refused before generation, with its split,
 row number and field and a count of the other rows with the same problem, because such a gold
 would score every completion 0.0 and give GRPO no signal. A dataset that mixes numeric and
 LaTeX golds, such as MATH-500, loads under `math` too; validation prints how many golds are

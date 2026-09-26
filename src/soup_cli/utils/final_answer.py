@@ -20,15 +20,22 @@ An answer is stated explicitly in one of three forms:
    ``42 (i.e. 42.0)`` answers ``42``.
 
 A box outranks a phrase. A ``####`` line outranks both, unless one of them comes after it: then
-the ``####`` line was a markdown heading, or an answer the text went on to correct.
+the ``####`` line was a markdown heading, or an answer the text went on to correct. Any later
+phrase counts, chatter such as ``I hope this answer is helpful!`` included, because it cannot
+be told apart from an answer under a heading. A reference is held to more: a ``####`` line that
+is not a number and has more text after it may be a heading over an unmarked body, so such a
+reference states no answer.
 
 The two delimited forms are authoritative: what they enclose IS the answer, number or not, so a
 list or a tuple there is one answer. A phrase has no closing delimiter, so its values are read
 from its clause: the stand-alone numbers outside brackets (the digits of ``(3, 4)``,
-``\\frac{14}{3}``, ``2^{10}`` or ``2x`` belong to one expression, not to several values) and
-every stand-alone number in its aside. A clause with MORE THAN ONE distinct value is a hedge
+``\\frac{14}{3}``, ``2^{10}`` or ``2x``, and of a time or a ratio such as ``3:45`` or
+``1:1,000``, belong to one expression, not to several values) and every stand-alone number in
+its aside. A clause with MORE THAN ONE distinct value is a hedge
 (``The answer is either 41 or 42.``): it states no answer, so a completion that hedges scores
-0.0 and a gold that hedges is refused. One value, even repeated (``42 or 42.0``), is the
+0.0 and a gold that hedges is refused. Every number in the clause counts, a justification's
+too (``42 because 6*7=42`` is a hedge), and a comma or a period before a justification ends the
+clause (``42, because 6*7=42`` is 42). One value, even repeated (``42 or 42.0``), is the
 clause's number; a clause with no digits at all falls back to a completion's last number.
 
 A text that states no explicit answer is free text. A reference is then its whole value, which
@@ -85,12 +92,18 @@ _MATH_DELIMITER_RE = re.compile(r"\\[()\[\]]")
 # Not followed by a letter, so ``\leftarrow`` and ``\rightarrow`` stay whole.
 _SIZING_RE = re.compile(r"\\(?:left|right)(?![A-Za-z])")
 _FRAC_VARIANT_RE = re.compile(r"\\[dt]frac(?![A-Za-z])")
-_NUMBER_PATTERN = r"[-+]?(?:(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?|\.\d+)(?:[eE][-+]?\d+)?"
+_UNSIGNED_PATTERN = r"(?:(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?|\.\d+)"
+_NUMBER_PATTERN = r"[-+]?" + _UNSIGNED_PATTERN + r"(?:[eE][-+]?\d+)?"
 _NUMBER_RE = re.compile(_NUMBER_PATTERN)
-# A bracket, or a number that stands alone: not part of a word ("2x", "3rd") or of a LaTeX
-# expression ("\frac{14}{3}", "2^{10}", "4/5"). Brackets let a scan track depth.
+# Not glued to a word ("2x", "3rd") or to a LaTeX expression ("\frac{14}{3}", "2^{10}", "4/5").
+_STANDS_ALONE = r"(?<![\w\\{}^/.])"
+# A bracket, which lets a scan track depth; a time or a ratio ("3:45", "1:1,000"), which is ONE
+# answer and is matched whole so that none of its numbers reads as a value; or, as group 1, a
+# number that stands alone.
 _VALUE_TOKEN_RE = re.compile(
-    r"[()\[\]{}]|(?<![\w\\{}^/.])(" + _NUMBER_PATTERN + r")(?![\w{}^/])"
+    r"[()\[\]{}]"
+    + "|" + _STANDS_ALONE + "[-+]?" + _UNSIGNED_PATTERN + "(?::" + _UNSIGNED_PATTERN + ")+"
+    + "|" + _STANDS_ALONE + r"(?<!\d:)(" + _NUMBER_PATTERN + r")(?![\w{}^/]|:\d)"
 )
 # After ", " or "; " inside a clause: a number next means a list that goes on ("41, 42 or 43",
 # "41, $42$"). Only one ``\s*`` can match a given whitespace run, because the second one follows
@@ -185,10 +198,15 @@ def _clause_values(answer: str, aside: str) -> frozenset[Decimal]:
     values: set[Decimal | None] = set()
     depth = 0
     for match in _VALUE_TOKEN_RE.finditer(answer):
-        if match.group(1) is None:
-            depth = depth + 1 if match.group() in _OPENERS else max(0, depth - 1)
-        elif depth == 0:
-            values.add(_to_decimal(match.group(1)))
+        token = match.group()
+        if match.group(1) is not None:
+            if depth == 0:
+                values.add(_to_decimal(match.group(1)))
+        elif token in _OPENERS:
+            depth += 1
+        elif token in _CLOSERS:
+            depth = max(0, depth - 1)
+        # Any other token is a time or a ratio: one answer, not a value.
     values.update(_to_decimal(m.group(1)) for m in _VALUE_TOKEN_RE.finditer(aside) if m.group(1))
     values.discard(None)
     return frozenset(values)
@@ -207,6 +225,7 @@ class _Explicit(NamedTuple):
     answer: str
     delimited: bool  # after '####' or inside \boxed{}
     values: frozenset[Decimal]  # a phrase clause's distinct values; empty when delimited
+    text_follows: bool = False  # a '####' answer with more text after its line
 
 
 def _marker_answer(text: str) -> tuple[int, _Explicit] | None:
@@ -225,7 +244,10 @@ def _marker_answer(text: str) -> tuple[int, _Explicit] | None:
         answer, values = _clause_reading(text, found.start())
         return (found.start(), _Explicit(answer, False, values)) if answer else None
     answer = normalize_answer(text[start:end])
-    return (start, _Explicit(answer, True, frozenset())) if answer else None
+    if not answer:
+        return None
+    text_follows = _NON_SPACE_RE.search(text, end) is not None
+    return start, _Explicit(answer, True, frozenset(), text_follows)
 
 
 def _closing_brace(text: str, start: int, limit: int) -> int | None:
@@ -317,13 +339,17 @@ def parse_reference(text: str) -> FinalAnswer | None:
     A reference is never read as free text: without an explicit answer it must be a bare,
     one-line answer. A reference that names an answer form but leaves it empty
     (``"...\\n####"``, ``"\\boxed{}"``), or whose answer phrase hedges between several values,
-    is ``None`` too.
+    is ``None`` too. So is one whose ``####`` line is not a number and has more text after it
+    (``"#### Solution\\nSix times seven is 42."``): that line may be a markdown heading over an
+    unmarked body, and a reference must not be ambiguous. A completion's ``####`` line is its
+    answer either way (``"#### Paris\\nHope this helps!"``).
     """
     found = _explicit_answer(text)
     if found is not None:
-        if _is_hedge(found):
+        number = parse_number(found.answer)
+        if _is_hedge(found) or (found.text_follows and number is None):
             return None
-        return FinalAnswer(found.answer, parse_number(found.answer))
+        return FinalAnswer(found.answer, number)
     bare = text.strip()
     if not bare or "\n" in bare or _names_an_answer_form(bare):
         return None
