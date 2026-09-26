@@ -4,8 +4,8 @@ Covers:
   - #49 End-to-end --push-as wiring with mocked HF Hub.
   - #53 build_logits_processors degrades gracefully without outlines/lmfe;
     chat-completions wires processors into _generate_response.
-  - #54 evaluate_candidate timing + score; run_auto_quant_picker happy
-    path + soft-fallback; serve auto_quant flow logs picked candidate.
+  - #54 auto-quant picker helpers were removed with the module in v0.76.0 (#1131);
+    the serve-side refusal is covered by test_issue816_auto_quant_refusal.py.
 """
 
 from __future__ import annotations
@@ -150,99 +150,6 @@ class TestGenerateResponseSignature:
         # for non-None processors).
         assert 'gen_kwargs["logits_processor"] = logits_processor' in src
         assert "model.generate(**gen_kwargs)" in src
-
-
-# ---------------------------------------------------------------------------
-# #54 — auto-quant picker
-# ---------------------------------------------------------------------------
-
-
-class TestEvaluateCandidate:
-    def test_empty_prompts_rejected(self):
-        from soup_cli.utils.auto_quant import evaluate_candidate
-
-        with pytest.raises(ValueError, match="at least one prompt"):
-            evaluate_candidate("test", eval_fn=lambda _p: ("", True), prompts=[])
-
-    def test_all_correct_marks_ok(self):
-        from soup_cli.utils.auto_quant import evaluate_candidate
-
-        cand = evaluate_candidate(
-            "test", eval_fn=lambda _p: ("resp", True),
-            prompts=["a", "b", "c"],
-        )
-        assert cand.score == 1.0
-        assert cand.ok is True
-        assert cand.latency_ms >= 0
-
-    def test_eval_crash_marks_not_ok(self):
-        from soup_cli.utils.auto_quant import evaluate_candidate
-
-        def _flaky(prompt):
-            if prompt == "b":
-                raise RuntimeError("boom")
-            return ("ok", True)
-
-        cand = evaluate_candidate(
-            "test", eval_fn=_flaky, prompts=["a", "b", "c"],
-        )
-        # Score = 2/3 because "b" crashed (counted as wrong)
-        assert cand.score == pytest.approx(2 / 3)
-        assert cand.ok is False  # any crash → not ok
-
-    def test_below_threshold_marks_not_ok(self):
-        from soup_cli.utils.auto_quant import evaluate_candidate
-
-        cand = evaluate_candidate(
-            "test", eval_fn=lambda p: ("", p == "a"),
-            prompts=["a", "b", "c", "d"],
-            min_correct_fraction=0.5,
-        )
-        # 1/4 = 0.25 < 0.5 → not ok
-        assert cand.score == 0.25
-        assert cand.ok is False
-
-
-class TestRunAutoQuantPicker:
-    def test_picks_best_when_threshold_passes(self):
-        from soup_cli.utils.auto_quant import run_auto_quant_picker
-
-        # Two candidates, both pass quality, but "fast" is faster
-        def _slow(_p):
-            return ("", True)
-
-        def _fast(_p):
-            return ("", True)
-
-        # Both score 1.0; tie-break by latency. We can't deterministically
-        # test which is faster (real timing) — instead we test that picker
-        # returns one of them.
-        result = run_auto_quant_picker(
-            candidate_specs=[("slow", _slow), ("fast", _fast)],
-            prompts=["a"],
-            min_score=0.5,
-        )
-        assert result.name in {"slow", "fast"}
-        assert result.score == 1.0
-
-    def test_soft_fallback_when_no_candidate_passes(self):
-        from soup_cli.utils.auto_quant import run_auto_quant_picker
-
-        # Both fail — score 0/3 < 0.9; min_correct_fraction default 0.5
-        # also fails so ok=False.
-        result = run_auto_quant_picker(
-            candidate_specs=[("a", lambda _p: ("", False)),
-                             ("b", lambda _p: ("", False))],
-            prompts=["x", "y", "z"],
-            min_score=0.9,
-        )
-        # Soft fallback returns *some* candidate so server can bind
-        assert result.name in {"a", "b"}
-
-
-# ---------------------------------------------------------------------------
-# #49 — End-to-end --push-as integration test (mocked HF)
-# ---------------------------------------------------------------------------
 
 
 class TestPushAsResumeIntegration:
