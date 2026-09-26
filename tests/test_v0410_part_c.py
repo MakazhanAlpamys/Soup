@@ -197,12 +197,12 @@ class TestSoupConfigIntegration:
             training={
                 "quantization": "none",
                 "lora": {"init_strategy": "loftq", "loftq_iter": 2, "loftq_bits": 4},
-                "optimizer": "badam",
+                "optimizer": "grokadamw",
                 "lr_groups": {"q_proj": 1e-4},
             },
         )
         assert cfg.training.lora.init_strategy == "loftq"
-        assert cfg.training.optimizer == "badam"
+        assert cfg.training.optimizer == "grokadamw"
         assert len(cfg.training.lr_groups) == 1
 
     def test_expand_layers_field_validator_rejects_bool(self):
