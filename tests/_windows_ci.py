@@ -5,6 +5,13 @@ here rather than in one of those files because the guard has now been needed in
 four of them, and this repo has been bitten three times by a predicate that was
 copied instead of shared (#372, #392, #424). ``test_windows_ci_guard_is_not_
 duplicated`` fails if a second copy appears.
+
+Before reaching for the skip, look at the crash frame. When it is a CPU bf16 or
+fp16 matmul (a real step under CPU autocast; trl's configs default to
+``bf16=True`` even with ``use_cpu=True``), request the ``aten_half_matmuls``
+fixture from ``tests/conftest.py`` instead. Its half-precision matmuls then run
+on ATen's precompiled kernels, not oneDNN's or MKL's run-time dispatched ones, its
+attention runs in fp32, and the test keeps running on every cell.
 """
 
 from __future__ import annotations

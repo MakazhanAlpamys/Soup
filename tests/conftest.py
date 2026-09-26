@@ -145,6 +145,42 @@ def _isolate_experiments_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
 
 
 @pytest.fixture
+def aten_half_matmuls(monkeypatch: pytest.MonkeyPatch):
+    """Keep a CPU bf16/fp16 step off oneDNN and off MKL's half-precision GEMMs.
+
+    For a test that runs a real step under CPU autocast: its half-precision matmuls
+    run on ATen's precompiled kernels instead, and attention runs in fp32. Two routes
+    in such a step pick their instruction set at run time from the library's own CPU
+    probe:
+
+    * a bf16 matmul whose ``m*n*k`` exceeds 16**3 goes to oneDNN whenever oneDNN
+      reports bf16 for the CPU (an AVX-512 or AVX2-VNNI-2 host), and to ATen's
+      precompiled ``gemm`` otherwise (``mkldnn_gemm``,
+      ``aten/src/ATen/native/mkldnn/Matmul.cpp``); fp16 goes the same way;
+    * the fused CPU SDPA kernel multiplies its bf16/fp16 blocks with MKL's
+      ``cblas_gemm_bf16bf16f32`` / ``cblas_gemm_f16f16f32`` (``MKL_VERBOSE=1`` logs
+      128 ``GEMM_BF16BF16F32`` calls in one step of #1235's test).
+
+    On part of GitHub's ``windows-latest`` fleet the first such matmul, a oneDNN one,
+    kills the interpreter with ``0xc000001d`` (main CI run 36251313755), while the
+    same hosts run fp32 training (MKL SGEMM) and bf16 element-wise ops (ATen) without
+    a fault. ``torch.backends.mkldnn.enabled = False`` sends the first route to ATen
+    (it also gates the SDPA brgemm), and SDPA's math backend upcasts q/k/v to fp32,
+    which puts attention on the SGEMM an fp32 run already uses.
+
+    Unlike ``skip_on_windows_ci`` the test keeps running on every cell under the same
+    autocast. A box without AVX-512 never reached oneDNN here anyway
+    (``ONEDNN_VERBOSE=1`` logs no primitive for these steps).
+    """
+    import torch
+    from torch.nn.attention import SDPBackend, sdpa_kernel
+
+    monkeypatch.setattr(torch.backends.mkldnn, "enabled", False)
+    with sdpa_kernel([SDPBackend.MATH]):
+        yield
+
+
+@pytest.fixture
 def tmp_data_dir(tmp_path: Path) -> Path:
     """Create a temp directory with sample training data."""
     data_dir = tmp_path / "data"
