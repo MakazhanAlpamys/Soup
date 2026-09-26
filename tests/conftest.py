@@ -145,6 +145,31 @@ def _isolate_experiments_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
 
 
 @pytest.fixture
+def onednn_off(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Run a CPU bf16/fp16 training step on ATen's own matmul kernels, not oneDNN's.
+
+    For a test that runs a real step under CPU autocast. On x86, torch hands a bf16
+    matmul whose ``m*n*k`` exceeds 16**3 to oneDNN whenever oneDNN reports bf16 for
+    the CPU (an AVX-512 or AVX2-VNNI-2 host), and to ATen's precompiled ``gemm``
+    otherwise (``mkldnn_gemm`` in ``aten/src/ATen/native/mkldnn/Matmul.cpp``); fp16
+    goes the same way on AVX512-FP16 hosts. oneDNN generates that kernel at run time
+    from its own CPUID probe. On part of GitHub's ``windows-latest`` fleet the first
+    such matmul kills the interpreter with ``0xc000001d`` (main CI run 36251313755,
+    #1235's bf16 tests), while the same hosts run fp32 training (MKL) and bf16
+    element-wise ops (ATen) without a fault. The matmul route and the SDPA brgemm
+    route (``could_pack``) both check ``torch.backends.mkldnn.enabled`` first, so with
+    it off no oneDNN code runs in the step.
+
+    Unlike ``skip_on_windows_ci`` the test keeps running on every cell under the same
+    autocast; only the matmul library changes. A box without AVX-512 never reached
+    oneDNN here anyway (``ONEDNN_VERBOSE=1`` logs no primitive for these steps).
+    """
+    import torch
+
+    monkeypatch.setattr(torch.backends.mkldnn, "enabled", False)
+
+
+@pytest.fixture
 def tmp_data_dir(tmp_path: Path) -> Path:
     """Create a temp directory with sample training data."""
     data_dir = tmp_path / "data"

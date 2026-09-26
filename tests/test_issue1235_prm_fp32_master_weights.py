@@ -20,6 +20,11 @@ device="cuda")`` on a CPU-only box builds the model a GPU run builds. Mixed
 precision runs as CPU autocast through ``use_cpu=True``, which goes through the
 same Accelerate wrapper (autocast the forward, convert its outputs to fp32) that
 CUDA autocast does. Nothing here touches a GPU.
+
+Those CPU bf16/fp16 steps run with oneDNN off (``onednn_off`` in conftest.py). On
+part of GitHub's ``windows-latest`` fleet the first bf16 matmul oneDNN runs dies
+with ``0xc000001d`` and takes the rest of the cell with it; the dtypes this file
+pins do not depend on which library multiplies the matrices.
 """
 
 from __future__ import annotations
@@ -153,7 +158,7 @@ def _max_delta_per_tensor(before, model, groups):
 
 
 @pytest.fixture
-def precision(monkeypatch):
+def precision(monkeypatch, onednn_off):
     """Pin the ``(bf16, fp16)`` flags ``train()`` asks for, and keep the run on CPU.
 
     ``use_cpu=True`` is what lets ``bf16=True`` run on a box with no GPU, as CPU
@@ -161,7 +166,8 @@ def precision(monkeypatch):
     has a card from training on it; the tests assert ``args.use_cpu`` so a patch
     that did not take cannot pass silently. A factory rather than a subclass, so
     the arguments object stays a real, picklable ``TrainingArguments`` for
-    ``save_model``.
+    ``save_model``. The step runs with oneDNN off (``onednn_off``), which the tests
+    assert for the same reason.
     """
     import sys
 
@@ -269,6 +275,8 @@ class TestBf16MixedPrecisionTrains:
         at 1.0, whose nearest bf16 neighbours are 2**-8 below and 2**-7 above, so a
         bf16 base leaves every one of them where it was.
         """
+        import torch
+
         precision(True, False)
         wrapper = _setup(prm_base, tmp_path, lr=lr, epochs=1, batch_size=len(ROWS))
         before = _snapshot(wrapper.model)
@@ -277,6 +285,7 @@ class TestBf16MixedPrecisionTrains:
 
         trainer = wrapper.trainer
         assert trainer.args.use_cpu
+        assert not torch.backends.mkldnn.enabled, "the bf16 step ran with oneDNN on"
         assert trainer.args.bf16 and trainer.accelerator.native_amp, "autocast was not on"
         assert trainer.state.global_step == 1
         deltas = _max_delta_per_tensor(before, wrapper.model, ("norms", "attn/mlp"))
@@ -293,6 +302,8 @@ class TestBf16MixedPrecisionTrains:
         """The issue's run: 4 rows, batch 1, 2 epochs. With the head patched to fp32
         and the base left bf16, 100% of the norms and 84.7% of the attention/MLP
         elements were still bit-identical after these 8 steps."""
+        import torch
+
         precision(True, False)
         wrapper = _setup(prm_base, tmp_path, lr=lr)
         before = _snapshot(wrapper.model)
@@ -300,6 +311,7 @@ class TestBf16MixedPrecisionTrains:
         wrapper.train()
 
         assert wrapper.trainer.args.use_cpu
+        assert not torch.backends.mkldnn.enabled, "the bf16 steps ran with oneDNN on"
         assert wrapper.trainer.args.bf16 and wrapper.trainer.accelerator.native_amp
         assert wrapper.trainer.state.global_step == 8
         unchanged = _unchanged_fraction_per_group(before, wrapper.model)
@@ -345,16 +357,17 @@ class TestPreAmpereFp16:
         wrapper.train()
 
         assert wrapper.trainer.args.use_cpu
+        assert not torch.backends.mkldnn.enabled, "the fp16 step ran with oneDNN on"
         assert wrapper.trainer.args.fp16 is True
         assert {"reward_head.weight", "reward_head.bias"} <= set(seen), sorted(seen)
         wrong = {n: str(d) for n, d in seen.items() if d != torch.float32}
         assert not wrong, f"the fp16 GradScaler would unscale these: {wrong}"
 
-    def test_an_fp16_autocast_grad_scaler_step_trains(self, prm_base, tmp_path):
+    def test_an_fp16_autocast_grad_scaler_step_trains(self, prm_base, tmp_path, onednn_off):
         """An optimizer step the way Accelerate runs fp16 on a CUDA card: autocast
         only ``model.forward``, convert its outputs to fp32 (``prepare_model`` in
         ``accelerate/accelerator.py``), and scale the loss. CPU autocast and the CPU
-        GradScaler stand in for the CUDA ones.
+        GradScaler stand in for the CUDA ones, with oneDNN off (``onednn_off``).
 
         The scaler starts at 2**16 and, as on a card, skips the steps whose scaled
         gradients overflow fp16 and halves the scale (this model takes its first
@@ -400,6 +413,7 @@ class TestPreAmpereFp16:
                 taken_at = attempt
                 break
         assert taken_at is not None, "the GradScaler skipped every step"
+        assert not torch.backends.mkldnn.enabled, "the fp16 step ran with oneDNN on"
         deltas = _max_delta_per_tensor(before, model, ("norms", "attn/mlp"))
         frozen = sorted(name for name, delta in deltas.items() if delta == 0.0)
         assert not frozen, f"an fp16-autocast step left these bit-identical: {frozen}"
@@ -566,3 +580,23 @@ class TestTheQuantizationMessages:
             load_config_from_string(self._PRM + "training: {quantization: gptq}\n")
         assert "task='prm' does not apply training.quantization" in str(exc.value)
         assert "checkpoint precision" not in str(exc.value)
+
+
+class TestTheOneDnnSwitchOffStaysScoped:
+    """Last in the file on purpose: it runs after every test that used ``onednn_off``.
+
+    The fixture must move only the steps that ask for it. One that leaked (made
+    autouse or session-wide, or no longer restored) would quietly move every later
+    test in the session off oneDNN, and a skipped oneDNN path is invisible in a
+    passing run.
+    """
+
+    def test_the_fixture_turns_it_off(self, onednn_off):
+        import torch
+
+        assert not torch.backends.mkldnn.enabled
+
+    def test_outside_the_fixture_it_is_back_on(self):
+        import torch
+
+        assert torch.backends.mkldnn.enabled, "onednn_off leaked out of the tests using it"
