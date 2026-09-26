@@ -29,6 +29,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from soup_cli.utils.advanced_precision import (
+    UNSLOTH_PRECISION_INCOMPATIBLE_REASON,
+)
+
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from soup_cli.config.schema import SoupConfig
 
@@ -234,9 +238,34 @@ _TRANSFORMERS_AUDIO_SFT: tuple[SupportEntry, ...] = (
 )
 
 
+_UNSLOTH_SFT: tuple[SupportEntry, ...] = (
+    SupportEntry(
+        "training.quantization_aware",
+        REJECTED,
+        f"QAT and FP8 training are not compatible with the unsloth backend "
+        f"({UNSLOTH_PRECISION_INCOMPATIBLE_REASON})",
+        issue=1124,
+    ),
+    SupportEntry(
+        "training.fp8_attention",
+        REJECTED,
+        f"fp8_attention is not supported on backend=unsloth "
+        f"({UNSLOTH_PRECISION_INCOMPATIBLE_REASON})",
+        issue=1124,
+    ),
+    SupportEntry(
+        "training.nvfp4",
+        REJECTED,
+        f"nvfp4 is not supported on backend=unsloth ({UNSLOTH_PRECISION_INCOMPATIBLE_REASON})",
+        issue=1124,
+    ),
+)
+
+
 #: ``(task, backend, modality)`` -> the settings that combination does not honour.
 REGISTRY: dict[tuple[str, str, str], tuple[SupportEntry, ...]] = {
     ("sft", "mlx", "text"): _MLX_SFT,
+    ("sft", "unsloth", "text"): _UNSLOTH_SFT,
     ("sft", "transformers", "vision"): _TRANSFORMERS_VISION_SFT,
     ("sft", "transformers", "audio"): _TRANSFORMERS_AUDIO_SFT,
 }
@@ -265,6 +294,10 @@ TRAINER_MODULES: dict[tuple[str, str, str], tuple[str, ...]] = {
         "soup_cli/trainer/rewind_mlx.py",
         "soup_cli/trainer/loss_summary.py",
     ),
+    # utils/unsloth.py handles the loader path. trainer/sft.py::_setup_unsloth is not listed
+    # here because listing sft.py would cause the drift guard to inspect transformers-only
+    # precision reads; an AST test in test_issue1124 guards _setup_unsloth instead.
+    ("sft", "unsloth", "text"): ("soup_cli/utils/unsloth.py",),
     ("sft", "transformers", "vision"): _TRANSFORMERS_SFT_MODULES,
     ("sft", "transformers", "audio"): _TRANSFORMERS_SFT_MODULES,
 }
@@ -276,8 +309,9 @@ def unsupported_for(
     """Every declared gap for a task/backend/modality combination, or ``()`` if unreviewed."""
     if (task, backend, modality) in REGISTRY:
         return REGISTRY[(task, backend, modality)]
-    # MLX has no modality-specific trainers; its SFT gaps apply to any modality setting.
-    if backend == "mlx":
+    # MLX and Unsloth have no modality-specific trainers; their SFT gaps
+    # apply to any modality setting.
+    if backend in ("mlx", "unsloth"):
         return REGISTRY.get((task, backend, DEFAULT_MODALITY), ())
     return ()
 
