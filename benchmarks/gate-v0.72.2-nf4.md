@@ -297,7 +297,7 @@ valid resident baseline at 3B on this box** — resident bf16 OOMs (v0.72.0) and
 resident NF4 spills. The honest claim remains the one v0.72.0 made at 0.5B, not
 a 3B speed-up ratio.
 
-Remaining row pending: the 8B headline.
+Remaining row pending: the 8B headline. — SATISFIED, measured 2026-09-19 and recorded 2026-09-20; see the measured post-#331 row below.
 
 ---
 
@@ -340,7 +340,88 @@ have printed ~52 B.
 
 ---
 
-## Post-#331 re-measurement — PENDING ([#361](https://github.com/MakazhanAlpamys/Soup/issues/361))
+## Post-#331 re-measurement — MEASURED 2026-09-19 ([#361](https://github.com/MakazhanAlpamys/Soup/issues/361))
+
+The run date is recovered from the machine, not from the JSON (which carries no
+timestamp): `row-361.json` on the reference laptop was created **2026-09-19
+05:17:12 IST** and last written **05:19:13 IST** (UTC+05:30), i.e. 2026-09-18
+23:47–23:49 UTC. Two readings corroborate it: the harness's own output ends
+`ROW WRITTEN 05:19:16`, and the 121 s span between the two file times is
+consistent with the measured window (50 steps × 2431.5 ms = 121.6 s), the
+per-step flush opening the file at step 1. The row reached #361 at 2026-09-19
+00:24 UTC, 35 minutes after the run ended. This record was written 2026-09-20,
+when this PR opened; the heading carries the measurement date, as every other
+heading in this file does.
+
+Measured post-#331 row, added — the rows above stay verbatim:
+
+| Model | Quant | Store | tok/s | GPU util | Peak VRAM | SM clock | eff TFLOPS | % of same-session ceiling |
+|---|---|---|---|---|---|---|---|---|
+| **Llama-3.1-8B-Instruct** | NF4 | **5.70 GB pinned** | **208.6** | 100% | **2.40 GB** | 1935 MHz / 59 C | 9.17 | 59% |
+
+Machine row: `results/issue361-post-repair-8b-nf4.json` (`--json` output of
+[`harness/issue361_nf4_throughput.py`](harness/issue361_nf4_throughput.py),
+committed as written).
+
+Hardware for **this** row, stated separately because it is not the gate box at
+the top of this record: **Windows 11 · RTX 3050 Laptop 4 GB (CC 8.6) ·
+16.8 GB RAM · NVMe** · Python 3.10.11 (the JSON's `versions`), measured by
+@umran666 on their own laptop. The gate box is a different machine with the
+**same GPU model** — 16.9 GB RAM, Python 3.10.8 — and every row above was
+measured on it.
+
+Run-from note, reconciling the SHAs. The machine row records the harness
+commit `9635673`; the run was from `main` at `1f1f1438` plus the #1014
+harness, which landed on `main` as `3e610c68` — both above the `f8226214`
+floor. An earlier issue comment said `main` at `2d1714b`; the numbers are
+identical, so it is one run with two SHAs attached, and this record
+governs.
+
+Invocation: `python benchmarks/harness/issue361_nf4_throughput.py
+--weights C:\llama31-8b-instruct --shards <scratch dir> --json
+benchmarks/results/issue361-post-repair-8b-nf4.json`, every other flag the
+protocol default (batch 1, S=512, 10 warm-up + 50 measured,
+`PagedAdamW8bit`, double buffering, same-session ceiling). The shard dir
+was a scratch location, since deleted; it is not recorded in the JSON.
+No run was discarded: the slowest measured step (3479 ms against a
+2431.5 ms median) is retained in the JSON's `step_time_ms.max`.
+
+**Read this row with its clock.** The pre-repair row ran at 952 MHz / 70 C, this
+one at 1935–1957 MHz / 59 C — the same GPU model on a different laptop, at
+roughly half its clock and running hotter. Two readings of the old 952 MHz fit
+the evidence and this comparison cannot tell them apart: a throttled or
+power-limited session (AC/power plan not recorded for the old row), or simply
+a lower power limit and weaker cooling on that laptop. The 1.74x
+raw gain (208.6 / 119.6) is therefore a clock, not a speedup: per unit clock
+the new code is ~14% slower (1.744 / 2.033 = 0.858), matching the same-session
+ceiling fraction moving 68% -> 59% to within 1% (59/68 = 0.868). Do not compare
+the two tok/s figures directly.
+
+**Large-layer-streaming asterisk, kept attached to the 68% -> 59% number.**
+The memory pattern changed between the rows: large-layer streaming moved
+`embed_tokens` + `lm_head` into the pinned store, so the store grew by exactly
+two 0.525B bf16 tensors (2 x 0.525e9 x 2B = 2.10 GB, matching the 5.70 - 3.60
+GB delta) while peak VRAM *fell* (3.32 GB allocated on the old row, 2.40 GB
+allocated / 2.66 GB reserved on this one). Even the ceiling-fraction
+comparison is therefore not like-for-like on efficiency — stated here, not
+only in the issue thread.
+
+**Stack delta, recorded without attribution.** The old row ran torch
+2.5.1+cu121 · bitsandbytes 0.49.2 · transformers 4.57.6 · peft 0.18.1 ·
+trl 0.19.1 · accelerate 1.12.0 · Python 3.10.8; this one ran torch
+2.6.0+cu124 · bitsandbytes 0.50.2 · transformers 5.16.1 · peft 0.21.0 ·
+trl 0.29.1 · accelerate 1.15.0 · Python 3.10.11 (see the JSON's `versions`).
+The clock accounts for the tok/s delta and the memory-pattern change for
+the store/peak delta; the residual ~14% per-clock shortfall is **not
+attributed** — it could be the #331 repair, the memory-pattern change, or
+the stack delta just listed, and this record claims none of the three. No
+attribution to the bitsandbytes minor move is claimed either — but the
+version is stated here because the gate's NF4 claim rests on
+identical bitsandbytes kernels, and the two 4-bit compute paths'
+disagreement is an open finding (#776).
+
+The rest of this section (the PENDING text, the owed-by line, the expected
+direction) stays as it was written:
 
 The 119.6 tok/s / 3.32 GB row above predates the #331 repair and has not been
 re-run on repaired code. The protocol to repeat is
@@ -361,3 +442,13 @@ figure above it is not impossible, but it needs its own explanation before it
 is recorded rather than after. The 3.32 GB peak is re-measured rather than
 carried over, because large-layer streaming moved `embed_tokens` and `lm_head`
 out of the resident allocation (see `docs/performance-and-quantization.md`).
+
+**Outcome vs the expected direction, recorded rather than edited away.** The
+figure came in *above* 119.6 tok/s, and it has its explanation before it, as
+required: a 952 → 1935 MHz clock change accounts for the whole excess and then
+some. Per unit clock the repair direction holds (about −14%, vs −4.8% at 32B
+— different clocks, different memory patterns, so read that as same-direction,
+not same-size).
+
+Both run-it-from floors from #361 are satisfied: the run landed above
+`f8226214` and above the later `76c23541`.
