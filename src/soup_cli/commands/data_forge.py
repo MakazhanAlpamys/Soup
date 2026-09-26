@@ -95,6 +95,7 @@ def forge(
     """
     from soup_cli.utils.data_forge import (
         JUDGE_PROVIDERS,
+        ForgeJudgeStats,
         build_forge_plan,
         discover_documents,
         make_judge_provider_fn,
@@ -150,10 +151,13 @@ def forge(
             )
             raise typer.Exit(2)
         try:
+            # #1221: fail each broken call loudly so it is counted and
+            # reported, instead of turning into an empty-answer row.
             judge_fn = make_judge_provider_fn(
                 canonical,
                 model=judge_model,
                 base_url=judge_base_url,
+                raise_on_error=True,
             )
         except (TypeError, ValueError, ImportError) as exc:
             console.print(
@@ -177,6 +181,7 @@ def forge(
         console.print(f"[red]Plan failed:[/] {escape(str(exc))}")
         raise typer.Exit(1) from exc
 
+    judge_stats = ForgeJudgeStats()
     rows = synthesise_forge_rows(
         doc_paths,
         task=plan.task,
@@ -185,7 +190,31 @@ def forge(
         teacher=plan.teacher,
         uncertainty_threshold=plan.uncertainty_threshold,
         max_chunk_chars=max_chunk_chars,
+        stats=judge_stats,
     )
+
+    failure_summary = ""
+    if judge_stats.failures:
+        if judge_provider is not None:
+            from soup_cli.utils.recipe_run import _provider_endpoint_label
+
+            provider_name = judge_provider.strip().lower()
+            endpoint = _provider_endpoint_label(provider_name, judge_base_url)
+            backend = f"--judge-provider {provider_name} ({endpoint})"
+        else:
+            backend = "the offline judge"
+        failure_summary = (
+            f"{judge_stats.failures} of {judge_stats.calls} judge calls failed "
+            f"for {backend}; first error: {judge_stats.first_error}"
+        )
+
+    if not rows and judge_stats.failures:
+        # #1221: a judge that produced nothing usable must fail loudly
+        # rather than write a dataset (of empty answers or otherwise).
+        console.print(
+            f"[red]No usable rows produced:[/] {escape(failure_summary)}"
+        )
+        raise typer.Exit(1)
 
     if not rows:
         console.print(
@@ -201,18 +230,30 @@ def forge(
         console.print(f"[red]Write failed:[/] {escape(str(exc))}")
         raise typer.Exit(1) from exc
 
+    judge_line = ""
+    if judge_stats.failures:
+        judge_line = (
+            f"Judge calls: [bold yellow]{judge_stats.failures} of "
+            f"{judge_stats.calls} failed[/]\n"
+        )
+        title = "[bold yellow]Data Forge — synth complete with judge failures[/]"
+    else:
+        title = "[bold green]Data Forge — synth complete[/]"
     console.print(
         Panel(
             f"Task:        [bold]{escape(plan.task)}[/]\n"
             f"Docs scanned:[bold] {plan.num_docs}[/]\n"
             f"Rows kept:   [bold]{len(rows)}[/] / target {plan.target_rows}\n"
+            f"{judge_line}"
             f"Teacher:     [bold]{escape(plan.teacher)}[/]\n"
             f"Threshold:   [bold]{plan.uncertainty_threshold:.2f}[/]\n"
             f"Dataset:     [bold]{escape(dataset_path)}[/]\n"
             f"Provenance:  [bold]{escape(manifest_path)}[/]",
-            title="[bold green]Data Forge — synth complete[/]",
+            title=title,
         )
     )
+    if failure_summary:
+        console.print(f"[yellow]Warning:[/] {escape(failure_summary)}")
     if judge_provider is None:
         console.print(
             "[dim]The built-in judge is the deterministic offline stub. "
