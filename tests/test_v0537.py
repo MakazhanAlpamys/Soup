@@ -2084,7 +2084,7 @@ class TestSftPretrainPreTokenizedShortCircuit:
         from soup_cli.trainer.sft import _maybe_load_pretokenized
 
         captured = MagicMock()
-        result = _maybe_load_pretokenized(cfg.data, cfg.base, captured)
+        result = _maybe_load_pretokenized(cfg.data, cfg.base, captured, task="sft")
         assert result is not None
         train_ds, eval_ds = result
         assert len(train_ds) == 2
@@ -2152,7 +2152,7 @@ class TestSftPretrainPreTokenizedShortCircuit:
         from soup_cli.trainer.sft import _maybe_load_pretokenized
 
         with pytest.raises(ValueError, match="cache hash mismatch"):
-            _maybe_load_pretokenized(cfg.data, cfg.base, MagicMock())
+            _maybe_load_pretokenized(cfg.data, cfg.base, MagicMock(), task="sft")
 
     def test_missing_metadata_proceeds_with_yellow_advisory(
         self, tmp_path, monkeypatch,
@@ -2171,7 +2171,7 @@ class TestSftPretrainPreTokenizedShortCircuit:
         from soup_cli.trainer.sft import _maybe_load_pretokenized
 
         captured = MagicMock()
-        result = _maybe_load_pretokenized(cfg.data, cfg.base, captured)
+        result = _maybe_load_pretokenized(cfg.data, cfg.base, captured, task="sft")
         assert result is not None
         train_ds, _ = result
         assert len(train_ds) == 2

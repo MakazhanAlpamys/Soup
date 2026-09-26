@@ -221,9 +221,9 @@ class TestGateRefusesACacheBuiltUnderAnotherSetting:
 
 class TestEveryGateCallerForwardsTheTask:
     def test_each_call_site_passes_task(self):
-        """The gate defaults to ``sft``, so a caller that drops ``task`` keys a
-        pretrain run as sft and refuses every cache ``soup data preprocess``
-        wrote for it."""
+        """A caller has to name ``task`` (keyword-only, no default since #1272),
+        and it has to be the run's own: keying a pretrain run as sft refuses every
+        cache ``soup data preprocess`` wrote for it."""
         import ast
         from pathlib import Path
 

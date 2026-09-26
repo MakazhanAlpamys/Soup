@@ -458,7 +458,7 @@ def _make_vision_trainer(
 
 
 def _maybe_load_pretokenized(
-    dcfg, base: str, console_obj: Console, tcfg=None, task: str = "sft",
+    dcfg, base: str, console_obj: Console, tcfg=None, *, task: str,
 ) -> Optional[Tuple[object, object]]:
     """v0.53.7 #86 — short-circuit tokenization when caller pre-tokenized via
     ``soup data preprocess``.
@@ -484,6 +484,7 @@ def _maybe_load_pretokenized(
     from soup_cli.utils.data_pipeline import (
         load_pretokenized_dataset,
         make_preprocess_cache_key,
+        preprocess_dataset_key_diff,
         preprocess_dataset_key_input,
         preprocess_mask_mode,
     )
@@ -508,8 +509,9 @@ def _maybe_load_pretokenized(
         source_format = metadata.get("format")
         if not isinstance(source_format, str) or not source_format:
             source_format = dcfg.format
+        dataset_key = preprocess_dataset_key_input(dcfg)
         current_key = make_preprocess_cache_key(
-            dataset_path=preprocess_dataset_key_input(dcfg),
+            dataset_path=dataset_key,
             tokenizer_name=base,
             max_length=dcfg.max_length,
             format_name=source_format,
@@ -528,8 +530,19 @@ def _maybe_load_pretokenized(
                 predates = "the cache predates chat_template keying (#1067); "
             elif "mask_mode" not in metadata:
                 predates = "the cache predates loss-mask keying (#1054); "
+            elif "key_schema" not in metadata:
+                predates = "the cache predates row-set keying (#1127); "
             else:
-                predates = ""
+                changed = preprocess_dataset_key_diff(
+                    metadata.get("dataset_key"), dataset_key
+                )
+                predates = (
+                    "the cache was built with a different "
+                    + ", ".join(f"data.{name}" for name in changed)
+                    + "; "
+                    if changed
+                    else ""
+                )
             raise ValueError(
                 "pre_tokenized cache hash mismatch: was generated with "
                 f"{stored_key!r}, current config implies {current_key!r}; "
