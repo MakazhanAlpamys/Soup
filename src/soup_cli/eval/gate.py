@@ -18,6 +18,7 @@ import yaml
 from pydantic import BaseModel, Field, field_validator
 
 from soup_cli import __version__
+from soup_cli.eval.results import newest_eval_rows
 from soup_cli.utils.paths import atomic_write_text, is_under_cwd
 
 logger = logging.getLogger(__name__)
@@ -282,23 +283,6 @@ def _row_provenance(row: Mapping[str, object]) -> Optional[dict[str, object]]:
     return None
 
 
-def _newest_row_per_benchmark(rows: list[dict]) -> dict[str, dict]:
-    """Keep the newest scored row for each benchmark.
-
-    ``rows`` arrive newest first (``created_at DESC, rowid DESC``), so the
-    first row seen for a benchmark is the one that counts. Score and
-    provenance must both come from that row: a re-measurement replaces the
-    stale score instead of only silencing its warning (#1224).
-    """
-    newest: dict[str, dict] = {}
-    for row in rows:
-        name = row.get("benchmark")
-        if not name or row.get("score") is None or name in newest:
-            continue
-        newest[name] = row
-    return newest
-
-
 def resolve_baseline(
     spec: Optional[str],
     *,
@@ -335,7 +319,10 @@ def resolve_baseline(
                     f"registry baseline not found: {ref} (use `soup registry list`)"
                 )
             rows = store.get_eval_results(entry_id)
-        newest = _newest_row_per_benchmark(rows)
+        newest = {
+            row["benchmark"]: row
+            for row in newest_eval_rows(rows)
+        }
         scores = {name: float(row["score"]) for name, row in newest.items()}
         # Registry rows predate the stamp (or carry it inside details_json).
         # Checked per benchmark: re-measuring one benchmark says nothing about
