@@ -566,3 +566,74 @@ class TestTheQuantizationMessages:
             load_config_from_string(self._PRM + "training: {quantization: gptq}\n")
         assert "task='prm' does not apply training.quantization" in str(exc.value)
         assert "checkpoint precision" not in str(exc.value)
+
+
+@pytest.mark.cuda
+class TestRealCudaHardware:
+    """Follow-up to #1235 (#1318): verify ``task: prm`` on real CUDA hardware.
+
+    Runs only when a CUDA device is actually available. Covers both Ampere+ (bf16)
+    and pre-Ampere (fp16 with GradScaler) execution on a real GPU.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _require_cuda(self):
+        import torch
+
+        if not torch.cuda.is_available():
+            pytest.skip("CUDA device is not available")
+
+    def test_real_cuda_ampere_or_newer_bf16_run(self, prm_base, tmp_path):
+        """Real CUDA run under Ampere+ flags (bf16=True, fp16=False)."""
+        import torch
+
+        import soup_cli.trainer.prm as prm_mod
+
+        old_flags = prm_mod.bf16_fp16_flags
+        prm_mod.bf16_fp16_flags = lambda device, **_kw: (True, False)
+        try:
+            wrapper = _setup(prm_base, tmp_path, lr=1.0e-5, epochs=1, batch_size=len(ROWS), device="cuda")
+            before = _snapshot(wrapper.model)
+
+            wrapper.train()
+
+            trainer = wrapper.trainer
+            assert not trainer.args.use_cpu
+            assert trainer.args.bf16 and trainer.accelerator.native_amp
+            assert trainer.state.global_step >= 1
+
+            deltas = _max_delta_per_tensor(before, wrapper.model, ("norms", "attn/mlp"))
+            frozen = sorted(name for name, delta in deltas.items() if delta == 0.0)
+            assert not frozen, f"CUDA bf16 step left these bit-identical: {frozen}"
+        finally:
+            prm_mod.bf16_fp16_flags = old_flags
+
+    def test_real_cuda_pre_ampere_fp16_run(self, prm_base, tmp_path):
+        """Real CUDA run under pre-Ampere flags (bf16=False, fp16=True).
+
+        Runs enough epochs/steps so that the CUDA GradScaler has time to back off
+        its initial scale (2^16 -> 2^13) and take real optimizer steps.
+        """
+        import torch
+
+        import soup_cli.trainer.prm as prm_mod
+
+        old_flags = prm_mod.bf16_fp16_flags
+        prm_mod.bf16_fp16_flags = lambda device, **_kw: (False, True)
+        try:
+            # 8 epochs with batch size 1 gives 32 step opportunities, enough for scale back-off and updates
+            wrapper = _setup(prm_base, tmp_path, lr=1.0e-5, epochs=8, batch_size=1, device="cuda")
+            before = _snapshot(wrapper.model)
+
+            wrapper.train()
+
+            trainer = wrapper.trainer
+            assert not trainer.args.use_cpu
+            assert trainer.args.fp16
+            assert trainer.state.global_step >= 1
+
+            unchanged = _unchanged_fraction_per_group(before, wrapper.model)
+            stuck = {g: unchanged[g] for g in _TRAINED_GROUPS if unchanged[g] == 1.0}
+            assert not stuck, f"CUDA fp16 run left groups completely unchanged: {stuck}"
+        finally:
+            prm_mod.bf16_fp16_flags = old_flags
