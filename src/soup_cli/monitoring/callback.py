@@ -347,8 +347,10 @@ class _SoupTrainerCallback_body:  # noqa: N801
             except Exception:
                 pass
 
-        # Loss watchdog — detect loss spikes and auto-stop
-        if self._watchdog_enabled and not self._watchdog_fired and "loss" in logs:
+        # Loss watchdog — detect loss spikes and auto-stop. A log whose loss is
+        # None measured nothing (#1225): skip it, rather than compare None
+        # before the first loss or re-count the carried one after it.
+        if self._watchdog_enabled and not self._watchdog_fired and logs.get("loss") is not None:
             if loss > self._watchdog_threshold:
                 self._watchdog_counter += 1
                 if self._watchdog_counter >= self._watchdog_patience:

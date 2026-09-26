@@ -63,7 +63,8 @@ class TrainingDisplay:
         self.current_step = 0
         self.total_steps = 0
         self.current_epoch = 0
-        self.loss = 0.0
+        #: None until a loss is measured (#1225); the panel shows "-"
+        self.loss: Optional[float] = None
         self.lr = 0.0
         self.grad_norm: Optional[float] = None
         self.gpu_mem = ""

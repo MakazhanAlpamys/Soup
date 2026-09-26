@@ -784,6 +784,61 @@ class TestNoSyntheticZeroLoss:
         Console(file=buffer, width=120).print(display._render())
         assert "Loss: - LR: 1.00e-04" in _plain(buffer.getvalue())
 
+    def test_the_live_panel_shows_a_dash_before_the_first_log(self):
+        """The panel is drawn when training starts, before any log. It showed
+        0.0000 there until the first log replaced it with a measured loss, or
+        with "-" for a log that carried none."""
+        from io import StringIO
+
+        from rich.console import Console
+
+        from soup_cli.config.loader import load_config_from_string
+        from soup_cli.monitoring.display import TrainingDisplay
+
+        cfg = load_config_from_string(
+            "base: hf-internal-testing/tiny-random-gpt2\ntask: online_dpo\n"
+            "data:\n  train: x.jsonl\n"
+            'training:\n  online_dpo_judge: "ollama://m"\n'
+        )
+        buffer = StringIO()
+        Console(file=buffer, width=120).print(TrainingDisplay(cfg)._render())
+        assert "Loss: - LR:" in _plain(buffer.getvalue())
+
+    def test_the_loss_watchdog_skips_a_log_whose_loss_is_none(self):
+        """The watchdog compares ``loss > threshold``. With the callback now
+        starting from None rather than 0.0, a log carrying ``"loss": None``
+        before any measured loss raised TypeError there. It is skipped, it
+        does not count toward the patience, and real losses still stop the
+        run."""
+        from unittest.mock import MagicMock
+
+        from soup_cli.monitoring.callback import SoupTrainerCallback
+
+        callback = SoupTrainerCallback(
+            display=MagicMock(),
+            loss_watchdog=True,
+            loss_watchdog_threshold=3.0,
+            loss_watchdog_patience=2,
+        )
+        control = MagicMock(should_training_stop=False)
+
+        def log(step, logs):
+            state = MagicMock()
+            state.global_step, state.max_steps, state.epoch = step, 6, step / 6
+            callback.on_log(MagicMock(), state, control, logs=logs)
+
+        log(1, {"loss": None, "learning_rate": 1e-4})
+        assert callback._watchdog_counter == 0
+        assert control.should_training_stop is False
+
+        log(2, {"loss": 5.0, "learning_rate": 1e-4})
+        log(3, {"loss": None, "learning_rate": 1e-4})  # carried 5.0 is not re-counted
+        assert callback._watchdog_counter == 1
+        assert control.should_training_stop is False
+
+        log(4, {"loss": 5.0, "learning_rate": 1e-4})
+        assert control.should_training_stop is True
+
 
 # ---------------------------------------------------------------------------
 # Contract checks
