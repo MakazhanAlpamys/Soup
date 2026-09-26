@@ -60,6 +60,7 @@ from soup_cli.commands import (  # noqa: E402
 from soup_cli.commands import monitor as monitor_cmd  # noqa: E402
 from soup_cli.commands import quantize as quantize_cmd  # noqa: E402
 from soup_cli.commands import quickstart as quickstart_cmd  # noqa: E402
+from soup_cli.commands import rewind as rewind_cmd  # noqa: E402
 from soup_cli.commands import spectrum as spectrum_cmd  # noqa: E402
 from soup_cli.commands import (  # noqa: E402
     tui as tui_cmd,
@@ -68,6 +69,7 @@ from soup_cli.commands import (  # noqa: E402
     why as why_cmd,
 )
 from soup_cli.utils.constants import GITHUB_URL  # noqa: E402
+from soup_cli.utils.exit_codes import GateCommand  # noqa: E402
 
 console = Console()
 
@@ -77,6 +79,8 @@ _verbose = False
 _log_level = "normal"
 # v0.71.3 #183 — audit-log opt-out, set by the --no-audit-log callback flag.
 _audit_disabled = False
+# v0.71.41 #318 — telemetry opt-out.
+_telemetry_disabled = False
 
 # Global options that consume a following value (so the audit command-splitter
 # does not mistake the value for the subcommand name).
@@ -129,7 +133,7 @@ app.command()(sweep.sweep)
 app.command(name="diff")(diff.diff)
 app.command()(infer.infer)
 app.command()(profile.profile)
-app.command()(bench.bench)
+app.add_typer(bench.app, name="bench")
 app.command()(doctor_cmd.doctor)
 app.command()(quickstart_cmd.quickstart)
 app.command()(ui.ui)
@@ -140,6 +144,7 @@ app.add_typer(
 )
 app.command(name="history")(history.history)
 app.command(name="why")(why_cmd.why)
+app.command(name="rewind")(rewind_cmd.rewind)
 app.command(name="tui")(tui_cmd.tui)
 app.add_typer(
     spectrum_cmd.app, name="spectrum",
@@ -170,7 +175,7 @@ from soup_cli.commands import plugins as plugins_cmd  # noqa: E402
 app.add_typer(
     plugins_cmd.app,
     name="plugins",
-    help="List, enable, disable Soup plugins (v0.45.0).",
+    help="Discover, list, enable, and disable Soup plugins.",
 )
 
 # v0.46.0 Part B — Agent Forge.
@@ -443,7 +448,7 @@ from soup_cli.commands import lock as _lock_cmd  # noqa: E402
 app.add_typer(
     _lock_cmd.app,
     name="lock",
-    help="Shared run lockfile (write / show / check) - v0.67.0 Part E.",
+    help="Shared run lockfile (write / show / check).",
 )
 
 # v0.68.0 — Anti-trend insurance (compile / distill-prompt / compile-tools /
@@ -485,7 +490,7 @@ from soup_cli.commands import build as _build_cmd  # noqa: E402
 
 app.command(
     name="build",
-    help="dbt-for-SFT DAG: validate + plan dataset transforms (v0.69.0 Part A).",
+    help="dbt-for-SFT DAG: validate, plan, and materialise dataset transforms.",
 )(_build_cmd.build_cmd)
 
 # v0.69.0 Part B — `soup expect` (expectations suite).
@@ -493,7 +498,8 @@ from soup_cli.commands import expect as _expect_cmd  # noqa: E402
 
 app.command(
     name="expect",
-    help="Run an expectations suite against a JSONL dataset (v0.69.0 Part B).",
+    cls=GateCommand,
+    help="Run an expectations suite against a JSONL dataset.",
 )(_expect_cmd.expect_cmd)
 
 # v0.70.0 Part E — `soup iterative-dpo` (iterative DPO loop driver).
@@ -502,7 +508,7 @@ from soup_cli.commands import iterative_dpo as _iterative_dpo_cmd  # noqa: E402
 app.add_typer(
     _iterative_dpo_cmd.app,
     name="iterative-dpo",
-    help="Iterative DPO loop driver (v0.70.0 Part E).",
+    help="Iterative DPO sample, score, pair, and train loop.",
 )
 
 # v0.71.10 #200 — `soup ra-dit` (two-stage RA-DIT orchestrator).
@@ -519,7 +525,7 @@ app.add_typer(
 from soup_cli.commands import data_doctor as _data_doctor_cmd  # noqa: E402
 
 data.app.command(name="doctor")(_data_doctor_cmd.doctor)
-data.app.command(name="lint")(_data_doctor_cmd.lint)
+data.app.command(name="lint", cls=GateCommand)(_data_doctor_cmd.lint)
 
 # v0.71.36 — Data Moat II: topic map + Secret-Sharer canaries.
 from soup_cli.commands import data_topics as _data_topics_cmd  # noqa: E402
@@ -529,6 +535,11 @@ data.app.command(name="topics")(_data_topics_cmd.topics)
 from soup_cli.commands import data_canary as _data_canary_cmd  # noqa: E402
 
 data.app.add_typer(_data_canary_cmd.app, name="canary")
+
+# Automated Dataset Cleaning & Sanity Repair Pipeline.
+from soup_cli.commands import data_clean as _data_clean_cmd  # noqa: E402
+
+data.app.command(name="clean")(_data_clean_cmd.clean)
 
 # v0.71.28 — MCP server: drive Soup from any MCP client (Claude Code / Cursor /
 # Cline / Continue) over stdio.
@@ -661,26 +672,68 @@ def version(
         parts.append("no torch")
 
     # Installed extras
-    extras = []
-    for name, label in [
-        ("fastapi", "serve"),
-        ("vllm", "serve-fast"),
-        ("datasketch", "data"),
-        ("lm_eval", "eval"),
-        ("deepspeed", "deepspeed"),
-        ("wandb", "wandb"),
-    ]:
-        try:
-            __import__(name)
-            extras.append(label)
-        except ImportError:
-            pass
+    extras = _installed_extras()
 
     if extras:
         parts.append(f"extras: {', '.join(extras)}")
 
     console.print(" | ".join(parts))
     console.print(f"[dim]GitHub: [link={GITHUB_URL}]{GITHUB_URL}[/link][/]")
+
+
+def _installed_extras() -> list[str]:
+    """Extras whose requirements are all importable, derived from dist metadata."""
+    import importlib.metadata
+
+    try:
+        from importlib.metadata import PackageNotFoundError
+        from importlib.metadata import metadata as _metadata
+        from importlib.metadata import requires as _requires
+    except ImportError:
+        return []
+    try:
+        dist_meta = _metadata("soup-cli")
+        reqs = _requires("soup-cli") or []
+    except PackageNotFoundError:
+        return []
+    provided = dist_meta.get_all("Provides-Extra") or []
+    try:
+        from packaging.requirements import Requirement
+    except ImportError:
+        return []
+    installed: list[str] = []
+    for extra in provided:
+        names: list[str] = []
+        try:
+            for raw in reqs:
+                req = Requirement(raw)
+                if req.marker is None:
+                    # A bare requirement with no marker applies to every
+                    # install, not to this extra in particular.
+                    continue
+                if not req.marker.evaluate({"extra": extra}):
+                    continue
+                if req.name.lower().replace("_", "-") == "soup-cli":
+                    # Self-reference (e.g. all = ["soup-cli[train,...]"]):
+                    # it names our own extras, not a third-party package.
+                    continue
+                names.append(req.name)
+        except Exception:  # noqa: BLE001 — unreadable metadata is not installed
+            continue
+        if not names:
+            continue
+        try:
+            for name in names:
+                # Distribution metadata, not the import name: ``scikit-learn``
+                # / ``sklearn`` and ``pillow`` / ``PIL`` never match find_spec,
+                # which dropped data/vision/dev from ``version --full`` (#828).
+                importlib.metadata.distribution(name)
+        except importlib.metadata.PackageNotFoundError:
+            continue
+        except Exception:  # noqa: BLE001 — unreadable metadata, skip extra
+            continue
+        installed.append(extra)
+    return sorted(installed)
 
 
 @app.callback(invoke_without_command=True)
@@ -706,11 +759,17 @@ def main(
             "command under ~/.soup/audit.jsonl. v0.71.3."
         ),
     ),
+    no_telemetry: bool = typer.Option(
+        False,
+        "--no-telemetry",
+        help="Opt-out of anonymous hardware-only telemetry for this run.",
+    ),
 ):
     """Soup — fine-tune and post-train LLMs in one command."""
-    global _verbose, _log_level, _audit_disabled
+    global _verbose, _log_level, _audit_disabled, _telemetry_disabled
     _verbose = verbose
     _audit_disabled = no_audit_log
+    _telemetry_disabled = no_telemetry
     from soup_cli.utils.log_level import (
         apply_logging_level,
         parse_log_level,
@@ -757,6 +816,44 @@ def _audit_env_opt_out() -> bool:
     return val in {"1", "true", "yes", "on"}
 
 
+_ALL_SECRET_OPTION_STRINGS: frozenset[str] | None = None
+
+
+def _mask_audit_args(command: str, args: list[str]) -> tuple[str, ...]:
+    """Mask credential option values in ``args`` by option name.
+
+    Long credential option names are masked app-wide; short aliases (``-t``)
+    only for the command they belong to, since the same letter means
+    something else elsewhere. If the command does not resolve to a leaf,
+    every credential option string of the app is masked. A resolution
+    failure falls back to that widest set, never to the unmasked args.
+    """
+    global _ALL_SECRET_OPTION_STRINGS
+    import click
+
+    from soup_cli.utils.argv_redaction import (
+        all_secret_option_strings,
+        mask_secret_args,
+        resolve_command,
+        secret_option_strings,
+    )
+
+    root = typer.main.get_command(app)
+    if _ALL_SECRET_OPTION_STRINGS is None:
+        _ALL_SECRET_OPTION_STRINGS = all_secret_option_strings(root)
+    everything = _ALL_SECRET_OPTION_STRINGS
+    try:
+        resolved = resolve_command(root, [command, *args])
+        if isinstance(resolved, click.Group):
+            secret_opts = everything
+        else:
+            app_wide_longs = frozenset(o for o in everything if o.startswith("--"))
+            secret_opts = secret_option_strings(resolved) | app_wide_longs
+    except Exception:  # noqa: BLE001 — fall back to the widest mask
+        secret_opts = everything
+    return mask_secret_args(args, secret_opts)
+
+
 def _emit_audit_event(argv: list[str], exit_code: int) -> None:
     """Append one HIPAA/SOC2 audit record for this command. Best-effort.
 
@@ -773,7 +870,10 @@ def _emit_audit_event(argv: list[str], exit_code: int) -> None:
 
         from soup_cli.utils.audit_log import AuditEvent, append_audit_event
 
-        command, args = _split_command_args(argv)
+        command, raw_args = _split_command_args(argv)
+        # Credential option values are masked by option name here; the
+        # value-pattern layer in utils/audit_log.py still applies afterwards.
+        args = _mask_audit_args(command, raw_args)
         command = (command or "(root)")[:64] or "(root)"
         try:
             operator = getpass.getuser() or "unknown"
@@ -801,8 +901,79 @@ def _emit_audit_event(argv: list[str], exit_code: int) -> None:
         pass
 
 
+_REGISTERED_COMMANDS: frozenset[str] | None = None
+
+
+def _get_registered_commands() -> frozenset[str]:
+    """Return the set of known registered top-level CLI command names.
+
+    Used by telemetry to sanitize argv so private arguments (e.g. local paths
+    passed by mistake as subcommands) can NEVER leak into telemetry event names.
+    """
+    global _REGISTERED_COMMANDS
+    if _REGISTERED_COMMANDS is None:
+        cmds: set[str] = set()
+        for cmd in app.registered_commands:
+            name = cmd.name or getattr(cmd.callback, "__name__", None)
+            if name:
+                cmds.add(name)
+        for grp in app.registered_groups:
+            name = grp.name
+            if not name and getattr(grp, "typer_instance", None):
+                name = getattr(grp.typer_instance.info, "name", None)
+            if name:
+                cmds.add(name)
+        _REGISTERED_COMMANDS = frozenset(cmds)
+    return _REGISTERED_COMMANDS
+
+
+def _emit_telemetry(argv: list[str], duration_seconds: float) -> None:
+    """Send an opt-in, hardware-only telemetry ping at command exit. Best-effort.
+
+    Telemetry is strictly opt-IN via ``SOUP_TELEMETRY=1``; it is disabled by default,
+    by ``--no-telemetry``, or when ``SOUP_TELEMETRY`` is unset or falsy.
+    Never raises — telemetry must NEVER crash the CLI.
+    """
+    try:
+        if _telemetry_disabled or "--no-telemetry" in argv:
+            return
+
+        from soup_cli.utils.trackers import is_telemetry_enabled
+
+        if not is_telemetry_enabled():
+            return
+
+        from soup_cli import __version__
+        from soup_cli.utils.trackers import (
+            build_telemetry_payload,
+            get_or_create_distinct_id,
+            send_telemetry_payload,
+        )
+
+        raw_command, _ = _split_command_args(argv)
+        reg = _get_registered_commands()
+        if raw_command in reg or raw_command == "(root)":
+            command = raw_command[:64]
+        else:
+            command = "(unknown)"
+
+        payload = build_telemetry_payload(
+            soup_version=__version__,
+            command=command,
+            duration_seconds=duration_seconds,
+            distinct_id=get_or_create_distinct_id(),
+        )
+        send_telemetry_payload(payload)
+    except Exception:  # noqa: BLE001 — telemetry must never crash the CLI
+        pass
+
+
 def run():
     """Entry point with friendly error handling."""
+    import time  # noqa: PLC0415
+
+    start_time = time.monotonic()
+
     # v0.54.0 — rewrite `soup advise <data>` → `soup advise run <data>`.
     sys.argv = _rewrite_advise_argv(sys.argv)
     argv_snapshot = list(sys.argv)
@@ -838,6 +1009,11 @@ def run():
         # Defensive/unreachable: app() raises SystemExit(0) on success under
         # click standalone mode, so this normal-return path rarely fires.
         _emit_audit_event(argv_snapshot, 0)
+    finally:
+        try:
+            _emit_telemetry(argv_snapshot, time.monotonic() - start_time)
+        except Exception:
+            pass
 
 
 # When invoked via `soup` entry point, use run() for error handling.

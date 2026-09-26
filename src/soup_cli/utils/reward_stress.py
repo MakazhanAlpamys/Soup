@@ -29,8 +29,12 @@ from typing import Any, Optional
 DEFAULT_SENTINEL = "GOLD"
 _DEFAULT_SENTINEL = DEFAULT_SENTINEL
 
-# ``empty`` + the three ``reward_hack_control.SHAPING_KINDS``.
-ATTACKS: tuple[str, ...] = ("empty", "length", "repetition", "sentinel")
+CLASSIC_ATTACKS: tuple[str, ...] = ("empty", "length", "repetition", "sentinel")
+STRUCTURE_ATTACKS: tuple[str, ...] = (
+    "wrapped_junk",
+    "answer_spray",
+)
+ATTACKS: tuple[str, ...] = CLASSIC_ATTACKS + STRUCTURE_ATTACKS
 
 # > ``reward_hack_control._SHAPING_LENGTH_SAT`` (32) so a length-reward saturates.
 _LENGTH_ATTACK_WORDS = 60
@@ -68,17 +72,83 @@ class StressReport:
 # ---------------------------------------------------------------------------
 # Attack generation
 # ---------------------------------------------------------------------------
-def _attack_text(kind: str, sentinel: str) -> str:
+def generate_attack_variants(
+    kind: str,
+    *,
+    sentinel: str = _DEFAULT_SENTINEL,
+    gold: Optional[str] = None,
+) -> list[str]:
+    """Return multiple distinct completion strings for a given attack kind."""
     if kind == "empty":
-        return ""
+        return ["   ", "\n\n", ""]
     if kind == "length":
-        # A long ramble with NO answer — games a length-based reward.
-        return " ".join(["padding"] * _LENGTH_ATTACK_WORDS)
+        return [
+            " ".join(["padding"] * _LENGTH_ATTACK_WORDS),
+            " ".join(["ramble"] * 50),
+            " ".join(["filler"] * 80),
+        ]
     if kind == "repetition":
-        return " ".join(["loop"] * _REPETITION_COUNT)
+        return [
+            " ".join(["loop"] * _REPETITION_COUNT),
+            " ".join(["repeat"] * 45),
+            " ".join(["again"] * 50),
+        ]
     if kind == "sentinel":
-        # Spam a magic token — games a "contains a sentinel" reward.
-        return " ".join([sentinel] * _SENTINEL_COUNT)
+        return [
+            " ".join([sentinel] * _SENTINEL_COUNT),
+            " ".join([sentinel] * 10),
+            f"start {sentinel} middle {sentinel} end",
+        ]
+    if kind == "wrapped_junk":
+        return [
+            "<think>padding</think>padding",
+            "<think></think>a",
+            "<think>loop loop</think>loop",
+            "<think>.</think>.",
+            "#### padding",
+            r"\boxed{padding}",
+            '{"response": "padding", "answer": "junk"}',
+        ]
+    if kind == "answer_spray":
+        target = "42" if gold is None else str(gold).strip()
+        try:
+            val = int(target)
+            d1, d2, d3 = str(val + 10), str(val + 20), str(val + 30)
+            dt0 = str(val + 1)
+            dt1 = str(val + 2)
+            dt2 = str(val + 3)
+            dt3 = str(val + 4)
+        except (ValueError, TypeError):
+            try:
+                fval = float(target)
+                if not math.isfinite(fval):
+                    raise ValueError("non-finite float")
+                scale = max(abs(fval) * 0.1, 10.0)
+
+                def _fmt(v: float) -> str:
+                    if v.is_integer() and abs(v) < 1e15:
+                        return str(int(v))
+                    return f"{v:.10g}"
+
+                d1 = _fmt(fval + scale)
+                d2 = _fmt(fval + scale * 2)
+                d3 = _fmt(fval + scale * 3)
+                dt0 = _fmt(fval + scale * 0.1)
+                dt1 = _fmt(fval + scale * 0.2)
+                dt2 = _fmt(fval + scale * 0.3)
+                dt3 = _fmt(fval + scale * 0.4)
+            except (ValueError, TypeError):
+                d1, d2, d3 = "option_alpha", "option_beta", "option_gamma"
+                dt0 = f"{target}_alt"
+                dt1 = f"{target}_other"
+                dt2 = f"{target}_extra"
+                dt3 = f"{target}_diff"
+        return [
+            f"<think>options</think> {d1} {d2} {target} {d3} {dt0}",
+            f"The candidate options considered were {target}, {d1}, {d2}, and {dt1}.",
+            f"Analysis indicates {target} is an option, while alternatives include {d1} and {dt2}.",
+            f"Could be {target} or perhaps {d1}, {d2}, and {dt3}.",
+        ]
     raise ValueError(f"unknown attack kind: {kind!r} (options: {', '.join(ATTACKS)})")
 
 
@@ -90,7 +160,11 @@ def generate_attacks(
         # A bare string is a Sequence of characters — iterating it would probe
         # per-letter. Force an explicit collection (mirrors reward_synth guards).
         raise TypeError("kinds must be a sequence of attack-kind strings, not a str")
-    return [(kind, _attack_text(kind, sentinel)) for kind in kinds]
+    attacks: list[tuple[str, str]] = []
+    for kind in kinds:
+        for text in generate_attack_variants(kind, sentinel=sentinel):
+            attacks.append((kind, text))
+    return attacks
 
 
 # ---------------------------------------------------------------------------
@@ -99,9 +173,11 @@ def generate_attacks(
 def _score_batch(
     reward_fn: Callable[..., Sequence[Any]],
     texts: Sequence[str],
-    answers: Optional[Sequence[str]],
+    references: Optional[Sequence[Any]],
+    *,
+    reference_key: str = "answer",
 ) -> list[float]:
-    """Score completions built from ``texts``; supply ``answer=`` only when given.
+    """Score completions and supply references under the verifier's metadata key.
 
     Validates the reward fn returned exactly one finite numeric score per
     completion. A short return (the classic case: a gold-requiring builtin like
@@ -112,9 +188,16 @@ def _score_batch(
     if not texts:
         return []
     completions = [[{"role": "assistant", "content": t}] for t in texts]
-    kwargs = {"answer": list(answers)} if answers is not None else {}
+    kwargs = {reference_key: list(references)} if references is not None else {}
     scores = list(reward_fn(completions, **kwargs))
     if len(scores) != len(texts):
+        if references is not None:
+            raise ValueError(
+                f"reward target returned {len(scores)} score(s) for {len(texts)} "
+                f"completion(s) despite receiving {len(references)} reference(s) via "
+                f"{reference_key!r}; verify the target's metadata key and one-score-per-"
+                "completion contract"
+            )
         raise ValueError(
             f"reward target returned {len(scores)} score(s) for {len(texts)} "
             "completion(s) — this verifier likely needs --references to be probed "
@@ -140,21 +223,40 @@ def run_stress(
     threshold: float = DEFAULT_THRESHOLD,
     max_gameable: float = DEFAULT_MAX_GAMEABLE,
     attacks: Sequence[str] = ATTACKS,
+    reference_key: Optional[str] = None,
 ) -> StressReport:
     """Score adversarial junk completions and flag a gameable verifier.
 
-    For each attack kind, one junk completion is scored per sampled gold against
-    the REAL gold (so numeric/tool_call/json_schema verifiers get a valid
-    ``answer=`` and still must reject the junk). ``gameability`` is the overall
-    junk accept-rate; ``gameable`` iff it strictly exceeds ``max_gameable``.
+    Each attack family generates distinct variant attempts (classic strings,
+    wrapped scaffolds, and answer-spray distractors).
+    When references are supplied, junk variants are scored against real
+    references under ``reference_key``, and ``answer_spray`` embeds the actual
+    target references.
 
-    ``reference_accept`` (the golds scored as their own correct completions) is
-    reported for context — a verifier that rejects everything is broken, a
-    different problem — but does NOT set the verdict.
+    ``gameability`` is the peak junk accept-rate across attack families;
+    ``gameable`` iff it strictly exceeds ``max_gameable``.
 
-    No-gold fallback: with an empty ``golds`` each attack is scored once with no
-    ``answer`` kwarg and ``reference_accept`` is ``None``.
+    ``reference_accept`` scores each reference as its own completion and is
+    reported for context, but does NOT set the verdict. It is a useful
+    self-acceptance control only when references are valid completions; a schema
+    document, for example, need not satisfy itself as an output instance.
+
+    No-gold fallback: with an empty ``golds`` each attack family's variants
+    are scored once with no ``answer`` kwarg and ``reference_accept`` is ``None``.
     """
+    if reference_key is None:
+        reference_key = (
+            "schema" if getattr(reward_fn, "__name__", "") == "json_schema_reward" else "answer"
+        )
+    if not reference_key:
+        raise ValueError("reference_key must not be empty")
+
+    if isinstance(attacks, (str, bytes)):
+        raise TypeError("attacks must be a sequence of attack-kind strings, not a str")
+    for k in attacks:
+        if k not in ATTACKS:
+            raise ValueError(f"unknown attack kind: {k!r} (options: {', '.join(ATTACKS)})")
+
     sampled = list(golds)[:_MAX_STRESS_GOLDS]
     have_golds = bool(sampled)
 
@@ -164,26 +266,67 @@ def run_stress(
 
     reference_accept: Optional[float] = None
     if have_golds:
-        ref_scores = _score_batch(reward_fn, sampled, sampled)
+        ref_scores = _score_batch(
+            reward_fn, sampled, sampled, reference_key=reference_key
+        )
         reference_accept = _accepted(ref_scores) / len(sampled)
 
+    unique_kinds = list(dict.fromkeys(attacks))
     results: list[AttackResult] = []
     total_accepted = total_n = 0
-    for kind, junk in generate_attacks(sentinel=sentinel, kinds=attacks):
-        if have_golds:
-            texts: list[str] = [junk] * len(sampled)
-            answers: Optional[list[str]] = list(sampled)
-        else:
-            texts = [junk]
-            answers = None
-        scores = _score_batch(reward_fn, texts, answers)
-        accepted = _accepted(scores)
-        n = len(texts)
-        results.append(AttackResult(kind, n, accepted, accepted / n if n else 0.0))
-        total_accepted += accepted
-        total_n += n
 
-    gameability = (total_accepted / total_n) if total_n else 0.0
+    for kind in unique_kinds:
+        kind_accepted = 0
+        kind_n = 0
+
+        if have_golds:
+            if kind == "answer_spray":
+                # Multiple templates; each template is tested across all sampled golds
+                # in batches of len(sampled) so batch size matches golds cap.
+                num_templates = len(
+                    generate_attack_variants("answer_spray", sentinel=sentinel, gold="42")
+                )
+                for idx in range(num_templates):
+                    texts = [
+                        generate_attack_variants(
+                            "answer_spray", sentinel=sentinel, gold=g
+                        )[idx]
+                        for g in sampled
+                    ]
+                    scores = _score_batch(
+                        reward_fn, texts, sampled, reference_key=reference_key
+                    )
+                    kind_accepted += _accepted(scores)
+                    kind_n += len(texts)
+            else:
+                variants = generate_attack_variants(kind, sentinel=sentinel, gold=None)
+                for v in variants:
+                    texts = [v] * len(sampled)
+                    scores = _score_batch(
+                        reward_fn, texts, sampled, reference_key=reference_key
+                    )
+                    kind_accepted += _accepted(scores)
+                    kind_n += len(texts)
+        else:
+            texts = generate_attack_variants(kind, sentinel=sentinel, gold=None)
+            scores = _score_batch(
+                reward_fn, texts, None, reference_key=reference_key
+            )
+            kind_accepted = _accepted(scores)
+            kind_n = len(texts)
+
+        results.append(
+            AttackResult(
+                kind=kind,
+                n=kind_n,
+                accepted=kind_accepted,
+                accept_rate=kind_accepted / kind_n if kind_n else 0.0,
+            )
+        )
+        total_accepted += kind_accepted
+        total_n += kind_n
+
+    gameability = max((a.accept_rate for a in results), default=0.0)
     return StressReport(
         reference_accept=reference_accept,
         attacks=tuple(results),

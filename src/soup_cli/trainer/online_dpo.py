@@ -8,9 +8,9 @@ DPO generates two completions per prompt ON-POLICY at each step and asks a
 Data is prompt-only (like GRPO): Soup's ``{"messages": [...]}`` rows are
 normalized to the OnlineDPO ``prompt`` column (chat, minus the assistant turn).
 
-**Cross-version adapter.** TRL changed the OnlineDPO API between 0.19.x and 1.x:
+**Cross-version adapter.** TRL changed the OnlineDPO API before 1.0 and in 1.x:
 
-- **trl 0.19.x** — ``from trl import OnlineDPOTrainer``; the judge is a
+- **trl <1** — the trainer and judge may live under ``trl.experimental``; the judge is a
   ``BasePairwiseJudge`` (swap-debiased *pairwise* comparison, via
   :func:`soup_cli.eval.judge.make_soup_pairwise_judge`); a reward model is
   passed as ``reward_model=`` / ``reward_processing_class=``.
@@ -33,12 +33,16 @@ from typing import Optional
 from rich.console import Console
 
 from soup_cli.config.schema import SoupConfig
+from soup_cli.data.chat_templates import apply_chat_template_override
+from soup_cli.trainer.loss_summary import summarize_training_loss
 from soup_cli.utils.gpu import (
     bf16_fp16_flags,
     estimate_batch_size,
     model_size_from_name,
     resolve_device_map,
+    resolve_frozen_base_load_dtype,
 )
+from soup_cli.utils.mixed_precision import align_trainable_dtype_for_fp16
 from soup_cli.utils.seeding import apply_training_seed, training_seed_kwargs
 
 console = Console()
@@ -46,29 +50,6 @@ console = Console()
 # Test seam: when set, replaces the URL-built judge (used by the offline
 # synthetic-judge smoke). A Soup evaluator (``.compare_pair`` + ``.evaluate``).
 _ONLINE_DPO_JUDGE_OVERRIDE = None
-
-
-def _import_online_dpo():
-    """Import ``OnlineDPOConfig``/``OnlineDPOTrainer`` across trl versions.
-
-    trl 0.19.x exposes them at the top level; trl 1.x moved them to
-    ``trl.experimental.online_dpo``.
-    """
-    try:
-        from trl import OnlineDPOConfig, OnlineDPOTrainer
-
-        return OnlineDPOConfig, OnlineDPOTrainer
-    except ImportError:
-        pass
-    try:
-        from trl.experimental.online_dpo import OnlineDPOConfig, OnlineDPOTrainer
-
-        return OnlineDPOConfig, OnlineDPOTrainer
-    except ImportError as exc:  # pragma: no cover — trl ships in [train]
-        raise ImportError(
-            "task='online_dpo' requires trl with OnlineDPO support "
-            "(pip install \"soup-cli[train]\")"
-        ) from exc
 
 
 def _trl_accepts(param: str) -> bool:
@@ -103,15 +84,16 @@ def _trl_accepts(param: str) -> bool:
     """
     import inspect
 
-    try:
-        from trl import OnlineDPOTrainer
-    except ImportError:
-        try:
-            from trl.experimental.online_dpo import OnlineDPOTrainer
-        except ImportError:
-            return False
+    from soup_cli.trainer._trl_compat import resolve_trl_symbol
 
-    for base in OnlineDPOTrainer.__mro__:
+    try:
+        online_dpo_trainer_cls = resolve_trl_symbol(
+            "OnlineDPOTrainer", "trl.experimental.online_dpo"
+        )
+    except ImportError:
+        return False
+
+    for base in online_dpo_trainer_cls.__mro__:
         init = base.__dict__.get("__init__")
         if init is None:
             continue
@@ -230,7 +212,14 @@ class OnlineDPOTrainerWrapper:
         """Load model, tokenizer, build the OnlineDPO trainer (judge in loop)."""
         from datasets import Dataset
 
-        OnlineDPOConfig, OnlineDPOTrainer = _import_online_dpo()  # noqa: N806 (classes)
+        from soup_cli.trainer._trl_compat import resolve_trl_symbol
+
+        online_dpo_config_cls = resolve_trl_symbol(
+            "OnlineDPOConfig", "trl.experimental.online_dpo"
+        )
+        online_dpo_trainer_cls = resolve_trl_symbol(
+            "OnlineDPOTrainer", "trl.experimental.online_dpo"
+        )
 
         from soup_cli.trainer.sft import _enable_hf_transfer_progress
 
@@ -286,7 +275,7 @@ class OnlineDPOTrainerWrapper:
         warmup_steps = int(total_steps * tcfg.warmup_ratio)
 
         _bf16, _fp16 = bf16_fp16_flags(self.device)
-        odpo_config = OnlineDPOConfig(
+        odpo_config = online_dpo_config_cls(
             output_dir=str(output_dir),
             num_train_epochs=tcfg.epochs,
             per_device_train_batch_size=batch_size,
@@ -313,7 +302,7 @@ class OnlineDPOTrainerWrapper:
 
         judge_or_reward = self._build_judge_or_reward(tcfg)
 
-        self.trainer = OnlineDPOTrainer(
+        self.trainer = online_dpo_trainer_cls(
             model=self.model,
             args=odpo_config,
             train_dataset=train_ds,
@@ -321,6 +310,17 @@ class OnlineDPOTrainerWrapper:
             peft_config=self.peft_config,
             **judge_or_reward,
         )
+
+        # #359 - the same exposure #336 fixed in sft.py: with LoRA the
+        # no-decay optimizer group is empty, DeepSpeed drops it, and the LR
+        # scheduler keeps two base_lrs until torch's strict zip raises at the
+        # first step. The guard prunes inside create_optimizer, i.e. before
+        # the scheduler is built. No-op for full fine-tuning, and only under
+        # DeepSpeed so the ordinary path keeps its own optimizer.
+        if self.deepspeed_config:
+            from soup_cli.utils.deepspeed import attach_empty_param_group_guard
+
+            attach_empty_param_group_guard(self.trainer)
 
         # Curriculum + plugin callbacks (relora is a no-op unless relora_steps).
         from soup_cli.utils.peft_wiring import (
@@ -332,6 +332,7 @@ class OnlineDPOTrainerWrapper:
         attach_plugin_callback(self.trainer, console)
 
         self._output_dir = str(output_dir)
+        self._batch_size = batch_size
 
     def _setup_transformers(self, cfg: SoupConfig, tcfg) -> None:
         """Load model + tokenizer; build (but do NOT apply) the LoRA config.
@@ -340,7 +341,7 @@ class OnlineDPOTrainerWrapper:
         the reference on demand (adapter-disable). So — unlike offline DPO — we
         do not ``get_peft_model`` here.
         """
-        from peft import LoraConfig, TaskType
+        from peft import TaskType
         from transformers import AutoModelForCausalLM, AutoTokenizer
 
         console.print(f"[dim]Loading tokenizer: {cfg.base}[/]")
@@ -349,6 +350,9 @@ class OnlineDPOTrainerWrapper:
         )
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
+        apply_chat_template_override(
+            self.tokenizer, cfg.data.chat_template, console=console
+        )
         # Online DPO renders conversational prompts -> a chat template is
         # required. Fall back to a template WITH a generation cue when the model
         # ships none (so add_generation_prompt actually opens the assistant turn).
@@ -365,6 +369,7 @@ class OnlineDPOTrainerWrapper:
         dev_map = resolve_device_map(self.device)
         model_kwargs = {
             "trust_remote_code": self._trust_remote_code, "device_map": dev_map,
+            "torch_dtype": resolve_frozen_base_load_dtype(self.device),
         }
         if quant_config_obj is not None:
             model_kwargs["quantization_config"] = quant_config_obj
@@ -381,21 +386,34 @@ class OnlineDPOTrainerWrapper:
         if tcfg.quantization in ("4bit", "8bit", "mxfp4"):
             from peft import prepare_model_for_kbit_training
 
-            self.model = prepare_model_for_kbit_training(self.model)
+            from soup_cli.utils.layer_stream import should_enable_hf_gradient_checkpointing
 
-        target_modules = tcfg.lora.target_modules
-        if target_modules == "auto":
-            target_modules = None
+            self.model = prepare_model_for_kbit_training(
+                self.model,
+                use_gradient_checkpointing=should_enable_hf_gradient_checkpointing(
+                    tcfg.gradient_checkpointing, stream_layers=tcfg.stream_layers
+                ),
+            )
 
-        self.peft_config = LoraConfig(
-            r=tcfg.lora.r,
-            lora_alpha=tcfg.lora.alpha,
-            lora_dropout=tcfg.lora.dropout,
+        from soup_cli.utils.peft_wiring import (
+            build_lora_config,
+            resolve_lora_target_modules,
+        )
+
+        target_modules = resolve_lora_target_modules(self.model, tcfg.lora.target_modules, console)
+        # #1099: moe_lora picks the expert-FFN targets, as on every other
+        # build_lora_config trainer. The config is attached by TRL later, so
+        # this is where the flag has to act.
+        from soup_cli.utils.moe import resolve_moe_lora_targets
+
+        target_modules = resolve_moe_lora_targets(
+            self.model, tcfg, target_modules, console
+        )
+
+        self.peft_config = build_lora_config(
+            tcfg.lora,
             target_modules=target_modules,
             task_type=TaskType.CAUSAL_LM,
-            bias="none",
-            use_dora=tcfg.lora.use_dora,
-            use_rslora=tcfg.lora.use_rslora,
         )
 
         # Surgical PEFT patches operate on the base model (Gemma4 ClippableLinear).
@@ -406,7 +424,7 @@ class OnlineDPOTrainerWrapper:
     @staticmethod
     def _judge_kwargs(evaluator, has_judges: bool) -> dict:
         """Adapt a Soup evaluator to the installed trl's judge/reward API."""
-        if has_judges:  # trl 0.19.x — swap-debiased pairwise judge
+        if has_judges:  # trl <1 — swap-debiased pairwise judge
             from soup_cli.eval.judge import make_soup_pairwise_judge
 
             return {"judge": make_soup_pairwise_judge(evaluator)}
@@ -421,7 +439,7 @@ class OnlineDPOTrainerWrapper:
         Precedence: the test seam, then the judge URL, then a reward model. The
         schema cross-validator guarantees exactly one of judge/reward is set for
         a real config. The returned kwargs adapt to the installed trl version
-        (``judge=`` on 0.19.x, ``reward_funcs=`` on 1.x).
+        (``judge=`` before trl 1, ``reward_funcs=`` on trl 1.x).
         """
         has_judges = _trl_has_judges()
         if _ONLINE_DPO_JUDGE_OVERRIDE is not None:
@@ -474,21 +492,34 @@ class OnlineDPOTrainerWrapper:
         start = time.time()
 
         if display:
-            from soup_cli.monitoring.callback import SoupTrainerCallback
+            from soup_cli.monitoring.callback import (
+                SoupTrainerCallback,
+                soup_callback_kwargs,
+            )
 
             self.trainer.add_callback(
                 SoupTrainerCallback(
-                    display, tracker=tracker, run_id=run_id,
-                    loss_watchdog=self.config.training.loss_watchdog,
-                    loss_watchdog_threshold=self.config.training.loss_watchdog_threshold,
-                    loss_watchdog_patience=self.config.training.loss_watchdog_patience,
+                    display,
+                    tracker=tracker,
+                    run_id=run_id,
                     eval_gate_config=self.config.training.eval_gate,
+                    **soup_callback_kwargs(
+                        self.config.training,
+                        batch_size=self._batch_size,
+                        output_dir=self._output_dir,
+                        include_eval_gate=False,
+                    ),
                 )
             )
 
         from soup_cli.utils.v028_features import activation_offloading_context
 
         with activation_offloading_context(self.config.training, self._output_dir):
+            align_trainable_dtype_for_fp16(
+                self.trainer.model,
+                fp16=getattr(self.trainer.args, "fp16", False),
+                bf16=getattr(self.trainer.args, "bf16", False),
+            )
             self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)
         duration = time.time() - start
 
@@ -496,15 +527,14 @@ class OnlineDPOTrainerWrapper:
         self.tokenizer.save_pretrained(self._output_dir)
 
         logs = self.trainer.state.log_history
-        train_losses = [entry["loss"] for entry in logs if "loss" in entry]
+        loss_summary = summarize_training_loss(logs)
 
         hours = int(duration // 3600)
         minutes = int((duration % 3600) // 60)
         duration_str = f"{hours}h {minutes}m" if hours > 0 else f"{minutes}m"
 
         return {
-            "initial_loss": train_losses[0] if train_losses else 0,
-            "final_loss": train_losses[-1] if train_losses else 0,
+            **loss_summary,
             "duration": duration_str,
             "duration_secs": duration,
             "output_dir": self._output_dir,

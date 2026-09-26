@@ -12,6 +12,8 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
 
+from soup_cli.utils.terminal import for_terminal
+
 console = Console()
 
 
@@ -200,11 +202,11 @@ def infer(
             "'owner/repo-name' (no leading './').[/]"
         )
         raise typer.Exit(1) from exc
-    model_path = Path(model_ref)
     if model_kind == "hf":
         console.print(
             f"[dim]Local path not found; treating {model_ref!r} as a HF repo id.[/]"
         )
+    model_target = model_ref
 
     # Read prompts
     prompts = _read_prompts(input_path)
@@ -221,7 +223,7 @@ def infer(
 
     console.print(
         Panel(
-            f"Model:    [bold]{model_path}[/]\n"
+            f"Model:    [bold]{model_target}[/]\n"
             f"Input:    [bold]{input_path}[/] ({len(prompts)} prompts)\n"
             f"Output:   [bold]{output_file}[/]\n"
             f"Device:   [bold]{device}[/]\n"
@@ -234,7 +236,7 @@ def infer(
     # Load model — gate trust_remote_code via the v0.36.0 helper.
     console.print("[dim]Loading model...[/]")
     model_obj, tokenizer = _load_model(
-        str(model_path), base, device, trust_remote_code,
+        model_target, base, device, trust_remote_code, is_local=(model_kind == "local"),
     )
     console.print("[green]Model loaded.[/]\n")
 
@@ -309,19 +311,6 @@ _ASR_TRANSCRIBER_OVERRIDE = None
 # costlier than a text prompt, so an unbounded --input is a resource-exhaustion
 # vector (mirrors the project's 10k custom-eval / 1e6 HF-download caps).
 _MAX_ASR_ROWS: int = 100_000
-
-# C0 control bytes (keep tab/newline/CR) + DEL, stripped from dataset-derived
-# strings before they reach the terminal. rich.markup.escape() neutralises Rich
-# '[...]' tags but NOT raw ESC bytes, and a row's audio path / an exception
-# carrying it is untrusted (title-bar / OSC-8 spoofing). Mirrors v0.71.27
-# data_doctor._for_terminal.
-_CONTROL_STRIP_TABLE = {i: None for i in range(0x20) if i not in (0x09, 0x0A, 0x0D)}
-_CONTROL_STRIP_TABLE[0x7F] = None
-
-
-def _for_terminal(text: str) -> str:
-    """Strip C0/ESC/DEL control bytes from a dataset-derived string."""
-    return str(text).translate(_CONTROL_STRIP_TABLE)
 
 
 def _read_asr_rows(path: Path) -> list[dict]:
@@ -559,8 +548,6 @@ def _infer_asr(
             console.print(f"[red]{exc}[/]")
             raise typer.Exit(2) from exc
 
-    from rich.markup import escape as _escape
-
     refs: list[str] = []
     hyps: list[str] = []
     out_lines: list[str] = []
@@ -574,9 +561,9 @@ def _infer_asr(
             skipped += 1
             # Escape + control-strip the dataset-derived filename AND the
             # exception (whose message embeds that filename) before printing.
-            name = _escape(_for_terminal(Path(str(audio)).name))
+            name = for_terminal(Path(str(audio)).name)
             console.print(
-                f"[yellow]Skipped {name!r}: {_escape(_for_terminal(str(exc)))}[/]"
+                f"[yellow]Skipped {name!r}: {for_terminal(str(exc))}[/]"
             )
             continue
         rec = {"audio": audio, "transcription": hyp}
@@ -590,10 +577,10 @@ def _infer_asr(
                 row_wer = wer(ref, hyp)
                 row_cer = cer(ref, hyp)
             except ValueError as exc:
-                name = _escape(_for_terminal(Path(str(audio)).name))
+                name = for_terminal(Path(str(audio)).name)
                 console.print(
                     f"[yellow]Metric skipped for {name!r}: "
-                    f"{_escape(_for_terminal(str(exc)))}[/]"
+                    f"{for_terminal(str(exc))}[/]"
                 )
             else:
                 rec["reference"] = ref
@@ -648,6 +635,7 @@ def _load_model(
     base_model: Optional[str],
     device: str,
     trust_remote_code: bool = False,
+    is_local: Optional[bool] = None,
 ) -> tuple:
     """Load a model and tokenizer (reuses diff.py pattern)."""
     import torch
@@ -658,23 +646,31 @@ def _load_model(
         resolve_trust_remote_code,
     )
 
-    path = Path(model_path)
-    adapter_config_path = path / "adapter_config.json"
-    is_adapter = adapter_config_path.exists()
-
-    if is_adapter and not base_model:
+    if is_local is None:
         try:
-            with open(adapter_config_path, encoding="utf-8") as f:
-                config = json.load(f)
-            base_model = config.get("base_model_name_or_path")
-        except (json.JSONDecodeError, OSError):
-            pass
+            is_local = Path(model_path).exists()
+        except OSError:
+            is_local = False
 
-    if is_adapter and not base_model:
-        console.print(
-            f"[red]Cannot detect base model for {path}. Use --base.[/]"
-        )
-        raise typer.Exit(1)
+    is_adapter = False
+    if is_local:
+        path = Path(model_path)
+        adapter_config_path = path / "adapter_config.json"
+        is_adapter = adapter_config_path.exists()
+
+        if is_adapter and not base_model:
+            try:
+                with open(adapter_config_path, encoding="utf-8") as f:
+                    config = json.load(f)
+                base_model = config.get("base_model_name_or_path")
+            except (json.JSONDecodeError, OSError):
+                pass
+
+        if is_adapter and not base_model:
+            console.print(
+                f"[red]Cannot detect base model for {path}. Use --base.[/]"
+            )
+            raise typer.Exit(1)
 
     probe_target = base_model or model_path
     requires = model_requires_trust_remote_code(model_path) or False
@@ -696,7 +692,7 @@ def _load_model(
             base_model,
             trust_remote_code=trc,
             device_map="auto",
-            dtype=torch.float16,
+            torch_dtype=torch.float16,
         )
         model_obj = PeftModel.from_pretrained(base_obj, model_path)
     else:
@@ -704,7 +700,7 @@ def _load_model(
             model_path,
             trust_remote_code=trc,
             device_map="auto",
-            dtype=torch.float16,
+            torch_dtype=torch.float16,
         )
 
     model_obj.eval()
@@ -717,25 +713,11 @@ def _generate(
     """Generate a response from the model. Returns (text, token_count)."""
     import torch
 
-    if hasattr(tokenizer, "apply_chat_template") and tokenizer.chat_template:
-        text = tokenizer.apply_chat_template(
-            messages, tokenize=False, add_generation_prompt=True
-        )
-    else:
-        parts = []
-        for msg in messages:
-            role = msg["role"]
-            content = msg["content"]
-            if role == "system":
-                parts.append(f"System: {content}")
-            elif role == "user":
-                parts.append(f"User: {content}")
-            elif role == "assistant":
-                parts.append(f"Assistant: {content}")
-        parts.append("Assistant:")
-        text = "\n".join(parts)
+    from soup_cli.utils.vllm import encode_chat_prompt
 
-    inputs = tokenizer(text, return_tensors="pt")
+    inputs = encode_chat_prompt(
+        messages, tokenizer, fallback_on_error=False, return_tensors="pt"
+    )
     input_ids = inputs["input_ids"].to(model.device)
     attention_mask = inputs["attention_mask"].to(model.device)
 

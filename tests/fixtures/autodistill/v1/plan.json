@@ -1,0 +1,96 @@
+{
+  "schema": "soup.autodistill.plan.v1",
+  "run_id": "fixture-run-0001",
+  "capture_boundary": "same_tokenizer",
+  "teacher": {
+    "model_id": "example/teacher",
+    "revision": "1111111111111111111111111111111111111111",
+    "config_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "weights": [
+      {
+        "path": "model.safetensors",
+        "bytes": 4096,
+        "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      }
+    ]
+  },
+  "student": {
+    "model_id": "example/student",
+    "revision": "2222222222222222222222222222222222222222",
+    "config_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "weights": [
+      {
+        "path": "model.safetensors",
+        "bytes": 2048,
+        "sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      }
+    ]
+  },
+  "tokenizer": {
+    "tokenizer_id": "example/shared-tokenizer",
+    "revision": "3333333333333333333333333333333333333333",
+    "vocab_size": 1024,
+    "files": [
+      {
+        "path": "tokenizer.json",
+        "bytes": 1024,
+        "sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+      }
+    ],
+    "chat_template_sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    "renderer": "transformers@5.16.1"
+  },
+  "dataset": {
+    "normalization": "soup-jsonl-c14n-v1",
+    "normalized_sha256": "abababababababababababababababababababababababababababababababab",
+    "rows": 2,
+    "source_files": [
+      {
+        "path": "prompts.jsonl",
+        "bytes": 128,
+        "sha256": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"
+      }
+    ]
+  },
+  "capture": {
+    "planned_token_count": 1000,
+    "vocab_size": 1024,
+    "max_forced_tokens_per_position": 2,
+    "backend": "transformers",
+    "backend_version": "5.16.1",
+    "dtype": "bfloat16",
+    "quantization": "none",
+    "max_sequence_length": 2048,
+    "truncation": "right"
+  },
+  "probability_policy": {
+    "name": "topk_union_forced_tail.v1",
+    "top_k": 8,
+    "forced_token_sources": ["target", "student_sample"],
+    "token_id_bytes": 4,
+    "log_probability_bytes": 2,
+    "tail_mass_bytes": 4,
+    "entropy_bytes": 4,
+    "temperature": 1.0,
+    "renormalize_selected": false
+  },
+  "consumption_policy": {
+    "teacher_expert_replay": "explicit",
+    "student_rollout_replay": "forbidden",
+    "reservation_recovery": "release_if_checkpoint_absent",
+    "commit_requires_checkpoint_sha256": true
+  },
+  "throughput_profile": null,
+  "estimate": {
+    "token_count": 1000,
+    "dense_payload_bytes": 2048000,
+    "sparse_payload_bytes_upper_bound": 68000,
+    "container_metadata_included": false,
+    "runtime": {
+      "status": "unknown",
+      "seconds_min": null,
+      "seconds_max": null,
+      "profile_sha256": null
+    }
+  }
+}

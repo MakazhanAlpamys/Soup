@@ -20,18 +20,11 @@ import os
 
 import pytest
 
+from tests.conftest import cuda_available
 
 # ==========================================================================
 # fixtures (mirroring tests/test_v07200.py so the two cannot drift)
 # ==========================================================================
-def _cuda_available():
-    try:
-        import torch
-
-        return torch.cuda.is_available()
-    except Exception:  # pragma: no cover - torch always present in CI
-        return False
-
 
 def _torch_version():
     """Reported in the KTO xfail message: the failure it tolerates is a torch
@@ -52,7 +45,7 @@ def _mps_is_the_accelerator():
         return (
             hasattr(torch.backends, "mps")
             and torch.backends.mps.is_available()
-            and not torch.cuda.is_available()
+            and not cuda_available()
         )
     except Exception:  # pragma: no cover
         return False
@@ -176,26 +169,80 @@ def _batch_on(model, batch):
     deliberately pins the MODEL to CPU (for exact float32 arithmetic) still gets
     CUDA batch tensors from the dataloader.
     """
-    device = next(model.parameters()).device
+    device = next(
+        parameter.device for parameter in model.parameters() if not parameter.is_meta
+    )
     return {
         key: (value.to(device) if hasattr(value, "to") else value) for key, value in batch.items()
     }
 
 
+def _policy_logps(trainer, model, batch):
+    """Return chosen/rejected policy logps across TRL's DPO implementations.
+
+    TRL 0.29 folded ``concatenated_forward`` into ``_compute_loss``. Keeping
+    this small test adapter lets the gate continue to assert the policy/reference
+    property without requiring a production shim for a removed private method.
+    """
+    if hasattr(trainer, "concatenated_forward"):
+        return trainer.concatenated_forward(model, batch)
+
+    from trl.trainer.utils import selective_log_softmax
+
+    input_ids, attention_mask, completion_mask = trainer._truncate_inputs(
+        batch["input_ids"], batch["attention_mask"], batch["completion_mask"]
+    )
+    outputs = model(input_ids=input_ids, attention_mask=attention_mask, use_cache=False)
+    shift_logits = outputs.logits[..., :-1, :].contiguous()
+    shift_labels = input_ids[..., 1:].contiguous()
+    shift_completion_mask = completion_mask[..., 1:].contiguous()
+    per_token_logps = selective_log_softmax(shift_logits, shift_labels)
+    per_token_logps[shift_completion_mask == 0] = 0.0
+    assert trainer.ld_alpha is None, "the v0.72.4 gate assumes standard sequence logps"
+    chosen_logps, rejected_logps = per_token_logps.sum(dim=1).chunk(2, dim=0)
+    return {"chosen_logps": chosen_logps, "rejected_logps": rejected_logps}
+
+
 def _loss_of(trainer, model, batch):
     """Call the trainer's loss for `model`, across TRL's signature differences.
 
-    `KTOTrainer.get_batch_loss_metrics` takes (model, batch); DPO / ORPO / CPO
-    take (model, batch, train_eval).
+    TRL <=0.28 exposes ``get_batch_loss_metrics``. DPO 0.29 folds that method
+    into a private helper while KTO / the experimental preference trainers
+    retain the older surface. Prefer the old method where it exists. For the
+    new DPO implementation, reconstruct its standard sigmoid loss from the
+    policy and reference log-probability helpers so this test can compare a
+    separate resident control model without changing the trainer under test.
     """
     import inspect
 
-    fn = trainer.get_batch_loss_metrics
-    if "train_eval" in inspect.signature(fn).parameters:
-        loss, _ = fn(model, batch, "train")
-    else:
-        loss, _ = fn(model, batch)
-    return loss
+    fn = getattr(trainer, "get_batch_loss_metrics", None)
+    if fn is not None:
+        if "train_eval" in inspect.signature(fn).parameters:
+            loss, _ = fn(model, batch, "train")
+        else:
+            loss, _ = fn(model, batch)
+        return loss
+    # DPO 0.29 folds the whole standard sigmoid loss into a private
+    # ``_compute_loss``. Rebuild only that public mathematical contract from
+    # the policy and reference log-probability helpers: this gate deliberately
+    # reuses one trainer with a resident control model, while 0.29's private
+    # method reads ``self.model`` even when a different model argument is
+    # supplied. Calling it would therefore compare two different references.
+    import torch.nn.functional as functional
+
+    assert list(trainer.loss_types) == ["sigmoid"]
+    policy = _policy_logps(trainer, model, batch)
+    original_model = trainer.model
+    trainer.model = model
+    try:
+        ref_chosen, ref_rejected = trainer.compute_ref_log_probs(batch)
+    finally:
+        trainer.model = original_model
+    chosen_logratios = policy["chosen_logps"] - ref_chosen
+    rejected_logratios = policy["rejected_logps"] - ref_rejected
+    return -functional.logsigmoid(
+        trainer.beta * (chosen_logratios - rejected_logratios)
+    ).mean()
 
 
 def _match_streamed_dtype(resident, streamed):
@@ -206,7 +253,7 @@ def _match_streamed_dtype(resident, streamed):
     streaming path — that mistake produced a 9.96e-04 "failure" that was
     entirely the test's own.
     """
-    param = next(streamed.parameters())
+    param = next(parameter for parameter in streamed.parameters() if not parameter.is_meta)
     return resident.to(device=param.device, dtype=param.dtype)
 
 
@@ -307,6 +354,7 @@ def _build_streamed_wrapper(
     device=None,
     hidden=64,
     vocab=64,
+    tie=True,
     **training,
 ):
     """Build a task wrapper through the REAL `setup()` path, streaming.
@@ -318,14 +366,16 @@ def _build_streamed_wrapper(
     bf16 on CUDA, and "bit-exact" is only a meaningful assertion in the former
     (a bf16 logp of -12.75 cannot represent a change smaller than ~0.05).
     """
-    weights, resident, _ = _tiny_llama_dir(tmp_path, n_layers=n_layers, hidden=hidden, vocab=vocab)
+    weights, resident, _ = _tiny_llama_dir(
+        tmp_path, n_layers=n_layers, tie=tie, hidden=hidden, vocab=vocab
+    )
     _write_tiny_tokenizer(weights)
     monkeypatch.setenv("SOUP_LAYER_STREAM_CACHE_DIR", str(tmp_path / "cache"))
     monkeypatch.chdir(tmp_path)
     training.setdefault("batch_size", _MIN_BATCH.get(task, 1))
     cfg = _stream_cfg(weights, tmp_path / "out", task=task, **training)
     if device is None:
-        device = "cuda" if _cuda_available() else "cpu"
+        device = "cuda" if cuda_available() else "cpu"
     wrapper = _wrapper_for(task)(cfg, device=device)
     wrapper.setup({"train": _TASK_ROWS[task](8)})
     return wrapper, resident, weights
@@ -334,6 +384,17 @@ def _build_streamed_wrapper(
 # ==========================================================================
 # item 1 -- schema: which tasks may stream
 # ==========================================================================
+# These two tuples are the LOCALISATION, not a convenience. #370: while
+# diagnosing #328 on the H100 box only [dpo] and [kto] failed, which read as a
+# sharp localisation to the reference forward — and was wrong. They were the
+# only two the CUDA class was parametrised over. ORPO and SimPO are genuinely
+# reference-free (v0.72.4: no `ref_model` attribute at all) and failed too.
+# So: narrowing either tuple silently narrows what the suite can localise, and
+# is a scope change that must be argued for, not an edit.
+#
+# _REFERENCE_USING is for properties that only exist when there IS a reference
+# (the disabled-adapter identity, the reference forward). Everything that
+# exercises the streamed train() step belongs to _ALL_PREFERENCE.
 _REFERENCE_USING = ("dpo", "kto")
 _ALL_PREFERENCE = ("dpo", "orpo", "simpo", "kto")
 
@@ -396,7 +457,19 @@ class TestNoSecondModelInstance:
             f"{task} built a SECOND model instance for the reference — that "
             f"doubles memory and defeats layer streaming entirely"
         )
-        assert getattr(trainer, "is_peft_model", False) is True
+        from accelerate.utils import is_peft_model
+
+        assert is_peft_model(trainer.model)
+        # TRL 0.29 represents the immutable initial policy as a second adapter,
+        # not a second model. It is the correct reference when LoRA starts from
+        # non-zero weights (for example PiSSA or a resumed adapter).
+        if task == "dpo":
+            assert "ref" in trainer.model.peft_config
+            assert not any(
+                param.is_meta
+                for name, param in trainer.model.named_parameters()
+                if ".ref." in name
+            )
 
     @pytest.mark.parametrize("task", _ALL_PREFERENCE)
     def test_exactly_one_weight_store_is_constructed(self, tmp_path, monkeypatch, task):
@@ -434,7 +507,7 @@ class TestNoSecondModelInstance:
         batch = _batch_on(wrapper.model, next(iter(trainer.get_train_dataloader())))
         wrapper.model.eval()
         with torch.no_grad():
-            policy = trainer.concatenated_forward(wrapper.model, batch)
+            policy = _policy_logps(trainer, wrapper.model, batch)
             ref_chosen, ref_rejected = trainer.compute_ref_log_probs(batch)
         assert (policy["chosen_logps"] - ref_chosen).abs().max().item() > 1e-4
         assert (policy["rejected_logps"] - ref_rejected).abs().max().item() > 1e-4
@@ -455,13 +528,13 @@ class TestNoSecondModelInstance:
         batch = _batch_on(wrapper.model, next(iter(trainer.get_train_dataloader())))
         wrapper.model.eval()
         with torch.no_grad():
-            policy = trainer.concatenated_forward(wrapper.model, batch)
+            policy = _policy_logps(trainer, wrapper.model, batch)
             ref_chosen, _ = trainer.compute_ref_log_probs(batch)
         diff = (policy["chosen_logps"] - ref_chosen).abs().max().item()
         assert diff == 0.0, diff
 
 
-@pytest.mark.skipif(not _cuda_available(), reason="peak VRAM needs CUDA")
+@pytest.mark.gpu(reason="peak VRAM needs CUDA")
 class TestPeakVramIsNotDoubled:
     """The brief's literal assertion, on the real device."""
 
@@ -500,7 +573,7 @@ class TestPeakVramIsNotDoubled:
         torch.cuda.empty_cache()
         return peak, stats
 
-    @pytest.mark.parametrize("task", _REFERENCE_USING)
+    @pytest.mark.parametrize("task", _ALL_PREFERENCE)
     def test_weight_bearing_terms_are_identical_to_sft(self, tmp_path, monkeypatch, task):
         """One store, one pool. The gate measured 729.91 MB / 60.83 MB for both
         arms on a 730 MB model; here the sizes are tiny but the EQUALITY is the
@@ -526,10 +599,88 @@ class TestPeakVramIsNotDoubled:
         assert forced > implicit, (implicit, forced)
 
 
+@pytest.mark.gpu(reason="the #328 meta failure is CUDA-only")
+class TestEveryPreferenceLossTakesAStreamedStep:
+    """#370 — a real ``setup()`` + ``train()`` step for ALL FOUR preference
+    losses on the device the failure actually needs.
+
+    This exists as its own slot, rather than riding on the VRAM assertions
+    above, because the property is different: those measure how much memory a
+    step costs, this asserts a step happens at all. Reverting #328's
+    ``should_enable_hf_gradient_checkpointing`` guard turns every arm here red
+    with ``RuntimeError: Tensor on device cuda:0 is not on the expected device
+    meta!`` — HF check-points the inner decoder layer on top of
+    ``StreamedDecoderLayer``'s own ``checkpoint(use_reentrant=False)``, and the
+    recompute lands after ``functional_call``'s reparametrisation has exited and
+    restored the meta placeholders.
+
+    The orpo/simpo arms are the point. #328 was reported as dpo/kto-only purely
+    because those were the only two the CUDA class was parametrised over; all
+    four fail, and ORPO/SimPO reach it with no reference model at all.
+    """
+
+    @pytest.mark.parametrize("task", _ALL_PREFERENCE)
+    def test_a_streamed_train_step_completes(self, tmp_path, monkeypatch, task):
+        """``gradient_checkpointing=True`` is load-bearing, not decoration.
+
+        It is the configuration #328 dies in: the user asks for checkpointing,
+        streaming is on, and the guard has to refuse HF's copy of it. Measured
+        on an A10G — with the guard dropped this raises for all four tasks,
+        while the same test at the config default (False) still passes, because
+        there the reverted expression returns False anyway. A default-config
+        step would look like cover and assert nothing.
+        """
+        wrapper, _, _ = _build_streamed_wrapper(
+            tmp_path, monkeypatch, task=task, gradient_checkpointing=True
+        )
+        wrapper.trainer.args.max_steps = 1
+        try:
+            wrapper.trainer.train()
+        finally:
+            wrapper._close_stream_runtime()
+
+    @pytest.mark.parametrize("task", _ALL_PREFERENCE)
+    def test_hf_checkpointing_is_off_while_streaming(self, tmp_path, monkeypatch, task):
+        """The mechanism, asserted directly so a green run above cannot be a
+        coincidence of some other layer swallowing the double-recompute."""
+        wrapper, _, _ = _build_streamed_wrapper(
+            tmp_path, monkeypatch, task=task, gradient_checkpointing=True
+        )
+        try:
+            assert wrapper.trainer.args.gradient_checkpointing is False, (
+                f"{task} let HF check-point the inner decoder layer while "
+                f"streaming — this is exactly the #328 double-recompute"
+            )
+        finally:
+            wrapper._close_stream_runtime()
+
+
 class TestBitExactVsResident:
     """The rule every slot in the series inherits: a streamed run is bit-exact
     against the RESIDENT run of the same numerics. What changes per slot is the
     reference, not the standard — here it is a resident run of the same loss."""
+
+    def test_reference_dtype_match_ignores_meta_stream_weights(self):
+        """Large-layer streaming puts a meta embedding before the real LoRA
+        parameters.  The resident oracle must follow the first materialised
+        parameter, never move itself onto meta and turn the comparison red
+        before either model executes.
+        """
+        import torch
+        from torch import nn
+
+        class MixedPlacement(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.meta_weight = nn.Parameter(torch.empty(2, device="meta"))
+                self.real_weight = nn.Parameter(torch.ones(2, dtype=torch.float64))
+
+        resident = nn.Linear(2, 2, bias=False)
+        matched = _match_streamed_dtype(resident, MixedPlacement())
+
+        assert all(not parameter.is_meta for parameter in matched.parameters())
+        assert next(matched.parameters()).device.type == "cpu"
+        assert next(matched.parameters()).dtype is torch.float64
 
     @pytest.mark.skipif(
         _mps_is_the_accelerator(),
@@ -543,17 +694,22 @@ class TestBitExactVsResident:
         wrapper, resident, _ = _build_streamed_wrapper(tmp_path, monkeypatch, task=task)
         _randomise_lora_b(wrapper.model)
 
-        resident_peft = get_peft_model(
-            resident,
-            LoraConfig(
-                r=4,
-                lora_alpha=8,
-                lora_dropout=0.0,
-                bias="none",
-                target_modules=["q_proj", "v_proj"],
-                task_type=TaskType.CAUSAL_LM,
-            ),
+        lora_config = LoraConfig(
+            r=4,
+            lora_alpha=8,
+            lora_dropout=0.0,
+            bias="none",
+            target_modules=["q_proj", "v_proj"],
+            task_type=TaskType.CAUSAL_LM,
         )
+        resident_peft = get_peft_model(resident, lora_config)
+        # TRL 0.29 snapshots a non-zero initial policy as a frozen ``ref``
+        # adapter. Give the resident control the same adapter topology before
+        # copying weights; otherwise its reference is the bare base while the
+        # streamed arm compares against the snapshot, so this is no longer a
+        # streamed-vs-resident comparison.
+        if "ref" in wrapper.model.peft_config:
+            resident_peft.add_adapter("ref", lora_config)
         copied = _sync_adapters(resident_peft, wrapper.model)
         assert copied > 0, "vacuous: no adapter tensors copied"
 
@@ -871,7 +1027,7 @@ class TestKtoNeedsMoreThanOneRow:
         try:
             wrapper.trainer.train()
         except RuntimeError as exc:
-            if not _cuda_available() and "expected device meta" in str(exc):
+            if not cuda_available() and "expected device meta" in str(exc):
                 pytest.xfail(
                     "#328: known meta leak in KTO's KL forward on CPU under "
                     f"newer torch (this run: {_torch_version()})"

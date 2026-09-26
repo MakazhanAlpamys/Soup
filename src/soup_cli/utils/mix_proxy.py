@@ -173,6 +173,13 @@ def _render_overlay_yaml(
     We round-trip via ``yaml.safe_load`` / ``yaml.safe_dump`` to defeat any
     accidental key collisions; weights + datasets are sanitised above so the
     output cannot inject keys (the renderer emits scalars only).
+
+    ``data.train`` renders as the full dataset list, index-aligned with
+    ``data.interleave.probs`` — #443 wired ``data.interleave`` into
+    ``load_dataset()``, so ``soup train`` can now consume the real
+    N-dataset mixture this candidate searched, rather than the
+    single-highest-weighted-dataset collapse #330/#442 used as a stopgap
+    while there was no training-time reader.
     """
     import yaml  # noqa: PLC0415
 
@@ -188,7 +195,31 @@ def _render_overlay_yaml(
         "strategy": "probs",
         "probs": [float(w) for w in weights],
     }
-    return yaml.safe_dump(raw, sort_keys=False)
+    dumped = yaml.safe_dump(raw, sort_keys=False)
+
+    # Insert an explanatory comment directly above the `train:` line inside
+    # the `data:` block — a targeted line insert, not a value edit, so it
+    # can't touch anything the schema will parse. The comment names the
+    # exact list `data.train` renders as, so an anti-drift test can tie the
+    # comment's claim to the actual emitted value rather than to a
+    # separately-tracked variable (the #442 lesson).
+    lines = dumped.split("\n")
+    data_idx = next((i for i, ln in enumerate(lines) if ln == "data:"), -1)
+    if data_idx >= 0:
+        for i in range(data_idx + 1, len(lines)):
+            ln = lines[i]
+            if ln and not ln.startswith(" "):
+                break  # left the data: block
+            if ln.startswith("  train:"):
+                rounded_probs = [round(float(w), 6) for w in weights]
+                lines.insert(
+                    i,
+                    f"  # data.interleave=probs {rounded_probs} over "
+                    f"{list(datasets)!r} — see #443",
+                )
+                break
+        dumped = "\n".join(lines)
+    return dumped
 
 
 def _read_final_eval_loss(

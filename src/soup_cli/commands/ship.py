@@ -18,8 +18,8 @@ Exit codes so CI can gate on the result:
 **0 = SHIP, 2 = DON'T SHIP, 3 = usage/validation error, 1 = runtime error**.
 Usage errors moved off ``2`` in v0.71.38 — a typo'd flag was previously
 indistinguishable from a caught regression (both exited ``2``); ``3`` mirrors
-``soup plan`` / ``soup env check``. Offline ``--evidence`` read/parse errors
-stay ``1``.
+the unified taxonomy (EXIT_USAGE_ERROR = 3, EXIT_GATE_FAILED = 2). Offline
+``--evidence`` read/parse errors exit ``3``.
 
 Leg 1 (task win) modes: ``metric`` (reuses ``eval/custom.run_eval`` accuracy),
 ``judge_score`` (reuses ``eval/judge.JudgeEvaluator``), and ``pairwise`` (true
@@ -34,6 +34,7 @@ from __future__ import annotations
 import json
 import os
 import re
+from dataclasses import replace
 from typing import (
     TYPE_CHECKING,
     Callable,
@@ -49,6 +50,18 @@ import typer
 from rich.console import Console
 from rich.markup import escape
 
+from soup_cli.utils.exit_codes import (
+    EXIT_GATE_FAILED as _EXIT_DONT_SHIP,
+)
+from soup_cli.utils.exit_codes import (
+    EXIT_RUNTIME_ERROR as _EXIT_RUNTIME,
+)
+from soup_cli.utils.exit_codes import (
+    EXIT_USAGE_ERROR as _EXIT_USAGE,
+)
+from soup_cli.utils.exit_codes import (
+    GateGroup,
+)
 from soup_cli.utils.paths import atomic_write_text, enforce_under_cwd_and_no_symlink
 
 if TYPE_CHECKING:  # pydantic models — import for typing only (no eager cost)
@@ -58,7 +71,7 @@ from soup_cli.utils.ship_verdict import (
     DEFAULT_FORGETTING_THRESHOLD,
     MAX_NOISE_FLOOR_RUNS,
     MIN_NOISE_FLOOR_RUNS,
-    SUPPORTED_TASK_MODES,
+    NUMERICS_FAMILY_FULL,
     TASK_AXIS,
     TASK_MODES,
     NoiseFloor,
@@ -70,20 +83,17 @@ from soup_cli.utils.ship_verdict import (
     decide_ship,
     floor_exceeds_threshold,
     for_terminal,
-    noise_floor_from_evidence,
+    numerics_family,
+    parse_numerics,
     render_ship_panel,
+    verdict_from_evidence,
     verdict_to_dict,
     verdict_to_evidence,
 )
 
 console = Console()
 
-app = typer.Typer(no_args_is_help=False)
-
-# Exit-code taxonomy (v0.71.38): keep DON'T-SHIP distinct from a config typo.
-_EXIT_RUNTIME = 1  # something went wrong actually running (IO, model load, ...)
-_EXIT_DONT_SHIP = 2  # a verdict: leg 1 or leg 2 said don't ship
-_EXIT_USAGE = 3  # bad flags / validation (mirrors `soup plan` / `env check`)
+app = typer.Typer(cls=GateGroup, no_args_is_help=False)
 
 # 16 MiB cap on evidence JSON (mirrors `soup diagnose` — prevents a
 # multi-GB / symlink-pointed file from OOMing at json.load time).
@@ -252,10 +262,20 @@ def _config_sha_of(cfg: "SoupConfig") -> str:
     is EXCLUDED: it is applied at verdict time, not training time, so loosening
     ``forgetting_threshold`` must NOT invalidate evidence about an unchanged
     model (the staleness gate fingerprints the recipe, not the gate config).
+
+    ``training.rewind_log`` is excluded on the same criterion: it decides whether
+    the run writes ``rewind.jsonl`` beside the model, not what the model becomes.
+    Measured on a CUDA run in the #1018 review, toggling it left ``train_loss``
+    bit-identical while moving this sha, which would have invalidated evidence
+    about a model that had not changed.
     """
     from soup_cli.registry.hashing import hash_config
 
-    return hash_config(cfg.model_dump(mode="json", exclude={"eval": {"ship"}}))
+    return hash_config(
+        cfg.model_dump(
+            mode="json", exclude={"eval": {"ship"}, "training": {"rewind_log"}}
+        )
+    )
 
 
 def _safe_hash_file(path: str, max_bytes: int) -> Optional[str]:
@@ -290,20 +310,42 @@ def _safe_hash_file(path: str, max_bytes: int) -> Optional[str]:
     return digest.hexdigest()
 
 
-def _compute_provenance(cfg: "SoupConfig") -> Dict[str, str]:
+def _compute_provenance(cfg: "SoupConfig") -> Dict[str, object]:
     """Bind emitted evidence to the exact config that produced it (v0.71.39).
 
     ``config_sha`` (semantic recipe hash) + ``base_model`` + a best-effort
     ``data_sha`` over a cwd-local training file. Built only when we actually
     ``--emit-evidence`` (the ``data_sha`` streams the whole training file).
+    Also carries the #404 scorer/version stamp so a later ``--baseline``
+    consumer can detect scale drift.
     """
-    prov: Dict[str, str] = {"config_sha": _config_sha_of(cfg)}
+    from soup_cli.eval.gate import current_baseline_stamp
+
+    prov: Dict[str, object] = dict(current_baseline_stamp())
+    prov["config_sha"] = _config_sha_of(cfg)
     base = cfg.base
     if base:
         prov["base_model"] = base
     data = cfg.data.train
     if data:
-        data_sha = _safe_hash_file(data, _MAX_DATA_SHA_BYTES)
+        if isinstance(data, list):
+            # #443 — data.interleave: combine per-file hashes into one
+            # data_sha. Order preserved (not sorted) since reordering the
+            # list is a real semantic change — it realigns data.interleave
+            # .probs to different files.
+            import hashlib
+
+            shas = [
+                sha for p in data
+                if (sha := _safe_hash_file(p, _MAX_DATA_SHA_BYTES)) is not None
+            ]
+            data_sha = (
+                hashlib.sha256("\x1e".join(shas).encode()).hexdigest()
+                if shas
+                else None
+            )
+        else:
+            data_sha = _safe_hash_file(data, _MAX_DATA_SHA_BYTES)
         if data_sha is not None:
             prov["data_sha"] = data_sha
     return prov
@@ -376,67 +418,106 @@ def _load_evidence(path: str) -> dict:
 
 def _verdict_from_evidence(payload: dict, *, forgetting_threshold: float) -> ShipVerdict:
     """Build a verdict from an already-loaded evidence payload (no model load)."""
-    task = payload.get("task")
-    if not isinstance(task, dict):
-        _fail("evidence.task must be an object with 'mode', 'base', 'tuned'", _EXIT_RUNTIME)
-    mode = task.get("mode", "metric")
-    if mode not in SUPPORTED_TASK_MODES:
-        _fail(
-            f"evidence.task.mode must be one of {', '.join(SUPPORTED_TASK_MODES)}; "
-            f"got {mode!r}",
-            _EXIT_RUNTIME,
-        )
-    if "base" not in task or "tuned" not in task:
-        _fail("evidence.task needs both 'base' and 'tuned' scores", _EXIT_RUNTIME)
-    # A floor recorded by --emit-evidence must be honoured on read, or the same
-    # scores replay to a DIFFERENT decision than the run that produced them.
     try:
-        stored_floor = noise_floor_from_evidence(payload.get("noise_floor"))
-    except (TypeError, ValueError) as exc:
-        _fail(f"invalid evidence.noise_floor: {exc}", _EXIT_RUNTIME)
-    _warn_if_floor_widens(stored_floor, forgetting_threshold, source="evidence-supplied")
-
-    try:
-        task_win = build_task_win(
-            mode, task["base"], task["tuned"], noise_floor=stored_floor
+        verdict = verdict_from_evidence(
+            payload, forgetting_threshold=forgetting_threshold
         )
-    except (TypeError, ValueError) as exc:
-        _fail(f"invalid evidence.task: {exc}", _EXIT_RUNTIME)
-
-    raw_benchmarks = payload.get("benchmarks", {})
-    if not isinstance(raw_benchmarks, dict):
-        _fail("evidence.benchmarks must be an object of {name: {base, tuned}}", _EXIT_RUNTIME)
-    base_scores: Dict[str, object] = {}
-    tuned_scores: Dict[str, object] = {}
-    for name, entry in raw_benchmarks.items():
-        if not isinstance(entry, dict) or "base" not in entry or "tuned" not in entry:
-            _fail(f"evidence.benchmarks[{name!r}] needs 'base' and 'tuned'", _EXIT_RUNTIME)
-        base_scores[str(name)] = entry["base"]
-        tuned_scores[str(name)] = entry["tuned"]
-
-    try:
-        deltas = compute_benchmark_deltas(
-            base_scores,
-            tuned_scores,
-            forgetting_threshold=forgetting_threshold,
-            noise_floor=stored_floor,
-        )
-        return decide_ship(
-            task_win,
-            deltas,
-            forgetting_threshold=forgetting_threshold,
-            noise_floor=stored_floor,
-        )
-    except (TypeError, ValueError) as exc:
-        _fail(f"invalid evidence.benchmarks: {exc}", _EXIT_RUNTIME)
+    except (TypeError, ValueError, OverflowError) as exc:
+        _fail(str(exc), _EXIT_USAGE)
+    _warn_if_floor_widens(
+        verdict.noise_floor,
+        verdict.forgetting_threshold,
+        source="evidence-supplied",
+    )
+    return verdict
 
 
 # ---------------------------------------------------------------------------
 # Live path — load base + tuned, evaluate both legs
 # ---------------------------------------------------------------------------
 
+# live_eval only builds a BitsAndBytesConfig for these two (#367); the other
+# quant_menu formats (gptq/awq/hqq/...) need a full TrainingConfig, so those
+# still fall back to bf16 here, same as no --config at all.
+_LIVE_EVAL_QUANTIZATION_FORMATS = frozenset({"4bit", "8bit"})
+
+
+def _live_eval_quantization_from_config(soup_config: Optional["SoupConfig"]) -> Optional[str]:
+    """Reuse the training run's own quantization for the live eval load.
+
+    Returns ``None`` (unchanged bf16 default) when no ``--config`` was given,
+    or the run used a format live_eval cannot build directly.
+    """
+    if soup_config is None:
+        return None
+    quant = soup_config.training.quantization
+    return quant if quant in _LIVE_EVAL_QUANTIZATION_FORMATS else None
+
+
+def _live_eval_numerics(
+    quantization: Optional[str], device: Optional[str]
+) -> str:
+    """The actual load precision this live run will use.
+
+    Quantized loads stamp the format name; full-precision loads stamp the
+    dtype that ``_resolve_generators`` passes to ``make_generator``. One
+    helper so the console message, the verdict, and ``--emit-evidence``
+    cannot disagree.
+    """
+    if quantization == "4bit" or quantization == "8bit":
+        return quantization
+    from soup_cli.utils import live_eval
+
+    resolved = live_eval.resolve_device(device)
+    return "bfloat16" if resolved.startswith("cuda") else "float32"
+
+
+def _expected_numerics_family(soup_config: "SoupConfig") -> str:
+    """Family ``--config`` implies for the evidence staleness gate.
+
+    Does not import ``live_eval`` / torch — the offline ``--evidence`` path
+    must stay GPU-free. Unsupported quant-menu formats (gptq/awq/...) fall
+    through to ``full``, matching the live load.
+    """
+    quant = _live_eval_quantization_from_config(soup_config)
+    return quant if quant is not None else NUMERICS_FAMILY_FULL
+
+
+def _check_evidence_numerics(payload: dict, expected_family: str) -> None:
+    """Refuse evidence whose numerics *family* does not match ``--config``.
+
+    Missing stamp: warn, do not refuse (pre-#367 artifacts). Malformed stamp:
+    usage error, and the unknown value is never echoed (terminal-escape).
+    """
+    raw = payload.get("numerics")
+    if raw is None:
+        console.print(
+            "[yellow]Warning:[/] evidence has no numerics stamp; "
+            "cannot verify the judge loaded the same precision as --config. "
+            "Re-emit with soup ship ... --emit-evidence."
+        )
+        return
+    try:
+        got = parse_numerics(raw)
+        got_family = numerics_family(got)
+    except ValueError as exc:
+        _fail(f"invalid evidence.numerics: {exc}", _EXIT_USAGE)
+    if got_family != expected_family:
+        _fail(
+            "stale evidence: its numerics "
+            f"{escape(got)} (family {escape(got_family)}) do not match "
+            f"--config (family {escape(expected_family)}). "
+            "Re-run live ship + emit evidence against the current config.",
+            _EXIT_USAGE,
+        )
+
+
 def _resolve_generators(
-    base: str, tuned: Optional[str], adapter: Optional[str], device: Optional[str]
+    base: str,
+    tuned: Optional[str],
+    adapter: Optional[str],
+    device: Optional[str],
+    quantization: Optional[str] = None,
 ) -> Tuple[Callable[[str], str], Callable[[str], str]]:
     """Build ``(base_gen, tuned_gen)`` from live_eval (greedy decode)."""
     # #316 — the behavioural suites need a budget that fits a real tool call.
@@ -448,17 +529,35 @@ def _resolve_generators(
     from soup_cli.eval.gate_suites import BEHAVIOURAL_MAX_NEW_TOKENS
     from soup_cli.utils import live_eval
 
+    numerics = _live_eval_numerics(quantization, device)
+    if quantization:
+        console.print(
+            f"[dim]Live eval: loading base/tuned at {numerics} "
+            "(reused from --config training.quantization).[/]"
+        )
+        dtype = None
+    else:
+        # dtype is the stamp: bf16 on CUDA (including cuda:0), fp32 elsewhere.
+        dtype = numerics
+        console.print(
+            f"[dim]Live eval: loading base/tuned at full precision ({dtype}); "
+            "pass --config to reuse the training run's own quantization.[/]"
+        )
+
     base_gen = live_eval.make_generator(
-        base, device=device, max_new_tokens=BEHAVIOURAL_MAX_NEW_TOKENS
+        base, device=device, max_new_tokens=BEHAVIOURAL_MAX_NEW_TOKENS,
+        dtype=dtype, quantization=quantization,
     )
     if adapter:
         tuned_gen = live_eval.make_generator(
             base, adapter=adapter, device=device,
             max_new_tokens=BEHAVIOURAL_MAX_NEW_TOKENS,
+            dtype=dtype, quantization=quantization,
         )
     elif tuned:
         tuned_gen = live_eval.make_generator(
-            tuned, device=device, max_new_tokens=BEHAVIOURAL_MAX_NEW_TOKENS
+            tuned, device=device, max_new_tokens=BEHAVIOURAL_MAX_NEW_TOKENS,
+            dtype=dtype, quantization=quantization,
         )
     else:  # pragma: no cover — _verdict_live guarantees one of tuned/adapter
         raise ValueError("need --tuned or --adapter")
@@ -482,12 +581,16 @@ def _leg1_metric(
     return build_task_win("metric", base_acc, tuned_acc)
 
 
-def _leg1_judge(
-    base_gen: Callable[[str], str],
-    tuned_gen: Callable[[str], str],
-    task_eval: str,
-    judge_model: str,
-) -> TaskWin:
+def _build_judge_scorer(
+    task_eval: str, judge_model: str
+) -> Callable[[Callable[[str], str]], float]:
+    """A ``score(gen) -> [0, 1]`` scorer for one side of a judge_score leg.
+
+    Lifted out of ``_leg1_judge`` (was an inner closure) so the base side can be
+    scored on its own N times for the noise floor without also scoring the tuned
+    side (#403). The tasks are loaded and the evaluator built once, then reused
+    across every call.
+    """
     from soup_cli.eval.custom import load_eval_tasks
     from soup_cli.eval.gate import _parse_judge_url
     from soup_cli.eval.judge import JudgeEvaluator
@@ -524,7 +627,47 @@ def _leg1_judge(
         )
         return max(0.0, min(1.0, (overall - scale_min) / span))
 
-    return build_task_win("judge_score", _score(base_gen), _score(tuned_gen))
+    return _score
+
+
+def _leg1_judge(
+    base_gen: Callable[[str], str],
+    tuned_gen: Callable[[str], str],
+    task_eval: str,
+    judge_model: str,
+) -> TaskWin:
+    score = _build_judge_scorer(task_eval, judge_model)
+    return build_task_win("judge_score", score(base_gen), score(tuned_gen))
+
+
+def _build_pairwise_scorer(
+    task_eval: str, judge_model: str
+) -> Callable[[Callable[[str], str], Callable[[str], str]], float]:
+    """A ``winrate(gen_a, gen_b) -> [0, 1]`` scorer for a pairwise leg (#284).
+
+    Factored out of ``_leg1_pairwise`` so the noise floor can measure the base
+    model judged against ITSELF (``winrate(base_gen, base_gen)``), whose expected
+    value is 0.5 by construction — its spread over repeats is the combined
+    decode + judge noise, directly measured rather than inferred (#403). Tasks
+    and evaluator are built once and reused.
+    """
+    from soup_cli.eval.custom import load_eval_tasks
+    from soup_cli.eval.gate import _parse_judge_url
+    from soup_cli.eval.judge import JudgeEvaluator, pairwise_winrate
+
+    tasks = load_eval_tasks(task_eval)
+    if not tasks:
+        raise ValueError(f"task-eval file {task_eval!r} has no tasks")
+    provider, model, api_base = _parse_judge_url(judge_model)
+    evaluator = JudgeEvaluator(provider=provider, model=model, api_base=api_base)
+
+    def _winrate(
+        gen_a: Callable[[str], str], gen_b: Callable[[str], str]
+    ) -> float:
+        pairs = [(t.prompt, gen_a(t.prompt), gen_b(t.prompt)) for t in tasks]
+        return pairwise_winrate(pairs, evaluator)
+
+    return _winrate
 
 
 def _leg1_pairwise(
@@ -539,18 +682,8 @@ def _leg1_pairwise(
     which is better (swap-debiased). The tuned win-rate becomes leg 1, framed as
     ``TaskWin(base=0.5 coin-flip, tuned=win-rate)`` so ``won <=> win-rate > 0.5``.
     """
-    from soup_cli.eval.custom import load_eval_tasks
-    from soup_cli.eval.gate import _parse_judge_url
-    from soup_cli.eval.judge import JudgeEvaluator, pairwise_winrate
-
-    tasks = load_eval_tasks(task_eval)
-    if not tasks:
-        raise ValueError(f"task-eval file {task_eval!r} has no tasks")
-    provider, model, api_base = _parse_judge_url(judge_model)
-    evaluator = JudgeEvaluator(provider=provider, model=model, api_base=api_base)
-    pairs = [(t.prompt, base_gen(t.prompt), tuned_gen(t.prompt)) for t in tasks]
-    winrate = pairwise_winrate(pairs, evaluator)
-    return build_task_win("pairwise", 0.5, winrate)
+    winrate = _build_pairwise_scorer(task_eval, judge_model)
+    return build_task_win("pairwise", 0.5, winrate(base_gen, tuned_gen))
 
 
 def _extract_lm_score(bench_data: Mapping[str, object]) -> Optional[float]:
@@ -641,32 +774,12 @@ def _leg2_scores(
     (skipping the base run) for any name it covers.
     """
     from soup_cli.eval.gate_suites import (
-        SCORER_CHANGED_IN_V0_73_2,
         is_bundled_suite,
         score_bundled_suite,
     )
 
     bundled_names = [n for n in suite_names if is_bundled_suite(n)]
     other_names = [n for n in suite_names if not is_bundled_suite(n)]
-
-    # A --baseline / registry:// entry supplies the BASE score from a file and
-    # skips the live base run, so a snapshot taken before v0.73.2 is compared
-    # against a freshly-scored tuned model on a DIFFERENT scale. Measured on an
-    # unchanged model: mini_mmlu 0.423 -> 0.731, mini_tool_call 0.225 -> 1.000.
-    # That is far larger than the 0.05 gate, so it must be said out loud.
-    stale = sorted(
-        name
-        for name in bundled_names
-        if name in baseline_scores and name in SCORER_CHANGED_IN_V0_73_2
-    )
-    if stale:
-        console.print(
-            "[yellow]Warning:[/] --baseline supplies stored scores for "
-            f"{escape(', '.join(stale))}, whose scorer CHANGED in v0.73.2 "
-            "(#357 / #346). If that baseline was captured on an earlier "
-            "release the two sides are on different scales — re-measure the "
-            "baseline, or drop these names from it to force a live base run."
-        )
 
     base_map: Dict[str, object] = {}
     tuned_map: Dict[str, object] = {}
@@ -698,6 +811,57 @@ def _leg2_scores(
     return base_map, tuned_map
 
 
+def _build_task_floor_scorer(
+    task_mode: str,
+    base_gen: Callable[[str], str],
+    *,
+    base_id: str,
+    task_eval: str,
+    judge_model: Optional[str],
+) -> Callable[[], float]:
+    """A ``() -> float`` closure scoring the BASE side's leg-1 task axis once.
+
+    Built once (tasks / evaluator resolved a single time) and called per
+    noise-floor repeat so the spread reflects run-to-run variance, not setup.
+    The judge modes require a judge model; its presence is validated upstream in
+    ``_verdict_live``, so a missing one here is a programming error.
+    """
+    if task_mode == "metric":
+        from soup_cli.eval.custom import load_eval_tasks, run_eval
+
+        tasks = load_eval_tasks(task_eval)
+        if not tasks:
+            raise ValueError(f"task-eval file {task_eval!r} has no tasks")
+
+        def _metric_score() -> float:
+            return run_eval(base_id, tasks, generate_fn=base_gen).accuracy
+
+        return _metric_score
+
+    if not judge_model:
+        raise ValueError(f"--task-mode {task_mode} needs a judge model")
+
+    if task_mode == "judge_score":
+        judge_scorer = _build_judge_scorer(task_eval, judge_model)
+
+        def _judge_score() -> float:
+            return judge_scorer(base_gen)
+
+        return _judge_score
+
+    if task_mode == "pairwise":
+        pairwise_scorer = _build_pairwise_scorer(task_eval, judge_model)
+
+        def _pairwise_score() -> float:
+            # The base judged against itself: expected 0.5 by construction, so
+            # the spread over repeats is the combined decode + judge noise (#403).
+            return pairwise_scorer(base_gen, base_gen)
+
+        return _pairwise_score
+
+    raise ValueError(f"unknown task mode {task_mode!r}")
+
+
 def _measure_noise_floor(
     runs: int,
     suite_names: List[str],
@@ -706,6 +870,7 @@ def _measure_noise_floor(
     base_id: str,
     task_mode: str,
     task_eval: str,
+    judge_model: Optional[str],
     forgetting_threshold: float,
 ) -> NoiseFloor:
     """Re-run the BASE model ``runs`` times and return the measured spread.
@@ -716,12 +881,19 @@ def _measure_noise_floor(
     in that session sat inside the floor, so the gate was calling differences
     it could not resolve.
 
-    Coverage is deliberately partial and says so. Leg-2 axes are always
-    measured. The leg-1 task axis is measured **only in ``metric`` mode** — the
-    one leg-1 path that is offline and judge-free. In ``judge_score`` /
-    ``pairwise`` the repeats would fold the judge's own sampling noise into a
-    number presented as decode noise, which is publishing an inference as a
-    mechanism; the caller is warned instead and leg 1 keeps a 0.0 floor.
+    Leg-2 axes are always measured (decode-only). The leg-1 task axis is now
+    measured in every mode (#403):
+
+    - ``metric``: the offline scorer, re-run — decode-only noise.
+    - ``judge_score``: the base side scored N times through the judge.
+    - ``pairwise``: the base model judged against ITSELF, whose expected
+      win-rate is 0.5 by construction, so the spread is a directly measured
+      quantity, not an inference.
+
+    In the two judge modes the spread folds the judge's own sampling noise into
+    the number, so the returned floor is stamped ``judge_inclusive`` and never
+    presented as decode-only. That is why a judge-scored win smaller than the
+    judge's own noise no longer counts.
 
     A ``--baseline`` file is deliberately NOT consulted here even though the
     verdict path uses one: a stored number is not a repeat of this instrument,
@@ -736,14 +908,15 @@ def _measure_noise_floor(
             "[yellow]Warning:[/] --noise-floor measures bundled suites only; "
             f"no floor for {escape(', '.join(sorted(skipped)))}"
         )
-    measure_task = task_mode == "metric"
-    if not measure_task:
-        console.print(
-            f"[yellow]Warning:[/] --noise-floor does not measure the leg-1 task "
-            f"axis in --task-mode {escape(task_mode)} (a judge-backed repeat "
-            "would report the judge's sampling noise as decode noise); leg 1 "
-            "keeps a 0.0 floor."
-        )
+
+    judge_inclusive = task_mode in ("judge_score", "pairwise")
+    task_score = _build_task_floor_scorer(
+        task_mode,
+        base_gen,
+        base_id=base_id,
+        task_eval=task_eval,
+        judge_model=judge_model,
+    )
 
     samples: List[Dict[str, float]] = []
     for index in range(runs):
@@ -751,18 +924,10 @@ def _measure_noise_floor(
         run: Dict[str, float] = {}
         for name in bundled:
             run[name] = score_bundled_suite(name, base_gen)
-        if measure_task:
-            from soup_cli.eval.custom import load_eval_tasks, run_eval
-
-            tasks = load_eval_tasks(task_eval)
-            if not tasks:
-                raise ValueError(f"task-eval file {task_eval!r} has no tasks")
-            run[TASK_AXIS] = run_eval(
-                base_id, tasks, generate_fn=base_gen
-            ).accuracy
+        run[TASK_AXIS] = task_score()
         samples.append(run)
 
-    floor = compute_noise_floor(samples)
+    floor = compute_noise_floor(samples, judge_inclusive=judge_inclusive)
     if floor.floors and all(value == 0.0 for _name, value in floor.floors):
         console.print(
             "[dim]noise floor: every axis repeated exactly — this instrument "
@@ -816,6 +981,7 @@ def _verdict_live(
     device: Optional[str],
     forgetting_threshold: float,
     noise_floor_runs: Optional[int] = None,
+    quantization: Optional[str] = None,
 ) -> ShipVerdict:
     """Run a live verdict — validate flags (exit 2), then evaluate (exit 1)."""
     if not base:
@@ -854,7 +1020,12 @@ def _verdict_live(
         from soup_cli.eval.gate import resolve_baseline
 
         try:
-            baseline_scores = resolve_baseline(baseline_spec)
+            baseline_scores = resolve_baseline(
+                baseline_spec,
+                warn=lambda msg: console.print(
+                    f"[yellow]Warning:[/] {escape(msg)}"
+                ),
+            )
         except (ValueError, FileNotFoundError, OSError) as exc:
             _fail(f"--baseline: {exc}", _EXIT_USAGE)
 
@@ -865,7 +1036,20 @@ def _verdict_live(
 
     tuned_id = tuned if tuned else base
     try:
-        base_gen, tuned_gen = _resolve_generators(base, tuned, adapter, device)
+        base_gen, tuned_gen = _resolve_generators(base, tuned, adapter, device, quantization)
+        # Judge modes need a judge model. Validate it BEFORE measuring the
+        # noise floor, which now scores the leg-1 task axis through the judge as
+        # well (#403) — a missing / malformed judge is a usage error (exit 2),
+        # not a runtime one discovered mid-measurement.
+        if task_mode == "judge_score":
+            if not judge_model:
+                _fail("--task-mode judge_score needs --judge-model <url>", _EXIT_USAGE)
+            _validate_judge_model_url(judge_model)
+        elif task_mode == "pairwise":
+            if not judge_model:
+                _fail("--task-mode pairwise needs --judge-model <url>", _EXIT_USAGE)
+            _validate_judge_model_url(judge_model)
+
         measured_floor: Optional[NoiseFloor] = None
         if noise_floor_runs is not None:
             measured_floor = _measure_noise_floor(
@@ -875,17 +1059,12 @@ def _verdict_live(
                 base_id=base,
                 task_mode=task_mode,
                 task_eval=task_eval,
+                judge_model=judge_model,
                 forgetting_threshold=forgetting_threshold,
             )
         if task_mode == "judge_score":
-            if not judge_model:
-                _fail("--task-mode judge_score needs --judge-model <url>", _EXIT_USAGE)
-            _validate_judge_model_url(judge_model)
             task_win = _leg1_judge(base_gen, tuned_gen, task_eval, judge_model)
         elif task_mode == "pairwise":
-            if not judge_model:
-                _fail("--task-mode pairwise needs --judge-model <url>", _EXIT_USAGE)
-            _validate_judge_model_url(judge_model)
             task_win = _leg1_pairwise(base_gen, tuned_gen, task_eval, judge_model)
         else:
             task_win = _leg1_metric(base_gen, tuned_gen, base, tuned_id, task_eval)
@@ -905,11 +1084,14 @@ def _verdict_live(
             forgetting_threshold=forgetting_threshold,
             noise_floor=measured_floor,
         )
-        return decide_ship(
+        verdict = decide_ship(
             task_win,
             deltas,
             forgetting_threshold=forgetting_threshold,
             noise_floor=measured_floor,
+        )
+        return replace(
+            verdict, numerics=_live_eval_numerics(quantization, device)
         )
     except typer.Exit:
         # typer.Exit subclasses RuntimeError — re-raise so in-try _fail() usage
@@ -1019,7 +1201,9 @@ def ship(
             f"{MAX_NOISE_FLOOR_RUNS}) to measure what this instrument can "
             "resolve, print it beside the verdict, and refuse to call any "
             "delta smaller than the measured floor significant. Costs N extra "
-            "base passes. Leg-1 floor is measured in --task-mode metric only."
+            "base passes. The leg-1 task floor is measured in every --task-mode; "
+            "in judge_score / pairwise each repeat is N extra JUDGE passes "
+            "(N x the judge API calls), and the floor is labelled decode + judge."
         ),
     ),
     judge_model: Optional[str] = typer.Option(
@@ -1037,9 +1221,9 @@ def ship(
     baseline: Optional[str] = typer.Option(
         None,
         "--baseline",
-        help="registry://<id> or JSON file of base leg-2 scores (skips base run). "
-        "Recompute baselines captured before v0.71.38 — the leg-2 scorer changed, "
-        "so an old baseline is not comparable to a freshly-scored tuned model.",
+        help="registry://<id> or stamped JSON of base leg-2 scores (skips base run). "
+        "Unstamped or scorer_revision-mismatched baselines warn once — re-measure "
+        "so both sides share one scorer scale (#404).",
     ),
     forgetting_threshold: float = typer.Option(
         DEFAULT_FORGETTING_THRESHOLD,
@@ -1064,7 +1248,8 @@ def ship(
         "--config",
         help="soup.yaml whose eval.ship block supplies defaults (CLI flags win). "
         "With --evidence alone it GATES (refuses evidence whose config_sha drifted "
-        "from this config); with --emit-evidence it STAMPS this config's provenance.",
+        "from this config, or whose numerics family does not match); with "
+        "--emit-evidence it STAMPS this config's provenance.",
     ),
     push: Optional[str] = typer.Option(
         None,
@@ -1095,6 +1280,13 @@ def ship(
                 baseline = ship_cfg.baseline
             if _flag_is_default(ctx, "forgetting_threshold"):
                 forgetting_threshold = ship_cfg.forgetting_threshold
+            if _flag_is_default(ctx, "noise_floor") and ship_cfg.noise_floor is not None:
+                # A config floor is a live-measurement request just like the CLI
+                # flag: _validate_noise_floor_flag re-checks bounds below, and the
+                # --evidence guard refuses it there exactly as it refuses the flag
+                # (a floor is measured against a live base, nothing to run
+                # offline; a floor already in the evidence is applied on read).
+                noise_floor = ship_cfg.noise_floor
 
     _validate_task_mode_flag(task_mode)
     threshold = _validate_threshold_flag(forgetting_threshold)
@@ -1130,15 +1322,20 @@ def ship(
         try:
             payload = _load_evidence(evidence)
         except (OSError, ValueError, json.JSONDecodeError) as exc:
-            _fail(f"cannot read --evidence: {exc}", _EXIT_RUNTIME)
+            _fail(f"cannot read --evidence: {exc}", _EXIT_USAGE)
         # --config has two intents here:
         #   * GATE (no --emit-evidence): verify this committed evidence is bound
-        #     to the committed config — refuse if config_sha drifted or is absent.
+        #     to the committed config — refuse if config_sha drifted or is absent,
+        #     or if the numerics family does not match (#367).
         #   * PRODUCER (--emit-evidence): STAMP the config's provenance onto these
         #     scores (raw scores from an external eval tool -> bound evidence), so
         #     the input is NOT required to already carry a matching provenance.
         if config_sha is not None and not emit_evidence:
             _check_evidence_staleness(payload, config_sha)
+            assert soup_config is not None  # config_sha is computed from it
+            _check_evidence_numerics(
+                payload, _expected_numerics_family(soup_config)
+            )
         verdict = _verdict_from_evidence(payload, forgetting_threshold=threshold)
     elif base or tuned or adapter or task_eval:
         verdict = _verdict_live(
@@ -1153,6 +1350,7 @@ def ship(
             device=device,
             forgetting_threshold=threshold,
             noise_floor_runs=noise_floor,
+            quantization=_live_eval_quantization_from_config(soup_config),
         )
     else:
         _fail(
@@ -1162,11 +1360,14 @@ def ship(
         )
 
     # Full provenance (incl. data_sha) is only needed when writing evidence.
-    provenance = (
-        _compute_provenance(soup_config)
-        if emit_evidence and soup_config is not None
-        else None
-    )
+    # Always stamp scorer revision on emit (#404), even without --config.
+    provenance: Optional[Dict[str, object]] = None
+    if emit_evidence:
+        from soup_cli.eval.gate import current_baseline_stamp
+
+        provenance = dict(current_baseline_stamp())
+        if soup_config is not None:
+            provenance.update(_compute_provenance(soup_config))
     _emit_and_exit(
         verdict, output, emit_evidence=emit_evidence, push=push, provenance=provenance
     )

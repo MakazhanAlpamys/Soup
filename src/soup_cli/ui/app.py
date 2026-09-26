@@ -1,5 +1,6 @@
 """FastAPI application for Soup Web UI."""
 
+import ipaddress
 import json as json_mod
 import logging
 import os
@@ -10,7 +11,8 @@ import tempfile
 import threading
 import time
 from pathlib import Path
-from typing import Optional
+from types import MappingProxyType
+from typing import Mapping, Optional
 
 from pydantic import BaseModel as PydanticBaseModel
 from pydantic import Field
@@ -21,6 +23,160 @@ STATIC_DIR = Path(__file__).parent / "static"
 
 # Max file read size to prevent memory exhaustion
 _MAX_INSPECT_LIMIT = 500
+
+# #939: cap the body before FastAPI parses it, sized per route (chat/send
+# forwards upstream; inspect only ever needs a path and an int). #897 extends
+# the same mechanism to every YAML-bearing Web UI route.
+_MAX_CHAT_SEND_BODY_BYTES = 1024 * 1024
+_MAX_DATA_INSPECT_BODY_BYTES = 8 * 1024
+_MAX_YAML_REQUEST_BYTES = 1024 * 1024
+_BODY_SIZE_LIMITS = {
+    "/api/chat/send": _MAX_CHAT_SEND_BODY_BYTES,
+    "/api/data/inspect": _MAX_DATA_INSPECT_BODY_BYTES,
+    "/api/config/validate": _MAX_YAML_REQUEST_BYTES,
+    "/api/train/start": _MAX_YAML_REQUEST_BYTES,
+    "/api/config/from-form": _MAX_YAML_REQUEST_BYTES,
+}
+
+
+class _RequestBodySizeLimitMiddleware:
+    """Reject an oversized POST body before route/model parsing runs.
+
+    Checks ``Content-Length`` first, then streams and counts the actual body
+    bytes so a missing or understated header cannot bypass the cap. Per-route
+    limits keep the mechanism shared while allowing small JSON requests and
+    YAML-bearing configuration requests to use different ceilings.
+    """
+
+    def __init__(self, app, limits: Mapping[str, int] = _BODY_SIZE_LIMITS) -> None:
+        self._app = app
+        self._limits = limits
+
+    async def _reject(self, scope, receive, send) -> None:
+        from starlette.responses import JSONResponse
+
+        response = JSONResponse(
+            status_code=413,
+            content={"detail": "Request body too large"},
+        )
+        await response(scope, receive, send)
+
+    async def __call__(self, scope, receive, send) -> None:
+        max_body_size = None
+        if scope.get("type") == "http" and scope.get("method") == "POST":
+            max_body_size = self._limits.get(scope.get("path"))
+        if max_body_size is None:
+            await self._app(scope, receive, send)
+            return
+
+        for key, value in scope.get("headers", ()):
+            if key.lower() != b"content-length":
+                continue
+            try:
+                if int(value) > max_body_size:
+                    await self._reject(scope, receive, send)
+                    return
+            except ValueError:
+                # Do not trust a malformed header; the receive wrapper below
+                # still enforces the actual byte count.
+                pass
+
+        received = 0
+        buffered_messages = []
+        while True:
+            message = await receive()
+            buffered_messages.append(message)
+            if message.get("type") == "http.request":
+                received += len(message.get("body", b""))
+                if received > max_body_size:
+                    await self._reject(scope, receive, send)
+                    return
+                if message.get("more_body", False):
+                    continue
+            break
+
+        message_index = 0
+
+        async def receive_buffered():
+            nonlocal message_index
+            if message_index < len(buffered_messages):
+                message = buffered_messages[message_index]
+                message_index += 1
+                return message
+            return await receive()
+
+        await self._app(scope, receive_buffered, send)
+
+
+_CHART_JS_URL = "https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"
+
+CONTENT_SECURITY_POLICY = "; ".join((
+    "default-src 'self'",
+    f"script-src 'self' {_CHART_JS_URL}",
+    # Rendered markup and Chart.js set inline style attributes.
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' data:",
+    "connect-src 'self'",
+    "object-src 'none'",
+    "base-uri 'none'",
+    "frame-ancestors 'none'",
+    "form-action 'self'",
+))
+
+SECURITY_HEADERS: Mapping[str, str] = MappingProxyType({
+    "Content-Security-Policy": CONTENT_SECURITY_POLICY,
+    "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "no-referrer",
+    "X-Frame-Options": "DENY",
+})
+
+# FastAPI's interactive docs (served on a loopback bind only) bootstrap with an
+# inline script and CDN assets, so the page policy above would leave them blank.
+_POLICY_EXEMPT_PATHS = frozenset({"/docs", "/docs/oauth2-redirect", "/redoc"})
+
+
+class _SecurityHeadersMiddleware:
+    """Add the response headers in ``SECURITY_HEADERS`` to every HTTP response.
+
+    Pure ASGI: it rewrites only the ``http.response.start`` message and forwards
+    every body message as it arrives, so streamed responses (the training log
+    event stream) are not buffered. A header the endpoint already set is kept.
+    """
+
+    def __init__(
+        self,
+        app,
+        headers: Mapping[str, str] = SECURITY_HEADERS,
+        policy_exempt_paths: frozenset = frozenset(),
+    ) -> None:
+        self._app = app
+        self._headers = tuple(
+            (name.lower().encode("latin-1"), value.encode("latin-1"))
+            for name, value in headers.items()
+        )
+        self._policy_exempt_paths = policy_exempt_paths
+
+    async def __call__(self, scope, receive, send) -> None:
+        if scope.get("type") != "http":
+            await self._app(scope, receive, send)
+            return
+
+        exempt = scope.get("path") in self._policy_exempt_paths
+        extra = tuple(
+            (name, value)
+            for name, value in self._headers
+            if not (exempt and name == b"content-security-policy")
+        )
+
+        async def send_with_headers(message) -> None:
+            if message.get("type") == "http.response.start":
+                existing = list(message.get("headers", ()))
+                present = {name.lower() for name, _ in existing}
+                added = [(n, v) for n, v in extra if n not in present]
+                message = {**message, "headers": existing + added}
+            await send(message)
+
+        await self._app(scope, receive, send_with_headers)
 
 
 class TrainRequest(PydanticBaseModel):
@@ -41,9 +197,91 @@ class DataInspectRequest(PydanticBaseModel):
     limit: int = Field(default=50, ge=1, le=_MAX_INSPECT_LIMIT)
 
 
+class TrainLogBuffer:
+    """Thread-safe bounded ring buffer for subprocess output lines."""
+
+    def __init__(self, maxlen: int = 10000):
+        self._maxlen = maxlen
+        self._lines: list[tuple[int, str]] = []
+        self._lock = threading.Lock()
+        self._new_line_cond = threading.Condition(self._lock)
+        self._done = False
+        self._total_emitted = 0
+
+    def append(self, text: str) -> None:
+        with self._new_line_cond:
+            idx = self._total_emitted
+            self._total_emitted += 1
+            self._lines.append((idx, text))
+            if len(self._lines) > self._maxlen:
+                self._lines.pop(0)
+            self._new_line_cond.notify_all()
+
+    def mark_done(self) -> None:
+        with self._new_line_cond:
+            self._done = True
+            self._new_line_cond.notify_all()
+
+    def is_done(self) -> bool:
+        with self._lock:
+            return self._done
+
+    def get_lines_from(self, start_idx: int) -> list[tuple[int, str]]:
+        with self._lock:
+            return [item for item in self._lines if item[0] >= start_idx]
+
+    def wait_for_lines_or_done(
+        self, next_idx: int, timeout: float = 0.5
+    ) -> tuple[list[tuple[int, str]], bool]:
+        """Wait until lines >= next_idx are available or process is marked done."""
+        with self._new_line_cond:
+            available = [item for item in self._lines if item[0] >= next_idx]
+            if available or self._done:
+                return available, self._done
+            self._new_line_cond.wait(timeout=timeout)
+            available = [item for item in self._lines if item[0] >= next_idx]
+            return available, self._done
+
+
+def _drain_stdout_worker(proc: subprocess.Popen, log_buffer: TrainLogBuffer) -> None:
+    """Continuously read stdout of proc until EOF and write to log_buffer."""
+    stdout = getattr(proc, "stdout", None)
+    if stdout is None:
+        log_buffer.mark_done()
+        return
+
+    try:
+        while True:
+            raw_line = stdout.readline()
+            if not raw_line or raw_line == b"":
+                break
+            if isinstance(raw_line, bytes):
+                text = raw_line.decode("utf-8", errors="replace").rstrip("\n\r")
+            elif isinstance(raw_line, str):
+                text = raw_line.rstrip("\n\r")
+            else:
+                break
+            log_buffer.append(text)
+    except (ValueError, OSError) as exc:
+        logger.debug("Drain worker exception: %s", exc)
+    finally:
+        try:
+            stdout.close()
+        except Exception:
+            pass
+        log_buffer.mark_done()
+
+
+def _resolve_train_argv(config_path: str) -> list[str]:
+    """Construct command-line arguments for launching training subprocess."""
+    return [sys.executable, "-m", "soup_cli", "train", "--config", config_path, "--yes"]
+
+
 # Global state for training process
 _train_process: Optional[subprocess.Popen] = None
 _train_config_path: Optional[str] = None
+_train_log_buffer: Optional[TrainLogBuffer] = None
+_train_drain_thread: Optional[threading.Thread] = None
 _train_lock = threading.Lock()
 
 # Auth token generated at startup — printed to console for the user.
@@ -73,14 +311,113 @@ def set_auth_token(token: str) -> None:
         _auth_token = validated
 
 
+# Ephemeral single-use tickets for SSE endpoints (v0.74.x #687)
+# Valid for 30 seconds, single use only.
+_tickets: dict[str, float] = {}
+_tickets_lock = threading.Lock()
+
+
+def _cleanup_expired_tickets() -> None:
+    now = time.time()
+    expired = [t for t, exp in _tickets.items() if exp < now]
+    for t in expired:
+        _tickets.pop(t, None)
+
+
+def create_auth_ticket() -> str:
+    """Create a short-lived (30s) single-use ticket for SSE connection."""
+    ticket = secrets.token_urlsafe(32)
+    now = time.time()
+    with _tickets_lock:
+        _cleanup_expired_tickets()
+        _tickets[ticket] = now + 30.0
+    return ticket
+
+
+def consume_auth_ticket(ticket: str) -> bool:
+    """Consume a single-use ticket if valid and unexpired."""
+    if not ticket:
+        return False
+    now = time.time()
+    with _tickets_lock:
+        _cleanup_expired_tickets()
+        exp = _tickets.pop(ticket, None)
+        if exp is not None and now <= exp:
+            return True
+    return False
+
+
+def _bearer_matches(header_value: str) -> bool:
+    """Verify Bearer token against configured token in constant time.
+
+    Encodes both values to UTF-8 bytes before comparing, because
+    secrets.compare_digest raises TypeError if passed non-ASCII str arguments
+    (e.g. when Starlette decodes header bytes >= 0x80 using Latin-1).
+    """
+    with _auth_token_lock:
+        expected = f"Bearer {_auth_token}".encode("utf-8")
+    return secrets.compare_digest(header_value.encode("utf-8"), expected)
+
+
+def _is_loopback(host: str) -> bool:
+    """Return True if host is a loopback address or localhost."""
+    if host.lower() == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host.strip("[]")).is_loopback
+    except ValueError:
+        return False
+
+
 def create_app(host: str = "127.0.0.1", port: int = 7860):
     """Create the Soup Web UI FastAPI application."""
+    if not _is_loopback(host):
+        token = get_auth_token()
+        valid = False
+        if token:
+            try:
+                from soup_cli.utils.qr_url import validate_token
+
+                validate_token(token)
+                valid = True
+            except (TypeError, ValueError):
+                valid = False
+        if not valid:
+            raise ValueError(
+                f"Binding non-loopback host '{host}' requires a valid authentication token."
+            )
+
     from fastapi import Depends, FastAPI, HTTPException, Query, Request
     from fastapi.middleware.cors import CORSMiddleware
     from fastapi.responses import HTMLResponse
     from fastapi.staticfiles import StaticFiles
 
-    app = FastAPI(title="Soup Web UI", version="1.0.0")
+    # #731: FastAPI's interactive docs describe every route, parameter and
+    # schema, and served none of it behind a token -- so a `soup ui --public`
+    # bind let anyone on the LAN enumerate the whole API surface. Gating them
+    # behind `_verify_token` does not work: `/docs` is a browser navigation and
+    # Swagger cannot attach a Bearer header to it (the #687 constraint), so
+    # gating would break the page for the developer while `/openapi.json` stayed
+    # readable by curl. Passing `None` removes the routes outright -- there is
+    # no handler left to reach -- and loopback keeps the convenience.
+    _docs_enabled = _is_loopback(host)
+    app = FastAPI(
+        title="Soup Web UI",
+        version="1.0.0",
+        openapi_url="/openapi.json" if _docs_enabled else None,
+        docs_url="/docs" if _docs_enabled else None,
+        redoc_url="/redoc" if _docs_enabled else None,
+        # Derived from `swagger_ui_oauth2_redirect_url`, not from `docs_url`:
+        # leaving it at its default keeps `/docs/oauth2-redirect` serving even
+        # once `/docs` is gone.
+        swagger_ui_oauth2_redirect_url=(
+            "/docs/oauth2-redirect" if _docs_enabled else None
+        ),
+    )
+
+    # Install before CORS so a 413 from the size cap still carries the same
+    # CORS headers as a normal endpoint response.
+    app.add_middleware(_RequestBodySizeLimitMiddleware)
 
     # Restrict CORS to the origin we actually serve. When `host == "0.0.0.0"`
     # the literal `http://0.0.0.0:<port>` is never a browser origin, so we
@@ -109,15 +446,39 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
             allow_headers=["Authorization", "Content-Type"],
         )
 
+    # Added last, so it is the outermost layer: a 413 from the size cap, a CORS
+    # preflight and every error response carry the content policy too.
+    app.add_middleware(
+        _SecurityHeadersMiddleware,
+        policy_exempt_paths=_POLICY_EXEMPT_PATHS if _docs_enabled else frozenset(),
+    )
+
     def _verify_token(request: Request):
-        """Verify Bearer token on mutating endpoints."""
+        """Verify Bearer token on API endpoints."""
         auth = request.headers.get("Authorization", "")
-        with _auth_token_lock:
-            expected = f"Bearer {_auth_token}"
         # Constant-time compare — a plain != leaks the token byte-by-byte via
         # response timing when `soup ui --public` is exposed on a LAN.
-        if not secrets.compare_digest(auth, expected):
+        if not _bearer_matches(auth):
             raise HTTPException(status_code=401, detail="Unauthorized")
+
+    def _verify_token_or_ticket(request: Request):
+        """Verify Bearer token or consume a single-use ticket for SSE streaming."""
+        auth = request.headers.get("Authorization", "")
+        if auth and _bearer_matches(auth):
+            return
+
+        ticket = request.query_params.get("ticket", "")
+        if ticket and consume_auth_ticket(ticket):
+            return
+
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    # --- Auth ticket exchange for SSE ---
+
+    @app.post("/api/auth/ticket", dependencies=[Depends(_verify_token)])
+    def issue_auth_ticket():
+        """Exchange Bearer token for a short-lived (30s) single-use SSE ticket."""
+        return {"ticket": create_auth_ticket()}
 
     # --- Static files ---
 
@@ -130,7 +491,7 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
 
     # --- Runs API ---
 
-    @app.get("/api/runs")
+    @app.get("/api/runs", dependencies=[Depends(_verify_token)])
     def list_runs(limit: int = Query(default=50, ge=1, le=500)):
         from soup_cli.experiment.tracker import ExperimentTracker
 
@@ -141,7 +502,7 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
         finally:
             tracker.close()
 
-    @app.get("/api/runs/compare")
+    @app.get("/api/runs/compare", dependencies=[Depends(_verify_token)])
     def compare_runs(ids: str = Query(default="")):
         """Compare metrics for multiple runs."""
         from soup_cli.experiment.tracker import ExperimentTracker
@@ -178,7 +539,7 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
         finally:
             tracker.close()
 
-    @app.get("/api/runs/{run_id}")
+    @app.get("/api/runs/{run_id}", dependencies=[Depends(_verify_token)])
     def get_run(run_id: str):
         from soup_cli.experiment.tracker import ExperimentTracker
 
@@ -191,7 +552,7 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
         finally:
             tracker.close()
 
-    @app.get("/api/runs/{run_id}/metrics")
+    @app.get("/api/runs/{run_id}/metrics", dependencies=[Depends(_verify_token)])
     def get_run_metrics(run_id: str):
         from soup_cli.experiment.tracker import ExperimentTracker
 
@@ -218,7 +579,7 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
         finally:
             tracker.close()
 
-    @app.get("/api/runs/{run_id}/eval")
+    @app.get("/api/runs/{run_id}/eval", dependencies=[Depends(_verify_token)])
     def get_run_eval(run_id: str):
         from soup_cli.experiment.tracker import ExperimentTracker
 
@@ -231,7 +592,7 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
 
     # --- GPU / System Info ---
 
-    @app.get("/api/system")
+    @app.get("/api/system", dependencies=[Depends(_verify_token)])
     def system_info():
         from soup_cli import __version__
         from soup_cli.utils.gpu import detect_device, get_gpu_info
@@ -248,7 +609,7 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
 
     # --- Templates ---
 
-    @app.get("/api/templates")
+    @app.get("/api/templates", dependencies=[Depends(_verify_token)])
     def list_templates():
         from soup_cli.config.schema import TEMPLATES
 
@@ -286,6 +647,14 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
 
             try:
                 load_config_from_string(req.config_yaml)
+            except ValueError as exc:
+                # The loader's own message names the field and the suggestion;
+                # an unknown key now refuses here (#879), so this is where a
+                # Web UI user learns which key. Rendered through escapeHtml().
+                logger.warning("Invalid training config: %s", exc)
+                raise HTTPException(
+                    status_code=400, detail=f"Invalid training configuration: {exc}"
+                )
             except Exception as exc:
                 logger.warning("Invalid training config: %s", exc)
                 raise HTTPException(
@@ -304,13 +673,22 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
 
             _train_config_path = config_path
             _train_process = subprocess.Popen(
-                [sys.executable, "-m", "soup_cli", "train", "--config", config_path, "--yes"],
+                _resolve_train_argv(config_path),
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
             )
+            global _train_log_buffer, _train_drain_thread
+            _train_log_buffer = TrainLogBuffer(maxlen=10000)
+            _train_drain_thread = threading.Thread(
+                target=_drain_stdout_worker,
+                args=(_train_process, _train_log_buffer),
+                daemon=True,
+                name="soup_train_drain",
+            )
+            _train_drain_thread.start()
             return {"started": True, "pid": _train_process.pid}
 
-    @app.get("/api/train/status")
+    @app.get("/api/train/status", dependencies=[Depends(_verify_token)])
     def train_status():
         global _train_process
         with _train_lock:
@@ -340,6 +718,9 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
     def inspect_data(req: DataInspectRequest):
         from soup_cli.data.loader import load_raw_data
         from soup_cli.utils.paths import is_under_cwd
+
+        # The path lives inside the body, so it can't be checked before the
+        # body is parsed. _BODY_SIZE_LIMITS caps that read at 8 KiB instead.
 
         # Path traversal protection. Use realpath + commonpath containment
         # (is_under_cwd) — the old str.startswith check let a sibling like
@@ -386,7 +767,7 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
 
     # --- Training Live Monitor (SSE) ---
 
-    @app.get("/api/train/logs")
+    @app.get("/api/train/logs", dependencies=[Depends(_verify_token_or_ticket)])
     def stream_training_logs(request: Request):
         """SSE endpoint streaming training log lines in real time."""
         from fastapi.responses import StreamingResponse
@@ -397,26 +778,28 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
             skip_count = int(last_event_id) + 1
 
         def _generate_log_events():
-            line_index = 0
             with _train_lock:
-                proc = _train_process
-            if proc is None:
+                buf = _train_log_buffer
+            if buf is None:
                 yield "event: done\ndata: {}\n\n"
                 return
 
-            try:
-                for raw_line in proc.stdout:
-                    if isinstance(raw_line, bytes):
-                        raw_line = raw_line.decode("utf-8", errors="replace")
-                    text = raw_line.rstrip("\n\r")
-                    if line_index < skip_count:
-                        line_index += 1
-                        continue
-                    data = json_mod.dumps({"line": text, "id": line_index})
-                    yield f"id: {line_index}\ndata: {data}\n\n"
-                    line_index += 1
-            except (ValueError, OSError):
-                pass
+            current_idx = skip_count
+            while True:
+                lines, is_done = buf.wait_for_lines_or_done(current_idx, timeout=0.5)
+                for idx, text in lines:
+                    data = json_mod.dumps({"line": text, "id": idx})
+                    yield f"id: {idx}\ndata: {data}\n\n"
+                    current_idx = idx + 1
+
+                if is_done:
+                    # Drain any remaining lines buffered before completion
+                    remaining = buf.get_lines_from(current_idx)
+                    for idx, text in remaining:
+                        data = json_mod.dumps({"line": text, "id": idx})
+                        yield f"id: {idx}\ndata: {data}\n\n"
+                        current_idx = idx + 1
+                    break
 
             yield "event: done\ndata: {}\n\n"
 
@@ -429,7 +812,7 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
             },
         )
 
-    @app.get("/api/train/metrics/live")
+    @app.get("/api/train/metrics/live", dependencies=[Depends(_verify_token_or_ticket)])
     def stream_live_metrics(
         request: Request,
         run_id: Optional[str] = Query(default=None),
@@ -501,7 +884,7 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
             },
         )
 
-    @app.get("/api/train/progress")
+    @app.get("/api/train/progress", dependencies=[Depends(_verify_token)])
     def train_progress(
         run_id: Optional[str] = Query(default=None),
     ):
@@ -536,7 +919,7 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
 
     # --- Config Builder ---
 
-    @app.get("/api/config/schema")
+    @app.get("/api/config/schema", dependencies=[Depends(_verify_token)])
     def config_schema():
         """Return config schema as JSON for form generation."""
         from soup_cli.config.schema import (
@@ -592,7 +975,7 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
         schema["training"]["lora"] = _extract_field_info(LoraConfig)
         return schema
 
-    @app.get("/api/recipes")
+    @app.get("/api/recipes", dependencies=[Depends(_verify_token)])
     def list_recipes():
         """Return recipe catalog as JSON."""
         from soup_cli.recipes.catalog import RECIPES
@@ -629,7 +1012,10 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
             # Validate
             load_config_from_string(yaml_str)
             return {"yaml": yaml_str}
-        except (ValueError, TypeError) as exc:
+        except ValueError as exc:
+            logger.warning("Config form validation error: %s", exc)
+            return {"error": f"Invalid configuration: {exc}"}
+        except TypeError as exc:
             logger.warning("Config form validation error: %s", exc)
             return {"error": "Invalid configuration"}
 
@@ -756,7 +1142,7 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
 
     # --- v0.53.9 #94: SSE training-event stream ---
 
-    @app.get("/api/train/stream")
+    @app.get("/api/train/stream", dependencies=[Depends(_verify_token_or_ticket)])
     async def stream_train_events():
         """SSE endpoint streaming `TrainEvent` payloads as JSON frames.
 
@@ -811,7 +1197,7 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
 
     # --- v0.53.9 #100: Tool-call observation panel ---
 
-    @app.get("/api/tool-outputs")
+    @app.get("/api/tool-outputs", dependencies=[Depends(_verify_token)])
     def list_tool_outputs(
         limit: int = Query(default=100, ge=1, le=1000),
     ):

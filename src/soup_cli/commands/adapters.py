@@ -11,20 +11,11 @@ from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
 
+from soup_cli.utils.terminal import for_terminal
+
 console = Console()
 
 app = typer.Typer(no_args_is_help=True)
-
-# Strip C0/DEL control bytes from adapter-config-derived text before it reaches
-# the terminal. rich.markup.escape() only neutralises Rich's [...] tags, not raw
-# ANSI/OSC/ESC bytes that could spoof a title bar or hide a refusal (mirrors
-# commands/data_doctor.py::_for_terminal). Keep tab/LF/CR.
-_CONTROL_STRIP_TABLE = {i: None for i in range(0x20) if i not in (0x09, 0x0A, 0x0D)}
-_CONTROL_STRIP_TABLE[0x7F] = None
-
-
-def _for_terminal(text: str) -> str:
-    return text.translate(_CONTROL_STRIP_TABLE)
 
 
 def _find_adapters(directory: Path, max_depth: int = 6) -> list[Path]:
@@ -839,7 +830,7 @@ def arithmetic(
     if len(distinct) > 1:
         if not allow_cross_base:
             listed = ", ".join(
-                f"{escape(n)}={escape(_for_terminal(str(b)))}"
+                f"{escape(n)}={for_terminal(str(b))}"
                 for n, b in bases.items()
             )
             console.print(
@@ -942,7 +933,7 @@ def arithmetic(
     panel = Panel(
         f"Expression:     {escape(report.expression)}\n"
         f"Terms:          {terms_str}\n"
-        f"Base model:     {escape(_for_terminal(str(report.base_model)))}\n"
+        f"Base model:     {for_terminal(str(report.base_model))}\n"
         f"Merged tensors: [bold]{report.merged_layers}[/]\n"
         f"Skipped tensors:{len(report.skipped_layers)}\n"
         f"Output:         [bold]{escape(report.output_dir)}[/]",
@@ -1249,7 +1240,7 @@ def sign(
     adapter: str = typer.Argument(..., help="Path to adapter directory"),
     backend: str = typer.Option(
         "unsigned", "--backend",
-        help="Signing backend: unsigned | ed25519 (sigstore is infra-blocked)",
+        help="Signing backend: unsigned | ed25519 | sigstore (keyless OIDC)",
     ),
     key: Optional[str] = typer.Option(
         None, "--key",
@@ -1260,30 +1251,41 @@ def sign(
         help="Generate a fresh ed25519 keypair, persist the private key here "
              "(PEM, 0600), and sign with it.",
     ),
+    interactive_oidc: bool = typer.Option(
+        False, "--interactive-oidc",
+        help="Allow Sigstore browser OIDC when no ambient credential exists. "
+             "Off by default so headless runners fail instead of hanging.",
+    ),
 ):
     """Compute manifest + write ``.soup-signature.json`` (v0.60.0, ed25519 v0.71.2).
 
     ``unsigned`` (default) gives offline tamper detection via a Merkle-root
     hash. ``ed25519`` (v0.71.2 #185) adds a real detached signature over that
     root — pass ``--key <priv.pem>``, set ``SOUP_SIGNING_KEY``, or use
-    ``--generate-key <out.pem>``. ``sigstore`` keyless signing is infra-blocked
-    (needs an OIDC identity provider + Fulcio/Rekor network).
+    ``--generate-key <out.pem>``. ``sigstore`` uses keyless OIDC plus the
+    Sigstore public-good Fulcio/Rekor service; install ``soup-cli[sigstore]`` and
+    run in an ambient-OIDC environment (for example GitHub Actions). Browser
+    OIDC is opt-in with --interactive-oidc.
     """
     from soup_cli.utils.adapter_sign import sign_adapter
 
     try:
         record = sign_adapter(
-            adapter, backend=backend, key_path=key, generate_key_path=generate_key
+            adapter,
+            backend=backend,
+            key_path=key,
+            generate_key_path=generate_key,
+            sigstore_interactive=interactive_oidc,
         )
     except FileNotFoundError as exc:
-        console.print(f"[red]{escape(str(exc))}[/]")
+        console.print(f"[red]{for_terminal(exc)}[/]")
         raise typer.Exit(1) from exc
-    except NotImplementedError as exc:
-        console.print(f"[yellow]{escape(str(exc))}[/]")
-        raise typer.Exit(2) from exc
     except (ValueError, TypeError) as exc:
-        console.print(f"[red]{escape(str(exc))}[/]")
+        console.print(f"[red]{for_terminal(exc)}[/]")
         raise typer.Exit(2) from exc
+    except RuntimeError as exc:
+        console.print(f"[red]{for_terminal(exc)}[/]")
+        raise typer.Exit(1) from exc
 
     if generate_key and record.backend == "ed25519":
         console.print(
@@ -1313,7 +1315,17 @@ def verify(
     public_key: Optional[str] = typer.Option(
         None, "--public-key",
         help="Trusted ed25519 public-key PEM. When set, the embedded signing "
-             "key must match it (genuine authentication, not just consistency).",
+             "key must match it and requires an ed25519 signature "
+             "(genuine authentication, not just consistency).",
+    ),
+    cert_identity: Optional[str] = typer.Option(
+        None, "--cert-identity",
+        help="Trusted Sigstore certificate identity (SAN). Requires "
+             "--cert-oidc-issuer and is required for sigstore-signed adapters.",
+    ),
+    cert_oidc_issuer: Optional[str] = typer.Option(
+        None, "--cert-oidc-issuer",
+        help="Trusted OIDC issuer. Required together with --cert-identity.",
     ),
 ):
     """Verify ``.soup-signature.json`` against current files (v0.60.0, ed25519 v0.71.2).
@@ -1321,7 +1333,8 @@ def verify(
     For ``ed25519``-signed adapters the detached signature is verified against
     the embedded public key (self-consistency); pass ``--public-key
     <trusted.pem>`` to additionally require the signer's key match a key you
-    trust out of band.
+    trust out of band. Sigstore-signed adapters require both ``--cert-identity``
+    and ``--cert-oidc-issuer`` as an out-of-band trust policy.
 
     Exit codes:
       0  signature present and matches
@@ -1332,31 +1345,35 @@ def verify(
 
     try:
         report = verify_adapter(
-            adapter, strict=strict, trusted_public_key=public_key
+            adapter,
+            strict=strict,
+            trusted_public_key=public_key,
+            sigstore_identity=cert_identity,
+            sigstore_oidc_issuer=cert_oidc_issuer,
         )
     except FileNotFoundError as exc:
-        console.print(f"[red]{escape(str(exc))}[/]")
+        console.print(f"[red]{for_terminal(exc)}[/]")
         raise typer.Exit(1) from exc
     except ValueError as exc:
         # Strict mode raises; non-strict gives a report.
-        console.print(f"[red]{escape(str(exc))}[/]")
+        console.print(f"[red]{for_terminal(exc)}[/]")
         raise typer.Exit(3) from exc
     except TypeError as exc:
-        console.print(f"[red]{escape(str(exc))}[/]")
+        console.print(f"[red]{for_terminal(exc)}[/]")
         raise typer.Exit(2) from exc
 
     status_color = "green" if report.valid else "yellow"
     panel = Panel(
-        f"Adapter:    [bold]{escape(report.adapter)}[/]\n"
+        f"Adapter:    [bold]{for_terminal(report.adapter)}[/]\n"
         f"Valid:      [{status_color}]{report.valid}[/]\n"
-        f"Backend:    [bold]{escape(report.backend or '—')}[/]\n"
-        f"Reason:     {escape(report.reason)}",
+        f"Backend:    [bold]{for_terminal(report.backend or '—')}[/]\n"
+        f"Reason:     {for_terminal(report.reason)}",
         title="Adapter verify",
     )
     console.print(panel)
     if report.findings:
         for finding in report.findings:
-            console.print(f"  [yellow]- {escape(finding)}[/]")
+            console.print(f"  [yellow]- {for_terminal(finding)}[/]")
 
     if not report.valid:
         raise typer.Exit(1)
@@ -1455,7 +1472,7 @@ def adapter_pr(
         ),
     ),
 ):
-    """Render a GitHub-style PR for an adapter (v0.67.0 Part D).
+    """Render a GitHub-style PR for an adapter.
 
     The PR = ``{base SHA, dataset diff, adapter file, eval report}``
     rendered as a Markdown document with eval-delta tables and sample
@@ -1595,9 +1612,8 @@ def adapter_bisect(
 ):
     """Binary-search a training history to find the first failing checkpoint.
 
-    Composes with v0.66 Part B influence-blame: once the boundary is
-    found, ``soup adapters blame`` can attribute the regression to
-    specific dataset rows.
+    Once the boundary is found, ``soup adapters blame`` can attribute the
+    regression to specific dataset rows.
     """
     from soup_cli.utils.adapter_bisect import build_bisect_plan, run_bisect
 
@@ -1701,3 +1717,159 @@ def _estimated_probes(n: int) -> int:
     if n <= 2:
         return n
     return max(2, math.ceil(math.log2(n))) + 2
+
+
+@app.command()
+def audit(
+    adapter: str = typer.Argument(..., help="Path to adapter directory"),
+    config: str = typer.Option(..., "--config", "-c", help="soup.yaml the run was started from"),
+    json_out: bool = typer.Option(False, "--json", help="Emit machine-readable JSON"),
+):
+    """Check whether a finished run did what its config asked for (#762).
+
+    The MLX path records its effective settings in ``adapter_config.json`` --
+    optimizer, schedule, warmup, masking, clipping -- because each of those was
+    once accepted and silently dropped (#683, #684, #685, #686, #749). This
+    reads that record back and reports every place it disagrees with the config.
+
+    Exit codes: 0=agreement, 2=DIVERGED, 1=usage/read error. The verdict is
+    kept off ``1`` so a CI gate can tell "the run did not do what the config
+    asked" from "the path was wrong"; this follows ``soup ship`` / ``soup
+    shrink`` rather than the older ``adapters scan``. Settings the record
+    cannot speak to are reported ``unknown``, never as agreeing -- a false
+    clean bill is worse than no audit -- and ``unknown`` exits 0.
+    """
+    import contextlib
+    import json as _json
+    import sys
+
+    import yaml
+
+    from soup_cli.utils.adapter_audit import audit_adapter, unknown_reason
+
+    # Sibling subcommands enforce this (scan: 779, merge: 1484); read-only here,
+    # but a convention mismatch inside one file is its own hazard.
+    #
+    # #763 review: on the RAW argument, and before the existence check.
+    # `Path(adapter).resolve()` follows the symlink, so the `os.lstat` inside
+    # the helper saw the target and the no-symlink half never fired; and with
+    # the existence check first, an out-of-cwd path was reported as
+    # "No adapter_config.json in: C:/Windows" -- a missing-file message for a
+    # path that is refused outright.
+    from soup_cli.utils.paths import enforce_under_cwd_and_no_symlink
+    from soup_cli.utils.terminal import for_terminal
+
+    for _path, _label in ((adapter, "adapter directory"), (config, "--config")):
+        try:
+            enforce_under_cwd_and_no_symlink(_path, _label)
+        except (ValueError, OSError) as exc:
+            # Same shape as `adapters scan` (:779) -- a refused path is a red
+            # line and Exit(1), never a raw traceback.
+            console.print(f"[red]Path refused: {escape(str(exc))}[/]")
+            raise typer.Exit(1) from exc
+
+    adapter_path = Path(adapter).resolve()
+    record_file = adapter_path / "adapter_config.json"
+    if not record_file.exists():
+        console.print(f"[red]No adapter_config.json in: {adapter}[/]")
+        raise typer.Exit(1)
+
+    config_path = Path(config).resolve()
+    if not config_path.exists():
+        console.print(f"[red]Config not found: {config}[/]")
+        raise typer.Exit(1)
+
+    try:
+        record = _json.loads(record_file.read_text())
+    except ValueError as exc:
+        console.print(f"[red]adapter_config.json is not valid JSON: {exc}[/]")
+        raise typer.Exit(1) from exc
+    # #763 review: load through the schema, not yaml.safe_load. Handing the raw
+    # mapping to audit_adapter left omitted keys to the audit's own fallbacks,
+    # and three of those disagreed with config/schema.py -- warmup_ratio 0.0 vs
+    # 0.03, weight_decay 0.0 vs 0.01, gradient_accumulation_steps 1 vs 4. A
+    # config that simply omits them was reported `ok` against a value it never
+    # asked for, which is the false clean bill this command exists to refuse.
+    # The schema is the single source of defaults; the audit module stays pure.
+    try:
+        from soup_cli.config.loader import load_config_from_string
+
+        # The loader reports unknown keys through its own module-level Console,
+        # which writes to STDOUT -- so `--json` emitted four lines of warning
+        # ahead of the payload and `json.load` failed on it (#763 review).
+        # A diagnostic about the config is not this command's output; stderr
+        # is where it belongs, and it stays just as visible there.
+        with contextlib.redirect_stdout(sys.stderr):
+            soup_config = load_config_from_string(config_path.read_text())
+    except yaml.YAMLError as exc:
+        console.print(f"[red]Could not parse {config}: {exc}[/]")
+        raise typer.Exit(1) from exc
+    except (SystemExit, Exception) as exc:  # schema rejection prints its own
+        console.print(f"[red]Could not load {config}: {exc}[/]")
+        raise typer.Exit(1) from exc
+    cfg = soup_config.model_dump()
+
+    result = audit_adapter(cfg, record)
+
+    if json_out:
+        # Plain stdout, not console.print_json: Rich pretty-prints and
+        # highlights, which makes the output unparseable by the caller this
+        # flag exists for.
+        payload = result.to_dict()
+        # Criterion 4 for machine consumers: a list of `unknown` rows with no
+        # explanation reads as a tool failure rather than as a limit of the
+        # record. Gated on `unknown_count` so it matches the table exactly.
+        payload["unknown_reason"] = (
+            unknown_reason(result.record_kind) if result.unknown_count else None
+        )
+        typer.echo(_json.dumps(payload, indent=2))
+        raise typer.Exit(result.exit_code)
+
+    table = Table(title=f"Audit: {adapter_path.name}")
+    table.add_column("setting")
+    table.add_column("asked")
+    table.add_column("ran")
+    table.add_column("")
+    marks = {
+        "ok": "[green]ok[/]",
+        "diverged": "[red]DIVERGED[/]",
+        "unknown": "[yellow]unknown[/]",
+    }
+    for row in result.rows:
+        table.add_row(
+            row.setting,
+            # utils/terminal.for_terminal, not escape() alone: escape()
+            # neutralises Rich markup but not control bytes, and an
+            # adapter_config.json can be downloaded. A recorded
+            # "AdamW\x1b[2J" would clear the screen. #907 moved this helper
+            # out of the six private copies and into one module; the shared
+            # one strips control bytes THEN escapes markup, so it is a strict
+            # superset of the escape(_for_terminal(...)) pair it replaces.
+            for_terminal(row.asked),
+            for_terminal("—" if row.ran is None else row.ran),
+            marks.get(row.status, row.status),
+        )
+    console.print(table)
+
+    for row in result.rows:
+        if row.status == "diverged" and row.detail:
+            console.print(
+                f"  [red]{for_terminal(row.setting)}[/]: "
+                f"{for_terminal(row.detail)}"
+            )
+
+    reason = unknown_reason(result.record_kind)
+    if reason and result.unknown_count:
+        console.print(f"\n[yellow]{for_terminal(reason)}[/]")
+
+    if result.diverged_count:
+        console.print(
+            f"\n[red]{result.diverged_count} divergence(s)[/]"
+            f"{f', {result.unknown_count} unchecked' if result.unknown_count else ''}"
+        )
+    else:
+        console.print(
+            f"\n[green]No divergences[/]"
+            f"{f', {result.unknown_count} unchecked' if result.unknown_count else ''}"
+        )
+    raise typer.Exit(result.exit_code)

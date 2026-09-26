@@ -9,6 +9,15 @@ only halting:
 - ``pid_lagrangian`` (Stage 2): PID-Lagrangian controller + rollback ladder.
 
 Design:
+- The two mitigation ladders live in DIFFERENT modes by design: kl_control
+  owns the bang-bang β ladder (its terminal rung is β pinned at ``beta_ceil``),
+  and the rollback-to-last-good rung exists ONLY in pid_lagrangian (the config
+  schema rejects ``reward_hack_rollback`` under any other mode). A kl_control
+  run therefore has NO rollback counter. This is the reconciliation the H100
+  gate record (``benchmarks/gate-h100-validation.md``) recorded as an open
+  inconsistency (#371) when the β ladder fired in a kl_control arm but the
+  rollback ladder "never fired in any arm": its only home was the
+  pid_lagrangian arms, which all crashed (#342) before the rung could run.
 - Pure controller pieces (``ControllerState``, ``BangBangPolicy``,
   ``PIDLagrangianPolicy``, ``combine_signals``, ``smooth_signal``, the step
   functions) are frozen dataclasses / free functions with NO torch import at
@@ -775,8 +784,8 @@ class MitigationLogWriter:
 def _get_trainer_callback_base():
     """Lazy-resolve ``transformers.TrainerCallback`` (mirror reward_hacking.py).
 
-    Resolved once at class-definition time so this module imports on a
-    torch-less interpreter (falls back to ``object``).
+    Called on first access to the callback class (via PEP 562 ``__getattr__``),
+    NOT at module scope — so importing this module no longer pulls transformers.
     """
     try:
         from transformers import TrainerCallback
@@ -786,10 +795,7 @@ def _get_trainer_callback_base():
         return object
 
 
-_TrainerCallbackBase = _get_trainer_callback_base()
-
-
-class RewardHackMitigationCallback(_TrainerCallbackBase):  # type: ignore[misc, valid-type]
+class _RewardHackMitigationCallback_body:  # type: ignore[misc, valid-type]  # noqa: N801
     """Closed-loop reward-hacking mitigation HF TrainerCallback (v0.71.26).
 
     Reads the shared :class:`~soup_cli.utils.rl_signal_buffer.RLSignalBuffer`
@@ -987,9 +993,10 @@ class RewardHackMitigationCallback(_TrainerCallbackBase):  # type: ignore[misc, 
     def _apply_coefficient(self, value: float) -> None:
         """Write the controller's coefficient to the trainer.
 
-        GRPO: β must be dual-written — stock ``GRPOTrainer.compute_loss`` reads
-        ``self.beta`` (the instance) while Soup's ``_GRPOTrainerVariant`` reads
-        ``self.args.beta`` (the config). PPO: ``args.kl_coef``.
+        GRPO: stock ``GRPOTrainer.compute_loss`` and Soup's
+        ``_GRPOTrainerVariant`` both weight the KL by ``self.beta`` (#1232);
+        ``args.beta`` is written too, for bases that expose only the config (the
+        variant falls back to it). PPO: ``args.kl_coef``.
         """
         trainer = self._trainer
         if trainer is None:
@@ -1029,7 +1036,12 @@ class RewardHackMitigationCallback(_TrainerCallbackBase):  # type: ignore[misc, 
     def _run_bang_bang(
         self, telemetry: dict[str, Any], signals: Mapping[str, float]
     ) -> None:
-        """kl_control: vote → bang-bang step → mutate the trainer coefficient."""
+        """kl_control: vote → bang-bang step → mutate the trainer coefficient.
+
+        No rollback rung here — by design the kl_control ladder ends with β
+        pinned at ``beta_ceil``; the rollback rung lives only in pid_lagrangian
+        (module docstring, #371).
+        """
         policy = self.bang_bang
         if policy is None:
             return
@@ -1113,7 +1125,13 @@ class RewardHackMitigationCallback(_TrainerCallbackBase):  # type: ignore[misc, 
         optimizer: Any,
         control: Any,
     ) -> Any:
-        """pid_lagrangian: PID β update + rollback escalation ladder."""
+        """pid_lagrangian: PID β update + rollback escalation ladder.
+
+        The ONLY mode with a rollback rung (#371). Its HACK streak counts the
+        same combined vote that drives the PID (``classify_hack_signal``'s HACK
+        band), so within this mode the β control and the ladder agree on the
+        signal and its reset rule.
+        """
         policy = self.pid
         if policy is None:
             return control
@@ -1178,3 +1196,22 @@ class RewardHackMitigationCallback(_TrainerCallbackBase):  # type: ignore[misc, 
                     exc,
                 )
             return control
+
+
+_LAZY_CALLBACKS = {
+    "RewardHackMitigationCallback": _RewardHackMitigationCallback_body,
+}
+_BODY_SKIP = frozenset(("__dict__", "__weakref__"))
+
+
+def __getattr__(name: str):  # PEP 562
+    body = _LAZY_CALLBACKS.get(name)
+    if body is not None:
+        base = _get_trainer_callback_base()
+        ns = {k: v for k, v in vars(body).items() if k not in _BODY_SKIP}
+        cls = type(name, (base,), ns)
+        cls.__module__ = __name__
+        cls.__qualname__ = name
+        globals()[name] = cls
+        return cls
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

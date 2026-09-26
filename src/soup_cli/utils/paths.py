@@ -12,11 +12,12 @@ in a single module guarantees a single behaviour across the CLI.
 
 from __future__ import annotations
 
+import errno
 import os
 import stat
 import tempfile
 from pathlib import Path
-from typing import Union
+from typing import Iterable, Optional, Union
 
 
 def is_under(path: Union[str, Path], base: Union[str, Path]) -> bool:
@@ -119,6 +120,41 @@ def atomic_write_text(
     return os.path.realpath(output_path)
 
 
+def atomic_write_lines(
+    lines: Iterable[str],
+    output_path: str,
+    *,
+    prefix: str = ".soup.",
+    suffix: str = ".tmp",
+    field: str = "output",
+) -> str:
+    """Stream ``lines`` into ``output_path`` atomically under cwd containment.
+
+    Streaming sibling of :func:`atomic_write_text` (#204 ``soup ingest --pull``):
+    each line is written to the staging file as the iterable yields it, so a
+    large result is never held in memory, and the target is replaced only once
+    the iterable is exhausted. An exception raised while iterating removes the
+    staging file and leaves any existing target untouched. Same TOCTOU-safe
+    pipeline.
+    """
+    enforce_under_cwd_and_no_symlink(output_path, field)
+    parent = os.path.dirname(os.path.abspath(output_path)) or "."
+    os.makedirs(parent, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(prefix=prefix, suffix=suffix, dir=parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            for line in lines:
+                fh.write(line)
+        os.replace(tmp_path, output_path)
+    finally:
+        if os.path.exists(tmp_path):
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+    return os.path.realpath(output_path)
+
+
 def atomic_write_bytes(
     data: bytes,
     output_path: str,
@@ -149,3 +185,272 @@ def atomic_write_bytes(
             except OSError:
                 pass
     return os.path.realpath(output_path)
+
+
+def atomic_write_bytes_group(
+    outputs: list[tuple[bytes, str, str]],
+    *,
+    removals: list[tuple[str, str]] | None = None,
+) -> list[str]:
+    """Publish a group of byte outputs atomically as one logical generation.
+
+    Every payload is staged before an existing target is moved aside. If any
+    replacement fails, newly published targets are removed and every previous
+    target is restored. ``removals`` participate in the same transaction: they
+    disappear only after every replacement succeeds and are restored on
+    failure. This gives multi-file commands an all-new-or-all-old result
+    instead of exposing a partial generation.
+    """
+    if not isinstance(outputs, list) or not outputs:
+        raise ValueError("outputs must be a non-empty list")
+
+    prepared: list[tuple[bytes, str, str]] = []
+    identities: set[str] = set()
+    for item in outputs:
+        if not isinstance(item, tuple) or len(item) != 3:
+            raise TypeError("each output must be a (data, path, field) tuple")
+        data, output_path, field = item
+        if not isinstance(data, (bytes, bytearray)):
+            raise TypeError("output data must be bytes")
+        enforce_under_cwd_and_no_symlink(output_path, field)
+        identity = os.path.normcase(os.path.realpath(output_path))
+        if identity in identities:
+            raise ValueError("output paths must be distinct")
+        identities.add(identity)
+        prepared.append((bytes(data), output_path, field))
+
+    prepared_removals: list[tuple[str, str]] = []
+    if removals is not None and not isinstance(removals, list):
+        raise TypeError("removals must be a list")
+    for item in removals or []:
+        if not isinstance(item, tuple) or len(item) != 2:
+            raise TypeError("each removal must be a (path, field) tuple")
+        removal_path, field = item
+        enforce_under_cwd_and_no_symlink(removal_path, field)
+        identity = os.path.normcase(os.path.realpath(removal_path))
+        if identity in identities:
+            raise ValueError("output and removal paths must be distinct")
+        identities.add(identity)
+        prepared_removals.append((removal_path, field))
+
+    staged: dict[str, str] = {}
+    backups: dict[str, str] = {}
+    committed: set[str] = set()
+    try:
+        for data, output_path, _field in prepared:
+            parent = os.path.dirname(os.path.abspath(output_path)) or "."
+            os.makedirs(parent, exist_ok=True)
+            fd, tmp_path = tempfile.mkstemp(
+                prefix=".soup.group.", suffix=".tmp", dir=parent
+            )
+            try:
+                with os.fdopen(fd, "wb") as fh:
+                    fh.write(data)
+            except Exception:
+                if os.path.exists(tmp_path):
+                    os.unlink(tmp_path)
+                raise
+            staged[output_path] = tmp_path
+
+        existing = [
+            (output_path, field) for _data, output_path, field in prepared
+        ] + prepared_removals
+        for output_path, field in existing:
+            if not os.path.lexists(output_path):
+                continue
+            st = os.lstat(output_path)
+            if not stat.S_ISREG(st.st_mode):
+                raise ValueError(f"{field} must be a regular file")
+            parent = os.path.dirname(os.path.abspath(output_path)) or "."
+            fd, backup_path = tempfile.mkstemp(
+                prefix=".soup.backup.", suffix=".tmp", dir=parent
+            )
+            os.close(fd)
+            try:
+                os.replace(output_path, backup_path)
+            except Exception:
+                os.unlink(backup_path)
+                raise
+            backups[output_path] = backup_path
+
+        for _data, output_path, _field in prepared:
+            os.replace(staged[output_path], output_path)
+            committed.add(output_path)
+            del staged[output_path]
+    except Exception as exc:
+        rollback_failed = False
+        for output_path in committed:
+            if output_path in backups:
+                continue
+            try:
+                os.unlink(output_path)
+            except FileNotFoundError:
+                pass
+            except OSError:
+                rollback_failed = True
+        for output_path, backup_path in backups.items():
+            try:
+                os.replace(backup_path, output_path)
+            except OSError:
+                rollback_failed = True
+        if rollback_failed:
+            raise OSError("failed to restore a previous output generation") from exc
+        raise
+    finally:
+        for tmp_path in staged.values():
+            try:
+                os.unlink(tmp_path)
+            except FileNotFoundError:
+                pass
+
+    for backup_path in backups.values():
+        try:
+            os.unlink(backup_path)
+        except FileNotFoundError:
+            pass
+
+    return [os.path.realpath(output_path) for _data, output_path, _field in prepared]
+
+
+def refuse_linked_dirs(
+    path: Union[str, Path],
+    *,
+    stop_at: Union[str, Path, None] = None,
+) -> None:
+    """Inspect directory hierarchy from ``path`` up to ``stop_at`` for symlinks and
+    junctions (#1158).
+
+    Raises :exc:`OSError` with :data:`errno.ELOOP` if any directory component
+    between ``path`` and ``stop_at`` is a symbolic link or junction / reparse point.
+    """
+    if not isinstance(path, (str, Path)):
+        raise TypeError(f"path must be str or Path, got {type(path).__name__}")
+    p = str(path)
+    if not p:
+        raise ValueError("path must be non-empty")
+    if "\x00" in p:
+        raise ValueError("path must not contain null bytes")
+
+    curr = os.path.abspath(p)
+    stop: Optional[str] = None
+    if stop_at is not None:
+        stop = os.path.abspath(str(stop_at))
+    elif is_under_cwd(curr):
+        stop = os.path.abspath(os.getcwd())
+
+    stop_norm = os.path.normcase(stop) if stop is not None else None
+
+    while curr and curr != os.path.dirname(curr):
+        curr_norm = os.path.normcase(curr)
+        if stop_norm is not None and curr_norm == stop_norm:
+            break
+        if os.path.lexists(curr):
+            st = os.lstat(curr)
+            if stat.S_ISLNK(st.st_mode):
+                raise OSError(
+                    errno.ELOOP, f"Directory symbolic link not allowed: {curr!r}"
+                )
+            if os.name == "nt":
+                reparse = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+                if getattr(st, "st_file_attributes", 0) & reparse:
+                    raise OSError(
+                        errno.ELOOP, f"Directory reparse point not allowed: {curr!r}"
+                    )
+        if stop is not None:
+            try:
+                if os.path.samefile(curr, stop):
+                    break
+            except OSError:
+                pass
+        curr = os.path.dirname(curr)
+
+
+def open_no_follow(
+    path: Union[str, Path],
+    flags: int,
+    mode: int = 0o600,
+    *,
+    check_parent: bool = False,
+    refuse_hardlink: bool = False,
+) -> int:
+    """Open ``path`` refusing to follow symlinks across all platforms (#820).
+
+    On POSIX, applies ``O_NOFOLLOW`` at open time. On Windows (where
+    ``os.O_NOFOLLOW`` is absent from the OS open flags), performs pre-open
+    ``os.lstat`` inspection for ``S_ISLNK`` and reparse points, and post-open
+    ``os.fstat`` cross-validation against the opened file descriptor to detect
+    a TOCTOU swap.
+
+    When ``check_parent`` is True (#1158), inspects parent directory components
+    for symlinks and reparse points. When ``refuse_hardlink`` is True (#1158),
+    rejects hardlinked regular files (``st_nlink > 1``) with :data:`errno.EMLINK`.
+
+    Raises :exc:`OSError` with :data:`errno.ELOOP` if ``path`` is a symlink or
+    reparse point, or :data:`errno.EMLINK` if hardlinked.
+    """
+    if not isinstance(path, (str, Path)):
+        raise TypeError(f"path must be str or Path, got {type(path).__name__}")
+    p = str(path)
+    if not p:
+        raise ValueError("path must be non-empty")
+    if "\x00" in p:
+        raise ValueError("path must not contain null bytes")
+
+    pre_st: Optional[os.stat_result] = None
+    try:
+        pre_st = os.lstat(p)
+    except FileNotFoundError:
+        pre_st = None
+
+    if pre_st is not None:
+        if stat.S_ISLNK(pre_st.st_mode):
+            raise OSError(errno.ELOOP, f"Symbolic link not allowed: {p!r}")
+        if os.name == "nt":
+            reparse = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+            if getattr(pre_st, "st_file_attributes", 0) & reparse:
+                raise OSError(errno.ELOOP, f"Reparse point not allowed: {p!r}")
+
+    if check_parent:
+        refuse_linked_dirs(os.path.dirname(os.path.abspath(p)))
+
+    open_flags = flags | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(p, open_flags, mode)
+    try:
+        post_fst = os.fstat(fd)
+        if (
+            refuse_hardlink
+            and stat.S_ISREG(post_fst.st_mode)
+            and post_fst.st_nlink > 1
+        ):
+            raise OSError(errno.EMLINK, f"Hard link not allowed: {p!r}")
+        if os.name == "nt":
+            if pre_st is not None:
+                if (
+                    pre_st.st_ino != 0
+                    and post_fst.st_ino != 0
+                    and (pre_st.st_ino, pre_st.st_dev)
+                    != (post_fst.st_ino, post_fst.st_dev)
+                ):
+                    raise OSError(errno.ELOOP, f"File swapped during open: {p!r}")
+            else:
+                post_lst = os.lstat(p)
+                if stat.S_ISLNK(post_lst.st_mode):
+                    raise OSError(
+                        errno.ELOOP, f"Symbolic link created during open: {p!r}"
+                    )
+                reparse = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+                if getattr(post_lst, "st_file_attributes", 0) & reparse:
+                    raise OSError(
+                        errno.ELOOP, f"Reparse point created during open: {p!r}"
+                    )
+                if (
+                    post_lst.st_ino != 0
+                    and post_fst.st_ino != 0
+                    and (post_lst.st_ino, post_lst.st_dev)
+                    != (post_fst.st_ino, post_fst.st_dev)
+                ):
+                    raise OSError(errno.ELOOP, f"File swapped during open: {p!r}")
+    except Exception:
+        os.close(fd)
+        raise
+    return fd

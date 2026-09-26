@@ -119,7 +119,7 @@ def _try_import_callback_base():
         return object
 
 
-class ReLoRACallback(_try_import_callback_base()):  # type: ignore[misc]
+class _ReLoRACallback_body:  # type: ignore[misc]  # noqa: N801
     """HF ``TrainerCallback`` that magnitude-prunes LoRA weights every N steps.
 
     Subclasses the lazily-resolved ``TrainerCallback`` so it inherits the no-op
@@ -194,3 +194,22 @@ class ReLoRACallback(_try_import_callback_base()):  # type: ignore[misc]
             # Optimizer state structure varies (DeepSpeed / FSDP wrap it);
             # silent best-effort is the documented Axolotl behaviour too.
             return
+
+
+_LAZY_CALLBACKS = {
+    "ReLoRACallback": _ReLoRACallback_body,
+}
+_BODY_SKIP = frozenset(("__dict__", "__weakref__"))
+
+
+def __getattr__(name: str):  # PEP 562
+    body = _LAZY_CALLBACKS.get(name)
+    if body is not None:
+        base = _try_import_callback_base()
+        ns = {k: v for k, v in vars(body).items() if k not in _BODY_SKIP}
+        cls = type(name, (base,), ns)
+        cls.__module__ = __name__
+        cls.__qualname__ = name
+        globals()[name] = cls
+        return cls
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

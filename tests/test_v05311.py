@@ -10,6 +10,8 @@ import math
 
 import pytest
 
+from tests._windows_ci import skip_on_windows_ci
+
 # Skip the whole module when torch is unavailable — the math kernels are
 # torch-based by design.
 torch = pytest.importorskip("torch")
@@ -74,6 +76,64 @@ class TestGRPOVariantKernels:
 
         logp_new, logp_old, adv = self._toy_inputs()
         mask = torch.tensor([[1.0, 1.0, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0]])
+        out = apply_variant_loss(
+            "gspo",
+            logp_new=logp_new,
+            logp_old=logp_old,
+            advantages=adv,
+            completion_mask=mask,
+        )
+        assert math.isfinite(float(out))
+
+    def test_gspo_masked_token_cannot_change_loss(self):
+        """A masked (padding) token must not shift the gspo batch-mean
+        statistic other rows are centered against (#723)."""
+        from soup_cli.utils.grpo_variants import apply_variant_loss
+
+        logp_old = torch.zeros(4, 2)
+        adv = torch.tensor([1.0, 0.6, -0.3, 0.2])
+        mask = torch.tensor([[1.0, 0.0], [1.0, 1.0], [1.0, 1.0], [1.0, 1.0]])
+
+        losses = []
+        for delta in (-2.0, -6.0):
+            logp_new = torch.zeros(4, 2)
+            logp_new[0, 1] = delta  # masked position
+            out = apply_variant_loss(
+                "gspo",
+                logp_new=logp_new,
+                logp_old=logp_old,
+                advantages=adv,
+                completion_mask=mask,
+            )
+            losses.append(float(out))
+        assert losses[0] == pytest.approx(losses[1])
+
+    def test_gspo_masked_token_zero_gradient(self):
+        """Every masked gspo token must receive exactly zero gradient (#723)."""
+        from soup_cli.utils.grpo_variants import apply_variant_loss
+
+        logp_old = torch.zeros(4, 2)
+        adv = torch.tensor([1.0, 0.6, -0.3, 0.2])
+        mask = torch.tensor([[1.0, 0.0], [1.0, 1.0], [1.0, 1.0], [1.0, 1.0]])
+        logp_new = torch.zeros(4, 2, requires_grad=True)
+        with torch.no_grad():
+            logp_new[0, 1] = -6.0
+        out = apply_variant_loss(
+            "gspo",
+            logp_new=logp_new,
+            logp_old=logp_old,
+            advantages=adv,
+            completion_mask=mask,
+        )
+        out.backward()
+        assert float(logp_new.grad[0, 1]) == pytest.approx(0.0)
+
+    def test_gspo_all_masked_column_no_nan(self):
+        """A column with zero unmasked entries must not divide by zero."""
+        from soup_cli.utils.grpo_variants import apply_variant_loss
+
+        logp_new, logp_old, adv = self._toy_inputs()
+        mask = torch.tensor([[1.0, 0.0, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0]])
         out = apply_variant_loss(
             "gspo",
             logp_new=logp_new,
@@ -539,11 +599,20 @@ class TestGRPOTrainerVariantFactory:
         inputs = {
             "per_token_logps": torch.zeros(2, 4),
             "old_per_token_logps": torch.zeros(2, 4),
+            # #1232: beta 0.1 needs the reference trl puts in the batch whenever
+            # beta != 0. Without it the kernel refuses, the #159 fallback runs,
+            # and the fake's 99.0 comes back -- which this test used to accept.
+            "ref_per_token_logps": torch.zeros(2, 4),
             "advantages": torch.tensor([1.0, -1.0]),
         }
         # Variant kernel should compute a real (non-99.0) loss.
         result = trainer.compute_loss(model=None, inputs=inputs)
         assert isinstance(result, torch.Tensor)
+        assert not trainer._soup_fallback_warned, "fell back to the base loss"
+        assert float(result) != 99.0
+        # gspo at ratio 1 with advantages +1 / -1 is 0, and a reference equal
+        # to the policy adds exactly 0 KL.
+        assert float(result) == 0.0
 
     def test_variant_falls_back_on_missing_inputs(self):
         """When TRL renames inputs, fall back to original loss (defence-in-depth)."""
@@ -561,6 +630,177 @@ class TestGRPOTrainerVariantFactory:
         # No expected keys — falls back to original.
         result = trainer.compute_loss(model=None, inputs={})
         assert float(result) == 42.0
+
+
+class TestGRPOVariantRuntimeContract:
+    """Regression tests for GRPO variant execution on realistic TRL runtime contracts.
+
+    Tests that variants do NOT require per_token_logps to be pre-injected in inputs,
+    and instead resolve logps in a single forward pass via _get_per_token_logps_and_entropies
+    without triggering fallback to stock TRL loss.
+    """
+
+    class _MockTRLTrainer:
+        def __init__(self, beta=0.0):
+            self.args = type("Args", (), {"beta": beta})()
+            self.model = type("Model", (), {"training": True})()
+            self.current_gradient_accumulation_steps = 1
+            self._get_logps_called = 0
+
+        def _get_per_token_logps_and_entropies(
+            self, model, input_ids, attention_mask, logits_to_keep, **kwargs
+        ):
+            self._get_logps_called += 1
+            b = input_ids.size(0)
+            t = logits_to_keep
+            # Distinct logps to test math
+            logps = torch.tensor(
+                [[-0.1, -0.2, -0.3], [-0.4, -0.5, -0.6]], requires_grad=True
+            )
+            return logps, torch.zeros(b, t)
+
+        def _compute_loss(self, model, inputs):
+            return torch.tensor(777.0)
+
+        def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
+            return self._compute_loss(model, inputs)
+
+    @pytest.fixture
+    def realistic_batch(self):
+        return {
+            "prompt_ids": torch.tensor([[1, 2], [3, 4]]),
+            "prompt_mask": torch.tensor([[1, 1], [1, 1]]),
+            "completion_ids": torch.tensor([[5, 6, 7], [8, 9, 10]]),
+            "completion_mask": torch.tensor([[1, 1, 1], [1, 1, 1]]),
+            "advantages": torch.tensor([1.2, -0.8]),
+            "num_items_in_batch": 2,
+        }
+
+    def test_realistic_batch_without_precomputed_logps_computes_variant_loss(
+        self, realistic_batch
+    ):
+        """Realistic batch (no per_token_logps in inputs) must execute variant without fallback."""
+        from soup_cli.trainer.grpo import make_grpo_trainer_variant
+
+        variant_cls = make_grpo_trainer_variant(self._MockTRLTrainer, "gspo")
+        trainer = variant_cls()
+        loss = trainer.compute_loss(model=None, inputs=realistic_batch)
+
+        assert not trainer._soup_fallback_warned
+        assert float(loss.detach()) != 777.0
+        assert trainer._get_logps_called == 1
+
+    @pytest.mark.parametrize("variant", ["gspo", "dapo", "dr_grpo", "bnpo", "rft"])
+    def test_all_variants_execute_without_fallback_on_realistic_batch(
+        self, realistic_batch, variant
+    ):
+        """Every supported variant must execute cleanly without fallback."""
+        from soup_cli.trainer.grpo import make_grpo_trainer_variant
+
+        variant_cls = make_grpo_trainer_variant(self._MockTRLTrainer, variant)
+        trainer = variant_cls()
+        loss = trainer.compute_loss(model=None, inputs=realistic_batch)
+
+        assert not trainer._soup_fallback_warned
+        assert float(loss.detach()) != 777.0
+
+    def test_two_sided_variant_with_delta_executes(self, realistic_batch):
+        """two_sided variant with delta executes cleanly without fallback."""
+        from soup_cli.trainer.grpo import make_grpo_trainer_variant
+
+        variant_cls = make_grpo_trainer_variant(self._MockTRLTrainer, "two_sided")
+        trainer = variant_cls()
+        trainer._soup_grpo_delta = 0.2
+        loss = trainer.compute_loss(model=None, inputs=realistic_batch)
+
+        assert not trainer._soup_fallback_warned
+        assert float(loss.detach()) != 777.0
+
+    def test_standard_variant_delegates_to_stock_loss_without_warning(
+        self, realistic_batch
+    ):
+        """'standard' variant delegates directly to stock _compute_loss."""
+        from soup_cli.trainer.grpo import make_grpo_trainer_variant
+
+        variant_cls = make_grpo_trainer_variant(self._MockTRLTrainer, "standard")
+        trainer = variant_cls()
+        loss = trainer.compute_loss(model=None, inputs=realistic_batch)
+
+        assert not trainer._soup_fallback_warned
+        assert float(loss) == 777.0
+
+    def test_fallback_warns_once_on_corrupted_inputs(self):
+        """Corrupted inputs missing prompt_ids and logps must trigger fallback with warning."""
+        from soup_cli.trainer.grpo import make_grpo_trainer_variant
+
+        variant_cls = make_grpo_trainer_variant(self._MockTRLTrainer, "gspo")
+        trainer = variant_cls()
+        loss = trainer.compute_loss(model=None, inputs={"corrupted": True})
+
+        assert trainer._soup_fallback_warned
+        assert float(loss) == 777.0
+
+    def test_variant_loss_differs_from_stock_and_between_objectives(
+        self, realistic_batch
+    ):
+        """Different objectives produce mathematically distinct losses on identical data."""
+        from soup_cli.trainer.grpo import make_grpo_trainer_variant
+
+        losses = {}
+        for var in ["gspo", "dapo", "dr_grpo", "bnpo", "rft"]:
+            cls_ = make_grpo_trainer_variant(self._MockTRLTrainer, var)
+            tr = cls_()
+            losses[var] = float(tr.compute_loss(model=None, inputs=realistic_batch).detach())
+
+        # rft computes NLL on positive advantages whereas gspo uses centered ratio
+        assert losses["rft"] != losses["gspo"]
+
+    @skip_on_windows_ci
+    def test_real_trl_grpotrainer_end_to_end_step(self, tmp_path):
+        """End-to-end single step with real trl.GRPOTrainer and tiny model."""
+        from datasets import Dataset
+        from transformers import AutoTokenizer, GPT2Config, GPT2LMHeadModel
+        from trl import GRPOConfig, GRPOTrainer
+
+        from soup_cli.trainer.grpo import make_grpo_trainer_variant
+
+        config = GPT2Config(
+            n_layer=1,
+            n_head=1,
+            n_embd=32,
+            vocab_size=50257,
+            attn_pdrop=0.0,
+            resid_pdrop=0.0,
+            embd_pdrop=0.0,
+        )
+        model = GPT2LMHeadModel(config)
+        tokenizer = AutoTokenizer.from_pretrained("gpt2")
+        tokenizer.pad_token = tokenizer.eos_token
+        dataset = Dataset.from_dict({"prompt": ["Hello", "World"]})
+
+        training_args = GRPOConfig(
+            output_dir=str(tmp_path / "grpo_out"),
+            per_device_train_batch_size=2,
+            num_generations=2,
+            max_completion_length=4,
+            report_to="none",
+            learning_rate=1e-4,
+            max_steps=1,
+            use_cpu=True,
+        )
+
+        variant_cls = make_grpo_trainer_variant(GRPOTrainer, "gspo")
+        trainer = variant_cls(
+            model=model,
+            reward_funcs=lambda prompts, completions, **k: [1.0] * len(completions),
+            args=training_args,
+            train_dataset=dataset,
+            processing_class=tokenizer,
+        )
+
+        assert not trainer._soup_fallback_warned
+        trainer.train()
+        assert not trainer._soup_fallback_warned
 
 
 # ---------------------------------------------------------------------------
@@ -799,6 +1039,9 @@ class TestReviewFixCoverage:
         inputs = {
             "per_token_logps": torch.zeros(2, 4),
             "old_per_token_logps": torch.zeros(2, 4),
+            # #1232: the reference trl supplies whenever beta != 0; without it
+            # the kernel refuses and the fake's (99.0, {"fake": True}) returns.
+            "ref_per_token_logps": torch.zeros(2, 4),
             "advantages": torch.tensor([1.0, -1.0]),
         }
         result = trainer.compute_loss(
@@ -809,8 +1052,11 @@ class TestReviewFixCoverage:
         # forward pass.
         assert isinstance(result, tuple)
         assert len(result) == 2
-        loss, _outputs = result
+        loss, outputs = result
         assert isinstance(loss, torch.Tensor)
+        assert not trainer._soup_fallback_warned, "fell back to the base loss"
+        assert outputs is None, outputs
+        assert float(loss) == 0.0
 
     # --- HIGH: source-grep regression — callback wired into grpo.py ---
 

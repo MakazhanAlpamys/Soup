@@ -111,7 +111,8 @@ class TestDraftModelLoading:
             _load_draft_model("small-model", "cuda")
             call_kwargs = mock_load.call_args[1]
             assert call_kwargs["device_map"] == "auto"
-            assert call_kwargs["dtype"] == torch.float16
+            assert call_kwargs["torch_dtype"] == torch.float16
+            assert "dtype" not in call_kwargs
 
     def test_load_draft_model_no_trust_remote_code(self):
         """_load_draft_model should NOT pass trust_remote_code."""

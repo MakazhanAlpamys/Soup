@@ -51,7 +51,8 @@ def apply_liger_kernel(model_name: str) -> bool:
     if not check_liger_available():
         return False
 
-    model_lower = model_name.lower()
+    clean_name = str(model_name or "").strip().replace("\\", "/").rstrip("/")
+    last_component = clean_name.rsplit("/", 1)[-1].lower() if clean_name else ""
 
     # Detect the architecture from the CONFIG, not from the path.
     #
@@ -79,7 +80,7 @@ def apply_liger_kernel(model_name: str) -> bool:
             # success we cannot back.
             pass
 
-    return _apply_liger_manual(model_lower)
+    return _apply_liger_manual(last_component)
 
 
 def _detect_model_type(model_name: str) -> str:
@@ -97,30 +98,30 @@ def _detect_model_type(model_name: str) -> str:
     return str(getattr(config, "model_type", "") or "")
 
 
-def _apply_liger_manual(model_lower: str) -> bool:
-    """Manually apply Liger Kernel patches for known model architectures."""
+def _apply_liger_manual(last_component: str) -> bool:
+    """Manually apply Liger Kernel patches matching the last path component (#456)."""
     try:
-        if "llama" in model_lower or "codellama" in model_lower:
+        if "llama" in last_component or "codellama" in last_component:
             from liger_kernel.transformers import apply_liger_kernel_to_llama
 
             apply_liger_kernel_to_llama()
             return True
-        elif "mistral" in model_lower or "mixtral" in model_lower:
+        elif "mistral" in last_component or "mixtral" in last_component:
             from liger_kernel.transformers import apply_liger_kernel_to_mistral
 
             apply_liger_kernel_to_mistral()
             return True
-        elif "gemma" in model_lower:
+        elif "gemma" in last_component:
             from liger_kernel.transformers import apply_liger_kernel_to_gemma2
 
             apply_liger_kernel_to_gemma2()
             return True
-        elif "qwen" in model_lower:
+        elif "qwen" in last_component:
             from liger_kernel.transformers import apply_liger_kernel_to_qwen2
 
             apply_liger_kernel_to_qwen2()
             return True
-        elif "phi" in model_lower:
+        elif "phi" in last_component:
             from liger_kernel.transformers import apply_liger_kernel_to_phi3
 
             apply_liger_kernel_to_phi3()

@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import json
+import ntpath
 import os
 import random
 from pathlib import Path
-from typing import Optional
+from typing import NoReturn, Optional
 
 import typer
 from rich.console import Console
@@ -15,8 +16,10 @@ from rich.table import Table
 from soup_cli.data.loader import load_raw_data
 from soup_cli.data.validator import validate_and_stats
 from soup_cli.utils.embed import DEFAULT_EMBED_MODEL, embed_texts
+from soup_cli.utils.exit_codes import EXIT_GATE_FAILED, EXIT_USAGE_ERROR, GateCommand
 from soup_cli.utils.paths import is_under_cwd
 from soup_cli.utils.semdedup import DedupReport, greedy_semdedup
+from soup_cli.utils.terminal import for_terminal
 
 console = Console()
 
@@ -74,19 +77,36 @@ def inspect(
         console.print(sample_table)
 
 
-@app.command()
+@app.command(cls=GateCommand)
 def validate(
     path: str = typer.Argument(..., help="Path to dataset file"),
     fmt: str = typer.Option(
         "auto", "--format", "-f",
         help="Expected format: auto, alpaca, sharegpt, chatml, dpo, kto, plaintext",
     ),
+    min_valid_fraction: float = typer.Option(
+        0.0,
+        "--min-valid-fraction",
+        min=0.0,
+        max=1.0,
+        help="Exit 2 when the fraction of valid rows is below this value",
+    ),
 ):
-    """Validate dataset format and report issues."""
+    """Validate a dataset, returning exit 3 for input errors and 2 for unusable data."""
     file_path = Path(path)
     if not file_path.exists():
         console.print(f"[red]File not found: {file_path}[/]")
-        raise typer.Exit(1)
+        raise typer.Exit(EXIT_USAGE_ERROR)
+
+    if fmt != "auto":
+        from soup_cli.data.formats import VALID_FORMATS
+
+        if fmt not in VALID_FORMATS:
+            console.print(
+                f"[red]Unknown --format: {fmt!r}[/]\n"
+                f"Accepted: auto, {', '.join(VALID_FORMATS)}"
+            )
+            raise typer.Exit(EXIT_USAGE_ERROR)
 
     data = load_raw_data(file_path)
 
@@ -99,7 +119,7 @@ def validate(
             console.print(f"[dim]Auto-detected format: {fmt}[/]")
         except ValueError as exc:
             console.print(f"[red]{exc}[/]")
-            raise typer.Exit(1)
+            raise typer.Exit(EXIT_USAGE_ERROR)
 
     result = validate_and_stats(data, expected_format=fmt)
 
@@ -113,6 +133,17 @@ def validate(
     valid = result["valid_rows"]
     total = result["total"]
     console.print(f"\n[green]{valid}/{total} rows valid for {fmt} format[/]")
+
+    if total > 0 and valid == 0:
+        console.print("[red]Validation failed: no usable rows remain.[/]")
+        raise typer.Exit(EXIT_GATE_FAILED)
+
+    if total > 0 and valid / total < min_valid_fraction:
+        console.print(
+            f"[red]Validation failed: valid fraction {valid / total:.3f} is below "
+            f"--min-valid-fraction {min_valid_fraction:.3f}.[/]"
+        )
+        raise typer.Exit(EXIT_GATE_FAILED)
 
 
 @app.command()
@@ -619,13 +650,17 @@ def stats(
                     pass  # no .buffer (e.g. in tests), keep original
 
             try:
-                plt.clear_figure()
-                plt.hist(lengths, bins=30)
-                plt.title("Text Length Distribution (chars)")
-                plt.xlabel("Length")
-                plt.ylabel("Count")
-                plt.theme("dark")
-                plt.show()
+                from soup_cli.utils.plotext_compat import render_histogram
+
+                render_histogram(
+                    plt,
+                    lengths,
+                    console=console,
+                    bins=30,
+                    title="Text Length Distribution (chars)",
+                    xlabel="Length",
+                    ylabel="Count",
+                )
             finally:
                 sys.stdout = original_stdout
     except UnicodeEncodeError:
@@ -1921,7 +1956,7 @@ def from_traces_cmd(
         help="Drop pairs with judge-confidence below this threshold (0.0 - 1.0).",
     ),
 ) -> None:
-    """Harvest preference pairs from production traces (v0.26.0 Part C).
+    """Harvest preference pairs from production traces.
 
     Prominent reminder: traces may contain sensitive user data; review
     before sharing or uploading to external systems.
@@ -2308,6 +2343,95 @@ def _push_dataset_non_hf(
 
 # --- v0.42.0 Part C / F: AOT preprocess + document ingestion ---------------
 
+
+def _cache_key_dataset_path(cfg) -> str:
+    """Dataset-path input fed to make_preprocess_cache_key (#443 list-aware).
+
+    A list data.train folds data.interleave's strategy/probs into the key
+    too, since the same file set under a different mixture must not
+    collide on a stale, mis-mixed cache entry. Extracted as its own
+    function so it can be exercised directly by
+    tests/test_issue443_interleave_wiring.py's enumerating test.
+    """
+    from soup_cli.utils.data_pipeline import preprocess_dataset_key_input
+
+    return preprocess_dataset_key_input(cfg.data)
+
+
+def _refuse_row(idx: int, row, reason: str) -> NoReturn:
+    """Stop ``soup data preprocess`` on a chat row it cannot tokenize (#1180).
+
+    Numbers the row from 1, as the live SFT path does (``trainer/sft.py``), among
+    the rows that survived loading, and quotes the start of its first message so
+    it can be found even where that number is not the file's line. Every part of
+    the message comes from the dataset, so it goes through ``for_terminal``: a
+    role holding ``\\x1b[2J`` would otherwise clear the user's screen.
+    """
+    preview = label = ""
+    messages = row.get("messages") if isinstance(row, dict) else None
+    text = (row.get("text") or row.get("content")) if isinstance(row, dict) else None
+    if isinstance(messages, list) and messages and isinstance(messages[0], dict):
+        first = messages[0]
+        role = str(first.get("role"))[:30]
+        label, preview = "first message", f"{role!r}: {str(first.get('content', ''))[:60]!r}"
+    elif isinstance(text, str):
+        # A pretrain row has raw text, not messages.
+        label, preview = "text", f"{text[:60]!r}"
+    console.print(
+        f"[red]Train row {idx + 1} cannot be tokenized:[/] {for_terminal(reason)}"
+        + (f"\n  {label}: {for_terminal(preview)}" if preview else "")
+    )
+    console.print(
+        "Nothing was written. Fix or remove the row and re-run; the cache must hold "
+        "every row the training path would train on."
+    )
+    raise typer.Exit(1)
+
+
+def _mask_labels_for_cache_row(
+    messages, tokenizer, mask_mode: str, max_length: int, input_ids: list
+) -> list:
+    """Loss mask for one cached chat row, from the live path's own builders (#1054).
+
+    ``mask_mode`` comes from ``preprocess_mask_mode``, which mirrors
+    ``data.sft_format.build_format_row``'s selection — so a cache and the
+    equivalent live run mask the same tokens. Every flag that reaches the live
+    builder has to be read back out of the mode string here: dropping one caches
+    a different mask under a key that says otherwise, which is #1054 again.
+
+    Suffixes are matched with ``in``, not ``endswith`` — with both suffixes
+    present the mode is ``responses_only+eot+mask_history``, and ``endswith``
+    would silently drop the EOT from every such cache.
+
+    The builders tokenize through ``add_special_tokens=False`` while this path is
+    pinned to the rendered template's own tokenization, so their mask is aligned
+    back onto ``input_ids`` rather than replacing it (``align_labels_to_ids``).
+    """
+    from soup_cli.data.loss_mask import (
+        align_labels_to_ids,
+        build_assistant_only_labels,
+        build_per_message_train_labels,
+    )
+
+    if mask_mode == "full":
+        return list(input_ids)
+    if mask_mode == "train_field":
+        built = build_per_message_train_labels(
+            messages, tokenizer, max_length=max_length
+        )
+    else:
+        built = build_assistant_only_labels(
+            messages,
+            tokenizer,
+            max_length=max_length,
+            include_eot="+eot" in mask_mode,
+            mask_history="+mask_history" in mask_mode,
+        )
+    return align_labels_to_ids(
+        built["input_ids"], built["labels"], input_ids
+    )
+
+
 @app.command(name="preprocess")
 def preprocess_dataset(
     config_path: str = typer.Argument(
@@ -2333,7 +2457,11 @@ def preprocess_dataset(
     import json as _json
 
     from soup_cli.config.loader import load_config
-    from soup_cli.utils.data_pipeline import make_preprocess_cache_key
+    from soup_cli.data.chat_templates import resolve_chat_template
+    from soup_cli.utils.data_pipeline import (
+        make_preprocess_cache_key,
+        preprocess_mask_mode,
+    )
     from soup_cli.utils.paths import is_under_cwd
 
     cfg_real = os.path.realpath(config_path)
@@ -2354,16 +2482,31 @@ def preprocess_dataset(
         )
         raise typer.Exit(1)
 
+    dataset_path = _cache_key_dataset_path(cfg)
+    # #1067: render with data.chat_template, as the live path does, and key on it.
+    try:
+        chat_template = resolve_chat_template(cfg.data.chat_template)
+    except KeyError as exc:
+        console.print(f"[red]Invalid data.chat_template:[/] {for_terminal(exc.args[0])}")
+        raise typer.Exit(1) from exc
+    train_display = (
+        ", ".join(cfg.data.train) if isinstance(cfg.data.train, list) else cfg.data.train
+    )
+    mask_mode = preprocess_mask_mode(cfg.data, getattr(cfg, "training", None))
     cache_key = make_preprocess_cache_key(
-        dataset_path=cfg.data.train,
+        dataset_path=dataset_path,
         tokenizer_name=cfg.base,
         max_length=cfg.data.max_length,
         format_name=cfg.data.format,
+        chat_template=chat_template,
+        mask_mode=mask_mode,
+        task=cfg.task,
     )
     target = Path(out_real) / cache_key
-    console.print(f"[cyan]Dataset:[/] {cfg.data.train}")
+    console.print(f"[cyan]Dataset:[/] {train_display}")
     console.print(f"[cyan]Tokenizer:[/] {cfg.base}")
     console.print(f"[cyan]max_length:[/] {cfg.data.max_length}")
+    console.print(f"[cyan]Loss mask:[/] {mask_mode}")
     console.print(f"[cyan]Cache key:[/] {cache_key}")
     console.print(f"[cyan]Target:[/] {target}")
 
@@ -2397,6 +2540,8 @@ def preprocess_dataset(
     tokenizer = AutoTokenizer.from_pretrained(
         cfg.base, trust_remote_code=False
     )
+    if chat_template is not None:
+        tokenizer.chat_template = chat_template
 
     try:
         dataset = load_dataset(cfg.data)
@@ -2407,6 +2552,24 @@ def preprocess_dataset(
     raw_rows = dataset.get("train", []) if isinstance(dataset, dict) else []
     max_length = int(cfg.data.max_length)
     is_pretrain = cfg.task == "pretrain"
+
+    # #876: measured once, not per row -- how many leading BOS the tokenizer's
+    # post-processor prepends, so the chat path can keep only the template's own.
+    bos_added_by_post_processor = None
+    if not is_pretrain:
+        from soup_cli.data.loss_mask import post_processor_leading_bos_count
+
+        bos_added_by_post_processor = post_processor_leading_bos_count(tokenizer)
+
+    if not is_pretrain and not getattr(tokenizer, "chat_template", None):
+        # #1180 review: a whole-dataset problem, reported once rather than blamed
+        # on the first row -- removing a row cannot fix it.
+        console.print(
+            f"[red]The tokenizer for {for_terminal(cfg.base)} has no chat_template,[/] "
+            "so no chat row can be rendered. Set data.chat_template, or use a base "
+            "whose tokenizer ships one. Nothing was written."
+        )
+        raise typer.Exit(1)
 
     rendered_rows: list[dict] = []
     for idx, row in enumerate(raw_rows):
@@ -2425,17 +2588,20 @@ def preprocess_dataset(
             if not text:
                 continue
         else:
+            # #1180: a chat row that cannot be rendered stops the command, as the
+            # live training path stops on it. Skipping it wrote a smaller dataset
+            # than the one configured, exited 0, and the cached run trained on it.
             messages = row.get("messages") if isinstance(row, dict) else None
-            if not messages or not getattr(tokenizer, "chat_template", None):
-                continue
+            if not messages:
+                _refuse_row(idx, row, "it has no messages")
             try:
                 text = tokenizer.apply_chat_template(
                     messages, tokenize=False, add_generation_prompt=False
                 )
-            except Exception:  # noqa: BLE001 — tokenizer template errors vary
-                continue
+            except Exception as exc:  # noqa: BLE001 — tokenizer template errors vary
+                _refuse_row(idx, row, f"{type(exc).__name__}: {exc}")
             if not isinstance(text, str) or not text:
-                continue
+                _refuse_row(idx, row, "the chat template rendered it as empty text")
         try:
             tokens = tokenizer(
                 text,
@@ -2443,15 +2609,82 @@ def preprocess_dataset(
                 truncation=True,
                 padding=False,
                 return_attention_mask=True,
+                # Tokenise exactly as ``main`` (add_special_tokens defaults to
+                # True). This keeps ``main``'s truncation reservation — a
+                # truncated row still ends on the post-processor's EOS — and the
+                # post-processor BOS/EOS. #785 removed the one doubled leading BOS
+                # here; #791 then applies TRL's training EOS rule below, both only
+                # for the chat path.
             )
-        except Exception:  # noqa: BLE001 — tokenizer errors vary
-            continue
+        except Exception as exc:  # noqa: BLE001 — tokenizer errors vary
+            # Pretrain too (#1182 review, round 3): live pretraining stops on a row
+            # the tokenizer rejects -- TRL's map has no per-row skip -- so skipping
+            # it here cached fewer rows than the live run trains on.
+            _refuse_row(idx, row, f"{type(exc).__name__}: {exc}")
+        input_ids = tokens["input_ids"]
+        attention_mask = tokens.get("attention_mask", [1] * len(input_ids))
+        if not is_pretrain:
+            # #785/#788/#876: add_special_tokens=True prepends the post-processor's
+            # BOS, which the live path (add_special_tokens=False) never trains on.
+            # Keep only the BOS the template itself renders: one for a
+            # ``{{ bos_token }}`` template (#785's doubled case), zero for a
+            # ``data.chat_template`` preset (#876). Pretrain feeds raw document
+            # text with no template, so it keeps ``main``'s encoding untouched.
+            from soup_cli.data.loss_mask import (
+                append_training_eos,
+                strip_post_processor_leading_bos,
+            )
+
+            # Decide "was this row truncated" BEFORE removing a BOS. Afterwards a
+            # row cut to the budget reads as one token short of it, and the EOS
+            # check below would hand it a stop token the live path (append, then
+            # truncate) does not have. Only the exact-fit length is ambiguous, so
+            # only that row is re-measured without truncation.
+            truncated = False
+            if len(input_ids) >= max_length:
+                try:
+                    full = tokenizer(text, truncation=False, verbose=False)
+                    truncated = len(full["input_ids"]) > max_length
+                except Exception:  # noqa: BLE001 — tokenizer errors vary
+                    truncated = True
+            input_ids, attention_mask = strip_post_processor_leading_bos(
+                tokenizer, input_ids, attention_mask, bos_added_by_post_processor
+            )
+            # #791: the live training path appends ``eos_token`` (TRL 0.29.1's
+            # ``add_eos``, ``sft_trainer.py:1026-1038``) to every chat row that
+            # does not already end on it, before tokenizing. This cache path
+            # tokenizes directly, so on a template that renders no EOS and a
+            # tokenizer whose post-processor appends none (Qwen-shaped) the cached
+            # row carried zero stop tokens while the live path trained on one —
+            # run-on generation, and silent (the loss curve looks normal and
+            # ``soup data doctor`` renders the live path, not the cache). Reproduce
+            # the rule in token space so the cache trains on the same EOS count.
+            # Only when the row is under the length budget: a row that filled
+            # ``max_length`` was truncated, and the live path (append-then-truncate)
+            # keeps no trailing EOS there either, so matching it means not pushing
+            # the row past the budget.
+            if not truncated and len(input_ids) < max_length:
+                with_eos = append_training_eos(tokenizer, input_ids)
+                if len(with_eos) != len(input_ids):
+                    input_ids = with_eos
+                    attention_mask = attention_mask + [1]
+            # #1054: without a ``labels`` column TRL's collator falls back to
+            # ``labels = input_ids`` and the cached run trains on the prompt
+            # too, silently diverging from the equivalent live chatml run. Build
+            # the mask with the very helpers the live path uses, then align it
+            # onto this path's ids, which are left exactly as the tokenization
+            # above produced them — only ``labels`` is new here.
+            labels = _mask_labels_for_cache_row(
+                messages, tokenizer, mask_mode, max_length, input_ids
+            )
+        else:
+            # Pretrain trains on every token by design — no masking.
+            labels = list(input_ids)
         rendered_rows.append(
             {
-                "input_ids": tokens["input_ids"],
-                "attention_mask": tokens.get(
-                    "attention_mask", [1] * len(tokens["input_ids"])
-                ),
+                "input_ids": input_ids,
+                "labels": labels,
+                "attention_mask": attention_mask,
             }
         )
 
@@ -2482,14 +2715,18 @@ def preprocess_dataset(
         _shutil.rmtree(tmp_dir, ignore_errors=True)
         raise
 
+    from soup_cli import __version__ as _soup_version
+
     metadata = {
         "cache_key": cache_key,
         "row_count": len(rendered_rows),
         "tokenizer_name": cfg.base,
         "max_length": max_length,
         "format": cfg.data.format,
+        "chat_template": cfg.data.chat_template,
+        "mask_mode": mask_mode,
         "task": cfg.task,
-        "soup_version": "0.53.7",
+        "soup_version": _soup_version,
     }
     metadata_path = target / "metadata.json"
     with open(metadata_path, "w", encoding="utf-8") as f:
@@ -2714,8 +2951,28 @@ def recipe(
         "-o",
         help="Output dir for sampler node (required with --execute).",
     ),
+    provider: Optional[str] = typer.Option(
+        None,
+        "--provider",
+        help="LLM provider for llm_text/judge nodes: ollama, anthropic, or vllm.",
+    ),
+    model: Optional[str] = typer.Option(
+        None,
+        "--model",
+        help="Provider model name (defaults to llama3.1).",
+    ),
+    base_url: Optional[str] = typer.Option(
+        None,
+        "--base-url",
+        help="Provider base URL (Ollama/vLLM; defaults to loopback).",
+    ),
+    offline: bool = typer.Option(
+        False,
+        "--offline",
+        help="Explicitly allow placeholder generation and accept-all judging.",
+    ),
 ) -> None:
-    """v0.45.0 Part E — Validate a Data Recipe DAG (live runner deferred)."""
+    """Validate a Data Recipe DAG and optionally execute every node."""
     from rich.markup import escape as _escape
 
     from soup_cli.utils.recipe_dag import load_recipe_yaml
@@ -2762,21 +3019,69 @@ def recipe(
             )
             raise typer.Exit(2)
 
+        if provider is not None and offline:
+            console.print("[red]--provider and --offline cannot be used together.[/]")
+            raise typer.Exit(2)
+        if provider is None and (model is not None or base_url is not None):
+            console.print("[red]--model and --base-url require --provider.[/]")
+            raise typer.Exit(2)
+        if provider is not None:
+            from soup_cli.utils.data_forge import JUDGE_PROVIDERS
+
+            provider = provider.strip().lower()
+            if provider not in JUDGE_PROVIDERS:
+                options = ", ".join(sorted(JUDGE_PROVIDERS))
+                console.print(
+                    f"[red]Unknown --provider '{_escape(provider)}'; choose: {options}.[/]"
+                )
+                raise typer.Exit(2)
+        has_llm_nodes = any(node.kind in {"llm_text", "judge"} for node in dag.nodes)
+        if has_llm_nodes and provider is None and not offline:
+            console.print(
+                "[red]This recipe contains llm_text or judge nodes. Pass --provider "
+                "<ollama|anthropic|vllm>, or explicitly opt in to placeholder output "
+                "with --offline.[/]"
+            )
+            raise typer.Exit(2)
+        if offline and has_llm_nodes:
+            console.print(
+                "[yellow]Offline recipe mode: llm_text writes placeholder text and judge "
+                "accepts every row.[/]"
+            )
+
         # v0.53.7 #106: live runner. Per-node handlers + checkpoint + resume
         # land here; ``NotImplementedError`` is no longer raised on the live
         # surface but we keep the catch for defence-in-depth (a future schema
         # change might re-introduce a stub for an unknown node kind).
         try:
-            result = run_recipe(dag, output_dir=output)
+            result = run_recipe(
+                dag,
+                output_dir=output,
+                judge_provider=provider,
+                judge_model=model,
+                judge_base_url=base_url,
+                offline=offline,
+            )
         except NotImplementedError as exc:
             console.print(f"[yellow]{_escape(str(exc))}[/]")
             raise typer.Exit(2) from exc
         except (TypeError, ValueError) as exc:
             console.print(f"[red]Recipe failed: {_escape(str(exc))}[/]")
             raise typer.Exit(1) from exc
+        provider_calls = result.get("provider_call_count", 0)
+        provider_failures = result.get("provider_failure_count", 0)
+        provider_summary = ""
+        if isinstance(provider_calls, int) and provider_calls:
+            call_label = "call" if provider_calls == 1 else "calls"
+            failure_label = "failure" if provider_failures == 1 else "failures"
+            provider_summary = (
+                f" {provider_calls} provider {call_label}, "
+                f"{provider_failures} {failure_label}."
+            )
         console.print(
             f"[green]Recipe executed.[/] "
             f"{len(result.get('completed_nodes', ()))} node(s) completed."
+            f"{provider_summary}"
         )
         return
 
@@ -2801,13 +3106,15 @@ def gen_magpie(
         512, "--max-tokens", help="Max tokens per generation [1, 16384]"
     ),
     quality_filter: bool = typer.Option(
-        True, "--quality-filter/--no-quality-filter", help="Apply v0.47 quality filter"
+        True,
+        "--quality-filter/--no-quality-filter",
+        help="Apply non-empty + educational heuristics (not a toxicity classifier)",
     ),
     plan_only: bool = typer.Option(
         False, "--plan-only", help="Validate + print plan; do not generate."
     ),
 ) -> None:
-    """Magpie synthetic data generator (v0.69.0 Part C; live in v0.71.6 #232).
+    """Generate synthetic data from a chat-template prefix.
 
     Feeds the chat-template prefix only to ``--base`` and harvests user-side
     turns via ``--provider`` (ollama / vllm raw completion). With ``--plan-only``
@@ -2874,27 +3181,64 @@ def gen_magpie(
         )
 
 
-# v0.71.31 — Best-of-N rejection sampling (local sampling + judge).
+# v0.71.31 — Best-of-N rejection sampling (local/provider sampling + judge).
 _BON_MAX_PROMPTS = 100_000
 _BON_MAX_JSONL_BYTES = 100 * 1024 * 1024  # 100 MiB
+_BON_PROVIDER_SAMPLERS = ("ollama", "vllm")
 
 
-def _load_bon_model(base: str, device: str, trust: bool):
+def _load_bon_model(
+    base: str, device: str, trust: bool, revision: Optional[str] = None
+):
     """Seam: load ``(model, tokenizer)`` for best-of-n (patched in tests)."""
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
-    tok = AutoTokenizer.from_pretrained(base, trust_remote_code=trust)
+    load_kwargs: dict[str, object] = {"trust_remote_code": trust}
+    if revision:
+        load_kwargs["revision"] = revision
+    tok = AutoTokenizer.from_pretrained(base, **load_kwargs)
     if tok.pad_token is None:
         tok.pad_token = tok.eos_token
     dev_map = "cpu" if device == "cpu" else "auto"
     model = AutoModelForCausalLM.from_pretrained(
-        base, trust_remote_code=trust, device_map=dev_map
+        base, device_map=dev_map, **load_kwargs
     )
     return model, tok
 
 
-def _bon_load_prompts(path: str) -> list:
-    """Read a JSONL of {prompt|messages|instruction} rows -> list[str]."""
+def _prompt_text_or_none(row: dict) -> str | None:
+    """Extract one usable prompt without exposing row contents."""
+    text = None
+    if isinstance(row.get("prompt"), str):
+        text = row["prompt"]
+    elif isinstance(row.get("instruction"), str):
+        text = row["instruction"]
+    elif isinstance(row.get("messages"), list):
+        users = [
+            message.get("content")
+            for message in row["messages"]
+            if isinstance(message, dict) and message.get("role") == "user"
+        ]
+        if users and isinstance(users[-1], str):
+            text = users[-1]
+    if text is None or not text.strip():
+        return None
+    return text
+
+
+def _bon_prompt_text(row: dict, line_number: int) -> str:
+    """Extract one strict Best-of-N prompt with a private, line-numbered error."""
+    text = _prompt_text_or_none(row)
+    if text is None:
+        raise ValueError(
+            f"prompt JSONL line {line_number} has no non-empty prompt, "
+            "instruction, or user message"
+        )
+    return text
+
+
+def _bon_load_prompt_records(path: str) -> list[tuple[str, int]]:
+    """Read prompt JSONL strictly as ``(text, source_line)`` records."""
     from soup_cli.utils.paths import enforce_under_cwd_and_no_symlink
 
     enforce_under_cwd_and_no_symlink(path, "--prompts path")
@@ -2903,9 +3247,9 @@ def _bon_load_prompts(path: str) -> list:
         raise FileNotFoundError(path)
     if os.path.getsize(real) > _BON_MAX_JSONL_BYTES:
         raise ValueError(f"--prompts file exceeds {_BON_MAX_JSONL_BYTES} bytes")
-    prompts: list = []
+    prompts: list[tuple[str, int]] = []
     with open(real, "r", encoding="utf-8") as handle:
-        for raw_line in handle:
+        for line_number, raw_line in enumerate(handle, start=1):
             stripped = raw_line.strip()
             if not stripped:
                 continue
@@ -2913,35 +3257,56 @@ def _bon_load_prompts(path: str) -> list:
                 raise ValueError(f"--prompts file exceeds {_BON_MAX_PROMPTS} rows")
             try:
                 row = json.loads(stripped)
+            except json.JSONDecodeError as exc:
+                raise ValueError(
+                    f"prompt JSONL line {line_number} is not valid JSON"
+                ) from exc
+            if not isinstance(row, dict):
+                raise ValueError(f"prompt JSONL line {line_number} must be a JSON object")
+            prompts.append((_bon_prompt_text(row, line_number), line_number))
+    return prompts
+
+
+def _evolve_load_prompts(path: str) -> list[str]:
+    """Read evolve seeds while preserving its historical skip-invalid policy."""
+    from soup_cli.utils.paths import enforce_under_cwd_and_no_symlink
+
+    enforce_under_cwd_and_no_symlink(path, "--input path")
+    real = os.path.realpath(path)
+    if not os.path.isfile(real):
+        raise FileNotFoundError(path)
+    if os.path.getsize(real) > _BON_MAX_JSONL_BYTES:
+        raise ValueError(f"--input file exceeds {_BON_MAX_JSONL_BYTES} bytes")
+    prompts: list[str] = []
+    with open(real, "r", encoding="utf-8") as handle:
+        for raw_line in handle:
+            stripped = raw_line.strip()
+            if not stripped:
+                continue
+            if len(prompts) >= _BON_MAX_PROMPTS:
+                raise ValueError(f"--input file exceeds {_BON_MAX_PROMPTS} rows")
+            try:
+                row = json.loads(stripped)
             except json.JSONDecodeError:
                 continue
             if not isinstance(row, dict):
                 continue
-            text = None
-            if isinstance(row.get("prompt"), str):
-                text = row["prompt"]
-            elif isinstance(row.get("instruction"), str):
-                text = row["instruction"]
-            elif isinstance(row.get("messages"), list):
-                users = [
-                    m.get("content")
-                    for m in row["messages"]
-                    if isinstance(m, dict) and m.get("role") == "user"
-                ]
-                if users and isinstance(users[-1], str):
-                    text = users[-1]
-            if text:
+            text = _prompt_text_or_none(row)
+            if text is not None:
                 prompts.append(text)
     return prompts
 
 
 @app.command(name="best-of-n")
 def best_of_n(
-    base: str = typer.Option(..., "--base", help="Base model id/path to sample from"),
-    prompts: str = typer.Option(..., "--prompts", help="JSONL of {prompt|messages} rows"),
+    base: str = typer.Option("", "--base", help="Local base model id/path to sample from"),
+    prompts: str = typer.Option("", "--prompts", help="JSONL of {prompt|messages} rows"),
     judge: str = typer.Option(
-        ..., "--judge", help="Judge URL (ollama://|https://|http://localhost)"
+        "", "--judge", help="Judge URL (ollama://|https://|http://localhost)"
     ),
+    provider: str = typer.Option("", "--provider", help="Provider sampler: ollama | vllm"),
+    model: str = typer.Option("", "--model", help="Provider sampler model id"),
+    base_url: str = typer.Option("", "--base-url", help="Provider sampler base URL"),
     n: int = typer.Option(8, "--n", help="Candidates per prompt [2, 64]"),
     output: str = typer.Option(
         "", "--output", "-o", help="Output SFT JSONL (required unless --plan-only)"
@@ -2949,31 +3314,52 @@ def best_of_n(
     emit_pairs: str = typer.Option(
         "", "--emit-pairs", help="Also write winner/loser DPO pairs to this JSONL"
     ),
+    checkpoint: str = typer.Option(
+        "",
+        "--checkpoint",
+        help="Recovery journal (default: <output-or-artifact>.checkpoint.jsonl)",
+    ),
+    manifest: str = typer.Option(
+        "", "--manifest", help="Commit manifest (default: <output>.manifest.json)"
+    ),
+    resume: bool = typer.Option(False, "--resume", help="Resume a matching checkpoint"),
+    export_candidates: str = typer.Option(
+        "", "--export-candidates", help="Sampling-only candidate artifact JSONL"
+    ),
+    candidate_artifact: str = typer.Option(
+        "", "--candidate-artifact", help="Offline candidate artifact to materialize"
+    ),
+    judgments: str = typer.Option(
+        "", "--judgments", help="Offline verified judgments JSONL"
+    ),
     temperature: float = typer.Option(1.0, "--temperature", help="Sampling temp [0, 2]"),
     max_new_tokens: int = typer.Option(
         256, "--max-new-tokens", help="Max new tokens per candidate [1, 4096]"
     ),
-    device: str = typer.Option("", "--device", help="cuda | cpu"),
-    seed: int = typer.Option(0, "--seed", help="Sampling seed"),
+    device: str = typer.Option("", "--device", help="Local sampler device: cuda | cpu"),
+    seed: int = typer.Option(0, "--seed", help="Local sampling seed"),
+    revision: str = typer.Option("", "--revision", help="Pinned local model revision"),
     trust_remote_code: bool = typer.Option(
-        False, "--trust-remote-code", help="Allow custom model code on --base"
+        False, "--trust-remote-code", help="Allow custom model code on local --base"
     ),
     plan_only: bool = typer.Option(False, "--plan-only", help="Validate + print plan"),
 ) -> None:
     """Best-of-N rejection sampling: sample N per prompt, a judge picks the winner.
 
-    Samples ``--n`` candidates from ``--base`` locally (transformers), scores each
-    with ``--judge`` pointwise, and writes the winner as an SFT chat row (with
-    ``_best_of_n`` provenance). ``--emit-pairs`` additionally writes winner-vs-
-    loser DPO pairs. BOND-lite (Best-of-N distillation, v0.71.31).
+    Samples ``--n`` candidates from local ``--base`` (the default) or an Ollama /
+    vLLM raw-completion ``--provider``, scores each with ``--judge`` pointwise,
+    and writes the winner as an SFT chat row (with ``_best_of_n`` provenance).
+    ``--emit-pairs`` additionally writes winner-vs-loser DPO pairs. BOND-lite
+    (Best-of-N distillation, v0.71.31; provider sampling #299).
     """
     from rich.markup import escape as _escape
     from rich.panel import Panel
 
-    from soup_cli.eval.gate import _parse_judge_url
-    from soup_cli.eval.judge import JudgeEvaluator
     from soup_cli.utils import best_of_n as bon
-    from soup_cli.utils.paths import atomic_write_text, enforce_under_cwd_and_no_symlink
+    from soup_cli.utils import best_of_n_artifact as bon_artifact
+    from soup_cli.utils import best_of_n_checkpoint as bon_checkpoint
+    from soup_cli.utils.magpie import make_magpie_generate_fn
+    from soup_cli.utils.paths import enforce_under_cwd_and_no_symlink
     from soup_cli.utils.trust_remote import (
         model_requires_trust_remote_code,
         resolve_trust_remote_code,
@@ -2990,94 +3376,536 @@ def best_of_n(
         console.print("[red]--max-new-tokens must be in [1, 4096][/]")
         raise typer.Exit(2)
 
-    # --- Judge URL (SSRF via JudgeEvaluator construction) ---
-    try:
-        provider, judge_model_id, api_base = _parse_judge_url(judge)
-        evaluator = JudgeEvaluator(
-            provider=provider, model=judge_model_id, api_base=api_base
-        )
-    except (ValueError, TypeError) as exc:
-        console.print(f"[red]Invalid --judge: {_escape(str(exc))}[/]")
-        raise typer.Exit(2) from exc
+    offline_mode = bool(candidate_artifact or judgments)
+    export_mode = bool(export_candidates)
+    if offline_mode and export_mode:
+        console.print("[red]offline materialization and --export-candidates are exclusive[/]")
+        raise typer.Exit(2)
+    if offline_mode:
+        from soup_cli.utils import best_of_n_stream as bon_stream
 
-    # --- Paths ---
+        if not candidate_artifact or not judgments:
+            console.print("[red]provide both --candidate-artifact and --judgments[/]")
+            raise typer.Exit(2)
+        if resume or checkpoint:
+            console.print(
+                "[red]offline materialization does not support --resume or --checkpoint; "
+                "rerun with the same candidate and judgment artifacts[/]"
+            )
+            raise typer.Exit(2)
+        if any(
+            (
+                base,
+                prompts,
+                judge,
+                provider,
+                model,
+                base_url,
+                device,
+                revision,
+                trust_remote_code,
+                seed != 0,
+                checkpoint,
+                resume,
+                n != 8,
+                temperature != 1.0,
+                max_new_tokens != 256,
+            )
+        ):
+            console.print(
+                "[red]offline materialization does not accept sampling or judge options[/]"
+            )
+            raise typer.Exit(2)
+        if not output and not plan_only:
+            console.print("[red]--output is required unless --plan-only is set.[/]")
+            raise typer.Exit(2)
+        manifest_path = manifest or (f"{output}.manifest.json" if output else "")
+        try:
+            paths = [candidate_artifact, judgments]
+            if output:
+                enforce_under_cwd_and_no_symlink(output, "--output path")
+                paths.append(output)
+            if emit_pairs:
+                enforce_under_cwd_and_no_symlink(emit_pairs, "--emit-pairs path")
+                paths.append(emit_pairs)
+            if manifest_path:
+                enforce_under_cwd_and_no_symlink(manifest_path, "--manifest path")
+                paths.append(manifest_path)
+            if len({os.path.normcase(os.path.realpath(path)) for path in paths}) != len(paths):
+                raise ValueError("offline input and output paths must be distinct")
+        except (FileNotFoundError, OSError, TypeError, ValueError) as exc:
+            console.print(f"[red]Invalid offline artifact: {_escape(str(exc))}[/]")
+            raise typer.Exit(2) from exc
+        publication_started = False
+        try:
+            with bon_stream.index_offline_artifacts(
+                candidate_artifact, judgments
+            ) as offline_index:
+                console.print(
+                    Panel(
+                        f"Candidate groups: [bold]{offline_index.group_count}[/]\n"
+                        f"Matched rows:     [bold]{offline_index.group_count}[/]\n"
+                        "Network/model:    [bold]disabled[/]",
+                        title="soup data best-of-n — offline plan",
+                    )
+                )
+                if plan_only:
+                    offline_index.validate_all()
+                    return
+                staged = bon_stream.stage_offline_datasets(
+                    offline_index, output, emit_pairs
+                )
+                if staged.sft_count != offline_index.group_count:
+                    staged.cleanup()
+                    raise ValueError(
+                        "judgments must cover every candidate group exactly once"
+                    )
+                publication_started = True
+                try:
+                    stale_dpo = ""
+                    if not emit_pairs and os.path.lexists(manifest_path):
+                        stale_dpo = bon_artifact.find_committed_sibling_dpo(
+                            manifest_path, sft_path=output
+                        )
+                    manifest_bytes = bon_artifact.offline_manifest_from_digests(
+                        candidate_artifact_sha256=offline_index.candidate_sha256,
+                        judgments_sha256=offline_index.judgments_sha256,
+                        sft_path=output,
+                        sft_sha256=staged.sft_sha256,
+                        sft_count=staged.sft_count,
+                        dpo_path=emit_pairs,
+                        dpo_sha256=staged.dpo_sha256,
+                        dpo_count=staged.dpo_count,
+                    ).encode("utf-8")
+                    bon_stream.publish_staged_datasets(
+                        staged,
+                        output,
+                        emit_pairs,
+                        manifest_path=manifest_path,
+                        manifest_bytes=manifest_bytes,
+                        stale_dpo_path=stale_dpo,
+                    )
+                finally:
+                    staged.cleanup()
+                sft_count = staged.sft_count
+                dpo_count = staged.dpo_count
+        except (FileNotFoundError, OSError, TypeError, ValueError) as exc:
+            if not publication_started:
+                console.print(f"[red]Invalid offline artifact: {_escape(str(exc))}[/]")
+                raise typer.Exit(2) from exc
+            console.print(f"[red]Failed to write output: {_escape(str(exc))}[/]")
+            raise typer.Exit(1) from exc
+        body = (
+            f"SFT rows:   [bold]{sft_count}[/]\n"
+            f"Output:     [bold]{_escape(os.path.relpath(output))}[/]"
+        )
+        if emit_pairs:
+            body += (
+                f"\nDPO pairs:  [bold]{dpo_count}[/]\n"
+                f"Pairs out:  [bold]{_escape(os.path.relpath(emit_pairs))}[/]"
+            )
+        body += f"\nManifest:   [bold]{_escape(os.path.relpath(manifest_path))}[/]"
+        console.print(Panel(body, title="soup data best-of-n — offline done"))
+        return
+
+    if export_mode:
+        if judge or output or emit_pairs or manifest:
+            console.print(
+                "[red]--export-candidates cannot be combined with judge or final outputs[/]"
+            )
+            raise typer.Exit(2)
+    elif not judge:
+        console.print("[red]--judge is required for the online workflow[/]")
+        raise typer.Exit(2)
+    if not prompts:
+        console.print("[red]--prompts is required for sampling[/]")
+        raise typer.Exit(2)
+
+    evaluator = None
+    if not export_mode:
+        from soup_cli.eval.gate import _parse_judge_url
+        from soup_cli.eval.judge import JudgeEvaluator
+
+        # JudgeEvaluator construction validates the URL against SSRF.
+        try:
+            judge_provider, judge_model_id, api_base = _parse_judge_url(judge)
+            evaluator = JudgeEvaluator(
+                provider=judge_provider, model=judge_model_id, api_base=api_base
+            )
+        except (ValueError, TypeError) as exc:
+            console.print(f"[red]Invalid --judge: {_escape(str(exc))}[/]")
+            raise typer.Exit(2) from exc
+
+    checkpoint_path = ""
+    manifest_path = ""
+    if not export_mode:
+        checkpoint_path = checkpoint or (f"{output}.checkpoint.jsonl" if output else "")
+        manifest_path = manifest or (f"{output}.manifest.json" if output else "")
+
+    # --- Prompt and output paths ---
     try:
-        prompt_list = _bon_load_prompts(prompts)
+        prompt_records = _bon_load_prompt_records(prompts)
         if output:
             enforce_under_cwd_and_no_symlink(output, "--output path")
         if emit_pairs:
             enforce_under_cwd_and_no_symlink(emit_pairs, "--emit-pairs path")
+        if checkpoint_path:
+            enforce_under_cwd_and_no_symlink(checkpoint_path, "--checkpoint path")
+        if manifest_path:
+            enforce_under_cwd_and_no_symlink(manifest_path, "--manifest path")
+        if export_candidates:
+            enforce_under_cwd_and_no_symlink(
+                export_candidates, "--export-candidates path"
+            )
+            checkpoint_path = checkpoint or f"{export_candidates}.checkpoint.jsonl"
+            enforce_under_cwd_and_no_symlink(checkpoint_path, "--checkpoint path")
+            export_paths = [prompts, export_candidates, checkpoint_path]
+            if len(
+                {os.path.normcase(os.path.realpath(path)) for path in export_paths}
+            ) != len(export_paths):
+                raise ValueError(
+                    "prompt source, candidate artifact, and checkpoint paths "
+                    "must be distinct"
+                )
     except (FileNotFoundError, TypeError, ValueError) as exc:
         console.print(f"[red]{_escape(str(exc))}[/]")
         raise typer.Exit(2) from exc
-    if not prompt_list:
+    if not prompt_records:
         console.print("[red]--prompts produced no usable rows[/]")
         raise typer.Exit(2)
+    prompt_list = [prompt for prompt, _source_line in prompt_records]
+    if resume and not export_mode and not output:
+        console.print("[red]--resume requires --output[/]")
+        raise typer.Exit(2)
 
-    trust = resolve_trust_remote_code(
-        base,
-        requested=trust_remote_code,
-        console=console,
-        requires_remote_code=model_requires_trust_remote_code(base) or False,
-    )
+    # --- Sampler selection ---
+    generate_fn = None
+    sampling_provider = ""
+    trust = False
+    if provider:
+        if base:
+            console.print("[red]--base and --provider are mutually exclusive[/]")
+            raise typer.Exit(2)
+        if device or revision or trust_remote_code or seed != 0:
+            console.print(
+                "[red]--device, --revision, --seed and --trust-remote-code "
+                "apply only to local --base[/]"
+            )
+            raise typer.Exit(2)
+        sampling_provider = provider.strip().lower()
+        if sampling_provider == "anthropic":
+            console.print(
+                "[red]anthropic has no raw-completion endpoint; "
+                "--provider must be ollama or vllm[/]"
+            )
+            raise typer.Exit(2)
+        if sampling_provider not in _BON_PROVIDER_SAMPLERS:
+            console.print("[red]--provider must be ollama or vllm[/]")
+            raise typer.Exit(2)
+        try:
+            generate_fn = make_magpie_generate_fn(
+                sampling_provider,
+                model=model,
+                base_url=base_url or None,
+                temperature=temperature,
+                max_tokens=max_new_tokens,
+            )
+        except (TypeError, ValueError, ImportError) as exc:
+            console.print(f"[red]{_escape(str(exc))}[/]")
+            raise typer.Exit(2) from exc
+    else:
+        if not base:
+            console.print("[red]either local --base or --provider is required[/]")
+            raise typer.Exit(2)
+        if model or base_url:
+            console.print("[red]--model and --base-url require --provider[/]")
+            raise typer.Exit(2)
+        trust = resolve_trust_remote_code(
+            base,
+            requested=trust_remote_code,
+            console=console,
+            requires_remote_code=model_requires_trust_remote_code(base) or False,
+        )
+
+    sampler_label = f"{sampling_provider}:{model}" if generate_fn is not None else base
+    if generate_fn is not None:
+        default_endpoint = {
+            "ollama": "http://localhost:11434",
+            "vllm": "http://localhost:8000",
+        }[sampling_provider]
+        sampler_spec = {
+            "kind": "provider",
+            "provider": sampling_provider,
+            "model": model,
+            "n": n,
+            "temperature": temperature,
+            "max_new_tokens": max_new_tokens,
+        }
+        sampler_identity = bon_artifact.sampler_identity_fingerprint(
+            "provider-endpoint", base_url or default_endpoint
+        )
+    else:
+        is_local_path = os.path.exists(base) or os.path.isabs(base) or ntpath.isabs(base)
+        public_model = "<local-model>" if is_local_path else base
+        model_identity = os.path.realpath(base) if is_local_path else base
+        model_fingerprint_parts = [
+            "local-model",
+            model_identity,
+            revision or "unspecified",
+        ]
+        if is_local_path and export_mode:
+            model_fingerprint_parts.append(
+                bon_artifact.local_model_content_fingerprint(base)
+            )
+        sampler_spec = {
+            "kind": "local",
+            "model": public_model,
+            "revision": revision or "unspecified",
+            "n": n,
+            "temperature": temperature,
+            "max_new_tokens": max_new_tokens,
+            "device": device or "auto",
+            "seed": seed,
+            "trust_remote_code": trust,
+        }
+        sampler_identity = bon_artifact.sampler_identity_fingerprint(
+            *model_fingerprint_parts
+        )
+
+    digest = ""
+    if not export_mode:
+        digest = bon_checkpoint.run_digest(
+            prompt_list,
+            {
+                "base": base,
+                "provider": sampling_provider,
+                "model": model,
+                "base_url": base_url,
+                "n": n,
+                "temperature": temperature,
+                "max_new_tokens": max_new_tokens,
+                "device": device,
+                "revision": revision,
+                "seed": seed,
+                "trust_remote_code": trust,
+                "judge": judge,
+                "emit_pairs": bool(emit_pairs),
+            },
+        )
 
     console.print(
         Panel(
-            f"Base model:   [bold]{_escape(base)}[/]\n"
-            f"Prompts:      [bold]{len(prompt_list)}[/]\n"
+            f"Sampler:      [bold]{_escape(sampler_label)}[/]\n"
+            f"Prompts:      [bold]{len(prompt_records)}[/]\n"
             f"N candidates: [bold]{n}[/]\n"
-            f"Judge:        [bold]{_escape(judge)}[/]",
+            f"Judge:        [bold]{_escape(judge) if judge else 'offline artifact'}[/]\n"
+            f"Checkpoint:   [bold]"
+            f"{_escape(os.path.relpath(checkpoint_path)) if checkpoint_path else '-'}[/]",
             title="soup data best-of-n — plan",
         )
     )
     if plan_only:
         return
-    if not output:
+    if not export_mode and not output:
         console.print("[red]--output is required unless --plan-only is set.[/]")
         raise typer.Exit(2)
 
-    import torch
-
-    torch.manual_seed(seed)
-    model, tokenizer = _load_bon_model(base, device, trust)
-
     dev = device or None
-    sft_lines: list = []
-    pair_lines: list = []
-    for prompt in prompt_list:
-        candidates = bon.sample_candidates(
-            model,
-            tokenizer,
-            prompt,
-            n=n,
-            temperature=temperature,
-            max_new_tokens=max_new_tokens,
-            device=dev,
-        )
-        pick = bon.judge_pick_best(prompt, candidates, evaluator)
-        sft_lines.append(
-            json.dumps(bon.build_sft_row(prompt, pick, judge_model=judge), ensure_ascii=False)
-        )
-        if emit_pairs:
-            pair = bon.build_dpo_pair(prompt, pick, candidates)
-            if pair is not None:
-                pair_lines.append(json.dumps(pair, ensure_ascii=False))
+    if export_mode:
+        from soup_cli.utils import best_of_n_stream as bon_stream
 
-    # Atomic writes (mkstemp + os.replace + re-validated containment) so a
-    # symlink swapped in after the fast-fail check cannot redirect the write.
-    try:
-        atomic_write_text("\n".join(sft_lines) + "\n", output, field="output")
-        if emit_pairs:
-            atomic_write_text(
-                ("\n".join(pair_lines) + "\n") if pair_lines else "",
-                emit_pairs,
-                field="emit-pairs",
+        checkpoint_path = checkpoint or f"{export_candidates}.checkpoint.jsonl"
+        completed = 0
+        try:
+            completed = bon_stream.prepare_candidate_checkpoint(
+                checkpoint_path,
+                prompt_records,
+                sampler_spec,
+                sampler_identity,
+                resume=resume,
             )
+            local_model = None
+            tokenizer = None
+            local_torch = None
+            if generate_fn is None and completed < len(prompt_list):
+                import torch
+
+                local_torch = torch
+                if revision:
+                    local_model, tokenizer = _load_bon_model(
+                        base, device, trust, revision=revision
+                    )
+                else:
+                    local_model, tokenizer = _load_bon_model(base, device, trust)
+            for index in range(completed, len(prompt_records)):
+                prompt, source_line = prompt_records[index]
+                if local_torch is not None:
+                    local_torch.manual_seed(bon_checkpoint.prompt_seed(seed, index))
+                candidates = bon.sample_candidates(
+                    local_model,
+                    tokenizer,
+                    prompt,
+                    n=n,
+                    temperature=temperature,
+                    max_new_tokens=max_new_tokens,
+                    device=dev,
+                    generate_fn=generate_fn,
+                )
+                group = bon_artifact.build_candidate_group(
+                    prompt,
+                    index,
+                    candidates,
+                    sampler_spec,
+                    source_line=source_line,
+                )
+                bon_stream.append_candidate_group(checkpoint_path, group)
+                completed = index + 1
+            bon_stream.publish_candidate_checkpoint(
+                checkpoint_path,
+                export_candidates,
+                prompt_records,
+                sampler_spec,
+                sampler_identity,
+            )
+        except Exception as exc:
+            console.print(
+                "[red]Candidate export failed before publication.[/]\n"
+                f"Reason:           [bold]{_escape(str(exc))}[/]\n"
+                f"Completed groups: [bold]{completed}/{len(prompt_list)}[/]\n"
+                f"Resume with: [bold]--resume --checkpoint "
+                f"{_escape(os.path.relpath(checkpoint_path))}[/]"
+            )
+            raise typer.Exit(1) from exc
+        console.print(
+            Panel(
+                f"Candidate groups: [bold]{completed}[/]\n"
+                f"Output:           [bold]{_escape(os.path.relpath(export_candidates))}[/]\n"
+                f"Checkpoint:       [bold]{_escape(os.path.relpath(checkpoint_path))}[/]",
+                title="soup data best-of-n — candidates exported",
+            )
+        )
+        return
+
+    completed_entries = []
+    try:
+        targets = [output, checkpoint_path, manifest_path]
+        if emit_pairs:
+            targets.append(emit_pairs)
+        if len({os.path.normcase(os.path.realpath(path)) for path in targets}) != len(
+            targets
+        ):
+            raise ValueError(
+                "output, pairs, checkpoint, and manifest paths must be distinct"
+            )
+        if resume:
+            completed_entries = bon_checkpoint.load_checkpoint(
+                checkpoint_path, digest=digest, total=len(prompt_list)
+            )
+        else:
+            bon_checkpoint.initialise_checkpoint(
+                checkpoint_path, digest=digest, total=len(prompt_list)
+            )
+    except (FileNotFoundError, OSError, TypeError, ValueError) as exc:
+        console.print(f"[red]Invalid checkpoint: {_escape(str(exc))}[/]")
+        raise typer.Exit(2) from exc
+
+    local_model = None
+    tokenizer = None
+    local_torch = None
+    if generate_fn is None and len(completed_entries) < len(prompt_list):
+        import torch
+
+        local_torch = torch
+        if revision:
+            local_model, tokenizer = _load_bon_model(
+                base, device, trust, revision=revision
+            )
+        else:
+            local_model, tokenizer = _load_bon_model(base, device, trust)
+
+    sft_rows = [entry[0] for entry in completed_entries]
+    pair_rows = [entry[1] for entry in completed_entries if entry[1] is not None]
+    assert evaluator is not None
+    for index in range(len(completed_entries), len(prompt_records)):
+        prompt, source_line = prompt_records[index]
+        try:
+            if local_torch is not None:
+                # Bind stochastic sampling to the prompt index rather than the
+                # process RNG position so an interrupted/resumed run produces
+                # the same candidates as an uninterrupted run (#549).
+                local_torch.manual_seed(bon_checkpoint.prompt_seed(seed, index))
+            candidates = bon.sample_candidates(
+                local_model,
+                tokenizer,
+                prompt,
+                n=n,
+                temperature=temperature,
+                max_new_tokens=max_new_tokens,
+                device=dev,
+                generate_fn=generate_fn,
+            )
+            pick = bon.judge_pick_best(prompt, candidates, evaluator)
+            row = bon.build_sft_row(prompt, pick, judge_model=judge)
+            row["_best_of_n"]["source_line"] = source_line
+            if generate_fn is not None:
+                row["_best_of_n"]["sampler"] = {
+                    "provider": sampling_provider,
+                    "model": model,
+                }
+            pair = bon.build_dpo_pair(prompt, pick, candidates) if emit_pairs else None
+            bon_checkpoint.append_checkpoint(
+                checkpoint_path, index=index, sft=row, dpo=pair
+            )
+        except bon.BestOfNRuntimeError as exc:
+            console.print(
+                f"[red]Best-of-N stopped after {index}/{len(prompt_list)} prompts.[/]\n"
+                f"Resume with [bold]--resume[/]; checkpoint: "
+                f"[bold]{_escape(os.path.relpath(checkpoint_path))}[/]"
+            )
+            raise typer.Exit(1) from exc
+        except ValueError:
+            # Deterministic validation failures (for example a non-finite
+            # judge score) cannot be repaired by resuming. Preserve the
+            # established fail-closed ValueError contract instead of
+            # presenting a misleading recovery instruction.
+            raise
+        except Exception as exc:
+            console.print(
+                f"[red]Best-of-N stopped after {index}/{len(prompt_list)} prompts.[/]\n"
+                f"Resume with [bold]--resume[/]; checkpoint: "
+                f"[bold]{_escape(os.path.relpath(checkpoint_path))}[/]"
+            )
+            raise typer.Exit(1) from exc
+        sft_rows.append(row)
+        if pair is not None:
+            pair_rows.append(pair)
+
+    # Snapshot every prior target before replacement, commit the manifest last,
+    # and restore the complete old generation if any publication step fails.
+    sft_text = bon_checkpoint.dataset_text(sft_rows)
+    pair_text = bon_checkpoint.dataset_text(pair_rows)
+    try:
+        bon_checkpoint.publish_generation(
+            sft_path=output,
+            sft_text=sft_text,
+            pair_path=emit_pairs,
+            pair_text=pair_text,
+            manifest_path=manifest_path,
+            manifest_text_value=bon_checkpoint.manifest_text(
+                digest=digest,
+                sft_path=output,
+                sft_text=sft_text,
+                sft_count=len(sft_rows),
+                pair_path=emit_pairs,
+                pair_text=pair_text,
+                pair_count=len(pair_rows),
+            ),
+        )
     except (OSError, ValueError, TypeError) as exc:
         console.print(f"[red]Failed to write output: {_escape(str(exc))}[/]")
         raise typer.Exit(1) from exc
-    sft_count = len(sft_lines)
-    pair_count = len(pair_lines)
+    sft_count = len(sft_rows)
+    pair_count = len(pair_rows)
 
     body = (
         f"SFT rows:   [bold]{sft_count}[/]\n"
@@ -3088,6 +3916,7 @@ def best_of_n(
             f"\nDPO pairs:  [bold]{pair_count}[/]\n"
             f"Pairs out:  [bold]{_escape(os.path.relpath(emit_pairs))}[/]"
         )
+    body += f"\nManifest:   [bold]{_escape(os.path.relpath(manifest_path))}[/]"
     console.print(Panel(body, title="soup data best-of-n — done"))
 
 
@@ -3133,7 +3962,7 @@ def evolve(
         raise typer.Exit(2)
 
     try:
-        seeds = _bon_load_prompts(input_path)
+        seeds = _evolve_load_prompts(input_path)
         if output:
             enforce_under_cwd_and_no_symlink(output, "--output path")
         generate_fn = make_magpie_generate_fn(
@@ -3216,7 +4045,7 @@ def persona_mix(
     ),
     seed: int = typer.Option(0, "--seed", help="Deterministic seed"),
 ) -> None:
-    """Sample a prompt × persona × style matrix (v0.69.0 Part D).
+    """Sample a prompt × persona × style matrix.
 
     Reads ``--prompts`` (JSONL with ``prompt`` field per row); writes
     ``--output`` JSONL with ``{prompt, persona, style}`` rows. When
@@ -3344,7 +4173,7 @@ def brain_rot_cmd(
         ),
     ),
 ) -> None:
-    """Score a dataset for brain-rot per arXiv 2510.13928 (v0.69.0 Part E).
+    """Score a dataset for brain-rot per arXiv 2510.13928.
 
     Reports a per-row OK/MINOR/MAJOR verdict + an aggregate verdict. With
     ``--strict`` the command exits 3 when the MAJOR fraction exceeds

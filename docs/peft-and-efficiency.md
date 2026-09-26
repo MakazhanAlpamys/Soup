@@ -104,8 +104,7 @@ training:
 
 **How it composes:**
 - **Multipack** picks WHICH samples go together (FFD packing).
-- **`packing_cross_doc_attn_mask`** sets HOW the attention mask is built (block-diagonal causal — see section above).
-- The two layer cleanly: enable both for FA-incompatible backends; FA varlen path is auto-selected when FlashAttention is available.
+- Packed-document isolation is TRL's default `bfd` strategy when FlashAttention is the `attn_implementation`. `packing_cross_doc_attn_mask` is rejected at config load (it never mapped to a valid TRL `packing_strategy`).
 
 **Architecture allowlist** — 18 supported (Llama 3.x, Qwen 2/3, Mistral, Gemma 2/3, Phi 3/4, DeepSeek V2/V3, Mixtral, Falcon, StableLM, SmolLM2). Unknown architectures **fail loudly at config-load** instead of silently no-opping (critical fix vs Axolotl's silent-miss footgun).
 
@@ -113,7 +112,7 @@ training:
 
 **Multi-GPU sharding (v0.71.19).** Under FSDP / DeepSpeed ZeRO / DDP (`num_processes > 1`) the `get_train_dataloader` override routes the multipack DataLoader through `accelerator.prepare`, so accelerate's `BatchSamplerShard` round-robins whole FFD-packed bins to each rank (preserving the packing; the bin seed is identical across ranks so every rank agrees on the global order before sharding). The single-GPU path returns the raw DataLoader unchanged. Multi-GPU correctness is mocked-tested — a real 2+-GPU validation run is tracked QA.
 
-**DoS hardening** — the FFD packer caps at 1M items (algorithm is O(N²) worst-case); the 4D mask builder caps allocations at 2³¹ cells; the chat-template Jinja analyzer caps at 128KB. Every numeric input rejects `bool` explicitly (matches v0.30.0+ project policy).
+**DoS hardening** — the FFD packer caps at 1M items (a bound on retained memory; placement itself is O(N log N) since #726); the 4D mask builder caps allocations at 2³¹ cells; the chat-template Jinja analyzer caps at 128KB. Every numeric input rejects `bool` explicitly (matches v0.30.0+ project policy).
 
 The `JinjaTemplateAnalyzer` (also v0.37.0) walks chat-template ASTs to discover non-standard `message.<field>` references (`tool_calls`, `name`, `weight`, `train`) — used by the v0.36.0 `train_on_messages_with_train_field` path so per-message training masks are aware of fields beyond `role` / `content`. The analyzer parses templates without rendering them, so a crafted `soup.yaml` cannot trigger SSRF.
 
@@ -140,9 +139,11 @@ training:
 
 **YaRN.** Best quality for 4-8x extension. Tunables (`yarn_factor`, `yarn_attn_factor`, `yarn_beta_fast`, `yarn_beta_slow`) only apply when `rope_scaling_type=yarn`; the schema rejects them otherwise. Pure-Python math kernels are exposed at `soup_cli.utils.long_context.yarn_*` for reference / config-emit. The actual RoPE rotation runs inside HF Transformers.
 
-**Llama 3.1 NTK-aware.** Use `rope_scaling_type: llama3` for the canonical Llama 3.1 frequency-band scaling (`scale_factor=8`, `low_freq_factor=1`, `high_freq_factor=4`, `old_context_len=8192`). `detect_llama3_rope_in_config` auto-detects the block in any HF model config dict. Omit `rope_scaling_type` from your YAML (so it stays `None`) on a Llama 3.1 base and `apply_long_context_config` will auto-pick `llama3` by reading `model.config.rope_scaling` at load time — explicit caller picks still win.
+**Llama 3.1 NTK-aware.** Use `rope_scaling_type: llama3` for the canonical Llama 3.1 frequency-band scaling (`scale_factor=8`, `low_freq_factor=1`, `high_freq_factor=4`, `old_context_len=8192`). `detect_llama3_rope_in_config` can identify the block in an HF model config dict, but `soup train` changes RoPE only when `rope_scaling_type` is explicit; omitting it preserves the checkpoint's native RoPE configuration.
 
-**LongLoRA S² (schema-only this release).** `training.use_longlora: true` requires `task=sft`, `backend=transformers`, a base in the architecture allowlist (Llama / CodeLlama / Mistral / Qwen / Phi — Mixtral excluded), and `use_ring_attention=false`. The schema also rejects the combo with FlashAttention v3 installed (the S² custom-mask kernel conflicts with FA-v3 native custom-mask). The schema gate fails fast at config load; live forward override mirroring LlamaFactory `model/model_utils/longlora.py` lands in a follow-up release.
+RoPE scaling is applied before model construction for the Transformers text paths of `task: sft` and `task: pretrain`. Vision, audio, layer-streaming and Unsloth setup paths do not consume these fields, nor do other training tasks. Existing type-independent model parameters such as `rope_theta` are preserved; tunables belonging to a previous RoPE algorithm are removed when the type changes. Models such as Gemma 3 that use nested per-layer RoPE sections are refused rather than partially modified. `longrope` additionally requires a checkpoint that already ships its learned `short_factor` and `long_factor` vectors; Soup refuses to invent those model-specific values.
+
+**LongLoRA S².** `training.use_longlora: true` requires `task=sft`, `backend=transformers`, a base in the architecture allowlist (Llama / CodeLlama / Mistral / Mixtral / Qwen / Phi), and `use_ring_attention=false`. The schema also rejects the combo with FlashAttention v3 installed (the S² custom-mask kernel conflicts with FA-v3 native custom-mask). During SFT setup, Soup installs the shifted-sparse attention forward override on matching attention modules.
 
 ```yaml
 # Llama 3.1 with NTK-aware scaling out to 128k
@@ -194,8 +195,10 @@ training:
     mlp:    1e-5
 
   # Friendly aliases for users coming from LlamaFactory / Axolotl
-  load_in_8bit: true        # equivalent to quantization: 8bit
+  # load_in_8bit: true      # equivalent to quantization: 8bit
   # load_in_16bit: true     # equivalent to quantization: none
+
+  quantization: none        # required: PEFT LoftQ quantizes the base itself
 
   lora:
     init_strategy: loftq    # quantization-aware LoRA init (also: pissa / olora / random)
@@ -209,6 +212,90 @@ training:
 
 Catch-all friendly errors: typos in `optimizer:` are rejected at config-load with the v0.41.0 additions listed in the message; `lr_groups` patterns are validated as compilable regexes (length-capped + benign-string ReDoS probe); `load_in_8bit` mixed with `load_in_16bit` raises rather than picking one silently.
 
+PiSSA, OLoRA, LoftQ, and VeRA are applied through the shared PEFT constructor on
+the Transformers backend. Soup refuses these variants on MLX and Unsloth rather
+than silently substituting ordinary LoRA. PiSSA and LoftQ additionally require
+`quantization: none`: PiSSA needs floating-point base weights for its SVD, while
+LoftQ performs the low-bit conversion itself, so an already quantized base is
+invalid for either initializer.
+
+On the Transformers backend, `target_modules: auto` is resolved in this order, and
+an explicit target list always wins unchanged:
+
+1. **Architectures PEFT maps itself** (`llama`, `mistral`, `qwen2`, …) are left to
+   PEFT's own default.
+2. **Architectures Soup maps** are resolved from `utils/peft_wiring.py`. The Qwen3.5
+   family targets `q_proj` and `v_proj` in full-attention layers plus `in_proj_qkv`
+   and `out_proj` in the fused linear-attention layers, because PEFT does not map
+   `qwen3_5_text`. The MoE architectures Soup ships recipes for (`qwen3_moe`,
+   `deepseek_v3`, `deepseek_v4`, `glm4_moe`, `glm_moe_dsa`, `granitemoehybrid`,
+   `kimi_k2`/`kimi_k25`, `gpt_oss`, `minimax_m2`, `minimax_m3_vl`) target their
+   attention projections; PEFT maps none of them (#1070). MiniMax-M3 uses a regex
+   scoped to its language tower, so a text fine-tune does not adapt the vision
+   encoder. `glm4_moe` is GLM-4.6 and is *not* `glm_moe_dsa` (GLM-5 / GLM-5.1):
+   the two have different attention shapes.
+3. **Anything else fails closed.** `auto` on an architecture neither PEFT nor Soup
+   maps is refused at setup, naming the `model_type`, rather than reaching PEFT's
+   `No target_modules passed`. This is not new behaviour — PEFT refused those too —
+   only a clearer message. It covers dense models as well as MoE ones: at the time of
+   writing `phi3`, `smollm3`, `lfm2` and several vision/audio architectures in the
+   catalogue land here. Give an explicit `target_modules` list, or for a MoE model set
+   `training.moe_lora: true`, which supplies expert targets and is checked *before*
+   the refusal. `training.lora.target_parameters` on its own also suffices.
+
+**`granitemoehybrid` is adapted only in part, and says so at setup.** Granite 4.0
+is a hybrid: on `ibm-granite/granite-4.0-tiny-base-preview` only 4 of the 40
+decoder layers carry a `self_attn` at all (`config.layer_types` is 36
+`linear_attention` + 4 `full_attention`), so the attention-projection entry above
+reaches a tenth of the decoder. The other 36 layers are Mamba-2 blocks
+(`mamba.in_proj`, `mamba.out_proj`), and every layer's shared-expert projections
+(`shared_mlp.input_linear`, `shared_mlp.output_linear`) and fused routed experts
+are left alone as well — consistent with every other row of that table, where the
+policy is attention projections only. Training prints a yellow
+`Partial LoRA coverage:` line naming the model type, the counted fraction and what
+was skipped, so the small adapter is not a surprise at merge time. If you want to
+reach the state-space or shared-expert projections, name them explicitly:
+
+```yaml
+training:
+  lora:
+    target_modules: [q_proj, k_proj, v_proj, o_proj, in_proj, out_proj]
+```
+
+That list is correct as module names on this architecture — it is what
+`named_modules()` reports — but Soup has not measured whether adapting a
+state-space projection trains well, and it is not the default for that reason.
+Treat it as the way to reach those layers, not as a recommendation to.
+
+The MLX backend keeps its separate full-key default (`self_attn.q_proj`,
+`self_attn.v_proj`).
+
+Qwen4-Exp routed experts are raw 3-D parameters rather than `nn.Linear` modules, so
+`target_modules: auto` / `all-linear` deliberately does not include them. Opt into
+PEFT's parameter-targeting path for a higher-capacity resident SFT or continued-pretrain
+adapter:
+
+```yaml
+training:
+  lora:
+    r: 16
+    alpha: 32
+    dropout: 0                 # required by PEFT ParamWrapper
+    target_modules: auto       # every Qwen4-Exp linear family
+    target_parameters: auto    # routed gate_up_proj + down_proj tensors
+    rank_pattern:
+      experts.gate_up_proj: 2
+      experts.down_proj: 2
+```
+
+`target_parameters: auto` fails closed when an architecture has no registered mapping;
+an explicit list of parameter-name suffixes is also accepted. It is currently limited to
+resident text `sft` / `pretrain` on the Transformers backend and plain LoRA/rsLoRA with
+random initialization. PEFT requires zero dropout for raw parameters and warns that
+`torch.compile` may recompile or graph-break around parameter wrappers. Parameter-targeted
+MoE adapters also materialize a contribution for every expert during inference; merge the
+adapter into the base for deployment when hot-swapping is not required.
+
 See `soup_cli.utils.optimizer_zoo.SUPPORTED_OPTIMIZERS` for the complete optimizer allowlist.
 
 
@@ -218,6 +305,7 @@ Five PEFT-surface improvements that LlamaFactory and Axolotl maintain:
 
 ```yaml
 training:
+  quantization: none            # required: PiSSA initializes from float weights
   lora:
     init_strategy: pissa          # 'random' (default), 'pissa', 'olora'
     rank_pattern:                 # per-target-module rank override
@@ -287,6 +375,26 @@ training:
     r: 64
     alpha: 16
 ```
+
+
+## LoRA-FA (Frozen-A LoRA)
+
+Freeze random projection matrices in LoRA $A$ and update only LoRA $B$ matrices using PEFT's `create_lorafa_optimizer` ([arXiv:2308.03303](https://arxiv.org/abs/2308.03303)):
+
+```yaml
+training:
+  lr: 2e-4
+  use_lorafa: true
+  lora:
+    r: 64
+    alpha: 16
+```
+
+### Operating Point & Caveats
+- **Measured Adapter Operating Point:** Trains exactly 50.0% fewer parameters per adapted projection (trains $B$, freezes $A$), reducing AdamW optimizer states (`exp_avg_B`, `exp_avg_sq_B`) by half for square projections.
+- **Analytic Activation Retention:** Freezing $A$ avoids storing input activations $x \in \mathbb{R}^{B \times L \times d_{in}}$ for adapter backpropagation through $A$. Only $u = A x \in \mathbb{R}^{B \times L \times r}$ is retained, yielding an analytic adapter activation ratio of $r / d_{in}$ (~64× reduction for rank 64 on hidden dim 4096; the exact ratio scales with your rank choice).
+- **Scope & Limitations:** These values represent a micro-benchmark operating point and an analytic saved-tensor ratio for the adapter projections — **they are not total or peak LLM VRAM savings, an end-to-end throughput result, or a quality claim.** Peak training VRAM in full LLM fine-tuning is dominated by base model activations, KV caches, and weights; total end-to-end VRAM savings are substantially smaller. Downstream task quality and end-to-end throughput vs standard LoRA remain unmeasured. See [`benchmarks/gate-725-lorafa-operating-point.md`](../benchmarks/gate-725-lorafa-operating-point.md) for measured figures.
+- **Compatibility:** Supported on the `transformers` backend for `sft`, `pretrain`, and `embedding` tasks. Mutually exclusive with `loraplus_lr_ratio` (which differentiates $A$ and $B$ rates), `use_galore`, `lora.use_vera` (VeRA trains scaling vectors, so `create_lorafa_optimizer` finds no $B$ matrices), non-AdamW optimizers, and the `mlx` backend. Requires explicit `lora.r` and `lora.alpha`. LoRA-FA has not been validated under `stream_layers: true` (layer streaming); combining them is not recommended.
 
 
 ## rsLoRA (Rank-Stabilized Scaling)
@@ -382,10 +490,11 @@ Works with and without LoRA. When used with LoRA, LoRA is applied only to unfroz
 
 ## LISA — Layerwise Importance Sampling (v0.71.34)
 
-LISA (Layerwise Importance Sampled AdamW, [arXiv:2403.17919](https://arxiv.org/abs/2403.17919)) targets full-fine-tuning quality at LoRA-like memory. **Measured at 7B+, it delivers the first half and not the second** — see [what it actually costs](#what-lisa-actually-costs-measured-at-3b-and-8b) below before choosing it over LoRA. Instead of picking layers once (that's Spectrum's static `unfrozen_parameters`), LISA re-samples a small random set of decoder layers **every N steps** and freezes the rest; the input embeddings, the LM head, and the final norm stay trainable throughout.
+LISA (Layerwise Importance Sampled AdamW, [arXiv:2403.17919](https://arxiv.org/abs/2403.17919)) targets full-fine-tuning quality at LoRA-like memory. **Measured at 7B+, it delivers the first half and not the second** — see [what it actually costs](#what-lisa-actually-costs-measured-at-3b-and-8b) below before choosing it over LoRA. Instead of picking layers once (that's Spectrum's static `unfrozen_parameters`), LISA re-samples a small random set of decoder layers **every N steps** and freezes the rest; the input embeddings, the LM head, and the final norm stay trainable throughout by default (set `lisa_train_embeddings: false` to freeze that group too — see [the memory trade-off](#reclaiming-the-always-on-overhead-lisa_train_embeddings) below).
 
 ```yaml
-task: sft
+task: sft                 # or `pretrain` — continued pre-training is the same
+                          # full-FT-of-active-layers mechanism (#307)
 backend: transformers
 modality: text
 training:
@@ -393,9 +502,10 @@ training:
   lisa_enabled: true
   lisa_num_layers: 2       # decoder layers active per interval (clamped to model depth)
   lisa_interval_steps: 20  # re-sample cadence, in global steps
+  lisa_train_embeddings: true  # default; false freezes embeddings + head + final norm
 ```
 
-Because only a handful of layers train at any moment (and their optimizer state is cleared when they're re-frozen), peak optimizer memory is roughly `embeddings + head + lisa_num_layers` — far below a full fine-tune, while every layer still gets updated over the course of training. LISA is `sft` + `transformers` + `text` + `quantization: none` only, and is mutually exclusive with LoRA features, `freeze_layers`/`freeze_ratio`, and Spectrum's `unfrozen_parameters` (each independently decides what trains).
+Because only a handful of layers train at any moment (and their optimizer state is cleared when they're re-frozen), peak optimizer memory is roughly `embeddings + head + lisa_num_layers` — far below a full fine-tune, while every layer still gets updated over the course of training. LISA is `sft` or `pretrain` + `transformers` + `text` + `quantization: none` only, and is mutually exclusive with LoRA features, `freeze_layers`/`freeze_ratio`, and Spectrum's `unfrozen_parameters` (each independently decides what trains).
 
 ### What LISA actually costs, measured at 3B and 8B
 
@@ -431,6 +541,29 @@ everything LISA trains (66.9% at 3B). So `lisa_num_layers` only controls about
 30% of the cost, and the other 70% grows with vocabulary x hidden size — an
 overhead LoRA never pays at all.
 
+### Reclaiming the always-on overhead: `lisa_train_embeddings`
+
+Set `lisa_train_embeddings: false` to freeze the always-on group (input
+embeddings, LM head, final norm) so only the sampled `lisa_num_layers` decoder
+layers train. Because that group is the majority of what LISA trains, this is
+the knob that actually moves LISA's memory toward the LoRA-like target the paper
+promises.
+
+It is a **real trade, not a free win**: the always-on set is presumably
+load-bearing for LISA's quality result, so freezing it may move held-out loss.
+The default stays `true` (LISA exactly as published) precisely because this
+should be a measured choice, not a silent change — measure both ways on your
+model before committing to it.
+
+> **Pre-flight caveat.** The analytical VRAM pre-flight still classifies LISA as
+> full fine-tuning regardless of `lisa_train_embeddings`, so it does **not** yet
+> credit the saving from freezing the always-on group — a frozen-embeddings run
+> that would fit can still be refused before launch. This is deliberate:
+> over-predicting is the safe failure (under-predicting is a silent spill on
+> Windows), and crediting the saving needs a measured constant on GPU hardware.
+> Use `--allow-oom-attempt` to launch a run the pre-flight conservatively
+> refuses.
+
 **Choose LISA when you need full-rank updates on a model too large to
 full-fine-tune** — its real win is that 8B trains on a single 80 GB card where
 full fine-tuning needs about 120 GB. Otherwise prefer LoRA: at these sizes it
@@ -461,6 +594,7 @@ training:
   loss_watchdog_patience: 5     # Consecutive steps above threshold before stopping
 ```
 
+> **Backend Note:** Setting `loss_watchdog: true` is refused on `backend: mlx` at config validation (Soup does not implement the watchdog on the MLX callback, which has no stop control).
 
 ## Training Stability & Auto-Tuning
 
@@ -502,7 +636,7 @@ Picks `bf16` on Ampere+, `fp16` on Turing or known fp16-stable models (Qwen2 / Q
 
 ### Loss Spike Auto-Recovery
 
-Extends the watchdog: instead of stopping on a spike, decay LR and resume. Capped at 3 attempts by default.
+Extends the watchdog: instead of stopping on a spike, writes `<output>/spike_recovery.json` with decayed LR and attempt count for re-launch. Capped at 3 attempts by default.
 
 ```yaml
 training:
@@ -511,6 +645,8 @@ training:
   loss_spike_recovery_max_attempts: 3
   loss_spike_recovery_lr_decay: 0.5     # halve LR each recovery
 ```
+
+> **Backend Note:** Setting `loss_spike_recovery: true` is refused on `backend: mlx` at config validation (spike recovery is driven by the watchdog and the watchdog cannot fire on MLX).
 
 ### Convergence Detector
 
@@ -521,7 +657,9 @@ training:
   convergence_rel_tol: 0.005  # Relative range below this == plateau
 ```
 
-Surfaces `continue` / `early_stop` / `lower_lr` advice based on the loss curve.
+Computes `continue` / `early_stop` / `lower_lr` advice from the loss curve for
+callers that invoke the detector. `soup train` currently reports this option as
+not enforced; a live training callback remains a follow-up.
 
 ### VRAM Pressure Advisory
 
@@ -533,38 +671,40 @@ training:
 
 Records peak memory each step. When pressure crosses the threshold, recommends a new `(batch, accum)` pair preserving effective batch (capped at `accum=1024`).
 
+> **Backend Note:** Setting `grad_accum_auto_tune: true` is refused on `backend: mlx` at config validation (there is no VRAM total to measure pressure against on unified memory).
+
 > **v0.33.0:** `--find-lr` now runs an in-process LR-sweep training loop (replaces the v0.32.0 stub curve), spike-recovery writes a `spike_recovery.json` hint with the decayed LR for re-launch, and the grad-accum advisory prints a recommended `(batch, accum)` pair when VRAM pressure crosses the threshold. Live optimizer-state rewind and live DataLoader rebuild remain follow-ups (HF Trainer / TRL upstream constraints).
 
 
 ## Training Intelligence (Forgetting + Checkpoint Quality)
 
-Two optional in-training evaluators that run alongside your main loss curve.
+The `forgetting_*`, `checkpoint_*`, `early_stop_on_regression`, and `convergence_*` settings are
+reserved for planned in-training callbacks. They are accepted by the schema but
+are not enforced during training in this build. `soup train` prints an advisory note
+when one is set away from its default, directing users to `--gate <suite.yaml>`.
+(Other unconsumed configuration fields staged for features that have not landed emit
+a load-time warning in v0.76 and are refused as of v0.77 per #808).
 
-**Forgetting detection** — runs a small benchmark during training to detect catastrophic forgetting (quality regression on abilities the base model had). Can auto-stop if forgetting exceeds a threshold.
-
-```yaml
-training:
-  forgetting_detection: true
-  forgetting_eval_steps: 500       # How often to evaluate (10-10,000)
-  forgetting_benchmark: mmlu        # Baseline benchmark to track
-  forgetting_threshold: 0.10        # Regression threshold (0.01-0.50)
-  forgetting_stop: true             # Halt training on breach (default: warn only)
-```
-
-**Checkpoint intelligence** — tracks a quality metric across checkpoints and keeps only the top-N by eval score (not by loss). Pairs nicely with `early_stop_on_regression`.
+Use the live eval gate for regression detection and automatic stopping today:
 
 ```yaml
+base: meta-llama/Llama-3.1-8B-Instruct
+task: sft
+data:
+  train: ./data/chat.jsonl
 training:
-  checkpoint_intelligence: true
-  checkpoint_eval_steps: 500
-  checkpoint_eval_metric: accuracy   # or: bleu, rouge, exact_match, custom
-  checkpoint_eval_tasks: ./evals/sanity.jsonl
-  checkpoint_keep_top: 3             # Keep the 3 best (1-20)
-  early_stop_on_regression: true
-  early_stop_patience: 3             # Stop after N regressions (1-10)
+  epochs: 5
+  eval_gate:
+    enabled: true
+    suite: ./evals/gate.yaml
+    every_n_epochs: 1
+    regression_threshold: 0.05
+    baseline: registry://llama31-chat-v1
+    on_regression: stop
 ```
 
-Checkpoint pruning refuses to delete symlinks or paths outside the output directory — safe to run on any `output:` path.
+The gate runs at epoch boundaries. See [Eval-Gated Training](evaluation.md#eval-gated-training)
+for the suite format and post-training invocation.
 
 
 ## GaLore (Memory-Efficient Full-Parameter Training)

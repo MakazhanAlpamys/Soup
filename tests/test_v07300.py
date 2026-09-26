@@ -32,19 +32,33 @@ construction.
 
 WHY THIS IS NOT A NUMERICS CHANGE AT TRAINING SHAPES (STEP 13 of the record)
 
-``bitsandbytes::gemm_4bit`` dispatches on M (tokens)::
+``bitsandbytes::gemm_4bit`` chooses between its fused kernel and
+``_dequant_linear_fallback``. The constant this file used to cite is only the OUTER
+bound of that choice::
 
-    _gemm_4bit_custom_max_m = 1536      # CUDA
-    if M > _gemm_4bit_custom_max_m: -> _dequant_linear_fallback
+    _gemm_4bit_custom_max_m = 1536      # CUDA (256 on ROCm)
+    if M > _gemm_4bit_custom_max_m:  -> _dequant_linear_fallback
+    elif K % blocksize != 0:         -> _dequant_linear_fallback
+    else: use_custom = _gemm_4bit_use_custom_fn(device, dtype, M, N, K)
 
-and on real projection shapes it takes that fallback at every M measured from 8 to
-2048. So at 8B/32B shapes bitsandbytes is ALREADY doing what this repair does; the
-repair makes it explicit and moves it inside the checkpoint. Measured over 423 rows,
-the gradient is bit-exact in every one of them, worst ``max_abs`` exactly 0.0 — by
-construction, since bnb's own backward is already dequantise-then-matmul.
+Below that bound the decision is NOT a threshold on M at all: it is a per-arch
+occupancy heuristic over the full shape ``(M, N, K)`` and the device. The constant
+therefore explains the ``M > 1536`` half only, and citing it alone is not an argument
+about training shapes.
 
-The forward differs only where the fused kernel genuinely runs (small M), and then by
-one bf16 ulp: worst 3.95e-3 relative to scale against 2^-8 = 3.9e-3.
+What carries the claim is measurement, and it is SHAPE-DEPENDENT rather than
+universal. On REAL 8B/32B projections the fallback was taken at every M measured from
+8 to 2048, so at those shapes bitsandbytes is ALREADY doing what this repair does and
+the repair only makes it explicit and moves it inside the checkpoint: measured over
+423 rows, the gradient is bit-exact in every one of them, worst ``max_abs`` exactly
+0.0 — by construction, since bnb's own backward is dequantise-then-matmul.
+
+On SMALL shapes the fused kernel genuinely does run, and the forward then differs by
+one bf16 ulp: worst 3.95e-3 relative to scale against 2^-8 = 3.9e-3. That is not
+hypothetical: this file's own fixture (hidden 64) sits inside the fused window at
+M <= 32, which is precisely what ``TestFixtureIsOutsideTheFusedKernelWindow`` below
+exists to pin. Read the two together — the "always fallback" result belongs to the
+real projection shapes it was measured on, not to every call site.
 """
 
 import os
@@ -200,14 +214,7 @@ class TestStreamedPreferenceLossesDisableHfGradientCheckpointing:
 # ==========================================================================
 # the CI fixture must exercise the kernel path production actually takes
 # ==========================================================================
-def _cuda_available():
-    try:
-        return torch.cuda.is_available()
-    except Exception:
-        return False
-
-
-@pytest.mark.skipif(not _cuda_available(), reason="the fused-kernel window is a CUDA dispatch")
+@pytest.mark.gpu(reason="the fused-kernel window is a CUDA dispatch")
 class TestFixtureIsOutsideTheFusedKernelWindow:
     """The streamed-vs-resident gate was comparing a code path no real model uses.
 

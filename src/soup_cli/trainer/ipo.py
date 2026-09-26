@@ -8,12 +8,16 @@ from typing import Optional
 from rich.console import Console
 
 from soup_cli.config.schema import SoupConfig
+from soup_cli.data.chat_templates import apply_chat_template_override
+from soup_cli.trainer.loss_summary import summarize_training_loss
 from soup_cli.utils.gpu import (
     bf16_fp16_flags,
     estimate_batch_size,
     model_size_from_name,
     resolve_device_map,
+    resolve_frozen_base_load_dtype,
 )
+from soup_cli.utils.mixed_precision import align_trainable_dtype_for_fp16
 from soup_cli.utils.seeding import apply_training_seed, training_seed_kwargs
 
 console = Console()
@@ -86,6 +90,10 @@ class IPOTrainerWrapper:
             self._setup_unsloth(cfg, tcfg)
         else:
             self._setup_transformers(cfg, tcfg)
+
+        apply_chat_template_override(
+            self.tokenizer, cfg.data.chat_template, console=console
+        )
 
         trainable, total = self.model.get_nb_trainable_parameters()
         pct = 100 * trainable / total
@@ -173,6 +181,17 @@ class IPOTrainerWrapper:
             processing_class=self.tokenizer,
         )
 
+        # #359 - the same exposure #336 fixed in sft.py: with LoRA the
+        # no-decay optimizer group is empty, DeepSpeed drops it, and the LR
+        # scheduler keeps two base_lrs until torch's strict zip raises at the
+        # first step. The guard prunes inside create_optimizer, i.e. before
+        # the scheduler is built. No-op for full fine-tuning, and only under
+        # DeepSpeed so the ordinary path keeps its own optimizer.
+        if self.deepspeed_config:
+            from soup_cli.utils.deepspeed import attach_empty_param_group_guard
+
+            attach_empty_param_group_guard(self.trainer)
+
         # v0.40.6 #67 — ReLoRA callback.
         from soup_cli.utils.peft_wiring import (
             attach_curriculum_callback,
@@ -186,10 +205,11 @@ class IPOTrainerWrapper:
         attach_plugin_callback(self.trainer, console)
 
         self._output_dir = str(output_dir)
+        self._batch_size = batch_size
 
     def _setup_transformers(self, cfg: SoupConfig, tcfg) -> None:
         """Load model via standard transformers + peft pipeline."""
-        from peft import LoraConfig, TaskType, get_peft_model, prepare_model_for_kbit_training
+        from peft import TaskType, get_peft_model, prepare_model_for_kbit_training
         from transformers import AutoModelForCausalLM, AutoTokenizer
 
         console.print(f"[dim]Loading tokenizer: {cfg.base}[/]")
@@ -210,6 +230,7 @@ class IPOTrainerWrapper:
         dev_map = resolve_device_map(self.device)
         model_kwargs = {
             "trust_remote_code": self._trust_remote_code, "device_map": dev_map,
+            "torch_dtype": resolve_frozen_base_load_dtype(self.device),
         }
         if quant_config_obj is not None:
             model_kwargs["quantization_config"] = quant_config_obj
@@ -223,21 +244,34 @@ class IPOTrainerWrapper:
             cfg.data,
         )
         if tcfg.quantization in ("4bit", "8bit", "mxfp4"):
-            self.model = prepare_model_for_kbit_training(self.model)
+            from soup_cli.utils.layer_stream import should_enable_hf_gradient_checkpointing
 
-        target_modules = tcfg.lora.target_modules
-        if target_modules == "auto":
-            target_modules = None
+            self.model = prepare_model_for_kbit_training(
+                self.model,
+                use_gradient_checkpointing=should_enable_hf_gradient_checkpointing(
+                    tcfg.gradient_checkpointing, stream_layers=tcfg.stream_layers
+                ),
+            )
 
-        lora_config = LoraConfig(
-            r=tcfg.lora.r,
-            lora_alpha=tcfg.lora.alpha,
-            lora_dropout=tcfg.lora.dropout,
+        from soup_cli.utils.peft_wiring import (
+            build_lora_config,
+            resolve_lora_target_modules,
+        )
+
+        target_modules = resolve_lora_target_modules(self.model, tcfg.lora.target_modules, console)
+        # #1099: moe_lora picks the expert-FFN targets. Without this the flag
+        # was accepted and ignored here, and on a fused-expert MoE the auto
+        # resolution leaves peft with nothing to attach.
+        from soup_cli.utils.moe import resolve_moe_lora_targets
+
+        target_modules = resolve_moe_lora_targets(
+            self.model, tcfg, target_modules, console
+        )
+
+        lora_config = build_lora_config(
+            tcfg.lora,
             target_modules=target_modules,
             task_type=TaskType.CAUSAL_LM,
-            bias="none",
-            use_dora=tcfg.lora.use_dora,
-            use_rslora=tcfg.lora.use_rslora,
         )
         # v0.40.6 #67 — surgical PEFT patches.
         from soup_cli.utils.peft_wiring import (
@@ -294,15 +328,23 @@ class IPOTrainerWrapper:
         start = time.time()
 
         if display:
-            from soup_cli.monitoring.callback import SoupTrainerCallback
+            from soup_cli.monitoring.callback import (
+                SoupTrainerCallback,
+                soup_callback_kwargs,
+            )
 
             self.trainer.add_callback(
                 SoupTrainerCallback(
-                    display, tracker=tracker, run_id=run_id,
-                    loss_watchdog=self.config.training.loss_watchdog,
-                    loss_watchdog_threshold=self.config.training.loss_watchdog_threshold,
-                    loss_watchdog_patience=self.config.training.loss_watchdog_patience,
+                    display,
+                    tracker=tracker,
+                    run_id=run_id,
                     eval_gate_config=self.config.training.eval_gate,
+                    **soup_callback_kwargs(
+                        self.config.training,
+                        batch_size=self._batch_size,
+                        output_dir=self._output_dir,
+                        include_eval_gate=False,
+                    ),
                 )
             )
 
@@ -331,6 +373,11 @@ class IPOTrainerWrapper:
         with activation_offloading_context(
             self.config.training, self._output_dir,
         ):
+            align_trainable_dtype_for_fp16(
+                self.trainer.model,
+                fp16=getattr(self.trainer.args, "fp16", False),
+                bf16=getattr(self.trainer.args, "bf16", False),
+            )
             self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)
         duration = time.time() - start
 
@@ -338,15 +385,14 @@ class IPOTrainerWrapper:
         self.tokenizer.save_pretrained(self._output_dir)
 
         logs = self.trainer.state.log_history
-        train_losses = [entry["loss"] for entry in logs if "loss" in entry]
+        loss_summary = summarize_training_loss(logs)
 
         hours = int(duration // 3600)
         minutes = int((duration % 3600) // 60)
         duration_str = f"{hours}h {minutes}m" if hours > 0 else f"{minutes}m"
 
         return {
-            "initial_loss": train_losses[0] if train_losses else 0,
-            "final_loss": train_losses[-1] if train_losses else 0,
+            **loss_summary,
             "duration": duration_str,
             "duration_secs": duration,
             "output_dir": self._output_dir,

@@ -402,7 +402,7 @@ class TestSFTVisionIntegration:
         assert wrapper.config.modality == "vision"
 
     def test_sft_setup_vision_calls_automodel(self):
-        """_setup_vision_transformers should use AutoModelForVision2Seq."""
+        """The SFT wrapper exposes the Transformers vision setup path."""
         from soup_cli.trainer.sft import SFTTrainerWrapper
 
         cfg = SoupConfig(

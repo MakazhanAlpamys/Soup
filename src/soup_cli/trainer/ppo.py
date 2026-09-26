@@ -9,19 +9,65 @@ Full RLHF pipeline:  SFT → Reward Model → PPO
 
 import time
 from pathlib import Path
-from typing import Optional
+from typing import Any, Mapping, Optional
 
 from rich.console import Console
+from rich.markup import escape
 
 from soup_cli.config.schema import SoupConfig
+from soup_cli.data.chat_templates import apply_chat_template_override
+from soup_cli.trainer.loss_summary import summarize_training_loss
 from soup_cli.utils.gpu import (
     estimate_batch_size,
     model_size_from_name,
     resolve_device_map,
+    resolve_frozen_base_load_dtype,
 )
+from soup_cli.utils.mixed_precision import align_trainable_dtype_for_fp16
 from soup_cli.utils.seeding import apply_training_seed, training_seed_kwargs
 
 console = Console()
+
+
+def _set_ppo_training_kwargs(
+    ppo_kwargs: dict[str, object],
+    ppo_config_cls: type,
+    tcfg: Any,
+) -> dict[str, str]:
+    """Forward Soup's three PPO schedules across TRL parameter renames."""
+    from soup_cli.trainer._trl_compat import config_accepts, kl_penalty_kwargs
+
+    applied: dict[str, str] = {}
+
+    if config_accepts(ppo_config_cls, "num_train_epochs"):
+        ppo_kwargs["num_train_epochs"] = tcfg.epochs
+        applied["train_epochs"] = "num_train_epochs"
+
+    if config_accepts(ppo_config_cls, "num_ppo_epochs"):
+        ppo_kwargs["num_ppo_epochs"] = tcfg.ppo_epochs
+        applied["ppo_epochs"] = "num_ppo_epochs"
+    elif config_accepts(ppo_config_cls, "ppo_epochs"):
+        ppo_kwargs["ppo_epochs"] = tcfg.ppo_epochs
+        applied["ppo_epochs"] = "ppo_epochs"
+
+    kl_kwargs = kl_penalty_kwargs(ppo_config_cls, tcfg.ppo_kl_penalty)
+    ppo_kwargs.update(kl_kwargs)
+    for name in kl_kwargs:
+        applied["kl_coef"] = name
+
+    return applied
+
+
+def _effective_ppo_setting(
+    config: object,
+    kwargs: Mapping[str, object],
+    field: str | None,
+    fallback: object,
+) -> object:
+    """Read the constructed config value, with compatibility fallbacks."""
+    if field is None:
+        return f"{fallback} (not forwarded)"
+    return getattr(config, field, kwargs[field])
 
 
 class PPOTrainerWrapper:
@@ -99,6 +145,10 @@ class PPOTrainerWrapper:
         else:
             self._setup_transformers(cfg, tcfg)
 
+        apply_chat_template_override(
+            self.tokenizer, cfg.data.chat_template, console=console
+        )
+
         trainable, total = self.model.get_nb_trainable_parameters()
         pct = 100 * trainable / total
         console.print(
@@ -125,7 +175,7 @@ class PPOTrainerWrapper:
             console.print(f"[green]Auto batch size (PPO):[/] {batch_size}")
 
         # --- Dataset ---
-        train_data = _prepare_ppo_dataset(dataset["train"])
+        train_data = _prepare_ppo_dataset(dataset["train"], tokenizer=self.tokenizer)
         train_ds = Dataset.from_list(train_data)
 
         # Tokenize dataset: trl experimental PPOTrainer expects input_ids,
@@ -166,16 +216,12 @@ class PPOTrainerWrapper:
 
         ppo_params = inspect.signature(ppo_config_cls).parameters
 
-        # trl renamed ppo_epochs -> num_ppo_epochs in newer versions
-        if "num_ppo_epochs" in ppo_params:
-            ppo_kwargs["num_ppo_epochs"] = tcfg.ppo_epochs
-        elif "ppo_epochs" in ppo_params:
-            ppo_kwargs["ppo_epochs"] = tcfg.ppo_epochs
+        applied_ppo_fields = _set_ppo_training_kwargs(
+            ppo_kwargs, ppo_config_cls, tcfg
+        )
 
         if "cliprange" in ppo_params:
             ppo_kwargs["cliprange"] = tcfg.ppo_clip_ratio
-        if "init_kl_coef" in ppo_params:
-            ppo_kwargs["init_kl_coef"] = tcfg.ppo_kl_penalty
 
         # Optional params that may not exist in all trl versions
         if "log_with" in ppo_params:
@@ -193,6 +239,30 @@ class PPOTrainerWrapper:
             ppo_kwargs["use_cpu"] = True
 
         ppo_config = ppo_config_cls(**ppo_kwargs)
+        effective_train_epochs = _effective_ppo_setting(
+            ppo_config,
+            ppo_kwargs,
+            applied_ppo_fields.get("train_epochs"),
+            tcfg.epochs,
+        )
+        effective_ppo_epochs = _effective_ppo_setting(
+            ppo_config,
+            ppo_kwargs,
+            applied_ppo_fields.get("ppo_epochs"),
+            tcfg.ppo_epochs,
+        )
+        effective_kl_coef = _effective_ppo_setting(
+            ppo_config,
+            ppo_kwargs,
+            applied_ppo_fields.get("kl_coef"),
+            tcfg.ppo_kl_penalty,
+        )
+        console.print(
+            "[green]PPO schedule:[/] "
+            f"train epochs={effective_train_epochs}, "
+            f"PPO epochs={effective_ppo_epochs}, "
+            f"KL coefficient={effective_kl_coef}"
+        )
 
         # --- Build reward functions list for PPOTrainer ---
         reward_funcs = []
@@ -293,6 +363,17 @@ class PPOTrainerWrapper:
             }
             self._dataset_in_constructor = True
             self.trainer = ppo_trainer_cls(**trainer_kwargs)
+
+        # #359 - the same exposure #336 fixed in sft.py: with LoRA the
+        # no-decay optimizer group is empty, DeepSpeed drops it, and the LR
+        # scheduler keeps two base_lrs until torch's strict zip raises at the
+        # first step. The guard prunes inside create_optimizer, i.e. before
+        # the scheduler is built. No-op for full fine-tuning, and only under
+        # DeepSpeed so the ordinary path keeps its own optimizer.
+        if self.deepspeed_config:
+            from soup_cli.utils.deepspeed import attach_empty_param_group_guard
+
+            attach_empty_param_group_guard(self.trainer)
 
         # v0.71.26 — reward-hack mitigation / echo-trap / RL-checkpoint callbacks
         # (PPO parity with GRPO; kl_coef mutation for the controller).
@@ -420,7 +501,7 @@ class PPOTrainerWrapper:
 
     def _setup_transformers(self, cfg: SoupConfig, tcfg) -> None:
         """Load model via standard transformers + peft pipeline."""
-        from peft import LoraConfig, TaskType, get_peft_model, prepare_model_for_kbit_training
+        from peft import TaskType, get_peft_model, prepare_model_for_kbit_training
         from transformers import AutoModelForCausalLM, AutoTokenizer
 
         console.print(f"[dim]Loading tokenizer: {cfg.base}[/]")
@@ -442,6 +523,7 @@ class PPOTrainerWrapper:
         dev_map = resolve_device_map(self.device)
         model_kwargs = {
             "trust_remote_code": self._trust_remote_code, "device_map": dev_map,
+            "torch_dtype": resolve_frozen_base_load_dtype(self.device),
         }
         if quant_config_obj is not None:
             model_kwargs["quantization_config"] = quant_config_obj
@@ -449,21 +531,34 @@ class PPOTrainerWrapper:
         self.model = AutoModelForCausalLM.from_pretrained(cfg.base, **model_kwargs)
 
         if tcfg.quantization in ("4bit", "8bit", "mxfp4"):
-            self.model = prepare_model_for_kbit_training(self.model)
+            from soup_cli.utils.layer_stream import should_enable_hf_gradient_checkpointing
 
-        target_modules = tcfg.lora.target_modules
-        if target_modules == "auto":
-            target_modules = None
+            self.model = prepare_model_for_kbit_training(
+                self.model,
+                use_gradient_checkpointing=should_enable_hf_gradient_checkpointing(
+                    tcfg.gradient_checkpointing, stream_layers=tcfg.stream_layers
+                ),
+            )
 
-        lora_config = LoraConfig(
-            r=tcfg.lora.r,
-            lora_alpha=tcfg.lora.alpha,
-            lora_dropout=tcfg.lora.dropout,
+        from soup_cli.utils.peft_wiring import (
+            build_lora_config,
+            resolve_lora_target_modules,
+        )
+
+        target_modules = resolve_lora_target_modules(self.model, tcfg.lora.target_modules, console)
+        # #1099: moe_lora picks the expert-FFN targets. Without this the flag
+        # was accepted and ignored here, and on a fused-expert MoE the auto
+        # resolution leaves peft with nothing to attach.
+        from soup_cli.utils.moe import resolve_moe_lora_targets
+
+        target_modules = resolve_moe_lora_targets(
+            self.model, tcfg, target_modules, console
+        )
+
+        lora_config = build_lora_config(
+            tcfg.lora,
             target_modules=target_modules,
             task_type=TaskType.CAUSAL_LM,
-            bias="none",
-            use_dora=tcfg.lora.use_dora,
-            use_rslora=tcfg.lora.use_rslora,
         )
         # v0.40.6 #67 — surgical PEFT patches.
         from soup_cli.utils.peft_wiring import (
@@ -540,15 +635,23 @@ class PPOTrainerWrapper:
                 self.trainer.dataset = self._train_ds
 
         if display:
-            from soup_cli.monitoring.callback import SoupTrainerCallback
+            from soup_cli.monitoring.callback import (
+                SoupTrainerCallback,
+                soup_callback_kwargs,
+            )
 
             self.trainer.add_callback(
                 SoupTrainerCallback(
-                    display, tracker=tracker, run_id=run_id,
-                    loss_watchdog=self.config.training.loss_watchdog,
-                    loss_watchdog_threshold=self.config.training.loss_watchdog_threshold,
-                    loss_watchdog_patience=self.config.training.loss_watchdog_patience,
+                    display,
+                    tracker=tracker,
+                    run_id=run_id,
                     eval_gate_config=self.config.training.eval_gate,
+                    **soup_callback_kwargs(
+                        self.config.training,
+                        batch_size=self._batch_size,
+                        output_dir=self._output_dir,
+                        include_eval_gate=False,
+                    ),
                 )
             )
 
@@ -562,6 +665,11 @@ class PPOTrainerWrapper:
             self.config.training, self._output_dir,
         ):
             if resume_from_checkpoint and "resume_from_checkpoint" in train_params:
+                align_trainable_dtype_for_fp16(
+                    self.trainer.model,
+                    fp16=getattr(self.trainer.args, "fp16", False),
+                    bf16=getattr(self.trainer.args, "bf16", False),
+                )
                 self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)
             else:
                 if resume_from_checkpoint:
@@ -569,6 +677,11 @@ class PPOTrainerWrapper:
                         "[yellow]Warning: This PPOTrainer does not support "
                         "resume_from_checkpoint -- starting from scratch.[/]"
                     )
+                align_trainable_dtype_for_fp16(
+                    self.trainer.model,
+                    fp16=getattr(self.trainer.args, "fp16", False),
+                    bf16=getattr(self.trainer.args, "bf16", False),
+                )
                 self.trainer.train()
         duration = time.time() - start
 
@@ -578,15 +691,14 @@ class PPOTrainerWrapper:
 
         # Extract metrics
         logs = self.trainer.state.log_history
-        train_losses = [entry["loss"] for entry in logs if "loss" in entry]
+        loss_summary = summarize_training_loss(logs)
 
         hours = int(duration // 3600)
         minutes = int((duration % 3600) // 60)
         duration_str = f"{hours}h {minutes}m" if hours > 0 else f"{minutes}m"
 
         return {
-            "initial_loss": train_losses[0] if train_losses else 0,
-            "final_loss": train_losses[-1] if train_losses else 0,
+            **loss_summary,
             "duration": duration_str,
             "duration_secs": duration,
             "output_dir": self._output_dir,
@@ -674,15 +786,14 @@ class PPOTrainerWrapper:
         self.tokenizer.save_pretrained(self._output_dir)
 
         # Extract metrics
-        losses = [entry["loss"] for entry in log_history if "loss" in entry]
+        loss_summary = summarize_training_loss(log_history)
 
         hours = int(duration // 3600)
         minutes = int((duration % 3600) // 60)
         duration_str = f"{hours}h {minutes}m" if hours > 0 else f"{minutes}m"
 
         return {
-            "initial_loss": losses[0] if losses else 0,
-            "final_loss": losses[-1] if losses else 0,
+            **loss_summary,
             "duration": duration_str,
             "duration_secs": duration,
             "output_dir": self._output_dir,
@@ -759,10 +870,14 @@ def _load_reward_model(
     Reward models are typically AutoModelForSequenceClassification that output
     a scalar reward score for a given input sequence.
 
-    v0.40.5 #66: when ``tcfg`` is provided, the reward model is loaded with
-    the same quantization config as the policy model (Quant Menu). This keeps
-    the reward model from silently consuming full-precision VRAM and OOM-ing
-    when the policy is GPTQ/AWQ/HQQ/etc. Pass ``tcfg=None`` for unquantized.
+    v0.40.5 #66: when ``tcfg`` is provided and ``training.quantize_reward_model``
+    is set, the reward model is loaded with the same quantization config as
+    the policy model (Quant Menu), so it doesn't silently consume
+    full-precision VRAM and OOM when the policy is GPTQ/AWQ/HQQ/etc. v0.53.0
+    made this opt-in via that flag (default False) rather than unconditional,
+    matching ``double_quant_on``'s #321 precedent of honouring a configured
+    flag over a hardcoded default. Pass ``tcfg=None`` for unquantized
+    regardless of the flag.
     """
     from transformers import AutoModelForSequenceClassification
 
@@ -785,7 +900,7 @@ def _load_reward_model(
         "device_map": dev_map,
         "num_labels": 1,
     }
-    if tcfg is not None:
+    if tcfg is not None and tcfg.quantize_reward_model:
         from soup_cli.utils.quant_menu import build_quantization_config_for_loader
 
         quant_config_obj = build_quantization_config_for_loader(
@@ -801,7 +916,7 @@ def _load_reward_model(
     return reward_model
 
 
-def _prepare_ppo_dataset(data: list[dict]) -> list[dict]:
+def _prepare_ppo_dataset(data: list[dict], tokenizer: Any | None = None) -> list[dict]:
     """Convert dataset rows to PPO format.
 
     PPO expects each row to have a 'prompt_text' field (string for tokenization)
@@ -824,16 +939,68 @@ def _prepare_ppo_dataset(data: list[dict]) -> list[dict]:
             prepared.append(entry)
         elif "messages" in row:
             messages = row["messages"]
-            # Use user messages as prompt text
-            prompt_parts = [
-                msg["content"] for msg in messages if msg["role"] in ("system", "user")
-            ]
-            entry = {"prompt_text": " ".join(prompt_parts)}
+            prompt_text = None
+            if (
+                tokenizer is not None
+                and getattr(tokenizer, "chat_template", None)
+                and callable(getattr(tokenizer, "apply_chat_template", None))
+            ):
+                prompt_messages = [
+                    msg
+                    for msg in messages
+                    if isinstance(msg, dict) and msg.get("role") in ("system", "user")
+                ]
+                if not prompt_messages:
+                    prompt_messages = messages
+                try:
+                    prompt_text = tokenizer.apply_chat_template(
+                        prompt_messages, tokenize=False, add_generation_prompt=True
+                    )
+                except Exception as exc:
+                    console.print(
+                        f"[yellow]Warning:[/] apply_chat_template failed: {escape(str(exc))}; "
+                        "falling back to joined text"
+                    )
+                    prompt_text = None
+            if prompt_text is None:
+                # Use user messages as prompt text
+                prompt_parts = [
+                    msg.get("content", "")
+                    for msg in messages
+                    if isinstance(msg, dict) and msg.get("role") in ("system", "user")
+                ]
+                prompt_text = " ".join(prompt_parts)
+            entry = {"prompt_text": prompt_text}
+            if "answer" in row:
+                entry["answer"] = row["answer"]
             prepared.append(entry)
         elif "prompt" in row and isinstance(row["prompt"], list):
-            # Message list → join content
-            prompt_parts = [msg.get("content", "") for msg in row["prompt"]]
-            entry = {"prompt_text": " ".join(prompt_parts)}
+            prompt_list = row["prompt"]
+            prompt_text = None
+            if (
+                tokenizer is not None
+                and getattr(tokenizer, "chat_template", None)
+                and callable(getattr(tokenizer, "apply_chat_template", None))
+            ):
+                try:
+                    prompt_text = tokenizer.apply_chat_template(
+                        prompt_list, tokenize=False, add_generation_prompt=True
+                    )
+                except Exception as exc:
+                    console.print(
+                        f"[yellow]Warning:[/] apply_chat_template failed: {escape(str(exc))}; "
+                        "falling back to joined text"
+                    )
+                    prompt_text = None
+            if prompt_text is None:
+                # Message list → join content
+                prompt_parts = [
+                    msg.get("content", "")
+                    for msg in prompt_list
+                    if isinstance(msg, dict)
+                ]
+                prompt_text = " ".join(prompt_parts)
+            entry = {"prompt_text": prompt_text}
             if "answer" in row:
                 entry["answer"] = row["answer"]
             prepared.append(entry)

@@ -65,14 +65,16 @@ def test_validate_format_alpaca_valid():
 
 
 def test_validate_format_alpaca_invalid():
-    """Rows missing required alpaca keys should be flagged."""
+    """Rows the converter would drop should be flagged, with the row and reason."""
     data = [
         {"instruction": "Q", "output": "A"},
         {"wrong_key": "Q2", "output": "A2"},  # missing 'instruction'
     ]
     stats = validate_and_stats(data, expected_format="alpaca")
     assert stats["valid_rows"] == 1
-    assert any("missing required keys" in iss for iss in stats["issues"])
+    assert any("fail to convert" in iss for iss in stats["issues"])
+    # The specific offending row is surfaced so `validate` is actionable.
+    assert any("row 1" in iss for iss in stats["issues"])
 
 
 def test_validate_short_samples():

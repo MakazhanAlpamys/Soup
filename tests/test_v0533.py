@@ -393,10 +393,14 @@ class TestReviewFixes:
         monkeypatch.setattr(torch, "cuda", _Cuda())
         assert wrapper._build_precision_kwargs() == {"fp16": False, "bf16": True}
 
-    def test_precision_kwargs_mps_device(self) -> None:
-        """tdd-review HIGH — non-CUDA / non-CPU device (MPS) returns no-MP."""
+    def test_precision_kwargs_mps_falls_back_when_bf16_is_unavailable(
+        self, monkeypatch
+    ) -> None:
+        """#567 — MPS remains FP32 when its live runtime rejects BF16."""
         from soup_cli.trainer.grpo import GRPOTrainerWrapper
+        from soup_cli.utils import gpu
 
+        monkeypatch.setattr(gpu, "mps_supports_bf16", lambda: False)
         cfg = load_config_from_string(_minimal_grpo_yaml())
         wrapper = GRPOTrainerWrapper(cfg, device="mps")
         assert wrapper._build_precision_kwargs() == {"fp16": False, "bf16": False}

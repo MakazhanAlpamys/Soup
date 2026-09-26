@@ -95,22 +95,60 @@ def resolve_device(device: Optional[str] = None) -> str:
         return "cpu"
 
 
-def _apply_prompt_template(tokenizer: object, prompt: str) -> str:
-    """Render a single user turn through the tokenizer's chat template.
+def _build_quantization_config(quantization: Optional[str]):
+    """``BitsAndBytesConfig`` for the two quant-menu formats live_eval needs,
+    or ``None`` to load the base at full precision (unchanged behavior).
 
-    Falls back to the raw prompt when the tokenizer has no chat template.
+    Only ``"4bit"``/``"8bit"``/``None`` are supported here: the other
+    quant_menu formats (gptq/awq/hqq/aqlm/...) key off a full
+    ``TrainingConfig``, which live_eval callers don't have.
+    """
+    if quantization is None or quantization == "none":
+        return None
+    from transformers import BitsAndBytesConfig
+
+    if quantization == "8bit":
+        return BitsAndBytesConfig(load_in_8bit=True)
+    if quantization == "4bit":
+        from soup_cli.utils.gpu import get_compute_dtype
+
+        return BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_quant_type="nf4",
+            bnb_4bit_compute_dtype=get_compute_dtype(),
+            bnb_4bit_use_double_quant=True,
+        )
+    raise ValueError(
+        f"live_eval quantization={quantization!r} not supported; use '4bit', '8bit', or None"
+    )
+
+
+def _render_prompt_template(tokenizer: object, prompt: str) -> Tuple[str, bool]:
+    """Render a single user turn; also report whether the chat template produced it.
+
+    Falls back to the raw prompt when the tokenizer has no chat template or the
+    template fails to render.
     """
     chat_template = getattr(tokenizer, "chat_template", None)
     if chat_template:
         try:
-            return tokenizer.apply_chat_template(  # type: ignore[attr-defined]
+            text = tokenizer.apply_chat_template(  # type: ignore[attr-defined]
                 [{"role": "user", "content": prompt}],
                 tokenize=False,
                 add_generation_prompt=True,
             )
         except Exception:  # noqa: BLE001 — malformed template → raw prompt
-            return prompt
-    return prompt
+            return prompt, False
+        return text, True
+    return prompt, False
+
+
+def _apply_prompt_template(tokenizer: object, prompt: str) -> str:
+    """Render a single user turn through the tokenizer's chat template.
+
+    Falls back to the raw prompt when the tokenizer has no chat template.
+    """
+    return _render_prompt_template(tokenizer, prompt)[0]
 
 
 def load_model_and_tokenizer(
@@ -120,6 +158,7 @@ def load_model_and_tokenizer(
     device: Optional[str] = None,
     trust_remote_code: bool = False,
     dtype: Optional[str] = None,
+    quantization: Optional[str] = None,
 ):
     """Load an ``AutoModelForCausalLM`` + tokenizer, optionally with a LoRA adapter.
 
@@ -128,6 +167,9 @@ def load_model_and_tokenizer(
     ``"auto"``) is forwarded as ``torch_dtype`` so a caller can preserve the
     checkpoint's native precision instead of upcasting to fp32 (``soup shrink``
     needs this so the shipped smaller model is not silently re-widened).
+    ``quantization`` (``"4bit"`` / ``"8bit"`` / ``None``) judges the base the
+    way it was trained instead of always upcasting to full precision; see
+    :func:`_build_quantization_config`.
     """
     if not isinstance(model_id, str) or not model_id.strip():
         raise ValueError("model_id must be a non-empty string")
@@ -141,6 +183,17 @@ def load_model_and_tokenizer(
     model_kwargs = {"trust_remote_code": trust_remote_code}
     if dtype is not None:
         model_kwargs["torch_dtype"] = dtype
+    quant_config = _build_quantization_config(quantization)
+    if quant_config is not None:
+        # A quantized load is pinned to a device at from_pretrained time
+        # (BNB rejects a later .to() on an already-dispatched model), so
+        # device_map takes the place of the .to(dev) call below. A bare
+        # "cuda" has no index and later trips accelerate's device_map
+        # resolution (see _device_map_value's own docstring).
+        from soup_cli.utils.layer_stream_runtime import _device_map_value
+
+        model_kwargs["quantization_config"] = quant_config
+        model_kwargs["device_map"] = _device_map_value(dev)
     model = AutoModelForCausalLM.from_pretrained(model_id, **model_kwargs)
     if adapter is not None:
         if not isinstance(adapter, str) or not adapter.strip():
@@ -148,7 +201,8 @@ def load_model_and_tokenizer(
         from peft import PeftModel
 
         model = PeftModel.from_pretrained(model, adapter)
-    model = model.to(dev)
+    if quant_config is None:
+        model = model.to(dev)
     model.eval()
     return model, tokenizer, dev
 
@@ -160,20 +214,31 @@ def make_generator(
     device: Optional[str] = None,
     max_new_tokens: int = 64,
     trust_remote_code: bool = False,
+    dtype: Optional[str] = None,
+    quantization: Optional[str] = None,
     loaded: Optional[tuple] = None,
 ) -> GeneratorFn:
     """Build a deterministic ``GeneratorFn`` closure (greedy decode).
 
     ``loaded`` lets a caller share an already-loaded ``(model, tokenizer,
     device)`` triple across several closures (base + multi off one load).
+    ``dtype``/``quantization`` are ignored when ``loaded`` is given, same as
+    ``device``.
     """
     _check_positive_int(max_new_tokens, "max_new_tokens")
     if loaded is not None and (not isinstance(loaded, tuple) or len(loaded) != 3):
         raise ValueError("loaded must be a (model, tokenizer, device) tuple")
     import torch
 
+    from soup_cli.utils.vllm import encode_rendered_prompt
+
     model, tokenizer, dev = loaded or load_model_and_tokenizer(
-        model_id, adapter=adapter, device=device, trust_remote_code=trust_remote_code
+        model_id,
+        adapter=adapter,
+        device=device,
+        trust_remote_code=trust_remote_code,
+        dtype=dtype,
+        quantization=quantization,
     )
     pad_id = (
         tokenizer.pad_token_id
@@ -184,9 +249,14 @@ def make_generator(
     def _gen(prompt: str) -> str:
         if not isinstance(prompt, str):
             raise TypeError("prompt must be a string")
-        text = _apply_prompt_template(tokenizer, prompt)
-        inputs = tokenizer(
-            text, return_tensors="pt", truncation=True, max_length=_MAX_PROMPT_TOKENS
+        text, templated = _render_prompt_template(tokenizer, prompt)
+        inputs = encode_rendered_prompt(
+            tokenizer,
+            text,
+            templated=templated,
+            return_tensors="pt",
+            truncation=True,
+            max_length=_MAX_PROMPT_TOKENS,
         ).to(dev)
         prompt_len = inputs["input_ids"].shape[1]
         with torch.no_grad():
@@ -210,9 +280,13 @@ def make_multi_generator(
     max_new_tokens: int = 64,
     temperature: float = 0.8,
     trust_remote_code: bool = False,
+    quantization: Optional[str] = None,
     loaded: Optional[tuple] = None,
 ) -> MultiGen:
-    """Build a sampling ``MultiGen`` closure: ``multi(prompt, k) -> [str, ...]``."""
+    """Build a sampling ``MultiGen`` closure: ``multi(prompt, k) -> [str, ...]``.
+
+    ``quantization`` is ignored when ``loaded`` is given, same as ``device``.
+    """
     _check_positive_int(max_new_tokens, "max_new_tokens")
     if (
         isinstance(temperature, bool)
@@ -224,8 +298,14 @@ def make_multi_generator(
         raise ValueError("loaded must be a (model, tokenizer, device) tuple")
     import torch
 
+    from soup_cli.utils.vllm import encode_rendered_prompt
+
     model, tokenizer, dev = loaded or load_model_and_tokenizer(
-        model_id, adapter=adapter, device=device, trust_remote_code=trust_remote_code
+        model_id,
+        adapter=adapter,
+        device=device,
+        trust_remote_code=trust_remote_code,
+        quantization=quantization,
     )
     pad_id = (
         tokenizer.pad_token_id
@@ -238,9 +318,14 @@ def make_multi_generator(
             raise TypeError("prompt must be a string")
         if isinstance(k, bool) or not isinstance(k, int) or k < 1:
             raise ValueError("k must be a positive int")
-        text = _apply_prompt_template(tokenizer, prompt)
-        inputs = tokenizer(
-            text, return_tensors="pt", truncation=True, max_length=_MAX_PROMPT_TOKENS
+        text, templated = _render_prompt_template(tokenizer, prompt)
+        inputs = encode_rendered_prompt(
+            tokenizer,
+            text,
+            templated=templated,
+            return_tensors="pt",
+            truncation=True,
+            max_length=_MAX_PROMPT_TOKENS,
         ).to(dev)
         prompt_len = inputs["input_ids"].shape[1]
         with torch.no_grad():
@@ -369,6 +454,7 @@ def lora_probe(
     lr: float = _DEFAULT_LR,
     max_length: int = 256,
     trust_remote_code: bool = False,
+    quantization: Optional[str] = None,
 ) -> Tuple[float, float, float]:
     """Measure held-out loss before/after a short LoRA train. Returns
     ``(base_loss, probe_loss, wall_clock_seconds)``.
@@ -388,7 +474,7 @@ def lora_probe(
 
     started = time.monotonic()
     model, tokenizer, dev = load_model_and_tokenizer(
-        base, device=device, trust_remote_code=trust_remote_code
+        base, device=device, trust_remote_code=trust_remote_code, quantization=quantization
     )
     pairs = _build_pairs(
         rows, input_extractor=input_extractor, output_extractor=output_extractor
@@ -459,6 +545,7 @@ def measure_logit_agreement(
     max_pairs: int = _MAX_AGREEMENT_PAIRS,
     max_length: int = 256,
     trust_remote_code: bool = False,
+    quantization: Optional[str] = None,
 ) -> float:
     """Fraction of held-out target tokens the base model already predicts top-1.
 
@@ -472,7 +559,7 @@ def measure_logit_agreement(
     import torch
 
     model, tokenizer, dev = load_model_and_tokenizer(
-        base, device=device, trust_remote_code=trust_remote_code
+        base, device=device, trust_remote_code=trust_remote_code, quantization=quantization
     )
     pairs = _build_pairs(
         rows, input_extractor=input_extractor, output_extractor=output_extractor

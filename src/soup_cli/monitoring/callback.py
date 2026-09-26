@@ -3,15 +3,12 @@
 from __future__ import annotations
 
 import logging
-from typing import Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 from rich.console import Console
-from transformers import (
-    TrainerCallback,
-    TrainerControl,
-    TrainerState,
-    TrainingArguments,
-)
+
+if TYPE_CHECKING:
+    from transformers import TrainerControl, TrainerState, TrainingArguments
 
 from soup_cli.monitoring.display import TrainingDisplay
 
@@ -19,7 +16,69 @@ logger = logging.getLogger(__name__)
 console = Console()
 
 
-class SoupTrainerCallback(TrainerCallback):
+def soup_callback_kwargs(
+    tcfg: Any,
+    *,
+    batch_size: Optional[int] = None,
+    output_dir: Optional[str] = None,
+    include_eval_gate: bool = True,
+) -> dict[str, Any]:
+    """Shared kwargs for :class:`SoupTrainerCallback` across all trainers (#802).
+
+    Unifies watchdog, spike recovery, and grad-accum parameters so they cannot
+    drift across trainer implementations.
+    """
+    resolved_batch = 1
+    if batch_size is not None and not isinstance(batch_size, bool):
+        try:
+            resolved_batch = max(1, int(batch_size))
+        except (TypeError, ValueError):
+            resolved_batch = 1
+    elif (
+        hasattr(tcfg, "batch_size")
+        and isinstance(tcfg.batch_size, int)
+        and not isinstance(tcfg.batch_size, bool)
+    ):
+        resolved_batch = max(1, tcfg.batch_size)
+
+    kwargs: dict[str, Any] = {
+        "loss_watchdog": getattr(tcfg, "loss_watchdog", False),
+        "loss_watchdog_threshold": getattr(tcfg, "loss_watchdog_threshold", 3.0),
+        "loss_watchdog_patience": getattr(tcfg, "loss_watchdog_patience", 5),
+        "spike_recovery": getattr(tcfg, "loss_spike_recovery", False),
+        "spike_recovery_max_attempts": getattr(
+            tcfg, "loss_spike_recovery_max_attempts", 3
+        ),
+        "spike_recovery_lr_decay": getattr(
+            tcfg, "loss_spike_recovery_lr_decay", 0.5
+        ),
+        "grad_accum_auto_tune": getattr(tcfg, "grad_accum_auto_tune", False),
+        "grad_accum_pressure_threshold": getattr(
+            tcfg, "grad_accum_pressure_threshold", 0.9
+        ),
+        "grad_accum_current_steps": getattr(
+            tcfg, "gradient_accumulation_steps", 1
+        ),
+        "grad_accum_current_batch": resolved_batch,
+    }
+    if include_eval_gate:
+        kwargs["eval_gate_config"] = getattr(tcfg, "eval_gate", None)
+    if output_dir is not None:
+        kwargs["output_dir"] = output_dir
+    return kwargs
+
+
+def _get_trainer_callback_base():
+    """Lazy-resolve ``transformers.TrainerCallback``."""
+    try:
+        from transformers import TrainerCallback
+
+        return TrainerCallback
+    except ImportError:
+        return object
+
+
+class _SoupTrainerCallback_body:  # noqa: N801
     """Bridges HF Trainer events to Soup's Rich live display and experiment tracker."""
 
     def __init__(
@@ -47,6 +106,18 @@ class SoupTrainerCallback(TrainerCallback):
         self.run_id = run_id
         self.eval_config = eval_config
         self.output_dir = output_dir
+        # HF emits a summary-only ``on_log`` event after the final optimizer
+        # step. It has runtime/throughput fields but no loss/LR/grad norm. Keep
+        # the last real values so that event cannot reset the dashboards and
+        # tracker to synthetic zeroes (#541).
+        self._last_loss = 0.0
+        self._last_lr = 0.0
+        # A missing norm is not a measured zero. Keep the last measured value
+        # only for the live panel; persisted metrics use the current log.
+        self._last_grad_norm: Optional[float] = None
+        #: None until an evaluation runs. Not 0.0 -- an unmeasured
+        #: validation loss must not read as a measured one.
+        self._last_val_loss = None
         # Loss watchdog state
         self._watchdog_enabled = loss_watchdog
         self._watchdog_threshold = loss_watchdog_threshold
@@ -154,13 +225,17 @@ class SoupTrainerCallback(TrainerCallback):
         if logs is None:
             return
 
-        # Try to get GPU memory
+        # Try to get GPU memory.
+        # Uses max_memory_allocated() to report peak allocated VRAM rather than the
+        # inter-step trough (#650). We deliberately do not call reset_peak_memory_stats()
+        # here because that reset is process-global and would clobber the grad-accum
+        # advisor's own peak reading at line 566 (#650 criterion 3).
         gpu_mem = ""
         try:
             import torch
 
             if torch.cuda.is_available():
-                used = torch.cuda.memory_allocated() / (1024**3)
+                used = torch.cuda.max_memory_allocated() / (1024**3)
                 total = torch.cuda.get_device_properties(0).total_memory / (1024**3)
                 gpu_mem = f"{used:.1f}/{total:.1f} GB"
         except Exception:
@@ -168,17 +243,47 @@ class SoupTrainerCallback(TrainerCallback):
 
         step = state.global_step
         epoch = state.epoch or 0
-        loss = logs.get("loss", 0.0)
-        lr = logs.get("learning_rate", 0.0)
-        grad_norm = logs.get("grad_norm", 0.0)
+        if logs.get("loss") is not None:
+            self._last_loss = logs["loss"]
+        if logs.get("learning_rate") is not None:
+            self._last_lr = logs["learning_rate"]
+        if logs.get("grad_norm") is not None:
+            self._last_grad_norm = logs["grad_norm"]
+        # An evaluation arrives as its OWN on_log call carrying `eval_loss` and
+        # no `loss`. Before this, nothing read it: the eval call left
+        # `_last_loss` untouched and re-reported the stale training number to
+        # every sink at the same step, so the evaluated value existed nowhere.
+        # It is kept as a separate series and never folded into `loss`.
+        if logs.get("eval_loss") is not None:
+            self._last_val_loss = logs["eval_loss"]
+        loss = self._last_loss
+        lr = self._last_lr
+        display_grad_norm = self._last_grad_norm
+        measured_grad_norm = logs.get("grad_norm")
+        # Two different values on purpose, and the distinction is the whole
+        # point of the column existing.
+        #
+        # The PANEL wants the last measured value carried forward, so the row
+        # does not blink out on every training step between evaluations.
+        #
+        # The RECORD must not. Persisting the carried value would write a
+        # measurement on steps where no evaluation ran -- 9 stored points for 2
+        # real ones at a realistic cadence -- inflating n for anything that
+        # reads the series back, including `soup eval`'s paired bootstrap. That
+        # is the same fabrication this change refuses for legacy rows, and it
+        # would be inconsistent to reject 0.0 there and accept a carried value
+        # here.
+        display_val_loss = self._last_val_loss
+        measured_val_loss = logs.get("eval_loss")
         speed = logs.get("train_steps_per_second", 0.0)
 
         self.display.update(
             step=step,
             epoch=epoch,
             loss=loss,
+            val_loss=display_val_loss,
             lr=lr,
-            grad_norm=grad_norm,
+            grad_norm=display_grad_norm,
             speed=speed,
             gpu_mem=gpu_mem,
         )
@@ -198,8 +303,17 @@ class SoupTrainerCallback(TrainerCallback):
                     # `is not None`, not truthiness — a real 0.0 loss / lr (e.g.
                     # end of an LR schedule) must not be reported as None.
                     loss=float(loss) if loss is not None else None,
+                    val_loss=(
+                        float(measured_val_loss)
+                        if measured_val_loss is not None
+                        else None
+                    ),
                     lr=float(lr) if lr is not None else None,
-                    grad_norm=float(grad_norm) if grad_norm is not None else None,
+                    grad_norm=(
+                        float(measured_grad_norm)
+                        if measured_grad_norm is not None
+                        else None
+                    ),
                 )
             )
         except Exception:
@@ -280,8 +394,9 @@ class SoupTrainerCallback(TrainerCallback):
                 step=step,
                 epoch=epoch,
                 loss=loss,
+                val_loss=measured_val_loss,
                 lr=lr,
-                grad_norm=grad_norm,
+                grad_norm=measured_grad_norm,
                 speed=speed,
                 gpu_mem=gpu_mem,
             )
@@ -465,10 +580,13 @@ class SoupTrainerCallback(TrainerCallback):
         if custom_tasks:
             try:
                 from soup_cli.commands.eval import custom
+                # #752 — pass every typer parameter; see commands/eval.py.
                 custom(
                     tasks=custom_tasks,
                     model=self.output_dir,
                     run_id=self.run_id,
+                    attach_to_registry=None,
+                    output=None,
                 )
             except Exception as exc:
                 logger.exception("Auto-eval custom failed")
@@ -565,3 +683,22 @@ class SoupTrainerCallback(TrainerCallback):
             f"({new_batch}, {new_accum}). "
             f"Restart training with the new pair to take effect."
         )
+
+
+_LAZY_CALLBACKS = {
+    "SoupTrainerCallback": _SoupTrainerCallback_body,
+}
+_BODY_SKIP = frozenset(("__dict__", "__weakref__"))
+
+
+def __getattr__(name: str):  # PEP 562
+    body = _LAZY_CALLBACKS.get(name)
+    if body is not None:
+        base = _get_trainer_callback_base()
+        ns = {k: v for k, v in vars(body).items() if k not in _BODY_SKIP}
+        cls = type(name, (base,), ns)
+        cls.__module__ = __name__
+        cls.__qualname__ = name
+        globals()[name] = cls
+        return cls
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

@@ -8,12 +8,15 @@ from typing import Optional
 from rich.console import Console
 
 from soup_cli.config.schema import SoupConfig
+from soup_cli.trainer.loss_summary import summarize_training_loss
 from soup_cli.utils.gpu import (
     bf16_fp16_flags,
     estimate_batch_size,
     model_size_from_name,
+    resolve_base_load_dtype,
     resolve_device_map,
 )
+from soup_cli.utils.mixed_precision import align_trainable_dtype_for_fp16
 from soup_cli.utils.seeding import apply_training_seed, training_seed_kwargs
 
 console = Console()
@@ -83,10 +86,24 @@ class PretrainTrainerWrapper:
         else:
             self._setup_transformers(cfg, tcfg)
 
-        trainable, total = self.model.get_nb_trainable_parameters()
+        # #307 — a LISA run has no PEFT wrapper, so `get_nb_trainable_parameters`
+        # (a PeftModel method) is absent and the count comes straight off the
+        # parameters. The label follows the same split: reporting "LoRA applied"
+        # for a run that applied no adapter is the docs-contradict-code defect.
+        if tcfg.lisa_enabled:
+            trainable = sum(
+                param.numel()
+                for param in self.model.parameters()
+                if param.requires_grad
+            )
+            total = sum(param.numel() for param in self.model.parameters())
+            label = "LISA"
+        else:
+            trainable, total = self.model.get_nb_trainable_parameters()
+            label = "LoRA applied"
         pct = 100 * trainable / total
         console.print(
-            f"[green]LoRA applied:[/] {trainable:,} trainable"
+            f"[green]{label}:[/] {trainable:,} trainable"
             f" / {total:,} total ({pct:.2f}%)"
         )
 
@@ -113,7 +130,15 @@ class PretrainTrainerWrapper:
         # via `soup data preprocess`. Skips the raw-text load entirely.
         from soup_cli.trainer.sft import _maybe_load_pretokenized
 
-        pretok = _maybe_load_pretokenized(cfg.data, cfg.base, console)
+        # #1054: pass ``tcfg`` -- ``preprocess_mask_mode`` reads
+        # ``training.train_on_eot`` from it, and ``task: pretrain`` is in the
+        # sft-family set the schema allows that flag on. Omitting it dropped the
+        # ``+eot`` suffix here but not in ``soup data preprocess``, so the cache
+        # was refused by a hash the re-run advised in the error reproduces.
+        pretok = _maybe_load_pretokenized(
+            cfg.data, cfg.base, console, getattr(cfg, "training", None),
+            task=cfg.task,
+        )
         if pretok is not None:
             train_ds, eval_ds = pretok
         else:
@@ -164,9 +189,15 @@ class PretrainTrainerWrapper:
         if self.fsdp_config:
             training_kwargs.update(self.fsdp_config)
 
-        # LoRA+ — different learning rates for A and B matrices
-        if tcfg.loraplus_lr_ratio is not None:
-            training_kwargs["loraplus_lr_ratio"] = tcfg.loraplus_lr_ratio
+        # LoRA+ — different learning rates for A and B matrices. Not a
+        # TrainingArguments field: the optimizer is built and attached after the
+        # trainer exists (attach_loraplus_optimizer), so it must NOT be forwarded
+        # here (#724).
+
+        # LoRA-FA — freezes LoRA A matrices and trains B matrices. Not a
+        # TrainingArguments field: the optimizer is built and attached after the
+        # trainer exists (attach_lorafa_optimizer), so it must NOT be forwarded
+        # here (#725).
 
         # GaLore — memory-efficient full-parameter training
         if tcfg.use_galore:
@@ -189,6 +220,11 @@ class PretrainTrainerWrapper:
             )
 
         training_args = TrainingArguments(**training_kwargs)
+        from soup_cli.trainer.sft import SFTTrainerWrapper
+
+        training_args = SFTTrainerWrapper._as_sft_config(
+            training_args, cfg.data.max_length, packing=tcfg.packing,
+        )
 
         # --- Trainer ---
         trainer_kwargs = {
@@ -201,7 +237,6 @@ class PretrainTrainerWrapper:
 
         # Sample packing — pack multiple short samples into one sequence
         if tcfg.packing:
-            trainer_kwargs["packing"] = True
             console.print("[green]Sample packing enabled[/]")
 
         # v0.40.4 #65 — multipack live wiring (mirrors sft.py).
@@ -233,26 +268,47 @@ class PretrainTrainerWrapper:
         else:
             self.trainer = SFTTrainer(**trainer_kwargs)
 
+        # #359 - the same exposure #336 fixed in sft.py: with LoRA the
+        # no-decay optimizer group is empty, DeepSpeed drops it, and the LR
+        # scheduler keeps two base_lrs until torch's strict zip raises at the
+        # first step. The guard prunes inside create_optimizer, i.e. before
+        # the scheduler is built. No-op for full fine-tuning, and only under
+        # DeepSpeed so the ordinary path keeps its own optimizer.
+        if self.deepspeed_config:
+            from soup_cli.utils.deepspeed import attach_empty_param_group_guard
+
+            attach_empty_param_group_guard(self.trainer)
+
         # v0.40.6 #67 — ReLoRA callback (magnitude-prune LoRA every N steps).
         from soup_cli.utils.peft_wiring import (
             attach_curriculum_callback,
+            attach_lisa_callback,
+            attach_lorafa_optimizer,
+            attach_loraplus_optimizer,
             attach_plugin_callback,
             attach_relora_callback,
         )
+        # LoRA+ optimizer (#724) — build and attach now that the trainer exists.
+        attach_loraplus_optimizer(self.trainer, tcfg)
+        # LoRA-FA optimizer (#725) — build and attach now that the trainer exists.
+        attach_lorafa_optimizer(self.trainer, tcfg)
         attach_relora_callback(self.trainer, tcfg)
+        # #307 — LISA layerwise importance sampling (v0.71.34 #267 for sft).
+        attach_lisa_callback(self.trainer, tcfg)
         # v0.53.5 #114/#115 — dynamic curriculum live callback.
         attach_curriculum_callback(self.trainer, tcfg, str(output_dir), console)
         # v0.53.6 #101 — Soup plugin TrainerCallback.
         attach_plugin_callback(self.trainer, console)
 
         self._output_dir = str(output_dir)
+        self._batch_size = batch_size
 
     def _setup_transformers(self, cfg: SoupConfig, tcfg) -> None:
         """Load model via standard transformers + peft pipeline."""
-        from peft import LoraConfig, TaskType, get_peft_model, prepare_model_for_kbit_training
+        from peft import TaskType, get_peft_model, prepare_model_for_kbit_training
         from transformers import AutoModelForCausalLM, AutoTokenizer
 
-        from soup_cli.utils.moe import detect_moe_model, get_moe_target_modules
+        from soup_cli.utils.moe import detect_moe_model
 
         console.print(f"[dim]Loading tokenizer: {cfg.base}[/]")
         self.tokenizer = AutoTokenizer.from_pretrained(
@@ -273,11 +329,41 @@ class PretrainTrainerWrapper:
         dev_map = resolve_device_map(self.device)
         model_kwargs = {
             "trust_remote_code": self._trust_remote_code, "device_map": dev_map,
+            "torch_dtype": resolve_base_load_dtype(
+                self.device, full_finetune=tcfg.lisa_enabled
+            ),
         }
         if quant_config_obj is not None:
             model_kwargs["quantization_config"] = quant_config_obj
 
+        rope_config = None
+        if tcfg.rope_scaling_type:
+            from transformers import AutoConfig
+
+            from soup_cli.utils.long_context import apply_long_context_config
+
+            model_config = AutoConfig.from_pretrained(
+                cfg.base, trust_remote_code=self._trust_remote_code
+            )
+            rope_config = apply_long_context_config(
+                model_config,
+                target_length=cfg.data.max_length,
+                rope_scaling_type=tcfg.rope_scaling_type,
+                model_name=cfg.base,
+                yarn_factor=tcfg.yarn_factor,
+                yarn_attn_factor=tcfg.yarn_attn_factor,
+                yarn_beta_fast=tcfg.yarn_beta_fast,
+                yarn_beta_slow=tcfg.yarn_beta_slow,
+            )
+            if rope_config:
+                model_kwargs["config"] = model_config
+
         self.model = AutoModelForCausalLM.from_pretrained(cfg.base, **model_kwargs)
+        if rope_config:
+            console.print(
+                f"[green]Long-context enabled:[/] RoPE {tcfg.rope_scaling_type} "
+                f"scaling to {cfg.data.max_length} tokens"
+            )
 
         # MoE aux loss for load balancing
         is_moe = detect_moe_model(self.model)
@@ -291,7 +377,14 @@ class PretrainTrainerWrapper:
             )
 
         if tcfg.quantization in ("4bit", "8bit", "mxfp4"):
-            self.model = prepare_model_for_kbit_training(self.model)
+            from soup_cli.utils.layer_stream import should_enable_hf_gradient_checkpointing
+
+            self.model = prepare_model_for_kbit_training(
+                self.model,
+                use_gradient_checkpointing=should_enable_hf_gradient_checkpointing(
+                    tcfg.gradient_checkpointing, stream_layers=tcfg.stream_layers
+                ),
+            )
 
         # v0.53.4 #83 — LLaMA Pro block expansion (centralised — see SFT).
         from soup_cli.utils.block_expansion import (
@@ -300,37 +393,47 @@ class PretrainTrainerWrapper:
 
         apply_block_expansion_if_configured(self.model, tcfg, console)
 
-        # LoRA — with MoE-aware target modules if moe_lora is enabled
-        target_modules = tcfg.lora.target_modules
-        if target_modules == "auto":
-            target_modules = None
-
-        if tcfg.moe_lora and is_moe:
-            moe_targets = get_moe_target_modules(self.model)
-            if moe_targets:
-                target_modules = moe_targets
-                console.print(
-                    f"[green]ScatterMoE LoRA:[/] targeting {len(moe_targets)} module patterns"
-                )
-
-        lora_config = LoraConfig(
-            r=tcfg.lora.r,
-            lora_alpha=tcfg.lora.alpha,
-            lora_dropout=tcfg.lora.dropout,
-            target_modules=target_modules,
-            task_type=TaskType.CAUSAL_LM,
-            bias="none",
-            use_dora=tcfg.lora.use_dora,
-            use_rslora=tcfg.lora.use_rslora,
-        )
-        # v0.40.6 #67 — surgical PEFT patches.
+        # #307 — LISA layerwise importance sampling. Full-FT of a rotating set
+        # of decoder layers, so it fully replaces the LoRA path below (the
+        # schema cross-validator guarantees no LoRA-feature / freeze flag is
+        # combined). Shared with the SFT trainer so the two cannot drift.
         from soup_cli.utils.peft_wiring import (
-            apply_post_lora_patches,
-            apply_pre_lora_patches,
+            apply_lisa_setup,
+            build_lora_config,
+            resolve_lora_target_modules,
+            resolve_lora_target_parameters,
         )
-        apply_pre_lora_patches(self.model, cfg.base)
-        self.model = get_peft_model(self.model, lora_config)
-        apply_post_lora_patches(self.model)
+
+        if not apply_lisa_setup(self.model, tcfg, console):
+            # LoRA — with MoE-aware target modules if moe_lora is enabled
+            target_modules = resolve_lora_target_modules(
+                self.model, tcfg.lora.target_modules, console
+            )
+            target_parameters = resolve_lora_target_parameters(
+                self.model, tcfg.lora.target_parameters
+            )
+
+            # #798: the same helper every other trainer uses (see sft.py).
+            from soup_cli.utils.moe import resolve_moe_lora_targets
+
+            target_modules = resolve_moe_lora_targets(
+                self.model, tcfg, target_modules, console
+            )
+
+            lora_config = build_lora_config(
+                tcfg.lora,
+                target_modules=target_modules,
+                target_parameters=target_parameters,
+                task_type=TaskType.CAUSAL_LM,
+            )
+            # v0.40.6 #67 — surgical PEFT patches.
+            from soup_cli.utils.peft_wiring import (
+                apply_post_lora_patches,
+                apply_pre_lora_patches,
+            )
+            apply_pre_lora_patches(self.model, cfg.base)
+            self.model = get_peft_model(self.model, lora_config)
+            apply_post_lora_patches(self.model)
 
         # v0.71.12 #84 — Mixture-of-Depths selective-token routing (applied
         # after get_peft_model so the routers are trainable).
@@ -385,15 +488,23 @@ class PretrainTrainerWrapper:
 
         # Add callback for live display and experiment tracking
         if display:
-            from soup_cli.monitoring.callback import SoupTrainerCallback
+            from soup_cli.monitoring.callback import (
+                SoupTrainerCallback,
+                soup_callback_kwargs,
+            )
 
             self.trainer.add_callback(
                 SoupTrainerCallback(
-                    display, tracker=tracker, run_id=run_id,
-                    loss_watchdog=self.config.training.loss_watchdog,
-                    loss_watchdog_threshold=self.config.training.loss_watchdog_threshold,
-                    loss_watchdog_patience=self.config.training.loss_watchdog_patience,
+                    display,
+                    tracker=tracker,
+                    run_id=run_id,
                     eval_gate_config=self.config.training.eval_gate,
+                    **soup_callback_kwargs(
+                        self.config.training,
+                        batch_size=self._batch_size,
+                        output_dir=self._output_dir,
+                        include_eval_gate=False,
+                    ),
                 )
             )
 
@@ -402,6 +513,11 @@ class PretrainTrainerWrapper:
         with activation_offloading_context(
             self.config.training, self._output_dir,
         ):
+            align_trainable_dtype_for_fp16(
+                self.trainer.model,
+                fp16=getattr(self.trainer.args, "fp16", False),
+                bf16=getattr(self.trainer.args, "bf16", False),
+            )
             self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)
         duration = time.time() - start
 
@@ -411,15 +527,14 @@ class PretrainTrainerWrapper:
 
         # Extract metrics
         logs = self.trainer.state.log_history
-        train_losses = [entry["loss"] for entry in logs if "loss" in entry]
+        loss_summary = summarize_training_loss(logs)
 
         hours = int(duration // 3600)
         minutes = int((duration % 3600) // 60)
         duration_str = f"{hours}h {minutes}m" if hours > 0 else f"{minutes}m"
 
         return {
-            "initial_loss": train_losses[0] if train_losses else 0,
-            "final_loss": train_losses[-1] if train_losses else 0,
+            **loss_summary,
             "duration": duration_str,
             "duration_secs": duration,
             "output_dir": self._output_dir,

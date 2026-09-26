@@ -29,6 +29,8 @@ from typing import Any, List, Optional, Tuple
 
 from rich.console import Console
 
+from soup_cli.trainer.loss_summary import summarize_training_loss
+
 console = Console()
 
 # Bounds — keep the loop bounded on a 4 GB box.
@@ -162,7 +164,7 @@ class UnlearnTrainerWrapper:
     def setup(self, dataset: Any = None) -> None:
         """Load policy + (optional) frozen reference, LoRA, and datasets."""
         import torch
-        from peft import LoraConfig, get_peft_model
+        from peft import get_peft_model
 
         from soup_cli.utils.live_eval import load_model_and_tokenizer
         from soup_cli.utils.seeding import apply_training_seed
@@ -181,11 +183,21 @@ class UnlearnTrainerWrapper:
         self.model, self.tokenizer, self._dev = load_model_and_tokenizer(
             cfg.base, device=self.device, trust_remote_code=self.trust_remote_code,
         )
-        lora_cfg = LoraConfig(
-            r=cfg.training.lora.r,
-            lora_alpha=cfg.training.lora.alpha,
-            lora_dropout=cfg.training.lora.dropout,
-            bias="none",
+        from soup_cli.utils.peft_wiring import (
+            build_lora_config,
+            resolve_lora_target_modules,
+        )
+
+        target_modules = resolve_lora_target_modules(self.model, tcfg.lora.target_modules, console)
+        # #1151: moe_lora picks the expert-FFN targets; see sft.py.
+        from soup_cli.utils.moe import resolve_moe_lora_targets
+
+        target_modules = resolve_moe_lora_targets(
+            self.model, tcfg, target_modules, console
+        )
+        lora_cfg = build_lora_config(
+            tcfg.lora,
+            target_modules=target_modules,
             task_type="CAUSAL_LM",
         )
         self.model = get_peft_model(self.model, lora_cfg)
@@ -316,9 +328,14 @@ class UnlearnTrainerWrapper:
             f"[green]Unlearn done:[/] {step} steps, "
             f"loss {initial_loss} -> {final_loss}, saved {output_dir}"
         )
+        losses = (
+            [final_loss]
+            if step == 1 and final_loss is not None
+            else [loss for loss in (initial_loss, final_loss) if loss is not None]
+        )
+        loss_summary = summarize_training_loss([{"loss": loss} for loss in losses])
         return {
-            "initial_loss": initial_loss if initial_loss is not None else 0.0,
-            "final_loss": final_loss if final_loss is not None else 0.0,
+            **loss_summary,
             "total_steps": step,
             "duration_secs": duration,
             "output_dir": output_dir,

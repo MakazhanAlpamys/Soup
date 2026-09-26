@@ -20,31 +20,13 @@ when an alarm actually fires.
 
 from __future__ import annotations
 
-import ipaddress
 from typing import List, Mapping, Optional, Tuple
 from urllib.parse import urlparse
 
+from soup_cli.utils.net_guard import LOOPBACK_HOSTS as _LOOPBACK_HOSTS
+from soup_cli.utils.net_guard import is_private_or_link_local as _is_private_or_link_local
+
 _MAX_WEBHOOK_URL_LEN = 4096
-_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
-
-
-def _is_private_or_link_local(host: str) -> bool:
-    """Return True iff ``host`` resolves to a non-loopback private/reserved IP.
-
-    Explicit parentheses on the final clause (mirrors v0.63.0 drift-alarm
-    code-review MEDIUM fix): Python binds ``and`` tighter than ``or``, but
-    the SSRF gate is safety-critical and a future edit should not need to
-    re-derive the precedence rules to verify the logic.
-    """
-    try:
-        ip = ipaddress.ip_address(host)
-    except ValueError:
-        return False
-    return (
-        ip.is_private
-        or ip.is_link_local
-        or (ip.is_loopback is False and (ip.is_reserved or ip.is_multicast))
-    )
 
 
 def validate_webhook_url(url: object, *, allow_private_hosts: bool = False) -> str:
@@ -89,7 +71,8 @@ def validate_webhook_url(url: object, *, allow_private_hosts: bool = False) -> s
     # any ``https://10.x`` / ``192.168.x`` sail straight through to the return.
     # Loopback hosts stay allowed (they are handled by the ``_LOOPBACK_HOSTS``
     # guard below), so an explicit ``http://localhost`` webhook still works.
-    if host not in _LOOPBACK_HOSTS:
+    host_clean = host.lower().rstrip(".")
+    if host_clean not in _LOOPBACK_HOSTS:
         if _is_private_or_link_local(host) and not allow_private_hosts:
             raise ValueError(
                 "webhook URL private/link-local/reserved hosts are not "

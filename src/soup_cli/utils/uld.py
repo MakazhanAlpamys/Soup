@@ -231,6 +231,7 @@ def uld_distill_loss(
     *,
     config: ULDConfig,
     attention_mask=None,
+    labels=None,
 ):
     """Cross-tokenizer ULD distillation loss (v0.71.11 #236).
 
@@ -247,7 +248,13 @@ def uld_distill_loss(
       Distils only on the high-probability subset.
 
     Differentiable w.r.t. the student logits (sort / topk both use
-    gather). Returns a scalar mean over the (masked) token positions.
+    gather). Returns a scalar mean over the (masked) token positions,
+    restricted to the trained tokens the same way
+    :func:`soup_cli.trainer.distill._compute_distill_term` restricts the
+    plain-KL path: ``labels != -100`` (post causal shift) when ``labels``
+    is given, else ``attention_mask``, else every position (#682: a
+    pure-padding mask let prompt tokens and the shift-boundary position
+    leak into the loss).
     """
     import torch
 
@@ -255,6 +262,18 @@ def uld_distill_loss(
         raise TypeError(
             f"config must be ULDConfig, got {type(config).__name__}"
         )
+
+    # Causal-LM alignment: logit position i predicts token i+1, the same
+    # shift the CE term applies. Drop the final logit and shift
+    # labels/attention_mask the same way so the mask below lines up.
+    if labels is not None or attention_mask is not None:
+        student_logits = student_logits[:, :-1, :]
+        teacher_logits = teacher_logits[:, :-1, :]
+        if labels is not None:
+            labels = labels[:, 1:]
+        if attention_mask is not None:
+            attention_mask = attention_mask[:, 1:]
+
     p_s = torch.softmax(student_logits, dim=-1)
     p_t = torch.softmax(teacher_logits, dim=-1)
 
@@ -274,11 +293,14 @@ def uld_distill_loss(
         t_sorted, _ = torch.sort(p_t, dim=-1, descending=True)
         per_pos = _sorted_w1(s_sorted, t_sorted)
 
-    if attention_mask is not None:
+    if labels is not None:
+        mask = (labels != -100).to(per_pos.dtype)
+    elif attention_mask is not None:
         mask = attention_mask.to(per_pos.dtype)
-        denom = mask.sum().clamp(min=1.0)
-        return (per_pos * mask).sum() / denom
-    return per_pos.mean()
+    else:
+        return per_pos.mean()
+    denom = mask.sum().clamp(min=1.0)
+    return (per_pos * mask).sum() / denom
 
 
 class ULDProjection:
@@ -298,12 +320,13 @@ class ULDProjection:
             )
         self.config = config
 
-    def __call__(self, student_logits, teacher_logits, *, attention_mask=None):
+    def __call__(self, student_logits, teacher_logits, *, attention_mask=None, labels=None):
         return uld_distill_loss(
             student_logits,
             teacher_logits,
             config=self.config,
             attention_mask=attention_mask,
+            labels=labels,
         )
 
 
@@ -449,6 +472,7 @@ def uld_aligned_loss(
     *,
     config: ULDConfig,
     attention_mask=None,
+    labels=None,
 ):
     """Wasserstein-1 ULD loss with token-sequence alignment (v0.71.18 #258).
 
@@ -472,6 +496,12 @@ def uld_aligned_loss(
             Must have at least ``B`` entries.
         config: a :class:`ULDConfig` (strategy ``wasserstein_aligned``).
         attention_mask: optional ``[B, Ts]`` student mask (1 = real token).
+        labels: optional ``[B, Ts]`` student labels (``-100`` = not
+            supervised). Same causal shift and masking as
+            :func:`uld_distill_loss` (#682): a student token list is decoded
+            from the UNSHIFTED sequence, so position ``i`` in it is raw
+            position ``i``, letting the shift below (which only drops the
+            tail) stay aligned with the per-position alignment computed here.
     """
     import torch
 
@@ -486,6 +516,16 @@ def uld_aligned_loss(
             f"{batch} entries (logit batch dim), got "
             f"{len(student_tokens)} / {len(teacher_tokens)}"
         )
+
+    # Same causal shift as uld_distill_loss: drop the final logit (nothing
+    # to predict) and shift labels/attention_mask so the mask lines up.
+    if labels is not None or attention_mask is not None:
+        student_logits = student_logits[:, :-1, :]
+        if labels is not None:
+            labels = labels[:, 1:]
+        if attention_mask is not None:
+            attention_mask = attention_mask[:, 1:]
+
     per_seq = []
     for b in range(batch):
         align = align_token_sequences(student_tokens[b], teacher_tokens[b])
@@ -501,10 +541,13 @@ def uld_aligned_loss(
         s_sorted, _ = torch.sort(p_s, dim=-1, descending=True)
         t_sorted, _ = torch.sort(p_t, dim=-1, descending=True)
         per_pos = _sorted_w1(s_sorted, t_sorted)  # [Ts]
-        if attention_mask is not None:
+        if labels is not None:
+            mask = (labels[b, :ts] != -100).to(per_pos.dtype)
+        elif attention_mask is not None:
             mask = attention_mask[b, :ts].to(per_pos.dtype)
-            denom = mask.sum().clamp(min=1.0)
-            per_seq.append((per_pos * mask).sum() / denom)
         else:
             per_seq.append(per_pos.mean())
+            continue
+        denom = mask.sum().clamp(min=1.0)
+        per_seq.append((per_pos * mask).sum() / denom)
     return torch.stack(per_seq).mean()

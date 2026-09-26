@@ -7,13 +7,11 @@ unsafe URL into the terminal.
 
 from __future__ import annotations
 
-import ipaddress
 import re
 from typing import Optional
 from urllib.parse import urlparse
 
-# Loopback hosts on which plain HTTP is allowed.
-_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+from soup_cli.utils.net_guard import LOOPBACK_HOSTS as _LOOPBACK_HOSTS
 
 # Token regex — 16-128 chars of urlsafe base64.
 _TOKEN_RE = re.compile(r"^[A-Za-z0-9_\-]{16,128}$")
@@ -31,14 +29,6 @@ def validate_token(token: str) -> str:
             "token must be 16-128 urlsafe-base64 chars (A-Z, a-z, 0-9, '_', '-')"
         )
     return token
-
-
-def _host_is_private_ip(host: str) -> bool:
-    try:
-        ip = ipaddress.ip_address(host)
-    except ValueError:
-        return False
-    return bool(ip.is_private and not ip.is_loopback)
 
 
 def build_phone_url(

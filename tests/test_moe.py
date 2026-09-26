@@ -43,6 +43,17 @@ class TestDetectMoEModel:
         model = self._make_model(num_experts=128, model_type="qwen3_moe")
         assert detect_moe_model(model) is True
 
+    def test_detect_qwen35_moe_text_wrapper(self):
+        """Should detect Qwen3.5-MoE through a text sub-config wrapper."""
+        model = self._make_model(model_type="qwen2_vl")
+        text_config = MagicMock()
+        for key in MOE_CONFIG_KEYS:
+            setattr(text_config, key, None)
+        text_config.num_experts = 128
+        text_config.model_type = "qwen3_5_moe_text"
+        model.config.text_config = text_config
+        assert detect_moe_model(model) is True
+
     def test_detect_deepseek_v3(self):
         """Should detect DeepSeek V3 (n_routed_experts > 1)."""
         model = self._make_model(n_routed_experts=256, model_type="deepseek_v3")
@@ -225,6 +236,28 @@ class TestGetMoEInfo:
         assert info["num_experts"] == 128
         assert info["num_active_experts"] == 8
 
+    def test_qwen35_moe_text_info(self):
+        """Should extract MoE info from the text sub-config when wrapped."""
+        model = MagicMock()
+        config = MagicMock()
+        for key in MOE_CONFIG_KEYS:
+            setattr(config, key, None)
+        config.model_type = "qwen2_vl"
+        text_config = MagicMock()
+        text_config.num_experts = 128
+        text_config.num_experts_per_tok = 8
+        text_config.model_type = "qwen3_5_moe_text"
+        for key in ("num_local_experts", "n_routed_experts", "moe_num_experts",
+                     "num_experts_per_token", "num_selected_experts"):
+            setattr(text_config, key, None)
+        config.text_config = text_config
+        model.config = config
+
+        info = get_moe_info(model)
+        assert info["num_experts"] == 128
+        assert info["num_active_experts"] == 8
+        assert info["model_type"] == "qwen3_5_moe_text"
+
     def test_deepseek_info(self):
         """Should extract info from DeepSeek V3 config."""
         model = MagicMock()
@@ -280,7 +313,7 @@ class TestDetectAdditionalMoETypes:
         return model
 
     @pytest.mark.parametrize("model_type", [
-        "jetmoe", "arctic", "grok", "qwen2_moe", "deepseek_v2",
+        "jetmoe", "arctic", "grok", "qwen2_moe", "deepseek_v2", "qwen3_5_moe",
     ])
     def test_detect_moe_type(self, model_type):
         """All listed MoE model types should be detected."""

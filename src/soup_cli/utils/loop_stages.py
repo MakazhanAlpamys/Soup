@@ -32,6 +32,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Callable, Mapping, Optional
 
 from soup_cli.utils.loop_state import LoopState
+from soup_cli.utils.net_guard import LOOPBACK_HOSTS as _LOOPBACK_HOSTS
+from soup_cli.utils.net_guard import parse_ip_literal
 from soup_cli.utils.paths import atomic_write_text
 
 if TYPE_CHECKING:
@@ -259,8 +261,6 @@ def gate_against_baseline(
 # Adapter-name shape accepted by the v0.30.0 /v1/adapters/activate route.
 _ADAPTER_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._\-]*$")
 
-_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
-
 
 def _endpoint_is_local(endpoint: str) -> bool:
     """True iff ``endpoint``'s host is loopback or a private/link-local IP.
@@ -270,8 +270,14 @@ def _endpoint_is_local(endpoint: str) -> bool:
     Loopback hostnames are accepted by name; any other host must parse as a
     private / loopback / link-local IP literal. A non-IP public hostname is
     rejected (we do not resolve DNS — project policy).
+
+    Deliberately narrower than ``net_guard.is_private_or_link_local``: this
+    gates what counts as "the operator's own box / LAN" for an outbound
+    POST, so reserved/multicast ranges stay rejected rather than being
+    treated as trustworthy deploy targets (#616 review). Shares
+    ``parse_ip_literal`` with the wider predicate for the abbreviated /
+    decimal / hex / octal IPv4 parsing only.
     """
-    import ipaddress
     from urllib.parse import urlparse
 
     host = (urlparse(endpoint).hostname or "").strip("[]").lower()
@@ -279,9 +285,8 @@ def _endpoint_is_local(endpoint: str) -> bool:
         return False
     if host in _LOOPBACK_HOSTS:
         return True
-    try:
-        ip = ipaddress.ip_address(host)
-    except ValueError:
+    ip = parse_ip_literal(host)
+    if ip is None:
         return False
     return ip.is_loopback or ip.is_private or ip.is_link_local
 
@@ -364,9 +369,12 @@ def deploy_to_canary(
         }
     name = os.path.basename(str(adapter_path).rstrip("/\\")) or "canary"
     ok = _post_activate(endpoint, name)
+    # activate_adapter is a full hot-swap (100% of traffic), not a canary
+    # split; canary_router.route()/BucketStats never ran, so there is no
+    # verdict to report here even when the POST itself succeeded.
     return {
         "deployed": ok,
-        "canary_verdict": "OK" if ok else None,
+        "canary_verdict": None,
         "notes": "" if ok else "activate POST failed",
     }
 

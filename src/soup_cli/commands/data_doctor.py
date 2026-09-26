@@ -2,10 +2,11 @@
 
 Thin Typer/Rich CLI layer over the pure engines in
 ``utils/data_doctor.py`` (chat-template compat report + loss-mask X-ray)
-and ``utils/data_lint.py`` (preference-data linter). Mirrors
-``commands/diagnose.py``'s render/exit-code conventions: exit 0 = OK/MINOR,
-exit 2 = MAJOR (or a routing usage error — wrong format for this command),
-exit 1 = runtime error (bad path, bad tokenizer, bad --output).
+and ``utils/data_lint.py`` (preference-data linter). ``soup data lint``
+follows the project-wide 0/2/3 gate taxonomy (#813): exit 0 = OK/MINOR,
+exit 2 = MAJOR defects, exit 3 = usage/format error.
+``soup data doctor`` exits 0 on OK/MINOR, 1 if file is not found or empty,
+and 2 on MAJOR defects or routing failure.
 """
 
 from __future__ import annotations
@@ -25,28 +26,17 @@ from soup_cli.data.formats import detect_format
 from soup_cli.data.loader import load_raw_data
 from soup_cli.utils import data_doctor as engine
 from soup_cli.utils import data_lint as lint_engine
+from soup_cli.utils.exit_codes import (
+    EXIT_GATE_FAILED,
+    EXIT_USAGE_ERROR,
+)
 from soup_cli.utils.paths import atomic_write_text
+from soup_cli.utils.terminal import for_terminal, strip_control
 from soup_cli.utils.trust_remote import model_requires_trust_remote_code, resolve_trust_remote_code
 
 console = Console()
 
 _PREFERENCE_FORMATS = ("dpo", "kto")
-
-# C0 control bytes (keep tab/newline/CR) + DEL, stripped before ANY
-# dataset-derived string reaches the terminal. rich.markup.escape() only
-# neutralises Rich's own [...] tag syntax — it does not strip raw escape
-# sequences, and dataset content (an unknown 'role' field, --show-mask's
-# decoded token text) is untrusted: a crafted training row can carry a
-# literal ESC byte that survives escape() and hits the terminal raw
-# (title-bar spoofing, OSC 8 link-text spoofing, or obscuring a MAJOR
-# verdict via cursor tricks). --output JSON is unaffected: json.dumps
-# already \\u00XX-escapes control characters per the JSON spec.
-_CONTROL_STRIP_TABLE = {i: None for i in range(0x20) if i not in (0x09, 0x0A, 0x0D)}
-_CONTROL_STRIP_TABLE[0x7F] = None
-
-
-def _for_terminal(text: str) -> str:
-    return text.translate(_CONTROL_STRIP_TABLE)
 
 
 def _verdict_style(verdict: str) -> str:
@@ -66,8 +56,8 @@ def _render_checks_table(title: str, checks: Sequence[_AnyCheck]) -> None:
         table.add_row(
             escape(check.name),
             f"[{_verdict_style(check.verdict)}]{check.verdict}[/]",
-            escape(_for_terminal(check.message)),
-            escape(_for_terminal(check.evidence)),
+            for_terminal(check.message),
+            for_terminal(check.evidence),
         )
     console.print(table)
 
@@ -102,7 +92,7 @@ def _render_mask_previews(previews: Sequence[engine.MaskPreviewRow]) -> None:
             # Byte-level BPE tokenizers round-trip arbitrary bytes exactly,
             # so a crafted training row can decode straight back to a raw
             # control sequence — strip before it ever reaches Text.append.
-            text.append(_for_terminal(token.text), style=style)
+            text.append(strip_control(token.text), style=style)
         console.print(Panel(text, title=f"row {preview.row_index} ({escape(preview.strategy)})"))
 
 
@@ -278,12 +268,12 @@ def lint(
     file_path = Path(path)
     if not file_path.exists():
         console.print(f"[red]File not found: {file_path}[/]")
-        raise typer.Exit(code=1)
+        raise typer.Exit(code=EXIT_USAGE_ERROR)
 
     data = load_raw_data(file_path)
     if not data:
         console.print("[red]Dataset is empty.[/]")
-        raise typer.Exit(code=1)
+        raise typer.Exit(code=EXIT_USAGE_ERROR)
 
     resolved_fmt = _resolve_format(data, fmt)
 
@@ -293,7 +283,7 @@ def lint(
             "soup data lint only supports dpo/orpo/simpo/ipo/bco (chosen/rejected) and kto. "
             "Use [bold]soup data doctor[/] instead for chat/SFT data."
         )
-        raise typer.Exit(code=2)
+        raise typer.Exit(code=EXIT_USAGE_ERROR)
 
     # Only dpo's length_bias check consults length_fn — skip the tokenizer
     # load entirely for kto so `--model` isn't a wasted download/load.
@@ -318,7 +308,7 @@ def lint(
         report = lint_engine.run_lint(data, resolved_fmt, sample_size=sample, length_fn=length_fn)
     except ValueError as exc:
         console.print(f"[red]Error:[/] {escape(str(exc))}")
-        raise typer.Exit(code=1) from exc
+        raise typer.Exit(code=EXIT_USAGE_ERROR) from exc
 
     _render_lint_report(report)
 
@@ -328,10 +318,10 @@ def lint(
             console.print(f"[green]Wrote[/] {escape(output)}")
         except (OSError, ValueError) as exc:
             console.print(f"[red]Error:[/] cannot write --output: {escape(str(exc))}")
-            raise typer.Exit(code=1) from exc
+            raise typer.Exit(code=EXIT_USAGE_ERROR) from exc
 
     if report.overall == "MAJOR":
-        raise typer.Exit(code=2)
+        raise typer.Exit(code=EXIT_GATE_FAILED)
 
 
 __all__ = ["doctor", "lint"]

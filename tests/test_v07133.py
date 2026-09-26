@@ -14,9 +14,21 @@ from __future__ import annotations
 import ast
 import math
 import os
+import re
 from pathlib import Path
+from typing import Sequence
 
 import pytest
+
+# Rich styles console output, so a phrase assertion must never read raw
+# `result.output`: an escape sequence can land inside the phrase and a wrap can
+# split it across a line. Strip ANSI, then collapse whitespace — the repo-wide
+# rule enforced by `test_cli_help_assertions_are_ansi_safe.py`.
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _plain(text: str) -> str:
+    return re.sub(r"\s+", " ", _ANSI_RE.sub("", text or ""))
 
 
 # ---------------------------------------------------------------------------
@@ -477,6 +489,37 @@ class TestCountAcceptedAndRate:
         with pytest.raises(ValueError, match="non-negative"):
             acceptance_rate(-1, 3)
 
+    def test_count_accepted_spans_uses_max_align_chars_cap(self, monkeypatch):
+        """regression: count_accepted_spans respects the _MAX_ALIGN_CHARS cap."""
+        import difflib
+
+        from soup_cli.utils import uld
+        from soup_cli.utils.draft import count_accepted_spans
+
+        monkeypatch.setattr(uld, "_MAX_ALIGN_CHARS", 10)
+
+        captured: list[tuple[str, str]] = []
+        real_matcher = difflib.SequenceMatcher
+
+        def _spy_matcher(isjunk, a, b, autojunk=False):
+            captured.append((a, b))
+            return real_matcher(isjunk, a, b, autojunk=autojunk)
+
+        monkeypatch.setattr(difflib, "SequenceMatcher", _spy_matcher)
+
+        # 16-character non-matching strings: d_text != t_text triggers SequenceMatcher.
+        draft_pieces = ["abcdef", "ghijkl", "mnop"]
+        target_pieces = ["_bcdef", "ghijkl", "mnop"]
+
+        count_accepted_spans(draft_pieces, target_pieces)
+
+        assert len(captured) == 1
+        a_str, b_str = captured[0]
+        assert a_str == "abcdefghij"
+        assert b_str == "_bcdefghij"
+        assert len(a_str) == 10
+        assert len(b_str) == 10
+
 
 class TestClassify:
     def test_boundary_exact(self):
@@ -728,7 +771,7 @@ class TestDraftRegistry:
         assert "hf/target-5" in targets
         assert f"hf/target-{_MAX_REGISTRY_ENTRIES + 4}" in targets
 
-    @pytest.mark.skipif(os.name == "nt", reason="POSIX symlink semantics")
+    @pytest.mark.requires_symlink
     def test_registry_symlink_is_not_followed_on_read(self, draft_registry, tmp_path):
         """O_NOFOLLOW: a symlink at the registry path must degrade to empty,
         not leak an arbitrary file's parsed content into serve --auto-spec."""
@@ -845,12 +888,47 @@ class _TensorTok:
         return {"input_ids": ids, "attention_mask": torch.ones_like(ids)}
 
 
-class _FakeTarget:
-    """Greedy-generates a fixed continuation."""
+class _CrossTokenizerMock:
+    """Mock tokenizer for cross-tokenizer measurement tests."""
 
-    def __init__(self, full_ids: list[int], n_prompt: int):
-        self._full_ids = full_ids
+    pad_token_id = 0
+    eos_token_id = 0
+
+    def __init__(
+        self,
+        vocab_size: int,
+        encode_map: dict[str, list[int]],
+        decode_map: dict[int, str],
+    ):
+        self.vocab_size = vocab_size
+        self._encode_map = encode_map
+        self._decode_map = decode_map
+
+    def encode(self, text: str, add_special_tokens: bool = False) -> list[int]:
+        return list(self._encode_map.get(text, [0]))
+
+    def decode(self, token_ids: Sequence[int], skip_special_tokens: bool = False) -> str:
+        return "".join(self._decode_map.get(int(tid), "") for tid in token_ids)
+
+    def __call__(self, text: str, return_tensors: str | None = None, **kwargs):
+        import torch
+
+        ids = torch.tensor([self.encode(text)])
+        return {"input_ids": ids, "attention_mask": torch.ones_like(ids)}
+
+
+class _FakeTarget:
+    """Greedy-generates a continuation, applying repetition penalty when != 1.0."""
+
+    def __init__(
+        self,
+        full_ids: list[int],
+        n_prompt: int,
+        default_repetition_penalty: float = 1.2,
+    ):
+        self._full_ids = list(full_ids)
         self._n_prompt = n_prompt
+        self._default_repetition_penalty = default_repetition_penalty
         self.calls: list[dict] = []
 
     def parameters(self):
@@ -862,7 +940,33 @@ class _FakeTarget:
         import torch
 
         self.calls.append(kwargs)
-        return torch.tensor([self._full_ids])
+        rep_penalty = kwargs.get("repetition_penalty", self._default_repetition_penalty)
+        if rep_penalty is None:
+            rep_penalty = self._default_repetition_penalty
+
+        input_ids = kwargs.get("input_ids")
+        if input_ids is not None:
+            curr_ids = input_ids[0].cpu().tolist()
+        else:
+            curr_ids = list(self._full_ids[: self._n_prompt])
+
+        target_gen = self._full_ids[self._n_prompt :]
+        if not target_gen:
+            return torch.tensor([curr_ids])
+
+        generated = list(curr_ids)
+        for expected_tok in target_gen:
+            alt_tok = 99 if expected_tok != 99 else 98
+            logits = {expected_tok: 10.0, alt_tok: 9.0}
+            if rep_penalty != 1.0:
+                seen = set(generated)
+                for tok_id in list(logits.keys()):
+                    if tok_id in seen:
+                        logits[tok_id] = logits[tok_id] / rep_penalty
+            best_tok = max(logits.keys(), key=lambda t: logits[t])
+            generated.append(best_tok)
+
+        return torch.tensor([generated])
 
 
 class _FakeDraft:
@@ -965,7 +1069,83 @@ class TestMeasureAcceptance:
             max_new_tokens=8,
         )
         assert target.calls[0]["do_sample"] is False
+        assert target.calls[0]["repetition_penalty"] == 1.0
         assert target.calls[0]["max_new_tokens"] == 8
+
+    def test_repetition_penalty_neutralized_for_self_acceptance(self):
+        """When target and draft are identical, repetition_penalty is neutralized (Refs #345)."""
+        from soup_cli.utils.draft import measure_acceptance
+
+        # Target generates [10, 11, 12] from prompt [10, 6].
+        # An identical draft produces predictions [10, 11, 12] for those positions.
+        identical_draft_argmax = [99, 10, 11, 12, 99]
+        target = _FakeTarget([10, 6, 10, 11, 12], 2)
+        draft = _FakeDraft(identical_draft_argmax)
+
+        accepted, total = measure_acceptance(
+            target, draft, _TensorTok([10, 6]), ["hello"], max_new_tokens=8
+        )
+        assert target.calls[0]["repetition_penalty"] == 1.0
+        assert total == 3
+        assert accepted == 3
+
+    def test_cross_tokenizer_unextendable_prompt_scores_zero_zero(self):
+        """When draft tokenizer produces no continuation beyond draft_prompt_len,
+        measure_acceptance skips counting and returns exactly (0, 0)."""
+        from soup_cli.utils.draft import measure_acceptance
+
+        target_tok = _CrossTokenizerMock(
+            vocab_size=32000,
+            encode_map={"hello": [5, 6], "hello world": [5, 6, 10, 11, 12]},
+            decode_map={5: "hel", 6: "lo", 10: " ", 11: "wor", 12: "ld"},
+        )
+        # Draft tokenizer produces no new tokens beyond draft_prompt_len (both 3 tokens).
+        draft_tok = _CrossTokenizerMock(
+            vocab_size=49152,
+            encode_map={"hello": [1, 2, 3], "hello world": [1, 2, 3]},
+            decode_map={1: "hel", 2: "lo", 3: ""},
+        )
+        target = _FakeTarget([5, 6, 10, 11, 12], 2)
+        draft = _FakeDraft([99, 99, 99, 99, 99])
+
+        accepted, total = measure_acceptance(
+            target,
+            draft,
+            target_tok,
+            ["hello"],
+            max_new_tokens=8,
+            draft_tokenizer=draft_tok,
+        )
+        assert (accepted, total) == (0, 0)
+
+    def test_cross_tokenizer_extendable_prompt_measures_acceptance(self):
+        """When draft tokenizer produces tokens beyond draft_prompt_len,
+        measure_acceptance computes span-aligned acceptance."""
+        from soup_cli.utils.draft import measure_acceptance
+
+        target_tok = _CrossTokenizerMock(
+            vocab_size=32000,
+            encode_map={"hello": [5, 6], "hello world": [5, 6, 10, 11, 12]},
+            decode_map={5: "hel", 6: "lo", 10: " ", 11: "wor", 12: "ld"},
+        )
+        draft_tok = _CrossTokenizerMock(
+            vocab_size=49152,
+            encode_map={"hello": [1, 2], "hello world": [1, 2, 20, 21, 22]},
+            decode_map={1: "hel", 2: "lo", 20: " ", 21: "wor", 22: "ld"},
+        )
+        target = _FakeTarget([5, 6, 10, 11, 12], 2)
+        draft = _FakeDraft([99, 20, 21, 22, 99])
+
+        accepted, total = measure_acceptance(
+            target,
+            draft,
+            target_tok,
+            ["hello"],
+            max_new_tokens=8,
+            draft_tokenizer=draft_tok,
+        )
+        assert (accepted, total) == (3, 3)
+
 
 
 class TestMeasureThroughput:
@@ -1127,6 +1307,14 @@ class TestDraftDistillCli:
 
         monkeypatch.setattr(draft_cmd, "_vocab_size_of", _fake_vocab)
 
+        tok_target = _FakeTok(target_vocab)
+        tok_draft = _FakeTok(draft_vocab)
+
+        def _fake_tok(model_id: str, **kwargs):
+            return tok_target if "target" in model_id else tok_draft
+
+        monkeypatch.setattr("transformers.AutoTokenizer.from_pretrained", _fake_tok)
+
     def test_plan_only_writes_nothing(self, runner, in_tmp_cwd, monkeypatch):
         from soup_cli.commands.draft import app
 
@@ -1141,7 +1329,9 @@ class TestDraftDistillCli:
         assert "task: distill" in result.output
         assert not (in_tmp_cwd / "draftout").exists()
 
-    def test_vocab_mismatch_rejected(self, runner, in_tmp_cwd, monkeypatch):
+    def test_vocab_mismatch_routes_to_cross_tokenizer_uld(
+        self, runner, in_tmp_cwd, monkeypatch
+    ):
         from soup_cli.commands.draft import app
 
         self._patch_configs(monkeypatch, 49152, 151936)
@@ -1149,11 +1339,11 @@ class TestDraftDistillCli:
         result = runner.invoke(
             app,
             ["distill", "--target", "org/target", "--draft-base", "org/tiny",
-             "--data", data, "-o", "draftout"],
+             "--data", data, "-o", "draftout", "--plan-only"],
         )
-        assert result.exit_code == 1
-        assert "tokenizer" in result.output.lower()
-        assert "uld_strategy" in result.output
+        assert result.exit_code == 0
+        assert "uld_strategy: wasserstein_aligned" in result.output
+        assert "cross-tokenizer" in result.output.lower()
 
     def test_data_outside_cwd_rejected(self, runner, in_tmp_cwd, tmp_path_factory,
                                        monkeypatch):
@@ -1314,6 +1504,64 @@ class TestDraftDistillCli:
                 draft_base="org/tiny", target="org/target", data="d.jsonl",
                 out_dir="draftout", steps=100, data_rows=200,
             )
+
+    def test_run_distill_reports_rendered_config_validation_error(
+        self, in_tmp_cwd, monkeypatch
+    ):
+        import typer
+
+        from soup_cli.commands import draft as draft_cmd
+
+        messages: list[str] = []
+        monkeypatch.setattr(
+            "soup_cli.config.loader.load_config_from_string",
+            lambda _yaml: (_ for _ in ()).throw(ValueError("invalid rendered config")),
+        )
+        monkeypatch.setattr(draft_cmd.console, "print", lambda message: messages.append(message))
+
+        with pytest.raises(typer.Exit) as exc_info:
+            draft_cmd._run_distill(
+                draft_base="org/tiny",
+                target="org/target",
+                data="d.jsonl",
+                out_dir="draftout",
+                steps=100,
+                data_rows=200,
+            )
+
+        assert exc_info.value.exit_code == 1
+        assert messages == ["[red]Invalid rendered distill config:[/] invalid rendered config"]
+
+    def test_run_distill_sanitizes_rendered_config_validation_error(
+        self, in_tmp_cwd, monkeypatch
+    ):
+        import typer
+
+        from soup_cli.commands import draft as draft_cmd
+
+        messages: list[str] = []
+        monkeypatch.setattr(
+            "soup_cli.config.loader.load_config_from_string",
+            lambda _yaml: (_ for _ in ()).throw(
+                ValueError("bad \x1b[2J[bold red]field[/]")
+            ),
+        )
+        monkeypatch.setattr(draft_cmd.console, "print", lambda message: messages.append(message))
+
+        with pytest.raises(typer.Exit) as exc_info:
+            draft_cmd._run_distill(
+                draft_base="org/tiny",
+                target="org/target",
+                data="d.jsonl",
+                out_dir="draftout",
+                steps=100,
+                data_rows=200,
+            )
+
+        assert exc_info.value.exit_code == 1
+        assert len(messages) == 1
+        assert "\x1b" not in messages[0]
+        assert "bad [2J\\[bold red]field\\[/]" in messages[0]
 
     def test_run_distill_timeout_raises_friendly_error(self, in_tmp_cwd, monkeypatch):
         import subprocess as _sp
@@ -1571,12 +1819,22 @@ class TestDraftMeasureCli:
 
         tok_a = _FakeTok(49152)
         tok_b = _FakeTok(49152) if compatible else _FakeTok(151936)
+        model_a = object()
+        model_b = object()
+
+        # measure now gates on config.vocab_size before loading (issue #344). Make
+        # that gate pass (equal config vocab) so these tests keep exercising the
+        # load / same_tokenizer / measurement paths; the tokenizer-vocab mismatch
+        # `compatible=False` sets still trips same_tokenizer as before.
+        monkeypatch.setattr(draft_cmd, "_vocab_size_of", lambda mid, trc=False: 49152)
 
         def _fake_load(model_id, **kwargs):
             tok = tok_a if "target" in model_id else tok_b
-            return object(), tok, "cpu"
+            model = model_a if "target" in model_id else model_b
+            return model, tok, "cpu"
 
         monkeypatch.setattr(draft_cmd, "_load_pair_member", _fake_load)
+        return (model_a, tok_a), (model_b, tok_b)
 
     def test_happy_path_writes_report_and_exits_zero(
         self, runner, in_tmp_cwd, monkeypatch
@@ -1597,7 +1855,7 @@ class TestDraftMeasureCli:
              "--prompts", prompts, "-o", "report.json"],
         )
         assert result.exit_code == 0, (result.output, repr(result.exception))
-        assert "STRONG" in result.output
+        assert "STRONG" in _plain(result.output)
         data = _json.loads((in_tmp_cwd / "report.json").read_text(encoding="utf-8"))
         assert data["acceptance_rate"] == 0.75
         assert data["verdict"] == "STRONG"
@@ -1618,21 +1876,71 @@ class TestDraftMeasureCli:
              "--prompts", prompts, "--min-acceptance", "0.6"],
         )
         assert result.exit_code == 2
-        assert "60.0%" in result.output
-        assert "below" in result.output.lower()
+        assert "60.0%" in _plain(result.output)
+        assert "below" in _plain(result.output).lower()
 
-    def test_mismatched_tokenizer_exits_one(self, runner, in_tmp_cwd, monkeypatch):
+    def test_mismatched_tokenizer_measures_cross_tokenizer(
+        self, runner, in_tmp_cwd, monkeypatch
+    ):
+        from soup_cli.commands import draft as draft_cmd
         from soup_cli.commands.draft import app
 
-        self._patch_load(monkeypatch, compatible=False)
+        (_, _), (draft_model, draft_tok) = self._patch_load(
+            monkeypatch, compatible=False
+        )
+        monkeypatch.setattr(draft_cmd, "measure_acceptance", lambda *a, **k: (60, 100))
+
+        captured_kwargs: list[dict] = []
+
+        def _spy_measure_throughput(*args, **kwargs):
+            captured_kwargs.append(kwargs)
+            return 15.0
+
+        monkeypatch.setattr(draft_cmd, "measure_throughput", _spy_measure_throughput)
+
         prompts = self._prompts(in_tmp_cwd)
         result = runner.invoke(
             app,
             ["measure", "--target", "org/target", "--draft", "org/tiny",
              "--prompts", prompts],
         )
-        assert result.exit_code == 1
-        assert "tokenizer" in result.output.lower()
+        assert result.exit_code == 0
+        assert "Cross-tokenizer draft detected" in _plain(result.output)
+        assert "60.0%" in _plain(result.output)
+
+        assisted_calls = [kw for kw in captured_kwargs if "assistant_model" in kw]
+        assert len(assisted_calls) == 1
+        assisted = assisted_calls[0]
+        assert assisted["assistant_model"] is draft_model
+        assert assisted["assistant_tokenizer"] is draft_tok
+        assert "max_new_tokens" in assisted
+        assert "num_assistant_tokens" in assisted
+
+    def test_mismatched_tokenizer_unsupported_uad_warns(
+        self, runner, in_tmp_cwd, monkeypatch
+    ):
+        from soup_cli.commands import draft as draft_cmd
+        from soup_cli.commands.draft import app
+
+        self._patch_load(monkeypatch, compatible=False)
+        monkeypatch.setattr(draft_cmd, "measure_acceptance", lambda *a, **k: (60, 100))
+
+        def _boom(model, tok, prompts, *, assistant_model=None, **kw):
+            if assistant_model is not None:
+                raise RuntimeError("Universal Assisted Decoding requires transformers>=4.45.0")
+            return 20.0
+
+        monkeypatch.setattr(draft_cmd, "measure_throughput", _boom)
+
+        prompts = self._prompts(in_tmp_cwd)
+        result = runner.invoke(
+            app,
+            ["measure", "--target", "org/target", "--draft", "org/tiny",
+             "--prompts", prompts],
+        )
+        assert result.exit_code == 0
+        assert "Universal Assisted Decoding requires transformers>=4.45.0" in _plain(result.output)
+        assert "could not be measured" in _plain(result.output)
 
     def test_prompts_outside_cwd_rejected(
         self, runner, in_tmp_cwd, tmp_path_factory, monkeypatch
@@ -1683,6 +1991,9 @@ class TestDraftMeasureCli:
         def _boom(model_id, **kw):
             raise OSError("model not found")
 
+        # Config gate passes (issue #344) so the flow reaches the load, which is
+        # what this test exercises.
+        monkeypatch.setattr(draft_cmd, "_vocab_size_of", lambda mid, trc=False: 49152)
         monkeypatch.setattr(draft_cmd, "_load_pair_member", _boom)
         prompts = self._prompts(in_tmp_cwd)
         result = runner.invoke(
@@ -1752,6 +2063,368 @@ class TestDraftMeasureCli:
         )
         assert result.exit_code == 1
         assert "no tokens" in result.output.lower()
+
+
+#: Qwen2.5's config.vocab_size with the padded embedding rows, and without them.
+#: The tokenizers are identical; only these two numbers differ (issue #344).
+_QWEN_PADDED_VOCAB = 152064
+_QWEN_BASE_VOCAB = 151936
+#: `LlavaConfig().get_text_config().vocab_size` on transformers 4.57.6 — the
+#: composite shape whose top-level `vocab_size` is absent (#344 review).
+_LLAVA_TEXT_VOCAB = 32000
+
+
+class TestDraftMeasureVocabGate:
+    """issue #344 — measure must refuse the SAME pairs distill refuses (on
+    config.vocab_size, before loading), and must not discard a completed
+    measurement when the assisted arm fails inside transformers."""
+
+    def _prompts(self, tmp_path):
+        return _write_jsonl(
+            tmp_path / "p.jsonl", [{"prompt": "What is 2+2?"}, {"prompt": "Hi"}]
+        )
+
+    @pytest.mark.parametrize(
+        ("target_vocab", "draft_vocab"),
+        [
+            (_QWEN_PADDED_VOCAB, _QWEN_BASE_VOCAB),
+            # The mirror image. The gate is `!=`, not `>`: a draft with the LARGER
+            # config vocab is refused too. Without this direction, mutating the
+            # comparison to `>` survives (#344 review, finding 3).
+            (_QWEN_BASE_VOCAB, _QWEN_PADDED_VOCAB),
+        ],
+    )
+    def test_config_vocab_mismatch_refused_before_any_model_loads(
+        self, runner, in_tmp_cwd, monkeypatch, target_vocab, draft_vocab
+    ):
+        # Qwen2.5 large<-small: identical tokenizers, but config.vocab_size differs
+        # by padded embedding rows (152064 vs 151936). same_tokenizer() accepts it;
+        # transformers' assisted generation does not. measure must gate on the
+        # config vocab up front, exactly like distill.
+        from soup_cli.commands import draft as draft_cmd
+        from soup_cli.commands.draft import app
+
+        monkeypatch.setattr(
+            draft_cmd,
+            "_vocab_size_of",
+            lambda mid, trc=False: target_vocab if "target" in mid else draft_vocab,
+        )
+        loaded: list[str] = []
+
+        def _fake_load(model_id, **kwargs):
+            loaded.append(model_id)
+            return object(), _FakeTok(151643), "cpu"
+
+        # Everything past the gate is patched out, so the only thing that can make
+        # this test pass is the gate itself refusing before the load.
+        monkeypatch.setattr(draft_cmd, "_load_pair_member", _fake_load)
+        monkeypatch.setattr(draft_cmd, "measure_acceptance", lambda *a, **k: (75, 100))
+        monkeypatch.setattr(draft_cmd, "measure_throughput", lambda *a, **k: 20.0)
+
+        prompts = self._prompts(in_tmp_cwd)
+        result = runner.invoke(
+            app,
+            ["measure", "--target", "org/target-qwen-32b", "--draft", "org/qwen-0_5b",
+             "--prompts", prompts, "-o", "report.json"],
+        )
+        assert result.exit_code == 1, (result.output, repr(result.exception))
+        assert "vocab" in result.output.lower()
+        # Refused BEFORE the expensive load, and no report written.
+        assert loaded == []
+        assert not (in_tmp_cwd / "report.json").exists()
+
+    def test_assisted_arm_failure_keeps_acceptance_and_plain_on_disk(
+        self, runner, in_tmp_cwd, monkeypatch
+    ):
+        import json as _json
+
+        from soup_cli.commands import draft as draft_cmd
+        from soup_cli.commands.draft import app
+
+        monkeypatch.setattr(draft_cmd, "_vocab_size_of", lambda mid, trc=False: 49152)
+        monkeypatch.setattr(
+            draft_cmd,
+            "_load_pair_member",
+            lambda model_id, **kw: (object(), _FakeTok(49152), "cpu"),
+        )
+        monkeypatch.setattr(draft_cmd, "measure_acceptance", lambda *a, **k: (75, 100))
+
+        def _throughput(model, tok, prompts, *, assistant_model=None,
+                        num_assistant_tokens=5, max_new_tokens=64):
+            # The assisted arm is the one transformers refuses (issue #344); the
+            # plain arm has already succeeded by the time it runs.
+            if assistant_model is not None:
+                raise ValueError(
+                    "The main and assistant models have different tokenizers"
+                )
+            return 20.0
+
+        monkeypatch.setattr(draft_cmd, "measure_throughput", _throughput)
+
+        prompts = self._prompts(in_tmp_cwd)
+        result = runner.invoke(
+            app,
+            ["measure", "--target", "org/target", "--draft", "org/tiny",
+             "--prompts", prompts, "-o", "report.json"],
+        )
+        # A failed assisted arm is a loud warning, not a crash: the acceptance rate
+        # and plain throughput already succeeded and must survive on disk.
+        assert result.exit_code == 0, (result.output, repr(result.exception))
+        report = in_tmp_cwd / "report.json"
+        assert report.exists()
+        data = _json.loads(report.read_text(encoding="utf-8"))
+        assert data["acceptance_rate"] == 0.75
+        assert data["tok_s_plain"] == 20.0
+        assert data["tok_s_assisted"] is None
+        assert data["speedup"] is None
+        # #344 review: a crashed arm is recorded on disk (else it is byte-identical
+        # to an untimed or interrupted one), and the loud warning is actually shown
+        # (deleting the message fails this).
+        assert data["assisted_status"] == "crash"
+        assert "could not be measured" in _plain(result.output)
+
+    def _run_measure(self, runner, in_tmp_cwd, monkeypatch, throughput):
+        """Drive `measure` to the assisted arm with everything before it mocked;
+        `throughput` decides the assisted arm's outcome."""
+        from soup_cli.commands import draft as draft_cmd
+        from soup_cli.commands.draft import app
+
+        monkeypatch.setattr(draft_cmd, "_vocab_size_of", lambda mid, trc=False: 49152)
+        monkeypatch.setattr(
+            draft_cmd,
+            "_load_pair_member",
+            lambda model_id, **kw: (object(), _FakeTok(49152), "cpu"),
+        )
+        monkeypatch.setattr(draft_cmd, "measure_acceptance", lambda *a, **k: (75, 100))
+        monkeypatch.setattr(draft_cmd, "measure_throughput", throughput)
+        prompts = self._prompts(in_tmp_cwd)
+        return runner.invoke(
+            app,
+            ["measure", "--target", "org/target", "--draft", "org/tiny",
+             "--prompts", prompts, "-o", "report.json"],
+        )
+
+    def test_assisted_arm_outcomes_are_distinguishable_on_disk(
+        self, runner, in_tmp_cwd, monkeypatch
+    ):
+        """#344 review: crash / untimed / interrupt / complete wrote byte-identical
+        JSON. Each now records a distinct ``assisted_status``."""
+        import json as _json
+
+        def _complete(model, tok, prompts, *, assistant_model=None, **kw):
+            return 30.0 if assistant_model is not None else 20.0
+
+        result = self._run_measure(runner, in_tmp_cwd, monkeypatch, _complete)
+        assert result.exit_code == 0, (result.output, repr(result.exception))
+        data = _json.loads((in_tmp_cwd / "report.json").read_text(encoding="utf-8"))
+        assert data["assisted_status"] == "complete"
+        assert data["tok_s_assisted"] == 30.0
+        assert data["speedup"] == 1.5
+
+    def test_assisted_arm_untimed_is_recorded_and_silent(
+        self, runner, in_tmp_cwd, monkeypatch
+    ):
+        """A non-positive assisted number is 'untimed', not 'crash', and prints no
+        warning — the two must not collapse to the same on-disk state."""
+        import json as _json
+
+        def _untimed(model, tok, prompts, *, assistant_model=None, **kw):
+            return 0.0 if assistant_model is not None else 20.0
+
+        result = self._run_measure(runner, in_tmp_cwd, monkeypatch, _untimed)
+        assert result.exit_code == 0, (result.output, repr(result.exception))
+        data = _json.loads((in_tmp_cwd / "report.json").read_text(encoding="utf-8"))
+        assert data["assisted_status"] == "untimed"
+        assert data["tok_s_assisted"] is None
+        assert "could not be measured" not in _plain(result.output)
+
+    def test_assisted_arm_interrupt_is_recorded_and_reraised(
+        self, runner, in_tmp_cwd, monkeypatch
+    ):
+        """Ctrl-C during the arm is recorded as 'interrupted' and re-raised (so the
+        exit is not 0). Widening the ``except`` to swallow BaseException — or
+        dropping the KeyboardInterrupt handler — fails this."""
+        import json as _json
+
+        def _interrupt(model, tok, prompts, *, assistant_model=None, **kw):
+            if assistant_model is not None:
+                raise KeyboardInterrupt
+            return 20.0
+
+        result = self._run_measure(runner, in_tmp_cwd, monkeypatch, _interrupt)
+        # click converts the re-raised KeyboardInterrupt to exit 130 — the point
+        # is that it is NOT swallowed into a 0 like crash/untimed are.
+        assert result.exit_code == 130, (result.output, repr(result.exception))
+        data = _json.loads((in_tmp_cwd / "report.json").read_text(encoding="utf-8"))
+        assert data["assisted_status"] == "interrupted"
+        assert data["tok_s_assisted"] is None
+
+    def test_hard_death_in_the_assisted_arm_keeps_the_incremental_report(
+        self, runner, in_tmp_cwd, monkeypatch
+    ):
+        """The incremental write earns its keep on a death NO handler catches.
+
+        `SystemExit` derives from `BaseException`, so neither `except Exception`
+        nor `except KeyboardInterrupt` catches it and nothing in `measure` runs
+        after the arm dies here — the only reason acceptance + plain throughput
+        are on disk is the write that already happened BEFORE the arm. A hard
+        kill is the same shape with no Python frame at all. Delete just that
+        write and every other test in this class stays green; this one goes red
+        (#344 review, blocker 1). It is also the only assertion on `pending`,
+        which is reachable on disk exactly in this case.
+        """
+        import json as _json
+
+        def _hard_death(model, tok, prompts, *, assistant_model=None, **kw):
+            if assistant_model is not None:
+                raise SystemExit(137)
+            return 20.0
+
+        result = self._run_measure(runner, in_tmp_cwd, monkeypatch, _hard_death)
+        assert result.exit_code == 137, (result.output, repr(result.exception))
+        report = in_tmp_cwd / "report.json"
+        assert report.exists(), "acceptance + plain throughput were discarded"
+        data = _json.loads(report.read_text(encoding="utf-8"))
+        assert data["acceptance_rate"] == 0.75
+        assert data["tok_s_plain"] == 20.0
+        assert data["assisted_status"] == "pending"
+
+    @pytest.mark.parametrize(
+        ("outcome", "expected_exit"),
+        [("crash", 0), ("interrupt", 130)],
+    )
+    def test_a_failed_status_write_does_not_mask_the_arm_outcome(
+        self, runner, in_tmp_cwd, monkeypatch, outcome, expected_exit
+    ):
+        """#344 review nit: the status write inside the two handlers was unguarded,
+        so an `OSError` there replaced the exception being handled — the crashed
+        arm's warning became an unrelated traceback, and Ctrl-C lost its exit 130.
+        Drop the guard in `_record_assisted_status` and both cases fail.
+        """
+        import json as _json
+
+        from soup_cli.commands import draft as draft_cmd
+
+        real_write = draft_cmd._write_draft_report
+        writes = {"n": 0}
+
+        def _fail_after_the_pre_arm_write(report, output):
+            writes["n"] += 1
+            if writes["n"] == 1:
+                real_write(report, output)
+                return
+            raise OSError("no space left on device")
+
+        monkeypatch.setattr(
+            draft_cmd, "_write_draft_report", _fail_after_the_pre_arm_write
+        )
+
+        def _throughput(model, tok, prompts, *, assistant_model=None, **kw):
+            if assistant_model is None:
+                return 20.0
+            if outcome == "interrupt":
+                raise KeyboardInterrupt
+            raise ValueError("boom")
+
+        result = self._run_measure(runner, in_tmp_cwd, monkeypatch, _throughput)
+        assert result.exit_code == expected_exit, (
+            result.output,
+            repr(result.exception),
+        )
+        # The failed update is reported, not swallowed silently...
+        assert "could not record the assisted-arm outcome" in _plain(result.output)
+        # ...and the results the pre-arm write persisted are untouched on disk.
+        data = _json.loads((in_tmp_cwd / "report.json").read_text(encoding="utf-8"))
+        assert data["acceptance_rate"] == 0.75
+        assert data["tok_s_plain"] == 20.0
+
+    def test_a_crashed_arm_without_an_output_path_still_warns(
+        self, runner, in_tmp_cwd, monkeypatch
+    ):
+        """`measure` without `-o` has no report to update, so recording the outcome
+        must be a no-op rather than a write against `None` — the arm still warns
+        and the run still exits 0."""
+        from soup_cli.commands import draft as draft_cmd
+        from soup_cli.commands.draft import app
+
+        monkeypatch.setattr(draft_cmd, "_vocab_size_of", lambda mid, trc=False: 49152)
+        monkeypatch.setattr(
+            draft_cmd,
+            "_load_pair_member",
+            lambda model_id, **kw: (object(), _FakeTok(49152), "cpu"),
+        )
+        monkeypatch.setattr(draft_cmd, "measure_acceptance", lambda *a, **k: (75, 100))
+
+        def _crash(model, tok, prompts, *, assistant_model=None, **kw):
+            if assistant_model is not None:
+                raise ValueError("boom")
+            return 20.0
+
+        monkeypatch.setattr(draft_cmd, "measure_throughput", _crash)
+        result = runner.invoke(
+            app,
+            ["measure", "--target", "org/target", "--draft", "org/tiny",
+             "--prompts", self._prompts(in_tmp_cwd)],
+        )
+        assert result.exit_code == 0, (result.output, repr(result.exception))
+        assert "could not be measured" in _plain(result.output)
+        assert not list(in_tmp_cwd.glob("*.json"))
+
+
+class TestVocabSizeOfCompositeConfig:
+    """#344 review, blocker 2 — `_vocab_size_of` reads a composite/multimodal
+    config's `get_text_config()` when the top-level `vocab_size` is absent, so a
+    VLM target is no longer refused with "could not read model config". It is the
+    shared helper, so this covers `measure` and `distill` at once.
+
+    Stubbed configs rather than a real `LlavaConfig` so changes in the supported
+    Transformers range cannot satisfy the assertion without reaching the
+    fallback. The shapes below are the ones originally measured on 4.57.6
+    (`LlavaConfig().vocab_size` missing, `get_text_config().vocab_size == 32000`).
+    """
+
+    def _vocab_size_for(self, config):
+        from unittest.mock import patch
+
+        from soup_cli.commands.draft import _vocab_size_of
+
+        with patch("transformers.AutoConfig.from_pretrained", return_value=config):
+            return _vocab_size_of("org/model")
+
+    @pytest.mark.parametrize(
+        "text_vocab", [_LLAVA_TEXT_VOCAB, _QWEN_PADDED_VOCAB]
+    )
+    def test_composite_config_resolves_through_get_text_config(self, text_vocab):
+        """Two sizes, because one would be satisfied by a fallback that returns a
+        hardcoded 32000 rather than reading the sub-config."""
+        import types
+
+        config = types.SimpleNamespace(
+            get_text_config=lambda: types.SimpleNamespace(vocab_size=text_vocab)
+        )
+        assert self._vocab_size_for(config) == text_vocab
+
+    def test_top_level_vocab_size_still_wins(self):
+        """The control. Without it a fallback that took PRIORITY would also pass
+        the test above — here `get_text_config()` raises, so calling it at all is
+        a failure, and the plain (Qwen-shaped) path must be untouched."""
+        import types
+
+        def _must_not_be_called():
+            raise AssertionError("get_text_config() shadowed the top-level vocab_size")
+
+        config = types.SimpleNamespace(
+            vocab_size=_QWEN_BASE_VOCAB, get_text_config=_must_not_be_called
+        )
+        assert self._vocab_size_for(config) == _QWEN_BASE_VOCAB
+
+    def test_neither_source_still_raises(self):
+        """A config with no vocab size anywhere keeps the pre-existing error —
+        the fallback must not turn an unreadable config into a silent default."""
+        import types
+
+        with pytest.raises(ValueError, match="vocab_size"):
+            self._vocab_size_for(types.SimpleNamespace())
 
 
 class TestDraftListCli:

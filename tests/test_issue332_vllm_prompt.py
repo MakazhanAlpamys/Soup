@@ -165,8 +165,10 @@ class TestBothBackendsShareOneBuilder:
     """Acceptance #1: vLLM and transformers must produce the SAME string."""
 
     def test_transformers_backend_calls_the_shared_builder(self):
+        # #781: serve renders through the builder's body and encodes in the same
+        # call; the ids it sends are pinned in tests/test_issue781_inference_bos.py.
         src = Path("src/soup_cli/commands/serve.py").read_text(encoding="utf-8")
-        assert "build_chat_prompt(" in src, (
+        assert "encode_chat_prompt(" in src, (
             "the transformers backend must use the shared builder"
         )
 
@@ -175,9 +177,26 @@ class TestBothBackendsShareOneBuilder:
         place — inside the shared fallback."""
         serve_src = Path("src/soup_cli/commands/serve.py").read_text(encoding="utf-8")
         vllm_src = Path("src/soup_cli/utils/vllm.py").read_text(encoding="utf-8")
+        # #360: sglang.py is the file that carried the third hand-rolled copy,
+        # so it is the file most likely to grow one again. Guarding vllm.py and
+        # serve.py while leaving it unscanned protected everything except the
+        # place the defect actually was.
+        sglang_src = Path("src/soup_cli/utils/sglang.py").read_text(encoding="utf-8")
 
         assert 'f"User: {content}"' not in serve_src
+        assert 'f"User: {content}"' not in sglang_src
         assert vllm_src.count('f"User: {content}"') == 1
+
+    def test_sglang_does_not_redefine_the_finish_reason_vocabulary(self):
+        """#360 item 4: one source of truth for the finish_reason set.
+
+        A second ``_FINISH_REASONS = frozenset(...)`` in sglang.py is the same
+        duplicated-constant shape that #372, #392 and #424 were caused by.
+        """
+        sglang_src = Path("src/soup_cli/utils/sglang.py").read_text(encoding="utf-8")
+
+        assert "_FINISH_REASONS = frozenset" not in sglang_src
+        assert "from soup_cli.utils.vllm import _FINISH_REASONS" in sglang_src
 
 
 # ============================================================
@@ -268,12 +287,19 @@ class TestVllmAppPrompt:
         return capture, resp.json()
 
     def test_engine_receives_the_templated_prompt(self):
+        """Since #785 the engine gets the templated prompt as token ids rather
+        than text, so vLLM's own tokenizer cannot add a second BOS to it. The
+        #332 invariant is unchanged: those ids encode the model's own template,
+        not the hand-rolled prompt."""
         tok = _tokenizer(_CHATML)
         capture, _ = self._post(tok)
 
-        assert capture["prompt"] == tok.apply_chat_template(
+        templated = tok.apply_chat_template(
             _MESSAGES, tokenize=False, add_generation_prompt=True
         )
+        assert capture["prompt"] == {
+            "prompt_token_ids": tok(templated, add_special_tokens=False)["input_ids"]
+        }
 
     def test_control_engine_receives_legacy_prompt_without_a_template(self):
         capture, _ = self._post(_tokenizer(None))

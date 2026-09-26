@@ -142,6 +142,13 @@ class TestPartANewFormats:
         ]}]}
         assert format_to_messages(row, "multimodal") is None
 
+    @pytest.mark.parametrize("msg", ["plain", 42, None, ["role", "user"]])
+    def test_multimodal_converter_non_dict_message_is_dropped(self, msg):
+        # A non-dict message reached `msg.get(...)` and raised AttributeError,
+        # which format_to_messages does not catch, so one malformed row
+        # aborted the whole dataset load instead of being dropped.
+        assert format_to_messages({"messages": [msg]}, "multimodal") is None
+
     def test_pre_tokenized_format_requires_tokenized_path(self):
         with pytest.raises(Exception, match="tokenized_path"):
             DataConfig(train="data.jsonl", format="pre_tokenized")
@@ -265,11 +272,11 @@ class TestPartCPreprocess:
     def test_cache_key_deterministic(self):
         a = dp.make_preprocess_cache_key(
             dataset_path="d.jsonl", tokenizer_name="x/y", max_length=512,
-            format_name="alpaca",
+            format_name="alpaca", mask_mode="responses_only", task="sft",
         )
         b = dp.make_preprocess_cache_key(
             dataset_path="d.jsonl", tokenizer_name="x/y", max_length=512,
-            format_name="alpaca",
+            format_name="alpaca", mask_mode="responses_only", task="sft",
         )
         assert a == b
         assert len(a) == 16
@@ -277,24 +284,24 @@ class TestPartCPreprocess:
     def test_cache_key_changes_on_each_arg(self):
         baseline = dp.make_preprocess_cache_key(
             dataset_path="d.jsonl", tokenizer_name="x/y", max_length=512,
-            format_name="alpaca",
+            format_name="alpaca", mask_mode="responses_only", task="sft",
         )
         # Different dataset path → different key.
         diff_path = dp.make_preprocess_cache_key(
             dataset_path="other.jsonl", tokenizer_name="x/y", max_length=512,
-            format_name="alpaca",
+            format_name="alpaca", mask_mode="responses_only", task="sft",
         )
         diff_tok = dp.make_preprocess_cache_key(
             dataset_path="d.jsonl", tokenizer_name="z/w", max_length=512,
-            format_name="alpaca",
+            format_name="alpaca", mask_mode="responses_only", task="sft",
         )
         diff_len = dp.make_preprocess_cache_key(
             dataset_path="d.jsonl", tokenizer_name="x/y", max_length=1024,
-            format_name="alpaca",
+            format_name="alpaca", mask_mode="responses_only", task="sft",
         )
         diff_fmt = dp.make_preprocess_cache_key(
             dataset_path="d.jsonl", tokenizer_name="x/y", max_length=512,
-            format_name="sharegpt",
+            format_name="sharegpt", mask_mode="responses_only", task="sft",
         )
         assert len({baseline, diff_path, diff_tok, diff_len, diff_fmt}) == 5
 
@@ -302,22 +309,22 @@ class TestPartCPreprocess:
         with pytest.raises(ValueError):
             dp.make_preprocess_cache_key(
                 dataset_path="", tokenizer_name="x", max_length=1,
-                format_name="a",
+                format_name="a", mask_mode="responses_only", task="sft",
             )
         with pytest.raises(ValueError, match="null bytes"):
             dp.make_preprocess_cache_key(
                 dataset_path="d\x00", tokenizer_name="x", max_length=1,
-                format_name="a",
+                format_name="a", mask_mode="responses_only", task="sft",
             )
         with pytest.raises(ValueError, match="bool"):
             dp.make_preprocess_cache_key(
                 dataset_path="d", tokenizer_name="x", max_length=True,
-                format_name="a",
+                format_name="a", mask_mode="responses_only", task="sft",
             )
         with pytest.raises(ValueError):
             dp.make_preprocess_cache_key(
                 dataset_path="d", tokenizer_name="x", max_length=0,
-                format_name="a",
+                format_name="a", mask_mode="responses_only", task="sft",
             )
 
     def test_tokenized_path_schema(self):
@@ -557,9 +564,88 @@ class TestPartEVocabExpansion:
         cfg = DataConfig(train="d.jsonl")
         assert cfg.skip_prepare_dataset is False
 
-    def test_remove_unused_columns_default_true(self):
+    def test_remove_unused_columns_default_false(self):
+        """#759: the declared default said True while every trainer passed
+        False, so the default was a false statement about what happens."""
         cfg = DataConfig(train="d.jsonl")
-        assert cfg.remove_unused_columns is True
+        assert cfg.remove_unused_columns is False
+
+    def test_remove_unused_columns_true_loads_with_a_warning_and_is_ignored(self):
+        """#759 revised ruling: `true` never took effect, and refusing it would
+        break configs Soup wrote itself, so it loads, warns, and is ignored."""
+        from soup_cli.config.deprecation import SoupConfigDeprecationWarning
+
+        with pytest.warns(
+            SoupConfigDeprecationWarning, match=r"data\.remove_unused_columns: true"
+        ) as record:
+            cfg = DataConfig(train="d.jsonl", remove_unused_columns=True)
+        assert cfg.remove_unused_columns is False, "the run must see what the trainers pass"
+        message = str(record[0].message)
+        assert "ignored" in message
+        assert "will refuse it" in message
+
+    def test_remove_unused_columns_false_loads_without_a_warning(self):
+        """The control: only `true` warns. Without this, a validator that warned
+        on every value would pass the test above."""
+        import warnings
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            cfg = DataConfig(train="d.jsonl", remove_unused_columns=False)
+            default = DataConfig(train="d.jsonl")
+        assert cfg.remove_unused_columns is False
+        assert default.remove_unused_columns is False
+
+    def test_remove_unused_columns_true_warns_through_the_yaml_path(self, monkeypatch):
+        """The user-facing path: `soup train` loads YAML, so the warning has to be
+        printed there, once, and the value the run sees is False."""
+        import io
+
+        from rich.console import Console
+
+        from soup_cli.config import loader
+
+        buffer = io.StringIO()
+        monkeypatch.setattr(
+            loader,
+            "console",
+            Console(file=buffer, width=500, force_terminal=False, color_system=None),
+        )
+        yaml_str = (
+            "base: sshleifer/tiny-gpt2\n"
+            "task: sft\n"
+            "data:\n"
+            "  train: d.jsonl\n"
+            "  remove_unused_columns: true\n"
+        )
+        cfg = load_config_from_string(yaml_str)
+        assert cfg.data.remove_unused_columns is False
+        out = buffer.getvalue()
+        assert out.count("data.remove_unused_columns: true") == 1, out
+        assert "Delete the line" in out
+
+    def test_a_config_autopilot_wrote_on_the_old_default_still_loads(self, tmp_path):
+        """The regression that revised the ruling: `soup autopilot` dumps the whole
+        model (`write_yaml`, `exclude_none` only), so on the old default every
+        config it wrote carries `remove_unused_columns: true`."""
+        import yaml
+
+        from soup_cli.autopilot.generate_config import write_yaml
+        from soup_cli.config.deprecation import SoupConfigDeprecationWarning
+        from soup_cli.config.loader import load_config
+        from soup_cli.config.schema import SoupConfig
+
+        written = tmp_path / "soup.yaml"
+        write_yaml(SoupConfig(base="sshleifer/tiny-gpt2", data={"train": "d.jsonl"}), written)
+        dumped = yaml.safe_load(written.read_text(encoding="utf-8"))
+        # What the v0.75.0-and-earlier writer produced: the old default, literally.
+        dumped["data"]["remove_unused_columns"] = True
+        written.write_text(yaml.safe_dump(dumped, sort_keys=False), encoding="utf-8")
+
+        with pytest.warns(SoupConfigDeprecationWarning):
+            SoupConfig(**dumped)
+        cfg = load_config(written)
+        assert cfg.data.remove_unused_columns is False
 
     def test_prompt_strategy_happy(self):
         cfg = DataConfig(
@@ -698,7 +784,6 @@ data:
   streaming: true
   buffer_size: 1024
   shards: 4
-  interleave: concat
   mask_history: true
   train_on_prompt: false
   train_on_responses_only: true
@@ -726,7 +811,12 @@ output: ./out
         assert cfg.data.streaming is True
         assert cfg.data.buffer_size == 1024
         assert cfg.data.shards == 4
-        assert cfg.data.interleave == "concat"
+        # interleave is intentionally not in this kitchen-sink fixture: #443
+        # made data.interleave + data.streaming mutually exclusive at parse
+        # time (interleave now has a real training-time consumer, and it's
+        # local-files-only), so it can no longer sit alongside streaming:
+        # true here. interleave's own round-trip is covered by
+        # TestPartDInterleave below and by tests/test_issue443_interleave_wiring.py.
         assert cfg.data.mask_history is True
         assert cfg.data.image_resize_algorithm == "bicubic"
         assert cfg.data.video_fps == 24.0
@@ -936,16 +1026,14 @@ class TestSecurityReviewFixes:
         with pytest.raises(Exception, match="probs"):
             DataConfig(train="d.jsonl", interleave="probs")
 
+    @pytest.mark.requires_symlink
     def test_ingest_symlink_rejected(self, tmp_path, monkeypatch):
         # Security M2: lstat-based symlink rejection (TOCTOU defence).
         monkeypatch.chdir(tmp_path)
         target = tmp_path / "real.txt"
         target.write_text("hello", encoding="utf-8")
         link = tmp_path / "link.txt"
-        try:
-            link.symlink_to(target)
-        except (OSError, NotImplementedError):
-            pytest.skip("symlinks not supported on this platform")
+        link.symlink_to(target)
         runner = CliRunner()
         result = runner.invoke(app, ["data", "ingest", "link.txt"])
         assert result.exit_code == 1

@@ -2,11 +2,13 @@
 
 LISA (arXiv:2403.17919) gives full-FT quality at LoRA-like memory: every N
 steps it freezes all decoder layers except a small randomly-sampled set
-(embeddings + language-model head always trainable). The dynamic cousin of
+(embeddings + language-model head + final norm trainable throughout by default;
+``train_embeddings=False`` freezes that group too, #377). The dynamic cousin of
 Spectrum's static ``unfrozen_parameters`` selection.
 
-Correctness invariant (see also ``trainer/sft.py``): the SFT trainer leaves the
-model **fully trainable at prep time** so HF's ``create_optimizer`` (called
+Correctness invariant (see ``utils/peft_wiring.apply_lisa_setup``, shared by the
+SFT and pretrain trainers since #307): the trainer leaves the model **fully
+trainable at prep time** so HF's ``create_optimizer`` (called
 *before* ``on_train_begin``) includes every decoder parameter in its param
 groups. This callback then toggles ``requires_grad`` — frozen parameters produce
 ``grad=None`` and AdamW skips them, and their optimizer state is cleared on
@@ -56,6 +58,10 @@ class LisaPolicy:
     interval_steps: int
     reset_optimizer: bool = True
     seed: int = 0
+    # False freezes the always-on group (embeddings + LM head + final norm) so
+    # only the sampled decoder layers are trainable — the always-on set is 70.7%
+    # of what LISA trains at 8B, so this is where the memory actually is (#377).
+    train_embeddings: bool = True
 
     def __post_init__(self) -> None:
         for name in ("num_layers", "interval_steps", "seed"):
@@ -70,6 +76,8 @@ class LisaPolicy:
             raise ValueError("LisaPolicy.seed must be >= 0")
         if not isinstance(self.reset_optimizer, bool):
             raise TypeError("LisaPolicy.reset_optimizer must be bool")
+        if not isinstance(self.train_embeddings, bool):
+            raise TypeError("LisaPolicy.train_embeddings must be bool")
 
 
 def _try_import_callback_base():
@@ -101,7 +109,7 @@ def locate_decoder_layer_indices(model: Any) -> list[int]:
     return sorted(seen)
 
 
-class LisaCallback(_try_import_callback_base()):  # type: ignore[misc]
+class _LisaCallback_body:  # type: ignore[misc]  # noqa: N801
     """HF ``TrainerCallback`` implementing LISA layer sampling.
 
     Subclasses the lazily-resolved ``TrainerCallback`` so it inherits the no-op
@@ -166,7 +174,10 @@ class LisaCallback(_try_import_callback_base()):  # type: ignore[misc]
 
         for name, param in model.named_parameters():
             if _is_always_on(name):
-                param.requires_grad = True
+                # Always trainable under the default; frozen when the caller
+                # opts out via train_embeddings=False so the sampled decoder
+                # layers are the only trainable parameters (#377).
+                param.requires_grad = self.policy.train_embeddings
                 continue
             m = _LAYER_RE.search(name)
             if m is None:
@@ -211,3 +222,22 @@ class LisaCallback(_try_import_callback_base()):  # type: ignore[misc]
                     state[param] = {}
         except Exception:  # noqa: BLE001 — optimizer state shape varies (DS/FSDP)
             return
+
+
+_LAZY_CALLBACKS = {
+    "LisaCallback": _LisaCallback_body,
+}
+_BODY_SKIP = frozenset(("__dict__", "__weakref__"))
+
+
+def __getattr__(name: str):  # PEP 562
+    body = _LAZY_CALLBACKS.get(name)
+    if body is not None:
+        base = _try_import_callback_base()
+        ns = {k: v for k, v in vars(body).items() if k not in _BODY_SKIP}
+        cls = type(name, (base,), ns)
+        cls.__module__ = __name__
+        cls.__qualname__ = name
+        globals()[name] = cls
+        return cls
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

@@ -171,6 +171,24 @@ class TestBuildOptimizerParamGroups:
         assert len(out) == 1
         assert out[0]["name"] == "base"
 
+    def test_all_params_matched_no_base_group(self):
+        # Every param routes into a pattern group, so base_bucket stays empty
+        # and must not be appended (branch 229->235 in lr_groups.py).
+        groups = parse_lr_groups([
+            ("self_attn", 1e-4),
+            ("mlp", 2e-4),
+            ("lm_head", 3e-4),
+        ])
+        out = build_optimizer_param_groups(self._named_params(), 2e-5, groups)
+        names = [g["name"] for g in out]
+        assert names == ["lr_group:self_attn", "lr_group:mlp", "lr_group:lm_head"]
+        attn_bucket = next(g for g in out if g["name"] == "lr_group:self_attn")
+        assert sorted(attn_bucket["params"]) == ["T_q0", "T_v0"]
+        mlp_bucket = next(g for g in out if g["name"] == "lr_group:mlp")
+        assert mlp_bucket["params"] == ["T_g1"]
+        head_bucket = next(g for g in out if g["name"] == "lr_group:lm_head")
+        assert head_bucket["params"] == ["T_head"]
+
     def test_base_lr_bool_rejected(self):
         with pytest.raises(ValueError, match="must be a number"):
             build_optimizer_param_groups([], True, None)  # type: ignore[arg-type]

@@ -41,7 +41,9 @@ class TestMetricsFullFields:
             tracker.close()
 
             client = TestClient(create_app())
-            response = client.get(f"/api/runs/{run_id}/metrics")
+            response = client.get(
+                f"/api/runs/{run_id}/metrics", headers=_auth_headers()
+            )
             assert response.status_code == 200
             metrics = response.json()["metrics"]
             assert len(metrics) == 1
@@ -73,7 +75,9 @@ class TestMetricsFullFields:
             tracker.close()
 
             client = TestClient(create_app())
-            response = client.get(f"/api/runs/{run_id}/metrics")
+            response = client.get(
+                f"/api/runs/{run_id}/metrics", headers=_auth_headers()
+            )
             metrics = response.json()["metrics"]
             assert metrics[0]["epoch"] == 1.5
 
@@ -122,7 +126,9 @@ class TestRunsCompareEndpoint:
             tracker.close()
 
             client = TestClient(create_app())
-            response = client.get(f"/api/runs/compare?ids={run1},{run2}")
+            response = client.get(
+                f"/api/runs/compare?ids={run1},{run2}", headers=_auth_headers()
+            )
             assert response.status_code == 200
             data = response.json()
             assert "runs" in data
@@ -145,7 +151,9 @@ class TestRunsCompareEndpoint:
 
             client = TestClient(create_app())
             ids = ",".join([f"run_{i}" for i in range(6)])
-            response = client.get(f"/api/runs/compare?ids={ids}")
+            response = client.get(
+                f"/api/runs/compare?ids={ids}", headers=_auth_headers()
+            )
             assert response.status_code == 400
 
     def test_compare_validates_run_ids(self, tmp_path):
@@ -160,7 +168,10 @@ class TestRunsCompareEndpoint:
             from soup_cli.ui.app import create_app
 
             client = TestClient(create_app())
-            response = client.get("/api/runs/compare?ids=nonexistent1,nonexistent2")
+            response = client.get(
+                "/api/runs/compare?ids=nonexistent1,nonexistent2",
+                headers=_auth_headers(),
+            )
             assert response.status_code == 200
             data = response.json()
             assert len(data["runs"]) == 2
@@ -177,11 +188,13 @@ class TestRunsCompareEndpoint:
             from soup_cli.ui.app import create_app
 
             client = TestClient(create_app())
-            response = client.get("/api/runs/compare?ids=")
+            response = client.get(
+                "/api/runs/compare?ids=", headers=_auth_headers()
+            )
             assert response.status_code == 400
 
     def test_compare_no_auth_required(self, tmp_path):
-        """Compare is GET (read-only) — no auth needed."""
+        """Compare requires auth (401 without token, 200 with one)."""
         try:
             from fastapi.testclient import TestClient
         except ImportError:
@@ -192,8 +205,13 @@ class TestRunsCompareEndpoint:
             from soup_cli.ui.app import create_app
 
             client = TestClient(create_app())
-            response = client.get("/api/runs/compare?ids=run1,run2")
-            assert response.status_code == 200
+            assert client.get("/api/runs/compare?ids=run1,run2").status_code == 401
+            assert (
+                client.get(
+                    "/api/runs/compare?ids=run1,run2", headers=_auth_headers()
+                ).status_code
+                == 200
+            )
 
 
 class TestEvalResultsEndpoint:
@@ -227,7 +245,9 @@ class TestEvalResultsEndpoint:
             tracker.close()
 
             client = TestClient(create_app())
-            response = client.get(f"/api/runs/{run_id}/eval")
+            response = client.get(
+                f"/api/runs/{run_id}/eval", headers=_auth_headers()
+            )
             data = response.json()
             assert len(data["eval_results"]) == 1
             result = data["eval_results"][0]
@@ -257,7 +277,9 @@ class TestEvalResultsEndpoint:
             tracker.close()
 
             client = TestClient(create_app())
-            response = client.get(f"/api/runs/{run_id}/eval")
+            response = client.get(
+                f"/api/runs/{run_id}/eval", headers=_auth_headers()
+            )
             assert response.status_code == 200
             data = response.json()
             assert data["eval_results"] == []
@@ -287,7 +309,9 @@ class TestEvalResultsEndpoint:
 
             client = TestClient(create_app())
             ids_str = ",".join(run_ids)
-            response = client.get(f"/api/runs/compare?ids={ids_str}")
+            response = client.get(
+                f"/api/runs/compare?ids={ids_str}", headers=_auth_headers()
+            )
             assert response.status_code == 200
             assert len(response.json()["runs"]) == 5
 
@@ -320,7 +344,9 @@ class TestCompareMetricsContent:
             tracker.close()
 
             client = TestClient(create_app())
-            response = client.get(f"/api/runs/compare?ids={run_id}")
+            response = client.get(
+                f"/api/runs/compare?ids={run_id}", headers=_auth_headers()
+            )
             data = response.json()
             m = data["runs"][0]["metrics"][0]
             assert m["step"] == 10
@@ -349,6 +375,8 @@ class TestCompareMetricsContent:
             tracker.close()
 
             client = TestClient(create_app())
-            response = client.get(f"/api/runs/compare?ids={run_id}")
+            response = client.get(
+                f"/api/runs/compare?ids={run_id}", headers=_auth_headers()
+            )
             data = response.json()
             assert "config" in data["runs"][0]

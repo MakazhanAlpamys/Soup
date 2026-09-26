@@ -1,0 +1,1864 @@
+{
+ "meta": {
+  "gpu": "NVIDIA GeForce RTX 5070 Laptop GPU",
+  "torch": "2.14.0+cu130",
+  "vram_total_gb": 8.518,
+  "driver": "616.92",
+  "pcie_gen": "5",
+  "pcie_width": "8",
+  "label": "RTX 5070 Laptop, DISK tier (shipped DiskSource, page cache warm), Mistral-7B-Instruct-v0.3 NF4",
+  "weights": "unsloth/mistral-7b-instruct-v0.3",
+  "weights_dir": "C:\\Users\\user\\.soup\\spectrum\\weights\\unsloth__mistral-7b-instruct-v0.3",
+  "shard_dir": "C:\\Users\\user\\.soup\\layer-stream\\unsloth__mistral-7b-instruct-v0.3",
+  "quant": "nf4",
+  "dtype": "bfloat16",
+  "tier": "disk",
+  "pinned": false,
+  "store_gb": 0.0,
+  "disk_gb": 4.137812864,
+  "buffers": 2,
+  "buffer_bytes": 493494328,
+  "large_buffer_bytes": 268435456,
+  "n_layers": 32,
+  "total_params": 7248023552,
+  "shapes": {
+   "hidden": 4096,
+   "intermediate": 14336,
+   "layers": 32,
+   "kv_out": 1024,
+   "q_out": 4096,
+   "vocab": 32768,
+   "decoder_params": 6979321856,
+   "lm_head_params": 134217728,
+   "flop_per_token": 42412802048,
+   "tied": false
+  },
+  "lora_r": 8,
+  "lora_targets": "q_proj,k_proj,v_proj,o_proj",
+  "batch": 1,
+  "seq": 512,
+  "steps": 8,
+  "warmup": 3,
+  "shard_seconds": 0.004132800007937476,
+  "build_seconds": 1.3796375999809243,
+  "evict_gb": 0.0,
+  "started": "2026-09-12T20:26:28"
+ },
+ "records": [
+  {
+   "kind": "ceiling",
+   "square_4096": {
+    "tflops": 43.12167358369122,
+    "samples": [
+     11.231227226789123,
+     43.12167358369122,
+     32.755659120178414
+    ],
+    "sm_clock_mhz": 1897,
+    "dtype": "bfloat16"
+   },
+   "shape_matched": [
+    {
+     "m": 512,
+     "k": 4096,
+     "n": 4096,
+     "count": 2,
+     "tflops": 43.6294192461134
+    },
+    {
+     "m": 512,
+     "k": 4096,
+     "n": 1024,
+     "count": 2,
+     "tflops": 33.61662280307985
+    },
+    {
+     "m": 512,
+     "k": 4096,
+     "n": 14336,
+     "count": 2,
+     "tflops": 35.88137173948896
+    },
+    {
+     "m": 512,
+     "k": 14336,
+     "n": 4096,
+     "count": 1,
+     "tflops": 33.1668538393967
+    }
+   ],
+   "shape_matched_weighted_tflops": 36.25544157754446,
+   "sm_clock_mhz": 1897,
+   "dtype": "bfloat16"
+  },
+  {
+   "kind": "step",
+   "label": "step_plain",
+   "tokens_per_step": 512,
+   "steps": 8,
+   "warmup": 3,
+   "events_on": false,
+   "nocopy": false,
+   "nodequant": false,
+   "step_s_mean": 2.4595126125022944,
+   "step_s_min": 1.698613699991256,
+   "step_s_max": 3.0135259999951813,
+   "tok_per_s": 208.1713252444329,
+   "layer_loads_per_step": 61.0,
+   "large_loads_per_step": 2.0,
+   "bytes_moved_per_step": 7401166508.0,
+   "implied_h2d_gb_per_s": 3.009200469384906,
+   "copy_s_per_step": 0.0,
+   "copy_stream_gb_per_s": null,
+   "stall_s_per_step": 0.0,
+   "stall_share": 0.0,
+   "peak_alloc_gb": 1.34248192,
+   "peak_reserved_gb": 1.411383296,
+   "sm_clock_mhz_start": 1320,
+   "sm_clock_mhz_end": 1627,
+   "records": [
+    {
+     "step_s": 1.723912300018128,
+     "loss": 11.138764381408691,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 0.0,
+     "stall_s": 0.0,
+     "copy_events": 0
+    },
+    {
+     "step_s": 1.698613699991256,
+     "loss": 10.823948860168457,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 0.0,
+     "stall_s": 0.0,
+     "copy_events": 0
+    },
+    {
+     "step_s": 1.7238365999946836,
+     "loss": 10.56845474243164,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 0.0,
+     "stall_s": 0.0,
+     "copy_events": 0
+    },
+    {
+     "step_s": 2.6576523999974597,
+     "loss": 10.410082817077637,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 0.0,
+     "stall_s": 0.0,
+     "copy_events": 0
+    },
+    {
+     "step_s": 2.9753689999924973,
+     "loss": 10.292389869689941,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 0.0,
+     "stall_s": 0.0,
+     "copy_events": 0
+    },
+    {
+     "step_s": 2.9572131000168156,
+     "loss": 10.211008071899414,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 0.0,
+     "stall_s": 0.0,
+     "copy_events": 0
+    },
+    {
+     "step_s": 2.9259778000123333,
+     "loss": 10.081832885742188,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 0.0,
+     "stall_s": 0.0,
+     "copy_events": 0
+    },
+    {
+     "step_s": 3.0135259999951813,
+     "loss": 9.943675994873047,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 0.0,
+     "stall_s": 0.0,
+     "copy_events": 0
+    }
+   ]
+  },
+  {
+   "kind": "step",
+   "label": "step_events",
+   "tokens_per_step": 512,
+   "steps": 8,
+   "warmup": 3,
+   "events_on": true,
+   "nocopy": false,
+   "nodequant": false,
+   "step_s_mean": 2.891724075005186,
+   "step_s_min": 2.7714408000174444,
+   "step_s_max": 2.9419530000013765,
+   "tok_per_s": 177.0570036143859,
+   "layer_loads_per_step": 61.0,
+   "large_loads_per_step": 2.0,
+   "bytes_moved_per_step": 7401166508.0,
+   "implied_h2d_gb_per_s": 2.559430400698492,
+   "copy_s_per_step": 1.7242424277067183,
+   "copy_stream_gb_per_s": 4.292416419565617,
+   "stall_s_per_step": 0.0002449360016908031,
+   "stall_share": 8.47024112044175e-05,
+   "peak_alloc_gb": 1.34248192,
+   "peak_reserved_gb": 1.411383296,
+   "sm_clock_mhz_start": 1627,
+   "sm_clock_mhz_end": 1500,
+   "records": [
+    {
+     "step_s": 2.9005340000148863,
+     "loss": 9.30081558227539,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 1.7343725414276123,
+     "stall_s": 0.00024240000382997096,
+     "copy_events": 63
+    },
+    {
+     "step_s": 2.896307599992724,
+     "loss": 9.13361644744873,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 1.7246034603118896,
+     "stall_s": 0.00025625600351486354,
+     "copy_events": 63
+    },
+    {
+     "step_s": 2.91960600001039,
+     "loss": 8.955907821655273,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 1.747361400604248,
+     "stall_s": 0.00024147200107108802,
+     "copy_events": 63
+    },
+    {
+     "step_s": 2.906596199987689,
+     "loss": 8.785626411437988,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 1.7423743591308594,
+     "stall_s": 0.00030038399912882594,
+     "copy_events": 63
+    },
+    {
+     "step_s": 2.897728100011591,
+     "loss": 8.637133598327637,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 1.7213337211608886,
+     "stall_s": 0.0003032960010459647,
+     "copy_events": 63
+    },
+    {
+     "step_s": 2.899626900005387,
+     "loss": 8.487350463867188,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 1.7258359985351563,
+     "stall_s": 0.00024553600419312716,
+     "copy_events": 63
+    },
+    {
+     "step_s": 2.7714408000174444,
+     "loss": 8.335060119628906,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 1.6284603128433228,
+     "stall_s": 0.0001211840013274923,
+     "copy_events": 63
+    },
+    {
+     "step_s": 2.9419530000013765,
+     "loss": 8.198655128479004,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 1.7695976276397705,
+     "stall_s": 0.0002489599994150922,
+     "copy_events": 63
+    }
+   ]
+  },
+  {
+   "kind": "sweep",
+   "label": "sweep_seq16",
+   "tokens_per_step": 16,
+   "steps": 8,
+   "warmup": 3,
+   "events_on": true,
+   "nocopy": false,
+   "nodequant": false,
+   "step_s_mean": 2.756374037500791,
+   "step_s_min": 2.615218399994774,
+   "step_s_max": 3.1229194000188727,
+   "tok_per_s": 5.804727436232576,
+   "layer_loads_per_step": 61.0,
+   "large_loads_per_step": 2.0,
+   "bytes_moved_per_step": 7401166508.0,
+   "implied_h2d_gb_per_s": 2.685109643069578,
+   "copy_s_per_step": 1.7285236057043076,
+   "copy_stream_gb_per_s": 4.281785035260948,
+   "stall_s_per_step": 0.002627163996206946,
+   "stall_share": 0.0009531231830165547,
+   "peak_alloc_gb": 1.073198592,
+   "peak_reserved_gb": 1.411383296,
+   "sm_clock_mhz_start": 1500,
+   "sm_clock_mhz_end": 1777,
+   "records": [
+    {
+     "step_s": 2.6501015000103507,
+     "loss": 7.7568583488464355,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 1.6686851539611816,
+     "stall_s": 0.0029682879948522895,
+     "copy_events": 63
+    },
+    {
+     "step_s": 2.6567610999918543,
+     "loss": 5.965649127960205,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 1.6764683094024657,
+     "stall_s": 0.0025129599935607987,
+     "copy_events": 63
+    },
+    {
+     "step_s": 2.762834199995268,
+     "loss": 4.490614891052246,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 1.7891455707550048,
+     "stall_s": 0.002864320020773448,
+     "copy_events": 63
+    },
+    {
+     "step_s": 2.7541608000174165,
+     "loss": 3.175246238708496,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 1.7619777240753174,
+     "stall_s": 0.0029497280068462714,
+     "copy_events": 63
+    },
+    {
+     "step_s": 2.712323599989759,
+     "loss": 2.0705177783966064,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 1.7382078971862793,
+     "stall_s": 0.0022495040023932235,
+     "copy_events": 63
+    },
+    {
+     "step_s": 2.615218399994774,
+     "loss": 1.2220066785812378,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 1.6457801275253297,
+     "stall_s": 0.0027399679737864064,
+     "copy_events": 63
+    },
+    {
+     "step_s": 2.7766732999880332,
+     "loss": 0.5609200596809387,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 1.7327766361236572,
+     "stall_s": 0.002946655983105302,
+     "copy_events": 63
+    },
+    {
+     "step_s": 3.1229194000188727,
+     "loss": 0.19801585376262665,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 1.8151474266052245,
+     "stall_s": 0.001785887994337827,
+     "copy_events": 63
+    }
+   ],
+   "seq": 16
+  },
+  {
+   "kind": "sweep",
+   "label": "sweep_seq32",
+   "tokens_per_step": 32,
+   "steps": 8,
+   "warmup": 3,
+   "events_on": true,
+   "nocopy": false,
+   "nodequant": false,
+   "step_s_mean": 2.879588249990775,
+   "step_s_min": 2.791505100001814,
+   "step_s_max": 2.9741794999863487,
+   "tok_per_s": 11.11269987995767,
+   "layer_loads_per_step": 61.0,
+   "large_loads_per_step": 2.0,
+   "bytes_moved_per_step": 7401166508.0,
+   "implied_h2d_gb_per_s": 2.5702169426561974,
+   "copy_s_per_step": 1.7998973768949509,
+   "copy_stream_gb_per_s": 4.111993607528859,
+   "stall_s_per_step": 0.0026896679971250706,
+   "stall_share": 0.000934046038399305,
+   "peak_alloc_gb": 1.078124032,
+   "peak_reserved_gb": 1.4155776,
+   "sm_clock_mhz_start": 1897,
+   "sm_clock_mhz_end": 1815,
+   "records": [
+    {
+     "step_s": 2.8897735999780707,
+     "loss": 10.974372863769531,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 1.8071465511322022,
+     "stall_s": 0.002709344002301805,
+     "copy_events": 63
+    },
+    {
+     "step_s": 2.838468699977966,
+     "loss": 10.41505241394043,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 1.7681894645690919,
+     "stall_s": 0.0029809279907494785,
+     "copy_events": 63
+    },
+    {
+     "step_s": 2.9133479000010993,
+     "loss": 9.746493339538574,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 1.8029387798309326,
+     "stall_s": 0.002139711991068907,
+     "copy_events": 63
+    },
+    {
+     "step_s": 2.840574000001652,
+     "loss": 8.953070640563965,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 1.7887049264907837,
+     "stall_s": 0.0018648000013781712,
+     "copy_events": 63
+    },
+    {
+     "step_s": 2.8839868999784812,
+     "loss": 8.069750785827637,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 1.7921619129180908,
+     "stall_s": 0.002052319996175356,
+     "copy_events": 63
+    },
+    {
+     "step_s": 2.791505100001814,
+     "loss": 7.021181583404541,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 1.735307456970215,
+     "stall_s": 0.002921023979666643,
+     "copy_events": 63
+    },
+    {
+     "step_s": 2.9048703000007663,
+     "loss": 5.974310398101807,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 1.8355808963775635,
+     "stall_s": 0.002899231995339505,
+     "copy_events": 63
+    },
+    {
+     "step_s": 2.9741794999863487,
+     "loss": 4.830729007720947,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 1.8691490268707276,
+     "stall_s": 0.003949984020320698,
+     "copy_events": 63
+    }
+   ],
+   "seq": 32
+  },
+  {
+   "kind": "sweep",
+   "label": "sweep_seq64",
+   "tokens_per_step": 64,
+   "steps": 8,
+   "warmup": 3,
+   "events_on": true,
+   "nocopy": false,
+   "nodequant": false,
+   "step_s_mean": 2.7789813250055886,
+   "step_s_min": 2.7132851000060327,
+   "step_s_max": 2.8867717000248376,
+   "tok_per_s": 23.030021621275665,
+   "layer_loads_per_step": 61.0,
+   "large_loads_per_step": 2.0,
+   "bytes_moved_per_step": 7401166508.0,
+   "implied_h2d_gb_per_s": 2.6632660109672077,
+   "copy_s_per_step": 1.760766946554184,
+   "copy_stream_gb_per_s": 4.2033765584276,
+   "stall_s_per_step": 0.002653676002359134,
+   "stall_share": 0.0009549096204717379,
+   "peak_alloc_gb": 1.09007616,
+   "peak_reserved_gb": 1.419771904,
+   "sm_clock_mhz_start": 1815,
+   "sm_clock_mhz_end": 1822,
+   "records": [
+    {
+     "step_s": 2.873415499983821,
+     "loss": 10.120329856872559,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 1.833265727996826,
+     "stall_s": 0.0018768959691515192,
+     "copy_events": 63
+    },
+    {
+     "step_s": 2.8867717000248376,
+     "loss": 9.225997924804688,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 1.8311776905059813,
+     "stall_s": 0.0028014720026403664,
+     "copy_events": 63
+    },
+    {
+     "step_s": 2.7592810000060126,
+     "loss": 8.360047340393066,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 1.738558235168457,
+     "stall_s": 0.003233216009568423,
+     "copy_events": 63
+    },
+    {
+     "step_s": 2.731984799989732,
+     "loss": 7.227058410644531,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 1.7148574676513673,
+     "stall_s": 0.0016960639988537877,
+     "copy_events": 63
+    },
+    {
+     "step_s": 2.789001900004223,
+     "loss": 6.066623210906982,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 1.7842730255126953,
+     "stall_s": 0.002535104011534713,
+     "copy_events": 63
+    },
+    {
+     "step_s": 2.718192700005602,
+     "loss": 5.2373151779174805,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 1.7067519035339356,
+     "stall_s": 0.003644448005245067,
+     "copy_events": 63
+    },
+    {
+     "step_s": 2.7132851000060327,
+     "loss": 4.207126140594482,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 1.7088000965118408,
+     "stall_s": 0.0028742080323863775,
+     "copy_events": 63
+    },
+    {
+     "step_s": 2.7599179000244476,
+     "loss": 3.270693302154541,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 1.7684514255523682,
+     "stall_s": 0.002567999989492819,
+     "copy_events": 63
+    }
+   ],
+   "seq": 64
+  },
+  {
+   "kind": "sweep",
+   "label": "sweep_seq128",
+   "tokens_per_step": 128,
+   "steps": 8,
+   "warmup": 3,
+   "events_on": true,
+   "nocopy": false,
+   "nodequant": false,
+   "step_s_mean": 2.904866424996726,
+   "step_s_min": 2.7793514000077266,
+   "step_s_max": 3.0007594999915455,
+   "tok_per_s": 44.0639882435022,
+   "layer_loads_per_step": 61.0,
+   "large_loads_per_step": 2.0,
+   "bytes_moved_per_step": 7401166508.0,
+   "implied_h2d_gb_per_s": 2.54785089059933,
+   "copy_s_per_step": 1.847655171751976,
+   "copy_stream_gb_per_s": 4.005707678117284,
+   "stall_s_per_step": 0.002759351995147881,
+   "stall_share": 0.0009499066708896919,
+   "peak_alloc_gb": 1.116733952,
+   "peak_reserved_gb": 1.42606336,
+   "sm_clock_mhz_start": 1822,
+   "sm_clock_mhz_end": 1582,
+   "records": [
+    {
+     "step_s": 2.7793514000077266,
+     "loss": 10.260855674743652,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 1.7315633506774903,
+     "stall_s": 0.0027991679961560296,
+     "copy_events": 63
+    },
+    {
+     "step_s": 2.834311299986439,
+     "loss": 9.716059684753418,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 1.788165948867798,
+     "stall_s": 0.002588959990767762,
+     "copy_events": 63
+    },
+    {
+     "step_s": 2.849797300004866,
+     "loss": 9.136378288269043,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 1.8284756813049317,
+     "stall_s": 0.0025310400024754925,
+     "copy_events": 63
+    },
+    {
+     "step_s": 2.9109761999861803,
+     "loss": 8.49352741241455,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 1.8207214698791503,
+     "stall_s": 0.003521376014687121,
+     "copy_events": 63
+    },
+    {
+     "step_s": 2.9231508999946527,
+     "loss": 7.804540634155273,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 1.8602162857055664,
+     "stall_s": 0.0028079359924886374,
+     "copy_events": 63
+    },
+    {
+     "step_s": 2.9650832999905106,
+     "loss": 7.045490741729736,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 1.9108317527770997,
+     "stall_s": 0.0031429119799286126,
+     "copy_events": 63
+    },
+    {
+     "step_s": 3.0007594999915455,
+     "loss": 6.3105998039245605,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 1.9470780820846558,
+     "stall_s": 0.0015092480011517182,
+     "copy_events": 63
+    },
+    {
+     "step_s": 2.9755015000118874,
+     "loss": 5.568441867828369,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 1.8941888027191163,
+     "stall_s": 0.003174175983527675,
+     "copy_events": 63
+    }
+   ],
+   "seq": 128
+  },
+  {
+   "kind": "sweep",
+   "label": "sweep_seq256",
+   "tokens_per_step": 256,
+   "steps": 8,
+   "warmup": 3,
+   "events_on": true,
+   "nocopy": false,
+   "nodequant": false,
+   "step_s_mean": 2.9380017625044275,
+   "step_s_min": 2.8183346000150777,
+   "step_s_max": 3.1924251999880653,
+   "tok_per_s": 87.13405256155431,
+   "layer_loads_per_step": 61.0,
+   "large_loads_per_step": 2.0,
+   "bytes_moved_per_step": 7401166508.0,
+   "implied_h2d_gb_per_s": 2.519115748144092,
+   "copy_s_per_step": 1.8435023192167281,
+   "copy_stream_gb_per_s": 4.014731324636807,
+   "stall_s_per_step": 0.002791916005866369,
+   "stall_share": 0.0009502771718851758,
+   "peak_alloc_gb": 1.191808512,
+   "peak_reserved_gb": 1.42606336,
+   "sm_clock_mhz_start": 1582,
+   "sm_clock_mhz_end": 1417,
+   "records": [
+    {
+     "step_s": 3.1924251999880653,
+     "loss": 10.807646751403809,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 2.007143077850342,
+     "stall_s": 0.0025545920114964245,
+     "copy_events": 63
+    },
+    {
+     "step_s": 2.9405556000128854,
+     "loss": 10.484643936157227,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 1.8882101392745971,
+     "stall_s": 0.0021362239982699975,
+     "copy_events": 63
+    },
+    {
+     "step_s": 3.0004414999857545,
+     "loss": 10.219310760498047,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 1.9027824249267578,
+     "stall_s": 0.002433664020267315,
+     "copy_events": 63
+    },
+    {
+     "step_s": 2.879594400001224,
+     "loss": 10.00166130065918,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 1.7825571269989013,
+     "stall_s": 0.00286403199727647,
+     "copy_events": 63
+    },
+    {
+     "step_s": 2.933431700017536,
+     "loss": 9.79052734375,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 1.8299676094055175,
+     "stall_s": 0.003448576002381742,
+     "copy_events": 63
+    },
+    {
+     "step_s": 2.898399199999403,
+     "loss": 9.558959007263184,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 1.8290830974578858,
+     "stall_s": 0.003193888019421138,
+     "copy_events": 63
+    },
+    {
+     "step_s": 2.8183346000150777,
+     "loss": 9.30532169342041,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 1.7641900482177735,
+     "stall_s": 0.002768064001458697,
+     "copy_events": 63
+    },
+    {
+     "step_s": 2.8408319000154734,
+     "loss": 9.003596305847168,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 1.7440850296020507,
+     "stall_s": 0.0029362879963591693,
+     "copy_events": 63
+    }
+   ],
+   "seq": 256
+  },
+  {
+   "kind": "sweep",
+   "label": "sweep_seq384",
+   "tokens_per_step": 384,
+   "steps": 8,
+   "warmup": 3,
+   "events_on": true,
+   "nocopy": false,
+   "nodequant": false,
+   "step_s_mean": 2.9203886250106734,
+   "step_s_min": 2.869684800010873,
+   "step_s_max": 2.9561238999885973,
+   "tok_per_s": 131.48934929802246,
+   "layer_loads_per_step": 61.0,
+   "large_loads_per_step": 2.0,
+   "bytes_moved_per_step": 7401166508.0,
+   "implied_h2d_gb_per_s": 2.5343087713105135,
+   "copy_s_per_step": 1.807222683429718,
+   "copy_stream_gb_per_s": 4.095326257168367,
+   "stall_s_per_step": 0.0012198280002048705,
+   "stall_share": 0.0004176937239647043,
+   "peak_alloc_gb": 1.267931648,
+   "peak_reserved_gb": 1.42606336,
+   "sm_clock_mhz_start": 1417,
+   "sm_clock_mhz_end": 1680,
+   "records": [
+    {
+     "step_s": 2.9365592000249308,
+     "loss": 10.629191398620605,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 1.8140221195220947,
+     "stall_s": 0.0010413440079428255,
+     "copy_events": 63
+    },
+    {
+     "step_s": 2.9561238999885973,
+     "loss": 10.46342658996582,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 1.832789556503296,
+     "stall_s": 0.0013732799973804504,
+     "copy_events": 63
+    },
+    {
+     "step_s": 2.869684800010873,
+     "loss": 10.362784385681152,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 1.7807018814086915,
+     "stall_s": 0.0009698240146972239,
+     "copy_events": 63
+    },
+    {
+     "step_s": 2.931897900009062,
+     "loss": 10.300651550292969,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 1.8112851543426514,
+     "stall_s": 0.0012235839996719733,
+     "copy_events": 63
+    },
+    {
+     "step_s": 2.9058630000217818,
+     "loss": 10.241134643554688,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 1.818961187362671,
+     "stall_s": 0.0010073919949354605,
+     "copy_events": 63
+    },
+    {
+     "step_s": 2.9372573000146076,
+     "loss": 10.175980567932129,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 1.8085324153900146,
+     "stall_s": 0.00133788798796013,
+     "copy_events": 63
+    },
+    {
+     "step_s": 2.884950400009984,
+     "loss": 10.108777046203613,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 1.785498785018921,
+     "stall_s": 0.001103520008153282,
+     "copy_events": 63
+    },
+    {
+     "step_s": 2.9407725000055507,
+     "loss": 10.040230751037598,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 1.8059903678894043,
+     "stall_s": 0.0017017919908976183,
+     "copy_events": 63
+    }
+   ],
+   "seq": 384
+  },
+  {
+   "kind": "sweep",
+   "label": "sweep_seq512",
+   "tokens_per_step": 512,
+   "steps": 8,
+   "warmup": 3,
+   "events_on": true,
+   "nocopy": false,
+   "nodequant": false,
+   "step_s_mean": 2.9579352750006365,
+   "step_s_min": 2.92177429998992,
+   "step_s_max": 3.00131889997283,
+   "tok_per_s": 173.0937131475569,
+   "layer_loads_per_step": 61.0,
+   "large_loads_per_step": 2.0,
+   "bytes_moved_per_step": 7401166508.0,
+   "implied_h2d_gb_per_s": 2.5021394384630025,
+   "copy_s_per_step": 1.7494732222557068,
+   "copy_stream_gb_per_s": 4.23051145558959,
+   "stall_s_per_step": 0.0003402560029499,
+   "stall_share": 0.00011503159174090678,
+   "peak_alloc_gb": 1.34248192,
+   "peak_reserved_gb": 1.42606336,
+   "sm_clock_mhz_start": 1680,
+   "sm_clock_mhz_end": 1620,
+   "records": [
+    {
+     "step_s": 2.926138999988325,
+     "loss": 10.542435646057129,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 1.739462776184082,
+     "stall_s": 0.00043849600455723705,
+     "copy_events": 63
+    },
+    {
+     "step_s": 2.999463600019226,
+     "loss": 10.489054679870605,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 1.7748555450439454,
+     "stall_s": 0.0003718720012111589,
+     "copy_events": 63
+    },
+    {
+     "step_s": 2.937940100004198,
+     "loss": 10.445549011230469,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 1.7413466625213623,
+     "stall_s": 0.0003195520035224035,
+     "copy_events": 63
+    },
+    {
+     "step_s": 2.9547918000025675,
+     "loss": 10.40854549407959,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 1.7451304683685303,
+     "stall_s": 0.00031328000442590564,
+     "copy_events": 63
+    },
+    {
+     "step_s": 2.92177429998992,
+     "loss": 10.374472618103027,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 1.7282189731597901,
+     "stall_s": 0.00035977600154001266,
+     "copy_events": 63
+    },
+    {
+     "step_s": 2.96106490000966,
+     "loss": 10.337809562683105,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 1.7601738204956054,
+     "stall_s": 0.00024144000187516213,
+     "copy_events": 63
+    },
+    {
+     "step_s": 3.00131889997283,
+     "loss": 10.299250602722168,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 1.7519535636901855,
+     "stall_s": 0.0002613760008243844,
+     "copy_events": 63
+    },
+    {
+     "step_s": 2.9609896000183653,
+     "loss": 10.25771427154541,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 1.7546439685821533,
+     "stall_s": 0.00041625600564293566,
+     "copy_events": 63
+    }
+   ],
+   "seq": 512
+  },
+  {
+   "kind": "ablate",
+   "label": "A_baseline_r0",
+   "tokens_per_step": 512,
+   "steps": 8,
+   "warmup": 3,
+   "events_on": false,
+   "nocopy": false,
+   "nodequant": false,
+   "step_s_mean": 3.0199047249952855,
+   "step_s_min": 2.949568799987901,
+   "step_s_max": 3.2266134999808855,
+   "tok_per_s": 169.54177254741018,
+   "layer_loads_per_step": 61.0,
+   "large_loads_per_step": 2.0,
+   "bytes_moved_per_step": 7401166508.0,
+   "implied_h2d_gb_per_s": 2.45079470446259,
+   "copy_s_per_step": 0.0,
+   "copy_stream_gb_per_s": null,
+   "stall_s_per_step": 0.0,
+   "stall_share": 0.0,
+   "peak_alloc_gb": 1.34248192,
+   "peak_reserved_gb": 1.42606336,
+   "sm_clock_mhz_start": 1620,
+   "sm_clock_mhz_end": 1695,
+   "records": [
+    {
+     "step_s": 3.2266134999808855,
+     "loss": 10.477171897888184,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 0.0,
+     "stall_s": 0.0,
+     "copy_events": 0
+    },
+    {
+     "step_s": 3.0263418999966234,
+     "loss": 10.442898750305176,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 0.0,
+     "stall_s": 0.0,
+     "copy_events": 0
+    },
+    {
+     "step_s": 2.9784682000172324,
+     "loss": 10.41540241241455,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 0.0,
+     "stall_s": 0.0,
+     "copy_events": 0
+    },
+    {
+     "step_s": 2.9950220999890007,
+     "loss": 10.391140937805176,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 0.0,
+     "stall_s": 0.0,
+     "copy_events": 0
+    },
+    {
+     "step_s": 2.9931667000055313,
+     "loss": 10.368337631225586,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 0.0,
+     "stall_s": 0.0,
+     "copy_events": 0
+    },
+    {
+     "step_s": 2.949568799987901,
+     "loss": 10.345687866210938,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 0.0,
+     "stall_s": 0.0,
+     "copy_events": 0
+    },
+    {
+     "step_s": 2.9848140999965835,
+     "loss": 10.321673393249512,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 0.0,
+     "stall_s": 0.0,
+     "copy_events": 0
+    },
+    {
+     "step_s": 3.005242499988526,
+     "loss": 10.294806480407715,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 0.0,
+     "stall_s": 0.0,
+     "copy_events": 0
+    }
+   ],
+   "arm": "A_baseline",
+   "round": 0
+  },
+  {
+   "kind": "ablate",
+   "label": "B_nocopy_r0",
+   "tokens_per_step": 512,
+   "steps": 8,
+   "warmup": 3,
+   "events_on": false,
+   "nocopy": true,
+   "nodequant": false,
+   "step_s_mean": 1.0431439749991114,
+   "step_s_min": 1.0339062999992166,
+   "step_s_max": 1.0612717999902088,
+   "tok_per_s": 490.82390568419487,
+   "layer_loads_per_step": 61.0,
+   "large_loads_per_step": 2.0,
+   "bytes_moved_per_step": 7401166508.0,
+   "implied_h2d_gb_per_s": 7.095057523585184,
+   "copy_s_per_step": 0.0,
+   "copy_stream_gb_per_s": null,
+   "stall_s_per_step": 0.0,
+   "stall_share": 0.0,
+   "peak_alloc_gb": 1.34248192,
+   "peak_reserved_gb": 1.42606336,
+   "sm_clock_mhz_start": 1695,
+   "sm_clock_mhz_end": 1567,
+   "records": [
+    {
+     "step_s": 1.0400213999964762,
+     "loss": 10.607372283935547,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 0.0,
+     "stall_s": 0.0,
+     "copy_events": 0
+    },
+    {
+     "step_s": 1.0612717999902088,
+     "loss": 10.574830055236816,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 0.0,
+     "stall_s": 0.0,
+     "copy_events": 0
+    },
+    {
+     "step_s": 1.0582894000108354,
+     "loss": 10.580706596374512,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 0.0,
+     "stall_s": 0.0,
+     "copy_events": 0
+    },
+    {
+     "step_s": 1.0350636999937706,
+     "loss": 10.581358909606934,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 0.0,
+     "stall_s": 0.0,
+     "copy_events": 0
+    },
+    {
+     "step_s": 1.0341818000015337,
+     "loss": 10.555482864379883,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 0.0,
+     "stall_s": 0.0,
+     "copy_events": 0
+    },
+    {
+     "step_s": 1.0339062999992166,
+     "loss": 10.538304328918457,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 0.0,
+     "stall_s": 0.0,
+     "copy_events": 0
+    },
+    {
+     "step_s": 1.0434685999935027,
+     "loss": 10.566720008850098,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 0.0,
+     "stall_s": 0.0,
+     "copy_events": 0
+    },
+    {
+     "step_s": 1.038948800007347,
+     "loss": 10.573573112487793,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 0.0,
+     "stall_s": 0.0,
+     "copy_events": 0
+    }
+   ],
+   "arm": "B_nocopy",
+   "round": 0
+  },
+  {
+   "kind": "ablate",
+   "label": "C_nodequant_r0",
+   "tokens_per_step": 512,
+   "steps": 8,
+   "warmup": 3,
+   "events_on": false,
+   "nocopy": false,
+   "nodequant": true,
+   "step_s_mean": 2.755782675001683,
+   "step_s_min": 2.661624500004109,
+   "step_s_max": 2.8187489999982063,
+   "tok_per_s": 185.79113826517082,
+   "layer_loads_per_step": 61.0,
+   "large_loads_per_step": 2.0,
+   "bytes_moved_per_step": 7401166508.0,
+   "implied_h2d_gb_per_s": 2.6856858398659758,
+   "copy_s_per_step": 0.0,
+   "copy_stream_gb_per_s": null,
+   "stall_s_per_step": 0.0,
+   "stall_share": 0.0,
+   "peak_alloc_gb": 1.256364544,
+   "peak_reserved_gb": 1.493172224,
+   "sm_clock_mhz_start": 1567,
+   "sm_clock_mhz_end": 1717,
+   "records": [
+    {
+     "step_s": 2.661624500004109,
+     "loss": 11.395503997802734,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 0.0,
+     "stall_s": 0.0,
+     "copy_events": 0
+    },
+    {
+     "step_s": 2.7140247000206728,
+     "loss": 11.481649398803711,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 0.0,
+     "stall_s": 0.0,
+     "copy_events": 0
+    },
+    {
+     "step_s": 2.694493599992711,
+     "loss": 11.289868354797363,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 0.0,
+     "stall_s": 0.0,
+     "copy_events": 0
+    },
+    {
+     "step_s": 2.7983998999989126,
+     "loss": 11.154857635498047,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 0.0,
+     "stall_s": 0.0,
+     "copy_events": 0
+    },
+    {
+     "step_s": 2.8187489999982063,
+     "loss": 10.980010986328125,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 0.0,
+     "stall_s": 0.0,
+     "copy_events": 0
+    },
+    {
+     "step_s": 2.756346100009978,
+     "loss": 10.68508529663086,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 0.0,
+     "stall_s": 0.0,
+     "copy_events": 0
+    },
+    {
+     "step_s": 2.818434199987678,
+     "loss": 10.177075386047363,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 0.0,
+     "stall_s": 0.0,
+     "copy_events": 0
+    },
+    {
+     "step_s": 2.784189400001196,
+     "loss": 10.26284122467041,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 0.0,
+     "stall_s": 0.0,
+     "copy_events": 0
+    }
+   ],
+   "arm": "C_nodequant",
+   "round": 0
+  },
+  {
+   "kind": "ablate",
+   "label": "D_neither_r0",
+   "tokens_per_step": 512,
+   "steps": 8,
+   "warmup": 3,
+   "events_on": false,
+   "nocopy": true,
+   "nodequant": true,
+   "step_s_mean": 0.850594675001048,
+   "step_s_min": 0.8097083000175189,
+   "step_s_max": 1.0426209999714047,
+   "tok_per_s": 601.9318190527929,
+   "layer_loads_per_step": 61.0,
+   "large_loads_per_step": 2.0,
+   "bytes_moved_per_step": 7401166508.0,
+   "implied_h2d_gb_per_s": 8.701167225142669,
+   "copy_s_per_step": 0.0,
+   "copy_stream_gb_per_s": null,
+   "stall_s_per_step": 0.0,
+   "stall_share": 0.0,
+   "peak_alloc_gb": 1.256364544,
+   "peak_reserved_gb": 1.493172224,
+   "sm_clock_mhz_start": 1717,
+   "sm_clock_mhz_end": 2047,
+   "records": [
+    {
+     "step_s": 0.8352606999978889,
+     "loss": 61.16130065917969,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 0.0,
+     "stall_s": 0.0,
+     "copy_events": 0
+    },
+    {
+     "step_s": 0.8188829999999143,
+     "loss": 43.12909698486328,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 0.0,
+     "stall_s": 0.0,
+     "copy_events": 0
+    },
+    {
+     "step_s": 1.0426209999714047,
+     "loss": 19.75450325012207,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 0.0,
+     "stall_s": 0.0,
+     "copy_events": 0
+    },
+    {
+     "step_s": 0.8464750999992248,
+     "loss": 12.299566268920898,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 0.0,
+     "stall_s": 0.0,
+     "copy_events": 0
+    },
+    {
+     "step_s": 0.8228284000069834,
+     "loss": 10.924994468688965,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 0.0,
+     "stall_s": 0.0,
+     "copy_events": 0
+    },
+    {
+     "step_s": 0.816678300005151,
+     "loss": 10.478053092956543,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 0.0,
+     "stall_s": 0.0,
+     "copy_events": 0
+    },
+    {
+     "step_s": 0.8123026000102982,
+     "loss": 10.245229721069336,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 0.0,
+     "stall_s": 0.0,
+     "copy_events": 0
+    },
+    {
+     "step_s": 0.8097083000175189,
+     "loss": 10.119690895080566,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 0.0,
+     "stall_s": 0.0,
+     "copy_events": 0
+    }
+   ],
+   "arm": "D_neither",
+   "round": 0
+  },
+  {
+   "kind": "ablate",
+   "label": "A_baseline_r1",
+   "tokens_per_step": 512,
+   "steps": 8,
+   "warmup": 3,
+   "events_on": false,
+   "nocopy": false,
+   "nodequant": false,
+   "step_s_mean": 2.880836412503413,
+   "step_s_min": 2.5323689999931958,
+   "step_s_max": 2.9676056999887805,
+   "tok_per_s": 177.7261623665323,
+   "layer_loads_per_step": 61.0,
+   "large_loads_per_step": 2.0,
+   "bytes_moved_per_step": 7401166508.0,
+   "implied_h2d_gb_per_s": 2.5691033603565407,
+   "copy_s_per_step": 0.0,
+   "copy_stream_gb_per_s": null,
+   "stall_s_per_step": 0.0,
+   "stall_share": 0.0,
+   "peak_alloc_gb": 1.619305984,
+   "peak_reserved_gb": 1.728053248,
+   "sm_clock_mhz_start": 2047,
+   "sm_clock_mhz_end": 1725,
+   "records": [
+    {
+     "step_s": 2.5323689999931958,
+     "loss": 10.397371292114258,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 0.0,
+     "stall_s": 0.0,
+     "copy_events": 0
+    },
+    {
+     "step_s": 2.9300592000072356,
+     "loss": 10.248197555541992,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 0.0,
+     "stall_s": 0.0,
+     "copy_events": 0
+    },
+    {
+     "step_s": 2.9308971999853384,
+     "loss": 10.131832122802734,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 0.0,
+     "stall_s": 0.0,
+     "copy_events": 0
+    },
+    {
+     "step_s": 2.940485900006024,
+     "loss": 9.950359344482422,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 0.0,
+     "stall_s": 0.0,
+     "copy_events": 0
+    },
+    {
+     "step_s": 2.915499299997464,
+     "loss": 9.763912200927734,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 0.0,
+     "stall_s": 0.0,
+     "copy_events": 0
+    },
+    {
+     "step_s": 2.9368804000259843,
+     "loss": 9.649218559265137,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 0.0,
+     "stall_s": 0.0,
+     "copy_events": 0
+    },
+    {
+     "step_s": 2.9676056999887805,
+     "loss": 9.582015991210938,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 0.0,
+     "stall_s": 0.0,
+     "copy_events": 0
+    },
+    {
+     "step_s": 2.8928946000232827,
+     "loss": 9.527124404907227,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 0.0,
+     "stall_s": 0.0,
+     "copy_events": 0
+    }
+   ],
+   "arm": "A_baseline",
+   "round": 1
+  },
+  {
+   "kind": "ablate",
+   "label": "B_nocopy_r1",
+   "tokens_per_step": 512,
+   "steps": 8,
+   "warmup": 3,
+   "events_on": false,
+   "nocopy": true,
+   "nodequant": false,
+   "step_s_mean": 1.0584145125030773,
+   "step_s_min": 1.031043299997691,
+   "step_s_max": 1.0953191999869887,
+   "tok_per_s": 483.74242222846635,
+   "layer_loads_per_step": 61.0,
+   "large_loads_per_step": 2.0,
+   "bytes_moved_per_step": 7401166508.0,
+   "implied_h2d_gb_per_s": 6.99269182401586,
+   "copy_s_per_step": 0.0,
+   "copy_stream_gb_per_s": null,
+   "stall_s_per_step": 0.0,
+   "stall_share": 0.0,
+   "peak_alloc_gb": 1.619305984,
+   "peak_reserved_gb": 1.728053248,
+   "sm_clock_mhz_start": 1725,
+   "sm_clock_mhz_end": 1665,
+   "records": [
+    {
+     "step_s": 1.082298900000751,
+     "loss": 10.490368843078613,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 0.0,
+     "stall_s": 0.0,
+     "copy_events": 0
+    },
+    {
+     "step_s": 1.0953191999869887,
+     "loss": 10.49005126953125,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 0.0,
+     "stall_s": 0.0,
+     "copy_events": 0
+    },
+    {
+     "step_s": 1.0741060000145808,
+     "loss": 10.489672660827637,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 0.0,
+     "stall_s": 0.0,
+     "copy_events": 0
+    },
+    {
+     "step_s": 1.048327300028177,
+     "loss": 10.489248275756836,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 0.0,
+     "stall_s": 0.0,
+     "copy_events": 0
+    },
+    {
+     "step_s": 1.0507154999941122,
+     "loss": 10.488879203796387,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 0.0,
+     "stall_s": 0.0,
+     "copy_events": 0
+    },
+    {
+     "step_s": 1.0408823000034317,
+     "loss": 10.488502502441406,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 0.0,
+     "stall_s": 0.0,
+     "copy_events": 0
+    },
+    {
+     "step_s": 1.031043299997691,
+     "loss": 10.48826789855957,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 0.0,
+     "stall_s": 0.0,
+     "copy_events": 0
+    },
+    {
+     "step_s": 1.0446235999988858,
+     "loss": 10.487975120544434,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 0.0,
+     "stall_s": 0.0,
+     "copy_events": 0
+    }
+   ],
+   "arm": "B_nocopy",
+   "round": 1
+  },
+  {
+   "kind": "ablate",
+   "label": "C_nodequant_r1",
+   "tokens_per_step": 512,
+   "steps": 8,
+   "warmup": 3,
+   "events_on": false,
+   "nocopy": false,
+   "nodequant": true,
+   "step_s_mean": 2.8106952875059505,
+   "step_s_min": 2.662888800026849,
+   "step_s_max": 3.0807825999800116,
+   "tok_per_s": 182.1613329185603,
+   "layer_loads_per_step": 61.0,
+   "large_loads_per_step": 2.0,
+   "bytes_moved_per_step": 7401166508.0,
+   "implied_h2d_gb_per_s": 2.633215539549778,
+   "copy_s_per_step": 0.0,
+   "copy_stream_gb_per_s": null,
+   "stall_s_per_step": 0.0,
+   "stall_share": 0.0,
+   "peak_alloc_gb": 1.256364544,
+   "peak_reserved_gb": 1.728053248,
+   "sm_clock_mhz_start": 1665,
+   "sm_clock_mhz_end": 1635,
+   "records": [
+    {
+     "step_s": 2.736624800018035,
+     "loss": 9.46771240234375,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 0.0,
+     "stall_s": 0.0,
+     "copy_events": 0
+    },
+    {
+     "step_s": 2.820805499999551,
+     "loss": 9.907508850097656,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 0.0,
+     "stall_s": 0.0,
+     "copy_events": 0
+    },
+    {
+     "step_s": 2.8131071000243537,
+     "loss": 11.61017894744873,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 0.0,
+     "stall_s": 0.0,
+     "copy_events": 0
+    },
+    {
+     "step_s": 2.662888800026849,
+     "loss": 9.419377326965332,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 0.0,
+     "stall_s": 0.0,
+     "copy_events": 0
+    },
+    {
+     "step_s": 3.0807825999800116,
+     "loss": 9.280900001525879,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 0.0,
+     "stall_s": 0.0,
+     "copy_events": 0
+    },
+    {
+     "step_s": 2.810990900004981,
+     "loss": 9.864212036132812,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 0.0,
+     "stall_s": 0.0,
+     "copy_events": 0
+    },
+    {
+     "step_s": 2.7603661000030115,
+     "loss": 9.268325805664062,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 0.0,
+     "stall_s": 0.0,
+     "copy_events": 0
+    },
+    {
+     "step_s": 2.7999964999908116,
+     "loss": 9.2680082321167,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 0.0,
+     "stall_s": 0.0,
+     "copy_events": 0
+    }
+   ],
+   "arm": "C_nodequant",
+   "round": 1
+  },
+  {
+   "kind": "ablate",
+   "label": "D_neither_r1",
+   "tokens_per_step": 512,
+   "steps": 8,
+   "warmup": 3,
+   "events_on": false,
+   "nocopy": true,
+   "nodequant": true,
+   "step_s_mean": 0.831969549995847,
+   "step_s_min": 0.8105701000022236,
+   "step_s_max": 0.8503049999999348,
+   "tok_per_s": 615.4071384013463,
+   "layer_loads_per_step": 61.0,
+   "large_loads_per_step": 2.0,
+   "bytes_moved_per_step": 7401166508.0,
+   "implied_h2d_gb_per_s": 8.89595840140657,
+   "copy_s_per_step": 0.0,
+   "copy_stream_gb_per_s": null,
+   "stall_s_per_step": 0.0,
+   "stall_share": 0.0,
+   "peak_alloc_gb": 1.256364544,
+   "peak_reserved_gb": 1.728053248,
+   "sm_clock_mhz_start": 1635,
+   "sm_clock_mhz_end": 1927,
+   "records": [
+    {
+     "step_s": 0.8449491999926977,
+     "loss": 9.429017066955566,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 0.0,
+     "stall_s": 0.0,
+     "copy_events": 0
+    },
+    {
+     "step_s": 0.8503049999999348,
+     "loss": 9.414759635925293,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 0.0,
+     "stall_s": 0.0,
+     "copy_events": 0
+    },
+    {
+     "step_s": 0.8467622000025585,
+     "loss": 9.393470764160156,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 0.0,
+     "stall_s": 0.0,
+     "copy_events": 0
+    },
+    {
+     "step_s": 0.8293283999955747,
+     "loss": 9.36732292175293,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 0.0,
+     "stall_s": 0.0,
+     "copy_events": 0
+    },
+    {
+     "step_s": 0.8327596999879461,
+     "loss": 9.33725643157959,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 0.0,
+     "stall_s": 0.0,
+     "copy_events": 0
+    },
+    {
+     "step_s": 0.822348299989244,
+     "loss": 9.306315422058105,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 0.0,
+     "stall_s": 0.0,
+     "copy_events": 0
+    },
+    {
+     "step_s": 0.818733499996597,
+     "loss": 9.275118827819824,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 0.0,
+     "stall_s": 0.0,
+     "copy_events": 0
+    },
+    {
+     "step_s": 0.8105701000022236,
+     "loss": 9.24550724029541,
+     "layer_loads": 61,
+     "large_loads": 2,
+     "copy_s": 0.0,
+     "stall_s": 0.0,
+     "copy_events": 0
+    }
+   ],
+   "arm": "D_neither",
+   "round": 1
+  },
+  {
+   "kind": "ceiling_end",
+   "square_4096": {
+    "tflops": 36.27329946106248,
+    "samples": [
+     36.27329946106248,
+     32.53800219339825,
+     32.635818253695774
+    ],
+    "sm_clock_mhz": 1545,
+    "dtype": "bfloat16"
+   },
+   "shape_matched": [
+    {
+     "m": 512,
+     "k": 4096,
+     "n": 4096,
+     "count": 2,
+     "tflops": 43.167581919408796
+    },
+    {
+     "m": 512,
+     "k": 4096,
+     "n": 1024,
+     "count": 2,
+     "tflops": 29.171742624062762
+    },
+    {
+     "m": 512,
+     "k": 4096,
+     "n": 14336,
+     "count": 2,
+     "tflops": 33.63822630674592
+    },
+    {
+     "m": 512,
+     "k": 14336,
+     "n": 4096,
+     "count": 1,
+     "tflops": 32.24270065787326
+    }
+   ],
+   "shape_matched_weighted_tflops": 34.55677473850976,
+   "sm_clock_mhz": 1545,
+   "dtype": "bfloat16"
+  }
+ ]
+}

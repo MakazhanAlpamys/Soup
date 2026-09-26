@@ -1,0 +1,17 @@
+{
+  "schema": "soup.autodistill.capture-token.v1",
+  "example_id": "ex-0001",
+  "trajectory_kind": "teacher_expert",
+  "position": 0,
+  "vocab_size": 3,
+  "context_token_ids": [1],
+  "target_token_id": 2,
+  "student_sampled_token_id": null,
+  "top_k_token_ids": [0],
+  "forced_token_ids": [2],
+  "selected_token_ids": [0, 2],
+  "teacher_log_probabilities": [-0.35667494393873245, -1.6094379124341003],
+  "tail_mass": 0.1,
+  "teacher_entropy": 0.8018185525433373,
+  "temperature": 1.0
+}

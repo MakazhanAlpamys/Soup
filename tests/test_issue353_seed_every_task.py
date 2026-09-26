@@ -184,6 +184,9 @@ def _cfg(weights, out_dir, task, **training_over):
     }
     training.update(_LIVE[task][3])
     training.update(training_over)
+    data = {"train": "train.jsonl", "max_length": 64}
+    if task not in {"pretrain", "embedding", "classifier"}:
+        data["chat_template"] = "chatml"
     return load_config_from_string(
         yaml.safe_dump(
             {
@@ -191,7 +194,7 @@ def _cfg(weights, out_dir, task, **training_over):
                 "task": task,
                 "backend": "transformers",
                 "modality": "text",
-                "data": {"train": "train.jsonl", "max_length": 64, "chat_template": "chatml"},
+                "data": data,
                 "training": training,
                 "output": str(out_dir),
             }
@@ -317,6 +320,12 @@ class TestEveryConfigClassAcceptsTheSeed:
         from transformers import Seq2SeqTrainingArguments, TrainingArguments
 
         from soup_cli.trainer._trl_compat import resolve_trl_symbol
+        from soup_cli.trainer.ppo import _import_ppo_classes
+
+        online_dpo_config = resolve_trl_symbol(
+            "OnlineDPOConfig", "trl.experimental.online_dpo"
+        )
+        _, ppo_config, _ = _import_ppo_classes()
 
         classes = {
             # classifier, distill, mole_routing, prm, pretrain, embedding, sft
@@ -326,8 +335,10 @@ class TestEveryConfigClassAcceptsTheSeed:
             "KTOConfig": trl.KTOConfig,
             "GRPOConfig": trl.GRPOConfig,
             "RewardConfig": trl.RewardConfig,
-            "OnlineDPOConfig": trl.OnlineDPOConfig,
-            "PPOConfig": trl.PPOConfig,
+            # TRL 0.29 moved both APIs under trl.experimental. Exercise the
+            # same compatibility imports the production wrappers use.
+            "OnlineDPOConfig": online_dpo_config,
+            "PPOConfig": ppo_config,
             # #326 moved these three out of the public namespace.
             "ORPOConfig": resolve_trl_symbol("ORPOConfig", "trl.experimental.orpo"),
             "CPOConfig": resolve_trl_symbol("CPOConfig", "trl.experimental.cpo"),

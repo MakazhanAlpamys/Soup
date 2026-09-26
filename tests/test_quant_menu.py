@@ -426,7 +426,7 @@ class TestCompatMatrix:
         )
         assert problems == []
 
-    def test_compat_check_4bit_fsdp_warns_without_quant_storage(self):
+    def test_compat_check_4bit_fsdp_without_storage_is_auto_resolved(self):
         from soup_cli.utils.quant_menu import check_quant_distributed_compat
 
         problems = check_quant_distributed_compat(
@@ -435,9 +435,9 @@ class TestCompatMatrix:
             fsdp=True,
             bnb_4bit_quant_storage=None,
         )
-        # Returned as a 'warning' tag, not a hard error.
-        warnings = [p for p in problems if "warning" in p.lower()]
-        assert any("quant_storage" in w.lower() for w in warnings)
+        # #350 resolves this to the compute dtype before model loading, so the
+        # old advisory (which understated a hard stop as a speed warning) is gone.
+        assert problems == []
 
     def test_compat_check_gptq_ddp_clean(self):
         from soup_cli.utils.quant_menu import check_quant_distributed_compat
@@ -661,3 +661,26 @@ class TestLoaderEntryPoint:
                 tcfg=FakeTcfg(),  # type: ignore[arg-type]
                 base="m",
             )
+
+    def test_loader_4bit_honours_double_quant_false(self):
+        """#321 — the resident 4-bit path threads
+        ``training.bnb_4bit_use_double_quant`` instead of hardcoding it, so a
+        config that turns double-quant off measurably produces a
+        ``BitsAndBytesConfig`` with ``bnb_4bit_use_double_quant=False``."""
+        from soup_cli.utils.quant_menu import build_quantization_config_for_loader
+
+        tcfg = self._tcfg(quantization="4bit", bnb_4bit_use_double_quant=False)
+        cfg = build_quantization_config_for_loader(tcfg=tcfg, base="m")
+        assert cfg.load_in_4bit is True
+        assert cfg.bnb_4bit_use_double_quant is False
+
+    def test_loader_4bit_double_quant_defaults_on(self):
+        """The schema default is reconciled to True (matches what every shipped
+        4-bit load has always used), so an unset flag still double-quantises —
+        threading the field must not silently drop double-quant for existing
+        users."""
+        from soup_cli.utils.quant_menu import build_quantization_config_for_loader
+
+        tcfg = self._tcfg(quantization="4bit")
+        cfg = build_quantization_config_for_loader(tcfg=tcfg, base="m")
+        assert cfg.bnb_4bit_use_double_quant is True

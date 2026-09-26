@@ -15,6 +15,7 @@ BETA feature. Covers:
 
 from __future__ import annotations
 
+import json
 import os
 
 import pytest
@@ -140,7 +141,7 @@ def test_validate_datasets_rejects_empty_string(tmp_path, monkeypatch):
         validate_datasets(["", "b.jsonl"])
 
 
-@pytest.mark.skipif(os.name == "nt", reason="POSIX symlink semantics")
+@pytest.mark.requires_symlink
 def test_validate_datasets_rejects_symlink(tmp_path, monkeypatch):
     real = tmp_path / "real.jsonl"
     real.write_text("{}")
@@ -497,6 +498,14 @@ def test_render_recipe_shape(tmp_path):
     assert "0.600000" in text
     assert "0.400000" in text
     assert "a.jsonl" in text
+    # #330 introduced data.train as a single string (the highest-weighted
+    # dataset) because there was no training-time reader for a real
+    # mixture. #443 wired data.interleave into load_dataset() and restored
+    # the full-list shape for >= 2 datasets — train: is now a YAML list,
+    # index-aligned with interleave.probs.
+    assert "  train:" in text
+    assert f'- {json.dumps(str(tmp_path / "a.jsonl"))}' in text
+    assert f'- {json.dumps(str(tmp_path / "b.jsonl"))}' in text
 
 
 def test_render_recipe_rejects_non_report():
@@ -595,7 +604,7 @@ def test_write_recipe_overwrite_ok(tmp_path, monkeypatch):
     assert "data:" in text
 
 
-@pytest.mark.skipif(os.name == "nt", reason="POSIX symlinks")
+@pytest.mark.requires_symlink
 def test_write_recipe_symlink_rejected(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     real = tmp_path / "real.yaml"
@@ -814,7 +823,7 @@ def test_parse_budget_rejects_below_min_with_suffix(raw):
         parse_budget(raw)
 
 
-@pytest.mark.skipif(os.name == "nt", reason="POSIX symlinks")
+@pytest.mark.requires_symlink
 def test_load_mix_recipe_rejects_symlink(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     real = tmp_path / "real.yaml"

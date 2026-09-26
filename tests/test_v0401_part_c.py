@@ -1,9 +1,10 @@
-"""v0.40.1 Part C tests — autopilot fallback / transformers cap / quickstart
+"""v0.40.1 Part C tests — autopilot fallback / dependency cap / quickstart
 GPU-aware model pick / lr_finder import regression.
 """
 
 from __future__ import annotations
 
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -39,7 +40,7 @@ def test_probe_cache_returns_none_for_missing_repo():
     assert _probe_cache_param_count("nonexistent-org/never-cached-XYZ") is None
 
 
-# --- C5: doctor flags transformers 5.x ------------------------------------
+# --- C5: doctor flags unsupported breaking majors -------------------------
 
 
 def test_version_ge_handles_dev_suffix():
@@ -56,10 +57,10 @@ def test_version_ge_short_version_string():
     assert _version_ge("4.99", "5.0.0") is False
 
 
-def test_max_exclusive_table_caps_transformers():
+def test_max_exclusive_table_allows_transformers5_and_caps_transformers6():
     from soup_cli.commands.doctor import _MAX_EXCLUSIVE
 
-    assert _MAX_EXCLUSIVE.get("transformers") == "5.0.0"
+    assert _MAX_EXCLUSIVE.get("transformers") == "6.0.0"
 
 
 # --- G12: lr_finder real loop uses load_raw_data ---------------------------
@@ -151,10 +152,162 @@ def test_detect_gpu_hw_returns_advisory_when_smi_succeeds():
     with (
         patch("shutil.which", return_value="/usr/bin/nvidia-smi"),
         patch("subprocess.run", return_value=completed),
+        patch(
+            "soup_cli.commands.doctor._nvidia_smi_cuda_version",
+            return_value=None,
+        ),
     ):
         advisory = _detect_gpu_hw_without_torch_cuda()
     assert "RTX 3050" in advisory
-    assert "cu121" in advisory
+    # Unknown driver: do not guess a CUDA wheel index.
+    assert "download.pytorch.org/whl/" not in advisory
+    assert "whl/None" not in advisory
+    assert "could not be confirmed" in advisory
+
+
+def test_detect_gpu_hw_uses_driver_cuda_wheel():
+    import subprocess
+
+    from soup_cli.commands.doctor import _detect_gpu_hw_without_torch_cuda
+
+    completed = subprocess.CompletedProcess(
+        args=[], returncode=0, stdout="NVIDIA GeForce RTX 5060 Ti\n", stderr=""
+    )
+    with (
+        patch("shutil.which", return_value="/usr/bin/nvidia-smi"),
+        patch("subprocess.run", return_value=completed),
+        patch(
+            "soup_cli.commands.doctor._nvidia_smi_cuda_version",
+            return_value=(13, 2),
+        ),
+        # Installed CUDA torch version string, as on a real GPU box.
+        # A naive `assert "cu121" not in advisory` matches this and goes
+        # red locally / green on CPU-only CI.
+        patch("importlib.metadata.version", return_value="2.5.1+cu121"),
+    ):
+        advisory = _detect_gpu_hw_without_torch_cuda()
+    assert "RTX 5060 Ti" in advisory
+    assert "2.5.1+cu121" in advisory
+    assert "whl/cu132" in advisory
+    assert "whl/cu121" not in advisory
+
+
+def test_nvidia_smi_invoked_by_absolute_path():
+    import subprocess
+
+    from soup_cli.commands.doctor import (
+        _detect_gpu_hw_without_torch_cuda,
+        _nvidia_smi_cuda_version,
+    )
+
+    smi = "/usr/bin/nvidia-smi"
+    failed = subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr="")
+    with (
+        patch("shutil.which", return_value=smi),
+        patch("subprocess.run", return_value=failed) as run,
+    ):
+        _nvidia_smi_cuda_version()
+    argv = run.call_args.args[0]
+    assert argv[0] == smi
+    assert argv[0] != "nvidia-smi"
+
+    with (
+        patch("shutil.which", return_value=smi),
+        patch("subprocess.run", return_value=failed) as run,
+    ):
+        _detect_gpu_hw_without_torch_cuda()
+    argv = run.call_args.args[0]
+    assert argv[0] == smi
+    assert "--query-gpu=name" in argv
+
+
+def test_parse_cuda_version_from_nvidia_smi_header():
+    from soup_cli.commands.doctor import _parse_cuda_version
+
+    header = (
+        "NVIDIA-SMI 596.49                 Driver Version: 596.49"
+        "         CUDA Version: 13.2"
+    )
+    assert _parse_cuda_version(header) == (13, 2)
+    assert _parse_cuda_version("CUDA Version:13.2") == (13, 2)
+    assert _parse_cuda_version("CUDA UMD Version: 13.4") == (13, 4)
+    assert _parse_cuda_version("CUDA  UMD  Version: 13.4") == (13, 4)
+    assert _parse_cuda_version("CUDA Version: 12.10") == (12, 10)
+    assert _parse_cuda_version("CUDA Version: N/A") is None
+    assert _parse_cuda_version("no cuda here") is None
+    assert _parse_cuda_version("") is None
+
+
+def test_detect_gpu_hw_distinguishes_cuda_build_from_cpu_build(monkeypatch):
+    import sys
+    import types
+
+    from soup_cli.commands.doctor import _detect_gpu_hw_without_torch_cuda
+
+    fake_torch = types.SimpleNamespace(
+        version=types.SimpleNamespace(cuda="13.0"),
+    )
+
+    monkeypatch.setitem(sys.modules, "torch", fake_torch)
+    monkeypatch.setattr(
+        "soup_cli.commands.doctor._nvidia_smi_cuda_version",
+        lambda: (13, 0),
+    )
+    monkeypatch.setattr(
+        "soup_cli.commands.doctor._nvidia_smi_executable",
+        lambda: "/usr/bin/nvidia-smi",
+    )
+    monkeypatch.setattr(
+        "shutil.which",
+        lambda name: "/usr/bin/nvidia-smi",
+    )
+
+    completed = types.SimpleNamespace(
+        returncode=0,
+        stdout="NVIDIA GeForce RTX 5070 Laptop GPU\\n",
+        stderr="",
+    )
+    monkeypatch.setattr("subprocess.run", lambda *args, **kwargs: completed)
+    monkeypatch.setattr(
+        "importlib.metadata.version",
+        lambda name: "2.14.0+cu130",
+    )
+
+    advisory = _detect_gpu_hw_without_torch_cuda()
+
+    assert "CUDA build (13.0) could not initialise" in advisory
+    assert "the CPU build" not in advisory
+    assert "--force-reinstall" in advisory
+    assert "torch>=2.6.0" in advisory
+    assert "whl/cu130" in advisory
+
+
+def test_torch_cuda_wheel_tag_picks_supported_index():
+    from soup_cli.commands.doctor import _TORCH_CUDA_WHEELS, _torch_cuda_wheel_tag
+
+    assert (11, 8, "cu118") in _TORCH_CUDA_WHEELS
+
+    # Fixed published-index mapping; do not derive arbitrary CUDA tags.
+    assert _torch_cuda_wheel_tag((13, 4)) == "cu132"
+    assert _torch_cuda_wheel_tag((13, 2)) == "cu132"
+    assert _torch_cuda_wheel_tag((13, 1)) == "cu130"
+    assert _torch_cuda_wheel_tag((13, 0)) == "cu130"
+    assert _torch_cuda_wheel_tag((12, 8)) == "cu128"
+    assert _torch_cuda_wheel_tag((12, 7)) == "cu126"
+    assert _torch_cuda_wheel_tag((12, 6)) == "cu126"
+    assert _torch_cuda_wheel_tag((12, 4)) == "cu124"
+    assert _torch_cuda_wheel_tag((12, 1)) == "cu118"
+    assert _torch_cuda_wheel_tag((11, 8)) == "cu118"
+    assert _torch_cuda_wheel_tag((11, 0)) is None
+
+    # An unreadable driver must never guess an arbitrary CUDA index.
+    assert _torch_cuda_wheel_tag(None) is None
+
+
+def test_readme_does_not_hardcode_a_cuda_wheel_index():
+    readme = Path(__file__).resolve().parents[1] / "README.md"
+    text = readme.read_text(encoding="utf-8")
+    assert "download.pytorch.org/whl/cu" not in text
 
 
 # --- N4: dual-Python interpreter detector ---------------------------------

@@ -11,6 +11,8 @@ import os
 
 import pytest
 
+from tests.conftest import cuda_available
+
 
 # ==========================================================================
 # C1 — the pure planner (utils/layer_stream.py)
@@ -143,6 +145,47 @@ class TestDecidePinning:
 
         assert decide_pinning(7 * 10**9, 7 * 10**9).pinned is True
 
+    def test_stream_pin_false_forces_pageable_and_states_the_cost(self):
+        """#366: pinning could not be turned off from config. stream_pin=false
+        forces the pageable store even where the box could page-lock it, and the
+        reason states the throughput it costs rather than absorbing it.
+
+        #366 re-review: pin the ACTUAL figures, not just the word 'throughput' —
+        a bare-word assertion let the measured gain be changed to 1.01 with the
+        suite green. The forced-off reason must carry the same GPU-utilisation
+        sentence the automatic-fallback branch does, and both benchmark figures.
+        """
+        from soup_cli.utils.layer_stream import (
+            PIN_THROUGHPUT_GAIN_REAL,
+            PIN_THROUGHPUT_GAIN_SYNTHETIC,
+            decide_pinning,
+        )
+
+        decision = decide_pinning(2 * 10**9, 7 * 10**9, stream_pin=False)
+        assert decision.pinned is False
+        reason = decision.reason
+        # The exact measured figures (benchmarks/gate-h100-validation.md), so a
+        # silent change to either constant fails here.
+        assert f"{PIN_THROUGHPUT_GAIN_REAL:.2f}x" in reason
+        assert f"{PIN_THROUGHPUT_GAIN_SYNTHETIC:.2f}x" in reason
+        assert "6.56x" in reason and "7.41x" in reason
+        # The same GPU-utilisation sentence the automatic fallback carries.
+        assert "~97% to ~79%" in reason
+
+    def test_stream_pin_true_forces_pinned_even_above_ceiling(self):
+        """The override pins where the automatic path would have fallen back."""
+        from soup_cli.utils.layer_stream import decide_pinning
+
+        decision = decide_pinning(50 * 10**9, 7 * 10**9, stream_pin=True)
+        assert decision.pinned is True
+        assert "refuses" in decision.reason.lower()
+
+    def test_stream_pin_none_keeps_automatic_behaviour(self):
+        from soup_cli.utils.layer_stream import decide_pinning
+
+        assert decide_pinning(8 * 10**9, 7 * 10**9, stream_pin=None).pinned is False
+        assert decide_pinning(2 * 10**9, 7 * 10**9, stream_pin=None).pinned is True
+
 
 class TestBufferValidation:
     def test_default_is_two(self):
@@ -239,6 +282,18 @@ class TestVramEstimate:
         three = estimate_stream_vram(layer_bytes=100, buffers=3, embed_bytes=0, workspace_bytes=0)
         assert three - two == 100
 
+    def test_large_layer_slot_is_charged_once(self):
+        from soup_cli.utils.layer_stream import estimate_stream_vram
+
+        got = estimate_stream_vram(
+            layer_bytes=100,
+            buffers=2,
+            embed_bytes=25,
+            large_layer_bytes=400,
+            workspace_bytes=0,
+        )
+        assert got == 2 * 100 + 25 + 400
+
     def test_logits_budget_includes_the_whole_loss_path(self):
         """plan P5: logits, not weights, OOM you first on a small card.
 
@@ -284,6 +339,13 @@ class TestLayerSpec:
             LayerSpec(name="w", shape=(2, 2), dtype="int4").nbytes
 
 
+#: Distinguishing fragment of the forced-ON pin note, so the assertions below
+#: select that note rather than any line that happens to mention the key.
+_FORCED_PIN_TEXT = "training.stream_pin=true"
+#: Free RAM too small for the fixture base, so the plan lands on the disk tier.
+_NO_RAM_BYTES = 1000
+
+
 class TestStreamPlan:
     def test_build_plan_reports_tier_and_pinning(self):
         from soup_cli.utils.layer_stream import build_stream_plan
@@ -304,6 +366,26 @@ class TestStreamPlan:
         # 5.5 GB store fits under a 7 GB pinned ceiling
         assert plan.pinned is True
 
+    def test_large_layers_count_in_host_store_but_only_one_device_slot(self):
+        from soup_cli.utils.layer_stream import build_stream_plan
+
+        plan = build_stream_plan(
+            arch="llama",
+            n_layers=2,
+            layer_bytes=100,
+            embed_bytes=25,
+            large_store_bytes=800,
+            large_buffer_bytes=400,
+            available_ram_bytes=10_000,
+            pinned_limit_bytes=10_000,
+            buffers=2,
+            disk_kind="nvme",
+        )
+
+        assert plan.store_bytes == 2 * 100 + 800
+        assert plan.large_store_bytes == 800
+        assert plan.buffer_bytes == 2 * 100 + 400
+
     def test_plan_falls_back_to_pageable_and_records_a_note(self):
         from soup_cli.utils.layer_stream import build_stream_plan
 
@@ -319,6 +401,101 @@ class TestStreamPlan:
         )
         assert plan.pinned is False
         assert any("pageable" in note.lower() for note in plan.notes)
+
+    def test_stream_pin_false_reaches_the_plan_as_pageable_with_cost(self):
+        """#366 criteria 1+2: stream_pin=false proceeds pageable AND the
+        pre-flight note states the throughput cost — the store here fits under
+        the pinned ceiling, so the automatic path would otherwise pin it."""
+        from soup_cli.utils.layer_stream import build_stream_plan
+
+        plan = build_stream_plan(
+            arch="qwen2",
+            n_layers=36,
+            layer_bytes=154 * 10**6,
+            embed_bytes=622 * 10**6,
+            available_ram_bytes=12 * 10**9,
+            pinned_limit_bytes=7 * 10**9,
+            buffers=2,
+            disk_kind="nvme",
+            stream_pin=False,
+        )
+        assert plan.pinned is False
+        assert any("throughput" in note.lower() for note in plan.notes)
+
+    def _plan_with_stream_pin(self, stream_pin, *, available_ram_bytes=12 * 10**9):
+        from soup_cli.utils.layer_stream import build_stream_plan
+
+        return build_stream_plan(
+            arch="qwen2",
+            n_layers=36,
+            layer_bytes=154 * 10**6,
+            embed_bytes=622 * 10**6,
+            available_ram_bytes=available_ram_bytes,
+            pinned_limit_bytes=7 * 10**9,
+            buffers=2,
+            disk_kind="nvme",
+            stream_pin=stream_pin,
+        )
+
+    @staticmethod
+    def _forced_on_notes(plan):
+        return [note for note in plan.notes if _FORCED_PIN_TEXT in note]
+
+    def test_stream_pin_true_is_recorded_in_the_plan_notes(self):
+        """#366 round-3 nit: `decide_pinning`'s docstring says True "only records
+        the intent so the pre-flight reflects it", but the plan appended the
+        reason only when the decision came back UNpinned — so a forced-on pin was
+        the one branch that decided something and said nothing. This PR's whole
+        framing is record, never silence."""
+        plan = self._plan_with_stream_pin(True)
+        assert plan.pinned is True
+        notes = self._forced_on_notes(plan)
+        assert notes, plan.notes
+        # The SEMANTICS, not just the key name: a note that merely mentioned
+        # stream_pin would otherwise pass.
+        assert any("page-locked host memory" in note for note in notes), notes
+        assert any("the run refuses" in note for note in notes), notes
+
+    def test_automatic_pinning_stays_quiet(self):
+        """Control: only an EXPLICIT request is worth a note. Without this a
+        mutant that always appended the reason would satisfy the case above, and
+        every automatic run would grow a line of noise."""
+        plan = self._plan_with_stream_pin(None)
+        assert plan.pinned is True
+        assert self._forced_on_notes(plan) == [], plan.notes
+
+    def test_the_disk_tier_records_the_forced_pin_too_and_names_its_staging(self):
+        """This assertion used to be its exact inverse, and the inversion is the
+        finding. The note was withheld on the disk tier because it claimed a RAM
+        store that tier did not have, and the runtime announced the
+        inapplicability instead — but #971 gave the disk tier host staging that
+        `stream_pin` honours or refuses, and DELETED that announcement. Withheld,
+        the explicit request was recorded nowhere at all on the tier where it now
+        decides something. It must print, and it must name what this tier
+        actually page-locks."""
+        plan = self._plan_with_stream_pin(True, available_ram_bytes=_NO_RAM_BYTES)
+        assert plan.tier == "disk"
+        notes = self._forced_on_notes(plan)
+        assert notes, plan.notes
+        assert any("staging" in note for note in notes), notes
+        # And it must not have become a disk-only note: the RAM tier keeps it.
+        assert any("base store on the RAM tier" in note for note in notes), notes
+
+    def test_both_spellings_of_the_disk_tier_print_the_same_pin_prose(self):
+        """One tier, two behaviours chosen by the spelling — the defect R2 fixed
+        for the pin itself, still present in the prose that explains it.
+
+        `build_stream_plan` computes its notes from `choose_tier`'s answer,
+        BEFORE `stream_setup` forces the tier, so gating the note on
+        `tier == TIER_RAM` meant `stream_source: disk` on a RAM-sized box printed
+        a RAM-tier promise under a panel headed `tier disk`, while `auto` on a
+        RAM-poor box printed nothing. With the gate gone the note is identical
+        either way — which is only checkable because it now names both tiers.
+        """
+        fell_into = self._plan_with_stream_pin(True, available_ram_bytes=_NO_RAM_BYTES)
+        forced_from = self._plan_with_stream_pin(True)
+        assert fell_into.tier == "disk" and forced_from.tier == "ram"
+        assert self._forced_on_notes(fell_into) == self._forced_on_notes(forced_from)
 
     def test_plan_is_frozen(self):
         import dataclasses
@@ -396,7 +573,7 @@ def _write_safetensors(path, tensors):
     return path
 
 
-def _fake_weights_dir(tmp_path, n_layers=3, split=False):
+def _fake_weights_dir(tmp_path, n_layers=3, split=False, untied=False):
     import torch
 
     torch.manual_seed(0)
@@ -410,6 +587,8 @@ def _fake_weights_dir(tmp_path, n_layers=3, split=False):
         "model.embed_tokens.weight": torch.randn(32, 8, dtype=torch.float32),
         "model.norm.weight": torch.randn(8, dtype=torch.float32),
     }
+    if untied:
+        extras["lm_head.weight"] = torch.randn(32, 8, dtype=torch.float32)
     src = tmp_path / "weights"
     src.mkdir()
     if split:
@@ -447,16 +626,47 @@ class TestShardRoundTrip:
                 short = key[len("model.layers.1.") :]
                 assert torch.equal(blob[short], tensor), short
 
-    def test_extras_are_separated_from_layers(self, tmp_path):
+    def test_tied_embedding_stays_resident_and_unaffected(self, tmp_path):
+        import torch
         from safetensors.torch import load_file
 
         from soup_cli.utils.layer_shard import extras_shard_path, shard_checkpoint
 
         src, _, extras = _fake_weights_dir(tmp_path)
         out = str(tmp_path / "shards")
-        shard_checkpoint(src, out, dtype="float32")
-        blob = load_file(extras_shard_path(out))
-        assert set(blob) == set(extras)
+        index = shard_checkpoint(src, out, dtype="float32")
+        resident = load_file(extras_shard_path(out))
+
+        assert set(resident) == {"model.embed_tokens.weight", "model.norm.weight"}
+        assert torch.equal(
+            resident["model.embed_tokens.weight"], extras["model.embed_tokens.weight"]
+        )
+        assert index.large_keys == ()
+
+    def test_untied_vocabulary_pair_is_split_from_resident_extras(self, tmp_path):
+        import torch
+        from safetensors.torch import load_file
+
+        from soup_cli.utils.layer_shard import (
+            extras_shard_path,
+            large_shard_path,
+            shard_checkpoint,
+        )
+
+        src, _, weights = _fake_weights_dir(tmp_path, untied=True)
+        out = str(tmp_path / "shards")
+        index = shard_checkpoint(src, out, dtype="float32")
+
+        resident = load_file(extras_shard_path(out))
+        embedding = load_file(large_shard_path(out, "model.embed_tokens.weight"))
+        head = load_file(large_shard_path(out, "lm_head.weight"))
+
+        assert set(resident) == {"model.norm.weight"}
+        assert torch.equal(
+            embedding["model.embed_tokens.weight"], weights["model.embed_tokens.weight"]
+        )
+        assert torch.equal(head["lm_head.weight"], weights["lm_head.weight"])
+        assert index.large_keys == ("lm_head.weight", "model.embed_tokens.weight")
 
     def test_layers_split_across_source_files_are_gathered(self, tmp_path):
         """Real checkpoints shard by size, not by layer boundary."""
@@ -560,7 +770,7 @@ class TestShardGuards:
         with pytest.raises(ValueError, match="decoder layer"):
             shard_checkpoint(str(src), str(tmp_path / "out"), dtype="float32")
 
-    @pytest.mark.skipif(os.name == "nt", reason="POSIX symlink semantics")
+    @pytest.mark.requires_symlink
     def test_symlinked_source_shard_is_skipped(self, tmp_path):
         """Mirrors spectrum_scan._discover_safetensors."""
         import torch
@@ -681,13 +891,13 @@ class TestShardNoTopLevelTorch:
 
 
 class TestShardUniformity:
-    """The runtime builds its buffer-pool spec from layer 0. A checkpoint whose
-    layers disagree would size the pool wrong and stream garbage into it."""
+    """Heterogeneous layers are allowed, but a shared key must keep one layout."""
 
-    def test_non_uniform_layer_parameter_set_refused(self, tmp_path):
+    def test_non_uniform_layer_parameter_set_is_allowed(self, tmp_path):
         import torch
+        from safetensors.torch import load_file
 
-        from soup_cli.utils.layer_shard import shard_checkpoint
+        from soup_cli.utils.layer_shard import layer_shard_path, shard_checkpoint
 
         src = tmp_path / "weights"
         src.mkdir()
@@ -700,7 +910,27 @@ class TestShardUniformity:
                 "model.embed_tokens.weight": torch.randn(4, 4),
             },
         )
-        with pytest.raises(ValueError, match="uniform"):
+        index = shard_checkpoint(str(src), str(tmp_path / "out"), dtype="float32")
+        assert index.n_layers == 2
+        assert "mlp.extra.weight" not in load_file(layer_shard_path(str(tmp_path / "out"), 0))
+        assert "mlp.extra.weight" in load_file(layer_shard_path(str(tmp_path / "out"), 1))
+
+    def test_shared_key_with_conflicting_shape_is_still_refused(self, tmp_path):
+        import torch
+
+        from soup_cli.utils.layer_shard import shard_checkpoint
+
+        src = tmp_path / "weights"
+        src.mkdir()
+        _write_safetensors(
+            str(src / "model.safetensors"),
+            {
+                "model.layers.0.mlp.extra.weight": torch.randn(4, 4),
+                "model.layers.1.mlp.extra.weight": torch.randn(4, 8),
+                "model.embed_tokens.weight": torch.randn(4, 4),
+            },
+        )
+        with pytest.raises(ValueError, match="stored shapes or dtypes"):
             shard_checkpoint(str(src), str(tmp_path / "out"), dtype="float32")
 
     def test_non_contiguous_layer_indices_refused(self, tmp_path):
@@ -759,6 +989,7 @@ class TestStreamSchemaDefaults:
         cfg = _load(_stream_yaml(training={"stream_layers": False}))
         assert cfg.training.stream_layers is False
         assert cfg.training.stream_source == "auto"
+        assert cfg.training.stream_ngram_source == "auto"
         assert cfg.training.stream_buffers == 2
         assert cfg.training.stream_vram_override is None
 
@@ -873,6 +1104,13 @@ class TestStreamScopeGates:
         with pytest.raises(ValueError, match="LoRA"):
             _load(_stream_yaml(training={"lora": {"r": 0}}))
 
+    def test_stream_pin_is_committable_to_config(self):
+        """#366: the pinning override joins the streaming config keys. Default
+        is None so today's automatic behaviour is unchanged."""
+        assert _load(_stream_yaml(training={"stream_pin": False})).training.stream_pin is False
+        assert _load(_stream_yaml(training={"stream_pin": True})).training.stream_pin is True
+        assert _load(_stream_yaml()).training.stream_pin is None
+
 
 class TestStreamMutualExclusions:
     def test_unfrozen_parameters_conflict(self):
@@ -902,6 +1140,23 @@ class TestStreamMutualExclusions:
         with pytest.raises(ValueError, match="stream_layers"):
             _load(_stream_yaml(training={"train_router_only": True, "moe_lora": True}))
 
+    def test_moe_expert_quant_conflict_names_the_silent_noop(self):
+        """Expert quantization is wired only into the resident setup path.
+
+        ``moe_lora`` satisfies the older feature validator, so this assertion
+        can pass only if the streaming cross-validator refuses the reachable
+        silent no-op explicitly.
+        """
+        with pytest.raises(
+            ValueError,
+            match=r"stream_layers.*moe_expert_quant.*silently ignored",
+        ):
+            _load(
+                _stream_yaml(
+                    training={"moe_lora": True, "moe_expert_quant": "nf4"}
+                )
+            )
+
     def test_expand_layers_conflict(self):
         """Likewise: freeze_trainable_layers satisfies the LLaMA-Pro validator."""
         with pytest.raises(ValueError, match="stream_layers"):
@@ -921,6 +1176,27 @@ class TestStreamFootgunRejection:
         with pytest.raises(ValueError, match="stream_layers"):
             _load(_stream_yaml(training={"stream_layers": False, "stream_source": "ram"}))
 
+    def test_stream_ngram_source_without_stream_layers_rejected(self):
+        with pytest.raises(ValueError, match="stream_layers"):
+            _load(
+                _stream_yaml(
+                    training={
+                        "stream_layers": False,
+                        "stream_ngram_source": "disk",
+                    }
+                )
+            )
+
+    @pytest.mark.parametrize("stream_pin", [True, False])
+    def test_stream_pin_without_stream_layers_rejected(self, stream_pin):
+        """#366 criterion 4: stream_pin set while streaming is off is a footgun.
+
+        #366 re-review: cover BOTH values. The guard is ``stream_pin is not
+        None``; testing only ``False`` let it be narrowed to ``is False`` with the
+        suite green, leaving ``true`` + ``stream_layers: false`` unguarded."""
+        with pytest.raises(ValueError, match="stream_layers"):
+            _load(_stream_yaml(training={"stream_layers": False, "stream_pin": stream_pin}))
+
 
 class TestStreamBufferBounds:
     def test_one_buffer_rejected(self):
@@ -939,6 +1215,10 @@ class TestStreamBufferBounds:
         with pytest.raises(ValueError, match="stream_source"):
             _load(_stream_yaml(training={"stream_source": "network"}))
 
+    def test_bad_stream_ngram_source_rejected(self):
+        with pytest.raises(ValueError, match="stream_ngram_source"):
+            _load(_stream_yaml(training={"stream_ngram_source": "network"}))
+
 
 # ==========================================================================
 # C4 — the streaming runtime (utils/layer_stream_runtime.py)
@@ -946,28 +1226,20 @@ class TestStreamBufferBounds:
 # The four classes below are SILENT failures: if any regresses, training still
 # runs and still converges. That is exactly why they are tests, not comments.
 # ==========================================================================
-def _cuda_available():
-    try:
-        import torch
-
-        return torch.cuda.is_available()
-    except Exception:
-        return False
-
 
 def _mps_is_the_accelerator():
     """True on an Apple-Silicon runner with no CUDA.
 
     transformers picks `mps` as its default device there, while this suite
     builds the streamed model on `cpu` — the two then disagree and any real
-    training step raises "found at least two devices". v0.72.0 measured CUDA
-    and CPU only; MPS is untested, so the step test is skipped rather than
-    making an unverified claim about it.
+    training step raises "found at least two devices". Most historical step
+    tests therefore stay on CPU; dedicated MPS controls exercise the hardware
+    path explicitly.
     """
     try:
         import torch
 
-        if torch.cuda.is_available():
+        if cuda_available():
             return False
         backend = getattr(torch.backends, "mps", None)
         return bool(backend is not None and backend.is_available())
@@ -1012,7 +1284,7 @@ def _tiny_lora():
     )
 
 
-def _build_streamed_cpu(tmp_path, n_layers=2, tie=True, buffers=2):
+def _build_streamed_cpu(tmp_path, n_layers=2, tie=True, buffers=2, device="cpu"):
     from soup_cli.utils.layer_shard import shard_checkpoint
     from soup_cli.utils.layer_stream_runtime import build_streamed_model
 
@@ -1021,7 +1293,7 @@ def _build_streamed_cpu(tmp_path, n_layers=2, tie=True, buffers=2):
     index = shard_checkpoint(weights, shards, dtype="float32", arch="llama")
     model, runtime = build_streamed_model(
         model_id=weights, shard_dir=shards, index=index,
-        lora_config=_tiny_lora(), device="cpu", dtype="float32",
+        lora_config=_tiny_lora(), device=device, dtype="float32",
         buffers=buffers, pin=False, seed=3,
     )
     return model, runtime, resident, weights
@@ -1342,6 +1614,104 @@ class TestStreamedForwardParityCpu:
             want = ref(input_ids=ids).logits
         assert torch.equal(got, want), (got - want).abs().max().item()
 
+    def test_untied_large_layers_share_one_slot_and_match_resident(self, tmp_path):
+        """#324: two distinct vocabulary matrices must not mean two VRAM copies."""
+        import torch
+        from peft import get_peft_model
+
+        model, runtime, resident, _ = _build_streamed_cpu(tmp_path, tie=False)
+        ref = get_peft_model(resident, _tiny_lora())
+        _copy_lora(model, ref)
+
+        ids = torch.randint(0, 64, (1, 12))
+        with torch.no_grad():
+            got = model(input_ids=ids).logits
+            want = ref(input_ids=ids).logits
+
+        assert torch.equal(got, want), (got - want).abs().max().item()
+        matrix_bytes = 64 * 32 * 4
+        assert runtime.large_pool is not None
+        assert set(runtime.large_pool.specs) == {
+            "model.embed_tokens.weight",
+            "lm_head.weight",
+        }
+        assert runtime.large_pool.nbytes == matrix_bytes
+        assert runtime.large_pool.loads == 2
+        assert runtime.large_pool.owner == "lm_head.weight"
+
+    def test_untied_large_layers_match_resident_backward_gradients(self, tmp_path):
+        """The untied slot must preserve training numerics, not only logits."""
+        import torch
+        from peft import get_peft_model
+
+        from soup_cli.utils.layer_stream_runtime import canonical_named_parameters
+
+        model, _runtime, resident, _ = _build_streamed_cpu(tmp_path, tie=False)
+        ref = get_peft_model(resident, _tiny_lora())
+
+        generator = torch.Generator().manual_seed(17)
+        with torch.no_grad():
+            for name, parameter in model.named_parameters():
+                if "lora_B" in name:
+                    parameter.copy_(
+                        torch.randn(parameter.shape, generator=generator) * 0.02
+                    )
+        _copy_lora(model, ref)
+        model.eval()
+        ref.eval()
+        model.zero_grad(set_to_none=True)
+        ref.zero_grad(set_to_none=True)
+
+        ids = torch.randint(0, 64, (2, 12), generator=generator)
+        streamed_loss = model(input_ids=ids, labels=ids).loss
+        resident_loss = ref(input_ids=ids, labels=ids).loss
+        assert torch.equal(streamed_loss, resident_loss), (
+            streamed_loss - resident_loss
+        ).abs().item()
+
+        streamed_loss.backward()
+        resident_loss.backward()
+        streamed_grads = {
+            name: parameter.grad
+            for name, parameter in canonical_named_parameters(model)
+            if "lora_" in name and parameter.grad is not None
+        }
+        resident_grads = {
+            name: parameter.grad
+            for name, parameter in canonical_named_parameters(ref)
+            if "lora_" in name and parameter.grad is not None
+        }
+
+        assert streamed_grads and set(streamed_grads) == set(resident_grads)
+        assert any(float(gradient.abs().sum()) > 0.0 for gradient in streamed_grads.values())
+        for name, gradient in streamed_grads.items():
+            assert torch.equal(gradient, resident_grads[name]), name
+
+    def test_tied_embedding_control_uses_the_unchanged_resident_path(self, tmp_path):
+        import torch
+
+        model, runtime, _resident, _ = _build_streamed_cpu(tmp_path, tie=True)
+        model(input_ids=torch.randint(0, 64, (1, 8)))
+
+        assert runtime.large_pool is None
+        assert not model.get_input_embeddings().weight.is_meta
+        assert model.get_input_embeddings().weight is model.get_output_embeddings().weight
+
+    def test_all_aliases_of_a_tied_boundary_module_are_replaced(self):
+        import torch.nn as nn
+
+        from soup_cli.utils.layer_stream_runtime import _replace_module_references
+
+        root = nn.Module()
+        shared = nn.Linear(4, 4, bias=False)
+        replacement = nn.Identity()
+        root.input = shared
+        root.output = shared
+
+        assert _replace_module_references(root, shared, replacement) == 2
+        assert root.input is replacement
+        assert root.output is replacement
+
     def test_layer_zero_adapter_gradient_is_non_zero(self, tmp_path):
         """plan P2: a detach()/no_grad() around the base severs the graph.
         Loss still falls (upper layers learn), so only this catches it."""
@@ -1369,6 +1739,28 @@ class TestStreamedForwardParityCpu:
             assert torch.equal(two(input_ids=ids).logits, three(input_ids=ids).logits)
 
 
+@pytest.mark.skipif(not _mps_is_the_accelerator(), reason="needs Apple Silicon MPS")
+class TestStreamedLargeLayerParityMps:
+    def test_untied_logits_match_resident(self, tmp_path):
+        """Supplementary #324 hardware control; the required CI oracle is CPU."""
+        import torch
+        from peft import get_peft_model
+
+        model, runtime, resident, _ = _build_streamed_cpu(
+            tmp_path, tie=False, device="mps"
+        )
+        ref = get_peft_model(resident.to("mps"), _tiny_lora())
+        _copy_lora(model, ref)
+        ids = torch.randint(0, 64, (1, 12), device="mps")
+
+        with torch.no_grad():
+            got = model(input_ids=ids).logits
+            want = ref(input_ids=ids).logits
+
+        assert torch.equal(got, want), (got - want).abs().max().item()
+        assert runtime.large_pool.loads == 2
+
+
 def _copy_lora(src, dst):
     """StreamedDecoderLayer inserts an `.inner.` segment into state-dict keys."""
     def norm(key):
@@ -1381,9 +1773,7 @@ def _copy_lora(src, dst):
         dst_lora[key].copy_(val)
 
 
-CUDA = pytest.mark.skipif(
-    not _cuda_available(), reason="requires CUDA (layer streaming is a GPU feature)"
-)
+CUDA = pytest.mark.gpu(reason="layer streaming is a GPU feature")
 
 
 @CUDA
@@ -1790,6 +2180,70 @@ class TestStreamLoraVariantGates:
             _load(_stream_yaml(training={"lora": {"r": 4, "init_strategy": "olora"}}))
 
 
+class TestStreamLoraHeadTargetGate:
+    """#1012 follow-up (#1019 review): the forward pass for a LoRA target on
+    lm_head/embed_tokens under streaming is correct, but saving and resuming
+    that adapter is not implemented yet (save_pretrained() raises copying a
+    meta tensor; a save -> load_adapter round trip silently drops most of the
+    adapter's tensors). Refuse at parse time, before any shard I/O runs, the
+    same way lora.use_dora / lora.use_vera are refused above."""
+
+    def test_lm_head_target_rejected(self):
+        with pytest.raises(ValueError, match="lm_head"):
+            _load(
+                _stream_yaml(
+                    training={"lora": {"r": 4, "target_modules": ["q_proj", "lm_head"]}}
+                )
+            )
+
+    def test_embed_tokens_target_rejected(self):
+        with pytest.raises(ValueError, match="embed_tokens"):
+            _load(
+                _stream_yaml(
+                    training={
+                        "lora": {"r": 4, "target_modules": ["q_proj", "embed_tokens"]}
+                    }
+                )
+            )
+
+    def test_both_boundary_modules_named_together(self):
+        with pytest.raises(ValueError, match="embed_tokens.*lm_head|lm_head.*embed_tokens"):
+            _load(
+                _stream_yaml(
+                    training={
+                        "lora": {
+                            "r": 4,
+                            "target_modules": ["embed_tokens", "q_proj", "lm_head"],
+                        }
+                    }
+                )
+            )
+
+    def test_bare_string_target_is_checked_too(self):
+        """target_modules accepts a bare string (Union[str, List[str]]), not
+        only a list: the guard must not assume a list."""
+        with pytest.raises(ValueError, match="lm_head"):
+            _load(_stream_yaml(training={"lora": {"r": 4, "target_modules": "lm_head"}}))
+
+    def test_non_boundary_targets_still_accepted(self):
+        """Negative control: q_proj/v_proj/o_proj/k_proj are unaffected. This
+        is the exact config #1019's own forward-fix tests exercise and it must
+        keep training."""
+        cfg = _load(
+            _stream_yaml(
+                training={
+                    "lora": {"r": 4, "target_modules": ["q_proj", "v_proj", "k_proj", "o_proj"]}
+                }
+            )
+        )
+        assert cfg.training.lora.target_modules == ["q_proj", "v_proj", "k_proj", "o_proj"]
+
+    def test_auto_target_modules_still_accepted(self):
+        """Negative control: the default 'auto' sentinel is untouched."""
+        cfg = _load(_stream_yaml(training={"lora": {"r": 4}}))
+        assert cfg.training.lora.target_modules == "auto"
+
+
 class TestPrefetchDirectionIsExplicit:
     """Direction was inferred from call order, which is correct today only
     because the turnaround index happens to be the last layer. Make it explicit
@@ -1824,6 +2278,35 @@ class TestPrefetchDirectionIsExplicit:
         assert pre.direction == -1
         pre.prime()  # next step's forward
         assert pre.direction == 1
+
+    def test_output_prefetch_runs_once_per_forward_not_during_backward(self):
+        from soup_cli.utils.layer_stream_runtime import StreamPrefetcher
+
+        class _Pool:
+            n = 2
+
+            def __init__(self):
+                self.owner = [None, None]
+
+            def slot_for(self, idx):
+                return idx % self.n
+
+            def load_async(self, idx, source, stream=None):
+                self.owner[self.slot_for(idx)] = idx
+
+        tails = []
+        pre = StreamPrefetcher(
+            _Pool(), source=None, n_layers=3, tail_prefetch=lambda: tails.append("head")
+        )
+        pre.prime()
+        for idx in (0, 1, 2, 2, 1, 0):
+            pre.advance(idx)
+        assert tails == ["head"]
+
+        pre.prime()
+        for idx in (0, 1, 2):
+            pre.advance(idx)
+        assert tails == ["head", "head"]
 
 
 class TestShardCacheIdentityBinding:
@@ -1887,7 +2370,7 @@ class TestShardWriteContainment:
         with pytest.raises(ValueError, match="under"):
             shard_checkpoint(src, outside, dtype="float32")
 
-    @pytest.mark.skipif(os.name == "nt", reason="POSIX symlink semantics")
+    @pytest.mark.requires_symlink
     def test_symlinked_ancestor_is_resolved_not_followed_blindly(self, tmp_path):
         from soup_cli.utils.layer_shard import shard_checkpoint
 
@@ -2015,7 +2498,7 @@ class TestStreamingEndToEndSetup:
         # Use the REAL device: TrainingArguments picks cuda when it is
         # available, so forcing the model to cpu here would only produce a
         # device mismatch that no user would ever hit.
-        device = "cuda" if _cuda_available() else "cpu"
+        device = "cuda" if cuda_available() else "cpu"
         return SFTTrainerWrapper(cfg, device=device), dataset
 
     def test_setup_builds_a_real_trl_trainer(self, tmp_path, monkeypatch):
@@ -2124,12 +2607,305 @@ class TestPinnedFallbackRuntime:
         assert any("pageable" in msg.lower() for msg in printed)
         assert any("utilisation" in msg.lower() for msg in printed)
 
+#: One decoder layer's weight for the AC3 refusal message, sized realistically so
+#: the rendered figure is a real number and not `0.00 GB`.
+_REFUSAL_HIDDEN = 4096
+_REFUSAL_SPEC = {"weight": ((_REFUSAL_HIDDEN, _REFUSAL_HIDDEN), "bfloat16")}
+#: (n_layers, rendered GB) pairs. TWO of them on purpose: a single fixed
+#: expectation would be satisfied by a message that hardcoded that string, which
+#: is the presence-not-value defect this PR's review round is about. Each case
+#: also asserts the OTHER size is absent, so only a figure computed from the
+#: actual store can satisfy both. 4096^2 bf16 = 32 MiB per layer, so 32 layers is
+#: 1.073 GB and 64 layers is 2.147 GB.
+_REFUSAL_STORE_SIZES = ((32, "1.07 GB"), (64, "2.15 GB"))
+#: The distinguishing phrase of the disk-tier "pinning is inapplicable here"
+#: announcement, DELETED in #971. It was true while the disk tier allocated a
+#: fresh tensor per call and had nothing to page-lock; the async reader stages
+#: into reusable host buffers, which pin exactly as the RAM store does. Kept so
+#: the rewritten cases can assert it is ABSENT — a re-introduced explanation
+#: would otherwise read as a harmless extra line.
+_DISK_TIER_INAPPLICABLE_TEXT = "Pinning does not apply"
+#: Same convention as `_REFUSAL_STORE_SIZES`, for the depth the disk tier's pin
+#: refusal must quote: two values, each case asserting the OTHER is absent, so a
+#: message hardcoding one of them cannot pass. Both inside
+#: [MIN_STREAM_READ_AHEAD, MAX_STREAM_READ_AHEAD], and neither is the default —
+#: a depth equal to the default would also be satisfied by a message that fell
+#: back to it.
+_REFUSAL_READ_AHEAD_DEPTHS = (3, 4)
+
+
+class TestStreamPinRuntimeRefusal:
+    """#366 criterion 3: training.stream_pin=true (require_pin) must refuse
+    loudly when the box cannot page-lock the store, instead of silently
+    degrading to a pageable one and spending the whole throughput margin."""
+
+    _SPEC = {"weight": ((2, 2), "float32")}
+
+    def _patch_ramsource_to_fail_pinning(self, monkeypatch):
+        import soup_cli.utils.layer_stream_runtime as rt
+
+        class _FailsWhenPinned:
+            def __init__(self, shard_dir, n_layers, spec, *, pin=True):
+                if pin:
+                    raise RuntimeError("CUDA error: cannot allocate pinned memory")
+                self.nbytes = 1
+                # The real `RamSource` reports what it actually got, and since
+                # the RAM branch of `_build_source` returns `source.pinned`
+                # rather than a literal `False`, a double that omits it is no
+                # longer a faithful stand-in.
+                self.pinned = pin
+
+        monkeypatch.setattr(rt, "RamSource", _FailsWhenPinned)
+        return rt
+
+    def test_auto_falls_back_to_pageable(self, monkeypatch):
+        """Without the override, a page-lock failure still falls back (default)."""
+        rt = self._patch_ramsource_to_fail_pinning(monkeypatch)
+        source, pinned = rt._build_source("d", 1, self._SPEC, True, None)
+        assert pinned is False
+        assert source.nbytes > 0
+
+    def test_the_returned_flag_is_read_off_the_source_on_the_ram_tier_too(
+        self, monkeypatch
+    ):
+        """`_build_source`'s docstring promises the second element "means the
+        same thing on both tiers". The disk branch returns `source.pinned`; the
+        RAM branch returned the literal it had just asked for, which is a claim
+        made at the CALL SITE about what the constructor did.
+
+        Value-identical with the real `RamSource`, which raises rather than
+        returning a pageable store under `pin=True` — so this stub is
+        counterfactual on purpose. It is the only way to tell "what the source
+        says" from "what the caller assumed", and that distinction is what the
+        docstring is asserting.
+        """
+        import soup_cli.utils.layer_stream_runtime as rt
+
+        class _SaysPageableAnyway:
+            def __init__(self, shard_dir, n_layers, spec, *, pin=True):
+                self.nbytes = 1
+                self.pinned = False
+
+        monkeypatch.setattr(rt, "RamSource", _SaysPageableAnyway)
+        _, pinned = rt._build_source("d", 1, self._SPEC, True, None)
+        assert pinned is False
+
+    def test_forced_pin_refuses_instead_of_falling_back(self, monkeypatch):
+        rt = self._patch_ramsource_to_fail_pinning(monkeypatch)
+        with pytest.raises(RuntimeError, match="stream_pin"):
+            rt._build_source("d", 1, self._SPEC, True, None, require_pin=True)
+
+    @pytest.mark.parametrize(("n_layers", "expected"), _REFUSAL_STORE_SIZES)
+    def test_the_refusal_names_the_store_size(self, monkeypatch, n_layers, expected):
+        """#366 AC3: the refusal must cite the STORE SIZE — not the page-locked
+        ceiling, which is deliberately left unprobed (`pinned_limit_bytes=None`)
+        and so cannot be quoted honestly. Dropping the figure from the message
+        left the suite green, which made AC3 unenforced.
+
+        Two sizes, each asserting the other is ABSENT: a message that hardcoded
+        one figure would satisfy a single-case test identically, which is exactly
+        the presence-not-value failure this review round is about."""
+        rt = self._patch_ramsource_to_fail_pinning(monkeypatch)
+        others = [gb for layers, gb in _REFUSAL_STORE_SIZES if layers != n_layers]
+        with pytest.raises(RuntimeError) as excinfo:
+            rt._build_source("d", n_layers, _REFUSAL_SPEC, True, None, require_pin=True)
+        message = str(excinfo.value)
+        assert expected in message, message
+        for other in others:
+            assert other not in message, message
+
+    def test_the_refusal_sums_heterogeneous_layer_specs(self, monkeypatch):
+        """The #426 per-layer spec must survive #416's refusal path.
+
+        The two layers deliberately have different, disjoint keys and sizes.
+        Summing them gives 0.05 GB; multiplying the largest layer by two gives
+        0.07 GB, while multiplying the merged union by two gives 0.10 GB.
+        """
+        rt = self._patch_ramsource_to_fail_pinning(monkeypatch)
+        layer_specs = [
+            {"self_attn.q_proj.weight": ((4096, 4096), "bfloat16")},
+            {"linear_attn.in_proj_qkv.weight": ((2048, 4096), "bfloat16")},
+        ]
+
+        with pytest.raises(RuntimeError) as excinfo:
+            rt._build_source(
+                "d", 2, layer_specs, True, None, require_pin=True
+            )
+
+        message = str(excinfo.value)
+        assert "0.05 GB" in message, message
+        assert "0.07 GB" not in message, message
+        assert "0.10 GB" not in message, message
+
+
+class TestDiskTierPinsItsStagingOrRefuses:
+    """#971: the disk tier now pins the same way the RAM tier does.
+
+    It used to ANNOUNCE that pinning was inapplicable, which was true while the
+    tier allocated a fresh tensor per call — there was no host buffer to
+    page-lock. ``AsyncDiskSource`` reads ahead into REUSABLE host staging, and
+    pinning that staging is what lets the host-to-device copy overlap compute
+    at all. So an explicit ``training.stream_pin`` is honoured or refused here,
+    never explained away; and because the depth decides how much is page-locked,
+    the refusal offers a remedy the RAM tier cannot.
+
+    ``require_pin`` is gated on a real CUDA device upstream, so this drives
+    `_build_source` directly to reach the branch without a GPU.
+    """
+
+    _SPEC = {"weight": ((2, 2), "float32")}
+
+    class _RecordingConsole:
+        def __init__(self):
+            self.messages = []
+
+        def print(self, *args, **_kwargs):
+            self.messages.append(" ".join(str(a) for a in args))
+
+    def _patch_async_source(self, monkeypatch, *, fails_when_pinned: bool):
+        """Mirrors `_patch_ramsource_to_fail_pinning` above, one tier down.
+
+        Patched on `soup_cli.utils.async_disk_source` because `_build_source`
+        imports the class lazily — that module attribute is the name the import
+        resolves, so patching the runtime module would not be seen.
+        """
+        import soup_cli.utils.async_disk_source as ads
+
+        opened = []
+
+        class _StubAsyncDisk:
+            def __init__(self, shard_dir, n_layers, spec, **kwargs):
+                opened.append(kwargs)
+                if kwargs.get("pin") and fails_when_pinned:
+                    raise RuntimeError("CUDA error: cannot allocate pinned memory")
+                self.pinned = bool(kwargs.get("pin"))
+                self.read_ahead = kwargs.get("read_ahead")
+                self.nbytes = 16
+                self.disk_bytes = 64
+
+            def close(self):
+                pass
+
+        monkeypatch.setattr(ads, "AsyncDiskSource", _StubAsyncDisk)
+        return opened
+
+    def _build_on_disk(self, monkeypatch, *, require_pin, pin=True, fails=True,
+                       read_ahead=4):
+        import soup_cli.utils.layer_stream_runtime as rt
+
+        opened = self._patch_async_source(monkeypatch, fails_when_pinned=fails)
+        console = self._RecordingConsole()
+        source, pinned = rt._build_source(
+            "d", 1, self._SPEC, pin, console, "disk",
+            require_pin=require_pin, read_ahead=read_ahead,
+        )
+        return source, pinned, console.messages, opened
+
+    @pytest.mark.parametrize("read_ahead", _REFUSAL_READ_AHEAD_DEPTHS)
+    def test_an_explicit_request_that_cannot_be_met_refuses(
+        self, monkeypatch, read_ahead
+    ):
+        """The RAM tier's contract, now the disk tier's: stream_pin=true means
+        refuse, not degrade. The remedy list must include the one that is
+        specific to this tier — the read-ahead depth IS the multiplier on how
+        much host memory gets page-locked.
+
+        Two depths, each asserting the other is ABSENT. `assert "4" in message`
+        was a one-character check that a message hardcoding `read_ahead=4`
+        satisfied identically — the presence-not-value defect this file's own
+        `_REFUSAL_STORE_SIZES` comment spends six lines explaining.
+        """
+        others = [d for d in _REFUSAL_READ_AHEAD_DEPTHS if d != read_ahead]
+        with pytest.raises(RuntimeError) as excinfo:
+            self._build_on_disk(monkeypatch, require_pin=True, read_ahead=read_ahead)
+        message = str(excinfo.value)
+        assert "training.stream_pin" in message, message
+        assert f"training.stream_read_ahead={read_ahead}" in message, (
+            "the refusal must quote the depth it could not pin, not just name "
+            f"the field: {message}"
+        )
+        for other in others:
+            assert f"stream_read_ahead={other}" not in message, message
+
+    def test_without_the_flag_it_falls_back_loudly_and_retries_pageable(
+        self, monkeypatch
+    ):
+        """Refusing here would brick the very runs the disk tier exists for, so
+        the default is a fallback — but a silent one would spend the whole
+        overlap margin without saying so."""
+        source, pinned, messages, opened = self._build_on_disk(
+            monkeypatch, require_pin=False
+        )
+        assert pinned is False
+        assert source.pinned is False
+        assert [kwargs["pin"] for kwargs in opened] == [True, False], (
+            "the fallback must RETRY with pin=False, not hand back the object "
+            f"that failed: {opened}"
+        )
+        assert len(messages) == 1, messages
+        # The measured figures, not the punctuation between them: the RAM
+        # branch's fallback spells it "drops from ~97% to ~79%" and its refusal
+        # "~97% -> ~79%", and this must stay readable beside both.
+        assert "~97%" in messages[0] and "~79%" in messages[0], messages[0]
+        assert "training.stream_read_ahead" in messages[0], messages[0]
+
+    def test_a_successful_pin_says_nothing(self, monkeypatch):
+        """Control: the RAM tier keeps silent when its default works, and so
+        must this one. Without this half, a mutant that always printed the
+        fallback warning would pass the case above."""
+        source, pinned, messages, opened = self._build_on_disk(
+            monkeypatch, require_pin=False, fails=False
+        )
+        assert pinned is True
+        assert source.pinned is True
+        assert [kwargs["pin"] for kwargs in opened] == [True]
+        assert messages == []
+
+    def test_an_honoured_request_never_says_pinning_does_not_apply(
+        self, monkeypatch
+    ):
+        """The deleted announcement was FALSE once staging existed. A run that
+        asked for pinning and got it must not be told it was inapplicable."""
+        _source, pinned, messages, _opened = self._build_on_disk(
+            monkeypatch, require_pin=True, fails=False
+        )
+        assert pinned is True
+        assert not any(_DISK_TIER_INAPPLICABLE_TEXT in m for m in messages), messages
+        assert messages == []
+
+    def test_the_depth_reaches_the_source(self, monkeypatch):
+        """#748: `training.stream_read_ahead` is read by nothing unless it lands
+        on the constructor. Asserted on the value, not on presence."""
+        source, _pinned, _messages, opened = self._build_on_disk(
+            monkeypatch, require_pin=False, fails=False, read_ahead=7
+        )
+        assert opened[0]["read_ahead"] == 7
+        assert source.read_ahead == 7
+
+    def test_the_fallback_still_reaches_the_log_without_a_console(
+        self, monkeypatch, caplog
+    ):
+        """`_build_source` is also called with `console=None` (the runtime does
+        not always have one). The decision must still be recorded there, or the
+        degradation is silent on exactly the path with no screen to print to."""
+        import logging
+
+        import soup_cli.utils.layer_stream_runtime as rt
+
+        self._patch_async_source(monkeypatch, fails_when_pinned=True)
+        with caplog.at_level(logging.WARNING):
+            _source, pinned = rt._build_source(
+                "d", 1, self._SPEC, True, None, "disk", require_pin=False
+            )
+        assert pinned is False
+        assert "~97%" in caplog.text and "~79%" in caplog.text, caplog.text
+
 
 class TestCachedIndexInvalidation:
     def _prepare(self, tmp_path):
         from soup_cli.utils.layer_shard import shard_checkpoint
 
-        src, _, _ = _fake_weights_dir(tmp_path)
+        src, _, _ = _fake_weights_dir(tmp_path, untied=True)
         out = str(tmp_path / "shards")
         shard_checkpoint(src, out, dtype="float32")
         return src, out
@@ -2150,6 +2926,15 @@ class TestCachedIndexInvalidation:
         shard_checkpoint(src, out, dtype="float32")
         assert os.path.exists(layer_shard_path(out, 1))
 
+    def test_missing_large_layer_shard_reshards(self, tmp_path):
+        from soup_cli.utils.layer_shard import large_shard_path, shard_checkpoint
+
+        src, out = self._prepare(tmp_path)
+        path = large_shard_path(out, "model.embed_tokens.weight")
+        os.unlink(path)
+        shard_checkpoint(src, out, dtype="float32")
+        assert os.path.exists(path)
+
     def test_index_with_missing_keys_reshards(self, tmp_path):
         import json as _json
 
@@ -2165,7 +2950,7 @@ class TestCachedIndexInvalidation:
 
 class TestMaterializeExtrasGuard:
     def test_incomplete_extras_shard_is_refused(self, tmp_path):
-        """A corrupt extras shard must fail loudly, not leave meta embeddings."""
+        """A corrupt extras shard must fail loudly, not leave resident weights meta."""
         from safetensors.torch import load_file, save_file
 
         from soup_cli.utils.layer_shard import extras_shard_path, shard_checkpoint
@@ -2178,7 +2963,7 @@ class TestMaterializeExtrasGuard:
 
         blob = {k: v.clone() for k, v in load_file(extras_shard_path(shards)).items()}
         gc.collect()  # Windows refuses to rewrite a still-mmapped file (err 1224)
-        blob.pop("model.embed_tokens.weight")
+        blob.pop("model.norm.weight")
         save_file(blob, extras_shard_path(shards))
 
         model = build_meta_skeleton(weights, dtype="float32")

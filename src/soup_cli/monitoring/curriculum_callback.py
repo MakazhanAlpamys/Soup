@@ -59,7 +59,7 @@ _VALID_CURRICULUM_METRICS = frozenset({"length", "perplexity", "loss"})
 _SIGNAL_WINDOW = 512
 
 __all__ = [
-    "DynamicCurriculumCallback",
+    "DynamicCurriculumCallback",  # noqa: F822
     "_is_rank_zero",
     "_pick_bucket",
 ]
@@ -140,7 +140,7 @@ def _try_import_callback_base():
         return object
 
 
-class DynamicCurriculumCallback(_try_import_callback_base()):  # type: ignore[misc]
+class _DynamicCurriculumCallback_body:  # type: ignore[misc]  # noqa: N801
     """HF TrainerCallback emitting dynamic curriculum bucket-weight history.
 
     BETA: the callback is live in v0.53.5 but the sampler-side consumer
@@ -510,3 +510,22 @@ class DynamicCurriculumCallback(_try_import_callback_base()):  # type: ignore[mi
                 os.unlink(tmp_path)
             except OSError:
                 pass
+
+
+_LAZY_CALLBACKS = {
+    "DynamicCurriculumCallback": _DynamicCurriculumCallback_body,
+}
+_BODY_SKIP = frozenset(("__dict__", "__weakref__"))
+
+
+def __getattr__(name: str):  # PEP 562
+    body = _LAZY_CALLBACKS.get(name)
+    if body is not None:
+        base = _try_import_callback_base()
+        ns = {k: v for k, v in vars(body).items() if k not in _BODY_SKIP}
+        cls = type(name, (base,), ns)
+        cls.__module__ = __name__
+        cls.__qualname__ = name
+        globals()[name] = cls
+        return cls
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

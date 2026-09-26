@@ -1442,10 +1442,11 @@ LlamaConfig(vocab_size=4096, hidden_size=5120, intermediate_size=27648,
   exactly this, and `load_async` as issuing `stream.wait_stream(current)` before
   `copy_`. Both are evidently insufficient on this path.
 
-**No fix attempted and no Soup code changed**, per the brief. There is also no
-user-facing escape hatch: pinning is chosen automatically by `decide_pinning`,
-with no config key to disable it, so a user hitting this cannot work around it
-from `soup.yaml`.
+**No fix attempted and no Soup code changed**, per the brief. At the time this
+was measured there was also no user-facing escape hatch: pinning was chosen
+automatically by `decide_pinning` with no config key to disable it, so a user
+hitting this could not work around it from `soup.yaml`. That escape hatch now
+exists — `training.stream_pin: false` (#366) forces the pageable store.
 
 ### Everything measured, one table
 

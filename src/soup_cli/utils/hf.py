@@ -16,17 +16,16 @@ Design goals:
 
 from __future__ import annotations
 
-import ipaddress
 import os
 import re
 from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import urlparse
 
-DEFAULT_ENDPOINT = "https://huggingface.co"
+from soup_cli.utils.net_guard import LOOPBACK_HOSTS as _LOOPBACK_HOSTS
+from soup_cli.utils.net_guard import is_private_or_link_local as _is_private_or_link_local
 
-# Loopback hosts that may legitimately use plain HTTP (dev / self-hosted).
-_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+DEFAULT_ENDPOINT = "https://huggingface.co"
 
 # repo IDs are either "name" or "owner/name"; both parts must be safe.
 _REPO_PART_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$")
@@ -104,7 +103,8 @@ def resolve_endpoint() -> str:
         raise ValueError(
             "HF_ENDPOINT 0.0.0.0 is ambiguous; use 127.0.0.1 or localhost"
         )
-    if parsed.scheme == "http" and host not in _LOOPBACK_HOSTS:
+    host_clean = host.lower().rstrip(".")
+    if parsed.scheme == "http" and host_clean not in _LOOPBACK_HOSTS:
         # Reject plain HTTP for RFC1918 / link-local / cloud metadata too —
         # HF_ENDPOINT=http://169.254.169.254 or http://192.168.1.1 would
         # otherwise route SDK traffic to internal targets.
@@ -118,18 +118,6 @@ def resolve_endpoint() -> str:
             "HF_ENDPOINT for remote hosts must use HTTPS (localhost HTTP allowed)"
         )
     return stripped
-
-
-def _is_private_or_link_local(host: str) -> bool:
-    """Whether ``host`` resolves to a private / link-local / loopback IP."""
-    try:
-        addr = ipaddress.ip_address(host)
-    except ValueError:
-        # Hostname — we don't resolve DNS here (the SDK does), so fall back
-        # to "treat as public". A malicious DNS record pointing to a private
-        # IP is out of scope for this local-tool threat model.
-        return False
-    return addr.is_private or addr.is_link_local or addr.is_loopback
 
 
 def validate_repo_id(repo_id: str) -> None:

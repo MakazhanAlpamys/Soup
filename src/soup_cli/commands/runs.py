@@ -14,6 +14,7 @@ from rich.panel import Panel
 from rich.table import Table
 
 from soup_cli.utils.run_cost import format_cost_usd
+from soup_cli.utils.terminal import for_terminal
 
 console = Console()
 
@@ -95,7 +96,10 @@ def list_runs(
         elif status == "failed":
             status_str = "[red]failed[/]"
         else:
-            status_str = "[yellow]running[/]"
+            # Show the real status (e.g. 'terminated' reconciled from a dead
+            # watcher, issue #401) — never hardcode 'running' for a row that is
+            # no longer running.
+            status_str = f"[yellow]{status}[/]"
 
         # Format loss
         loss_str = ""
@@ -153,12 +157,19 @@ def show(
         console.print("[dim]Use [bold]soup runs[/] to see all runs.[/]")
         raise typer.Exit(1)
 
-    # Format status
+    # Format status. Enumerated rather than a catch-all "else: running" —
+    # that fallback used to print "running" for a "terminated" row too,
+    # since _reconcile_orphaned_run (#401) and a "launching" MCP row both
+    # fell through it silently (#764/#767 review).
     status = run["status"]
     if status == "completed":
         status_str = "[green]completed[/]"
     elif status == "failed":
         status_str = "[red]failed[/]"
+    elif status == "terminated":
+        status_str = "[red]terminated[/]"
+    elif status == "launching":
+        status_str = "[dim]launching[/]"
     else:
         status_str = "[yellow]running[/]"
 
@@ -177,6 +188,16 @@ def show(
         f"Name:       {_esc(str(run.get('experiment_name') or '-'))}",
         f"Status:     {status_str}",
         f"Date:       {run['created_at'][:19].replace('T', ' ')}",
+    ]
+    # error_message (#764/#767): written by fail_run since #764, but read by
+    # nothing until now — a failed run's "why" was sitting in the database
+    # with no surface to show it.
+    if run.get("error_message"):
+        # error_message is exception text, not a config-derived string --
+        # it can carry a remote error body verbatim, so it gets control-byte
+        # stripping (for_terminal) rather than markup escaping alone (#767).
+        info_lines.append(f"Error:      {for_terminal(run['error_message'])}")
+    info_lines.extend([
         "",
         f"Model:      [bold]{_esc(str(run.get('base_model') or '-'))}[/]",
         f"Task:       {_esc(str(run.get('task') or '-'))}",
@@ -189,7 +210,7 @@ def show(
         f"Duration:   {duration_str}",
         f"Cost:       {_fmt_cost(run)}",
         f"Output:     {_esc(str(run.get('output_dir') or '-'))}",
-    ]
+    ])
     console.print(Panel("\n".join(info_lines), title="Run Details"))
 
     # Config section
@@ -331,8 +352,11 @@ def clean(
     ),
     force: bool = typer.Option(False, "--force", "-f", help="Skip confirmation"),
     keep_weights: bool = typer.Option(
-        True, "--keep-weights",
-        help="Keep intermediate model weights but delete optimizer states."
+        True, "--keep-weights/--no-keep-weights",
+        help=(
+            "Keep intermediate model weights and delete only optimizer and scheduler "
+            "states (default). --no-keep-weights deletes whole non-best checkpoints."
+        ),
     ),
 ):
     """Intelligently clean up redundant checkpoint files to reclaim disk space."""
@@ -552,13 +576,18 @@ def _plot_loss_curve(metrics: list[dict]) -> None:
         console.print("[dim]No loss data to plot.[/]")
         return
 
-    plt.clear_figure()
-    plt.plot(steps, losses, label="loss")
-    plt.title("Training Loss")
-    plt.xlabel("Step")
-    plt.ylabel("Loss")
-    plt.theme("dark")
-    plt.show()
+    from soup_cli.utils.plotext_compat import render_line
+
+    render_line(
+        plt,
+        steps,
+        losses,
+        console=console,
+        label="loss",
+        title="Training Loss",
+        xlabel="Step",
+        ylabel="Loss",
+    )
 
 
 @app.command(name="curriculum-curve")

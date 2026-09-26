@@ -3,26 +3,28 @@
 from __future__ import annotations
 
 import platform
+import re
 import sys
 
 import typer
 from rich.console import Console
+from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
 
 from soup_cli.utils.constants import GITHUB_URL
+from soup_cli.utils.torchao_compat import TORCHAO_MIN_VERSION
 
 console = Console()
 
+
 # Dependencies to check: (import_name, package_name, min_version, required)
+#
+# A core-only install (`pip install soup-cli`) is intentionally light: the CLI,
+# config system, and data tools — no PyTorch. Only the core rows below are
+# required; the heavy training stack lives in EXTRA_GROUPS as one optional
+# extra, so a healthy core-only install reports no failures (#828).
 DEPS = [
-    ("torch", "torch", "2.0.0", True),
-    ("transformers", "transformers", "4.36.0", True),
-    ("peft", "peft", "0.7.0", True),
-    ("trl", "trl", "0.7.0", True),
-    ("datasets", "datasets", "2.14.0", True),
-    ("bitsandbytes", "bitsandbytes", "0.41.0", True),
-    ("accelerate", "accelerate", "0.25.0", True),
     ("pydantic", "pydantic", "2.0.0", True),
     ("typer", "typer", "0.9.0", True),
     ("rich", "rich", "13.0.0", True),
@@ -38,17 +40,37 @@ DEPS = [
     ("httpx", "httpx", "0.24.0", False),
     ("unsloth", "unsloth", "2024.8", False),
     ("PIL", "Pillow", "9.0.0", False),
-    ("torchao", "torchao", "0.4.0", False),
+    ("torchao", "torchao", TORCHAO_MIN_VERSION, False),
     ("sglang", "sglang", "0.2.0", False),
     ("librosa", "librosa", "0.10.0", False),
 ]
 
-# v0.40.1 Part C / C5 — packages whose major version we explicitly cap.
-# Empty by default; entries gate the dependency table to flag a
-# breaking-major upgrade (e.g. transformers 5.x) as INCOMPATIBLE rather
-# than silently allowing it.
+# Extra groups: (extra_name, [(import_name, package_name, min_version), ...])
+EXTRA_GROUPS: list[tuple[str, list[tuple[str, str, str]]]] = [
+    (
+        "train",
+        [
+            # The torch floor is declared once, in pyproject.toml's [train] extra.
+            # This literal is a copy, pinned to the declaration by
+            # tests/test_issue636_torch_floor.py — reading installed metadata instead
+            # would report the install's history, not the declaration (#636).
+            ("torch", "torch", "2.6.0"),
+            ("transformers", "transformers", "5.16.1"),
+            ("peft", "peft", "0.20.0"),
+            ("trl", "trl", "0.29.0"),
+            ("datasets", "datasets", "2.14.0"),
+            ("bitsandbytes", "bitsandbytes", "0.41.0"),
+            ("accelerate", "accelerate", "0.27.0"),
+        ],
+    ),
+]
+
+# Packages whose declared breaking-major ceiling must be reported as
+# incompatible instead of silently green-lighted by ``soup doctor``.
 _MAX_EXCLUSIVE: dict[str, str] = {
-    "transformers": "5.0.0",
+    "transformers": "6.0.0",
+    "peft": "1.0.0",
+    "trl": "1.0.0",
 }
 
 
@@ -62,7 +84,18 @@ def doctor(
         help=(
             "Detect the disk media type (NVMe / SSD / HDD). Layer streaming's "
             "disk overflow tier needs NVMe. Off by default: the probe costs ~9 s "
-            "on Windows."
+            "on Windows, and on Linux it WRITES a ~64 MiB scratch file "
+            "(.soup-diskprobe-*, git-ignored) into the current directory to "
+            "measure sequential read throughput."
+        ),
+    ),
+    config: str | None = typer.Option(
+        None,
+        "--config",
+        "-c",
+        help=(
+            "Also check a soup.yaml: report which of the settings it actually "
+            "sets are not read on its task and backend (#755)."
         ),
     ),
 ):
@@ -83,6 +116,9 @@ def doctor(
     # GPU check
     _check_gpu()
 
+    # MLX (Apple Silicon) check
+    _check_mlx()
+
     # Resources check
     _check_resources(probe_disk=disk)
 
@@ -94,7 +130,18 @@ def doctor(
     table.add_column("Min Version")
     table.add_column("Status")
 
-    issues = []
+    issues: list[str] = []
+    # Actionable install specs for the trailing "Fix all" line. Only entries
+    # that are actually missing or out of range land here — never the full
+    # required set, and never a bare per-package floor for an extra group.
+    fix_parts: list[str] = []
+    fix_pre: list[str] = []
+    # A missing or incompatible core dependency turns doctor into a gate:
+    # exit non-zero at the end. An installed package beyond its declared
+    # ceiling is blocking wherever it is found, extra groups included (#874).
+    # Advisory issues (optional packages, a missing or outdated [train]
+    # member, torchvision skew) never touch the exit code.
+    core_broken = False
 
     for import_name, pkg_name, min_ver, required in DEPS:
         try:
@@ -117,19 +164,28 @@ def doctor(
                     version = "?"
             version_str = str(version)
 
-            # v0.40.1 Part C / C5 — flag transformers 5.x as INCOMPATIBLE
-            # until the TRL/transformers 5.x migration lands.
+            # Flag versions beyond Soup's validated compatibility band.
             max_excl = _MAX_EXCLUSIVE.get(pkg_name)
             if max_excl and _version_ge(version_str, max_excl):
                 status = f"[red]INCOMPATIBLE (need <{max_excl})[/]"
                 issues.append(
-                    f"Downgrade {pkg_name}: pip install '{pkg_name}>={min_ver},<{max_excl}'"
+                    f'Downgrade {pkg_name}: pip install "{pkg_name}>={min_ver},<{max_excl}"'
                 )
+                fix_parts.append(f'"{pkg_name}>={min_ver},<{max_excl}"')
+                # Asymmetry, on purpose (#874): here only a *required* DEPS row
+                # past its ceiling blocks, whereas the extra-group check below
+                # blocks unconditionally. An optional DEPS row past a ceiling
+                # would exit 0 while the same package in an extra group exits 1.
+                # Unreachable today (_MAX_EXCLUSIVE and the optional DEPS rows
+                # do not intersect), but written down so it is not rediscovered.
+                if required:
+                    core_broken = True
             elif _version_ok(version_str, min_ver):
                 status = "[green]OK[/]"
             else:
                 status = f"[yellow]outdated (need >={min_ver})[/]"
-                issues.append(f"Upgrade {pkg_name}: pip install '{pkg_name}>={min_ver}'")
+                issues.append(f'Upgrade {pkg_name}: pip install "{pkg_name}>={min_ver}"')
+                fix_parts.append(f'"{pkg_name}>={min_ver}"')
 
             table.add_row(
                 pkg_name,
@@ -141,7 +197,9 @@ def doctor(
         except ImportError:
             if required:
                 status = "[red]MISSING[/]"
-                issues.append(f"Install {pkg_name}: pip install '{pkg_name}>={min_ver}'")
+                issues.append(f'Install {pkg_name}: pip install "{pkg_name}>={min_ver}"')
+                fix_parts.append(f'"{pkg_name}>={min_ver}"')
+                core_broken = True
             else:
                 status = "[dim]not installed[/]"
 
@@ -153,6 +211,94 @@ def doctor(
                 status,
             )
 
+    # Extra groups render in the same table as optional rows. A missing group
+    # member is advisory (status only, no per-package issue); a group with at
+    # least one missing member contributes exactly one issue pointing at the
+    # extra, so the suggestion keeps the declared ceilings and the platform
+    # torch index instead of bare per-package floors.
+    for extra_name, members in EXTRA_GROUPS:
+        missing_pkgs: list[str] = []
+        for import_name, pkg_name, min_ver in members:
+            version_str = _installed_version_str(import_name, pkg_name)
+            if version_str is None:
+                table.add_row(
+                    pkg_name,
+                    escape(f"[{extra_name}]"),
+                    "-",
+                    f">={min_ver}",
+                    "[dim]not installed[/]",
+                )
+                missing_pkgs.append(pkg_name)
+                continue
+            max_excl = _MAX_EXCLUSIVE.get(pkg_name)
+            if max_excl and _version_ge(version_str, max_excl):
+                status = f"[red]INCOMPATIBLE (need <{max_excl})[/]"
+                issues.append(
+                    f'Downgrade {pkg_name}: pip install "{pkg_name}>={min_ver},<{max_excl}"'
+                )
+                fix_parts.append(f'"{pkg_name}>={min_ver},<{max_excl}"')
+                core_broken = True
+            elif _version_ok(version_str, min_ver):
+                status = "[green]OK[/]"
+            else:
+                status = f"[yellow]outdated (need >={min_ver})[/]"
+                issues.append(f'Upgrade {pkg_name}: pip install "{pkg_name}>={min_ver}"')
+                fix_parts.append(f'"{pkg_name}>={min_ver}"')
+            table.add_row(pkg_name, escape(f"[{extra_name}]"), version_str, f">={min_ver}", status)
+        if missing_pkgs:
+            all_missing = len(missing_pkgs) == len(members)
+            missing_list = ", ".join(missing_pkgs)
+            if extra_name == "train":
+                driver = _nvidia_smi_cuda_version()
+                torch_missing = "torch" in missing_pkgs
+                # Single call site, gated on torch itself being missing.
+                tag = (
+                    _torch_cuda_wheel_tag(driver)
+                    if driver is not None and torch_missing
+                    else None
+                )
+                url = f"https://download.pytorch.org/whl/{tag}" if tag else None
+                if all_missing:
+                    if url is not None:
+                        # ``--index-url`` replaces PyPI, so torch must come from the
+                        # CUDA wheel index in its own step; the ``[train]`` extra is
+                        # then resolved against PyPI with torch already satisfied.
+                        issues.append(
+                            "Training stack not installed:\n"
+                            f"  pip install torch --index-url {url}\n"
+                            '  pip install "soup-cli[train]"'
+                        )
+                        fix_pre.append(f"pip install torch --index-url {url}")
+                    else:
+                        issues.append(
+                            'Training stack not installed: pip install "soup-cli[train]"'
+                        )
+                elif url is not None:
+                    issues.append(
+                        f"Training stack incomplete, missing: {missing_list}\n"
+                        f"  pip install torch --index-url {url}\n"
+                        '  pip install "soup-cli[train]"'
+                    )
+                    fix_pre.append(f"pip install torch --index-url {url}")
+                else:
+                    issues.append(
+                        f"Training stack incomplete, missing: {missing_list}\n"
+                        '  pip install "soup-cli[train]"'
+                    )
+                fix_parts.append('"soup-cli[train]"')
+            elif all_missing:
+                issues.append(
+                    f"{extra_name} stack not installed: "
+                    f'pip install "soup-cli[{extra_name}]"'
+                )
+                fix_parts.append(f'"soup-cli[{extra_name}]"')
+            else:
+                issues.append(
+                    f"{extra_name} stack incomplete, missing: {missing_list}\n"
+                    f'  pip install "soup-cli[{extra_name}]"'
+                )
+                fix_parts.append(f'"soup-cli[{extra_name}]"')
+
     console.print(table)
 
     # Check torchvision + torch compatibility
@@ -163,20 +309,124 @@ def doctor(
 
     # Summary
     if issues:
+        # Issue/fix text may contain "[train]"-style brackets, which Rich
+        # would otherwise swallow as markup tags — escape so the suggestion
+        # renders literally (cmd.exe-safe double quotes included). highlight
+        # is off so Rich does not colour-wrap the quoted specs mid-command.
         console.print(f"\n[yellow]Found {len(issues)} issue(s):[/]")
         for issue in issues:
-            console.print(f"  [red]>[/] {issue}")
-        console.print(
-            "\n[dim]Fix all: pip install -U "
-            + " ".join(
-                f"'{pkg_name}>={min_ver}'" for _, pkg_name, min_ver, required in DEPS if required
-            )
-            + "[/]"
-        )
+            console.print(f"  [red]>[/] {escape(issue)}", highlight=False)
+        if fix_pre or fix_parts:
+            console.print("\n[dim]Fix all:[/]")
+            for step in fix_pre:
+                console.print(f"[dim]  {escape(step)}[/]", highlight=False)
+            if fix_parts:
+                console.print(
+                    f"[dim]  pip install {escape(' '.join(fix_parts))}[/]", highlight=False
+                )
     else:
         console.print("\n[bold green]All checks passed![/] Your environment is ready.")
 
+    # After the environment summary on purpose: "All checks passed" reports on
+    # the environment, and printing config findings above it read as though the
+    # green line covered them too.
+    if config:
+        _check_config_support(config)
+
     console.print(f"\n[dim]GitHub: [link={GITHUB_URL}]{GITHUB_URL}[/link][/]")
+
+    if core_broken:
+        raise typer.Exit(code=1)
+
+
+def _installed_version_str(import_name: str, pkg_name: str) -> str | None:
+    """Return the installed version string, or None when not importable."""
+    try:
+        mod = __import__(import_name)
+    except ImportError:
+        return None
+    version = getattr(mod, "__version__", getattr(mod, "VERSION", None))
+    if version is None:
+        try:
+            from importlib.metadata import PackageNotFoundError
+            from importlib.metadata import version as _pkgver
+
+            version = _pkgver(pkg_name)
+        except (PackageNotFoundError, ImportError):
+            version = "?"
+    return str(version)
+
+
+def _check_config_support(config_path: str) -> None:
+    """#755 — report the settings this config sets that its backend never reads.
+
+    Only fields the user actually wrote are listed. A wall of 275 rows is not a
+    pre-flight check, and the fields sitting at their schema default are not
+    what anyone came here to ask about.
+    """
+    from soup_cli.config.backend_support import (
+        DEFAULT_BACKEND,
+        DEFAULT_MODALITY,
+        check_config,
+        unsupported_for,
+    )
+
+    try:
+        from soup_cli.config.loader import load_config
+
+        cfg = load_config(config_path)
+    except FileNotFoundError as exc:
+        console.print(f"\n[red]Config not found:[/] {config_path}")
+        # Non-zero deliberately: this leg is meant to be gate-able in CI, and a
+        # config that cannot be read is not a clean bill of health. `doctor`
+        # without --config keeps its old exit status.
+        raise typer.Exit(2) from exc
+    except SystemExit as exc:
+        # load_config prints its own diagnosis and raises SystemExit(1) for a
+        # schema-invalid config. SystemExit is a BaseException, so it walks
+        # past `except Exception` and the exit code contradicted the 2
+        # documented in docs/commands.md. Re-raised as 2 so all three unreadable
+        # shapes -- missing, unparseable, schema-invalid -- agree.
+        console.print("\n[red]Config could not be loaded (see above).[/]")
+        raise typer.Exit(2) from exc
+    except Exception as exc:  # invalid YAML, unreadable file
+        console.print(f"\n[red]Config could not be loaded:[/] {exc}")
+        raise typer.Exit(2) from exc
+
+    backend = getattr(cfg, "backend", DEFAULT_BACKEND)
+    modality = getattr(cfg, "modality", DEFAULT_MODALITY)
+    gaps = check_config(cfg)
+
+    modality_str = f" modality=[bold]{modality}[/]" if modality != DEFAULT_MODALITY else ""
+    console.print(
+        f"\n[bold]Config check[/] - task=[bold]{cfg.task}[/] "
+        f"backend=[bold]{backend}[/]{modality_str}"
+    )
+    if not gaps:
+        known = unsupported_for(cfg.task, backend, modality)
+        modality_msg = f" modality={modality}" if modality != DEFAULT_MODALITY else ""
+        console.print(
+            f"  [green]None of the {len(known)} setting(s) known to be unread "
+            f"on task={cfg.task} backend={backend}{modality_msg} is set in this config.[/]"
+        )
+        return
+
+    table = Table(title=None, show_header=True)
+    # overflow="fold" on both text columns: a dotted field name is one
+    # unbreakable word, so Rich ellipsises it on a narrow terminal and the row
+    # says a setting is ignored without saying which one. Folding keeps the
+    # name and the reason legible at any width.
+    table.add_column("setting", style="bold", overflow="fold")
+    table.add_column("status", justify="center")
+    table.add_column("why", overflow="fold")
+    for entry in gaps:
+        table.add_row(entry.field, f"[yellow]{entry.status}[/]", entry.describe())
+    console.print(table)
+    modality_summary = f" (modality={modality})" if modality != DEFAULT_MODALITY else ""
+    console.print(
+        f"  [yellow]{len(gaps)} setting(s) written here are not read on "
+        f"backend={backend}{modality_summary}.[/]"
+    )
 
 
 def _get_mlx_info() -> dict:
@@ -189,6 +439,37 @@ def _get_mlx_info() -> dict:
         return get_mlx_info()
     except Exception:  # noqa: BLE001
         return {"available": False}
+
+
+def _check_mlx():
+    """Report the MLX (Apple Silicon) backend in ``soup doctor``.
+
+    MLX is an Apple Silicon-only stack, so the panel is informational rather
+    than a pass/fail dependency: it shows the installed version and hardware
+    when present, and says so plainly when MLX is missing. It must never crash
+    the report (the info helper degrades to ``available=False`` on any error).
+    """
+    info = _get_mlx_info()
+    if info.get("available"):
+        mem_bytes = info.get("unified_memory_bytes")
+        mem_str = f"{mem_bytes / (1024**3):.0f} GB" if mem_bytes else "unknown"
+        chip = (info.get("chip") or {}).get("chip")
+        console.print(
+            Panel(
+                f"Version:  [bold green]{info.get('version') or 'unknown'}[/]\n"
+                f"Chip:     [bold]{chip or 'Apple Silicon'}[/]\n"
+                f"Memory:   [bold]{mem_str}[/] unified",
+                title="MLX",
+            )
+        )
+    elif info.get("apple_silicon"):
+        console.print(
+            Panel(
+                "Status:   [yellow]not installed[/]\n"
+                "Install:  [dim]pip install \"soup-cli\\[mlx]\"[/]",
+                title="MLX",
+            )
+        )
 
 
 def _check_gpu():
@@ -245,18 +526,93 @@ def _check_gpu():
         )
 
 
+# Newest-first PyTorch CUDA wheel tags. A driver that advertises CUDA N.M can
+# load any wheel whose CUDA is <= N.M (driver backward compatibility).
+_TORCH_CUDA_WHEELS: tuple[tuple[int, int, str], ...] = (
+    (13, 2, "cu132"),
+    (13, 0, "cu130"),
+    (12, 8, "cu128"),
+    (12, 6, "cu126"),
+    (12, 4, "cu124"),
+    (12, 1, "cu121"),
+    (11, 8, "cu118"),
+)
+
+# PyTorch CUDA indexes that carry a torch release satisfying Soup's
+# ``[train]`` floor (torch>=2.6.0). Keep this table explicit: not every
+# CUDA version reported by a driver has a corresponding PyTorch index.
+_SUPPORTED_TORCH_CUDA_WHEELS = frozenset(
+    {"cu132", "cu130", "cu128", "cu126", "cu124", "cu118"}
+)
+
+
+def _parse_cuda_version(text: str) -> tuple[int, int] | None:
+    """Extract ``(major, minor)`` from an nvidia-smi CUDA version header."""
+    match = re.search(r"CUDA(?:\s+UMD)?\s+Version:\s*(\d+)\.(\d+)", text or "")
+    if match is None:
+        return None
+    return int(match.group(1)), int(match.group(2))
+
+
+def _torch_cuda_wheel_tag(driver: tuple[int, int] | None) -> str | None:
+    """Pick the newest supported PyTorch CUDA wheel for a driver version.
+
+    A missing driver version is not safe to guess from, so it returns ``None``.
+    """
+    if driver is None:
+        return None
+
+    for major, minor, tag in _TORCH_CUDA_WHEELS:
+        if driver >= (major, minor) and tag in _SUPPORTED_TORCH_CUDA_WHEELS:
+            return tag
+
+    return None
+
+
+def _nvidia_smi_executable() -> str | None:
+    """Absolute path to nvidia-smi, or None.
+
+    Bare ``nvidia-smi`` is never handed to ``subprocess`` (CWE-427):
+    Windows ``CreateProcess`` searches the current directory before PATH.
+    """
+    import shutil
+
+    return shutil.which("nvidia-smi")
+
+
+def _nvidia_smi_cuda_version() -> tuple[int, int] | None:
+    """Read the driver's max CUDA version from ``nvidia-smi`` header output."""
+    import subprocess
+
+    nvidia_smi = _nvidia_smi_executable()
+    if nvidia_smi is None:
+        return None
+    try:
+        completed = subprocess.run(  # noqa: S603 — argv list, no shell
+            [nvidia_smi],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if completed.returncode != 0:
+        return None
+    return _parse_cuda_version((completed.stdout or "") + (completed.stderr or ""))
+
+
 def _detect_gpu_hw_without_torch_cuda() -> str:
     """v0.40.1 Part C / N3 — return advisory string if nvidia-smi succeeds
     but torch lacks CUDA (i.e. user installed the CPU-only wheel).
     """
-    import shutil
     import subprocess
 
-    if shutil.which("nvidia-smi") is None:
+    nvidia_smi = _nvidia_smi_executable()
+    if nvidia_smi is None:
         return ""
     try:
         completed = subprocess.run(  # noqa: S603 — argv list, no shell
-            ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"],
+            [nvidia_smi, "--query-gpu=name", "--format=csv,noheader"],
             capture_output=True,
             text=True,
             timeout=5,
@@ -279,10 +635,43 @@ def _detect_gpu_hw_without_torch_cuda() -> str:
         torch_version = _pkgver("torch")
     except Exception:  # noqa: BLE001
         torch_version = "?"
+
+    try:
+        import torch
+
+        torch_cuda_version = getattr(torch.version, "cuda", None)
+    except Exception:  # noqa: BLE001
+        torch_cuda_version = None
+
+    wheel = _torch_cuda_wheel_tag(_nvidia_smi_cuda_version())
+    windows_note = ""
+    if platform.system() == "Windows":
+        windows_note = " On Windows, PyPI's torch wheel is CPU-only."
+
+    if wheel is None:
+        return (
+            f"GPU hardware present ({gpu_label}) but torch CUDA could not "
+            f"be confirmed. The installed torch is {torch_version}. "
+            "Run `nvidia-smi` and install a PyTorch CUDA wheel compatible "
+            "with the reported driver."
+            f"{windows_note}"
+        )
+
+    index_url = f"https://download.pytorch.org/whl/{wheel}"
+
+    if torch_cuda_version:
+        build_status = (
+            f"torch CUDA build ({torch_cuda_version}) could not initialise"
+        )
+    else:
+        build_status = "torch is the CPU build"
+
     return (
-        f"GPU hardware present ({gpu_label}) but torch is the CPU build "
+        f"GPU hardware present ({gpu_label}) but {build_status} "
         f"(torch {torch_version}). To enable your GPU: "
-        f"`pip install torch --index-url https://download.pytorch.org/whl/cu121`"
+        f"`pip install --force-reinstall \"torch>=2.6.0\" "
+        f"--index-url {index_url}`"
+        f"{windows_note}"
     )
 
 

@@ -79,6 +79,11 @@ def _pref_rows(n=8):
     return [{"prompt": "hi", "chosen": " good answer", "rejected": " bad"} for _ in range(n)]
 
 
+def _long_pref_rows(n=8):
+    prompt = " ".join(["hello"] * 161)
+    return [{"prompt": prompt, "chosen": " good answer", "rejected": " bad"} for _ in range(n)]
+
+
 def _kto_rows(n=8):
     return [{"prompt": "hi", "completion": " good answer", "label": i % 2 == 0} for i in range(n)]
 
@@ -195,6 +200,39 @@ class TestEveryPreferenceTrainerReachesALiveTrlTrainer:
             )
         assert args.max_length == 64, (task, args.max_length)
 
+    @pytest.mark.parametrize("task", ("dpo", "orpo"))
+    def test_removed_prompt_cap_is_enforced_on_the_effective_batch(
+        self, tmp_path, monkeypatch, task
+    ):
+        """TRL 0.29 must not turn ``data.max_length`` into a cosmetic field.
+
+        The assertion is on the tensors the model receives, not the config or
+        an intermediate column: 0.29 accepted ``max_length=64`` while emitting
+        164/165-token DPO/ORPO batches from this exact 161-token prompt.
+        """
+        from soup_cli.trainer._trl_compat import config_accepts
+
+        module, cls_name, _ = _WRAPPERS[task]
+        import importlib
+
+        weights = _tiny_llama_dir(tmp_path)
+        _write_tiny_tokenizer(weights)
+        monkeypatch.chdir(tmp_path)
+        cfg = _cfg(weights, tmp_path / "out", task)
+        wrapper = getattr(importlib.import_module(module), cls_name)(cfg, device="cpu")
+        wrapper.setup({"train": _long_pref_rows(8)})
+
+        if config_accepts(type(wrapper.trainer.args), "max_prompt_length"):
+            pytest.skip("installed TRL still enforces its own prompt cap")
+
+        assert len(wrapper.trainer.train_dataset) == 8
+        batch = next(iter(wrapper.trainer.get_train_dataloader()))
+        sequence_keys = [key for key in batch if key.endswith("input_ids")]
+        assert sequence_keys, batch.keys()
+        assert all(batch[key].shape[-1] <= 64 for key in sequence_keys), {
+            key: tuple(batch[key].shape) for key in sequence_keys
+        }
+
 
 class TestTheCanaryCoversWhatItClaims:
     """Guards the *coverage* property, not the code. The bug shipped because a
@@ -233,41 +271,34 @@ class TestTheCanaryCoversWhatItClaims:
 
 
 class TestTheTrlBoundsAreConsistentWithTheCode:
-    """The floor shipped as `>=0.7.0` while `setup()` imported `GRPOTrainer`,
-    which trl first exports at 0.14.0 — a declared floor the code could never
-    have run on. Cheap to state as a property: whatever is installed must
-    satisfy the declared bound AND provide the symbols the trainers import."""
+    """The installed TRL must provide every symbol through Soup's real resolver."""
 
     def test_the_installed_trl_provides_every_symbol_the_trainers_import(self):
-        """`getattr`, not `hasattr`: trl exposes these through a lazy module, so
-        a submodule that fails to import raises something other than
-        AttributeError, and `hasattr` would report a clean False without saying
-        why. From 0.29 `ORPOConfig` / `CPOConfig` / `BCOConfig` leave the `trl`
-        namespace altogether — that is the shape of the next break, so it is
-        worth naming the symbol rather than only the version."""
-        import trl
+        """Exercise the same public-first, experimental-second imports as setup()."""
+        from soup_cli.trainer._trl_compat import resolve_trl_symbol
 
         broken = {}
-        for name in (
-            "DPOConfig",
-            "DPOTrainer",
-            "KTOConfig",
-            "KTOTrainer",
-            "ORPOConfig",
-            "ORPOTrainer",
-            "CPOConfig",
-            "CPOTrainer",
-            "BCOConfig",
-            "BCOTrainer",
-            "GRPOTrainer",
-            "GRPOConfig",
-        ):
+        symbols = {
+            "DPOConfig": None,
+            "DPOTrainer": None,
+            "KTOConfig": None,
+            "KTOTrainer": None,
+            "ORPOConfig": "trl.experimental.orpo",
+            "ORPOTrainer": "trl.experimental.orpo",
+            "CPOConfig": "trl.experimental.cpo",
+            "CPOTrainer": "trl.experimental.cpo",
+            "BCOConfig": "trl.experimental.bco",
+            "BCOTrainer": "trl.experimental.bco",
+            "GRPOTrainer": None,
+            "GRPOConfig": None,
+        }
+        for name, experimental_module in symbols.items():
             try:
-                getattr(trl, name)
+                resolve_trl_symbol(name, experimental_module)
             except Exception as exc:  # noqa: BLE001 - reported, not swallowed
                 broken[name] = f"{type(exc).__name__}: {exc}"
         assert not broken, (
-            f"installed trl {trl.__version__} cannot supply "
-            f"{sorted(broken)} — the [train] extra's bounds and the code "
+            f"installed trl cannot supply {sorted(broken)} through Soup's "
+            f"public/experimental resolver — the [train] bounds and the code "
             f"disagree: {broken}"
         )

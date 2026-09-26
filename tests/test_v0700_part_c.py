@@ -290,9 +290,14 @@ training:
         from soup_cli.config.loader import load_config_from_string
 
         cfg = load_config_from_string(
-            self._yaml(task="distill", minillm_enabled=True)
+            self._yaml(
+                task="distill",
+                minillm_enabled=True,
+                minillm_teacher_mix_ratio=0.3,
+            )
         )
         assert cfg.training.minillm_enabled is True
+        assert cfg.training.minillm_teacher_mix_ratio == 0.3
 
     def test_sft_minillm_rejected(self):
         from soup_cli.config.loader import load_config_from_string

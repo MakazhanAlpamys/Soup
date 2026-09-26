@@ -112,6 +112,10 @@ soup export --model ./output --format tensorrt
 soup export --model ./output --format tensorrt --output ./model_trt
 ```
 
+`pip install tensorrt_llm` pins its own `torch`/`transformers`/`numpy`/`datasets`
+versions, which can downgrade a training environment's stack. Install it in a
+separate environment from the one you trained in, and export there.
+
 ### BitNet 1.58 TQ1_0 GGUF Export (live in v0.71.20)
 
 Export a BitNet 1.58-bit model as a `TQ1_0` (1.58-bit ternary) GGUF via
@@ -205,8 +209,72 @@ soup bench ./output --prompts-file bench_suite.jsonl
 
 This acts as a built-in "speedometer," outputting Tokens-Per-Second (TPS), Total Latency, and Peak VRAM allocations into a clean status table.
 
+`soup bench <model>` is shorthand for `soup bench infer <model>`; both take the same flags.
+
+### Training benchmark
+
+`soup bench train` runs a short, fixed-length SFT job from your config and writes a JSON report.
+It exists so a throughput number carries evidence that the model was training while it was
+measured (#836):
+
+```bash
+soup bench train --config soup.yaml --steps 20 --warmup 3 -o bench-train.json
+```
+
+The run trains for exactly `--steps` optimizer steps, logs every step, saves nothing, and writes
+into a scratch directory, not the config's `output`. The first `--warmup` steps are measured but
+left out of the timing. It measures `task: sft` on the transformers backend and refuses any other
+task or backend by name.
+
+It exits **1** in two different ways, and only one of them leaves a report:
+
+- **Pre-flight refusals write no report.** A task or backend it does not measure, `--steps` not
+  above `--warmup`, and a model with zero trainable parameters are all refused before training
+  starts. Nothing is written to `-o`; the reason is printed.
+- **Post-run check failures write the report**, with `valid: false` and one entry per failed
+  check in `failures`. A run that did not train is a result, and the file keeps the evidence.
+
+The checks, all run on the finished report (`trainable_parameters` is also the pre-flight
+refusal above, so in ordinary use it fires there and writes nothing):
+
+| check | fails when |
+|---|---|
+| `trainable_parameters` | no `requires_grad` tensor has real storage (`meta` ones are counted apart). Checked before training too, because the Trainer would otherwise die in autograd without naming the cause |
+| `grad_norm` | a counted step logged `grad_norm == 0.0` or a non-finite norm. A backend that logs no norm is `"not reported by this backend"`, never `0.0` |
+| `parameters_changed` | the trainable parameters are bit-identical before the first step and after the last. This check needs no `grad_norm`, so it also covers backends that log none |
+| `step_count` | fewer optimizer steps ran than were requested |
+
+Only post-warm-up steps are checked for `grad_norm`. Under fp16 the GradScaler can skip its first
+steps on overflow and log a non-finite norm; raise `--warmup` past them rather than reading that
+as divergence.
+
+Report fields:
+
+| field | meaning |
+|---|---|
+| `valid`, `failures` | the verdict, and one `{check, message}` per failed check |
+| `checks` | `trainable_parameters` (count), `grad_norm` (state), `parameters_changed` (bool) |
+| `timing` | `median_seconds`, `p95_seconds` (nearest-rank), `counted_steps`, `warmup_steps_discarded`, `total_seconds`, and `step_seconds`: every counted step's time in run order, so a run that changed mode mid-flight shows where |
+| `tokens` | `useful` (supervised: `labels != -100`), `total`, and `utilisation` (`useful / total`), counted from the batches `training_step` received |
+| `throughput` | `useful_tokens_per_second` and `total_tokens_per_second` |
+| `memory` | `max_memory_allocated_bytes` and `max_memory_reserved_bytes`, kept separate and read after `reset_peak_memory_stats`. Both are `null` off CUDA. Never read from `nvidia-smi` |
+| `provenance` | device, card, CUDA runtime, compute capability, driver version, SM clock during the counted steps (`sm_clock_mhz_busy`: `min`, `median`, `max` and `sample_count` of `nvidia-smi` samples kept only from the post-warm-up steps. Queries start on a 100 ms schedule, and a slower query skips ticks. Each is timestamped at the midpoint of its query, taken for torch's own device by PCI bus id (nvidia-smi's first GPU when torch does not report one); memory is never read this way. With no sample in the window the numbers are `null`, and `unavailable_reason` says why: `"not a CUDA run"`, `"no nvidia-smi tool found"`, `"nvidia-smi returned no readable SM clock"`, or `"no sample fell inside the counted steps"` (a run too short for the schedule). It is `null` whenever there are numbers), platform, Python, package versions (torch, transformers, peft, trl, bitsandbytes, accelerate), dtype, optimizer, seed, data seed |
+| `config_hash`, `resolved_config` | sha256 of the fully resolved config, and the config itself, so a schema-default change that moves a run shows up (#716) |
+| `steps_requested`, `steps_measured` | what was asked for and what ran |
+
+A step's time runs from the previous step's end to its own end, so data loading counts. The first
+step runs from its own start. On CUDA each boundary is read after `torch.cuda.synchronize()`.
+`parameters_changed` proves that something moved, not that the model learned anything useful. It
+is a floor, not a quality gate.
+
 
 ## Inference Server
+
+`--auto-quant` currently refuses with exit code 2. Soup cannot compare GGUF, AWQ,
+GPTQ, FP8, and an unquantized baseline before a serving engine has loaded them;
+timing an unevaluated stub would make the result depend on timer noise and could
+force a format the checkpoint does not contain. Quantize the checkpoint explicitly,
+then serve that checkpoint without `--auto-quant`.
 
 Start a local OpenAI-compatible inference server:
 
@@ -251,8 +319,14 @@ soup serve --model ./output --kv-cache-type q8_0   # 8-bit quantized cache (need
 
 Use [vLLM](https://github.com/vllm-project/vllm) for significantly better throughput in production:
 
+> **Install `[serve-fast]` in a separate environment from `[train]`.** Their
+> accelerator stacks can still resolve different `torch` builds. `soup env
+> check` flags an installed package that violates this distribution's declared
+> bounds (exit code 3), so you can catch a contaminated venv before a run relies
+> on it.
+
 ```bash
-# Install vLLM support
+# Install vLLM support (in its own environment, not the training one)
 pip install "soup-cli[serve-fast]"
 
 # Start with vLLM backend
@@ -271,9 +345,12 @@ soup serve --model ./output --backend vllm --max-model-len 8192
 > **Tip:** Soup auto-detects vLLM. When installed, you'll see a hint during `soup serve` if you haven't enabled it yet.
 
 The vLLM backend applies the **model's own chat template**, exactly like the
-transformers backend — both call one shared prompt builder. A model that ships
-no chat template falls back to a generic `User:` / `Assistant:` prompt, and the
-server says so at startup. `finish_reason` reports `"length"` when a response
+transformers backend, and encodes the rendered prompt itself so the engine
+receives the same token ids Soup trains on rather than re-tokenizing the string.
+(The MII backend also tokenizes through a wrapper around the same tokenizer, so
+a templated prompt reaches its engine with the ids the template implies, #891.)
+A model that ships no chat template falls back to a generic `User:` /
+`Assistant:` prompt, and the server says so at startup. `finish_reason` reports `"length"` when a response
 hits `max_tokens` and `"stop"` otherwise (`/v1/messages` maps those to
 `max_tokens` / `end_turn`).
 
@@ -290,6 +367,27 @@ soup serve --model ./output --backend sglang
 
 # Multi-GPU with tensor parallelism
 soup serve --model ./output --backend sglang --tensor-parallel 2
+```
+
+Like the transformers and vLLM backends, the SGLang backend applies the
+**model's own chat template** via the same shared prompt builder (falling back
+to a generic `User:` / `Assistant:` prompt for template-less models). When the
+template rendered the prompt, Soup encodes it itself and posts the token ids to
+the runtime's `/generate` endpoint, so the engine cannot add a second BOS to
+the one the template already rendered (#890); the template-less fallback is
+still sent as a string and tokenized by the engine as before. `finish_reason`
+reports `"length"` when a response hits `max_tokens` and `"stop"` otherwise, so
+a client doing continue-on-length can tell a truncated answer from a completed
+one (#360).
+
+It also honours `--trust-remote-code` like every other backend. **This changed:**
+the SGLang runtime and its tokenizer previously loaded with `trust_remote_code`
+hardcoded on, so a model's custom repo code executed whether or not you opted in
+— the pre-flight panel announced it but offered no way to decline. A model that
+needs custom code now **fails to load** on this backend unless you pass the flag:
+
+```bash
+soup serve --model ./output --backend sglang --trust-remote-code
 ```
 
 ### Speculative Decoding
@@ -313,6 +411,8 @@ soup serve --model meta-llama/Llama-3.1-70B-Instruct --backend vllm --auto-spec
 
 `--auto-spec` handles Llama 3.1/3.3/4, Qwen 2.5/3, Mistral Large, Mixtral, DeepSeek V3/R1, and Gemma 2/3. Models without a known draft pairing (e.g. 8B-or-smaller targets where draft+target overhead outweighs the gain) print a yellow "no draft" note and fall back to standard decoding. A draft you trained yourself with `soup draft distill` is picked up **before** this built-in table.
 
+Cross-tokenizer speculative decoding is supported on the Transformers backend via Universal Assisted Decoding (UAD). When target and draft models use different tokenizers, Soup loads the draft tokenizer and routes through Transformers' cross-tokenizer candidate generator. This requires a `transformers` version supporting cross-tokenizer assisted decoding (Soup raises a clear error if the installed version lacks this capability). Same-tokenizer pairs continue using the native single-tokenizer assisted generation path.
+
 ### Train + measure your own draft (`soup draft`)
 
 The question nobody answers before enabling speculative decoding: *would the draft actually
@@ -334,15 +434,48 @@ soup draft list
 
 **Acceptance rate** is the fraction of the target's own greedy tokens the draft would have
 proposed correctly (teacher-forced argmax agreement — the metric the Medusa/EAGLE papers report).
-Higher is better; roughly, ≥70% is where speculative decoding starts paying for the draft's
-forward pass on realistic hardware. `--min-acceptance 0.6` exits **2** below the floor, so CI can
-gate on it (exit 0 = ok, 2 = below floor, 1 = error).
+Higher is better, and the STRONG / MODERATE / WEAK band (≥70% / ≥50%) grades the rate alone. **It
+does not say whether the pair is faster.** That depends on how much faster the draft is than its
+target: on the one pair measured at scale (Llama-3.1-8B target, Llama-3.2-1B draft, one H100),
+81.3% acceptance was STRONG and assisted generation ran at 0.48x of plain.
+`--min-acceptance 0.6` exits **2** below the floor, so CI can gate on it (exit 0 = ok, 2 = below
+floor, 1 = error).
+
+**Break-even and draft length.** `measure` also times the draft decoding alone and reports:
+
+- **Latency ratio** `c` = plain tok/s ÷ draft-alone tok/s: what one draft token costs in target
+  steps.
+- **Break-even acceptance** at the `--num-assistant-tokens` in use: the rate at which assisted
+  generation would stop being slower. "None" means no rate pays, which is always the case once the
+  draft is no faster than the target.
+- **Best k**: the draft length in 1..64 that maximises the modelled speedup at your measured
+  acceptance.
+
+These three are **modelled, not measured**. They use the standard expected-tokens model:
+per-position acceptance `a` independent across positions, `E = (1 − a^(k+1)) / (1 − a)` tokens per
+step at a cost of `k·c + 1` target steps. So they're a ceiling that excludes framework overhead.
+On the H100 pair above the model gave 0.955x at k=5 against a measured 0.481x. To measure
+instead, add `--sweep-k 1,2,3,5,8` (at most 8 values). It times assisted generation at each k and
+reports the measured best k beside the modelled one. The numbers are a single greedy run, and
+`soup serve` samples at temperature 0.7 by default, so treat the best k as a starting point.
+
+*Note: For cross-tokenizer drafts, the measured acceptance rate is a strict lower bound. A token boundary merge between the prompt and the first generated token can cause the score to read up to `1/n_gen` lower than its true value, but it will never over-report.*
 
 `distill` runs logit KD through the existing `task: distill` trainer and emits a **dense** model
-(a PEFT adapter directory cannot be loaded as an `assistant_model`). Draft and target must share a
-tokenizer — a mismatch is refused up front, because speculative decoding proposes *draft* token ids
-into the *target's* vocabulary and a mismatched pair silently produces garbage instead of failing.
+(a PEFT adapter directory cannot be loaded as an `assistant_model`). When draft and target share a
+tokenizer, standard distillation is used. When tokenizers or vocabularies differ, `soup draft distill`
+automatically routes through cross-tokenizer Universal Logit Distillation (`uld_strategy: wasserstein_aligned`).
 A `soup shrink` output makes a good draft base: same tokenizer by construction.
+
+**Cross-tokenizer measurement.** When tokenizers differ, raw token IDs cannot be compared directly.
+`soup draft measure` automatically detects mismatched tokenizers and evaluates acceptance by aligning
+decoded character spans (`count_accepted_spans`). For both same-tokenizer and cross-tokenizer pairs,
+target generation neutralizes only `repetition_penalty` with `repetition_penalty=1.0` (Refs #345) so that draft proposals
+and target continuations are evaluated under consistent argmax rules; other generation processors
+(`no_repeat_ngram_size`, `encoder_repetition_penalty`, `min_new_tokens`, `bad_words_ids`, `suppress_tokens`,
+and `sequence_bias`) are left untouched. Cross-tokenizer support expands the choice of draft models,
+but cross-tokenizer speculative decoding adds tokenization alignment overhead and does not guarantee
+a speedup — use `soup draft measure` to verify real throughput on your specific pair.
 
 **Measured reality check (be sceptical of speedup claims, including ours).** On
 `SmolLM2-360M-Instruct` with a `SmolLM2-135M-Instruct` draft, the *stock* draft already scored
@@ -384,7 +517,7 @@ curl http://localhost:8000/v1/adapters
 # → {"adapters": [{"name": "chat", "active": true}, ...], "active": "chat"}
 ```
 
-Names are validated against `^[a-zA-Z0-9][a-zA-Z0-9-]*$`; activate/deactivate calls are thread-safe behind a lock.
+Names are validated against `^[a-zA-Z0-9][a-zA-Z0-9-]*$`; activate/deactivate calls are thread-safe behind a lock. Activate/deactivate also check the `Host` and `Origin` headers (see [Server-Side Tool Endpoints](#server-side-tool-endpoints)).
 
 ### Multi-Tenant Vector Bank (`soup serve --bank`)
 
@@ -503,9 +636,19 @@ soup ui
 # -> prints auth token to console
 ```
 
+> **v0.75.0 and v0.75.1: add the token to the URL yourself.** In these two
+> releases the tab `soup ui` opens carries no token, so it shows
+> `Error loading dashboard: Unauthorized` and no page can load data (#1194).
+> Open `http://127.0.0.1:<PORT>/?token=<TOKEN>` instead, with the port from
+> the startup panel's `URL:` line and the value on its `Token:` line. The page
+> keeps the token for that tab, so a reload works, and removes it from the
+> address bar; your browser's history still records the URL. A new tab or
+> another browser needs the URL again, and the token changes every time
+> `soup ui` starts unless you pass `--auth-token`.
+
 **Pages:**
 - **Dashboard** — view all experiment runs, loss charts, system info, multi-run comparison
-- **New Training** — create configs from templates or 142 ready-made recipes, validate, start training with live SSE log streaming and progress bar
+- **New Training** — create configs from templates or 174 ready-made recipes, validate, start training with live SSE log streaming and progress bar
 - **Data Explorer** — browse and inspect datasets (JSONL, JSON, CSV, Parquet)
 - **Model Chat** — chat with streaming responses, configurable temperature/top_p/max_tokens, system prompt, adapter selection, markdown rendering, chat export
 
@@ -514,9 +657,26 @@ soup ui
 - **Enhanced Metrics** — 2x2 chart grid (loss, LR, grad_norm, throughput) + GPU memory chart, eval results table
 - **Multi-Run Compare** — overlay loss curves from up to 5 runs side-by-side
 - **Chat Upgrade** — SSE streaming via proxy, typing indicator, cancel button, markdown renderer (bold, italic, code blocks), chat export as JSON
-- **Config Builder** — recipe dropdown (142 recipes), config schema API for dynamic form generation
+- **Config Builder** — recipe dropdown (174 recipes), config schema API for dynamic form generation
 
-**Security:** The Web UI generates a random auth token at startup (printed to console). All mutating endpoints (start/stop training, delete runs, inspect data, validate config) require `Authorization: Bearer <token>` header. CORS is restricted to the served origin. Data inspection is sandboxed to the working directory.
+Gradient norm is nullable: backends or steps that do not report it store and
+stream `null`, and the Web UI chart leaves a gap instead of drawing a false
+zero. An actually logged `0.0` remains a measured value and appears in the
+terminal panel.
+
+**Security:** The Web UI generates a random auth token at startup (printed to console). Every private endpoint — mutating (start/stop training, delete runs, inspect data, validate config) and reading (runs, metrics, system, recipes, SSE streams) — requires an `Authorization: Bearer <token>` header. `/` and `/api/health` stay open so the dashboard can load. CORS is restricted to the served origin. Data inspection is sandboxed to the working directory.
+
+**The token is not kept across reloads.** The page reads the token from `?token=…` (the `--public` phone URL) or asks for it the first time a request is refused, then holds it in page memory only: never `sessionStorage`, `localStorage`, a cookie or a `window` property. A reload or a new tab therefore asks for it again; paste the token `soup ui` printed (the whole `Authorization: Bearer …` line works too). If you cancel the prompt, the page stays signed out until your next click, which asks again. That is deliberate: a token persisted where page script can read it would turn a future rendering mistake into a token disclosure. It does not protect against script already running in the page; the content policy below is the defence there.
+
+YAML-entry request bodies are capped at 1 MiB on `/api/config/validate`,
+`/api/train/start`, and `/api/config/from-form`. Larger bodies return HTTP 413
+before JSON/YAML validation. The server checks both `Content-Length` and the
+bytes actually received, so chunked requests and understated headers cannot
+bypass the limit.
+
+**Content policy.** Every Web UI response carries a `Content-Security-Policy` that allows scripts only from the UI's own origin and the pinned Chart.js file (no inline script, no `eval`), plus `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer` and `X-Frame-Options: DENY`. Chart.js is loaded with a Subresource Integrity hash, so the browser refuses it if the CDN serves different bytes. The UI's markup carries no inline event handlers, and every server- or dataset-derived value is escaped before it is rendered. The loopback-only `/docs`, `/docs/oauth2-redirect` and `/redoc` pages are the one exception to the policy header, because FastAPI's interactive docs start from an inline script.
+
+**Interactive API docs are loopback-only.** `/openapi.json`, `/docs`, `/docs/oauth2-redirect` and `/redoc` serve on a loopback bind and are **absent** (404) on any other, including `soup ui --public`. This is deliberate rather than incidental: the schema exposes no run data, configuration or logs, but it does describe every route, parameter and request/response shape, and on a LAN bind that is free reconnaissance. Gating them behind the token instead was rejected — `/docs` is a browser navigation and Swagger cannot attach a Bearer header to it, so gating would break the page for a developer while leaving `/openapi.json` readable by any HTTP client. If you need the schema while bound publicly, read it from a loopback instance of the same version.
 
 ```bash
 # Custom port, don't auto-open browser
@@ -552,7 +712,15 @@ soup llama --help                  # list supported subcommands
 soup llama cli -m model.gguf -p "Hello"
 soup llama gguf-split --merge a.gguf b.gguf out.gguf
 soup llama server -m model.gguf
+soup llama quantize model.gguf model-q4_k_m.gguf q4_K_M
 ```
+
+### `soup llama quantize`
+
+Forwards every trailing argument to the `llama-quantize` binary on `PATH` (same
+closed allowlist / filtered-env rules as the other `soup llama` subcommands). Use
+it when you already have a GGUF and want llama.cpp's quantizer directly, rather
+than going through `soup export --format gguf` / `soup quantize`.
 
 Closed allowlist: `cli` / `mtmd-cli` / `gguf-split` / `server` / `quantize`. Forwards to `llama-*` binary on PATH (`shutil.which`) with **filtered child env** — `HF_TOKEN` / `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` and other secrets are dropped before exec; only `PATH` / `HOME` / `USER` / locale + llama.cpp-recognised `LLAMA_CPP_HOME` / `GGML_*` / `OMP_NUM_THREADS` are forwarded.
 
@@ -704,17 +872,34 @@ prompt-lookup decoding — no draft model required). Mutually exclusive with a r
 
 ## Server-Side Tool Endpoints
 
+v0.53.7 ships live server-side tool calling on `soup serve`.
 Three POST routes are now available on `soup serve`:
 
-- **`POST /v1/tools/python`** — Sandboxed Python execution. Requires Bearer token auth.
-  Wraps the RLVR sandbox with 5-second timeout and 64KB code cap. Returns 200 with
-  `stdout` / `stderr` / `return_value`; 400 on validation error; 401 on bad auth.
-
-- **`POST /v1/tools/web_search`** — Domain-allowlisted web search. Requires Bearer token
-  auth. Uses httpx backend with hard 5-second timeout and 5-result cap. Returns results
+- **`POST /v1/tools/python`** — runs caller-supplied Python code in an isolated
+  sub-process. Bounded by 512 MB memory, 5-second wall-clock timeout, and a
+  single-worker concurrency cap.
+- **`POST /v1/tools/web_search`** — searches the web and returns domain-filtered results
   as `[{url, title, snippet}]` with snippets sanitized (null bytes stripped).
   Deny-by-default via `WebSearchConfig.domain_allowlist`.
 
-- **`POST /v1/tools/bash`** — Deferred to v0.53.8. Current child-process isolation
-  insufficient for `/bin/sh -c` (subprocess escapes the RLVR sandbox). Returns 501 with
-  v0.53.8 marker pending container/namespace work.
+- **`POST /v1/tools/bash`** — runs a bash command with strict OS-level network
+  isolation (`unshare` on supported Linux runtimes, `sandbox-exec` on macOS).
+  Enforces mandatory Bearer token authentication when bound to a non-loopback host,
+  a 5-second wall-clock timeout, a minimal secret-scrubbed environment, and a combined
+  10KB stdout/stderr streaming kill limit. Returns the real stdout, stderr, exit code,
+  and timeout state. This is not a filesystem sandbox: the child retains the server
+  process's read access to world-readable system files. The endpoint fails closed with
+  HTTP 501 when strict OS isolation is unavailable (including on Windows or restricted
+  Linux containers).
+
+Tool routes, `/v1/thumbs` and adapter activate/deactivate accept requests only when the
+`Host` header names the bound address (any loopback name for a loopback bind) and any
+`Origin` header names the same; otherwise they answer 421 or 403.
+
+The generation routes (`/v1/chat/completions`, `/v1/messages`) and the adapter listing
+(`GET /v1/adapters`) carry the narrower half of that check: a request whose `Origin` names
+another site is refused with 403, so a page the operator merely visits cannot drive
+generation on their server or enumerate the loaded adapters — CORS alone would only stop
+that page *reading* the reply, not sending the request. Requests that carry no `Origin` at
+all — curl, the OpenAI/Anthropic SDKs, a reverse proxy — are unaffected, and `Host` is not
+checked on these routes, so a proxy can still front them under its own hostname.

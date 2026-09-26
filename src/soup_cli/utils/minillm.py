@@ -29,7 +29,10 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
+
+if TYPE_CHECKING:
+    from soup_cli.utils.minillm import MiniLLMCallback
 
 _MAX_ANCHOR_PATH_LEN = 4096
 _MAX_ANCHOR_ROW_BYTES = 1_000_000
@@ -81,6 +84,7 @@ def _check_unit_float(value: object, field: str) -> float:
 def validate_teacher_mix_ratio(value: object) -> float:
     """Validate the teacher-mix sampling ratio. Range [0.0, 1.0].
 
+    Offline: weight of the teacher in the reverse-KL target. On-policy:
     0.0 = student-only rollouts; 1.0 = teacher-only rollouts. Typical
     MiniLLM recipes use 0.2-0.5 to balance exploration against
     proximity to the teacher's distribution.
@@ -422,7 +426,7 @@ def minillm_on_policy_rollout(
 
 
 def _get_trainer_callback_base():
-    """Lazy-resolve ``transformers.TrainerCallback`` (mirror v0.53.11)."""
+    """Lazy-resolve ``transformers.TrainerCallback``."""
     try:
         from transformers import TrainerCallback
 
@@ -431,10 +435,7 @@ def _get_trainer_callback_base():
         return object
 
 
-_TrainerCallbackBase = _get_trainer_callback_base()
-
-
-class MiniLLMCallback(_TrainerCallbackBase):  # type: ignore[misc, valid-type]
+class _MiniLLMCallback_body:  # type: ignore[misc, valid-type]  # noqa: N801
     """Live MiniLLM helper + HF TrainerCallback (v0.71.11 #237).
 
     Carries the :class:`MiniLLMConfig` and provides the loss terms the
@@ -622,4 +623,25 @@ def build_minillm_callback(
         raise TypeError(
             f"config must be MiniLLMConfig, got {type(config).__name__}"
         )
+    from soup_cli.utils.minillm import MiniLLMCallback
+
     return MiniLLMCallback(config, tokenizer=tokenizer, temperature=temperature)
+
+
+_LAZY_CALLBACKS = {
+    "MiniLLMCallback": _MiniLLMCallback_body,
+}
+_BODY_SKIP = frozenset(("__dict__", "__weakref__"))
+
+
+def __getattr__(name: str):  # PEP 562
+    body = _LAZY_CALLBACKS.get(name)
+    if body is not None:
+        base = _get_trainer_callback_base()
+        ns = {k: v for k, v in vars(body).items() if k not in _BODY_SKIP}
+        cls = type(name, (base,), ns)
+        cls.__module__ = __name__
+        cls.__qualname__ = name
+        globals()[name] = cls
+        return cls
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

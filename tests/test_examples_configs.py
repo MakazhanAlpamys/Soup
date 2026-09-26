@@ -15,17 +15,23 @@ the same blind spot that caused this.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
 
 from soup_cli.config.loader import load_config
 from soup_cli.config.schema import SoupConfig
+from soup_cli.utils.data_lint import run_lint
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CONFIGS_DIR = REPO_ROOT / "examples" / "configs"
 
 EXAMPLE_CONFIGS = sorted(CONFIGS_DIR.glob("*.yaml"))
+PREFERENCE_EXAMPLES = (
+    REPO_ROOT / "examples" / "data" / "chat_preferences.jsonl",
+    REPO_ROOT / "examples" / "data" / "dpo_sample.jsonl",
+)
 
 
 def test_example_configs_were_actually_found():
@@ -40,6 +46,17 @@ def test_example_configs_were_actually_found():
         f"Expected at least 8 example configs under {CONFIGS_DIR}, "
         f"found {len(EXAMPLE_CONFIGS)}: {[p.name for p in EXAMPLE_CONFIGS]}"
     )
+
+
+@pytest.mark.parametrize("data_path", PREFERENCE_EXAMPLES, ids=lambda path: path.name)
+def test_preference_example_lints_clean(data_path: Path):
+    rows = [json.loads(line) for line in data_path.read_text(encoding="utf-8").splitlines()]
+
+    report = run_lint(rows, "auto")
+
+    assert report.overall == "OK", [
+        (check.name, check.verdict, check.evidence) for check in report.checks
+    ]
 
 
 @pytest.mark.parametrize("config_path", EXAMPLE_CONFIGS, ids=lambda p: p.name)

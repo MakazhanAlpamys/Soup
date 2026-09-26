@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import pytest
 
+from tests.conftest import strip_ansi
+
 # ---------------------------------------------------------------------------
 # Schema field
 # ---------------------------------------------------------------------------
@@ -261,7 +263,9 @@ class TestHardError:
                 self, messages, tokenize=False, add_generation_prompt=False, **kwargs
             ):
                 self.applied.append(messages)
-                return "RENDERED"
+                # #785: the legacy path now pre-tokenizes (tokenize=True); it
+                # renders to text only for display/other callers.
+                return [1, 2, 3] if tokenize else "RENDERED"
 
         tok = _T()
         cfg = DataConfig(
@@ -272,5 +276,78 @@ class TestHardError:
         )
         fn = build_format_row(tok, cfg, console=None)
         out = fn({"messages": [{"role": "user", "content": "hi"}]})
-        assert out["text"] == "RENDERED"
+        assert out["input_ids"] == [1, 2, 3]  # override made the legacy path usable
+        assert tok.applied  # apply_chat_template was invoked
         assert tok.chat_template is not None  # override was applied
+
+
+# ---------------------------------------------------------------------------
+# An unregistered name exits with a message, not a KeyError traceback
+# ---------------------------------------------------------------------------
+
+
+_CONFIG_TEMPLATE = (
+    "base: some-org/some-model\ntask: sft\ndata:\n  train: d.jsonl\n"
+    "  format: chatml\n  chat_template: {name}\n  max_length: 128\n"
+)
+_UNREGISTERED_CONFIG = _CONFIG_TEMPLATE.format(name="not_a_real_name")
+# A double-quoted YAML string can carry ESC and BEL: clear-screen plus a window title.
+_CONTROL_BYTES_CONFIG = _CONFIG_TEMPLATE.format(name='"bad\\e[2J\\e]0;PWNED\\aname"')
+# Rich markup in the name: an unbalanced closing tag would raise MarkupError.
+_MARKUP_CONFIG = _CONFIG_TEMPLATE.format(name="'x[/]'")
+
+_COMMANDS = pytest.mark.parametrize(
+    "args",
+    [["data", "preprocess", "soup.yaml", "--yes"], ["train", "--config", "soup.yaml"]],
+    ids=["preprocess", "train"],
+)
+
+
+class TestUnregisteredNameExitsCleanly:
+    def _invoke(self, tmp_path, monkeypatch, args, config=_UNREGISTERED_CONFIG):
+        transformers = pytest.importorskip("transformers")
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        def _no_download(*_args, **_kwargs):
+            raise AssertionError("nothing should load for an invalid config")
+
+        for name in ("AutoTokenizer", "AutoModelForCausalLM"):
+            monkeypatch.setattr(
+                getattr(transformers, name), "from_pretrained", _no_download
+            )
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "d.jsonl").write_text("{}\n", encoding="utf-8")
+        (tmp_path / "soup.yaml").write_text(config, encoding="utf-8")
+        return CliRunner().invoke(app, args)
+
+    @_COMMANDS
+    def test_exits_1_naming_the_template(self, tmp_path, monkeypatch, args):
+        result = self._invoke(tmp_path, monkeypatch, args)
+        output = strip_ansi(result.output)
+
+        assert result.exit_code == 1, result.output
+        assert isinstance(result.exception, SystemExit), result.exception
+        assert "Invalid data.chat_template" in output
+        assert "not_a_real_name" in output
+        assert "chatml" in output, "the message still lists the known names"
+
+    @_COMMANDS
+    def test_control_bytes_in_the_name_do_not_reach_the_terminal(self, tmp_path, monkeypatch, args):
+        result = self._invoke(tmp_path, monkeypatch, args, config=_CONTROL_BYTES_CONFIG)
+        # strip_ansi removes only Rich's own SGR colour codes, not the injected sequences.
+        output = strip_ansi(result.output)
+
+        assert result.exit_code == 1, result.output
+        assert "Invalid data.chat_template" in output, repr(output)
+        assert "\x1b" not in output and "\x07" not in output, repr(output)
+
+    @_COMMANDS
+    def test_markup_in_the_name_is_printed_literally(self, tmp_path, monkeypatch, args):
+        result = self._invoke(tmp_path, monkeypatch, args, config=_MARKUP_CONFIG)
+        output = strip_ansi(result.output)
+
+        assert result.exit_code == 1, result.output
+        assert isinstance(result.exception, SystemExit), result.exception
+        assert "'x[/]'" in output, repr(output)

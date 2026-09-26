@@ -12,6 +12,7 @@ from soup_cli.data.formats import (
     messages_to_format,
 )
 from soup_cli.data.validator import extended_stats
+from tests.conftest import strip_ansi
 
 runner = CliRunner()
 
@@ -200,7 +201,7 @@ def test_merge_command(sample_alpaca_file, sample_sharegpt_file, tmp_path):
     )
     assert result.exit_code == 0
     assert "Merged" in result.output
-    assert "5 rows" in result.output  # 3 + 2
+    assert "5 rows" in strip_ansi(result.output)  # 3 + 2
 
     with open(output) as f:
         lines = f.readlines()
@@ -221,6 +222,7 @@ def test_stats_command(sample_alpaca_file):
     assert result.exit_code == 0
     assert "p50" in result.output
     assert "Tokens" in result.output
+    assert "Text Length Distribution" in result.output
 
 
 def test_stats_missing_file():

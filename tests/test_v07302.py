@@ -301,7 +301,8 @@ def _tool_gen(transform):
     lookup = {item["prompt"]: item["expected"] for item in items}
 
     def gen(prompt):
-        return transform(lookup[prompt])
+        expected = lookup[prompt]
+        return expected if expected == "NO_TOOL" else transform(expected)
 
     return gen
 
@@ -311,6 +312,8 @@ class TestIssue346ToolCallEnvelope:
         """Pins the reproduction itself: every expected call is 3 opens / 3
         closes, so dropping one produces the 3/2 the record reports."""
         for item in _tool_items():
+            if item["expected"] == "NO_TOOL":
+                continue
             assert item["expected"].count("{") == 3
             assert item["expected"].count("}") == 3
 
@@ -323,6 +326,9 @@ class TestIssue346ToolCallEnvelope:
         """The unwrapped inner object — what ``raw_decode`` actually returns
         once the outer brace is gone."""
         def gen(prompt):
+            for item in _tool_items():
+                if item["prompt"] == prompt and item["expected"] == "NO_TOOL":
+                    return "NO_TOOL"
             expected = json.loads(_tool_items()[0]["expected"])
             for item in _tool_items():
                 if item["prompt"] == prompt:
@@ -372,6 +378,11 @@ class TestIssue346PermissiveControls:
             expected = None
             for item in _tool_items():
                 if item["prompt"] == prompt:
+                    if item["expected"] == "NO_TOOL":
+                        first = tool_names_in_prompt(prompt)[0]
+                        return json.dumps(
+                            {"function": {"name": first, "arguments": {}}}
+                        )
                     expected = json.loads(item["expected"])["function"]["name"]
             assert expected in tool_names_in_prompt(prompt)
             return json.dumps({"name": expected, "description": "a tool"})
@@ -914,8 +925,8 @@ class TestAHostileEvidenceFloorIsBoundedAndLoud:
 class TestUntrustedNamesCannotDriveTheTerminal:
     """``rich.markup.escape`` neutralises Rich's ``[...]`` syntax and NOTHING
     else — a raw ESC byte survives it. Benchmark and axis names come out of an
-    untrusted evidence file, so both render paths strip C0/DEL first (the
-    ``_for_terminal`` pattern already used in six other command modules)."""
+    untrusted evidence file, so both render paths strip C0/DEL first (via
+    ``soup_cli.utils.terminal``, shared with every other command module)."""
 
     HOSTILE = "x\x1b]0;PWNED\x07\x1b[2Jy"
 
@@ -1058,55 +1069,65 @@ class TestTheMcpEvidenceReaderHonoursTheFloor:
             tool_ship_evidence({"evidence": "ev.json"})
 
 
-class TestStaleBaselineIsAnnounced:
-    """#357 / #346 moved the SCORER, so a ``--baseline`` snapshot taken before
-    v0.73.2 is on a different scale for the affected suites — measured on an
-    unchanged model, mini_mmlu 0.423 -> 0.731 and mini_tool_call 0.225 -> 1.000,
-    both far larger than the 0.05 gate. Silently diffing across that is how a
-    real regression gets masked."""
+class TestBaselineProvenanceStamp:
+    """#404 — baseline scale drift is detected by scorer_revision stamp, not
+    by a hard-coded suite-name list. The old ``SCORER_CHANGED_IN_V0_73_2``
+    warning is gone; ``resolve_baseline`` owns the warn path now."""
 
-    def test_the_affected_suites_are_named(self):
-        from soup_cli.eval.gate_suites import (
-            DEFAULT_GENERAL_SUITE,
-            SCORER_CHANGED_IN_V0_73_2,
+    def test_scorer_revision_is_exported(self):
+        from soup_cli.eval.gate_suites import BUNDLED_SCORER_REVISION
+
+        assert isinstance(BUNDLED_SCORER_REVISION, int)
+        assert BUNDLED_SCORER_REVISION >= 1
+
+    def test_matching_stamp_is_silent(self, tmp_path, monkeypatch, caplog):
+        import logging
+
+        from soup_cli.eval.gate import resolve_baseline, write_baseline_file
+
+        monkeypatch.chdir(tmp_path)
+        write_baseline_file("baseline.json", {"mini_mmlu": 0.42})
+        with caplog.at_level(logging.WARNING):
+            scores = resolve_baseline("baseline.json")
+        assert scores == {"mini_mmlu": 0.42}
+        assert not any("provenance" in r.message.lower() for r in caplog.records)
+        assert not any("scorer_revision" in r.message.lower() for r in caplog.records)
+
+    def test_unstamped_baseline_warns_unknown_provenance(self, tmp_path, monkeypatch):
+        from soup_cli.eval.gate import resolve_baseline
+
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "baseline.json").write_text(
+            '{"mini_mmlu": 0.42}', encoding="utf-8"
         )
+        seen: list[str] = []
+        scores = resolve_baseline(
+            "baseline.json", warn=lambda msg: seen.append(msg)
+        )
+        assert scores == {"mini_mmlu": 0.42}
+        assert len(seen) == 1
+        assert "unknown provenance" in seen[0]
 
-        assert set(SCORER_CHANGED_IN_V0_73_2) <= set(DEFAULT_GENERAL_SUITE)
-        assert "mini_mmlu" in SCORER_CHANGED_IN_V0_73_2
-        assert "mini_tool_call" in SCORER_CHANGED_IN_V0_73_2
+    def test_mismatched_revision_warns(self, tmp_path, monkeypatch):
+        import json
 
-    def test_every_unlisted_mcq_suite_really_is_unaffected(self):
-        """CONTROL, DERIVED not hand-written: whatever MCQ suites are NOT on the
-        list must be provably untouched by the prompt cue. A hand-written pair
-        of names would silently stop covering a suite added later — the failure
-        mode the project's scan-don't-list rule exists to prevent."""
-        from soup_cli.eval.forgetting import MINI_BENCHMARKS, build_mcq_prompt
-        from soup_cli.eval.gate_suites import SCORER_CHANGED_IN_V0_73_2
+        from soup_cli.eval.gate import resolve_baseline, stamp_baseline_scores
+        from soup_cli.eval.gate_suites import BUNDLED_SCORER_REVISION
 
-        unlisted = set(MINI_BENCHMARKS) - set(SCORER_CHANGED_IN_V0_73_2)
-        assert unlisted, "the scan found nothing to check"
-        for name in sorted(unlisted):
-            for item in MINI_BENCHMARKS[name]:
-                assert build_mcq_prompt(item["question"], item["answer"]) == (
-                    item["question"]
-                ), f"{name} IS affected by the prompt cue but is not listed"
+        monkeypatch.chdir(tmp_path)
+        payload = stamp_baseline_scores({"mini_mmlu": 0.42})
+        payload["provenance"]["scorer_revision"] = BUNDLED_SCORER_REVISION - 1
+        (tmp_path / "baseline.json").write_text(
+            json.dumps(payload), encoding="utf-8"
+        )
+        seen: list[str] = []
+        resolve_baseline("baseline.json", warn=lambda msg: seen.append(msg))
+        assert len(seen) == 1
+        assert "scorer_revision" in seen[0]
+        assert str(BUNDLED_SCORER_REVISION) in seen[0]
 
-    def test_every_listed_mcq_suite_really_is_affected(self):
-        """CONTROL in the other direction: a name on the list that nothing
-        actually changed would warn operators for no reason, which is how a
-        warning stops being read."""
-        from soup_cli.eval.forgetting import MINI_BENCHMARKS, build_mcq_prompt
-        from soup_cli.eval.gate_suites import MINI_TOOL_CALL, SCORER_CHANGED_IN_V0_73_2
-
-        for name in SCORER_CHANGED_IN_V0_73_2:
-            if name == MINI_TOOL_CALL:  # behavioural, not MCQ — see #346
-                continue
-            assert any(
-                build_mcq_prompt(item["question"], item["answer"]) != item["question"]
-                for item in MINI_BENCHMARKS[name]
-            ), f"{name} is listed but nothing changed for it"
-
-    def test_a_stale_baseline_warns(self, capsys):
+    def test_leg2_no_longer_name_warns_on_stale_suite(self, capsys):
+        """CONTROL. The suite-name warning moved out of ``_leg2_scores``."""
         from soup_cli.commands.ship import _leg2_scores
 
         def gen(prompt):
@@ -1123,30 +1144,10 @@ class TestStaleBaselineIsAnnounced:
             device=None,
         )
         out = _plain(capsys.readouterr().out)
-        assert "mini_mmlu" in out and "v0.73.2" in out
-
-    def test_a_baseline_for_an_unaffected_suite_is_quiet(self, capsys):
-        """CONTROL. A warning on every baseline would train the operator to
-        ignore it."""
-        from soup_cli.commands.ship import _leg2_scores
-
-        def gen(prompt):
-            return "hello 5 world"
-
-        _leg2_scores(
-            ["mini_arithmetic"],
-            gen,
-            gen,
-            base_id="base",
-            tuned_id="tuned",
-            adapter=None,
-            baseline_scores={"mini_arithmetic": 0.42},
-            device=None,
-        )
-        assert "Warning" not in _plain(capsys.readouterr().out)
+        assert "Warning" not in out
+        assert "v0.73.2" not in out
 
     def test_no_baseline_is_quiet(self, capsys):
-        """CONTROL. The warning is about a STORED score, not about the suite."""
         from soup_cli.commands.ship import _leg2_scores
 
         def gen(prompt):
@@ -1165,10 +1166,25 @@ class TestStaleBaselineIsAnnounced:
         assert "Warning" not in _plain(capsys.readouterr().out)
 
 
+def _const_task_scorer(monkeypatch, value=0.5):
+    """Pin the leg-1 task-axis scorer to a constant.
+
+    Since #403 the task axis is measured in every mode (judge modes score it
+    through a live judge). A test that only cares about the leg-2 / warning
+    paths pins the task scorer here so it needs no judge, and the task axis
+    contributes a flat 0.0 spread.
+    """
+    monkeypatch.setattr(
+        "soup_cli.commands.ship._build_task_floor_scorer",
+        lambda *args, **kwargs: (lambda: value),
+    )
+
+
 class TestTheFloorWideningTheThresholdIsAnnounced:
-    def test_a_floor_above_the_threshold_warns(self, capsys):
+    def test_a_floor_above_the_threshold_warns(self, capsys, monkeypatch):
         from soup_cli.commands.ship import _measure_noise_floor
 
+        _const_task_scorer(monkeypatch)
         # The two repeats must genuinely disagree. An every-other-call flip does
         # NOT do that: mini_mmlu has an EVEN number of items, so the second
         # pass starts on the same parity and reproduces the first exactly —
@@ -1182,18 +1198,21 @@ class TestTheFloorWideningTheThresholdIsAnnounced:
 
         _measure_noise_floor(
             2, ["mini_mmlu"], gen, base_id="b", task_mode="judge_score",
-            task_eval="unused.jsonl", forgetting_threshold=0.0,
+            task_eval="unused.jsonl", judge_model="ollama://j",
+            forgetting_threshold=0.0,
         )
         out = _plain(capsys.readouterr().out)
         assert "exceeds" in out and "--forgetting-threshold" in out
 
-    def test_a_deterministic_instrument_does_not_warn(self, capsys):
+    def test_a_deterministic_instrument_does_not_warn(self, capsys, monkeypatch):
         """CONTROL. A zero floor never widens anything."""
         from soup_cli.commands.ship import _measure_noise_floor
 
+        _const_task_scorer(monkeypatch)
         floor = _measure_noise_floor(
             2, ["mini_mmlu"], lambda p: "B", base_id="b", task_mode="judge_score",
-            task_eval="unused.jsonl", forgetting_threshold=0.0,
+            task_eval="unused.jsonl", judge_model="ollama://j",
+            forgetting_threshold=0.0,
         )
         out = _plain(capsys.readouterr().out)
         assert all(value == 0.0 for _n, value in floor.floors)
@@ -1508,44 +1527,159 @@ class TestMeasureNoiseFloorBranches:
         )
         floor = _measure_noise_floor(
             2, ["mini_mmlu"], lambda p: "hi B", base_id="b", task_mode="metric",
-            task_eval="task.jsonl", forgetting_threshold=0.05,
+            task_eval="task.jsonl", judge_model=None, forgetting_threshold=0.05,
         )
         assert TASK_AXIS in dict(floor.floors)
+        # Metric mode is decode-only — the floor must NOT be stamped judge.
+        assert floor.judge_inclusive is False
 
-    def test_judge_mode_skips_the_leg_one_axis_and_says_so(self, capsys):
+    def test_judge_mode_measures_the_leg_one_axis(self, capsys, monkeypatch):
+        """#403 — judge modes now measure the task axis instead of warning and
+        leaving it at a 0.0 floor. Base RED: the old code skipped it."""
         from soup_cli.commands.ship import _measure_noise_floor
         from soup_cli.utils.ship_verdict import TASK_AXIS
 
+        _const_task_scorer(monkeypatch, value=0.5)
         floor = _measure_noise_floor(
             2, ["mini_mmlu"], lambda p: "B", base_id="b", task_mode="judge_score",
-            task_eval="unused.jsonl", forgetting_threshold=0.05,
+            task_eval="unused.jsonl", judge_model="ollama://j",
+            forgetting_threshold=0.05,
         )
-        assert TASK_AXIS not in dict(floor.floors)
+        assert TASK_AXIS in dict(floor.floors)
+        assert floor.judge_inclusive is True
         out = _plain(capsys.readouterr().out)
-        assert "does not measure the leg-1 task axis" in out
+        assert "does not measure the leg-1 task axis" not in out
 
-    def test_a_non_bundled_suite_is_reported_as_unmeasured(self, capsys):
+    def test_a_non_bundled_suite_is_reported_as_unmeasured(self, capsys, monkeypatch):
         """A silently-skipped axis reads as 'floor 0.0', i.e. as a measurement
         that was never taken."""
         from soup_cli.commands.ship import _measure_noise_floor
 
+        _const_task_scorer(monkeypatch)
         floor = _measure_noise_floor(
             2, ["mini_mmlu", "hellaswag"], lambda p: "B", base_id="b",
             task_mode="judge_score", task_eval="unused.jsonl",
-            forgetting_threshold=0.05,
+            judge_model="ollama://j", forgetting_threshold=0.05,
         )
         assert "hellaswag" not in dict(floor.floors)
         out = _plain(capsys.readouterr().out)
         assert "bundled suites only" in out and "hellaswag" in out
 
-    def test_a_deterministic_instrument_says_so(self, capsys):
+    def test_a_deterministic_instrument_says_so(self, capsys, monkeypatch):
         from soup_cli.commands.ship import _measure_noise_floor
 
+        _const_task_scorer(monkeypatch)
         _measure_noise_floor(
             2, ["mini_mmlu"], lambda p: "B", base_id="b", task_mode="judge_score",
-            task_eval="unused.jsonl", forgetting_threshold=0.05,
+            task_eval="unused.jsonl", judge_model="ollama://j",
+            forgetting_threshold=0.05,
         )
         assert "deterministic" in _plain(capsys.readouterr().out)
+
+
+class TestNoiseFloorJudgeModes:
+    """#403 — the leg-1 task floor is measured in the judge modes too, and the
+    result is stamped so it is never read as a decode-only number."""
+
+    def test_pairwise_floor_measures_the_base_against_itself(self, monkeypatch):
+        from soup_cli.commands import ship as ship_mod
+        from soup_cli.commands.ship import _measure_noise_floor
+        from soup_cli.utils.ship_verdict import TASK_AXIS
+
+        spread = iter([0.4, 0.6])
+
+        def fake_pairwise(task_eval, judge_model):
+            def winrate(gen_a, gen_b):
+                # The maintainer's design: the base judged against ITSELF.
+                assert gen_a is gen_b
+                return next(spread)
+
+            return winrate
+
+        monkeypatch.setattr(ship_mod, "_build_pairwise_scorer", fake_pairwise)
+        floor = _measure_noise_floor(
+            2, [], lambda p: "x", base_id="b", task_mode="pairwise",
+            task_eval="t.jsonl", judge_model="ollama://j",
+            forgetting_threshold=0.05,
+        )
+        assert floor.of(TASK_AXIS) == pytest.approx(0.2, abs=1e-9)
+        assert floor.judge_inclusive is True
+
+    def test_judge_score_floor_measures_the_base_side(self, monkeypatch):
+        from soup_cli.commands import ship as ship_mod
+        from soup_cli.commands.ship import _measure_noise_floor
+        from soup_cli.utils.ship_verdict import TASK_AXIS
+
+        spread = iter([0.3, 0.5])
+
+        def fake_judge(task_eval, judge_model):
+            return lambda gen: next(spread)
+
+        monkeypatch.setattr(ship_mod, "_build_judge_scorer", fake_judge)
+        floor = _measure_noise_floor(
+            2, [], lambda p: "x", base_id="b", task_mode="judge_score",
+            task_eval="t.jsonl", judge_model="ollama://j",
+            forgetting_threshold=0.05,
+        )
+        assert floor.of(TASK_AXIS) == pytest.approx(0.2, abs=1e-9)
+        assert floor.judge_inclusive is True
+
+    def test_a_judge_floor_is_never_read_as_decode_only(self):
+        """CONTROL (crit 3 + 5). A judge-inclusive floor is labelled and stamped
+        on every surface; a decode-only floor is not — a reader can always tell
+        them apart, so the judge floor is never silently reused as decode noise.
+        """
+        from io import StringIO
+
+        from rich.console import Console
+
+        from soup_cli.utils.ship_verdict import (
+            TASK_AXIS,
+            NoiseFloor,
+            ShipVerdict,
+            _render_noise_floor,
+            build_task_win,
+            noise_floor_from_evidence,
+            verdict_to_dict,
+            verdict_to_evidence,
+        )
+
+        judge = NoiseFloor(runs=3, floors=((TASK_AXIS, 0.2),), judge_inclusive=True)
+        decode = NoiseFloor(runs=3, floors=((TASK_AXIS, 0.2),), judge_inclusive=False)
+
+        def _table(floor):
+            buf = StringIO()
+            Console(file=buf, width=120, no_color=True).print(_render_noise_floor(floor))
+            return buf.getvalue()
+
+        # Panel label.
+        assert "decode + judge" in _table(judge)
+        assert "decode + judge" not in _table(decode)
+        assert "leg 1 task" in _table(decode)
+
+        def _verdict(floor):
+            return ShipVerdict(
+                decision="SHIP",
+                task_win=build_task_win("pairwise", 0.5, 0.7),
+                benchmark_deltas=(),
+                failed_rule=None,
+                forgetting_threshold=0.05,
+                soup_version="x",
+                noise_floor=floor,
+            )
+
+        # verdict_to_dict always carries the marker.
+        assert verdict_to_dict(_verdict(judge))["noise_floor"]["judge_inclusive"] is True
+        assert verdict_to_dict(_verdict(decode))["noise_floor"]["judge_inclusive"] is False
+
+        # Evidence stamps it only when True (a decode-only floor round-trips
+        # byte-for-byte), and it round-trips back through the reader.
+        ev_judge = verdict_to_evidence(_verdict(judge))["noise_floor"]
+        ev_decode = verdict_to_evidence(_verdict(decode))["noise_floor"]
+        assert ev_judge["judge_inclusive"] is True
+        assert "judge_inclusive" not in ev_decode
+        assert noise_floor_from_evidence(ev_judge).judge_inclusive is True
+        assert noise_floor_from_evidence(ev_decode).judge_inclusive is False
 
 
 class TestBuildMcqPrompt:
@@ -1630,6 +1764,9 @@ class TestNoiseFloorCliFlag:
         assert result.exit_code == 0, (result.output, repr(result.exception))
         plain = _plain(result.output)
         assert "--noise-floor" in plain
+        # #403 crit 4 — the judge modes cost N extra JUDGE passes; the help must
+        # say so. "JUDGE" (a single upper-case token) survives Rich line-wrap.
+        assert "JUDGE" in plain
 
     @pytest.mark.parametrize("bad", ["1", "0", "-3", "11"])
     def test_out_of_range_is_a_usage_error(self, bad, tmp_path):

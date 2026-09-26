@@ -26,18 +26,9 @@ import sys
 
 import pytest
 
+from tests.conftest import cuda_available
+
 pytestmark = pytest.mark.filterwarnings("ignore::UserWarning")
-
-
-def _cuda() -> bool:
-    try:
-        import torch
-    except ImportError:  # pragma: no cover - torch is a [train] extra
-        return False
-    return torch.cuda.is_available()
-
-
-requires_cuda = pytest.mark.skipif(not _cuda(), reason="needs a CUDA device")
 
 
 def _mps_is_the_accelerator() -> bool:
@@ -54,7 +45,7 @@ def _mps_is_the_accelerator() -> bool:
     try:
         import torch
 
-        if torch.cuda.is_available():
+        if cuda_available():
             return False
         backend = getattr(torch.backends, "mps", None)
         return bool(backend is not None and backend.is_available())
@@ -68,42 +59,10 @@ skip_on_mps = pytest.mark.skipif(
 )
 
 
-def _windows_ci() -> bool:
-    """True on a GitHub ``windows-latest`` runner, false on a Windows dev box.
-
-    #382 — part of GitHub's ``windows-latest`` fleet lacks an instruction the
-    bitsandbytes wheel emits, so the first test here that reaches a real
-    ``trainer.train()`` dies with ``Windows fatal exception: code 0xc000001d``
-    (ILLEGAL_INSTRUCTION): a faulthandler dump, no Python exception, and a dead
-    interpreter. Three occurrences so far, on py3.10 and py3.12, so it tracks
-    the runner CPU rather than the interpreter; the control is that ``1715261``
-    is the crashing tree ``7c9a931`` plus one line of markdown and came back
-    green on the same pool.
-
-    Skipping it is not hiding a failure. The crash kills the process, so the
-    cell reports NOTHING about the ~17,000 tests it had not reached — one test
-    censoring the whole Windows matrix, which is the reverse of what a test
-    suite is for. What is skipped stays covered on ubuntu 3.10/3.11/3.12 and
-    macos 3.10/3.11/3.12, and the assertions are platform-independent.
-
-    Deliberately narrow: ``CI`` is set to ``true`` by GitHub Actions and by
-    nothing on a developer's machine, so the maintainer's own Windows box —
-    where the CPU is known — keeps running these tests. What is excluded is an
-    unknown CPU, not a platform.
-    """
-    return sys.platform == "win32" and os.environ.get("CI") == "true"
-
-
-skip_on_windows_ci = pytest.mark.skipif(
-    _windows_ci(),
-    reason=(
-        "#382: bitsandbytes' 4-bit kernel hits an illegal instruction on part "
-        "of GitHub's windows-latest fleet and kills the interpreter, which "
-        "censors every other test in the cell. NOT a statement about NF4 on "
-        "Windows: still covered on ubuntu + macos, and still live on a local "
-        "Windows box."
-    ),
-)
+# #382 — THE guard now lives in tests/_windows_ci.py because a second test
+# file needed it (test_v05311.py's real GRPOTrainer step, which crashed the
+# windows 3.11 cell on 2026-08-31). Imported, never re-declared.
+from tests._windows_ci import _windows_ci, skip_on_windows_ci  # noqa: E402
 
 
 # ==========================================================================
@@ -452,8 +411,24 @@ class TestQuantCacheInvalidation:
             quant_device="cpu",
         )
         assert first.quant_device == "cpu"
-        if not _cuda():
-            pytest.skip("needs a CUDA device to prove the invalidation")
+
+    @pytest.mark.gpu(reason="proving the invalidation needs a CUDA quantisation")
+    def test_quant_device_change_invalidates_on_cuda(self, tmp_path):
+        """#833: the CUDA half of the test above, split out so ``-m gpu`` selects it
+        and the CPU half above still runs on every machine."""
+        from soup_cli.utils.layer_shard import QUANT_NF4, shard_checkpoint
+
+        src = _fake_weights_dir(tmp_path)
+        out = str(tmp_path / "shards")
+        first = shard_checkpoint(
+            src,
+            out,
+            dtype="float32",
+            quant=QUANT_NF4,
+            quant_suffixes=QUANT_SUFFIXES,
+            quant_device="cpu",
+        )
+        assert first.quant_device == "cpu"
         second = shard_checkpoint(
             src,
             out,
@@ -556,7 +531,7 @@ class TestShardQuantGuards:
         _write_safetensors(str(src / "model.safetensors"), blob)
         src = str(src)
 
-        with pytest.raises(ValueError, match="different tensor shapes"):
+        with pytest.raises(ValueError, match="inconsistent NF4 metadata"):
             shard_checkpoint(
                 src,
                 str(tmp_path / "o"),
@@ -909,6 +884,82 @@ class TestPeftDispatchesTheBnbLoraPath:
         )
         assert streamed.load_in_4bit is resident.load_in_4bit
 
+    @pytest.mark.parametrize(
+        "dq_line,expected",
+        [
+            ("  bnb_4bit_use_double_quant: false\n", False),  # explicit off reaches BOTH
+            ("", True),  # unset resolves to the shipped default (on) on BOTH
+        ],
+    )
+    def test_stream_setup_threads_double_quant_into_sharder_and_runtime(
+        self, tmp_path, monkeypatch, dq_line, expected
+    ):
+        """#321 re-review finding 2: the earlier tests were vacuous — one passed
+        against main's untouched builder, the other only grepped the source and
+        fired on spelling. This drives ``_setup_streaming_transformers`` and
+        asserts the SAME resolved flag reaches BOTH the sharder and the runtime
+        builder, so streamed-vs-resident cannot drift. CPU-only: shard_checkpoint
+        is spied (its real CPU NF4 packing runs) and build_streamed_model stubbed.
+
+        Mutation control: hardcoding either call site back to ``True`` fails the
+        ``expected is False`` case; dropping the read fails both cases.
+        """
+        from unittest.mock import MagicMock
+
+        from soup_cli.config.loader import load_config_from_string
+        from soup_cli.trainer.sft import SFTTrainerWrapper
+
+        weights, _, _ = _tiny_llama_dir(tmp_path, n_layers=2)
+        _write_tiny_tokenizer(weights)
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("SOUP_LAYER_STREAM_CACHE_DIR", str(tmp_path / "cache"))
+        monkeypatch.setattr(
+            "soup_cli.utils.spectrum_scan.resolve_model_weights", lambda *_a, **_k: weights
+        )
+        monkeypatch.setattr(
+            "soup_cli.utils.layer_stream.free_ram_bytes", lambda: 10_000_000_000
+        )
+        monkeypatch.setattr(
+            "soup_cli.utils.layer_stream.detect_disk_kind", lambda *_a, **_k: "nvme"
+        )
+
+        captured = {}
+        import soup_cli.utils.layer_shard as shard_mod
+        import soup_cli.utils.layer_stream_runtime as rt_mod
+
+        real_shard = shard_mod.shard_checkpoint
+
+        def spy_shard(*args, **kwargs):
+            captured["shard"] = kwargs.get("double_quant")
+            return real_shard(*args, **kwargs)
+
+        def fake_build(**kwargs):
+            captured["build"] = kwargs.get("double_quant")
+            runtime = MagicMock()
+            runtime.tier = "ram"
+            runtime.stats.return_value = {
+                "tier": "ram", "store_bytes": 1, "pinned": False,
+                "buffers": 2, "buffer_bytes": 4, "n_layers": 2,
+            }
+            return MagicMock(), runtime
+
+        monkeypatch.setattr(shard_mod, "shard_checkpoint", spy_shard)
+        monkeypatch.setattr(rt_mod, "build_streamed_model", fake_build)
+
+        cfg = load_config_from_string(
+            f"base: {weights}\ntask: sft\nbackend: transformers\nmodality: text\n"
+            "data:\n  train: data.jsonl\n  format: alpaca\n"
+            "training:\n  batch_size: 1\n  gradient_accumulation_steps: 1\n"
+            f"  quantization: 4bit\n  stream_layers: true\n{dq_line}"
+            "  lora:\n    r: 4\n    target_modules: [q_proj, v_proj]\n"
+        )
+        wrapper = SFTTrainerWrapper(cfg)
+        wrapper.device = "cpu"
+        wrapper._setup_streaming_transformers(cfg, cfg.training)
+
+        assert captured["shard"] is expected, f"sharder got {captured['shard']!r}"
+        assert captured["build"] is expected, f"runtime got {captured['build']!r}"
+
     def test_unquantised_skeleton_is_untouched(self, tmp_path):
         """v0.72.0's bit-exact bf16 gates only stay valid if that path is
         byte-identical to what it was."""
@@ -1128,7 +1179,12 @@ class TestNF4StreamedModel:
         model, _, _, _, _ = _nf4_stream(tmp_path)
         meta = [n for n, p in model.named_parameters() if p.is_meta]
         assert meta, "no decoder weights left on meta"
-        assert all(".layers." in name for name in meta)
+        assert all(
+            ".layers." in name
+            or name.endswith("embed_tokens.weight")
+            or name.endswith("lm_head.weight")
+            for name in meta
+        )
 
     def test_adapters_are_real_not_meta(self, tmp_path):
         """PEFT creates adapters on the base layer's device, which here is
@@ -1402,12 +1458,18 @@ class TestSchemaAcceptsNF4:
         cfg = load_config_from_string(_stream_yaml(quantization="none"))
         assert cfg.training.quantization == "none"
 
-    @pytest.mark.parametrize("quant", ["8bit", "gptq", "bitnet_1.58"])
+    @pytest.mark.parametrize("quant", ["8bit", "gptq"])
     def test_other_quantisations_are_refused_naming_the_supported_set(self, quant):
         from soup_cli.config.loader import load_config_from_string
 
         with pytest.raises(Exception, match="4bit"):
             load_config_from_string(_stream_yaml(quantization=quant))
+
+    def test_bitnet_streaming_is_refused_by_the_global_training_gate(self):
+        from soup_cli.config.loader import load_config_from_string
+
+        with pytest.raises(ValueError, match="training is not implemented yet"):
+            load_config_from_string(_stream_yaml(quantization="bitnet_1.58"))
 
     def test_refusal_names_stream_layers_not_something_else(self):
         """A pre-existing validator could reject 8bit for an unrelated reason
@@ -1767,7 +1829,7 @@ class TestNF4EndToEndSetup:
                 for _ in range(4)
             ]
         }
-        device = "cuda" if _cuda() else "cpu"
+        device = "cuda" if cuda_available() else "cpu"
         return SFTTrainerWrapper(cfg, device=device), dataset
 
     def test_setup_builds_a_real_trl_trainer_under_nf4(self, tmp_path, monkeypatch):
@@ -1834,7 +1896,7 @@ class TestTheWindowsCiSkipStaysNarrow:
         assert _windows_ci() is False
 
 
-@requires_cuda
+@pytest.mark.gpu
 class TestNF4ParityOnCuda:
     """The CPU tests above prove the mechanism; this proves it on the device
     the feature actually ships for, where bitsandbytes uses different kernels."""

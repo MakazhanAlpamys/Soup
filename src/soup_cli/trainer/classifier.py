@@ -32,7 +32,9 @@ from typing import Any, List, Union
 from rich.console import Console
 
 from soup_cli.config.schema import SoupConfig
+from soup_cli.trainer.loss_summary import summarize_training_loss
 from soup_cli.utils.gpu import bf16_fp16_flags
+from soup_cli.utils.mixed_precision import align_trainable_dtype_for_fp16
 from soup_cli.utils.seeding import apply_training_seed, training_seed_kwargs
 
 console = Console()
@@ -261,25 +263,28 @@ class ClassifierTrainerWrapper:
             tcfg.lora.r > 0
         )
         if self._lora_active:
-            from peft import LoraConfig, TaskType, get_peft_model
+            from peft import TaskType, get_peft_model
 
             from soup_cli.utils.peft_wiring import (
                 apply_post_lora_patches,
                 apply_pre_lora_patches,
+                build_lora_config,
+                resolve_lora_target_modules,
             )
 
-            target_modules = tcfg.lora.target_modules
-            if target_modules == "auto":
-                target_modules = None
-            lora_config = LoraConfig(
-                r=tcfg.lora.r,
-                lora_alpha=tcfg.lora.alpha,
-                lora_dropout=tcfg.lora.dropout,
+            target_modules = resolve_lora_target_modules(
+                self.model, tcfg.lora.target_modules, console
+            )
+            # #1151: moe_lora picks the expert-FFN targets; see sft.py.
+            from soup_cli.utils.moe import resolve_moe_lora_targets
+
+            target_modules = resolve_moe_lora_targets(
+                self.model, tcfg, target_modules, console
+            )
+            lora_config = build_lora_config(
+                tcfg.lora,
                 target_modules=target_modules,
                 task_type=TaskType.SEQ_CLS,
-                bias="none",
-                use_dora=tcfg.lora.use_dora,
-                use_rslora=tcfg.lora.use_rslora,
             )
             apply_pre_lora_patches(self.model, cfg.base)
             self.model = get_peft_model(self.model, lora_config)
@@ -364,10 +369,22 @@ class ClassifierTrainerWrapper:
             args=args,
             train_dataset=train_ds,
             eval_dataset=eval_ds,
-            tokenizer=self.tokenizer,
+            processing_class=self.tokenizer,
             data_collator=DataCollatorWithPadding(tokenizer=self.tokenizer),
         )
+
+        # #359 - the same exposure #336 fixed in sft.py: with LoRA the
+        # no-decay optimizer group is empty, DeepSpeed drops it, and the LR
+        # scheduler keeps two base_lrs until torch's strict zip raises at the
+        # first step. The guard prunes inside create_optimizer, i.e. before
+        # the scheduler is built. No-op for full fine-tuning, and only under
+        # DeepSpeed so the ordinary path keeps its own optimizer.
+        if self.deepspeed_config:
+            from soup_cli.utils.deepspeed import attach_empty_param_group_guard
+
+            attach_empty_param_group_guard(self.trainer)
         self._output_dir = str(output_dir)
+        self._batch_size = batch_size
 
     def train(
         self,
@@ -383,17 +400,30 @@ class ClassifierTrainerWrapper:
             )
         start = time.time()
         if display is not None:
-            from soup_cli.monitoring.callback import SoupTrainerCallback
+            from soup_cli.monitoring.callback import (
+                SoupTrainerCallback,
+                soup_callback_kwargs,
+            )
 
             self.trainer.add_callback(
                 SoupTrainerCallback(
-                    display, tracker=tracker, run_id=run_id,
-                    loss_watchdog=self.config.training.loss_watchdog,
-                    loss_watchdog_threshold=self.config.training.loss_watchdog_threshold,
-                    loss_watchdog_patience=self.config.training.loss_watchdog_patience,
+                    display,
+                    tracker=tracker,
+                    run_id=run_id,
                     eval_gate_config=self.config.training.eval_gate,
+                    **soup_callback_kwargs(
+                        self.config.training,
+                        batch_size=self._batch_size,
+                        output_dir=self._output_dir,
+                        include_eval_gate=False,
+                    ),
                 )
             )
+        align_trainable_dtype_for_fp16(
+            self.trainer.model,
+            fp16=getattr(self.trainer.args, "fp16", False),
+            bf16=getattr(self.trainer.args, "bf16", False),
+        )
         self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)
         duration = time.time() - start
 
@@ -401,14 +431,13 @@ class ClassifierTrainerWrapper:
         self.tokenizer.save_pretrained(self._output_dir)
 
         logs = self.trainer.state.log_history
-        train_losses = [entry["loss"] for entry in logs if "loss" in entry]
+        loss_summary = summarize_training_loss(logs)
 
         hours = int(duration // 3600)
         minutes = int((duration % 3600) // 60)
         duration_str = f"{hours}h {minutes}m" if hours > 0 else f"{minutes}m"
         return {
-            "initial_loss": train_losses[0] if train_losses else 0,
-            "final_loss": train_losses[-1] if train_losses else 0,
+            **loss_summary,
             "duration": duration_str,
             "duration_secs": duration,
             "output_dir": self._output_dir,

@@ -4,6 +4,7 @@ import contextlib
 import json
 import logging
 import re
+import subprocess
 import threading
 import time
 import uuid
@@ -17,6 +18,8 @@ if TYPE_CHECKING:  # pragma: no cover
     from collections.abc import Generator
 from rich.console import Console
 from rich.panel import Panel
+
+from soup_cli.utils.terminal import for_terminal
 
 logger = logging.getLogger(__name__)
 
@@ -190,7 +193,10 @@ def serve(
     auto_quant: bool = typer.Option(
         False,
         "--auto-quant",
-        help="Try GGUF/AWQ/GPTQ/FP8 on a tiny eval, pick fastest-at-acceptable-quality.",
+        help=(
+            "Unavailable until Soup can measure each loaded candidate; "
+            "the command refuses instead of guessing a format."
+        ),
     ),
     trust_remote_code: bool = typer.Option(
         False,
@@ -237,8 +243,8 @@ def serve(
         help=(
             "Apply a stored activation-steering vector at decode time "
             "(CAA / ITI / RepE). Pass the name registered via "
-            "`soup steer train`. Schema-only in v0.62.0; live decode hook "
-            "ships in v0.62.1."
+            "`soup steer train`; the transformers backend installs the "
+            "decode hook after loading the model."
         ),
     ),
     steer_strength: float = typer.Option(
@@ -246,7 +252,7 @@ def serve(
         "--steer-strength",
         help=(
             "Steering strength multiplier (|s| <= 10.0). Ignored when "
-            "--steer is unset. v0.62.0 Part C."
+            "--steer is unset."
         ),
     ),
     hub: str = typer.Option(
@@ -305,19 +311,17 @@ def serve(
     ),
 ):
     """Start a local inference server with OpenAI-compatible API."""
-    # Security: the transformers backend exposes a best-effort code-exec tool
-    # endpoint (/v1/tools/python). Binding a non-loopback host without a tool
-    # auth token puts that endpoint on the network unauthenticated.
+    # Security: the server exposes code-exec tool endpoints (/v1/tools/python, /v1/tools/bash).
+    # Binding a non-loopback host without a tool auth token exposes unauthenticated code execution.
     if host not in {"127.0.0.1", "localhost", "::1"} and not tool_auth_token:
         from rich.markup import escape as _rich_escape
 
         console.print(
-            f"[bold yellow]Security warning:[/] binding non-loopback host "
-            f"'{_rich_escape(str(host))}' exposes the unauthenticated code-exec "
-            "tool endpoint (/v1/tools/python) to the network. Pass "
-            "[bold]--tool-auth-token <secret>[/] to require a bearer token, or "
-            "use [bold]--host 127.0.0.1[/] (the default)."
+            f"[red]Error:[/] binding non-loopback host '{_rich_escape(str(host))}' "
+            "requires [bold]--tool-auth-token <secret>[/] to protect code-execution "
+            "tool endpoints (/v1/tools/bash, /v1/tools/python)."
         )
+        raise typer.Exit(code=2)
     # v0.71.12 #221 — validate `--bank` up front (path containment + backend)
     # so a typo / bad path surfaces before backend init.
     if bank is not None:
@@ -487,6 +491,21 @@ def serve(
         )
         raise typer.Exit(1)
 
+    # #816 — the old path timed three calls to a constant-returning stub and
+    # described the fastest few hundred nanoseconds as a quality-gated model
+    # evaluation. On vLLM that random result could then force AWQ/GPTQ/FP8 on
+    # a checkpoint which did not declare that format. Refuse until candidate
+    # models are really loaded and evaluated; ``quantization=None`` lets each
+    # backend honour the checkpoint's own metadata instead of inventing it.
+    if auto_quant:
+        console.print(
+            "[red]--auto-quant is unavailable:[/] Soup cannot measure quantization "
+            "candidates before the serving engine is loaded. Refusing instead of "
+            "guessing GGUF/AWQ/GPTQ/FP8 from timer noise. Serve the checkpoint as-is "
+            "or quantize it explicitly first."
+        )
+        raise typer.Exit(2)
+
     # #333 — --dashboard used to be accepted and then do nothing on backends
     # whose app has no /metrics route. Say so instead of no-opping.
     if dashboard:
@@ -525,17 +544,47 @@ def serve(
             )
             raise typer.Exit(1)
 
+        mii_model_name = Path(model).name
+
+        # #332 — the served model's own chat template, same as the vLLM path.
+        # Without this the MII backend feeds a chat-tuned model a prompt format
+        # it never trained on, which is what made Llama-3.1-8B run on.
+        # Loaded before the pipeline because the pipeline tokenizes prompts
+        # through this same object (#785): MII's own tokenizer re-added the
+        # special tokens the template had already rendered.
+        mii_tokenizer = _load_serve_tokenizer(
+            model_path=Path(model),
+            base_model=None,
+            trust_remote_code=trust_remote_code,
+        )
+
         # v0.33.0 #38 — live MII pipeline + OpenAI-compatible HTTP.
         try:
             mii_pipeline = create_mii_pipeline(
                 model_path=model, tensor_parallel=1, max_length=4096,
+                tokenizer=mii_tokenizer,
             )
         except (ImportError, RuntimeError, OSError) as exc:
             console.print(f"[red]Failed to create MII pipeline:[/] {exc}")
             raise typer.Exit(1) from exc
 
-        mii_model_name = Path(model).name
-        mii_app = build_mii_app(mii_pipeline, model_name=mii_model_name)
+        if mii_tokenizer is None:
+            console.print(
+                "[yellow]Warning:[/] no tokenizer could be loaded for this model — "
+                "falling back to a generic 'User:/Assistant:' prompt. Chat-tuned "
+                "models can run on past their stop token with this format."
+            )
+        elif not getattr(mii_tokenizer, "chat_template", None):
+            console.print(
+                "[yellow]Warning:[/] this model ships no chat template — using the "
+                "generic 'User:/Assistant:' prompt format."
+            )
+        else:
+            console.print("[green]Chat template:[/] applying the model's own template.")
+
+        mii_app = build_mii_app(
+            mii_pipeline, model_name=mii_model_name, tokenizer=mii_tokenizer,
+        )
 
         import uvicorn
         console.print(
@@ -657,19 +706,13 @@ def serve(
 
     # Auto-pair draft model for speculative decoding
     if auto_spec and not speculative_model:
-        from rich.markup import escape as _esc
-
         from soup_cli.utils.spec_pairing import pick_draft_model
 
         # A paired value can come from the local draft registry (a file that
         # may be edited outside this invocation), so strip control bytes and
         # escape Rich markup before printing — escape() alone leaves raw
-        # ESC/OSC sequences live (mirrors commands/draft.py::_for_terminal).
-        _ctrl = {i: None for i in range(0x20) if i not in (0x09, 0x0A, 0x0D)}
-        _ctrl[0x7F] = None
-
-        def _safe(value: str) -> str:
-            return _esc(str(value).translate(_ctrl))
+        # ESC/OSC sequences live (mirrors soup_cli.utils.terminal.for_terminal).
+        _safe = for_terminal
 
         target_for_pairing = base_model or str(model_path)
         paired = pick_draft_model(target_for_pairing)
@@ -701,63 +744,6 @@ def serve(
             "[red]--structured-output json requires --json-schema <path>.[/]"
         )
         raise typer.Exit(1)
-
-    # v0.33.0 #54 / v0.35.0 #61 — Auto-quant live picker. Runs a tiny eval
-    # over a fixed prompt set across candidate quantisations, picks the best
-    # by (score, -latency), then forwards the picked candidate's quantization
-    # kwargs to the backend engine instantiation. Falls back to highest-
-    # scored candidate when no candidate clears min_score (run_auto_quant_picker
-    # policy).
-    auto_quant_kwargs: dict = {}
-    if auto_quant:
-        from soup_cli.utils.auto_quant import (
-            default_candidate_order,
-            quant_name_to_vllm_kwargs,
-            run_auto_quant_picker,
-        )
-
-        prompts = [
-            "What is 2 + 2?",
-            "Translate 'hello' to French.",
-            "Name one prime number greater than 10.",
-        ]
-
-        def _make_eval_fn(_name):
-            def _fn(_prompt):
-                # Pre-bind eval still uses a heuristic — the engine isn't up
-                # yet. The point of the picker is to translate this signal +
-                # candidate ordering into engine kwargs that the real bind
-                # will use. A live in-engine eval refresh remains future work.
-                return ("", True)
-            return _fn
-
-        candidate_specs = [
-            (name, _make_eval_fn(name)) for name in default_candidate_order()
-        ]
-        try:
-            picked = run_auto_quant_picker(
-                candidate_specs=candidate_specs, prompts=prompts,
-            )
-            console.print(
-                f"[green]--auto-quant picked:[/] {picked.name} "
-                f"(score={picked.score:.2f}, latency={picked.latency_ms:.1f}ms)"
-            )
-            # Forward the chosen quant into the backend engine. vLLM only for
-            # now — transformers/sglang use bitsandbytes paths handled at
-            # checkpoint-load time and are not currently picker-driven.
-            if backend == "vllm":
-                from rich.markup import escape
-
-                auto_quant_kwargs = quant_name_to_vllm_kwargs(picked.name)
-                if auto_quant_kwargs:
-                    console.print(
-                        "[green]--auto-quant binding vLLM with:[/] "
-                        + escape(repr(auto_quant_kwargs))
-                    )
-        except ValueError as exc:
-            from rich.markup import escape as _esc
-
-            console.print(f"[yellow]--auto-quant: {_esc(str(exc))}[/]")
 
     # Validate trace endpoint early
     if trace and trace_endpoint:
@@ -806,7 +792,7 @@ def serve(
             speculative_model=speculative_model,
             num_speculative_tokens=num_speculative_tokens,
             enable_prefix_caching=prefix_cache,
-            quantization=auto_quant_kwargs.get("quantization"),
+            quantization=None,
             trust_remote_code=resolved_trust,
             max_model_len=max_model_len,
             enable_dashboard=dashboard,
@@ -819,6 +805,7 @@ def serve(
             max_tokens_default=max_tokens_default,
             tensor_parallel=tensor_parallel,
             gpu_memory_utilization=gpu_memory_utilization,
+            trust_remote_code=resolved_trust,
         )
     else:
         # Transformers backend (original). ``resolved_trust`` was computed
@@ -946,6 +933,7 @@ def serve(
 
         # Load draft model for speculative decoding (transformers backend)
         draft_model = None
+        draft_tokenizer = None
         if speculative_model:
             from rich.markup import escape as _esc
 
@@ -962,10 +950,34 @@ def serve(
                 )
             )
             draft_model = _load_draft_model(speculative_model, device)
-            console.print(
-                f"[green]Speculative decoding enabled:[/] draft={_spec_display}, "
-                f"tokens={num_speculative_tokens}"
+            draft_tokenizer = _load_draft_tokenizer(
+                speculative_model, trust_remote_code=resolved_trust
             )
+
+            from soup_cli.utils.draft import (
+                same_tokenizer,
+                supports_universal_assisted_decoding,
+            )
+
+            if draft_tokenizer is not None and not same_tokenizer(tokenizer, draft_tokenizer):
+                if not supports_universal_assisted_decoding():
+                    console.print(
+                        "[red]Error: Target model and draft model have different tokenizers, "
+                        "which requires Universal Assisted Decoding. "
+                        "The installed transformers version does not support cross-tokenizer "
+                        "speculative decoding. Please upgrade transformers.[/]"
+                    )
+                    raise typer.Exit(1)
+                console.print(
+                    f"[green]Cross-tokenizer speculative decoding enabled:[/] "
+                    f"draft={_spec_display}, tokens={num_speculative_tokens} "
+                    "(Universal Assisted Decoding)"
+                )
+            else:
+                console.print(
+                    f"[green]Speculative decoding enabled:[/] draft={_spec_display}, "
+                    f"tokens={num_speculative_tokens}"
+                )
 
         if speculative_model:
             console.print(
@@ -1064,6 +1076,7 @@ def serve(
             model_name=str(model_path.name),
             max_tokens_default=max_tokens_default,
             draft_model=draft_model,
+            draft_tokenizer=draft_tokenizer,
             num_speculative_tokens=num_speculative_tokens,
             adapter_map=adapter_map if adapter_map else None,
             peft_adapter_names=peft_adapter_names,
@@ -1074,6 +1087,7 @@ def serve(
             reasoning_parser=resolved_reasoning_parser,
             record_thumbs_db=record_thumbs_db,
             auth_token=tool_auth_token,
+            host=host,
             loaded_bank=loaded_bank,
             mole_runtime=mole_runtime,
             kv_cache_generate_kwargs=(
@@ -1227,21 +1241,34 @@ def _serve_sglang(
     max_tokens_default: int,
     tensor_parallel: int,
     gpu_memory_utilization: float,
+    trust_remote_code: bool = False,
 ):
     """Set up SGLang runtime and create FastAPI app."""
     from soup_cli.utils.sglang import create_sglang_app, create_sglang_runtime
 
-    console.print(
-        Panel(
-            f"[bold yellow]WARNING:[/] Loading model via SGLang: "
-            f"[bold]{model_path}[/]\n"
-            "SGLang loads models with trust_remote_code enabled.\n"
-            "If this model contains custom code, it will execute "
-            "on this machine.\nOnly use models you trust.",
-            title="SGLang Runtime",
-            border_style="yellow",
+    if trust_remote_code:
+        console.print(
+            Panel(
+                f"[bold yellow]WARNING:[/] Loading model via SGLang: "
+                f"[bold]{model_path}[/]\n"
+                "trust_remote_code is ENABLED for this run.\n"
+                "If this model contains custom code, it will execute "
+                "on this machine.\nOnly use models you trust.",
+                title="SGLang Runtime",
+                border_style="yellow",
+            )
         )
-    )
+    else:
+        console.print(
+            Panel(
+                f"Loading model via SGLang: [bold]{model_path}[/]\n"
+                "trust_remote_code is disabled (default). A model that needs "
+                "custom code\nwill fail to load -- re-run with "
+                "--trust-remote-code if you trust the source.",
+                title="SGLang Runtime",
+                border_style="cyan",
+            )
+        )
     console.print("[dim]Initializing SGLang runtime...[/]")
     runtime, runtime_model_name = create_sglang_runtime(
         model_path=str(model_path),
@@ -1249,14 +1276,47 @@ def _serve_sglang(
         is_adapter=is_adapter,
         tensor_parallel_size=tensor_parallel,
         mem_fraction_static=gpu_memory_utilization,
+        trust_remote_code=trust_remote_code,
     )
     console.print("[bold green]SGLang runtime ready![/]")
+
+    # Load the tokenizer whose chat template the shared prompt builder applies
+    # (#360). It must match what create_sglang_runtime used to load this very
+    # model a few lines above: a mismatch means a custom-code model loads no
+    # tokenizer, tokenizer becomes None, and the #360 prompt fix silently
+    # degrades to the legacy format for exactly the models whose chat template
+    # matters most. That pairing used to be a literal True on both sides; both
+    # now follow serve.py's single resolved gate instead.
+    tokenizer = _load_serve_tokenizer(
+        model_path=model_path,
+        base_model=base_model,
+        trust_remote_code=trust_remote_code,
+    )
+
+    # A failure here is announced, never silent -- the same three-branch
+    # contract vLLM has at _serve_vllm. Falling back to the legacy
+    # role-prefixed prompt is what made Llama-3.1-8B loop, and on SGLang that
+    # fallback used to happen with nothing printed at all.
+    if tokenizer is None:
+        console.print(
+            "[yellow]Warning:[/] no tokenizer could be loaded for this model — "
+            "falling back to a generic 'User:/Assistant:' prompt. Chat-tuned "
+            "models can run on past their stop token with this format."
+        )
+    elif not getattr(tokenizer, "chat_template", None):
+        console.print(
+            "[yellow]Warning:[/] this model ships no chat template — using the "
+            "generic 'User:/Assistant:' prompt format."
+        )
+    else:
+        console.print("[green]Chat template:[/] applying the model's own template.")
 
     app = create_sglang_app(
         runtime=runtime,
         runtime_model_name=runtime_model_name,
         model_name=str(model_path.name),
         max_tokens_default=max_tokens_default,
+        tokenizer=tokenizer,
     )
 
     return app
@@ -1309,7 +1369,7 @@ def _load_model(
             base_model,
             trust_remote_code=trust_remote_code,
             device_map="auto",
-            dtype=load_dtype,
+            torch_dtype=load_dtype,
         )
         console.print(f"[dim]Loading LoRA adapter: {model_path}...[/]")
         model_obj = PeftModel.from_pretrained(base, model_path)
@@ -1319,7 +1379,7 @@ def _load_model(
             model_path,
             trust_remote_code=trust_remote_code,
             device_map="auto",
-            dtype=load_dtype,
+            torch_dtype=load_dtype,
         )
 
     model_obj.eval()
@@ -1417,10 +1477,27 @@ def _load_draft_model(speculative_model: str, device: str):
     draft = AutoModelForCausalLM.from_pretrained(
         speculative_model,
         device_map="auto" if device != "cpu" else "cpu",
-        dtype=torch.float16 if device != "cpu" else torch.float32,
+        torch_dtype=torch.float16 if device != "cpu" else torch.float32,
     )
     draft.eval()
     return draft
+
+
+def _load_draft_tokenizer(speculative_model: str, trust_remote_code: bool = False):
+    """Load the tokenizer for a draft model if available."""
+    import re
+
+    from transformers import AutoTokenizer
+
+    if re.match(r'^https?://', speculative_model):
+        return None
+    try:
+        return AutoTokenizer.from_pretrained(
+            speculative_model,
+            trust_remote_code=trust_remote_code,
+        )
+    except Exception:
+        return None
 
 
 def _plain_kv_kwargs(mapping: Any) -> Dict[str, Any]:
@@ -1449,6 +1526,7 @@ def _generate_response(
     top_p: float = 0.9,
     stream: bool = False,
     assistant_model=None,
+    assistant_tokenizer=None,
     num_assistant_tokens: int = 5,
     logits_processor=None,
     ngram_config: Any = None,
@@ -1457,13 +1535,14 @@ def _generate_response(
     """Generate a response from the model."""
     import torch
 
-    from soup_cli.utils.vllm import build_chat_prompt
+    from soup_cli.utils.vllm import encode_chat_prompt
 
     # Apply chat template. #332 — THE shared builder; the vLLM backend calls
-    # the same function so the two backends cannot drift apart again.
-    text = build_chat_prompt(messages, tokenizer)
-
-    inputs = tokenizer(text, return_tensors="pt")
+    # the same function so the two backends cannot drift apart again. #781 —
+    # encoded without re-adding the special tokens the template rendered.
+    inputs = encode_chat_prompt(
+        messages, tokenizer, fallback_on_error=True, return_tensors="pt"
+    )
     input_ids = inputs["input_ids"].to(model.device)
     attention_mask = inputs["attention_mask"].to(model.device)
 
@@ -1481,6 +1560,20 @@ def _generate_response(
         if assistant_model is not None:
             gen_kwargs["assistant_model"] = assistant_model
             gen_kwargs["num_assistant_tokens"] = num_assistant_tokens
+            if assistant_tokenizer is not None:
+                from soup_cli.utils.draft import (
+                    same_tokenizer,
+                    supports_universal_assisted_decoding,
+                )
+
+                if not same_tokenizer(tokenizer, assistant_tokenizer):
+                    if not supports_universal_assisted_decoding():
+                        raise RuntimeError(
+                            "Universal Assisted Decoding (cross-tokenizer speculative decoding) "
+                            "requires transformers with cross-tokenizer support."
+                        )
+                    gen_kwargs["tokenizer"] = tokenizer
+                    gen_kwargs["assistant_tokenizer"] = assistant_tokenizer
         # v0.33.0 #53 — structured-output LogitsProcessor list (may be empty).
         if logits_processor:
             gen_kwargs["logits_processor"] = logits_processor
@@ -1524,6 +1617,7 @@ def _create_app(
     model_name: str,
     max_tokens_default: int,
     draft_model=None,
+    draft_tokenizer=None,
     num_speculative_tokens: int = 5,
     adapter_map: Optional[Dict[str, str]] = None,
     peft_adapter_names: Optional[set] = None,
@@ -1535,6 +1629,7 @@ def _create_app(
     web_search_config: Any = None,
     web_search_backend: Any = None,
     auth_token: Optional[str] = None,
+    host: str = "127.0.0.1",
     reasoning_parser: Optional[str] = None,
     record_thumbs_db: Optional[str] = None,
     loaded_bank: Any = None,
@@ -1550,21 +1645,59 @@ def _create_app(
             loopback-only CORS trust boundary. When set, callers must
             supply ``Authorization: Bearer <token>``.
     """
+    import secrets as _secrets
     import threading as _threading
 
-    from fastapi import FastAPI, Header, HTTPException
+    from fastapi import Depends, FastAPI, Header, HTTPException, Request
     from fastapi import Path as FPath
     from fastapi.middleware.cors import CORSMiddleware
     from fastapi.responses import StreamingResponse
     from pydantic import BaseModel as PydanticBaseModel
     from pydantic import Field
 
+    from soup_cli.utils.local_request_guard import (
+        check_browser_origin,
+        check_local_request,
+    )
+
+    def _check_local_request(request: Request) -> None:
+        """Refuse tool / state-changing calls whose Host or Origin names another site."""
+        refusal = check_local_request(
+            host, request.headers.get("host"), request.headers.get("origin")
+        )
+        if refusal is not None:
+            status_code, detail = refusal
+            raise HTTPException(status_code=status_code, detail=detail)
+
+    def _check_browser_origin(request: Request) -> None:
+        """Refuse a cross-site BROWSER request to a generation / adapter-listing route.
+
+        CORS stops such a page reading the response, not sending the request:
+        a ``text/plain`` body is a simple request, so it is never preflighted,
+        and Starlette parses it as JSON anyway. Origin only — these routes are
+        the ones a reverse proxy fronts under its own hostname, so a Host check
+        would refuse every proxied deployment for no added protection.
+        """
+        refusal = check_browser_origin(
+            host, request.headers.get("host"), request.headers.get("origin")
+        )
+        if refusal is not None:
+            status_code, detail = refusal
+            raise HTTPException(status_code=status_code, detail=detail)
+
     def _check_tool_auth(authorization: Optional[str]) -> None:
-        """v0.53.7 H-A: gate tool endpoints when ``auth_token`` is set."""
+        """v0.53.7 H-A: gate tool endpoints when host is exposed or auth_token is set."""
+        if host not in {"127.0.0.1", "localhost", "::1"} and not auth_token:
+            raise HTTPException(
+                status_code=401,
+                detail="Authentication required on non-loopback host",
+            )
         if not auth_token:
             return
         expected = f"Bearer {auth_token}"
-        if not authorization or authorization != expected:
+        if not authorization or not _secrets.compare_digest(
+            authorization.encode("utf-8"), expected.encode("utf-8")
+        ):
             raise HTTPException(
                 status_code=401, detail="Invalid or missing bearer token"
             )
@@ -1573,10 +1706,20 @@ def _create_app(
 
     app = FastAPI(title="Soup Inference Server", version="1.0.0")
 
-    # Loopback-only CORS: the inference server hosts state-mutating POST
-    # endpoints (activate/deactivate adapter) without auth, so wildcard CORS
-    # would let any browser page swap the active adapter. Loopback origins
-    # cover the curl / same-host IDE extension cases.
+    # Loopback-only CORS, and three layers behind it:
+    #   * CORS limits which browser pages may READ a response. It does not stop
+    #     one being SENT: a `text/plain` body is a simple request, so it is
+    #     never preflighted, and Starlette parses it as JSON regardless.
+    #   * `_check_browser_origin` (Origin only) refuses cross-site BROWSER
+    #     requests to the generation routes and the adapter listing, so a page
+    #     the operator merely visits cannot burn GPU time or enumerate loaded
+    #     adapters. No Origin means no browser, so a proxy / curl / SDK passes.
+    #   * `_check_local_request` (Host AND Origin) covers the tool, thumbs and
+    #     adapter-mutation routes, which no reverse proxy needs to rename.
+    # None of the three covers a non-browser client, which sends no Origin at
+    # all and can name the bind address in Host — for those, on a non-loopback
+    # bind, the bearer token checked by `_check_tool_auth` is the only thing
+    # protecting these routes.
     app.add_middleware(
         CORSMiddleware,
         allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$",
@@ -1644,9 +1787,10 @@ def _create_app(
         """Dashboard + Prometheus-style JSON scrape."""
         return metrics.snapshot()
 
-    @app.get("/v1/adapters")
-    def list_adapters():
+    @app.get("/v1/adapters", dependencies=[Depends(_check_browser_origin)])
+    def list_adapters(authorization: Optional[str] = Header(default=None)):
         """List loaded LoRA adapters (names only, no paths for security)."""
+        _check_tool_auth(authorization)
         current = _active_snapshot()
         return {
             "adapters": [
@@ -1656,9 +1800,15 @@ def _create_app(
             "active": current,
         }
 
-    @app.post("/v1/adapters/activate/{name}")
-    def activate_adapter(name: str = FPath(..., pattern=r"^[a-zA-Z0-9][a-zA-Z0-9\-]*$")):
+    @app.post("/v1/adapters/activate/{name}", dependencies=[Depends(_check_local_request)])
+    def activate_adapter(
+        name: str = FPath(..., pattern=r"^[a-zA-Z0-9][a-zA-Z0-9\-]*$"),
+        authorization: Optional[str] = Header(default=None),
+    ):
         """Hot-swap the active adapter. Name must be in the loaded map."""
+        # Before the 404s: an unauthenticated caller must not learn which
+        # adapter names are loaded by reading "unknown adapter" off a probe.
+        _check_tool_auth(authorization)
         if not _adapter_map:
             raise HTTPException(
                 status_code=404, detail="No adapters loaded."
@@ -1672,9 +1822,10 @@ def _create_app(
             active_state["active"] = name
         return {"active": name, "status": "ok"}
 
-    @app.post("/v1/adapters/deactivate")
-    def deactivate_adapter():
+    @app.post("/v1/adapters/deactivate", dependencies=[Depends(_check_local_request)])
+    def deactivate_adapter(authorization: Optional[str] = Header(default=None)):
         """Return to base model (clear active adapter)."""
+        _check_tool_auth(authorization)
         with active_lock:
             active_state["active"] = None
         return {"active": None, "status": "ok"}
@@ -1692,7 +1843,7 @@ def _create_app(
             ],
         }
 
-    @app.post("/v1/chat/completions")
+    @app.post("/v1/chat/completions", dependencies=[Depends(_check_browser_origin)])
     def chat_completions(
         request: ChatCompletionRequest,
         x_user_id: Optional[str] = Header(default=None, alias="X-User-Id"),
@@ -1731,6 +1882,7 @@ def _create_app(
                     top_p=request.top_p,
                     model_name=model_name,
                     assistant_model=draft_model,
+                    assistant_tokenizer=draft_tokenizer,
                     num_assistant_tokens=num_speculative_tokens,
                     trace_log_writer=trace_log_writer,
                     started=stream_started,
@@ -1797,6 +1949,7 @@ def _create_app(
                                 temperature=request.temperature,
                                 top_p=request.top_p,
                                 assistant_model=draft_model,
+                                assistant_tokenizer=draft_tokenizer,
                                 num_assistant_tokens=num_speculative_tokens,
                                 logits_processor=processors or None,
                                 ngram_config=ngram_config,
@@ -1867,7 +2020,7 @@ def _create_app(
     # Reuses the v0.45.0 utils/anthropic_messages converter + the existing
     # chat_completions handler. Live on transformers backend only this
     # release (vLLM /v1/messages tracked for v0.53.7).
-    @app.post("/v1/messages")
+    @app.post("/v1/messages", dependencies=[Depends(_check_browser_origin)])
     def anthropic_messages(payload: dict) -> dict:
         from soup_cli.utils.anthropic_messages import (
             from_anthropic,
@@ -1953,7 +2106,7 @@ def _create_app(
     tool_max_query_len = 1024
     tool_max_results = 16
 
-    @app.post("/v1/tools/python")
+    @app.post("/v1/tools/python", dependencies=[Depends(_check_local_request)])
     def tool_python(
         payload: dict,
         authorization: Optional[str] = Header(default=None),
@@ -1980,23 +2133,57 @@ def _create_app(
             "timed_out": stdout is None,
         }
 
-    @app.post("/v1/tools/bash")
-    def tool_bash(payload: dict) -> dict:  # noqa: ARG001 — payload unused on stub
-        # v0.53.7 review-fix C1: bash spawns ``/bin/sh -c`` which escapes
-        # the RLVR sandbox's OS-level isolation (``unshare(CLONE_NEWNET)``
-        # / macOS ``sandbox-exec``); a caller can reach
-        # ``http://169.254.169.254/...`` from the child shell. Reverted to
-        # 501 until container/namespace work lands in v0.53.9.
-        raise HTTPException(
-            status_code=501,
-            detail=(
-                "Server-side tool 'bash' live execution deferred to "
-                "v0.53.9 — sandbox isolation requires container/namespace "
-                "work."
-            ),
-        )
+    @app.post("/v1/tools/bash", dependencies=[Depends(_check_local_request)])
+    def tool_bash(
+        payload: dict,
+        authorization: Optional[str] = Header(default=None),
+    ) -> dict:
+        _check_tool_auth(authorization)
+        if not isinstance(payload, dict):
+            raise HTTPException(status_code=400, detail="Invalid request")
+        command = payload.get("command")
+        if not isinstance(command, str) or not command:
+            raise HTTPException(status_code=400, detail="Invalid request")
+        if len(command) > tool_max_code_len:
+            raise HTTPException(status_code=400, detail="Invalid request")
+        try:
+            from soup_cli.trainer.rewards import _get_isolation_strategy, _run_bash_sandbox
 
-    @app.post("/v1/tools/web_search")
+            if _get_isolation_strategy() == "best-effort":
+                raise HTTPException(
+                    status_code=501,
+                    detail="bash sandbox requires OS-level isolation",
+                )
+
+            result = _run_bash_sandbox(command)
+        except (NotImplementedError, PermissionError, subprocess.SubprocessError) as exc:
+            raise HTTPException(
+                status_code=501,
+                detail=str(exc),
+            )
+        except HTTPException:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("/v1/tools/bash sandbox error: %s", exc)
+            raise HTTPException(status_code=500, detail="Internal server error")
+        if result.launch_failed:
+            raise HTTPException(
+                status_code=501,
+                detail="bash sandbox failed to initialize OS-level isolation",
+            )
+        exit_code = result.returncode if result.returncode is not None else 1
+        if result.timed_out:
+            exit_code = 124
+        elif result.output_exceeded:
+            exit_code = 1
+        return {
+            "stdout": result.stdout,
+            "stderr": result.stderr,
+            "exit_code": exit_code,
+            "timed_out": result.timed_out,
+        }
+
+    @app.post("/v1/tools/web_search", dependencies=[Depends(_check_local_request)])
     def tool_web_search(
         payload: dict,
         authorization: Optional[str] = Header(default=None),
@@ -2072,7 +2259,7 @@ def _create_app(
                         )
         return {"results": results}
 
-    @app.post("/v1/thumbs")
+    @app.post("/v1/thumbs", dependencies=[Depends(_check_local_request)])
     def record_thumb_endpoint(
         payload: dict,
         authorization: Optional[str] = Header(default=None),
@@ -2203,7 +2390,7 @@ def _stream_anthropic_messages(
 def _stream_response(
     model, tokenizer, messages,
     max_tokens, temperature, top_p, model_name,
-    assistant_model=None, num_assistant_tokens=5,
+    assistant_model=None, assistant_tokenizer=None, num_assistant_tokens=5,
     trace_log_writer=None, started=None,
     kv_cache_generate_kwargs=None,
     mole_runtime=None,
@@ -2249,6 +2436,7 @@ def _stream_response(
                     temperature=temperature,
                     top_p=top_p,
                     assistant_model=assistant_model,
+                    assistant_tokenizer=assistant_tokenizer,
                     num_assistant_tokens=num_assistant_tokens,
                     kv_cache_generate_kwargs=kv_cache_generate_kwargs,
                 )

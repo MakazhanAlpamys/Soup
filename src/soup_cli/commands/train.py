@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import contextlib
+import json
 import os
-import sys
+import re
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Annotated
 
 import typer
 from rich.console import Console
@@ -16,10 +17,10 @@ from rich.panel import Panel
 from soup_cli.config.loader import load_config
 from soup_cli.data.loader import load_dataset
 from soup_cli.monitoring.display import TrainingDisplay
-from soup_cli.trainer.sft import SFTTrainerWrapper
-from soup_cli.utils.gpu import detect_device, get_gpu_info
+from soup_cli.utils.gpu import detect_device, get_gpu_info, resolve_quantization
 
 if TYPE_CHECKING:  # pragma: no cover - type hints only, no runtime import
+    from soup_cli.config.schema import SoupConfig
     from soup_cli.utils.energy import EnergyMeasurement
 
 console = Console()
@@ -33,6 +34,79 @@ _HW_FIT_OPTIMIZERS = frozenset({
     "lomo", "adalomo", "schedule_free_adamw",
 })
 
+_UNWIRED_TRAINING_TUNABLES = (
+    "forgetting_eval_steps",
+    "forgetting_threshold",
+    "forgetting_benchmark",
+    "forgetting_stop",
+    "checkpoint_eval_steps",
+    "checkpoint_eval_metric",
+    "checkpoint_eval_tasks",
+    "checkpoint_keep_top",
+    "early_stop_patience",
+    "convergence_window",
+    "convergence_rel_tol",
+)
+
+
+def _nondefault_unwired_training_settings(training_config) -> list[str]:
+    """Return staged training settings whose value differs from the schema default."""
+    fields = type(training_config).model_fields
+    enabled_flags = [
+        name
+        for name, enabled in (
+            ("forgetting_detection", training_config.forgetting_detection),
+            ("checkpoint_intelligence", training_config.checkpoint_intelligence),
+            ("early_stop_on_regression", training_config.early_stop_on_regression),
+            ("convergence_detection", training_config.convergence_detection),
+        )
+        if enabled
+    ]
+    changed_tunables = [
+        name
+        for name in _UNWIRED_TRAINING_TUNABLES
+        if getattr(training_config, name) != fields[name].default
+    ]
+    return enabled_flags + changed_tunables
+
+
+def _format_training_complete_loss(result: dict) -> str:
+    """Render only a loss comparison that the trainer actually measured."""
+    summary_kind = result.get("loss_summary_kind")
+    if summary_kind == "unavailable":
+        return "Loss: [bold]unavailable[/]"
+    if summary_kind in {"mean", "single"} or (
+        summary_kind is None and result["initial_loss"] == result["final_loss"]
+    ):
+        return f"Loss: [bold]{result['final_loss']:.4f}[/]"
+    return f"Loss: [bold]{result['initial_loss']:.4f} -> {result['final_loss']:.4f}[/]"
+
+
+def _train_sample_count(dcfg, dataset) -> int:
+    """Rows training will actually consume (#1054).
+
+    For ``format: pre_tokenized`` the rows come from the Arrow cache at
+    ``data.tokenized_path`` (loaded later, in the trainer), not from
+    ``load_dataset`` — which sees the ORIGINAL ``data.train`` file and drops
+    every row for want of an ``input_ids`` column, printing "0 train samples"
+    for a run that then trains on the whole cache. Read the count preprocess
+    recorded instead, falling back to the loader's view if it is unavailable or
+    not a plausible count (a negative ``row_count`` is a corrupt or hand-edited
+    metadata.json, and printing "Loaded: -3 train samples" helps nobody).
+    """
+    rows = len(dataset.get("train", []))
+    if dcfg.format != "pre_tokenized" or not dcfg.tokenized_path:
+        return rows
+    try:
+        with open(
+            os.path.join(dcfg.tokenized_path, "metadata.json"), encoding="utf-8"
+        ) as f:
+            count = json.load(f).get("row_count")
+    except (OSError, ValueError):
+        return rows
+    valid = isinstance(count, int) and not isinstance(count, bool) and count >= 0
+    return count if valid else rows
+
 
 def _build_hardware_fit_input(cfg):
     """Best-effort ``HardwareFitInput`` from a ``SoupConfig``.
@@ -41,6 +115,7 @@ def _build_hardware_fit_input(cfg):
     ``"auto"``, unknown model size, unsupported quant, out-of-range dims), in
     which case the caller skips the gate rather than guess.
     """
+    from soup_cli.trainer.sft import is_full_finetune
     from soup_cli.utils.gpu import model_size_from_name
     from soup_cli.utils.hardware_fit import HardwareFitInput
 
@@ -59,14 +134,39 @@ def _build_hardware_fit_input(cfg):
     )
     if quant is None:
         return None
+    task = getattr(cfg, "task", None)
     if quant == "4bit":
         peft = "qlora"
-    elif (
-        getattr(tcfg, "unfrozen_parameters", None)
-        or getattr(tcfg, "freeze_layers", None)
-        or getattr(tcfg, "freeze_ratio", None)
-    ):
-        peft = "full"  # Spectrum / freeze-based full fine-tuning
+    elif task == "prm" or (
+        task in ("classifier", "reranker", "cross_encoder")
+        and not (tcfg.classifier_lora and tcfg.lora.r > 0)
+    ) or (task == "asr" and not (tcfg.asr_lora and tcfg.lora.r > 0)):
+        # #795: these trainers decide full fine-tuning themselves -- PRM always,
+        # the classifier family and ASR unless their own LoRA opt-in is on
+        # (classifier.py:262, asr.py::_should_use_lora). Budgeting them as LoRA
+        # under-predicts, the unsafe direction.
+        peft = "full"
+    elif is_full_finetune(tcfg):
+        # #471 — was an independent, hand-maintained check
+        # (unfrozen_parameters / freeze_layers / freeze_ratio) that had
+        # drifted from sft.py's real full-FT decision in BOTH directions:
+        # it missed lisa_enabled/lora.r==0 (under-predicting VRAM for those
+        # runs) and treated bare freeze_layers/freeze_ratio as sufficient on
+        # its own even with lora.r>0 still on (over-predicting — and able to
+        # falsely refuse a launch that would fit, since freeze_layers/
+        # freeze_ratio only reduce what's trainable WITHIN LoRA or full-FT,
+        # they don't select the mode). Now shares is_full_finetune with
+        # sft.py's SFTTrainerWrapper._resolve_load_dtype so the two cannot
+        # disagree again.
+        #
+        # #377 — lisa_train_embeddings=false freezes the always-on group and
+        # lowers real VRAM, but LISA stays "full" here on purpose: the analytical
+        # predictor has no measured constant for the frozen-embeddings trainable
+        # set, and over-predicting is the safe failure (under-predicting is a
+        # silent WDDM spill on Windows). A frozen-embeddings run that would fit
+        # can therefore still be refused by pre-flight; --allow-oom-attempt is
+        # the documented bypass, and crediting the saving is a hardware follow-up.
+        peft = "full"
     else:
         peft = "lora"
     optimizer = str(getattr(tcfg, "optimizer", "adamw_torch") or "adamw_torch")
@@ -100,6 +200,13 @@ def _hardware_fit_preflight(cfg, gpu_info, *, allow_oom_attempt: bool) -> None:
     # enable. The streaming path runs its own pre-flight instead (RAM-tier fit
     # + the plan panel in _setup_streaming_transformers).
     if getattr(cfg.training, "stream_layers", False):
+        return
+    # MLX uses Apple unified memory and its own runtime allocator, so the
+    # CUDA-shaped analytical VRAM predictor is skipped.  On a non-Apple host,
+    # ``backend: mlx`` still skips harmlessly: ``resolve_trainer`` fails on
+    # the ``mlx_lm`` import before training starts, so there is no silent
+    # hazard from bypassing the gate.
+    if getattr(cfg, "backend", None) == "mlx":
         return
 
     total_bytes = 0
@@ -166,6 +273,34 @@ def _apply_replay_overrides(cfg, *, replay, replay_ratio, replay_seed=None):
     return type(cfg)(**payload)
 
 
+def _describe_exception_for_tracker(exc: BaseException) -> str:
+    """Format ``exc`` for ``ExperimentTracker.fail_run``'s ``error=`` column.
+
+    A handled setup failure (a bad ``--tracker`` value, a hub download
+    error, a hub-cache path-containment refusal) exits via
+    ``raise typer.Exit(...)``, sometimes chained with ``from exc`` and
+    sometimes not. ``typer.Exit`` carries no message of its own, so
+    formatting it directly writes ``"Exit: "`` to the row and loses the
+    reason a human needs. Unwrapping to ``__cause__`` recovers it for the
+    chained sites; recording ``exit_code`` covers the one site that
+    raises bare, so all three read as something more useful than
+    ``"Exit: "`` (#764/#767 review).
+
+    The unwrap is gated to ``typer.Exit`` specifically — this helper also
+    runs on ordinary training failures (``raise X from Y`` deep inside a
+    library), where the outer exception X is the operator-facing reason
+    and the inner cause Y is just the mechanism. Unwrapping unconditionally
+    would discard X and keep only Y, which is less informative than before
+    this fix existed — the exact regression the same review caught.
+    """
+    if isinstance(exc, typer.Exit):
+        if exc.__cause__ is not None:
+            cause = exc.__cause__
+            return f"{type(cause).__name__}: {cause} (exit code {exc.exit_code})"
+        return f"Exit(code={exc.exit_code})"
+    return f"{type(exc).__name__}: {exc}"
+
+
 def train(
     config: str = typer.Option(
         "soup.yaml",
@@ -188,7 +323,8 @@ def train(
         None,
         "--resume",
         "-r",
-        help="Resume from checkpoint: path to checkpoint dir, or 'auto' for latest",
+        help="Resume from checkpoint: path to checkpoint dir ('auto' for latest); "
+        "on the MLX backend, a path to a .safetensors adapter file instead",
     ),
     wandb: bool = typer.Option(
         False,
@@ -225,14 +361,26 @@ def train(
     gpus: str = typer.Option(
         None,
         "--gpus",
-        help="Number of GPUs for distributed training ('auto' or integer)",
+        help="GPUs per node for distributed training ('auto' or integer)",
     ),
+    nodes: Annotated[int, typer.Option(
+        "--nodes", help="Number of machines; each must use the same --gpus count",
+    )] = 1,
+    node_rank: Annotated[int | None, typer.Option(
+        "--node-rank", help="This machine's rank, from 0 to nodes minus 1 (default 0)",
+    )] = None,
+    master_addr: Annotated[str | None, typer.Option(
+        "--master-addr",
+        help="Rank 0 hostname or IP reachable by all nodes; required with --nodes > 1",
+    )] = None,
+    master_port: Annotated[int | None, typer.Option(
+        "--master-port", help="Shared coordinator port for multiple nodes (default 29500)",
+    )] = None,
     no_reexec: bool = typer.Option(
         False,
         "--no-reexec",
         help=(
-            "When --gpus N>1, print the accelerate launch command instead "
-            "of auto-reexec under it (v0.33.0 #37 default behaviour: reexec)"
+            "Print the distributed launch command instead of launching it"
         ),
     ),
     gate: str = typer.Option(
@@ -455,30 +603,49 @@ def train(
         None,
         "--cloud",
         help=(
-            "Train on a serverless cloud GPU instead of locally (v0.71.18 "
-            "#16). Supported: modal. Renders a Modal app stub from the "
-            "config (plan-only); use --cloud-submit to submit live."
+            "Train on a cloud GPU instead of locally (v0.71.18 #16). Supported: "
+            "modal, lambda (runpod is planned). Renders a cloud app stub from the config "
+            "(plan-only); use --cloud-submit to submit live."
         ),
     ),
     gpu: str = typer.Option(
         "a100",
         "--gpu",
         help=(
-            "Cloud GPU type for --cloud (t4 / l4 / a10g / a100 / a100-80gb / "
-            "l40s / h100). Default a100. v0.71.18 #16."
+            "Cloud GPU type for --cloud (t4 / l4 / a10 / a10g / a100 / a100-80gb / "
+            "l40s / h100 / a6000). Default a100. Provider-specific allowlists apply."
         ),
     ),
     cloud_submit: bool = typer.Option(
         False,
         "--cloud-submit",
         help=(
-            "With --cloud modal, submit the rendered run live via the Modal "
-            "SDK (gated on a Modal token: run `modal setup` first). Default "
-            "is plan-only (render + print the `modal run` command)."
+            "With --cloud, submit the rendered run live via the cloud's SDK or API "
+            "(gated on respective provider token/API key). Default is plan-only "
+            "(render + print the command). Lambda requires a registered SSH key."
         ),
     ),
 ):
     """Start training from a soup.yaml config."""
+    from soup_cli.utils.launcher import validate_multi_node_options
+
+    try:
+        validate_multi_node_options(nodes, node_rank, master_addr, master_port)
+        if nodes > 1:
+            if not gpus:
+                raise ValueError("--nodes > 1 requires --gpus (GPUs per node)")
+            if cloud or find_lr:
+                raise ValueError("--nodes > 1 cannot be combined with --cloud or --find-lr")
+    except ValueError as exc:
+        message = str(exc)
+        for field, flag in (
+            ("num_machines", "--nodes"), ("machine_rank", "--node-rank"),
+            ("main_process_ip", "--master-addr"), ("main_process_port", "--master-port"),
+        ):
+            message = message.replace(field, flag)
+        console.print(f"[red]Invalid distributed launch:[/] {markup_escape(message)}")
+        raise typer.Exit(1) from exc
+
     config_path = Path(config)
     if not config_path.exists():
         console.print(f"[red]Config not found: {config_path}[/]")
@@ -517,7 +684,12 @@ def train(
 
     # Load & validate config
     console.print(f"[dim]Loading config from {config_path}...[/]")
-    cfg = load_config(config_path)
+    cfg = load_config(
+        config_path,
+        training_overrides=(
+            {"minillm_on_policy": True} if minillm_on_policy else None
+        ),
+    )
 
     # --- v0.71.36 replay passthrough ---
     try:
@@ -530,6 +702,17 @@ def train(
     except Exception as exc:  # noqa: BLE001 — pydantic ValidationError et al.
         console.print(f"[red]{markup_escape(str(exc))}[/]")
         raise typer.Exit(code=2) from exc
+
+    # An unregistered data.chat_template name raises KeyError in the trainer,
+    # after the model has loaded. Check it before anything is downloaded.
+    from soup_cli.data.chat_templates import resolve_chat_template
+    from soup_cli.utils.terminal import for_terminal
+
+    try:
+        resolve_chat_template(cfg.data.chat_template)
+    except KeyError as exc:
+        console.print(f"[red]Invalid data.chat_template:[/] {for_terminal(exc.args[0])}")
+        raise typer.Exit(1) from exc
 
     # v0.72.3 — --resume / --hf-resume now work with layer streaming. v0.72.0-.2
     # refused them because a streamed model's `named_parameters()` carry an
@@ -605,6 +788,11 @@ def train(
         )
 
     # --- MiniLLM on-policy rollout shortcut (v0.71.18 #257) ---
+    # Applied before SoupConfig validation via load_config(training_overrides=),
+    # so --minillm-on-policy can still select student-only sampling when the
+    # YAML leaves mix at 0 (#692 / #977). The assignment below is therefore a
+    # no-op when the flag was set; it stays so a later reader sees the flag
+    # take effect on cfg.training.
     if minillm_on_policy:
         if not cfg.training.minillm_enabled:
             console.print(
@@ -615,53 +803,76 @@ def train(
         cfg.training.minillm_on_policy = True
         console.print("[green]MiniLLM on-policy rollout enabled[/]")
 
-    # --- Cloud GPU training (v0.71.18 #16) ---
+    # --- Cloud GPU training (v0.71.18 #16, v0.71.22 #264) ---
     if cloud:
         from soup_cli import __version__ as _soup_version
-        from soup_cli.cloud import modal as _modal_cloud
+
+        cloud = cloud.lower()
+        if cloud == "runpod":
+            console.print(
+                "[yellow]RunPod cloud training is not yet live; use --cloud modal or lambda.[/]"
+            )
+            raise typer.Exit(2)
+        elif cloud == "modal":
+            from soup_cli.cloud import modal as cloud_mod
+        elif cloud == "lambda":
+            from soup_cli.cloud import lambda_labs as cloud_mod
+        else:
+            console.print(
+                f"[red]Invalid --cloud:[/] {markup_escape(cloud)}. "
+                "Supported: modal, lambda (runpod is planned)."
+            )
+            raise typer.Exit(2)
 
         try:
-            _modal_cloud.validate_cloud(cloud)
-            _modal_cloud.validate_gpu(gpu)
+            cloud_mod.validate_cloud(cloud)
+            cloud_mod.validate_gpu(gpu)
         except ValueError as exc:
             console.print(
                 f"[red]Invalid --cloud / --gpu:[/] {markup_escape(str(exc))}"
             )
             raise typer.Exit(2) from exc
         try:
-            plan = _modal_cloud.plan_modal_run(
+            # We call the generic-shaped plan function dynamically
+            plan_func = getattr(cloud_mod, f"plan_{cloud}_run", None)
+            if plan_func is None:
+                raise ValueError(f"cloud backend {cloud!r} has no plan function")
+            plan = plan_func(
                 str(config_path),
                 gpu=gpu,
                 output_dir=cfg.output,
                 soup_version=_soup_version,
             )
-            stub_realpath = _modal_cloud.write_stub(plan)
+            stub_realpath = cloud_mod.write_stub(plan)
         except (ValueError, TypeError) as exc:
             console.print(f"[red]Cloud plan failed:[/] {markup_escape(str(exc))}")
             raise typer.Exit(2) from exc
 
         console.print(
             Panel(
-                f"Cloud:    [bold]modal[/]\n"
+                f"Cloud:    [bold]{markup_escape(cloud)}[/]\n"
                 f"GPU:      [bold]{markup_escape(plan.gpu)}[/]\n"
                 f"Stub:     [bold]{markup_escape(os.path.relpath(stub_realpath))}[/]\n"
                 f"Output:   [bold]{markup_escape(plan.output_dir)}[/]\n\n"
                 f"[bold]Run:[/] {markup_escape(plan.run_command)}",
-                title="[bold green]soup train --cloud modal[/]",
+                title=f"[bold green]soup train --cloud {markup_escape(cloud)}[/]",
             )
         )
         if cloud_submit:
             try:
-                rc = _modal_cloud.submit_modal_run(plan)
+                submit_func = getattr(cloud_mod, f"submit_{cloud}_run", None)
+                if submit_func is None:
+                    raise RuntimeError(f"cloud backend {cloud!r} has no submit function")
+                rc = submit_func(plan)
             except RuntimeError as exc:
                 console.print(
-                    f"[yellow]Modal submit unavailable:[/] "
+                    f"[yellow]{cloud.title()} submit unavailable:[/] "
                     f"{markup_escape(str(exc))}"
                 )
                 raise typer.Exit(1) from exc
             raise typer.Exit(rc)
         console.print(
-            "[yellow]Note:[/] plan-only. Run `modal setup` once, then the "
+            f"[yellow]Note:[/] plan-only. Authenticate with {cloud}, then run the "
             "command above (or re-run with --cloud-submit)."
         )
         raise typer.Exit(0)
@@ -693,19 +904,10 @@ def train(
         cfg.training.eval_gate = EvalGateConfig(enabled=True, suite=gate)
         console.print(f"[green]Eval gate enabled[/] with suite: {gate}")
 
-    # Honesty guard: these knobs are accepted (and `soup autopilot` turns them
-    # on by default) but are not enforced mid-training in this build — the eval
-    # gate wired above is the live safety net. Warn instead of silently no-op'ing
-    # so a "zero-config" run does not advertise protection it does not have.
-    _unwired_gates = [
-        name
-        for name, on in (
-            ("forgetting_detection", cfg.training.forgetting_detection),
-            ("checkpoint_intelligence", cfg.training.checkpoint_intelligence),
-            ("early_stop_on_regression", cfg.training.early_stop_on_regression),
-        )
-        if on
-    ]
+    # Honesty guard: these staged knobs are accepted but are not enforced
+    # mid-training in this build. Warn for every non-default member of the
+    # families, not only their enable flags, so a tuned no-op is never silent.
+    _unwired_gates = _nondefault_unwired_training_settings(cfg.training)
     if _unwired_gates:
         console.print(
             "[yellow]Note:[/] "
@@ -716,14 +918,7 @@ def train(
         )
 
     # --- Resolve resume checkpoint (fail fast before heavy operations) ---
-    resume_from = None
-    if resume:
-        resume_from = _resolve_checkpoint(resume, cfg.output, cfg.experiment_name)
-        if resume_from:
-            console.print(f"[green]Resuming from:[/] {resume_from}")
-        else:
-            console.print("[red]No checkpoint found to resume from.[/]")
-            raise typer.Exit(1)
+    resume_from = _resolve_resume_or_exit(resume, cfg)
 
     # --- HF auto-resume: pull latest checkpoint branch into output dir ---
     if hf_resume and push_as and resume_from is None:
@@ -815,6 +1010,25 @@ def train(
         fsdp_kwargs = get_fsdp_training_args(fsdp)
         console.print(f"[green]FSDP2 enabled:[/] {fsdp}")
 
+    # #350 — BNB's default uint8 quant storage is not merely slow under FSDP:
+    # FSDP cannot flatten it. Resolve storage to the exact BNB compute dtype
+    # before any trainer builds its BitsAndBytesConfig. This updates the
+    # effective config shared by every wrapper and the reproducibility receipt.
+    from soup_cli.utils.quant_menu import resolve_fsdp_qlora_quant_storage
+
+    original_quant_storage = cfg.training.bnb_4bit_quant_storage
+    resolved_training = resolve_fsdp_qlora_quant_storage(
+        cfg.training,
+        fsdp=bool(fsdp),
+    )
+    if resolved_training is not cfg.training:
+        cfg = cfg.model_copy(update={"training": resolved_training})
+        action = "selected" if original_quant_storage is None else "overrode"
+        console.print(
+            f"[green]FSDP QLoRA:[/] {action} bnb_4bit_quant_storage="
+            f"{resolved_training.bnb_4bit_quant_storage} to match compute dtype"
+        )
+
     # --- v0.38.0 Quant Menu × multi-GPU compatibility check ---
     from soup_cli.utils.quant_menu import check_quant_distributed_compat
 
@@ -846,118 +1060,85 @@ def train(
             raise typer.Exit(1) from exc
         topo = detect_topology()
         if num_gpus is not None and num_gpus < 1:
+            if nodes > 1:
+                console.print("[red]Multi-node training requires at least one GPU per node.[/]")
+                raise typer.Exit(1)
             # --gpus auto on CPU / no-CUDA box — explicit, not silent.
             console.print(
                 "[yellow]--gpus auto detected 0 GPUs; continuing as a "
                 "single-process CPU run.[/]"
             )
-        elif num_gpus is not None and num_gpus > 1:
+        elif num_gpus is not None and num_gpus * nodes > 1:
             from soup_cli.utils.launcher import (
                 build_accelerate_argv,
+                build_train_reexec_argv,
+                collect_reexec_passthrough,
                 format_advice,
+                hint_argv_from_reexec,
                 is_in_distributed,
             )
 
-            if dry_run and not is_in_distributed():
-                # --dry-run must NEVER os.execvp into a real multi-GPU run.
-                # Without this guard the re-exec fired before the dry_run check
-                # (~350 lines below), so `soup train --dry-run --gpus N` launched
-                # a full accelerate run instead of just validating.
-                console.print(
-                    f"[dim]--dry-run: skipping accelerate re-exec "
-                    f"({num_gpus} GPUs, {topo['interconnect']}).[/]"
-                )
-            elif not is_in_distributed():
+            num_processes = num_gpus * nodes
+            if not is_in_distributed():
                 # v0.33.0 #37 — auto-reexec under accelerate launch unless
                 # --no-reexec was passed. Reexec uses os.execvp so the new
                 # accelerate process replaces this process; no leftover PID
                 # tree, stdio passes through unchanged.
-                # Reconstruct argv. Pass through critical flags so the
-                # reexec'd run sees what the user typed.
-                script_args: list[str] = [
-                    sys.executable, "-m", "soup_cli.cli", "train",
-                    "--config", config, "--no-reexec",
-                ]
-                if fsdp:
-                    script_args.extend(["--fsdp", fsdp])
-                if deepspeed:
-                    script_args.extend(["--deepspeed", deepspeed])
-                if resume:
-                    script_args.extend(["--resume", resume])
-                if wandb:
-                    script_args.append("--wandb")
-                if tensorboard:
-                    script_args.append("--tensorboard")
-                if echo_trap_tokenizer_aware:
-                    script_args.append("--echo-trap-tokenizer-aware")
-                if reward_hack_detector is not None:
-                    script_args.extend(
-                        ["--reward-hack-detector", reward_hack_detector]
+                # #372 — one argv builder for both the re-exec and the printed
+                # hint, so they cannot drift. collect_reexec_passthrough is the
+                # only list of "flags the user typed" that survive a launch.
+                script_args = build_train_reexec_argv(
+                    config,
+                    collect_reexec_passthrough(
+                        name=name,
+                        fsdp=fsdp,
+                        deepspeed=deepspeed,
+                        resume=resume,
+                        wandb=wandb,
+                        tensorboard=tensorboard,
+                        echo_trap_tokenizer_aware=echo_trap_tokenizer_aware,
+                        reward_hack_detector=reward_hack_detector,
+                        reward_hack_halt=reward_hack_halt,
+                        reward_hack_mitigation=reward_hack_mitigation,
+                        gate=gate,
+                        push_as=push_as,
+                        hf_resume=hf_resume,
+                        trust_remote_code=trust_remote_code,
+                        tracker=tracker,
+                        diagnose_gate=diagnose_gate,
+                        annex_xi=annex_xi,
+                        repro_receipt=repro_receipt,
+                        profile_run=profile_run,
+                        allow_oom_attempt=allow_oom_attempt,
+                        track_energy=track_energy,
+                        energy_country=energy_country,
+                        energy_out=energy_out,
+                        yes=yes,
+                        minillm_on_policy=minillm_on_policy,
+                        capture_activations=capture_activations,
+                        capture_prompts=capture_prompts,
+                        replay=replay,
+                        replay_ratio=replay_ratio,
+                        replay_seed=replay_seed,
+                    ),
+                )
+                if nodes > 1:
+                    console.print(
+                        "[dim]Multi-node NCCL default: NCCL_IB_DISABLE=0. "
+                        "Set NCCL_IB_DISABLE=1 for TCP-only networks. "
+                        "Existing environment settings are preserved.[/]"
                     )
-                if reward_hack_halt:
-                    script_args.append("--reward-hack-halt")
-                if reward_hack_mitigation is not None:
-                    script_args.extend(
-                        ["--reward-hack-mitigation", reward_hack_mitigation]
-                    )
-                # Pass through the remaining run-shaping flags — these were
-                # silently dropped on re-exec, so a multi-GPU run ignored the
-                # eval gate, HF push, trust-remote-code, tracker, diagnose gate,
-                # and the governance/energy artifacts the user asked for.
-                if gate:
-                    script_args.extend(["--gate", gate])
-                if push_as:
-                    script_args.extend(["--push-as", push_as])
-                if hf_resume:
-                    script_args.append("--hf-resume")
-                if trust_remote_code:
-                    script_args.append("--trust-remote-code")
-                if tracker:
-                    script_args.extend(["--tracker", tracker])
-                if diagnose_gate:
-                    script_args.extend(["--diagnose-gate", diagnose_gate])
-                if annex_xi:
-                    script_args.extend(["--annex-xi", annex_xi])
-                if repro_receipt:
-                    script_args.extend(["--repro-receipt", repro_receipt])
-                if profile_run:
-                    script_args.append("--profile")
-                if allow_oom_attempt:
-                    script_args.append("--allow-oom-attempt")
-                if track_energy:
-                    script_args.append("--track-energy")
-                    if energy_country:
-                        script_args.extend(["--energy-country", energy_country])
-                    if energy_out:
-                        script_args.extend(["--energy-out", energy_out])
-                if yes:
-                    script_args.append("--yes")
-                # Distillation / activation-capture flags — same drop-on-reexec
-                # bug class as the block above: a multi-GPU run silently ignored
-                # them (MiniLLM stayed offline, no activation snapshot written).
-                if minillm_on_policy:
-                    script_args.append("--minillm-on-policy")
-                if capture_activations:
-                    script_args.extend(["--capture-activations", capture_activations])
-                if capture_prompts:
-                    script_args.extend(["--capture-prompts", capture_prompts])
-                if no_reexec:
-                    # #77 — this hint used to be hand-built as
-                    # ["soup", "train", "-c", config] and silently dropped every
-                    # other flag the user typed, so following it literally ran
-                    # WITHOUT --fsdp, --deepspeed, --gate and the rest. It is now
-                    # derived from the same script_args the auto-reexec uses, so
-                    # the two cannot drift: one source for "what the user typed".
-                    # --no-reexec itself is dropped because under `accelerate
-                    # launch` the run is already distributed and never re-execs.
-                    hint_args = [
-                        "soup",
-                        "train",
-                        *(a for a in script_args[4:] if a != "--no-reexec"),
-                    ]
+                if (dry_run and nodes > 1) or (no_reexec and not dry_run):
+                    # Multi-node advice is the executable module-form argv,
+                    # exactly as passed to execvp, including the child guard.
+                    hint_args = script_args if nodes > 1 else hint_argv_from_reexec(script_args)
                     console.print(
                         Panel(
-                            markup_escape(format_advice(num_gpus, hint_args)),
+                            markup_escape(format_advice(
+                                num_processes, hint_args, num_machines=nodes,
+                                machine_rank=node_rank, main_process_ip=master_addr,
+                                main_process_port=master_port,
+                            )),
                             title="[yellow]Multi-GPU launch required[/]",
                         )
                     )
@@ -965,35 +1146,48 @@ def train(
                         f"[dim]Detected topology: {topo['gpu_count']} GPUs, "
                         f"{topo['interconnect']}[/]"
                     )
-                    raise typer.Exit(1)
+                    if not dry_run:
+                        raise typer.Exit(1)
 
-                argv = build_accelerate_argv(
-                    num_processes=num_gpus, script_args=script_args,
-                )
-                console.print(
-                    f"[green]Auto-reexec under accelerate "
-                    f"({num_gpus} GPUs, {topo['interconnect']})[/]"
-                )
-                console.print(f"[dim]argv: {' '.join(argv)}[/]")
-                # os.execvp replaces the current process — does not return.
-                # On Windows execvp creates a new process and returns the
-                # child's return code; we don't loop because the parent
-                # also exits via Typer.
-                try:
-                    os.execvp(argv[0], argv)
-                except OSError as exc:
+                if dry_run:
                     console.print(
-                        f"[red]accelerate launch failed:[/] {exc}\n"
-                        "Use [bold]--no-reexec[/] to fall back to printing "
-                        "the launch command for manual execution."
+                        f"[dim]--dry-run: skipping accelerate re-exec "
+                        f"({num_processes} GPUs, {topo['interconnect']}).[/]"
                     )
-                    raise typer.Exit(1) from exc
-            elif is_in_distributed():
+                else:
+                    argv = build_accelerate_argv(
+                        num_processes=num_processes, script_args=script_args,
+                        num_machines=nodes, machine_rank=node_rank,
+                        main_process_ip=master_addr, main_process_port=master_port,
+                    )
+                    if nodes > 1:
+                        from soup_cli.utils.topology import suggest_nccl_env
+
+                        for key, val in suggest_nccl_env(
+                            gpu_count=num_gpus, interconnect=topo["interconnect"],
+                            num_machines=nodes,
+                        ).items():
+                            os.environ.setdefault(key, val)
+                    console.print(
+                        f"[green]Auto-reexec under accelerate "
+                        f"({num_processes} GPUs, {topo['interconnect']})[/]"
+                    )
+                    console.print(f"[dim]argv: {markup_escape(' '.join(argv))}[/]")
+                    # execvp replaces this process; the child carries --no-reexec.
+                    try:
+                        os.execvp(argv[0], argv)
+                    except OSError as exc:
+                        console.print(
+                            f"[red]accelerate launch failed:[/] {markup_escape(str(exc))}\n"
+                            "Use [bold]--no-reexec[/] to print the launch command."
+                        )
+                        raise typer.Exit(1) from exc
+            elif not dry_run:
                 # Already a launched rank — announce + apply NCCL hints. (The
                 # dry_run branch above intentionally does neither.)
                 console.print(
                     f"[green]Distributed run detected[/] "
-                    f"({num_gpus} procs, {topo['interconnect']} interconnect)"
+                    f"({num_processes} procs, {topo['interconnect']} interconnect)"
                 )
                 # Apply NCCL env hints. All current keys (``NCCL_P2P_DISABLE`` /
                 # ``NCCL_IB_DISABLE`` / ``NCCL_NVLS_ENABLE``) are rank-idempotent
@@ -1004,21 +1198,25 @@ def train(
                 from soup_cli.utils.topology import suggest_nccl_env
 
                 for key, val in suggest_nccl_env(
-                    gpu_count=num_gpus, interconnect=topo["interconnect"]
+                    gpu_count=num_gpus, interconnect=topo["interconnect"], num_machines=nodes,
                 ).items():
                     os.environ.setdefault(key, val)
 
-    # Detect hardware
-    device, device_name = detect_device()
-    gpu_info = get_gpu_info()
+    # Detect hardware with backend awareness
+    device, device_name = detect_device(backend=cfg.backend)
+    gpu_info = get_gpu_info(backend=cfg.backend)
 
-    # Auto-disable quantization on CPU (bitsandbytes doesn't support CPU)
-    if device == "cpu" and cfg.training.quantization in ("4bit", "8bit"):
-        console.print(
-            f"[yellow]Warning: {cfg.training.quantization} quantization is not "
-            "supported on CPU. Switching to quantization: none.[/]"
-        )
-        cfg.training.quantization = "none"
+    # Quantization guard: explicit decision per #423.  See resolve_quantization()
+    # docstring for the full rationale — MLX 4-bit uses pre-quantized mlx-community
+    # weights (not bitsandbytes NF4), CPU cannot run bitsandbytes at all.
+    resolved_quant, quant_warning = resolve_quantization(
+        device=device,
+        backend=cfg.backend,
+        quantization=cfg.training.quantization,
+    )
+    if quant_warning:
+        console.print(f"[yellow]{quant_warning}[/]")
+    cfg.training.quantization = resolved_quant
 
     # Hardware-fit preflight: refuse (unless --allow-oom-attempt) when the
     # analytical VRAM predictor says the run won't fit. Skips silently on CPU
@@ -1030,7 +1228,9 @@ def train(
         backend_label = "unsloth [green](fast mode)[/]"
 
     quant_label = cfg.training.quantization
-    if cfg.training.quantization_aware:
+    if cfg.training.quantization_aware == "quest":
+        quant_label = "mixed W4/A4+A16 (QuEST fake quant)"
+    elif cfg.training.quantization_aware:
         quant_label += " + QAT"
 
     # v0.53.2 review-fix: classifier-family tasks train a sequence-classification
@@ -1095,14 +1295,34 @@ def train(
             raise typer.Exit(1)
 
     # Validate QAT configuration
-    if cfg.training.quantization_aware:
+    if (
+        cfg.training.quantization_aware is True
+        or cfg.training.quantization_aware == "fp8"
+    ):
         from soup_cli.utils.qat import validate_qat_config
 
         qat_errors = validate_qat_config(
             cfg.training.quantization, cfg.backend, cfg.modality,
+            quantization_aware=cfg.training.quantization_aware,
+            fp8_recipe=cfg.training.fp8_recipe,
+            check_card=not dry_run,
         )
         for err in qat_errors:
-            console.print(f"[red]QAT error:[/] {err}")
+            console.print(f"[red]QAT error:[/] {markup_escape(err)}")
+        if dry_run and cfg.training.quantization_aware == "fp8" and cfg.backend != "unsloth":
+            # #1154 review: a dry run validates the config, and FP8 configs are
+            # routinely written on a laptop for a remote card, so the local card
+            # is a note here -- printed before any error exit, so a dry run that
+            # also lacks torchao still shows the whole picture. The real run
+            # still stops on the card. (Unsloth: its refusal is the answer.)
+            from soup_cli.utils.fp8 import fp8_training_supported
+
+            card_ok, card_reason = fp8_training_supported(cfg.training.fp8_recipe)
+            if not card_ok:
+                console.print(
+                    "[yellow]Note:[/] this machine could not run it: "
+                    f"{markup_escape(card_reason)}"
+                )
         if qat_errors:
             raise typer.Exit(1)
 
@@ -1230,7 +1450,10 @@ def train(
 
     if dry_run:
         console.print("[yellow]Dry run - validating data...[/]")
-        dataset = load_dataset(cfg.data)
+        dataset = load_dataset(
+            cfg.data,
+            preserve_source_columns=cfg.task == "grpo",
+        )
         console.print(f"[green]Data OK:[/] {len(dataset['train'])} train samples")
         if "val" in dataset:
             console.print(f"[green]Val:[/] {len(dataset['val'])} samples")
@@ -1239,8 +1462,13 @@ def train(
 
     # Load data
     console.print("[dim]Loading dataset...[/]")
-    dataset = load_dataset(cfg.data)
-    console.print(f"[green]Loaded:[/] {len(dataset['train'])} train samples")
+    dataset = load_dataset(
+        cfg.data,
+        preserve_source_columns=cfg.task == "grpo",
+    )
+    console.print(
+        f"[green]Loaded:[/] {_train_sample_count(cfg.data, dataset)} train samples"
+    )
 
     # Capture the --tracker CLI value BEFORE the local ExperimentTracker
     # shadows it (v0.43.0 review fix — name-collision regression).
@@ -1259,241 +1487,275 @@ def train(
         experiment_name=experiment_name,
         run_id=os.environ.get("SOUP_MCP_RUN_ID") or None,
     )
+    # #764: without a pid, a SIGKILL'd or Ctrl+C'd run has no way for
+    # _reconcile_orphaned_run to ever notice the process is gone — the
+    # rescue path #401 built for MCP-spawned runs was otherwise inert here.
+    tracker.mark_running(run_id, pid=os.getpid())
     console.print(f"[dim]Run ID: {run_id}[/]")
 
-    # Build trainer based on task type
-    from soup_cli.utils.trackers import resolve_report_to
-
     try:
-        report_to = resolve_report_to(
-            wandb=wandb, tensorboard=tensorboard, tracker=tracker_backend
-        )
-    except ValueError as exc:
-        from rich.markup import escape as _esc
+        # Build trainer based on task type
+        from soup_cli.utils.trackers import resolve_report_to
 
-        console.print(f"[red]{_esc(str(exc))}[/]")
-        raise typer.Exit(code=2) from exc
-    console.print("[dim]Setting up model + trainer...[/]")
-    # v0.53.8 #130 — pre-fetch model from non-HF hub into a local cache and
-    # rewrite cfg.base to point at the local snapshot. The trainer wrappers
-    # still use transformers.from_pretrained, which reads HF Hub by default;
-    # by snapshotting first we keep every wrapper unchanged.
-    hub_name = getattr(cfg.training, "hub", "hf") or "hf"
-    if hub_name != "hf":
-        import re as _re
-
-        from rich.markup import escape as _markup_escape
-
-        from soup_cli.utils.hubs import download_repo
-        from soup_cli.utils.paths import is_under_cwd
-
-        # Sanitise cache subdir name — strip every path-separator and
-        # `..` segment so a crafted ``base: ../../etc`` cannot escape the
-        # cache root (Windows ``\\`` and POSIX ``/`` both blocked).
-        safe_slug = _re.sub(r"[^A-Za-z0-9._-]+", "__", cfg.base).strip("._-") or "model"
-        cache_dir = (Path.cwd() / ".soup_hub_cache" / safe_slug).resolve()
-        if not is_under_cwd(str(cache_dir)):
-            console.print(
-                "[red]Resolved hub cache dir escaped the current working "
-                "directory; refusing to download.[/]"
-            )
-            raise typer.Exit(code=1)
         try:
-            # Idempotency: if the cache dir already has a config.json, skip
-            # the re-download (modelscope/openmind-hub also short-circuit on
-            # match but having an explicit probe lets us print a clear hint).
-            existing_cfg = cache_dir / "config.json"
-            if existing_cfg.is_file():
-                local_path = str(cache_dir)
-                console.print(
-                    f"[dim]Using cached snapshot at {local_path}[/]"
-                )
-            else:
-                local_path = download_repo(
-                    hub_name,
-                    cfg.base,
-                    local_dir=str(cache_dir),
-                )
-                console.print(
-                    f"[dim]Fetched {cfg.base} from hub={hub_name} → "
-                    f"{local_path}[/]"
-                )
-            # Use ``model_copy(update=...)`` so the Pydantic field
-            # validators on ``base`` rerun (matches v0.33.0 #47 / v0.40.0
-            # Part B immutability policy).
-            cfg = cfg.model_copy(update={"base": local_path})
-        except ImportError as exc:
-            console.print(f"[red]{_markup_escape(str(exc))}[/]")
-            raise typer.Exit(code=1) from exc
-
-    # v0.53.8 #89 — friendly missing-dep advisory for `--tracker <name>`.
-    if report_to and report_to not in ("none", "wandb", "tensorboard"):
-        from soup_cli.utils.trackers import tracker_missing_dep_message
-
-        msg = tracker_missing_dep_message(report_to)
-        if msg:
-            console.print(f"[yellow]{msg}[/]")
-    trainer_kwargs = {
-        "device": device,
-        "report_to": report_to,
-        "deepspeed_config": ds_config_path,
-        "fsdp_config": fsdp_kwargs,
-    }
-    # v0.40.4 #63 — every transformer-backend trainer now threads
-    # --trust-remote-code through the wrapper (closes the v0.36.0 Part B gap).
-    trainer_kwargs = dict(trainer_kwargs, trust_remote_code=trust_remote_code)
-    from soup_cli.trainer.mlx_routing import resolve_trainer
-
-    mlx_cls, trainer_kwargs = resolve_trainer(cfg, trainer_kwargs)
-    if mlx_cls is not None:
-        trainer_wrapper = mlx_cls(cfg, **trainer_kwargs)
-    elif cfg.task == "dpo":
-        from soup_cli.trainer.dpo import DPOTrainerWrapper
-
-        trainer_wrapper = DPOTrainerWrapper(cfg, **trainer_kwargs)
-    elif cfg.task == "online_dpo":
-        from soup_cli.trainer.online_dpo import OnlineDPOTrainerWrapper
-
-        trainer_wrapper = OnlineDPOTrainerWrapper(cfg, **trainer_kwargs)
-    elif cfg.task == "grpo":
-        from soup_cli.trainer.grpo import GRPOTrainerWrapper
-
-        trainer_wrapper = GRPOTrainerWrapper(cfg, **trainer_kwargs)
-    elif cfg.task == "ppo":
-        from soup_cli.trainer.ppo import PPOTrainerWrapper
-
-        trainer_wrapper = PPOTrainerWrapper(cfg, **trainer_kwargs)
-    elif cfg.task == "kto":
-        from soup_cli.trainer.kto import KTOTrainerWrapper
-
-        trainer_wrapper = KTOTrainerWrapper(cfg, **trainer_kwargs)
-    elif cfg.task == "orpo":
-        from soup_cli.trainer.orpo import ORPOTrainerWrapper
-
-        trainer_wrapper = ORPOTrainerWrapper(cfg, **trainer_kwargs)
-    elif cfg.task == "simpo":
-        from soup_cli.trainer.simpo import SimPOTrainerWrapper
-
-        trainer_wrapper = SimPOTrainerWrapper(cfg, **trainer_kwargs)
-    elif cfg.task == "ipo":
-        from soup_cli.trainer.ipo import IPOTrainerWrapper
-
-        trainer_wrapper = IPOTrainerWrapper(cfg, **trainer_kwargs)
-    elif cfg.task == "bco":
-        from soup_cli.trainer.bco import BCOTrainerWrapper
-
-        trainer_wrapper = BCOTrainerWrapper(cfg, **trainer_kwargs)
-    elif cfg.task == "preference":
-        from soup_cli.trainer.preference import PreferenceTrainerWrapper
-
-        trainer_wrapper = PreferenceTrainerWrapper(cfg, **trainer_kwargs)
-    elif cfg.task == "reward_model":
-        from soup_cli.trainer.reward_model import RewardModelTrainerWrapper
-
-        trainer_wrapper = RewardModelTrainerWrapper(cfg, **trainer_kwargs)
-    elif cfg.task == "pretrain":
-        from soup_cli.trainer.pretrain import PretrainTrainerWrapper
-
-        trainer_wrapper = PretrainTrainerWrapper(cfg, **trainer_kwargs)
-    elif cfg.task == "embedding":
-        from soup_cli.trainer.embedding import EmbeddingTrainerWrapper
-
-        trainer_wrapper = EmbeddingTrainerWrapper(cfg, **trainer_kwargs)
-    elif cfg.task == "distill":
-        # v0.53.2 #133 — knowledge distillation (student + frozen teacher).
-        from soup_cli.trainer.distill import DistillTrainerWrapper
-
-        trainer_wrapper = DistillTrainerWrapper(cfg, **trainer_kwargs)
-    elif cfg.task == "prm":
-        # v0.53.11 #126 — Process Reward Model trainer.
-        from soup_cli.trainer.prm import PRMTrainerWrapper
-
-        trainer_wrapper = PRMTrainerWrapper(cfg, **trainer_kwargs)
-    elif cfg.task in ("classifier", "reranker", "cross_encoder"):
-        # v0.53.2 #132 — sequence-classification head.
-        from soup_cli.trainer.classifier import ClassifierTrainerWrapper
-
-        trainer_wrapper = ClassifierTrainerWrapper(cfg, **trainer_kwargs)
-    elif cfg.task == "unlearn":
-        # v0.71.9 #193 — NPO / SimNPO / RMU unlearning.
-        from soup_cli.trainer.unlearn import UnlearnTrainerWrapper
-
-        trainer_wrapper = UnlearnTrainerWrapper(cfg, **trainer_kwargs)
-    elif cfg.task == "moe_lora_routing":
-        # v0.71.12 #222 — MoLE per-token routing over N frozen task LoRAs.
-        from soup_cli.trainer.mole_routing import MoleRoutingTrainerWrapper
-
-        trainer_wrapper = MoleRoutingTrainerWrapper(cfg, **trainer_kwargs)
-    elif cfg.task == "tts":
-        # v0.71.20 #131 — TTS fine-tuning (SFT-style next-token CE over
-        # text + audio-codec-token sequences; per-family templating).
-        from soup_cli.trainer.tts import TTSTrainerWrapper
-
-        trainer_wrapper = TTSTrainerWrapper(cfg, **trainer_kwargs)
-    elif cfg.task == "asr":
-        # v0.71.32 — ASR (Whisper) fine-tuning via Seq2SeqTrainer.
-        from soup_cli.trainer.asr import AsrTrainerWrapper
-
-        trainer_wrapper = AsrTrainerWrapper(cfg, **trainer_kwargs)
-    else:
-        trainer_wrapper = SFTTrainerWrapper(cfg, **trainer_kwargs)
-    trainer_wrapper.setup(dataset)
-
-    # --- HF auto-push callback (Part B of v0.29.0) ---
-    if push_as:
-        from soup_cli.monitoring.hf_push import build_push_callback
-
-        push_cb = build_push_callback(
-            repo_id=push_as,
-            output_dir=cfg.output,
-            private=False,
-        )
-        if push_cb is None:
-            console.print(
-                "[yellow]--push-as: no HF token available; skipping auto-push[/]"
+            report_to = resolve_report_to(
+                wandb=wandb, tensorboard=tensorboard, tracker=tracker_backend
             )
-        else:
-            hf_trainer = getattr(trainer_wrapper, "trainer", None)
-            if hf_trainer is not None and hasattr(hf_trainer, "add_callback"):
-                hf_trainer.add_callback(push_cb)
-                console.print(
-                    f"[green]HF auto-push enabled[/] -> {push_as} "
-                    "(one branch per save_steps)"
-                )
-            else:
-                console.print(
-                    "[yellow]--push-as: trainer does not expose add_callback; "
-                    "auto-push disabled for this run[/]"
-                )
-
-    # Train with live display and experiment tracking
-    display = TrainingDisplay(cfg, device_name=device_name)
-    console.print("[bold green]Training started![/]\n")
-
-    profiler_ctx = contextlib.nullcontext()
-    if profile_run:
-        from soup_cli.utils.profiling import profile_training
-
-        profiler_ctx = profile_training(output_dir=Path(cfg.output), run_id=run_id)
-        console.print(
-            "[cyan]--profile:[/] writing torch.profiler trace to "
-            f"{cfg.output}/profiles/{run_id}.trace.json (early-steps window)"
-        )
-
-    # v0.71.3 #180 — optional codecarbon energy/CO2 measurement around the
-    # training window. Lazy-built; a graceful no-op when codecarbon is absent.
-    energy_ctx = contextlib.nullcontext()
-    energy_tracker = None
-    if track_energy:
-        try:
-            from soup_cli.utils.energy import EnergyTracker
-
-            energy_tracker = EnergyTracker(country_iso_code=energy_country)
-            energy_ctx = energy_tracker
         except ValueError as exc:
-            console.print(f"[yellow]--track-energy disabled:[/] {exc}")
-            energy_tracker = None
-            energy_ctx = contextlib.nullcontext()
+            from rich.markup import escape as _esc
+
+            console.print(f"[red]{_esc(str(exc))}[/]")
+            raise typer.Exit(code=2) from exc
+        console.print("[dim]Setting up model + trainer...[/]")
+        # v0.53.8 #130 — pre-fetch model from non-HF hub into a local cache and
+        # rewrite cfg.base to point at the local snapshot. The trainer wrappers
+        # still use transformers.from_pretrained, which reads HF Hub by default;
+        # by snapshotting first we keep every wrapper unchanged.
+        hub_name = getattr(cfg.training, "hub", "hf") or "hf"
+        if hub_name != "hf":
+            import re as _re
+
+            from rich.markup import escape as _markup_escape
+
+            from soup_cli.utils.hubs import download_repo
+            from soup_cli.utils.paths import is_under_cwd
+
+            # Sanitise cache subdir name — strip every path-separator and
+            # `..` segment so a crafted ``base: ../../etc`` cannot escape the
+            # cache root (Windows ``\\`` and POSIX ``/`` both blocked).
+            safe_slug = _re.sub(r"[^A-Za-z0-9._-]+", "__", cfg.base).strip("._-") or "model"
+            cache_dir = (Path.cwd() / ".soup_hub_cache" / safe_slug).resolve()
+            if not is_under_cwd(str(cache_dir)):
+                console.print(
+                    "[red]Resolved hub cache dir escaped the current working "
+                    "directory; refusing to download.[/]"
+                )
+                raise typer.Exit(code=1)
+            try:
+                # Idempotency: if the cache dir already has a config.json, skip
+                # the re-download (modelscope/openmind-hub also short-circuit on
+                # match but having an explicit probe lets us print a clear hint).
+                existing_cfg = cache_dir / "config.json"
+                if existing_cfg.is_file():
+                    local_path = str(cache_dir)
+                    console.print(
+                        f"[dim]Using cached snapshot at {local_path}[/]"
+                    )
+                else:
+                    local_path = download_repo(
+                        hub_name,
+                        cfg.base,
+                        local_dir=str(cache_dir),
+                    )
+                    console.print(
+                        f"[dim]Fetched {cfg.base} from hub={hub_name} → "
+                        f"{local_path}[/]"
+                    )
+                # Use ``model_copy(update=...)`` so the Pydantic field
+                # validators on ``base`` rerun (matches v0.33.0 #47 / v0.40.0
+                # Part B immutability policy).
+                cfg = cfg.model_copy(update={"base": local_path})
+            except ImportError as exc:
+                console.print(f"[red]{_markup_escape(str(exc))}[/]")
+                raise typer.Exit(code=1) from exc
+
+        # v0.53.8 #89 — friendly missing-dep advisory for `--tracker <name>`.
+        if report_to and report_to not in ("none", "wandb", "tensorboard"):
+            from soup_cli.utils.trackers import tracker_missing_dep_message
+
+            msg = tracker_missing_dep_message(report_to)
+            if msg:
+                console.print(f"[yellow]{msg}[/]")
+        trainer_kwargs = {
+            "device": device,
+            "report_to": report_to,
+            "deepspeed_config": ds_config_path,
+            "fsdp_config": fsdp_kwargs,
+        }
+        # v0.40.4 #63 — every transformer-backend trainer now threads
+        # --trust-remote-code through the wrapper (closes the v0.36.0 Part B gap).
+        trainer_kwargs = dict(trainer_kwargs, trust_remote_code=trust_remote_code)
+        from soup_cli.trainer.mlx_routing import resolve_trainer
+
+        mlx_cls, trainer_kwargs = resolve_trainer(cfg, trainer_kwargs)
+        if mlx_cls is not None:
+            trainer_wrapper = mlx_cls(cfg, **trainer_kwargs)
+        elif cfg.task == "dpo":
+            from soup_cli.trainer.dpo import DPOTrainerWrapper
+
+            trainer_wrapper = DPOTrainerWrapper(cfg, **trainer_kwargs)
+        elif cfg.task == "online_dpo":
+            from soup_cli.trainer.online_dpo import OnlineDPOTrainerWrapper
+
+            trainer_wrapper = OnlineDPOTrainerWrapper(cfg, **trainer_kwargs)
+        elif cfg.task == "grpo":
+            from soup_cli.trainer.grpo import GRPOTrainerWrapper
+
+            trainer_wrapper = GRPOTrainerWrapper(cfg, **trainer_kwargs)
+        elif cfg.task == "ppo":
+            from soup_cli.trainer.ppo import PPOTrainerWrapper
+
+            trainer_wrapper = PPOTrainerWrapper(cfg, **trainer_kwargs)
+        elif cfg.task == "kto":
+            from soup_cli.trainer.kto import KTOTrainerWrapper
+
+            trainer_wrapper = KTOTrainerWrapper(cfg, **trainer_kwargs)
+        elif cfg.task == "orpo":
+            from soup_cli.trainer.orpo import ORPOTrainerWrapper
+
+            trainer_wrapper = ORPOTrainerWrapper(cfg, **trainer_kwargs)
+        elif cfg.task == "simpo":
+            from soup_cli.trainer.simpo import SimPOTrainerWrapper
+
+            trainer_wrapper = SimPOTrainerWrapper(cfg, **trainer_kwargs)
+        elif cfg.task == "ipo":
+            from soup_cli.trainer.ipo import IPOTrainerWrapper
+
+            trainer_wrapper = IPOTrainerWrapper(cfg, **trainer_kwargs)
+        elif cfg.task == "bco":
+            from soup_cli.trainer.bco import BCOTrainerWrapper
+
+            trainer_wrapper = BCOTrainerWrapper(cfg, **trainer_kwargs)
+        elif cfg.task == "preference":
+            from soup_cli.trainer.preference import PreferenceTrainerWrapper
+
+            trainer_wrapper = PreferenceTrainerWrapper(cfg, **trainer_kwargs)
+        elif cfg.task == "reward_model":
+            from soup_cli.trainer.reward_model import RewardModelTrainerWrapper
+
+            trainer_wrapper = RewardModelTrainerWrapper(cfg, **trainer_kwargs)
+        elif cfg.task == "pretrain":
+            from soup_cli.trainer.pretrain import PretrainTrainerWrapper
+
+            trainer_wrapper = PretrainTrainerWrapper(cfg, **trainer_kwargs)
+        elif cfg.task == "embedding":
+            from soup_cli.trainer.embedding import EmbeddingTrainerWrapper
+
+            trainer_wrapper = EmbeddingTrainerWrapper(cfg, **trainer_kwargs)
+        elif cfg.task == "distill":
+            # v0.53.2 #133 — knowledge distillation (student + frozen teacher).
+            from soup_cli.trainer.distill import DistillTrainerWrapper
+
+            trainer_wrapper = DistillTrainerWrapper(cfg, **trainer_kwargs)
+        elif cfg.task == "prm":
+            # v0.53.11 #126 — Process Reward Model trainer.
+            from soup_cli.trainer.prm import PRMTrainerWrapper
+
+            trainer_wrapper = PRMTrainerWrapper(cfg, **trainer_kwargs)
+        elif cfg.task in ("classifier", "reranker", "cross_encoder"):
+            # v0.53.2 #132 — sequence-classification head.
+            from soup_cli.trainer.classifier import ClassifierTrainerWrapper
+
+            trainer_wrapper = ClassifierTrainerWrapper(cfg, **trainer_kwargs)
+        elif cfg.task == "unlearn":
+            # v0.71.9 #193 — NPO / SimNPO / RMU unlearning.
+            from soup_cli.trainer.unlearn import UnlearnTrainerWrapper
+
+            trainer_wrapper = UnlearnTrainerWrapper(cfg, **trainer_kwargs)
+        elif cfg.task == "moe_lora_routing":
+            # v0.71.12 #222 — MoLE per-token routing over N frozen task LoRAs.
+            from soup_cli.trainer.mole_routing import MoleRoutingTrainerWrapper
+
+            trainer_wrapper = MoleRoutingTrainerWrapper(cfg, **trainer_kwargs)
+        elif cfg.task == "tts":
+            # v0.71.20 #131 — TTS fine-tuning (SFT-style next-token CE over
+            # text + audio-codec-token sequences; per-family templating).
+            from soup_cli.trainer.tts import TTSTrainerWrapper
+
+            trainer_wrapper = TTSTrainerWrapper(cfg, **trainer_kwargs)
+        elif cfg.task == "asr":
+            # v0.71.32 — ASR (Whisper) fine-tuning via Seq2SeqTrainer.
+            from soup_cli.trainer.asr import AsrTrainerWrapper
+
+            trainer_wrapper = AsrTrainerWrapper(cfg, **trainer_kwargs)
+        else:
+            # Keep the transformers/TRL SFT surface outside the backend-first MLX
+            # route. The wrapper is import-light today, but importing it eagerly
+            # makes an MLX-only install depend on that remaining true forever.
+            from soup_cli.trainer.sft import SFTTrainerWrapper
+
+            trainer_wrapper = SFTTrainerWrapper(cfg, **trainer_kwargs)
+        trainer_wrapper.setup(dataset)
+
+        # #350 — PEFT promotes newly-created adapters to fp32. FSDP cannot flatten
+        # those beside bf16/float16 BNB storage, so align every trainable floating
+        # tensor after setup creates PEFT modules and before train() wraps the model.
+        aligned_fsdp_params = 0
+        if fsdp and cfg.training.quantization == "4bit":
+            from soup_cli.utils.gpu import get_compute_dtype
+            from soup_cli.utils.mixed_precision import align_trainable_dtype_for_fsdp_qlora
+
+            aligned_fsdp_params = align_trainable_dtype_for_fsdp_qlora(
+                getattr(trainer_wrapper, "model", None),
+                fsdp=True,
+                quantization=cfg.training.quantization,
+                compute_dtype=get_compute_dtype(),
+            )
+        if aligned_fsdp_params:
+            console.print(
+                f"[green]FSDP QLoRA:[/] aligned {aligned_fsdp_params} trainable "
+                "parameter tensor(s) to the compute dtype"
+            )
+
+        # --- HF auto-push callback (Part B of v0.29.0) ---
+        if push_as:
+            from soup_cli.monitoring.hf_push import build_push_callback
+
+            push_cb = build_push_callback(
+                repo_id=push_as,
+                output_dir=cfg.output,
+                private=False,
+            )
+            if push_cb is None:
+                console.print(
+                    "[yellow]--push-as: no HF token available; skipping auto-push[/]"
+                )
+            else:
+                hf_trainer = getattr(trainer_wrapper, "trainer", None)
+                if hf_trainer is not None and hasattr(hf_trainer, "add_callback"):
+                    hf_trainer.add_callback(push_cb)
+                    console.print(
+                        f"[green]HF auto-push enabled[/] -> {push_as} "
+                        "(one branch per save_steps)"
+                    )
+                else:
+                    console.print(
+                        "[yellow]--push-as: trainer does not expose add_callback; "
+                        "auto-push disabled for this run[/]"
+                    )
+
+        # Train with live display and experiment tracking
+        display = TrainingDisplay(cfg, device_name=device_name)
+        console.print("[bold green]Training started![/]\n")
+
+        profiler_ctx = contextlib.nullcontext()
+        if profile_run:
+            from soup_cli.utils.profiling import profile_training
+
+            profiler_ctx = profile_training(output_dir=Path(cfg.output), run_id=run_id)
+            console.print(
+                "[cyan]--profile:[/] writing torch.profiler trace to "
+                f"{cfg.output}/profiles/{run_id}.trace.json (early-steps window)"
+            )
+
+        # v0.71.3 #180 — optional codecarbon energy/CO2 measurement around the
+        # training window. Lazy-built; a graceful no-op when codecarbon is absent.
+        energy_ctx = contextlib.nullcontext()
+        energy_tracker = None
+        if track_energy:
+            try:
+                from soup_cli.utils.energy import EnergyTracker
+
+                energy_tracker = EnergyTracker(country_iso_code=energy_country)
+                energy_ctx = energy_tracker
+            except ValueError as exc:
+                console.print(f"[yellow]--track-energy disabled:[/] {exc}")
+                energy_tracker = None
+                energy_ctx = contextlib.nullcontext()
+
+    except Exception as exc:
+        tracker.fail_run(run_id, error=_describe_exception_for_tracker(exc))
+        raise
 
     try:
         with profiler_ctx, energy_ctx:
@@ -1512,7 +1774,7 @@ def train(
             output_dir=result["output_dir"],
         )
     except Exception as exc:
-        tracker.fail_run(run_id)
+        tracker.fail_run(run_id, error=_describe_exception_for_tracker(exc))
         # v0.34.0 Part D — write a .crash bundle next to the run for triage.
         try:
             from soup_cli.utils.crash import build_crash_bundle, write_crash_bundle
@@ -1541,7 +1803,7 @@ def train(
     # Report
     console.print(
         Panel(
-            f"Loss: [bold]{result['initial_loss']:.4f} -> {result['final_loss']:.4f}[/]\n"
+            f"{_format_training_complete_loss(result)}\n"
             f"Duration: [bold]{result['duration']}[/]\n"
             f"Output: [bold]{result['output_dir']}[/]\n"
             f"Run ID: [bold]{run_id}[/]\n\n"
@@ -1665,15 +1927,22 @@ def _write_annex_xi(out_path: str, run_id: str, cfg, *, energy=None) -> None:
     modality = getattr(cfg, "modality", "text") or "text"
     energy_kwh = float(getattr(energy, "energy_kwh", 0.0)) if energy is not None else 0.0
     co2_kg = float(getattr(energy, "co2_kg", 0.0)) if energy is not None else 0.0
-    train_path = str(getattr(cfg.data, "train", "") or "")
+    raw_train = getattr(cfg.data, "train", "") or ""
+    # #443 — pass the raw str|list through so top-domain extraction
+    # aggregates across every interleaved dataset, instead of stringifying
+    # a list into a nonexistent path (pre-fix: `str(getattr(...) or "")`
+    # applied `or ""` to the getattr result BEFORE str(), so a non-empty
+    # list became its own Python repr string, e.g. "['a.jsonl', 'b.jsonl']"
+    # — neither a valid path nor useful doc text).
+    train_display = ", ".join(raw_train) if isinstance(raw_train, list) else str(raw_train)
     # #184 — best-effort extract the top crawled domains from the training data.
-    top_domains = load_top_domains_from_jsonl(train_path)
+    top_domains = load_top_domains_from_jsonl(raw_train)
     fmt = "pdf" if out_path.lower().endswith(".pdf") else "markdown"
     data = AnnexXIData(
         model_name=str(getattr(cfg, "output", run_id) or run_id),
         base_model=str(cfg.base),
         task=str(cfg.task),
-        dataset_summary=train_path,
+        dataset_summary=train_display,
         modalities=(modality,),
         train_compute_flops=0.0,
         train_energy_kwh=energy_kwh,
@@ -1926,30 +2195,112 @@ def _run_diagnose_gate(
 
 def _resolve_deepspeed(deepspeed: str) -> str:
     """Resolve DeepSpeed config: named preset or path to JSON file."""
-    from soup_cli.utils.deepspeed import CONFIGS, write_deepspeed_config
+    import soup_cli.utils.deepspeed as ds
 
     # Named preset
-    if deepspeed in CONFIGS:
-        return write_deepspeed_config(deepspeed)
+    if deepspeed in ds.CONFIGS:
+        return ds.write_deepspeed_config(deepspeed)
 
-    # Path to config file
+    # Path to config file. Resolved the same way a preset is (#359): a config
+    # that needs no run-dependent rewrite comes back by this very path, and one
+    # that copied the ZeRO++ placeholders is repaired into a temp copy with the
+    # change printed. The user's file is never modified.
     ds_path = Path(deepspeed)
     if ds_path.exists() and ds_path.suffix == ".json":
-        return str(ds_path)
+        return ds.resolve_user_deepspeed_file(str(ds_path))
 
     console.print(
         f"[red]Invalid DeepSpeed config: {deepspeed}[/]\n"
-        f"Options: {', '.join(CONFIGS.keys())} or path to JSON file."
+        f"Options: {', '.join(ds.CONFIGS.keys())} or path to JSON file."
     )
     raise typer.Exit(1)
 
 
-def _resolve_checkpoint(resume: str, output_dir: str, experiment_name: str = None) -> str:
+_MLX_CHECKPOINT_RE = re.compile(r"^(\d+)_adapters\.safetensors$")
+
+
+def _highest_numbered_mlx_checkpoint(paths) -> Path | None:
+    """Pick the highest step-numbered ``NNNNNNN_adapters.safetensors`` file.
+
+    ``max()`` over the parsed step number: not a sort over whatever order
+    the filesystem's ``iterdir()`` happened to enumerate (that order isn't
+    guaranteed), and not a comparison of the filenames as strings (that
+    would only agree with numeric order if every step number in a run
+    happened to be zero-padded to the same width, which nothing here
+    enforces). Keying on the parsed int makes both mistakes fail instead
+    of coincidentally still returning the right file.
+    """
+    numbered: list[tuple[int, Path]] = []
+    for path in paths:
+        if not path.is_file():
+            continue
+        match = _MLX_CHECKPOINT_RE.match(path.name)
+        if match:
+            numbered.append((int(match.group(1)), path))
+    if not numbered:
+        return None
+    return max(numbered, key=lambda pair: pair[0])[1]
+
+
+def _resolve_mlx_checkpoint(resume: str, output_dir: str) -> str | None:
+    """MLX-style checkpoint resolution (#634).
+
+    mlx-lm's tuner saves step-numbered adapter snapshots
+    (``NNNNNNN_adapters.safetensors``) plus a final ``adapters.safetensors``
+    with no step prefix — files, not the ``checkpoint-N`` directories the
+    transformers/unsloth backends write. "auto" picks the highest-numbered
+    snapshot if one exists, else the final file. A direct ``resume`` value
+    must point at one of these files directly.
+
+    Takes no ``experiment_name``, unlike the transformers/unsloth resolver
+    below: ``mlx_sft.py``'s ``output_dir`` is always ``Path(cfg.output)``,
+    flat, never nested under it the way ``trainer/sft.py`` nests under
+    ``output_dir / cfg.experiment_name``. Nesting here would look inside a
+    directory MLX never writes to, and "auto" would report no checkpoint
+    found on every run that sets ``experiment_name`` — the exact symptom
+    #634 reported, reintroduced for a config the original fix didn't cover.
+    """
+    if resume.lower() == "auto":
+        base = Path(output_dir)
+
+        if not base.is_dir():
+            return None
+
+        highest = _highest_numbered_mlx_checkpoint(base.iterdir())
+        if highest is not None:
+            return str(highest)
+
+        final = base / "adapters.safetensors"
+        if final.is_file():
+            return str(final)
+        return None
+
+    # Direct path to a specific adapter file
+    checkpoint_path = Path(resume)
+    if checkpoint_path.exists() and checkpoint_path.is_file():
+        return str(checkpoint_path)
+    return None
+
+
+def _resolve_checkpoint(
+    resume: str,
+    output_dir: str,
+    experiment_name: str | None = None,
+    *,
+    backend: str = "transformers",
+) -> str | None:
     """Resolve the checkpoint path from --resume argument.
 
     If resume == "auto", find the latest checkpoint in the output directory.
     Otherwise, treat it as a direct path to a checkpoint directory.
+
+    ``backend="mlx"`` dispatches to :func:`_resolve_mlx_checkpoint`, since MLX
+    writes step-numbered adapter files rather than ``checkpoint-N``
+    directories (#634) — the shape below never matches an MLX run's output.
     """
+    if backend == "mlx":
+        return _resolve_mlx_checkpoint(resume, output_dir)
+
     if resume.lower() == "auto":
         base = Path(output_dir)
         if experiment_name:
@@ -1971,6 +2322,26 @@ def _resolve_checkpoint(resume: str, output_dir: str, experiment_name: str = Non
     if checkpoint_path.exists() and checkpoint_path.is_dir():
         return str(checkpoint_path)
     return None
+
+
+def _resolve_resume_or_exit(resume: str, cfg: "SoupConfig") -> str | None:
+    """Resolve ``--resume`` against ``cfg``, printing status and exiting on
+    failure. Extracted out of ``train()`` (#634 review) so the
+    ``backend=cfg.backend`` wiring — the entire seam the MLX checkpoint fix
+    depends on — is directly testable without invoking the rest of the
+    command, which needs real hardware/model loading this can be exercised
+    without. Returns ``None`` only when ``resume`` itself is falsy; a
+    ``resume`` value that fails to resolve exits rather than returning.
+    """
+    if not resume:
+        return None
+    resume_from = _resolve_checkpoint(resume, cfg.output, cfg.experiment_name, backend=cfg.backend)
+    if resume_from:
+        console.print(f"[green]Resuming from:[/] {resume_from}")
+    else:
+        console.print("[red]No checkpoint found to resume from.[/]")
+        raise typer.Exit(1)
+    return resume_from
 
 
 def _run_live_lr_sweep_or_synth(
@@ -2017,6 +2388,17 @@ def _synth_lr_curve(n: int) -> list[float]:
     return out
 
 
+def _lr_finder_dataset_path(train) -> str:
+    """#443 — LR-finder samples one representative dataset; it already
+    bypasses load_dataset()/_finalize() for a lightweight sweep, so full
+    interleave fidelity is out of this issue's scope. Falls back to the
+    first dataset rather than crashing on a list. Extracted as its own
+    function so it can be exercised directly by
+    tests/test_issue443_interleave_wiring.py's enumerating test.
+    """
+    return train[0] if isinstance(train, list) else train
+
+
 def _live_lr_sweep_from_config(cfg, schedule: list[float]) -> list[float]:
     """Build a tiny in-process loop: load model + tokenizer + a slice of
     the train dataset, then call :func:`run_lr_sweep`."""
@@ -2042,7 +2424,8 @@ def _live_lr_sweep_from_config(cfg, schedule: list[float]) -> list[float]:
     ).to(device)
     model.train()
 
-    dataset = load_raw_data(_Path(cfg.data.train))
+    lr_finder_train_path = _lr_finder_dataset_path(cfg.data.train)
+    dataset = load_raw_data(_Path(lr_finder_train_path))
     rows = list(dataset)[: max(2, len(schedule))]
     if not rows:
         raise RuntimeError("training dataset is empty")

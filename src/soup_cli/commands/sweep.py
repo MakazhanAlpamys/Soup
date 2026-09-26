@@ -1,6 +1,7 @@
 """soup sweep — hyperparameter search over training configs."""
 
 import itertools
+import math
 import random
 from pathlib import Path
 from typing import Optional
@@ -13,6 +14,39 @@ from rich.table import Table
 from soup_cli.config.loader import load_config
 
 console = Console()
+
+
+def _finite_loss(value: object) -> Optional[float]:
+    """Return a numeric finite loss, or ``None`` for missing/diverged values."""
+    try:
+        loss = float(value)
+    except (TypeError, ValueError):
+        return None
+    return loss if math.isfinite(loss) else None
+
+
+def _is_diverged_loss(value: object) -> bool:
+    """Whether a recorded loss is explicitly non-finite."""
+    try:
+        return not math.isfinite(float(value))
+    except (TypeError, ValueError):
+        return False
+
+
+def _loss_sort_key(result: dict) -> tuple[int, float]:
+    """Rank finite completed runs first and keep divergent/failed runs visible last."""
+    if result.get("status") != "completed":
+        return (2, float("inf"))
+    loss = _finite_loss(result.get("final_loss"))
+    return (0, loss) if loss is not None else (1, float("inf"))
+
+
+def _exceeds_early_stop(final_loss: object, best_loss: float, factor: float) -> bool:
+    """Treat an explicitly diverged arm as worse than any finite threshold."""
+    if _is_diverged_loss(final_loss):
+        return True
+    loss = _finite_loss(final_loss)
+    return loss is not None and math.isfinite(best_loss) and loss > best_loss * factor
 
 
 def sweep(
@@ -81,6 +115,32 @@ def sweep(
     # Generate parameter combinations
     combinations = _generate_combinations(sweep_params, strategy, max_runs)
 
+    # Validate before anything is printed (#642). --dry-run used to return
+    # below without ever loading the config, so neither the loader's
+    # unknown-key warning (#627) nor the sweep-parameter pre-flight (#628)
+    # was reachable under it — a dry run whose job is catching mistakes
+    # before a long run caught neither. Loading a config file executes
+    # nothing, so both paths now validate at the same point and share the
+    # single load.
+    base_cfg = load_config(config_path)
+
+    # Refuse the whole sweep before any arm starts — and before printing a
+    # grid that can never run (#627, #642). The arm loop below wraps each run
+    # in `except Exception`, so the guard inside `_run_single` would be
+    # caught, recorded as a per-arm failure, and the command would still
+    # exit 0 — an entirely invalid sweep that nothing downstream can detect.
+    # Every combination carries the same parameter names, so one probe built
+    # the way `_run_single` builds its config settles it for the grid.
+    if combinations:
+        probe = base_cfg.model_dump()
+        for key, val in combinations[0].items():
+            _set_nested_param(probe, key, val)
+        try:
+            _reject_unknown_sweep_params(probe)
+        except ValueError as exc:
+            console.print(f"[red]{exc}[/]")
+            raise typer.Exit(1) from exc
+
     console.print(
         Panel(
             f"Config:   [bold]{config_path}[/]\n"
@@ -112,8 +172,6 @@ def sweep(
             console.print("[yellow]Cancelled.[/]")
             raise typer.Exit()
 
-    # Execute sweep
-    base_cfg = load_config(config_path)
     results = []
     best_loss = float("inf")
     skipped = 0
@@ -137,14 +195,20 @@ def sweep(
                 "status": "completed",
             })
 
-            # Update best loss and check early stopping for remaining runs
-            if final_loss and final_loss < best_loss:
-                best_loss = final_loss
+            # A diverged run stays in results but can never become the best arm.
+            finite_loss = _finite_loss(final_loss)
+            if finite_loss is not None and finite_loss < best_loss:
+                best_loss = finite_loss
 
-            if early_stop and final_loss and best_loss < float("inf"):
-                if final_loss > best_loss * early_stop:
+            if early_stop and _exceeds_early_stop(final_loss, best_loss, early_stop):
+                if _is_diverged_loss(final_loss):
                     console.print(
-                        f"[yellow]Loss {final_loss:.4f} exceeds threshold "
+                        f"[yellow]Loss {final_loss} diverged; treating this arm as worse "
+                        "than the early-stop threshold.[/]"
+                    )
+                else:
+                    console.print(
+                        f"[yellow]Loss {finite_loss:.4f} exceeds threshold "
                         f"({best_loss:.4f} x {early_stop} = {best_loss * early_stop:.4f})[/]"
                     )
         except Exception as exc:
@@ -160,16 +224,22 @@ def sweep(
 
         # Early stopping: skip remaining runs if too many are poor
         if early_stop and len(results) >= 2:
-            completed = [r for r in results if r["status"] == "completed" and r["final_loss"]]
+            completed = [r for r in results if r["status"] == "completed"]
             if completed:
                 recent = completed[-1]
-                if recent["final_loss"] > best_loss * early_stop:
+                if _exceeds_early_stop(recent["final_loss"], best_loss, early_stop):
                     remaining = len(combinations) - idx - 1
                     if remaining > 0:
                         skipped = remaining
+                        if _is_diverged_loss(recent["final_loss"]):
+                            reason = "Last run diverged."
+                        else:
+                            reason = (
+                                f"Last loss {recent['final_loss']:.4f} exceeded threshold."
+                            )
                         console.print(
                             f"[yellow]Early stopping: skipping {remaining} remaining run(s). "
-                            f"Last loss {recent['final_loss']:.4f} exceeded threshold.[/]"
+                            f"{reason}[/]"
                         )
                         break
 
@@ -328,15 +398,29 @@ def _set_nested_param(config_dict: dict, key: str, value) -> dict:
     return config_dict
 
 
+def _reject_unknown_sweep_params(config_dict: dict) -> None:
+    """Refuse a sweep whose parameter names no config field (#627).
+
+    ``config_dict`` starts from a validated ``model_dump()``, so anything the
+    schema cannot place got there from a ``--param`` name. Dropping it silently
+    would run the whole grid with the swept knob never applied, producing arms
+    that are all identical and a winner that means nothing -- so this raises
+    regardless of the loader's severity switch, and carries no deadline: there
+    is no partially-useful result to preserve by continuing.
+
+    Kept out of :func:`_run_single` so it is reachable without importing the
+    training stack, and so removing it fails a test rather than a review.
+    """
+    from soup_cli.config.unknown_keys import find_unknown_config_keys, format_unknown_keys
+
+    unknown = find_unknown_config_keys(config_dict)
+    if unknown:
+        detail = format_unknown_keys(unknown, include_deadline=False)
+        raise ValueError(f"sweep parameter does not match any config field: {detail}")
+
+
 def _run_single(base_cfg, params: dict, run_name: str, config_path: Path) -> dict:
     """Run a single training with modified parameters."""
-    from soup_cli.config.schema import SoupConfig
-    from soup_cli.data.loader import load_dataset
-    from soup_cli.experiment.tracker import ExperimentTracker
-    from soup_cli.monitoring.display import TrainingDisplay
-    from soup_cli.trainer.sft import SFTTrainerWrapper
-    from soup_cli.utils.gpu import detect_device, get_gpu_info
-
     # Deep copy and modify config
     config_dict = base_cfg.model_dump()
     for key, val in params.items():
@@ -344,6 +428,19 @@ def _run_single(base_cfg, params: dict, run_name: str, config_path: Path) -> dic
 
     # Override experiment name
     config_dict["experiment_name"] = run_name
+
+    # Before the heavy imports, so this refusal is reachable -- and testable --
+    # without the training stack. `sweep()` pre-checks the grid too; this stays
+    # so a direct caller cannot bypass it.
+    _reject_unknown_sweep_params(config_dict)
+
+    from soup_cli.config.schema import SoupConfig
+    from soup_cli.data.loader import load_dataset
+    from soup_cli.experiment.tracker import ExperimentTracker
+    from soup_cli.monitoring.display import TrainingDisplay
+    from soup_cli.trainer.sft import SFTTrainerWrapper
+    from soup_cli.utils.gpu import detect_device, get_gpu_info
+
     cfg = SoupConfig(**config_dict)
 
     # Detect hardware
@@ -351,7 +448,10 @@ def _run_single(base_cfg, params: dict, run_name: str, config_path: Path) -> dic
     gpu_info = get_gpu_info()
 
     # Load data
-    dataset = load_dataset(cfg.data)
+    dataset = load_dataset(
+        cfg.data,
+        preserve_source_columns=cfg.task == "grpo",
+    )
     console.print(f"[dim]Loaded {len(dataset['train'])} train samples[/]")
 
     # Start tracking
@@ -446,26 +546,42 @@ def _display_summary(results: list[dict], sweep_params: dict[str, list]):
     table.add_column("Duration", justify="right")
     table.add_column("Status")
 
-    # Sort by final loss (best first)
-    sorted_results = sorted(results, key=lambda r: r.get("final_loss", float("inf")))
+    # Sort finite completed losses first; divergent and failed rows remain visible last.
+    sorted_results = sorted(results, key=_loss_sort_key)
 
     for idx, res in enumerate(sorted_results):
-        status_style = "green" if res["status"] == "completed" else "red"
+        diverged = res["status"] == "completed" and _is_diverged_loss(res.get("final_loss"))
+        display_status = "diverged" if diverged else res["status"]
+        status_style = "green" if display_status == "completed" else "red"
         param_vals = [str(res["params"].get(k, "")) for k in sweep_params]
-        loss_str = f"{res['final_loss']:.4f}" if res["final_loss"] else "-"
-        best_marker = " [bold yellow]*[/]" if idx == 0 and res["status"] == "completed" else ""
+        finite_loss = _finite_loss(res.get("final_loss"))
+        if diverged:
+            loss_str = str(res["final_loss"])
+        elif res["status"] == "completed" and finite_loss is not None:
+            loss_str = f"{finite_loss:.4f}"
+        else:
+            loss_str = "-"
+        best_marker = (
+            " [bold yellow]*[/]"
+            if idx == 0 and display_status == "completed"
+            else ""
+        )
         table.add_row(
             res["name"],
             *param_vals,
             f"{loss_str}{best_marker}",
             res.get("duration", "-"),
-            f"[{status_style}]{res['status']}[/]",
+            f"[{status_style}]{display_status}[/]",
         )
 
     console.print(table)
 
     # Best run
-    completed = [r for r in sorted_results if r["status"] == "completed"]
+    completed = [
+        r
+        for r in sorted_results
+        if r["status"] == "completed" and _finite_loss(r.get("final_loss")) is not None
+    ]
     if completed:
         best = completed[0]
         console.print(

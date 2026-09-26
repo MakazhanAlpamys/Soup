@@ -804,13 +804,12 @@ class TestReviewFixes:
         fused = AutoModelForCausalLM.from_pretrained(str(base_dir))
         assert fused.config.num_hidden_layers == 4
 
+    @pytest.mark.requires_symlink
     def test_output_model_symlink_rejected(self, tmp_path, monkeypatch):
         """A symlink planted at <output_dir>/model is rejected before any write
         (derived-path TOCTOU guard). POSIX-only (needs os.symlink)."""
         import os as _os
 
-        if not hasattr(_os, "symlink"):
-            pytest.skip("no os.symlink")
         from typer.testing import CliRunner
 
         from soup_cli.cli import app
@@ -823,11 +822,8 @@ class TestReviewFixes:
         out_dir.mkdir()
         escape_target = tmp_path / "escape_target"
         escape_target.mkdir()
-        try:
-            _os.symlink(str(escape_target), str(out_dir / "model"),
-                        target_is_directory=True)
-        except (OSError, NotImplementedError):
-            pytest.skip("symlink creation not permitted on this platform")
+        _os.symlink(str(escape_target), str(out_dir / "model"),
+                    target_is_directory=True)
         r = CliRunner().invoke(
             app,
             ["shrink", "--model", model_dir, "--drop-layers", "2",
@@ -838,11 +834,11 @@ class TestReviewFixes:
         assert "symlink" in r.output.lower()
 
     def test_for_terminal_strips_control_bytes(self):
-        from soup_cli.commands.shrink import _for_terminal
+        from soup_cli.utils.terminal import strip_control
 
-        assert _for_terminal("a\x1b]0;evilbc") == "a]0;evilbc"
+        assert strip_control("a\x1b]0;evilbc") == "a]0;evilbc"
         # tab / LF / CR preserved.
-        assert _for_terminal("a\tb\nc\rd") == "a\tb\nc\rd"
+        assert strip_control("a\tb\nc\rd") == "a\tb\nc\rd"
 
     def test_dont_ship_exit_code_2(self, tmp_path, monkeypatch):
         """A genuine perplexity regression past tolerance exits 2 (DON'T SHIP)."""
@@ -907,6 +903,60 @@ class TestRunHeal:
         with pytest.raises(RuntimeError, match="heal distill failed"):
             sc._run_heal(pruned_dir="./model", teacher="t", heal_data="./h.jsonl",
                          steps=5, out_dir="./adapter", heal_rows=10)
+
+    def test_run_heal_reports_rendered_config_validation_error(self, tmp_path, monkeypatch):
+        import typer
+
+        import soup_cli.commands.shrink as sc
+
+        messages: list[str] = []
+        monkeypatch.setattr(
+            "soup_cli.config.loader.load_config_from_string",
+            lambda _yaml: (_ for _ in ()).throw(ValueError("invalid rendered config")),
+        )
+        monkeypatch.setattr(sc.console, "print", lambda message: messages.append(message))
+
+        with pytest.raises(typer.Exit) as exc_info:
+            sc._run_heal(
+                pruned_dir="./model",
+                teacher="t",
+                heal_data="./h.jsonl",
+                steps=5,
+                out_dir="./adapter",
+                heal_rows=10,
+            )
+
+        assert exc_info.value.exit_code == 1
+        assert messages == ["[red]Invalid rendered heal config:[/] invalid rendered config"]
+
+    def test_run_heal_sanitizes_rendered_config_validation_error(self, tmp_path, monkeypatch):
+        import typer
+
+        import soup_cli.commands.shrink as sc
+
+        messages: list[str] = []
+        monkeypatch.setattr(
+            "soup_cli.config.loader.load_config_from_string",
+            lambda _yaml: (_ for _ in ()).throw(
+                ValueError("bad \x1b[2J[bold red]field[/]")
+            ),
+        )
+        monkeypatch.setattr(sc.console, "print", lambda message: messages.append(message))
+
+        with pytest.raises(typer.Exit) as exc_info:
+            sc._run_heal(
+                pruned_dir="./model",
+                teacher="t",
+                heal_data="./h.jsonl",
+                steps=5,
+                out_dir="./adapter",
+                heal_rows=10,
+            )
+
+        assert exc_info.value.exit_code == 1
+        assert len(messages) == 1
+        assert "\x1b" not in messages[0]
+        assert "bad [2J\\[bold red]field\\[/]" in messages[0]
 
     def test_nonzero_tail_control_bytes_stripped(self, tmp_path, monkeypatch):
         import soup_cli.commands.shrink as sc
@@ -1248,19 +1298,15 @@ class TestCommandsNoTopLevelTorch:
 
 
 class TestFuseAdapterSymlinkGuard:
+    @pytest.mark.requires_symlink
     def test_symlinked_base_dir_rejected(self, tmp_path, monkeypatch):
         import os as _os
 
-        if not hasattr(_os, "symlink"):
-            pytest.skip("no os.symlink")
         monkeypatch.chdir(tmp_path)
         target = tmp_path / "target"
         target.mkdir()
         link = tmp_path / "base"
-        try:
-            _os.symlink(str(target), str(link), target_is_directory=True)
-        except (OSError, NotImplementedError):
-            pytest.skip("symlink creation not permitted")
+        _os.symlink(str(target), str(link), target_is_directory=True)
         from soup_cli.commands.shrink import _fuse_adapter
 
         with pytest.raises(ValueError, match="symlink"):

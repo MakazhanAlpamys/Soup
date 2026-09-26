@@ -2,16 +2,15 @@
 
 Composite data-quality scorecard. Lighter-weight alternative to
 Argilla/Cleanlab — pure-Python heuristics that work without GPUs or
-200 MB Presidio models; heavy classifiers gated behind ``[data-pro]``
-extras (deferred until v0.47.1).
+200 MB Presidio models.
 
 Pieces:
 - benchmark decontamination via n-gram overlap (MMLU/GSM8K/HumanEval)
 - PII detection via narrow regex set (email/phone/SSN/credit-card)
 - language detection via small character-frequency heuristic, with
   optional ``langdetect`` fallback for Windows users
-- toxicity scoring via keyword baseline (a small Llama-Guard variant is
-  the v0.47.1 follow-up; for now we ship a fast, dep-free heuristic)
+- abuse-keyword scoring (a fast, dependency-free heuristic, not a
+  toxicity classifier)
 - educational-value score via length + lexical-diversity proxy
 
 The CLI surface keeps every subcommand small and JSONL-in / JSONL-out so
@@ -401,34 +400,56 @@ def detect_language(text: Any) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Toxicity (keyword baseline)
+# Abuse-keyword heuristic
 # ---------------------------------------------------------------------------
 
 
-# Intentionally small, neutral keyword set. The full Llama-Guard-3-1B
-# integration is the v0.47.1 follow-up; this baseline gives a fast
-# triage signal without the 1 GB model download.
-_TOXIC_KEYWORDS: frozenset = frozenset(
+# Avoid ambiguous process, medical, and security terms such as ``kill``,
+# ``die``, and ``attack``. This remains a narrow triage heuristic: keyword
+# matches are signals, not a safety verdict.
+_ABUSE_KEYWORDS: frozenset[str] = frozenset(
     {
-        "hate", "kill", "destroy", "attack", "violence", "abuse",
-        "slur", "die", "murder", "assault", "racist",
+        "abuse",
+        "harass",
+        "harassment",
+        "hate",
+        "idiot",
+        "loser",
+        "murder",
+        "pathetic",
+        "racist",
+        "slur",
+        "suffer",
+        "violence",
+        "worthless",
     }
 )
 
 
-def score_toxicity(text: Any) -> float:
-    """Return [0, 1] toxicity score from a keyword baseline.
+def score_abuse_keywords(text: Any) -> float:
+    """Return a [0, 1] abuse-keyword triage score.
 
-    A real Llama-Guard variant lands in v0.47.1 via ``[data-pro]``.
+    This is intentionally not presented as a toxicity classifier. Ambiguous
+    technical and medical action words are excluded. The deliberately small
+    keyword set has limited recall and can still flag benign uses of insults.
     """
     s = _require_str(text, name="text")
     tokens = _tokenise(s)
     if not tokens:
         return 0.0
-    hits = sum(1 for t in tokens if t in _TOXIC_KEYWORDS)
+    hits = sum(1 for token in tokens if token in _ABUSE_KEYWORDS)
     # Sub-linear weighting so long benign documents don't accumulate noise.
     score = min(1.0, hits / max(1, len(tokens) ** 0.5))
     return score
+
+
+def score_toxicity(text: Any) -> float:
+    """Compatibility name for :func:`score_abuse_keywords`.
+
+    The function name predates issue #821. Its result is a keyword heuristic,
+    not a general toxicity probability.
+    """
+    return score_abuse_keywords(text)
 
 
 # ---------------------------------------------------------------------------
@@ -440,8 +461,7 @@ def score_educational_value(text: Any) -> float:
     """Return [0, 1] educational-value score.
 
     Combines (a) log-scale length and (b) type/token ratio as a proxy
-    for vocabulary breadth. Lightweight stand-in for FineWeb-Edu's
-    classifier — the real model ships behind ``[data-pro]`` in v0.47.1.
+    for vocabulary breadth. It is a heuristic, not a FineWeb-Edu classifier.
     """
     s = _require_str(text, name="text")
     tokens = _tokenise(s)
@@ -506,7 +526,7 @@ def compute_scorecard(
         except ValueError as exc:
             _LOG.debug("pii failed for row: %s", exc)
         try:
-            if score_toxicity(text) >= 0.05:
+            if score_abuse_keywords(text) >= 0.05:
                 toxic_flagged += 1
         except ValueError as exc:
             _LOG.debug("toxicity failed for row: %s", exc)
@@ -641,6 +661,7 @@ __all__ = [
     "ngram_overlap_ratio",
     "ngram_set",
     "score_educational_value",
+    "score_abuse_keywords",
     "score_toxicity",
     "write_jsonl_rows",
 ]

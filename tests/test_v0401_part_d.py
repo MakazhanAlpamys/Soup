@@ -10,8 +10,10 @@ Closes:
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
 # --- H4: Template help is dynamically generated --------------------------
@@ -63,7 +65,182 @@ def test_init_force_flag_overwrites_without_prompt(tmp_path):
 # --- N2: soup migrate JSONL friendly error ------------------------------
 
 
-def test_migrate_jsonl_input_yields_friendly_error(tmp_path: Path):
+def test_migrate_jsonl_input_yields_friendly_error(tmp_path: Path, monkeypatch):
+    """Drives the *command*, not the helper: real JSONL named `.jsonl` is refused."""
+    from soup_cli.cli import app
+
+    monkeypatch.chdir(tmp_path)
+    jsonl = tmp_path / "data.jsonl"
+    jsonl.write_text('{"prompt": "hi"}\n{"prompt": "world"}\n', encoding="utf-8")
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app, ["migrate", "--from", "llamafactory", "data.jsonl", "--dry-run"]
+    )
+    assert result.exit_code == 2, (result.output, repr(result.exception))
+    assert "got JSONL" in result.output
+
+
+@pytest.mark.parametrize("record_size", [2, 40000])
+@pytest.mark.parametrize("trailing_newline", [True, False])
+def test_migrate_jsonl_with_json_suffix_yields_friendly_error(
+    tmp_path: Path, monkeypatch, record_size: int, trailing_newline: bool
+):
+    """Multiple JSON objects are data even when the suffix does not say JSONL."""
+    from soup_cli.cli import app
+
+    monkeypatch.chdir(tmp_path)
+    data = tmp_path / "data.json"
+    record = json.dumps({"prompt": "x" * record_size})
+    data.write_text(f"{record}\n{record}" + ("\n" if trailing_newline else ""), encoding="utf-8")
+
+    result = CliRunner().invoke(
+        app, ["migrate", "--from", "llamafactory", "data.json", "--dry-run"]
+    )
+
+    assert result.exit_code == 2, (result.output, repr(result.exception))
+    assert "got JSONL" in result.output
+
+
+def test_migrate_single_json_object_is_not_reported_as_jsonl(tmp_path: Path, monkeypatch):
+    """A valid single-object config must continue to the selected migrator."""
+    from soup_cli.cli import app
+
+    monkeypatch.chdir(tmp_path)
+    config = tmp_path / "config.json"
+    config.write_text(
+        json.dumps(
+            {
+                "model_name_or_path": "meta-llama/Llama-3-8B",
+                "stage": "sft",
+                "finetuning_type": "lora",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = CliRunner().invoke(
+        app, ["migrate", "--from", "llamafactory", "config.json", "--dry-run"]
+    )
+
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    assert "got JSONL" not in result.output
+
+
+def test_migrate_unsloth_notebook_is_not_reported_as_jsonl(tmp_path: Path, monkeypatch):
+    """A multi-line notebook remains a single JSON document and still migrates."""
+    from soup_cli.cli import app
+
+    monkeypatch.chdir(tmp_path)
+    notebook = tmp_path / "train.ipynb"
+    notebook.write_text(
+        json.dumps(
+            {
+                "cells": [
+                    {
+                        "cell_type": "code",
+                        "source": [
+                            "model, tokenizer = FastLanguageModel.from_pretrained(\n",
+                            "    model_name='unsloth/llama-3',\n",
+                            ")\n",
+                            "trainer = SFTTrainer()\n",
+                        ],
+                    }
+                ],
+                "metadata": {},
+                "nbformat": 4,
+                "nbformat_minor": 5,
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    result = CliRunner().invoke(
+        app, ["migrate", "--from", "unsloth", "train.ipynb", "--dry-run"]
+    )
+
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    assert "got JSONL" not in result.output
+
+
+def test_migrate_yaml_config_named_jsonl_still_migrates(tmp_path: Path, monkeypatch):
+    """Control: the suffix alone must not condemn a file whose content is YAML.
+
+    Fails if the `_looks_like_jsonl` call site is removed from the guard.
+    """
+    from soup_cli.cli import app
+
+    monkeypatch.chdir(tmp_path)
+    config = tmp_path / "config.jsonl"
+    config.write_text(
+        "model_name_or_path: meta-llama/Llama-3-8B\n"
+        "stage: sft\n"
+        "finetuning_type: lora\n",
+        encoding="utf-8",
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app, ["migrate", "--from", "llamafactory", "config.jsonl", "--dry-run"]
+    )
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    assert "got JSONL" not in result.output
+
+
+def test_migrate_bomd_jsonl_still_yields_friendly_error(tmp_path: Path, monkeypatch):
+    """A UTF-8 BOM must not defeat the sniff (#675 review).
+
+    Windows tooling writes UTF-8 with a BOM by default. Decoded as plain
+    ``utf-8`` the BOM survives as U+FEFF, which ``str.strip()`` leaves alone
+    because it is not whitespace, so ``startswith("{")`` is False and real
+    JSONL sniffs as a config. Fails if the helper reads ``utf-8`` rather than
+    ``utf-8-sig``.
+    """
+    from soup_cli.cli import app
+
+    monkeypatch.chdir(tmp_path)
+    jsonl = tmp_path / "bom.jsonl"
+    jsonl.write_bytes(
+        b"\xef\xbb\xbf" + b'{"prompt": "hi"}\n{"prompt": "world"}\n'
+    )
+    # Guard the fixture itself: plain utf-8 must see the BOM this test is about.
+    assert jsonl.read_text(encoding="utf-8").startswith("\ufeff")
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app, ["migrate", "--from", "llamafactory", "bom.jsonl", "--dry-run"]
+    )
+    assert result.exit_code == 2, (result.output, repr(result.exception))
+    assert "got JSONL" in result.output
+
+
+def test_migrate_sniff_does_not_read_a_whole_unnewlined_file(tmp_path: Path):
+    """The sniff is bounded: one very long line must not be read entire.
+
+    ``for line in fh`` on a file with no newline pulls all of it into one
+    string. Fails if the bounded ``readline`` is reverted.
+    """
+    import tracemalloc
+
+    from soup_cli.commands.migrate import _looks_like_jsonl
+
+    big = tmp_path / "oneline.jsonl"
+    big.write_text('{"prompt": "' + "x" * (8 * 1024 * 1024) + '"}', encoding="utf-8")
+
+    tracemalloc.start()
+    try:
+        assert _looks_like_jsonl(big) is True
+        peak = tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+
+    # Bounded read touches 64 KiB; the unbounded one allocated the 8 MiB line
+    # at least twice (read plus strip). 1 MiB leaves generous headroom.
+    assert peak < 1024 * 1024, f"peak {peak} bytes: the read looks unbounded"
+
+
+def test_migrate_helper_detects_jsonl(tmp_path: Path):
     from soup_cli.commands.migrate import _looks_like_jsonl
 
     jsonl = tmp_path / "data.jsonl"

@@ -321,8 +321,43 @@ class TestMlxOptimizer:
         )
         wrapper = MLXSFTTrainerWrapper(cfg)
         wrapper.model = object()
-        wrapper.tokenizer = object()
-        wrapper._dataset = {"train": [{"messages": []}], "val": []}
+
+        # A ChatML-shaped tokenizer and a real one-turn conversation. This row
+        # was `{"messages": []}` with `tokenizer = object()`, which worked only
+        # because the per-token mask (#683) was built lazily from inside
+        # `train()` and this fake `train()` never touches the dataset. #683 now
+        # probes row 0 at dataset construction so an unmaskable template fails
+        # before an 8B model loads, and an empty conversation is refused there
+        # -- the same refusal as before, earlier. The row is made real rather
+        # than the probe made lenient: this test asserts the optimizer
+        # contract, and it should reach it through the masked path a default
+        # config actually takes.
+        class _ChatMLTokenizer:
+            def apply_chat_template(
+                self, messages, tools=None, add_generation_prompt=False,
+                return_dict=False,
+            ):
+                if not messages:
+                    raise ValueError("Cannot apply chat template to an empty conversation.")
+                out = []
+                for m in messages:
+                    out += [f"<|im_start|>{m['role']}"] + m["content"].split() + ["<|im_end|>"]
+                if add_generation_prompt:
+                    out.append("<|im_start|>assistant")
+                return out
+
+        wrapper.tokenizer = _ChatMLTokenizer()
+        wrapper._dataset = {
+            "train": [
+                {
+                    "messages": [
+                        {"role": "user", "content": "What is 2+2?"},
+                        {"role": "assistant", "content": "Four."},
+                    ]
+                }
+            ],
+            "val": [],
+        }
         monkeypatch.setattr(wrapper, "_require_mlx", lambda: None)
         # v0.73.0 rewrite: LoRA application is exercised elsewhere; stub it
         # here so the optimizer contract is what this test asserts.
@@ -357,7 +392,16 @@ class TestMlxOptimizer:
 
         mlx_lm_mod = types.ModuleType("mlx_lm")
         opt_mod = types.ModuleType("mlx.optimizers")
-        opt_mod.AdamW = lambda learning_rate=None: sentinel
+        # #686 builds a real LR schedule and passes weight_decay, so this fake
+        # needs the three schedule builders and an AdamW that tolerates more
+        # than `learning_rate`. Recording stubs only -- the assertion below is
+        # still that a non-None optimizer reaches `train()`, unchanged.
+        opt_mod.AdamW = lambda **kwargs: sentinel
+        opt_mod.linear_schedule = lambda init, end, steps: (lambda step: end)
+        opt_mod.cosine_decay = lambda init, steps: (lambda step: init)
+        opt_mod.join_schedules = lambda scheds, boundaries: (
+            lambda step: scheds[-1](step)
+        )
         mlx_root = types.ModuleType("mlx")
 
         monkeypatch.setitem(sys.modules, "mlx", mlx_root)
@@ -370,7 +414,15 @@ class TestMlxOptimizer:
 
         wrapper.train()
         assert "optimizer" in seen
-        assert seen["optimizer"] is sentinel
+        # `is sentinel` until gradient clipping landed: `training.max_grad_norm`
+        # is honoured by wrapping the constructed optimizer in a proxy that
+        # clips before delegating, so what reaches train() is that proxy. The
+        # assertion this test exists for -- train() receives the optimizer that
+        # was built, not None -- is unchanged: the proxy delegates every
+        # attribute, so reaching the sentinel through it is the same claim.
+        optimizer = seen["optimizer"]
+        assert optimizer is not None
+        assert optimizer is sentinel or optimizer.__dict__["_inner"] is sentinel
 
 
 # --------------------------------------------------------------------------
@@ -441,10 +493,16 @@ class TestAsrInferMetricGuard:
 
 class TestAsrSkipControlStrip:
     def test_hostile_filename_is_stripped(self, tmp_path, monkeypatch):
+        from rich.console import Console
+
         import soup_cli.commands.infer as infer
         from soup_cli.cli import app as cli_app
 
         monkeypatch.chdir(tmp_path)
+        # Pin tty detection: the assertion below is about the filename, not
+        # about whether the ambient shell forces colour on the surrounding
+        # markup. no_color=True alone does not pin detection.
+        monkeypatch.setattr(infer, "console", Console(force_terminal=False))
         # A filename carrying a raw ESC byte; transcriber raises so the skip
         # warning path (which prints the name) runs.
         (tmp_path / "clip.wav").write_bytes(b"x")
@@ -462,6 +520,10 @@ class TestAsrSkipControlStrip:
         # All rows skipped → exit 2 (L2), and no raw ESC reaches the terminal.
         assert result.exit_code == 2
         assert "\x1b" not in result.output
+        # Paired visibility: the ESC-bearing error text must be *stripped*,
+        # not swallowed -- a sanitiser that dropped the whole message would
+        # pass the assertion above. "[31maudio" is the payload minus its ESC.
+        assert "[31maudio" in result.output
 
 
 class TestAsrTaskValidation:

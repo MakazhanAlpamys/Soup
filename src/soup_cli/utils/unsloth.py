@@ -41,7 +41,13 @@ def load_model_and_tokenizer(
 
     load_in_4bit = quantization == "4bit"
 
-    # Unsloth's FastLanguageModel.from_pretrained handles quantization internally
+    # Unsloth's FastLanguageModel.from_pretrained builds its OWN BitsAndBytesConfig
+    # internally and hardcodes bnb_4bit_use_double_quant=True; it exposes no
+    # passthrough (no double-quant kwarg, no quantization_config=). So
+    # training.bnb_4bit_use_double_quant cannot be honoured on the Unsloth path —
+    # #321 covers only the paths where Soup itself constructs the BnB config
+    # (resident load, streamed load, save/merge). Threading the flag here would
+    # be silently discarded, so it is deliberately not passed.
     dtype = None  # auto-detect
     model, tokenizer = FastLanguageModel.from_pretrained(
         model_name=model_name,

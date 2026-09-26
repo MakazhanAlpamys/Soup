@@ -6,6 +6,8 @@ These tests mock MLX entirely so they run on CI (Linux / Windows / macOS).
 
 import pytest
 
+from tests.conftest import strip_ansi
+
 # ---------------------------------------------------------------------------
 # MLX detection
 # ---------------------------------------------------------------------------
@@ -60,6 +62,46 @@ class TestMLXDetection:
 
         info = mlx_utils.get_mlx_info()
         assert info["available"] is False
+
+    def test_get_mlx_version_reads_core_version(self, monkeypatch):
+        """get_mlx_version prefers mlx.core over stale distribution metadata (#659)."""
+        import sys
+        import types
+
+        fake_mlx = types.ModuleType("mlx")  # no __version__ on the top-level pkg
+        fake_core = types.ModuleType("mlx.core")
+        fake_core.__version__ = "0.32.2"
+        fake_mlx.core = fake_core
+        monkeypatch.setitem(sys.modules, "mlx", fake_mlx)
+        monkeypatch.setitem(sys.modules, "mlx.core", fake_core)
+
+        from soup_cli.utils import mlx as mlx_utils
+
+        # The module version is authoritative after an in-place upgrade, while
+        # distribution metadata can still report the prior installed release.
+        monkeypatch.setattr(
+            "importlib.metadata.version", lambda name: "0.31.0" if name == "mlx" else None
+        )
+        assert mlx_utils.get_mlx_version() == "0.32.2"
+
+    def test_get_mlx_version_metadata_fallback(self, monkeypatch):
+        """get_mlx_version falls back to importlib.metadata when core lacks it."""
+        import sys
+        import types
+
+        fake_mlx = types.ModuleType("mlx")
+        fake_core = types.ModuleType("mlx.core")
+        fake_core.metal = types.SimpleNamespace(is_available=lambda: True)
+        fake_mlx.core = fake_core
+        monkeypatch.setitem(sys.modules, "mlx", fake_mlx)
+        monkeypatch.setitem(sys.modules, "mlx.core", fake_core)
+
+        from soup_cli.utils import mlx as mlx_utils
+
+        monkeypatch.setattr(
+            "importlib.metadata.version", lambda name: "0.32.2" if name == "mlx" else None
+        )
+        assert mlx_utils.get_mlx_version() == "0.32.2"
 
     def test_estimate_mlx_batch_size_small_model(self):
         from soup_cli.utils.mlx import estimate_mlx_batch_size
@@ -223,14 +265,22 @@ class TestMLXRecipes:
 
         recipe = get_recipe("qwen3-8b-sft-mlx")
         assert recipe is not None
+        assert recipe.model == "mlx-community/Qwen3-8B-4bit"
         cfg = load_config_from_string(recipe.yaml_str)
+        assert cfg.base == "mlx-community/Qwen3-8B-4bit"
         assert cfg.backend == "mlx"
 
-    def test_gemma3_9b_sft_mlx(self):
+    def test_gemma3_4b_sft_mlx(self):
+        from soup_cli.config.loader import load_config_from_string
         from soup_cli.recipes.catalog import get_recipe
 
-        recipe = get_recipe("gemma3-9b-sft-mlx")
+        recipe = get_recipe("gemma3-4b-sft-mlx")
         assert recipe is not None
+        assert recipe.model == "mlx-community/gemma-3-4b-it-4bit"
+        assert recipe.size == "4B"
+        cfg = load_config_from_string(recipe.yaml_str)
+        assert cfg.base == "mlx-community/gemma-3-4b-it-4bit"
+        assert cfg.backend == "mlx"
 
     def test_mlx_dpo_config_rejected_at_load(self):
         """backend=mlx + task=dpo is rejected by the SoupConfig validator."""
@@ -270,18 +320,115 @@ output: ./output
             load_config_from_string(yaml_str)
 
 
+class TestMlxRecipeRepoIds:
+    """Pin the repo id every shipped MLX recipe declares, on RecipeMeta.model
+    and YAML base: independently (#661). This does not check that the repo resolves.
+    """
+
+    MLX_RECIPES = [
+        ("llama3.1-8b-sft-mlx", "mlx-community/Llama-3.1-8B-Instruct-4bit"),
+        ("qwen3-8b-sft-mlx", "mlx-community/Qwen3-8B-4bit"),
+        ("gemma3-4b-sft-mlx", "mlx-community/gemma-3-4b-it-4bit"),
+    ]
+
+    @pytest.mark.parametrize("name,expected_repo", MLX_RECIPES)
+    def test_meta_model_matches_expected_repo(self, name: str, expected_repo: str):
+        from soup_cli.recipes.catalog import get_recipe
+
+        recipe = get_recipe(name)
+        assert recipe is not None, f"Recipe {name} missing from catalog"
+        assert recipe.model == expected_repo
+
+    @pytest.mark.parametrize("name,expected_repo", MLX_RECIPES)
+    def test_yaml_base_matches_expected_repo(self, name: str, expected_repo: str):
+        import yaml
+
+        from soup_cli.recipes.catalog import get_recipe
+
+        recipe = get_recipe(name)
+        assert recipe is not None
+        parsed = yaml.safe_load(recipe.yaml_str)
+        assert parsed["base"] == expected_repo
+
+
 # ---------------------------------------------------------------------------
 # doctor command reports MLX
 # ---------------------------------------------------------------------------
 
-class TestMLXDoctor:
-    def test_doctor_has_mlx_info(self):
-        """`soup doctor` helpers surface MLX info (no crash on non-Apple)."""
-        from soup_cli.commands.doctor import _get_mlx_info
 
-        info = _get_mlx_info()
-        assert isinstance(info, dict)
-        assert "available" in info
+class TestMLXDoctor:
+    def test_doctor_command_renders_mlx_panel(self, monkeypatch):
+        """`soup doctor` renders the MLX panel when MLX is available."""
+        import sys
+        import types
+        from importlib.machinery import ModuleSpec
+
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        fake_mlx = types.ModuleType("mlx")
+        fake_mlx.__spec__ = ModuleSpec("mlx", loader=None)
+        fake_core = types.ModuleType("mlx.core")
+        fake_core.__spec__ = ModuleSpec("mlx.core", loader=None)
+        fake_core.__version__ = "0.32.2"
+        fake_core.metal = types.SimpleNamespace(is_available=lambda: True)
+        fake_mlx.core = fake_core
+        monkeypatch.setitem(sys.modules, "mlx", fake_mlx)
+        monkeypatch.setitem(sys.modules, "mlx.core", fake_core)
+
+        result = CliRunner().invoke(app, ["doctor"])
+
+        assert result.exit_code == 0, result.output
+        assert "MLX" in result.output
+        assert "0.32.2" in result.output
+
+    def test_doctor_command_mlx_absent_control(self, monkeypatch):
+        """`soup doctor` renders the Apple-only MLX install guidance when absent."""
+        import builtins
+
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        real_import = builtins.__import__
+
+        def fake_import(name, *args, **kwargs):
+            if name == "mlx" or name == "mlx.core":
+                raise ImportError("no mlx")
+            return real_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", fake_import)
+        # Force the Apple-specific branch; otherwise optional dependencies also
+        # render "not installed" and the assertion would be vacuous off-Mac.
+        monkeypatch.setattr("soup_cli.utils.mlx.is_apple_silicon", lambda: True)
+        result = CliRunner().invoke(app, ["doctor"])
+
+        assert result.exit_code == 0
+        assert "MLX" in result.output
+        assert 'pip install "soup-cli[mlx]"' in strip_ansi(result.output)
+
+    def test_doctor_command_omits_mlx_panel_off_apple_silicon(self, monkeypatch):
+        """`soup doctor` stays quiet about MLX on non-Apple platforms."""
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        # The doctor report should not dedicate a panel to an unsupported backend.
+        monkeypatch.setattr(
+            "soup_cli.commands.doctor._get_mlx_info",
+            lambda: {"available": False, "apple_silicon": False},
+        )
+        result = CliRunner().invoke(app, ["doctor"])
+
+        assert result.exit_code == 0, result.output
+        # "Apple Silicon only" was asserted here originally and is vacuous: the
+        # string exists nowhere in src/, so it could never fail. Assert on a
+        # string the MLX branch really does emit -- the sibling test above
+        # asserts this exact hint IS present when apple_silicon is True -- so
+        # this now fails if `doctor` starts advertising MLX off Apple Silicon.
+        assert 'pip install "soup-cli[mlx]"' not in result.output
+        assert "MLX" not in result.output
 
 
 if __name__ == "__main__":

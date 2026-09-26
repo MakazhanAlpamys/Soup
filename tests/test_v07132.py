@@ -950,7 +950,8 @@ class TestAsrRecipes:
         assert cfg.task == "sft"
         assert cfg.modality == "vision"
 
-    def test_catalog_size_is_142(self):
+    def test_catalog_size_matches_the_pinned_count(self):
         from soup_cli.recipes.catalog import RECIPES
+        from tests.recipe_count import EXPECTED_RECIPE_COUNT, recipe_count_hint
 
-        assert len(RECIPES) == 142
+        assert len(RECIPES) == EXPECTED_RECIPE_COUNT, recipe_count_hint(len(RECIPES))

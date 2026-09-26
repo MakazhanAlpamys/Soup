@@ -4,6 +4,12 @@ import json
 import logging
 from typing import Any, Optional
 
+# The OpenAI finish_reason vocabulary Soup emits, imported rather than
+# redefined: a second copy of this set is exactly the kind of duplicated source
+# of truth that #372, #392 and #424 were each caused by. utils.vllm is
+# torch-free at import time, so this does not weigh down CLI startup.
+from soup_cli.utils.vllm import _FINISH_REASONS
+
 logger = logging.getLogger(__name__)
 
 
@@ -39,6 +45,88 @@ def decode_sglang_response(response: Any) -> dict:
     )
 
 
+def generate_with_runtime(
+    runtime: Any,
+    prompt: str,
+    prompt_token_ids: Optional[list[int]],
+    sampling_params: dict,
+) -> dict:
+    """Run one generation on an SGLang ``Runtime`` and return the response dict (#785).
+
+    ``Runtime.generate`` only ever posts ``{"text": prompt}``, and the server
+    then tokenizes that string with its tokenizer's default
+    ``add_special_tokens=True`` (``TokenizerManager._tokenize_texts``; there
+    is no request or server flag to turn that off). A template that rendered
+    ``{{ bos_token }}`` therefore reached the model with two of them:
+    measured on a running SGLang 0.5.9 with ``unsloth/Llama-3.2-1B-Instruct``
+    (``bos_token_id`` 128000), the engine ran on ``[128000, 128000, ...]``
+    over 37 ids for the string Soup sent, against the 36 ids
+    ``apply_chat_template(tokenize=True)`` returns; posting those 36 ids
+    reproduced them exactly (``[128000, 128006, ...]``, ``prompt_tokens`` 36).
+
+    So a prompt the template rendered is sent as the ids
+    :func:`~soup_cli.utils.vllm.build_engine_prompt` encoded for it, through
+    the same ``/generate`` endpoint ``Runtime.generate`` posts to, which uses
+    ``input_ids`` verbatim (``TokenizerManager._tokenize_one_request``). A
+    prompt no template rendered (``prompt_token_ids`` is None) still goes
+    through ``Runtime.generate`` as the string it always was.
+
+    Both routes return the same ``{"text": ..., "meta_info": {...}}`` dict:
+    ``Runtime.generate`` re-encodes the server's JSON as a string (#76), the
+    direct post has the dict already, and :func:`decode_sglang_response`
+    accepts both.
+    """
+    if prompt_token_ids is None:
+        return decode_sglang_response(runtime.generate(prompt, sampling_params=sampling_params))
+
+    try:
+        import httpx  # the repo's HTTP client (utils/webhooks.py, commands/generate.py)
+    except ImportError as exc:
+        raise ImportError("httpx is required to post token ids to the SGLang engine") from exc
+
+    # ``timeout`` is mandatory: this is a blocking call on the app's event loop
+    # (``chat_completions`` awaits it), so an unresponsive engine must be bounded
+    # rather than wedging the whole server. 300s mirrors the server-generation
+    # path in ``commands/generate.py``. ``rstrip`` guards a trailing slash on
+    # ``runtime.url`` from producing ``//generate``.
+    response = httpx.post(
+        runtime.url.rstrip("/") + "/generate",
+        json={"input_ids": prompt_token_ids, "sampling_params": sampling_params},
+        timeout=300.0,
+    )
+    response.raise_for_status()
+    return decode_sglang_response(response.json())
+
+
+def resolve_sglang_finish_reason(meta_info: Any, max_tokens: Optional[int]) -> str:
+    """Map SGLang ``meta_info`` to an OpenAI ``finish_reason`` (#360).
+
+    Mirrors ``vllm.resolve_finish_reason``: trust the engine's own
+    ``finish_reason`` when it maps to one Soup emits, otherwise derive it from
+    the token count — a generation that spent the whole budget was truncated,
+    not naturally stopped. The pre-fix code hardcoded ``"stop"``, so a client
+    doing continue-on-length silently stopped early.
+
+    SGLang reports ``finish_reason`` as ``{"type": "stop"|"length"|"abort"}`` in
+    recent versions and as a bare string in older ones — both are accepted so a
+    dict-only read cannot silently break a previously-working sglang.
+    """
+    info = meta_info if isinstance(meta_info, dict) else {}
+    reported = info.get("finish_reason")
+    if isinstance(reported, dict):
+        reported = reported.get("type")
+    if isinstance(reported, str) and reported in _FINISH_REASONS:
+        return reported
+    completion_tokens = info.get("completion_tokens")
+    try:
+        produced = int(completion_tokens) if completion_tokens is not None else 0
+    except (TypeError, ValueError):
+        produced = 0
+    if max_tokens and produced >= int(max_tokens):
+        return "length"
+    return "stop"
+
+
 def check_sglang_available() -> bool:
     """Check if SGLang is installed."""
     try:
@@ -66,6 +154,7 @@ def create_sglang_runtime(
     tensor_parallel_size: int = 1,
     mem_fraction_static: float = 0.88,
     dtype: str = "auto",
+    trust_remote_code: bool = False,
 ):
     """Create an SGLang Runtime for serving.
 
@@ -76,6 +165,12 @@ def create_sglang_runtime(
         tensor_parallel_size: Number of GPUs for tensor parallelism.
         mem_fraction_static: Fraction of GPU memory for static allocation.
         dtype: Data type for model weights.
+        trust_remote_code: Execute the model repo's custom code on load.
+            Default ``False`` -- the same default-deny the vLLM path takes.
+            ``serve.py`` resolves the v0.36.0 gate once per invocation and
+            passes the result here. This was previously an unconditional
+            ``True`` at both call sites, so the SGLang backend ran a model's
+            custom code whether or not the user opted in.
 
     Returns:
         (runtime, runtime_model_name) tuple.
@@ -99,7 +194,7 @@ def create_sglang_runtime(
             tp_size=tensor_parallel_size,
             mem_fraction_static=mem_fraction_static,
             dtype=dtype,
-            trust_remote_code=True,
+            trust_remote_code=trust_remote_code,
             lora_paths=[model_path],
         )
         runtime_model_name = base_model
@@ -109,7 +204,7 @@ def create_sglang_runtime(
             tp_size=tensor_parallel_size,
             mem_fraction_static=mem_fraction_static,
             dtype=dtype,
-            trust_remote_code=True,
+            trust_remote_code=trust_remote_code,
         )
         runtime_model_name = model_path
 
@@ -121,6 +216,7 @@ def create_sglang_app(
     runtime_model_name: str,
     model_name: str,
     max_tokens_default: int = 512,
+    tokenizer=None,
 ):
     """Create a FastAPI app using SGLang runtime for inference.
 
@@ -129,6 +225,11 @@ def create_sglang_app(
         runtime_model_name: Model name used by SGLang.
         model_name: Display model name for API responses.
         max_tokens_default: Default max tokens for generation.
+        tokenizer: HF tokenizer for the served model — its chat template is
+            applied by the shared ``build_engine_prompt`` (#360), which also
+            encodes the rendered prompt so the server does not add a second
+            BOS to it (#785). None degrades to the legacy role-prefixed
+            format, same as the vLLM backend.
 
     Returns:
         FastAPI application.
@@ -142,6 +243,10 @@ def create_sglang_app(
     from fastapi.responses import StreamingResponse
     from pydantic import BaseModel as PydanticBaseModel
     from pydantic import Field
+
+    # THE single prompt builder shared with the transformers and vLLM backends
+    # (#332), so the three cannot drift again. Was a hand-rolled third copy.
+    from soup_cli.utils.vllm import build_engine_prompt
 
     app = FastAPI(title="Soup Inference Server (SGLang)", version="1.0.0")
 
@@ -189,8 +294,12 @@ def create_sglang_app(
         max_tokens = request.max_tokens or max_tokens_default
         request_id = f"chatcmpl-{uuid.uuid4().hex[:8]}"
 
-        # Build prompt from messages
-        prompt = _build_prompt(request.messages)
+        # Apply the model's own chat template (legacy fallback when there is no
+        # tokenizer / template), shared with the transformers + vLLM backends.
+        # #785: and send the ids, not the string, whenever that template
+        # rendered the prompt; the string route lets the server add a second
+        # BOS on top of the one the template rendered (generate_with_runtime).
+        prompt, prompt_token_ids = build_engine_prompt(request.messages, tokenizer)
 
         sampling_params = {
             "temperature": request.temperature,
@@ -203,6 +312,7 @@ def create_sglang_app(
                 _stream_sglang_response(
                     runtime=runtime,
                     prompt=prompt,
+                    prompt_token_ids=prompt_token_ids,
                     sampling_params=sampling_params,
                     request_id=request_id,
                     model_name=model_name,
@@ -212,8 +322,8 @@ def create_sglang_app(
 
         # Non-streaming
         try:
-            response = decode_sglang_response(
-                runtime.generate(prompt, sampling_params=sampling_params)
+            response = generate_with_runtime(
+                runtime, prompt, prompt_token_ids, sampling_params
             )
             response_text = response["text"]
             prompt_tokens = response.get("meta_info", {}).get("prompt_tokens", 0)
@@ -233,7 +343,9 @@ def create_sglang_app(
                             "role": "assistant",
                             "content": response_text,
                         },
-                        "finish_reason": "stop",
+                        "finish_reason": resolve_sglang_finish_reason(
+                            response.get("meta_info"), max_tokens
+                        ),
                     }
                 ],
                 "usage": {
@@ -247,24 +359,10 @@ def create_sglang_app(
             logger.exception("SGLang generation error")
             raise HTTPException(status_code=500, detail="Internal server error")
 
-    def _build_prompt(messages: list[ChatMessage]) -> str:
-        """Build a simple prompt from chat messages."""
-        parts = []
-        for msg in messages:
-            role = msg.role
-            content = msg.content
-            if role == "system":
-                parts.append(f"System: {content}")
-            elif role == "user":
-                parts.append(f"User: {content}")
-            elif role == "assistant":
-                parts.append(f"Assistant: {content}")
-        parts.append("Assistant:")
-        return "\n".join(parts)
-
     async def _stream_sglang_response(
         runtime,
         prompt: str,
+        prompt_token_ids: Optional[list[int]],
         sampling_params: dict,
         request_id: str,
         model_name: str,
@@ -273,10 +371,11 @@ def create_sglang_app(
         created = int(time.time())
 
         try:
-            response = decode_sglang_response(
-                runtime.generate(prompt, sampling_params=sampling_params)
+            response = generate_with_runtime(
+                runtime, prompt, prompt_token_ids, sampling_params
             )
             response_text = response["text"]
+            meta_info = response.get("meta_info")
         except Exception:
             logger.exception("SGLang stream error")
             yield 'data: {"error": "Internal server error"}\n\n'
@@ -311,7 +410,9 @@ def create_sglang_app(
                 {
                     "index": 0,
                     "delta": {},
-                    "finish_reason": "stop",
+                    "finish_reason": resolve_sglang_finish_reason(
+                        meta_info, sampling_params.get("max_new_tokens")
+                    ),
                 }
             ],
         }

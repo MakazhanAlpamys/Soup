@@ -1,9 +1,12 @@
 """GPU detection, memory calculation, and auto batch size."""
 
+from __future__ import annotations
+
 import json
 import math
 import os
 import re
+from typing import Optional
 
 # A safetensors file starts with a u64 little-endian header length, then a
 # JSON header carrying each tensor's dtype + shape. Reading it costs a few
@@ -94,8 +97,33 @@ def resolve_device_map(device: str):
         return "auto"
 
 
-def detect_device() -> tuple[str, str]:
-    """Detect available device. Returns (device_string, human_name)."""
+def detect_device(backend: Optional[str] = None) -> tuple[str, str]:
+    """Detect available accelerator device with full Apple Silicon runtime disambiguation.
+
+    Args:
+        backend: Optional configured backend ('mlx', 'unsloth', 'transformers').
+                 When 'mlx' is specified, prioritizes Apple Silicon MLX
+                 runtime over PyTorch MPS.
+
+    Returns:
+        tuple[str, str]: (device_string, human_name)
+            device_string is one of: 'cuda', 'mps', 'mlx', 'cpu'
+            human_name is a descriptive string (e.g. 'NVIDIA A100-SXM4-80GB',
+            'Apple Silicon (Apple M2 Max)', 'CPU (no GPU detected)')
+    """
+    # 1. If MLX backend is explicitly requested, prioritize MLX
+    if backend == "mlx":
+        try:
+            from soup_cli.utils.mlx import detect_mlx, get_chip_info, is_apple_silicon
+
+            if is_apple_silicon() and detect_mlx():
+                chip_name = get_chip_info().get("chip")
+                name = f"Apple Silicon ({chip_name})" if chip_name else "Apple Silicon (MLX)"
+                return "mlx", name
+        except (ImportError, OSError, ValueError):
+            pass
+
+    # 2. Probe PyTorch accelerators (CUDA -> MPS)
     try:
         import torch
 
@@ -107,11 +135,89 @@ def detect_device() -> tuple[str, str]:
     except ImportError:
         pass
 
+    # 3. Fallback: Opportunistic Apple Silicon MLX probe if torch is absent or non-accelerated
+    try:
+        from soup_cli.utils.mlx import detect_mlx, get_chip_info, is_apple_silicon
+
+        if is_apple_silicon() and detect_mlx():
+            chip_name = get_chip_info().get("chip")
+            name = f"Apple Silicon ({chip_name})" if chip_name else "Apple Silicon (MLX)"
+            return "mlx", name
+    except (ImportError, OSError, ValueError):
+        pass
+
     return "cpu", "CPU (no GPU detected)"
 
 
-def get_gpu_info() -> dict:
-    """Get GPU memory info."""
+def resolve_quantization(
+    device: str,
+    backend: Optional[str],
+    quantization: str,
+) -> tuple[str, str | None]:
+    """Decide whether ``quantization`` should be kept, downgraded, or refused.
+
+    This is the explicit decision the maintainer requested in #423: MLX 4-bit
+    is a genuinely different mechanism from bitsandbytes NF4.  An
+    ``mlx-community`` checkpoint is *already* quantized, so ``quantization``
+    is forwarded to ``load_mlx_model`` as-is.  8-bit on MLX is rejected
+    separately by ``MLXTrainer._check_unsupported()``.
+
+    On CPU, bitsandbytes 4-bit / 8-bit cannot run — the guard downgrades to
+    ``"none"`` with a warning.  On CUDA / MPS the value is passed through
+    unchanged (bitsandbytes handles it).
+
+    Returns:
+        (resolved_quantization, warning_message | None)
+    """
+    # Explicit MLX 4-bit preservation: pre-quantized weights, not NF4.
+    if backend == "mlx" and quantization == "4bit":
+        return quantization, None
+
+    # CPU cannot run bitsandbytes quantisation.
+    if device == "cpu" and quantization in ("4bit", "8bit"):
+        msg = (
+            f"Warning: {quantization} quantization is not supported on CPU. "
+            "Switching to quantization: none."
+        )
+        return "none", msg
+
+    return quantization, None
+
+
+def get_gpu_info(backend: Optional[str] = None) -> dict:
+    """Get GPU memory and telemetry info.
+
+    Args:
+        backend: Optional configured backend ('mlx', 'unsloth', 'transformers').
+
+    Returns a dictionary containing:
+        - memory_total: Human-readable total memory string
+        - memory_total_bytes: Exact bytes (int)
+        - gpu_count: Number of accelerator devices (int)
+    """
+    # 1. If MLX backend is explicitly requested, query Apple Silicon unified memory
+    if backend == "mlx":
+        try:
+            from soup_cli.utils.mlx import detect_mlx, get_unified_memory_bytes, is_apple_silicon
+
+            if is_apple_silicon() and detect_mlx():
+                mem = get_unified_memory_bytes()
+                if mem and mem > 0:
+                    mem_gb = mem / (1024**3)
+                    return {
+                        "memory_total": f"{mem_gb:.1f} GB (unified)",
+                        "memory_total_bytes": mem,
+                        "gpu_count": 1,
+                    }
+                return {
+                    "memory_total": "shared (Apple Silicon MLX)",
+                    "memory_total_bytes": 0,
+                    "gpu_count": 1,
+                }
+        except (ImportError, OSError, ValueError):
+            pass
+
+    # 2. Probe PyTorch GPU info
     try:
         import torch
 
@@ -124,13 +230,33 @@ def get_gpu_info() -> dict:
                 "gpu_count": torch.cuda.device_count(),
             }
         if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-            # MPS doesn't expose memory easily, estimate from system
             return {
                 "memory_total": "shared (Apple Silicon)",
                 "memory_total_bytes": 0,
                 "gpu_count": 1,
             }
     except ImportError:
+        pass
+
+    # 3. Fallback: MLX unified memory check
+    try:
+        from soup_cli.utils.mlx import detect_mlx, get_unified_memory_bytes, is_apple_silicon
+
+        if is_apple_silicon() and detect_mlx():
+            mem = get_unified_memory_bytes()
+            if mem and mem > 0:
+                mem_gb = mem / (1024**3)
+                return {
+                    "memory_total": f"{mem_gb:.1f} GB (unified)",
+                    "memory_total_bytes": mem,
+                    "gpu_count": 1,
+                }
+            return {
+                "memory_total": "shared (Apple Silicon MLX)",
+                "memory_total_bytes": 0,
+                "gpu_count": 1,
+            }
+    except (ImportError, OSError, ValueError):
         pass
 
     return {
@@ -295,18 +421,51 @@ def cuda_supports_bf16() -> bool:
         return False
 
 
-def bf16_fp16_flags(device: str) -> tuple[bool, bool]:
+def mps_supports_bf16() -> bool:
+    """Return whether the live MPS runtime accepts native bfloat16 tensors.
+
+    PyTorch exposes no public ``is_bf16_supported`` equivalent for MPS.  Probe
+    the exact runtime instead of inferring support from a macOS or torch version:
+    this also covers builds compiled without MPS and older Metal runtimes.
+    """
+    try:
+        import torch
+
+        mps = getattr(torch.backends, "mps", None)
+        if mps is None or not mps.is_available():
+            return False
+        probe = torch.empty(1, dtype=torch.bfloat16, device="mps")
+        del probe
+        return True
+    except (
+        ImportError,
+        RuntimeError,
+        TypeError,
+        NotImplementedError,
+        AssertionError,
+        OSError,
+    ):
+        return False
+
+
+def bf16_fp16_flags(
+    device: str, *, allow_mps_bf16: bool = False
+) -> tuple[bool, bool]:
     """``(bf16, fp16)`` for ``TrainingArguments`` on ``device``.
 
-    bf16 where the card has it, fp16 where it does not, neither on CPU. Cannot
-    regress a working setup: on a bf16-capable card the answer is what every
-    wrapper hardcoded, and on the rest the previous answer was a crash.
+    bf16 where the card has it, fp16 where CUDA requires it, neither on CPU.
+    MPS is opt-in per trainer until that trainer has a real Apple Silicon smoke:
+    several audio/vision kernels have a different support surface from causal-LM
+    text training, so a successful scalar allocation cannot certify every task.
 
     A ``"cuda"`` string with no CUDA runtime behind it gets neither, rather than
     fp16 on a card that is not there — the run cannot proceed either way, and
     asking for mixed precision on a phantom device only obscures the real error.
     """
-    if not str(device).lower().startswith("cuda"):
+    device_name = str(device).lower()
+    if device_name.startswith("mps"):
+        return (allow_mps_bf16 and mps_supports_bf16(), False)
+    if not device_name.startswith("cuda"):
         return (False, False)
     try:
         import torch
@@ -317,6 +476,44 @@ def bf16_fp16_flags(device: str) -> tuple[bool, bool]:
         return (False, False)
     supported = cuda_supports_bf16()
     return (supported, not supported)
+
+
+def resolve_frozen_base_load_dtype(device: str):
+    """``torch_dtype`` for ``from_pretrained`` when loading a frozen (LoRA) base.
+
+    A frozen base never receives an optimizer step, so there is no reason to
+    upcast it to the HF default of float32 on load: keep the checkpoint's own
+    dtype (``"auto"``). The one exception is a pre-Ampere CUDA card (T4, P100,
+    V100, GTX 16xx, RTX 20xx): ``bf16_fp16_flags`` already routes mixed
+    precision compute to float16 there, since those cards have no bf16 units.
+    An ``"auto"`` load of a bf16-saved checkpoint would then leave the
+    resident weights in bf16 storage while every other tensor on the card is
+    float16, the same storage/compute split v0.73.1 (#385/#387) removed from
+    the other bf16-hardcoded call sites. Returning ``torch.float16`` there
+    keeps storage and compute in the same dtype. On CPU this still returns
+    ``"auto"``: the VRAM-saving reason for keeping the checkpoint's own dtype
+    does not apply there, but CPU use in this codebase is smoke tests only,
+    so a bf16-saved checkpoint loading bf16 on CPU is harmless in practice.
+    """
+    _, fp16_only = bf16_fp16_flags(device)
+    if fp16_only:
+        import torch
+
+        return torch.float16
+    return "auto"
+
+
+def resolve_base_load_dtype(device: str, *, full_finetune: bool):
+    """Resolve model-load dtype without drifting between trainer wrappers.
+
+    An optimizer that steps the base needs explicit fp32 master weights. A
+    frozen LoRA base instead keeps the checkpoint/card-aware policy above.
+    """
+    if full_finetune:
+        import torch
+
+        return torch.float32
+    return resolve_frozen_base_load_dtype(device)
 
 
 def get_compute_dtype():

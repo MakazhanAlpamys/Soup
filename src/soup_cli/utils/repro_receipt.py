@@ -3,8 +3,8 @@
 Captures the minimum environment fingerprint needed for a regulated-org
 audit: seeds (torch + numpy + python), Python interpreter version, OS +
 arch, soup_cli version, kernel versions (CUDA / cuDNN / NCCL — best-effort
-from torch when available), GPU model + driver (best-effort from
-``torch.cuda.get_device_name`` + ``nvidia-smi`` proxy).
+from torch when available), accelerator backend, GPU model + driver, and
+Apple unified memory when MPS is available.
 
 Pure-stdlib at module top; ``torch`` is lazy-imported so this module
 loads in <50 ms on CPU-only hosts.
@@ -16,6 +16,7 @@ import json
 import logging
 import platform
 import re
+import subprocess
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Mapping, Optional, Tuple
@@ -27,6 +28,7 @@ _LOG = logging.getLogger(__name__)
 _MAX_RUN_ID = 128
 _MAX_VERSION = 64
 _RUN_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._\-]{0,127}$")
+_SAFE_MACOS_SYSCTL_KEYS = frozenset({"hw.memsize", "machdep.cpu.brand_string"})
 
 
 @dataclass(frozen=True)
@@ -46,6 +48,8 @@ class ReproReceipt:
     gpu_models: Tuple[str, ...]
     driver_version: Optional[str]
     created_at: str
+    accelerator_backend: Optional[str] = None
+    unified_memory_bytes: Optional[int] = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.run_id, str) or not _RUN_ID_RE.match(self.run_id):
@@ -70,21 +74,77 @@ class ReproReceipt:
                 raise ValueError(f"seeds[{key}] must be int (got {type(val).__name__})")
         if not isinstance(self.gpu_models, tuple):
             raise ValueError("gpu_models must be a tuple")
+        if self.accelerator_backend not in (None, "cuda", "mps"):
+            raise ValueError("accelerator_backend must be cuda, mps, or None")
+        if self.unified_memory_bytes is not None and (
+            isinstance(self.unified_memory_bytes, bool)
+            or not isinstance(self.unified_memory_bytes, int)
+            or self.unified_memory_bytes <= 0
+        ):
+            raise ValueError("unified_memory_bytes must be a positive int or None")
+
+
+def _read_macos_sysctl(name: str) -> Optional[str]:
+    """Read one fixed macOS sysctl key without collecting unique identifiers."""
+    if platform.system() != "Darwin" or name not in _SAFE_MACOS_SYSCTL_KEYS:
+        return None
+    try:
+        result = subprocess.run(  # noqa: S603 — fixed executable and key allowlist.
+            ["/usr/sbin/sysctl", "-n", name],
+            capture_output=True,
+            check=False,
+            text=True,
+            timeout=2,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    value = result.stdout.strip()
+    return value if result.returncode == 0 and value else None
+
+
+def _detect_mps_metadata(torch_module) -> dict:
+    """Return privacy-safe Apple accelerator metadata when MPS is available."""
+    out = {
+        "accelerator_backend": None,
+        "gpu_models": (),
+        "unified_memory_bytes": None,
+    }
+    try:
+        if not torch_module.backends.mps.is_available():
+            return out
+    except Exception as exc:  # noqa: BLE001
+        _LOG.debug("repro_receipt MPS probe failed: %s", exc)
+        return out
+
+    out["accelerator_backend"] = "mps"
+    chip = _read_macos_sysctl("machdep.cpu.brand_string")
+    out["gpu_models"] = (chip or "Apple Silicon",)
+    memory = _read_macos_sysctl("hw.memsize")
+    try:
+        memory_bytes = int(memory) if memory is not None else None
+        if memory_bytes is not None and memory_bytes > 0:
+            out["unified_memory_bytes"] = memory_bytes
+    except ValueError:
+        pass
+    return out
 
 
 def _detect_torch_kernel_versions() -> dict:
     """Best-effort torch / CUDA / cuDNN / NCCL detection.
 
     Returns a dict with optional ``torch_version`` / ``cuda_version`` /
-    ``cudnn_version`` / ``nccl_version`` / ``gpu_models`` / ``driver_version``
-    keys. Each is ``None`` when not detected. Lazy-imports torch.
+    ``cudnn_version`` / ``nccl_version`` / ``accelerator_backend`` /
+    ``gpu_models`` / ``unified_memory_bytes`` / ``driver_version`` keys.
+    Optional scalar values are ``None`` when not detected. Lazy-imports torch.
     """
     out = {
         "torch_version": None,
         "cuda_version": None,
         "cudnn_version": None,
         "nccl_version": None,
+        "accelerator_backend": None,
         "gpu_models": (),
+        "unified_memory_bytes": None,
         "driver_version": None,
     }
     try:
@@ -114,12 +174,15 @@ def _detect_torch_kernel_versions() -> dict:
         _LOG.debug("repro_receipt torch probe failed: %s", exc)
     try:
         if torch.cuda.is_available():
+            out["accelerator_backend"] = "cuda"
             names = []
             for i in range(torch.cuda.device_count()):
                 names.append(str(torch.cuda.get_device_name(i)))
             out["gpu_models"] = tuple(names)
     except Exception as exc:  # noqa: BLE001
         _LOG.debug("repro_receipt torch probe failed: %s", exc)
+    if out["accelerator_backend"] is None:
+        out.update(_detect_mps_metadata(torch))
     return out
 
 
@@ -150,7 +213,9 @@ def build_repro_receipt(
         cuda_version=kernel.get("cuda_version"),
         cudnn_version=kernel.get("cudnn_version"),
         nccl_version=kernel.get("nccl_version"),
+        accelerator_backend=kernel.get("accelerator_backend"),
         gpu_models=tuple(kernel.get("gpu_models", ())),
+        unified_memory_bytes=kernel.get("unified_memory_bytes"),
         driver_version=kernel.get("driver_version"),
         created_at=created_at,
     )
@@ -168,7 +233,9 @@ def receipt_to_dict(r: ReproReceipt) -> dict:
         "cuda_version": r.cuda_version,
         "cudnn_version": r.cudnn_version,
         "nccl_version": r.nccl_version,
+        "accelerator_backend": r.accelerator_backend,
         "gpu_models": list(r.gpu_models),
+        "unified_memory_bytes": r.unified_memory_bytes,
         "driver_version": r.driver_version,
         "created_at": r.created_at,
     }

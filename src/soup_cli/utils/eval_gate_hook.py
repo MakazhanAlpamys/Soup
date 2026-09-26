@@ -13,9 +13,9 @@ paired-bootstrap CI so single-outlier rows do not flip the gate.
 
 Public surface
 --------------
-- Frozen dataclass: ``GateThresholds``, ``RegressionVerdict``.
+- Frozen dataclass: ``GateThresholds``, ``GateMetricSpec``, ``RegressionVerdict``.
 - Pure functions: ``render_pre_push_hook``, ``write_pre_push_hook``,
-  ``paired_bootstrap_ci``, ``decide_regression``.
+  ``resolve_gate_metric``, ``paired_bootstrap_ci``, ``decide_regression``.
 """
 
 from __future__ import annotations
@@ -31,6 +31,8 @@ import types
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
+from soup_cli.eval.aider_polyglot import TASK_NAME as AIDER_POLYGLOT_TASK_NAME
+from soup_cli.eval.custom import TASK_NAME as CUSTOM_TASK_NAME
 from soup_cli.utils.paths import is_under_cwd
 
 _MAX_FILE_BYTES = 64 * 1024  # hooks are tiny — 64 KiB plenty
@@ -74,6 +76,21 @@ class GateThresholds:
                 )
             if not math.isfinite(float(value)):
                 raise ValueError(f"{fld} must be finite")
+
+
+@dataclass(frozen=True)
+class GateMetricSpec:
+    """Validated metric semantics and tracker lookup names.
+
+    ``source_metrics`` may contain a compatibility fallback. In particular,
+    ``task_accuracy`` first reads its historical name, then the ``custom``
+    benchmark written by ``soup eval custom``.
+    """
+
+    name: str
+    source_metrics: tuple[str, ...]
+    threshold_attr: str
+    direction: int
 
 
 @dataclass(frozen=True)
@@ -215,17 +232,71 @@ def paired_bootstrap_ci(
 # Regression decision
 # ---------------------------------------------------------------------------
 
-# Mapping: metric → (tolerance attr name, direction).
+# Mapping: metric → (tracker lookup names, tolerance attr name, direction).
 # direction = +1 means "higher is better" (regression when ci_upper < tol)
 # direction = -1 means "lower is better"  (regression when ci_lower > tol)
-_METRIC_DIRECTION: Mapping[str, int] = types.MappingProxyType(
+_METRIC_SPECS: Mapping[str, tuple[tuple[str, ...], str, int]] = types.MappingProxyType(
     {
-        "task_accuracy": +1,
-        "refusal_rate": +1,
-        "format_validity": +1,
-        "p95_latency_ms": -1,
+        "task_accuracy": (("task_accuracy", CUSTOM_TASK_NAME), "task_accuracy", +1),
+        "refusal_rate": (("refusal_rate",), "refusal_rate", +1),
+        "format_validity": (("format_validity",), "format_validity", +1),
+        "p95_latency_ms": (("p95_latency_ms",), "p95_latency_ms", -1),
+        CUSTOM_TASK_NAME: ((CUSTOM_TASK_NAME,), "task_accuracy", +1),
+        AIDER_POLYGLOT_TASK_NAME: ((AIDER_POLYGLOT_TASK_NAME,), "task_accuracy", +1),
     }
 )
+# Backward-compatible immutable view retained for callers and tests that used
+# the v0.55.0 registry directly.
+_METRIC_DIRECTION: Mapping[str, int] = types.MappingProxyType(
+    {name: spec[2] for name, spec in _METRIC_SPECS.items()}
+)
+
+_ALLOWED_METRIC_HELP = (
+    "aider_polyglot, custom, format_validity, p95_latency_ms, refusal_rate, "
+    "task_accuracy, judge:<model>, benchmark:<name>"
+)
+_RESERVED_TRAINING_METRICS = frozenset(
+    {"loss", "val_loss", "lr", "grad_norm", "speed", "gpu_mem", "epoch"}
+)
+
+
+def resolve_gate_metric(metric: str) -> GateMetricSpec:
+    """Validate a gate metric and return its direction and tracker lookup.
+
+    Soup-owned benchmark names with stable score semantics are accepted
+    directly. Arbitrary lm-eval task names require the explicit
+    ``benchmark:`` namespace, which keeps a typo such as ``accuracy`` from
+    silently becoming a database lookup.
+    """
+    if isinstance(metric, bool) or not isinstance(metric, str):
+        raise TypeError("metric must be str")
+    if len(metric) > 256:
+        raise ValueError(f"metric name exceeds 256 characters; allowed: {_ALLOWED_METRIC_HELP}")
+    if metric in _METRIC_SPECS:
+        sources, threshold_attr, direction = _METRIC_SPECS[metric]
+        return GateMetricSpec(metric, sources, threshold_attr, direction)
+    if metric.startswith("judge:"):
+        suffix = metric.removeprefix("judge:")
+        source_metric = metric
+    elif metric.startswith("benchmark:"):
+        suffix = metric.removeprefix("benchmark:")
+        if suffix in _RESERVED_TRAINING_METRICS:
+            raise ValueError(
+                f"benchmark:{suffix} is a reserved training metric; "
+                "choose an eval benchmark result"
+            )
+        source_metric = suffix
+    else:
+        raise ValueError(
+            f"unknown metric {metric!r}; allowed: {_ALLOWED_METRIC_HELP}"
+        )
+    if not suffix:
+        raise ValueError(
+            f"unknown metric {metric!r}; allowed: {_ALLOWED_METRIC_HELP}"
+        )
+    if any(ord(char) < 0x20 for char in source_metric):
+        raise ValueError("metric source name must not contain control characters")
+    return GateMetricSpec(metric, (source_metric,), "task_accuracy", +1)
 
 
 def decide_regression(
@@ -244,16 +315,10 @@ def decide_regression(
     tolerance; lower-is-better metrics regress when the *lower* CI
     bound is still worse.
     """
-    if isinstance(metric, bool) or not isinstance(metric, str):
-        raise TypeError("metric must be str")
-    if metric not in _METRIC_DIRECTION:
-        raise ValueError(
-            f"unknown metric {metric!r}; allowed: "
-            + ", ".join(sorted(_METRIC_DIRECTION))
-        )
+    spec = resolve_gate_metric(metric)
     _validate_thresholds(thresholds)
-    tol = getattr(thresholds, metric)
-    direction = _METRIC_DIRECTION[metric]
+    tol = getattr(thresholds, spec.threshold_attr)
+    direction = spec.direction
     lo, hi, mean = paired_bootstrap_ci(
         baseline, candidate, n_samples=n_samples, seed=seed
     )
@@ -284,7 +349,7 @@ def decide_regression(
 _HOOK_TEMPLATE = """#!/usr/bin/env bash
 # Generated by `soup eval gate-install` (v0.55.0) — do not edit by hand.
 # Pre-push regression gate: blocks the push when `soup eval against`
-# detects a regression vs the baseline run id.
+# cannot establish an acceptable comparison against the baseline run id.
 set -euo pipefail
 
 BASELINE_RUN_ID={baseline_run_id}
@@ -296,12 +361,19 @@ if [ -z "$CANDIDATE_RUN_ID" ]; then
     exit 0
 fi
 
+set +e
 soup eval against "$BASELINE_RUN_ID" --candidate "$CANDIDATE_RUN_ID" \\
-    --suite "$GATE_SUITE" --json-only \\
-    || {{
-        echo "[soup] pre-push gate blocked: regression vs $BASELINE_RUN_ID" >&2
-        exit 1
-    }}
+    --suite "$GATE_SUITE" --json-only
+rc=$?
+set -e
+
+if [ "$rc" -eq 2 ]; then
+    echo "[soup] pre-push gate blocked: regression vs $BASELINE_RUN_ID" >&2
+    exit 2
+elif [ "$rc" -ne 0 ]; then
+    echo "[soup] pre-push gate error: configuration or usage error (exit $rc)" >&2
+    exit "$rc"
+fi
 
 exit 0
 """

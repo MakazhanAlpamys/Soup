@@ -7,8 +7,8 @@ running the most recent version from PyPI (`pip install -U soup-cli`).
 
 | Version | Supported          |
 | ------- | ------------------ |
-| 0.73.x  | :white_check_mark: |
-| < 0.73  | :x:                |
+| 0.75.x  | :white_check_mark: |
+| < 0.75  | :x:                |
 
 ## Reporting a Vulnerability
 
@@ -51,6 +51,10 @@ Out of scope:
   DMARC / SPF / DKIM record, and anything else established by a public DNS
   query. These are worth fixing and we do fix them, but they are not findings
   in Soup and they are not eligible for anything.
+
+### Telemetry and Network Egress
+
+Soup is local-first. Telemetry is strictly **opt-in** (disabled by default) via `SOUP_TELEMETRY=1` and can be overridden per invocation with `--no-telemetry`. When enabled, telemetry transmits anonymous, hardware-only environment metadata (OS, architecture, Python version, command name sanitized against registered commands) via HTTPS. It never collects model weights, dataset contents, file paths, configurations, or secrets. See the [Privacy Policy](docs/backends-and-ops.md#privacy-policy) for complete details.
 
 **There is no bug bounty and no monetary reward.** We credit reporters by name
 in the release notes, which is the whole of what we offer. Reports that open

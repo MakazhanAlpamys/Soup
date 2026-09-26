@@ -16,9 +16,9 @@ Soup works with **any** of the **340,000+** text-generation models on [HuggingFa
 | **Llama 3.x** | Llama-3.1-8B-Instruct, Llama-3.3-70B-Instruct | 1B–70B | Chat, instruction following |
 | **Llama 3.2 Vision** | Llama-3.2-11B-Vision-Instruct, Llama-3.2-90B-Vision | 11B–90B | Image understanding |
 | **Gemma 3** | Gemma-3-4B-IT, Gemma-3-9B-IT, Gemma-3-27B-IT | 4B–27B | Efficient, multilingual |
-| **Qwen 3.5 / 3.6** | Qwen3.5-0.8B…397B-A17B, Qwen3.6-27B, Qwen3.6-35B-A3B | 0.8B–397B | 262K context, native vision, MoE |
+| **Qwen 3.5 / 3.6 / 3.8** | Qwen3.5-0.8B…397B-A17B, Qwen3.6-27B/35B-A3B, Qwen3.8-27B | 0.8B–397B | 262K context, native vision, MoE |
 | **Qwen 3** | Qwen3-8B, Qwen3-14B, Qwen3-32B, Qwen3-235B-A22B | 0.6B–235B | Reasoning, code, MoE |
-| **Qwen 2.5** | Qwen2.5-7B-Instruct, Qwen2.5-Coder-32B-Instruct | 0.5B–72B | Code, math |
+| **Qwen 2.5** | Qwen2.5-7B-Instruct, Qwen2.5-Coder-32B-Instruct, Qwen2.5-Math-7B-Instruct | 0.5B–72B | Code, math |
 | **DeepSeek** | DeepSeek-R1-Distill-Llama-8B, DeepSeek-V3-0324, DeepSeek-V4-Flash/Pro | 1.5B–1.6T | Reasoning (GRPO), code, MoE |
 | **GLM** | GLM-5, GLM-5.1 | 9B–754B | Chinese + English, MoE |
 | **Kimi** | Kimi-K2, Kimi-K2.5, Kimi-K2.6 | ~1T (MoE) | Long-context agentic, MoE |
@@ -31,6 +31,39 @@ Soup works with **any** of the **340,000+** text-generation models on [HuggingFa
 | **Yi** | Yi-1.5-34B-Chat, Yi-1.5-9B-Chat | 6B–34B | Multilingual chat |
 | **InternLM 3** | InternLM3-8B-Instruct | 8B | Chinese + English |
 | **Falcon** | Falcon-11B, Falcon-40B-Instruct | 7B–180B | Open-weight |
+
+Qwen3.5, Qwen3.6, and Qwen3.8 checkpoints advertise a multimodal conditional-generation
+architecture on the Hub, but Soup's catalog recipes are deliberately text-only.
+Their explicit `modality: text` selects `AutoModelForCausalLM`, which instantiates the
+language decoder without the visual tower. This is appropriate for text-only SFT,
+pre-training, and GRPO data; it is not a full multimodal fine-tune. The Transformers
+backend requires Transformers 5.16.1 or newer, which also supplies the
+`qwen4_exp` text decoder used by Qwen3.8-Flash-Next (#571). On Torch runtimes
+whose `scatter` operator still requires `int64` indices, Soup widens only the
+QSA indexer's local index tensors before LoRA injection; Torch and the upstream
+Transformers class remain unchanged.
+
+With `training.stream_layers: true`, the Qwen4-Exp text decoder is admitted by
+its own parity-tested path. Its very large frozen PLE N-gram table is excluded
+from the decoder-layer shard and can be served from the original safetensors
+with `training.stream_ngram_source: disk`. Reads are sparse and read-only; Soup
+does not create a second dense PLE copy in its shard cache.
+
+Dense Transformers checkpoints and oMLX/oQ affine Qwen4 bundles are accepted by
+this layer-streamed SFT path. For oQ, Soup dequantizes each frozen decoder layer
+into the reusable stream cache and maps the fused Switch-MLP expert tensors to
+the Transformers text decoder. The packed PLE table remains in the original
+checkpoint and only selected rows are dequantized, so oQ requires
+`stream_ngram_source: disk` (or `auto`). Vision-tower and MTP weights are not
+part of the text-only CausalLM and are ignored. `training.quantization` must
+remain `none`; streamed NF4 parity is separate and is not validated for Qwen4.
+
+The Qwen4 resident-versus-streamed parity oracle currently covers float32 CPU.
+BF16 parity on CUDA has not been measured, so CUDA BF16 production readiness is
+still pending even though the runtime selects BF16 there. The 176.9B-parameter
+production oQ checkpoint completed cache construction and training setup on an
+M4 Max but not a full optimizer step; it is not validated as trainable on a
+128 GiB Mac. See the [M4 Max gate record](../benchmarks/gate-qwen4-ple-m4-max.md).
 
 ### Vision Models (with `modality: vision`)
 
@@ -93,6 +126,11 @@ wrong with the package. (Dropping the quotes entirely works on Windows too, but 
 The core `pip install soup-cli` is a light install — the CLI, config system, and data tools, with
 no PyTorch. Add `[train]` to fine-tune, or install other extras only when you need them:
 
+Every row below is written with `pip`, and works verbatim inside a virtualenv, a Colab notebook
+or a Docker image. Outside one, on Debian 12 / Ubuntu 23.04 or later, `pip` refuses with
+`error: externally-managed-environment`; substitute `pipx` or `uv tool` for `pip` and the extras
+spelling is unchanged. See [the README's install section](../README.md#1-install).
+
 | Extra | Install | What it adds |
 |---|---|---|
 | `train` | `pip install "soup-cli[train]"` | Training stack: torch, transformers, peft, trl, datasets, bitsandbytes, accelerate |
@@ -100,7 +138,7 @@ no PyTorch. Add `[train]` to fine-tune, or install other extras only when you ne
 | `fast` | `pip install "soup-cli[fast]"` | Unsloth backend (2-5x faster, lower VRAM) |
 | `vision` | `pip install "soup-cli[vision]"` | Vision / multimodal fine-tuning (Pillow) |
 | `audio` | `pip install "soup-cli[audio]"` | Audio / speech fine-tuning (librosa, soundfile) |
-| `mlx` | `pip install "soup-cli[mlx]"` | Apple Silicon backend (mlx, mlx-lm) |
+| `mlx` | `pip install "soup-cli[mlx]"` | Standalone Apple Silicon SFT backend for local data; `[train]` is not required |
 | `qat` | `pip install "soup-cli[qat]"` | Quantization-Aware Training (torchao) |
 | `serve` | `pip install "soup-cli[serve]"` | Inference server (FastAPI + uvicorn) |
 | `serve-fast` | `pip install "soup-cli[serve-fast]"` | vLLM inference backend (2-4x throughput) |
@@ -108,15 +146,18 @@ no PyTorch. Add `[train]` to fine-tune, or install other extras only when you ne
 | `ui` | `pip install "soup-cli[ui]"` | Web UI + inference server |
 | `tui` | `pip install "soup-cli[tui]"` | Full-screen Textual dashboard (`soup tui`) |
 | `eval` | `pip install "soup-cli[eval]"` | Benchmark evaluation (lm-evaluation-harness) |
+| `aider` | `pip install "soup-cli[aider]"` | Aider CLI; Polyglot evaluation also needs Aider's source-built Docker image |
 | `data` | `pip install "soup-cli[data]"` | Deduplication (MinHash via datasketch) |
 | `data-pro` | `pip install "soup-cli[data-pro]"` | Language detection + PII (langdetect, presidio) |
 | `deepspeed` | `pip install "soup-cli[deepspeed]"` | Multi-GPU training (DeepSpeed ZeRO) |
 | `liger` | `pip install "soup-cli[liger]"` | Liger Kernel fused ops |
 | `ring-attn` | `pip install "soup-cli[ring-attn]"` | Ring FlashAttention (sequence parallelism) |
 | `onnx` / `tensorrt` | `pip install "soup-cli[onnx]"` | ONNX / TensorRT-LLM export |
-| `awq` / `gptq` | `pip install "soup-cli[awq]"` | AWQ / GPTQ quantized export |
+| `awq` / `gptq` | `pip install "soup-cli[awq]"` | AWQ / GPTQ quantized export; not installable alongside `[train]` (see below) |
 | `trackers` | `pip install "soup-cli[trackers]"` | MLflow / SwanLab / Trackio logging |
 | `remote` | `pip install "soup-cli[remote]"` | Remote datasets (s3 / gs / az / oci) |
 | `dev` | `pip install "soup-cli[dev]"` | Tests + lint + types (pytest, ruff, mypy, pre-commit) |
+
+**`[awq]` and `[gptq]` cannot be installed alongside `[train]`.** AWQ export was measured working only with `transformers` 4.52.4 or older, while `[train]` requires `transformers>=5.16.1`; `auto-gptq` publishes no Python 3.12 wheel; and both upstream projects (AutoAWQ and AutoGPTQ) are archived. Run AWQ or GPTQ export from a separate environment. Whether these two export formats stay is tracked in [#338](https://github.com/MakazhanAlpamys/Soup/issues/338).
 
 The complete, authoritative extras list is in [`pyproject.toml`](../pyproject.toml).

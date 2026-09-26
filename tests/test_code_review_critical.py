@@ -137,7 +137,7 @@ def test_tool_python_endpoint_requires_bearer_when_token_set():
     pytest.importorskip("fastapi")
     from fastapi.testclient import TestClient
 
-    client = TestClient(_build_tool_app("secret"))
+    client = TestClient(_build_tool_app("secret"), base_url="http://127.0.0.1")
     # Auth is checked before body inspection, so an empty body still 401s.
     assert client.post("/v1/tools/python", json={}).status_code == 401
     assert (
@@ -152,7 +152,7 @@ def test_tool_python_gate_is_noop_without_token():
     pytest.importorskip("fastapi")
     from fastapi.testclient import TestClient
 
-    client = TestClient(_build_tool_app(None))
+    client = TestClient(_build_tool_app(None), base_url="http://127.0.0.1")
     # No token configured -> auth passes -> empty body fails the code check
     # with 400 (NOT 401). Proves the gate is opt-in, and reachable.
     assert client.post("/v1/tools/python", json={}).status_code == 400
@@ -176,6 +176,43 @@ def test_eval_benchmark_rejects_trust_remote_code_injection(tmp_path, monkeypatc
     result = CliRunner().invoke(app, ["benchmark", "--model", "adapter"])
     assert result.exit_code == 1, (result.output, repr(result.exception))
     assert "trust_remote_code" in result.output or "delimiters" in result.output
+
+
+def test_train_warns_for_unwired_convergence_detection(tmp_path, monkeypatch):
+    """The accepted convergence flag must be covered by the honesty guard."""
+    from typer.testing import CliRunner
+
+    import soup_cli.commands.train as train_mod
+    from soup_cli.cli import app
+
+    data_path = tmp_path / "train.jsonl"
+    data_path.write_text('{"text": "hello"}\n', encoding="utf-8")
+    config_path = tmp_path / "soup.yaml"
+    config_path.write_text(
+        "base: sshleifer/tiny-gpt2\n"
+        "task: sft\n"
+        f"output: {tmp_path / 'out'}\n"
+        "data:\n"
+        f"  train: {data_path}\n"
+        "training:\n"
+        "  convergence_detection: true\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(train_mod, "detect_device", lambda backend=None: ("cpu", "CPU"))
+    monkeypatch.setattr(
+        train_mod, "get_gpu_info", lambda backend=None: {"memory_total": "N/A"}
+    )
+    monkeypatch.setattr(
+        train_mod,
+        "load_dataset",
+        lambda *args, **kwargs: {"train": [{"text": "hello"}]},
+    )
+
+    result = CliRunner().invoke(
+        app, ["train", "--config", str(config_path), "--dry-run", "--yes"]
+    )
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    assert "convergence_detection are set but not enforced" in result.output
 
 
 # ─────────────────────────── CRITICAL 4: webhook SSRF ──────────────────────────

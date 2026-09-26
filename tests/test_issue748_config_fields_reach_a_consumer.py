@@ -1,0 +1,1121 @@
+"""Issue #748 — a config field that reaches no consumer must fail the suite.
+
+A field is declared in `config/schema.py`, validated, documented with a worked
+example, and read by nothing. It accepts a value and does nothing with it,
+silently. Searching this tracker for `ignore|silently|never read|does not
+honour|no caller` returns 36 issues, among them #683, #684, #685 and #686 --
+four in a single backend. Every one was found by a person reading code.
+
+Nothing failed when a field lost its last consumer, and nothing fails today
+when a field is added with no wiring. This guard closes that.
+
+**What it does and does not claim.** It answers "does anything read this",
+not "does this backend read this". `training.max_grad_norm` is read by sixteen
+transformers trainers and by nothing on MLX; that is a strictly harder problem
+and out of scope here.
+
+**What this cannot see, so nobody trusts it past its limits.**
+
+*The name space is global.* It asks whether an identifier appears as an
+attribute or key anywhere under ``src/``, not whether it appears on a config
+object. The consumed set is roughly 3,400 names -- most of the codebase's
+attribute namespace. A field named after a common attribute therefore reads as
+consumed on the strength of an unrelated one. Measured on this tree, an
+unwired field would be caught or missed as follows:
+
+    training.verbose         caught
+    training.top_k           LEAKS   -- `top_k` is an attribute elsewhere
+    training.top_p           LEAKS
+    training.temperature     LEAKS   -- `request.temperature`, commands/serve.py
+    training.dtype           LEAKS
+    training.seed            LEAKS
+    training.logging_steps   LEAKS
+
+So this is a ratchet with a known hole, not a proof. It leaks hardest on
+exactly the generic names a new HuggingFace/TRL passthrough field would carry,
+which is the case most likely to arise. `test_the_known_leak_is_still_the_
+known_leak` pins the boundary so it cannot move without someone noticing.
+Scoping reads to config-typed objects is a much larger piece of work and is
+not attempted here.
+
+*Fields read only through a ``schema.py`` ``@property`` ARE now seen*, but
+only when something calls the property. ``schema.py`` is excluded from the
+main scan, so ``training.bnb_4bit_use_double_quant`` -- resolved by the
+``double_quant_on`` property (``schema.py:1880``, #321) -- read as an orphan,
+and an earlier version of this allowlist recorded it as an unread offender on
+exactly that evidence. Freezing a repaired field as an open defect is the
+worst thing an allowlist can do, because no test can retire it: the list is
+meant to name fields a user can set with no effect, and an entry that
+contradicts itself gives a false answer to the one question the file exists to
+answer. `schema_property_reads` fixes it. The gate matters as much as the
+pass: an UNCALLED resolver launders nothing, or the detector's own failure
+mode returns one level up, with a field "read" by code that never runs.
+Validators are excluded on principle -- a validator checks a value, a property
+resolves one for a consumer.
+
+*A read inside a function nothing references is not consumption* (#807), and
+the gate that enforces it has limits in both directions. A field is dropped
+only when EVERY read sits in such a function; one live read anywhere rescues
+it, which is what keeps the impact small -- on this tree it drops exactly one
+declared field, `warmup_auto`, pinned by
+`test_the_real_tree_has_exactly_one_known_escape`.
+
+"Referenced" is a syntactic question, not a reachability one, and it errs
+toward *referenced* -- so distrust a pass more than a failure. Two leaks
+follow. A function called only from ANOTHER dead function counts as
+referenced, because the dead caller's body loads its name: deadness is not
+transitive here. And the match is global by spelling, so an unrelated
+`obj.name` anywhere under ``src/`` rescues a dead function of the same name.
+
+The opposite hole is the one to watch: a function whose name is never loaded
+is not referenced at all, so its reads are dropped and a live field could be
+reported unconsumed. Typer command bodies are its largest decorated class
+among the modules the gate scans; undecorated functions are a larger share.
+`@app.command()` loads `app` and `command`, never the decorated function's own
+name, so on this tree 115 of the 150 `*.command`-decorated functions are absent
+from `referenced_names`, and the other 35 are present only through the global
+spelling match above. A function reached only through a string --
+`getattr(module, "name")`, or an entry point declared outside ``src/`` -- is the
+same case. On this tree that drops nothing beyond the four above.
+
+**Two rules this file learned the hard way, kept because they generalise.**
+A check can only be pinned by testing its REFUSALS: loosening a predicate
+makes a suite pass rather than fail, so `_reason_is_accountable` is asserted
+against what it rejects. And an assertion that looks untestable usually is not
+-- it is only unextracted. The scan/import tree check in `_declared()` was
+described here as "unkillable by construction", on the grounds that it exists
+to fire in a misconfigured environment and no mutation run inside a correct
+one can reach it. That was true of the assertion as written and false of the
+question it asks: pulling the comparison out as `describe_tree_mismatch` made
+it an ordinary function over two paths, testable in both directions with
+`tmp_path` and killed by three mutations. The lesson is the more useful one:
+"untestable from here" is a claim about the current shape of the code, not
+about the property.
+
+*It cannot see a value that is read and then rewritten.* #423 is the shape:
+``detect_device()`` did not recognise MLX, so `quantization: 4bit` was read
+correctly and then silently rewritten to `none`. That needs device-aware
+expectations, not a reachability walk.
+
+**Why an AST walk and not a grep.** `citation_recall_threshold` appears in a
+validator's error-message strings, so `grep -rl` calls it consumed while
+nothing applies it. Docstrings are stripped before the walk for the same
+reason. Conversely a field reached only through `getattr(cfg, "name")` or
+`cfg_dict["name"]` IS consumed, and a guard that flagged those would be
+deleted within a week -- `relora_steps` and `loraplus_lr_ratio` are exactly
+that shape. Both directions are pinned below.
+"""
+
+from __future__ import annotations
+
+import ast
+import functools
+import os
+import pathlib
+import re
+
+import pytest
+
+pytestmark = pytest.mark.unit
+
+SRC = pathlib.Path(__file__).resolve().parents[1] / "src" / "soup_cli"
+SCHEMA = "schema.py"
+SCHEMA_PATH = SRC / "config" / SCHEMA
+
+# --------------------------------------------------------------------------
+# The detector. Kept here rather than in `src/` because it is test-only
+# tooling; nothing in the shipped CLI should depend on it.
+# --------------------------------------------------------------------------
+@functools.lru_cache(maxsize=None)
+def _consumed_cached(paths_key) -> frozenset:
+    return frozenset(consumed_names([pathlib.Path(p) for p in paths_key]))
+
+
+def consumed_names(paths) -> set:
+    """Names some module READS. Reads only -- writes are not consumption.
+
+    Counted as a read:
+      * `obj.field` in a load context;
+      * `d["field"]` in a load context;
+      * `getattr(obj, "field")` / `cfg.get("field")` and friends.
+
+    Deliberately NOT counted:
+      * `d["field"] = value` and `{"field": value}` -- that is code EMITTING
+        config, not reading the user's setting. This is the hole that let
+        both of the maintainer's named offenders through: `data.interleave`
+        looked consumed because `mix_proxy.py` writes
+        `data_block["interleave"] = {...}`, and
+        `bnb_4bit_use_double_quant` because `save_formats.py` writes it as a
+        key in an output dict. Run against the tree at the commit where each
+        was a live defect, the earlier version reported both as CONSUMED.
+      * docstring prose, and any other bare string constant. Nothing here
+        collects a free-standing `ast.Constant`, so prose is excluded
+        structurally rather than by a stripping pass. An earlier version
+        stripped docstrings explicitly; mutation testing showed that pass was
+        dead once reads were narrowed to Load contexts and call arguments, so
+        it was removed rather than left looking load-bearing.
+    """
+    names: set = set()
+    for path in paths:
+        try:
+            tree = ast.parse(path.read_text(errors="ignore"))
+        except (SyntaxError, UnicodeDecodeError, ValueError):
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Attribute):
+                if isinstance(node.ctx, ast.Load):
+                    names.add(node.attr)
+            elif isinstance(node, ast.Subscript):
+                sl = node.slice
+                if (
+                    isinstance(node.ctx, ast.Load)
+                    and isinstance(sl, ast.Constant)
+                    and isinstance(sl.value, str)
+                ):
+                    names.add(sl.value)
+            elif isinstance(node, ast.Call):
+                # getattr(obj, "field") / d.get("field") / pop / setdefault
+                fn = node.func
+                fname = fn.attr if isinstance(fn, ast.Attribute) else getattr(fn, "id", "")
+                # Only the NAME argument, never the default. `d.get("k", "widget")`
+                # returns "widget" as a fallback value; counting it as a read of a
+                # field called `widget` is a false positive, and false positives
+                # are what get a guard deleted.
+                idx = 1 if fname in ("getattr", "hasattr") else 0
+                if fname in ("getattr", "get", "pop", "setdefault", "hasattr"):
+                    if len(node.args) > idx:
+                        arg = node.args[idx]
+                        if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
+                            names.add(arg.value)
+    return names
+
+
+def training_receiver_reads(paths, field: str) -> bool:
+    """Whether ``field`` is read directly from a ``*.training`` receiver.
+
+    The global detector sees ``ship.py``'s unrelated local named
+    ``forgetting_threshold``. This narrower check proves that exception instead
+    of permanently suppressing the config field: the moment a consumer reads
+    ``cfg.training.forgetting_threshold`` (including through ``getattr``), the
+    allowlist-staleness test goes red.
+    """
+    for path in paths:
+        try:
+            tree = ast.parse(pathlib.Path(path).read_text(errors="ignore"))
+        except (SyntaxError, UnicodeDecodeError, ValueError):
+            continue
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Attribute)
+                and isinstance(node.ctx, ast.Load)
+                and node.attr == field
+                and isinstance(node.value, ast.Attribute)
+                and node.value.attr == "training"
+            ):
+                return True
+            if not isinstance(node, ast.Call) or len(node.args) < 2:
+                continue
+            if not isinstance(node.func, ast.Name) or node.func.id not in {"getattr", "hasattr"}:
+                continue
+            receiver, name = node.args[:2]
+            if (
+                isinstance(receiver, ast.Attribute)
+                and receiver.attr == "training"
+                and isinstance(name, ast.Constant)
+                and name.value == field
+            ):
+                return True
+    return False
+
+
+def schema_property_reads(schema_path: pathlib.Path) -> dict:
+    """Fields read inside `schema.py` `@property` bodies, keyed by property name.
+
+    `schema.py` is excluded from the main scan, so a field read only through a
+    resolver there looks like an orphan. `double_quant_on` (schema.py:1880,
+    #321) is that case: consumers read the property, nothing names the field.
+
+    Properties only, never validators, and the distinction is principled: a
+    validator CHECKS a value and consumes nothing on the user's behalf; a
+    `@property` RESOLVES one for someone else to consume. Measured on this
+    schema: 1 property, 156 validators, 0 other decorated functions -- so this
+    pass contributes exactly one name today.
+
+    Returned per-property rather than flattened so the caller can gate on
+    whether anything actually calls the property. An uncalled resolver must not
+    launder its fields into "consumed" -- that would reintroduce this
+    detector's own failure mode one level up.
+    """
+    out: dict = {}
+    try:
+        tree = ast.parse(schema_path.read_text(errors="ignore"))
+    except (SyntaxError, UnicodeDecodeError, ValueError):  # pragma: no cover
+        return out
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        names = []
+        for dec in node.decorator_list:
+            if isinstance(dec, ast.Name):
+                names.append(dec.id)
+            elif isinstance(dec, ast.Attribute):
+                names.append(dec.attr)
+        if "property" not in names:
+            continue
+        reads = set()
+        for inner in ast.walk(node):
+            if isinstance(inner, ast.Attribute) and isinstance(inner.ctx, ast.Load):
+                reads.add(inner.attr)
+        out[node.name] = reads
+    return out
+
+
+def fold_property_reads(consumed: set, props: dict) -> set:
+    """Add a resolver's reads to `consumed`, but ONLY if the resolver is called.
+
+    The gate, extracted so it is testable on its own. Without it a property
+    nobody calls would launder its fields into "consumed" -- this detector's
+    own failure mode one level up, where a field is "read" by code that never
+    runs. Tested against a synthetic uncalled resolver rather than the real
+    schema, because the real schema's only property IS called, so a test using
+    it cannot tell the gate from its absence. (An earlier version of that test
+    did exactly that and the mutation survived.)
+    """
+    out = set(consumed)
+    for prop_name, reads in props.items():
+        if prop_name in out:
+            out |= reads
+    return out
+
+
+def _consumer_modules():
+    return [p for p in SRC.rglob("*.py") if p.name != SCHEMA]
+
+
+def field_reaches_a_consumer(key: str, attr: str, consumed: set) -> bool:
+    """Apply receiver-qualified checks where the global namespace collides."""
+    if key == "training.forgetting_threshold":
+        return training_receiver_reads(_consumer_modules(), attr)
+    return attr in consumed
+
+
+def _consumed_in_src() -> set:
+    """Cached: the walk is 499 modules and ~2s, and this file did it four
+    times uncached. Keyed on the file list so a changed tree re-walks.
+
+    Includes fields resolved by a `schema.py` `@property` -- but only when the
+    property itself is called from somewhere in `src/`. See
+    `schema_property_reads`.
+    """
+    modules = _consumer_modules()
+    consumed = set(_consumed_cached(tuple(sorted(str(p) for p in modules))))
+    consumed = fold_property_reads(consumed, schema_property_reads(SCHEMA_PATH))
+    # #807: a read inside a function nothing calls is not consumption, for
+    # the same reason an uncalled @property launders nothing.
+    return drop_dead_function_reads(
+        consumed, function_scoped_reads(modules), referenced_names(modules)
+    )
+
+
+# --------------------------------------------------------------------------
+# Fields with no consumer today. Each entry is a promise that someone looked.
+#
+# Seeded so this lands green; the number normally shrinks as fields are wired.
+# A detector repair can expose a pre-existing orphan hidden by a name collision;
+# adding that field requires a tracked reason and a deliberate count update.
+# --------------------------------------------------------------------------
+KNOWN_UNCONSUMED = {
+    # -- documented with a worked example, applied nowhere. Verified by hand.
+    "training.lr_groups": "no issue yet -- utils/lr_groups.py exports parse_lr_groups() and "
+                          "nothing outside schema.py imports it; documented at "
+                          "docs/peft-and-efficiency.md:190",
+    # data.mask_history was here until #761 wired it into data/loss_mask.py.
+    "training.early_stop_patience": "#761 -- schema promises 'consecutive regressions "
+                                    "before early stopping'; documented at "
+                                    "docs/peft-and-efficiency.md:622",
+    "training.citation_recall_threshold": "no issue yet -- validated by utils/citation_faithful.py "
+                                          "and named in its error strings; never applied",
+    # -- found by the read/write fix, and the reason that fix exists. A user
+    #    setting that is OVERRIDDEN rather than merely unread, so the strongest
+    #    kind of member this list has.
+    "training.grace_codebook": "#808 -- warns at load from v0.76, refused as of v0.77 "
+                               "(the string appears as an artifact-kind name in "
+                               "store.py:52 / edit.py:312, unrelated to this field)",
+    # -- #807: read ONLY inside a function nothing in src/ references, so the
+    #    read is not consumption. Surfaced by the dead-function gate, which
+    #    the guard previously applied to @property resolvers only.
+    "training.warmup_auto": "#807 -- read only in autopilot.generate_config, "
+                            "which nothing in src/ calls; and that line reads "
+                            "the decisions dict and WRITES the value into a "
+                            "config, so it is not a read of the field either",
+    # -- declared, and an explicit value is IGNORED with a warning naming the
+    #    release that refuses it, so having no consumer is correct. Not refused
+    #    yet, because Soup's own writers put the old default into saved configs.
+    "data.remove_unused_columns": "#759 -- no trainer reads it; the trainers that set the "
+                                  "HF argument pass False so a custom collator still sees "
+                                  "the extra columns. The default is now False, and an "
+                                  "explicit true loads with a warning and is ignored",
+    # -- declared and deliberately REFUSED, so having no consumer is correct.
+    #    A distinct category from the two below: the user is told, loudly, at
+    #    config load. Found by this guard rather than by hand.
+    "training.packing_cross_doc_attn_mask": "no issue needed: rejected at config load "
+                                            "(schema.py:3495) because it never "
+                                            "mapped to a valid TRL packing_strategy; "
+                                            "documented at docs/performance-and-"
+                                            "quantization.md:153",
+    # -- staged for features that have not landed; grouped so they can be
+    #    retired together rather than one at a time.
+    "training.long_context_grpo": "#808 -- warns at load from v0.76, refused as of v0.77 "
+                                  "(documented as wiring Tiled MLP; no Tiled MLP exists)",
+    "training.vision_grpo": "#808 -- warns at load from v0.76, refused as of v0.77 "
+                            "(no vision GRPO path)",
+    "training.load_in_16bit": "no issue needed: schema rewrites quantization at validation time",
+    "training.unsloth_bnb_4bit": "no issue needed: schema assertion alias",
+    "training.llm_int8": "no issue needed: schema assertion alias",
+    "training.quantize_ref_model": "#808 -- warns at load from v0.76, refused as of v0.77 "
+                                   "(reference-model quantisation staging)",
+    "training.convergence_window": "#808 group B -- soup train reports it as not enforced "
+                                   "(convergence-detector staging)",
+    "training.convergence_rel_tol": "#808 group B -- soup train reports it as not enforced "
+                                    "(convergence-detector staging)",
+    "training.forgetting_eval_steps": "#799 -- catastrophic-forgetting probe staging",
+    "training.forgetting_threshold": "#799 -- staged catastrophic-forgetting threshold; "
+                                     "the same name in ship.py is unrelated",
+    "training.forgetting_benchmark": "#799 -- catastrophic-forgetting probe staging",
+    "training.forgetting_stop": "#799 -- catastrophic-forgetting probe staging",
+    "training.checkpoint_eval_steps": "#799 -- checkpoint-eval staging",
+    "training.checkpoint_eval_metric": "#799 -- checkpoint-eval staging",
+    "training.checkpoint_eval_tasks": "#799 -- checkpoint-eval staging",
+    "training.checkpoint_keep_top": "#799 -- checkpoint-eval staging",
+    "training.grace_codebook_size": "#808 -- warns at load from v0.76, refused as of v0.77 "
+                                    "(GRACE codebook staging)",
+    "training.grace_codebook_dim": "#808 -- warns at load from v0.76, refused as of v0.77 "
+                                   "(GRACE codebook staging)",
+    "data.video_dir": "#808 -- warns at load from v0.76, refused as of v0.77 "
+                      "(video pipeline staging)",
+    "data.eval_on_each_dataset": "#808 -- warns at load from v0.76, refused as of v0.77 "
+                                 "(per-dataset eval staging)",
+    "data.split_thinking": "#808 -- warns at load from v0.76, refused as of v0.77 "
+                           "(thinking-block masking staging)",
+    "data.image_min_pixels": "#808 -- warns at load from v0.76, refused as of v0.77 "
+                             "(image preprocessing staging)",
+    "data.image_max_pixels": "#808 -- warns at load from v0.76, refused as of v0.77 "
+                             "(image preprocessing staging)",
+    "data.image_resize_algorithm": "#808 -- warns at load from v0.76, refused as of v0.77 "
+                                   "(image preprocessing staging)",
+    "data.video_fps": "#808 -- warns at load from v0.76, refused as of v0.77 "
+                      "(video pipeline staging)",
+    "data.video_maxlen": "#808 -- warns at load from v0.76, refused as of v0.77 "
+                         "(video pipeline staging)",
+    "data.resize_vocab": "#808 -- warns at load from v0.76, refused as of v0.77 "
+                         "(vocab-resize staging)",
+    "data.extend_conversation": "#808 -- warns at load from v0.76, refused as of v0.77 "
+                                "(conversation-extension staging)",
+    "data.skip_prepare_dataset": "#808 -- warns at load from v0.76, refused as of v0.77 "
+                                 "(dataset-prep bypass staging)",
+}
+
+
+def describe_tree_mismatch(imported: pathlib.Path, scanned: pathlib.Path):
+    """Return a message if these are different trees, else None.
+
+    Compared by **identity, not spelling**. The original form was
+    ``imported == scanned``, which is wrong on a case-insensitive filesystem:
+    macOS preserves case but does not distinguish it, and ``Path.resolve()``
+    returns the path as typed. Handing pytest this file as
+    ``/users/.../soup/tests/...`` gives a lowercase ``scanned`` (it is derived
+    from ``__file__``) while the editable install resolves to the canonical
+    ``/Users/.../Soup``, so two spellings of one directory compared
+    unequal and the guard reported a broken rebase that had not happened.
+    A good error message for a condition that is not an error is still a false
+    alarm.
+
+    ``os.path.samefile`` compares device and inode, so it answers the question
+    the assertion is actually asking. It RAISES on a missing path rather than
+    returning False, which is why existence is checked first -- that is the
+    one case the assertion most needs to report rather than crash on.
+
+    No test-count evidence is quoted here on purpose. The previous comment
+    cited "17 passed without PYTHONPATH, 2 failed with it", measured against a
+    17-test file and the ``==`` version, so the number was stale on its own
+    terms before the comparison changed. `TestTheTreeMismatchCheck` pins the
+    behaviour instead, which cannot go stale the way a remembered count does.
+    """
+    if not imported.exists():
+        return f"the imported soup_cli does not exist on disk: {imported}"
+    if not scanned.exists():
+        return f"the tree being scanned does not exist: {scanned}"
+    if os.path.samefile(imported, scanned):
+        return None
+    return (
+        f"scanning {scanned} but importing {imported}; set "
+        "PYTHONPATH=<checkout>/src or reinstall with `pip install -e .`, "
+        "or this guard silently passes against the wrong source"
+    )
+
+
+def _declared():
+    import soup_cli
+    from soup_cli.config.schema import DataConfig, LoraConfig, TrainingConfig
+
+    # The scan walks SRC (this checkout); the fields come from the IMPORTED
+    # package. In a worktree with no PYTHONPATH those are different trees and
+    # the mismatch fails GREEN -- the silent-pass failure mode this file
+    # exists to prevent.
+    imported = pathlib.Path(soup_cli.__file__).resolve().parent
+    problem = describe_tree_mismatch(imported, SRC)
+    assert problem is None, problem
+
+    out = {}
+    # #807: LoraConfig was outside the guard's scope entirely, so every
+    # LoRA-variant field was unguarded.
+    for cls, label in (
+        (TrainingConfig, "training"),
+        (DataConfig, "data"),
+        (LoraConfig, "training.lora"),
+    ):
+        for name in cls.model_fields:
+            out[f"{label}.{name}"] = name
+    return out
+
+
+class TestTheDetectorItself:
+    """The guard is only worth having if the detector is right in BOTH
+    directions. A false negative lets a dead field through; a false positive
+    gets the test deleted.
+    """
+
+    def _consumed(self, tmp_path, source: str) -> set:
+        module = tmp_path / "consumer.py"
+        module.write_text(source)
+        return consumed_names([module])
+
+    def _training_receiver_reads(self, tmp_path, source: str, field: str) -> bool:
+        module = tmp_path / "receiver_consumer.py"
+        module.write_text(source)
+        return training_receiver_reads([module], field)
+
+    def test_training_receiver_read_is_field_qualified(self, tmp_path):
+        source = "def f(cfg):\n    return cfg.training.forgetting_threshold\n"
+        assert self._training_receiver_reads(tmp_path, source, "forgetting_threshold")
+
+    def test_training_receiver_getattr_is_field_qualified(self, tmp_path):
+        source = 'def f(cfg):\n    return getattr(cfg.training, "forgetting_threshold", None)\n'
+        assert self._training_receiver_reads(tmp_path, source, "forgetting_threshold")
+
+    def test_unrelated_name_does_not_count_as_training_receiver_read(self, tmp_path):
+        source = "def f(forgetting_threshold):\n    return forgetting_threshold\n"
+        assert not self._training_receiver_reads(tmp_path, source, "forgetting_threshold")
+
+    def test_an_attribute_access_counts_as_consumption(self, tmp_path):
+        assert "widget" in self._consumed(tmp_path, "def f(cfg):\n    return cfg.widget\n")
+
+    def test_getattr_with_a_string_counts_as_consumption(self, tmp_path):
+        """`getattr(tcfg, "fp8_recipe", ...)` is how utils/v028_features.py
+        reads many real fields."""
+        src = 'def f(cfg):\n    return getattr(cfg, "widget", None)\n'
+        assert "widget" in self._consumed(tmp_path, src)
+
+    def test_a_dict_lookup_counts_as_consumption(self, tmp_path):
+        assert "widget" in self._consumed(tmp_path, 'def f(d):\n    return d["widget"]\n')
+
+    # The docstring fixtures below use the bare field name as the ENTIRE
+    # docstring. An earlier version wrote prose around it ("Talks about
+    # widget.") and was vacuous: the collected constant is then that whole
+    # sentence, never the bare name, so the assertion held whether or not
+    # stripping happened. Found by mutating the stripper -- disabling it
+    # survived all three. An exact-match docstring is also the realistic
+    # shape, since generated documentation often is exactly the field name.
+
+    def test_a_module_docstring_does_not_count(self, tmp_path):
+        """The distinction a grep gets wrong."""
+        assert "widget" not in self._consumed(tmp_path, '"""widget"""\n')
+
+    def test_a_function_docstring_does_not_count(self, tmp_path):
+        assert "widget" not in self._consumed(
+            tmp_path, 'def f():\n    """widget"""\n    return 1\n'
+        )
+
+    def test_a_class_docstring_does_not_count(self, tmp_path):
+        assert "widget" not in self._consumed(
+            tmp_path, 'class C:\n    """widget"""\n    x = 1\n'
+        )
+
+    def test_prose_mentioning_a_field_is_not_a_read_either(self, tmp_path):
+        """The `citation_recall_threshold` shape: named inside a longer
+        message. Collected as the whole sentence, so it never matches the
+        field name -- pinned so a future change to how constants are split
+        cannot start counting prose as consumption."""
+        src = 'def f():\n    raise ValueError("widget must be in [0, 1]")\n'
+        assert "widget" not in self._consumed(tmp_path, src)
+
+    def test_an_unrelated_module_consumes_nothing(self, tmp_path):
+        """Reject-everything control: the detector must not report a name that
+        is simply absent, or every field would look consumed."""
+        assert "widget" not in self._consumed(tmp_path, "x = 1\n")
+
+    def test_a_syntactically_broken_module_is_skipped_not_fatal(self, tmp_path):
+        """One unparseable file must not take the guard down."""
+        bad = tmp_path / "bad.py"
+        bad.write_text("def (:\n")
+        assert consumed_names([bad]) == set()
+
+
+class TestEveryDeclaredFieldReachesAConsumer:
+    def test_no_new_field_is_declared_without_a_consumer(self):
+        consumed = _consumed_in_src()
+        orphans = sorted(
+            key
+            for key, attr in _declared().items()
+            if not field_reaches_a_consumer(key, attr, consumed)
+            and key not in KNOWN_UNCONSUMED
+        )
+        assert not orphans, (
+            "These config fields are declared in schema.py and read by no "
+            "module outside it, so a user setting them gets no effect and no "
+            "warning:\n  "
+            + "\n  ".join(orphans)
+            + "\n\nWire the field, or add it to KNOWN_UNCONSUMED with a reason."
+        )
+
+    def test_the_allowlist_names_only_real_fields(self):
+        """A renamed or deleted field must not keep a stale entry alive --
+        otherwise the allowlist silently stops guarding anything."""
+        declared = _declared()
+        stale = sorted(k for k in KNOWN_UNCONSUMED if k not in declared)
+        assert not stale, (
+            "KNOWN_UNCONSUMED names fields that no longer exist; remove them:\n  "
+            + "\n  ".join(stale)
+        )
+
+    def test_the_allowlist_does_not_cover_fields_that_are_consumed(self):
+        """The list may only shrink. When a field gets wired, its entry has to
+        go, or the guard stops noticing if the wiring is later removed."""
+        consumed = _consumed_in_src()
+        declared = _declared()
+        now_wired = sorted(
+            k for k in KNOWN_UNCONSUMED
+            if k in declared and field_reaches_a_consumer(k, declared[k], consumed)
+        )
+        assert not now_wired, (
+            "These fields now have a consumer, so their KNOWN_UNCONSUMED entry "
+            "is obsolete and must be deleted:\n  " + "\n  ".join(now_wired)
+        )
+
+    def test_every_allowlist_entry_carries_a_reason(self):
+        empty = sorted(k for k, v in KNOWN_UNCONSUMED.items() if not v or len(v) < 10)
+        assert not empty, f"allowlist entries need a reason: {empty}"
+
+    def test_the_guard_can_actually_fail(self, tmp_path, monkeypatch):
+        """Acceptance criterion 1, demonstrated rather than described.
+
+        A guard that has never been observed failing is not yet known to work.
+        This adds a field to the real TrainingConfig, confirms the check goes
+        red naming it, then wires a consumer and confirms it goes green.
+        """
+        from soup_cli.config.schema import TrainingConfig
+
+        fields = dict(TrainingConfig.model_fields)
+        fields["totally_unwired_probe"] = fields["max_grad_norm"]
+        monkeypatch.setattr(TrainingConfig, "model_fields", fields)
+
+        consumed = _consumed_in_src()
+        orphans = [
+            key for key, attr in _declared().items()
+            if not field_reaches_a_consumer(key, attr, consumed)
+            and key not in KNOWN_UNCONSUMED
+        ]
+        assert "training.totally_unwired_probe" in orphans, (
+            f"the guard did not flag an unwired field; it reported {orphans}. "
+            "Membership, not equality: any other orphan present is a separate "
+            "finding and must not make this read as a failure to detect."
+        )
+
+        # ...and green once something reads it.
+        wired = tmp_path / "wired.py"
+        wired.write_text("def f(cfg):\n    return cfg.totally_unwired_probe\n")
+        # Same composition as the real check, property pass included.
+        consumed_after = _consumed_in_src() | consumed_names([wired])
+        assert "totally_unwired_probe" in consumed_after
+        assert not [
+            key for key, attr in _declared().items()
+            if not field_reaches_a_consumer(key, attr, consumed_after)
+            and key not in KNOWN_UNCONSUMED
+        ]
+
+    def test_removing_a_fields_last_consumer_is_caught(self, tmp_path):
+        """Acceptance criterion 2: the failure fires on the commit that breaks
+        it, not months later in a user's run."""
+        declared = _declared()
+        # `lr` is read all over the trainers; simulate its last consumer going.
+        assert "training.lr" in declared
+        only_docstring = tmp_path / "gone.py"
+        only_docstring.write_text('"""This module used to apply cfg.lr."""\n')
+        consumed = consumed_names([only_docstring])
+        assert "lr" not in consumed, (
+            "a field named only in a docstring must read as unconsumed"
+        )
+
+
+def test_the_allowlist_size_is_pinned_exactly():
+    """A ratchet that fails in BOTH directions.
+
+    `<= N` catches the list growing -- a field allowlisted rather than wired.
+    It does not catch the list going STALE: wire a field, forget to delete its
+    entry, and the bound stays green while the allowlist now describes code
+    that no longer exists. @MakazhanAlpamys flagged that asymmetry on #751,
+    having watched #756's registry go stale five times in a day for exactly
+    that reason.
+
+    `==` makes both directions a deliberate, reviewable edit to this line.
+
+    **The one case only this test can see** -- and the reason it is not
+    redundant with the test below -- is an entry added for a BRAND-NEW unwired
+    field. Nothing is stale then, no entry describes code that moved, and the
+    count is the only signal that a field was allowlisted instead of wired.
+    `test_the_allowlist_does_not_cover_fields_that_are_consumed` is the other
+    half: it names WHICH entry went stale, where this one only says the count
+    moved.
+    """
+    assert len(KNOWN_UNCONSUMED) == 36, (
+        f"KNOWN_UNCONSUMED is {len(KNOWN_UNCONSUMED)}, pinned at 36. Going UP "
+        "means a field was allowlisted rather than wired; going DOWN means an "
+        "entry was retired, which is the good direction -- lower this number "
+        "in the same commit."
+    )
+
+
+def _reason_is_accountable(reason: str) -> bool:
+    """A reason must cite an issue or say in words that none exists.
+
+    Extracted so the predicate itself is testable. Loosening a check makes the
+    suite pass rather than fail, so the only way to pin it is to assert what it
+    REJECTS -- see `TestTheAccountabilityPredicate`.
+    """
+    return bool(re.search(r"#\d+", reason)) or "no issue" in reason
+
+
+class TestTheAccountabilityPredicate:
+    """`staging` was accepted as a pass and 31 of 40 entries used it. That loose
+    predicate is what let the `bnb_4bit_use_double_quant` entry through with a
+    wrong story attached, so what it REJECTS is the part worth pinning."""
+
+    def test_a_bare_staging_note_is_not_accountable(self):
+        assert not _reason_is_accountable("YaRN staging")
+
+    def test_prose_with_no_issue_and_no_admission_is_not_accountable(self):
+        assert not _reason_is_accountable("documented as wiring Tiled MLP")
+
+    def test_an_issue_reference_is_accountable(self):
+        assert _reason_is_accountable("#759 -- fifteen trainers hardcode it")
+
+    def test_an_explicit_admission_is_accountable(self):
+        assert _reason_is_accountable("no issue yet -- nothing imports it")
+        assert _reason_is_accountable("no issue needed: refused at config load")
+
+
+def test_every_allowlist_entry_states_an_issue_or_says_there_is_none():
+    """An entry with no issue reference is indistinguishable from one someone
+    added to make CI green, and that is how a ratchet rots. Where no issue
+    exists the entry must say so out loud, which makes it a standing prompt to
+    file one -- which is how #759 came to be filed.
+    """
+    # `staging` is deliberately NOT accepted as a pass. 31 of the entries used
+    # it, and that loose predicate is what let the bnb_4bit_use_double_quant
+    # entry through carrying a wrong story. An entry must cite an issue or say
+    # in words that none exists.
+    vague = sorted(
+        k for k, v in KNOWN_UNCONSUMED.items()
+        if not _reason_is_accountable(v)
+    )
+    assert not vague, (
+        "these allowlist entries cite no issue and do not say one is missing:\n  "
+        + "\n  ".join(vague)
+    )
+
+
+def test_a_get_default_is_not_counted_as_a_read(tmp_path):
+    """`d.get("k", "widget")` returns "widget" as a fallback VALUE, not as a
+    field name. Counting it would be a false positive, and the false-positive
+    rate is what decides whether a guard survives the next person in a hurry.
+    """
+    module = tmp_path / "m.py"
+    module.write_text('def f(d):\n    return d.get("k", "widget")\n')
+    consumed = consumed_names([module])
+    assert "k" in consumed, "the looked-up key is a read"
+    assert "widget" not in consumed, "the default value is not a read"
+
+
+def test_getattr_reads_the_name_not_the_default(tmp_path):
+    """`getattr(o, "name", "widget")` -- the name is argument 1, the default 2."""
+    module = tmp_path / "m.py"
+    module.write_text('def f(o):\n    return getattr(o, "name", "widget")\n')
+    consumed = consumed_names([module])
+    assert "name" in consumed
+    assert "widget" not in consumed
+
+
+class TestSchemaSideResolvers:
+    """`schema.py` is excluded from the scan, so a field read only through a
+    resolver defined there looked like an orphan. `double_quant_on`
+    (`schema.py:1880`, #321) is that case, and an earlier version of this file
+    recorded its field as an unread offender on exactly that evidence.
+
+    Properties only, never validators: a validator CHECKS a value and consumes
+    nothing on the user's behalf; a `@property` RESOLVES one for someone else
+    to consume. Measured on this schema -- 1 property, 156 validators, 0 other
+    decorated functions -- so the pass contributes exactly one name today.
+    """
+
+    def _props(self, tmp_path, source: str) -> dict:
+        schema = tmp_path / "schema.py"
+        schema.write_text(source)
+        return schema_property_reads(schema)
+
+    def test_a_property_body_contributes_the_fields_it_reads(self, tmp_path):
+        src = (
+            "class C:\n"
+            "    @property\n"
+            "    def resolved(self):\n"
+            "        return self.raw_field is not False\n"
+        )
+        assert self._props(tmp_path, src) == {"resolved": {"raw_field"}}
+
+    def test_a_validator_body_contributes_nothing(self, tmp_path):
+        """156 of them read fields here. Counting those would mark most of the
+        schema consumed by its own validation, which is the false negative
+        that matters."""
+        src = (
+            "class C:\n"
+            "    @field_validator('raw_field')\n"
+            "    def check(cls, v):\n"
+            "        return cls.raw_field\n"
+        )
+        assert self._props(tmp_path, src) == {}
+
+    def test_the_real_schema_has_exactly_one_property(self):
+        """If a second resolver appears, this pass grows silently -- the pin is
+        cheap and makes that a deliberate edit."""
+        props = schema_property_reads(SCHEMA_PATH)
+        assert list(props) == ["double_quant_on"], (
+            f"schema.py properties are now {sorted(props)}; each one launders "
+            "the fields it reads into 'consumed', so review the addition"
+        )
+        assert "bnb_4bit_use_double_quant" in props["double_quant_on"]
+
+    def test_a_called_resolver_makes_its_field_consumed(self):
+        """`double_quant_on` is called from quant_menu.py and stream_setup.py,
+        so its field retires from the allowlist."""
+        consumed = _consumed_in_src()
+        assert "double_quant_on" in consumed, "the property itself must be called"
+        assert "bnb_4bit_use_double_quant" in consumed
+        assert "training.bnb_4bit_use_double_quant" not in KNOWN_UNCONSUMED
+
+    def test_an_uncalled_resolver_launders_nothing(self):
+        """The gate, exercised directly.
+
+        An earlier version of this test built a temp schema and then asserted
+        against `_consumed_in_src()`, which reads the REAL schema -- so it held
+        whether the gate existed or not, and dropping the gate survived
+        mutation. This drives `fold_property_reads` itself.
+        """
+        props = {"never_called": {"orphan_field"}, "is_called": {"wired_field"}}
+        consumed = fold_property_reads({"is_called", "unrelated"}, props)
+
+        assert "wired_field" in consumed, "a CALLED resolver contributes its reads"
+        assert "orphan_field" not in consumed, (
+            "an uncalled resolver laundered its field into 'consumed'; a field "
+            "read only by code nothing invokes is not consumed"
+        )
+
+    def test_the_gate_is_what_retires_the_double_quant_entry(self):
+        """End to end on the real schema: the property is called, so its field
+        is consumed and needs no allowlist entry."""
+        props = schema_property_reads(SCHEMA_PATH)
+        raw = set(_consumed_cached(tuple(sorted(str(p) for p in _consumer_modules()))))
+
+        assert "bnb_4bit_use_double_quant" not in raw, (
+            "nothing outside schema.py names the field -- that is why the "
+            "property pass exists"
+        )
+        assert "double_quant_on" in raw, "the property itself is called"
+        assert "bnb_4bit_use_double_quant" in fold_property_reads(raw, props)
+
+
+def test_the_known_leak_is_still_the_known_leak():
+    """Pin the boundary of the global-name-space hole, measured not assumed.
+
+    The maintainer measured this on #751 before merging: an unwired
+    `training.verbose` is caught, an unwired `training.top_k` is not, because
+    `top_k` appears as an attribute elsewhere in the tree. Recording it as a
+    test rather than as prose means the hole cannot quietly widen or close.
+
+    If a name moves from one list to the other, that is not a failure to fix
+    by editing this test — it is a change in what the guard can see, and the
+    docstring's leak table should move with it.
+    """
+    consumed = _consumed_in_src()
+
+    assert "verbose" not in consumed, (
+        "`training.verbose` used to be catchable; if some module now reads a "
+        "`.verbose` attribute, the guard has lost a name it could see"
+    )
+    for leaky in ("top_k", "top_p", "temperature", "dtype", "seed", "logging_steps"):
+        assert leaky in consumed, (
+            f"`{leaky}` no longer collides with an unrelated attribute, so the "
+            "guard can now catch an unwired field of that name. Good news — "
+            "update the leak table in the module docstring."
+        )
+
+
+# --------------------------------------------------------------------------
+# #807: the same laundering the property gate refuses, one level over.
+#
+# `fold_property_reads` gates a `schema.py` @property on being CALLED. Ordinary
+# functions got no such gate, so a read inside a function nothing calls counted
+# exactly like a read in a trainer. `training.warmup_auto` passed the guard on
+# the strength of one line in `autopilot/generate_config.generate_config`,
+# which nothing in src/ calls -- and which reads the autopilot decisions dict
+# and writes the value INTO a config, so it is not even a read of the field.
+# --------------------------------------------------------------------------
+
+
+def function_scoped_reads(paths) -> dict:
+    """Map each read name to the {(module, enclosing function)} it occurs in.
+
+    ``None`` as the function means module scope, which always counts: a read at
+    import time runs whenever the module is imported.
+
+    Every function is attributed, **methods included**. An earlier version of
+    this walked only `tree.body` top-level defs, so a read inside a class
+    method was invisible -- and a field whose only live read sits in a method
+    then looked dead. That produced two false positives on the real tree
+    (`auto_mixed_precision`, read at `trainer/sft.py:1185`, and
+    `training.multipack`). False positives are what get a guard deleted, so the
+    attribution has to cover methods or the gate is worse than no gate.
+    """
+    out: dict = {}
+    for path in paths:
+        try:
+            tree = ast.parse(path.read_text(errors="ignore"))
+        except (SyntaxError, UnicodeDecodeError, ValueError):
+            continue
+        stack = [(tree, None)]
+        while stack:
+            node, fname = stack.pop()
+            for child in ast.iter_child_nodes(node):
+                inner = (
+                    child.name
+                    if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef))
+                    else fname
+                )
+                name = None
+                if isinstance(child, ast.Attribute) and isinstance(child.ctx, ast.Load):
+                    name = child.attr
+                elif isinstance(child, ast.Constant) and isinstance(child.value, str):
+                    name = child.value
+                if name:
+                    out.setdefault(name, set()).add((path.name, fname))
+                stack.append((child, inner))
+    return out
+
+
+def referenced_names(paths) -> set:
+    """Every name loaded anywhere under src/ -- the "is this function called?" set.
+
+    A global name match, deliberately. It errs toward "referenced", which is
+    the safe direction: a guard that cries wolf on live code gets deleted, and
+    a missed dead function is only a return to today's behaviour.
+    """
+    names: set = set()
+    for path in paths:
+        try:
+            tree = ast.parse(path.read_text(errors="ignore"))
+        except (SyntaxError, UnicodeDecodeError, ValueError):
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
+                names.add(node.id)
+            elif isinstance(node, ast.Attribute) and isinstance(node.ctx, ast.Load):
+                names.add(node.attr)
+    return names
+
+
+def drop_dead_function_reads(consumed: set, scoped: dict, referenced: set) -> set:
+    """Remove names whose EVERY read sits in a function nothing references.
+
+    The function-level twin of `fold_property_reads`, and extracted for the
+    same reason: a gate can only be pinned by driving it directly. Testing it
+    through the real tree cannot distinguish the gate from its absence for any
+    field that is genuinely live. Its limits are stated in the module
+    docstring's "What this cannot see" list.
+    """
+    out = set(consumed)
+    for name, sites in scoped.items():
+        if name not in out:
+            continue
+        if all(fn is not None and fn not in referenced for _, fn in sites):
+            out.discard(name)
+    return out
+
+
+class TestTheDeadFunctionGate:
+    """#807. Both directions, driven through the gate rather than the tree."""
+
+    def test_a_read_in_a_referenced_function_still_counts(self):
+        consumed = {"widget"}
+        scoped = {"widget": {("m.py", "live_helper")}}
+        assert "widget" in drop_dead_function_reads(consumed, scoped, {"live_helper"})
+
+    def test_a_read_in_a_function_nothing_references_is_dropped(self):
+        consumed = {"widget"}
+        scoped = {"widget": {("m.py", "dead_helper")}}
+        assert "widget" not in drop_dead_function_reads(consumed, scoped, {"other"})
+
+    def test_one_live_read_rescues_a_field_with_dead_ones(self):
+        """A field read in both a live and a dead function is consumed. Anything
+        else would flag `auto_mixed_precision`, which `sft.py` really reads."""
+        consumed = {"widget"}
+        scoped = {"widget": {("dead.py", "never_called"), ("live.py", "used")}}
+        assert "widget" in drop_dead_function_reads(consumed, scoped, {"used"})
+
+    def test_a_module_scope_read_always_counts(self):
+        """Module scope runs on import; there is no enclosing function to be
+        dead."""
+        consumed = {"widget"}
+        assert "widget" in drop_dead_function_reads(
+            consumed, {"widget": {("m.py", None)}}, set()
+        )
+
+    def test_methods_are_attributed_not_skipped(self, tmp_path):
+        """The false-positive generator. Walking only top-level defs made a
+        read inside a method invisible, so the field looked dead."""
+        mod = tmp_path / "m.py"
+        mod.write_text(
+            "class C:\n"
+            "    def a_method(self, cfg):\n"
+            "        return cfg.widget\n"
+        )
+        scoped = function_scoped_reads([mod])
+        assert scoped.get("widget") == {("m.py", "a_method")}, (
+            "a read inside a method must be attributed to that method, not lost"
+        )
+
+    def test_the_real_tree_has_exactly_one_known_escape(self):
+        """Measured, and pinned so the number cannot drift unnoticed."""
+        modules = _consumer_modules()
+        scoped = function_scoped_reads(modules)
+        referenced = referenced_names(modules)
+        # The UNGATED set: _consumed_in_src() already applies the gate, so
+        # diffing it against itself would always be empty and this test would
+        # pass vacuously. Rebuild the pre-gate set the same way it does.
+        ungated = fold_property_reads(
+            set(_consumed_cached(tuple(sorted(str(m) for m in modules)))),
+            schema_property_reads(SCHEMA_PATH),
+        )
+        dropped = sorted(ungated - drop_dead_function_reads(ungated, scoped, referenced))
+        assert "warmup_auto" in dropped, (
+            "warmup_auto is read only inside a function nothing references, "
+            "so the gate should drop it"
+        )
+        # The name says EXACTLY one, and membership alone would pass a gate that
+        # dropped more (#906 review). `dropped` spans every consumed identifier,
+        # not just config fields, so the exact claim is over declared leaves.
+        declared_leaves = set(_declared().values())
+        dropped_fields = sorted(set(dropped) & declared_leaves)
+        assert dropped_fields == ["warmup_auto"], (
+            f"expected exactly the one known escape, got {dropped_fields}"
+        )
+
+    def test_consumed_in_src_applies_the_gate_independently_of_the_allowlist(self):
+        """#906 review: the only thing that caught the gate being removed from
+        `_consumed_in_src()` was `test_the_allowlist_does_not_cover_fields_that_
+        are_consumed` -- the pin scheduled for deletion once #794/#808 retire
+        those entries. This pins the composition directly: each escape is read
+        in the ungated set, and must be absent from what the scan returns."""
+        modules = _consumer_modules()
+        ungated = fold_property_reads(
+            set(_consumed_cached(tuple(sorted(str(m) for m in modules)))),
+            schema_property_reads(SCHEMA_PATH),
+        )
+        consumed = _consumed_in_src()
+        assert "warmup_auto" in ungated, (
+            "warmup_auto is not read at all, so this check is vacuous"
+        )
+        assert "warmup_auto" not in consumed, (
+            "warmup_auto is read only inside a dead function, yet _consumed_in_src() "
+            "counts it: the gate is not composed into the scan"
+        )
+
+
+class TestTheTreeMismatchCheck:
+    """The scan/import guard, compared by identity rather than by spelling.
+
+    Reported by another session on this account: given this file by a
+    lowercased path, the guard failed with a message that reads like a broken
+    rebase. A lowercased `cd` alone does not do it -- `getcwd()` returns the
+    canonical spelling -- so the spelling arrives through `__file__`. macOS is
+    case-insensitive but case-PRESERVING and `Path.resolve()` does not
+    normalise case, so `==` compared two spellings of one directory and called
+    them different.
+
+    These replace a comment that cited "17 passed without PYTHONPATH, 2 failed
+    with it" as its evidence. That count was measured against the `==` version
+    and against a 17-test file that has grown since. A number that travels
+    between implementations is exactly what a test should be doing instead.
+    """
+
+    @pytest.mark.requires_symlink
+    def test_the_same_directory_reached_by_a_different_spelling_is_not_a_mismatch(
+        self, tmp_path
+    ):
+        """The false alarm, reproduced through a symlink rather than by relying
+        on the filesystem being case-insensitive -- so this test means the same
+        thing on Linux CI, where `/Users` and `/users` really are different."""
+        real = tmp_path / "Soup" / "src" / "soup_cli"
+        real.mkdir(parents=True)
+        alias = tmp_path / "alias"
+        alias.symlink_to(tmp_path / "Soup")
+        other_spelling = alias / "src" / "soup_cli"
+
+        assert real != other_spelling, "the two spellings differ as strings"
+        assert describe_tree_mismatch(real, other_spelling) is None, (
+            "one directory reached two ways is not a mismatch; comparing "
+            "spelling rather than identity is what produced the false alarm"
+        )
+
+    def test_genuinely_different_trees_are_still_caught(self, tmp_path):
+        """The case the assertion exists for, and the one that must not be lost
+        to the fix: a worktree with no PYTHONPATH scans one tree while
+        importing another, and the guard would otherwise pass GREEN."""
+        a = tmp_path / "checkout" / "src" / "soup_cli"
+        b = tmp_path / "installed" / "soup_cli"
+        a.mkdir(parents=True)
+        b.mkdir(parents=True)
+
+        msg = describe_tree_mismatch(b, a)
+        assert msg is not None
+        assert "PYTHONPATH" in msg, "the message must say how to fix it"
+
+    def test_a_missing_imported_path_is_reported_not_crashed(self, tmp_path):
+        """`os.path.samefile` raises rather than returning False on a missing
+        path, so existence is checked first. This is the case the assertion
+        most needs to report."""
+        scanned = tmp_path / "src" / "soup_cli"
+        scanned.mkdir(parents=True)
+        msg = describe_tree_mismatch(tmp_path / "gone", scanned)
+        assert msg is not None and "does not exist" in msg
+
+    def test_a_missing_scanned_path_is_reported_not_crashed(self, tmp_path):
+        imported = tmp_path / "soup_cli"
+        imported.mkdir()
+        msg = describe_tree_mismatch(imported, tmp_path / "gone")
+        assert msg is not None and "does not exist" in msg
+
+    def test_the_real_checkout_agrees_with_itself(self):
+        """Control on the live tree: whatever this run's spelling, the guard
+        must not fire."""
+        import soup_cli
+
+        imported = pathlib.Path(soup_cli.__file__).resolve().parent
+        assert describe_tree_mismatch(imported, SRC) is None

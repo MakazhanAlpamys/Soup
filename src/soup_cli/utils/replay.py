@@ -17,10 +17,6 @@ from typing import List, Optional, Sequence
 # even on long runs that logged tens of thousands of steps.
 MAX_PLOT_POINTS = 2000
 
-# Minimum step delta to keep when sub-sampling. Otherwise large stretches
-# can collapse into "step 100, 100, 100" duplicates after coarsening.
-_MIN_STEP_DELTA = 1
-
 
 @dataclass(frozen=True)
 class ReplaySummary:
@@ -65,18 +61,27 @@ def downsample(
     *,
     max_points: int = MAX_PLOT_POINTS,
 ) -> List[dict]:
-    """Return at most ``max_points`` rows preserving order + endpoints.
+    """Return exactly ``min(len(metrics), max_points)`` rows, order preserved.
 
-    Uses uniform stride sampling so chart shape is preserved.
+    ``max_points`` is a hard cap, not a stride divisor (#473). Both endpoints
+    are kept, so the first and final loss are always on the chart, and the
+    remaining slots are spread evenly between them to preserve chart shape.
+    Sampled indices are strictly increasing, so no row is emitted twice.
+
+    ``max_points=1`` is the one shape where both endpoints cannot fit: the
+    final row wins, since making the final loss visible is what the previous
+    endpoint pin existed to guarantee.
     """
     if max_points <= 0:
         raise ValueError("max_points must be positive")
     rows = list(metrics)
     if len(rows) <= max_points:
         return rows
-    stride = max(_MIN_STEP_DELTA, len(rows) // max_points)
-    sampled = rows[::stride]
-    # Always pin the last row so the final loss is visible.
-    if sampled[-1] is not rows[-1]:
-        sampled.append(rows[-1])
-    return sampled
+    if max_points == 1:
+        return [rows[-1]]
+    # Evenly spaced indices across [0, span] with both ends included. The
+    # `+ slots // 2` is integer round-half-up: floats would be exact at these
+    # sizes, but integer arithmetic keeps the endpoint landing provable.
+    span = len(rows) - 1
+    slots = max_points - 1
+    return [rows[(index * span + slots // 2) // slots] for index in range(max_points)]

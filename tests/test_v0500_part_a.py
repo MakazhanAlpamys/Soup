@@ -122,7 +122,7 @@ def test_variant_spec_description_and_requires_delta():
     assert "two-sided" in spec.description.lower() or "two_sided" in spec.description.lower()
     spec_gspo = get_variant_spec("gspo")
     assert spec_gspo.requires_delta is False
-    assert "stabilized" in spec_gspo.description.lower()
+    assert "sequence" in spec_gspo.description.lower()
 
 
 # ---------------------------------------------------------------------------
@@ -283,7 +283,13 @@ def test_training_config_two_sided_with_delta_ok():
 
 def test_training_config_delta_without_two_sided_rejected():
     with pytest.raises(ValidationError, match="two_sided"):
-        TrainingConfig(grpo_variant="gspo", grpo_delta=0.3)
+        TrainingConfig(grpo_variant="dapo", grpo_delta=0.3)
+
+
+def test_training_config_gspo_with_delta_ok():
+    tc = TrainingConfig(grpo_variant="gspo", grpo_delta=0.3)
+    assert tc.grpo_variant == "gspo"
+    assert tc.grpo_delta == 0.3
 
 
 def test_training_config_unknown_variant_rejected():

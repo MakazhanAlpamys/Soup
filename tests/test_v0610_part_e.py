@@ -13,7 +13,6 @@ from __future__ import annotations
 import dataclasses
 import json
 import os
-import sys
 from pathlib import Path
 
 import pytest
@@ -185,7 +184,7 @@ class TestLoadProbes:
         with pytest.raises(ValueError):
             load_probes("")
 
-    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX-only symlink test")
+    @pytest.mark.requires_symlink
     def test_symlink_rejected(self, tmp_path):
         from soup_cli.utils.edit_diff import load_probes
 
@@ -256,9 +255,36 @@ class TestBuildDiffReport:
                 before_run_id="b", after_run_id="a", top_k=200,
             )
 
-    def test_with_probe_file(self, tmp_path):
+    def test_with_probe_file_requires_models(self, tmp_path):
         from soup_cli.utils.edit_diff import build_diff_report
 
+        p = tmp_path / "probes.jsonl"
+        p.write_text(
+            '{"prompt": "q1"}\n{"prompt": "q2"}\n{"prompt": "q3"}\n',
+            encoding="utf-8",
+        )
+        old = os.getcwd()
+        os.chdir(tmp_path)
+        try:
+            with pytest.raises(ValueError, match="both --before-model and --after-model"):
+                build_diff_report(
+                    before_run_id="b",
+                    after_run_id="a",
+                    probe_file="probes.jsonl",
+                    top_k=2,
+                )
+        finally:
+            os.chdir(old)
+
+    def test_with_probe_file_and_models(self, monkeypatch, tmp_path):
+        from soup_cli.utils import live_eval
+        from soup_cli.utils.edit_diff import build_diff_report
+
+        monkeypatch.setattr(
+            live_eval,
+            "make_generator",
+            lambda m, **kw: (lambda p: f"{m}:{p}"),
+        )
         p = tmp_path / "probes.jsonl"
         p.write_text(
             '{"prompt": "q1"}\n{"prompt": "q2"}\n{"prompt": "q3"}\n',
@@ -271,12 +297,15 @@ class TestBuildDiffReport:
                 before_run_id="b",
                 after_run_id="a",
                 probe_file="probes.jsonl",
+                before_model="m_before",
+                after_model="m_after",
                 top_k=2,
             )
         finally:
             os.chdir(old)
         assert r.total_probes == 3
         assert len(r.changes) == 2  # capped by top_k
+        assert r.changes[0].changed is True
 
 
 class TestRenderDiffTable:

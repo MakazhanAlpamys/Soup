@@ -25,7 +25,12 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Iterable, Optional, Sequence
+from typing import TYPE_CHECKING, Iterable, Optional, Sequence
+
+if TYPE_CHECKING:
+    from soup_cli.utils.echo_trap import EchoTrapCallback
+
+
 
 VERDICTS: tuple[str, ...] = ("OK", "WARN", "TRAP")
 _VALID_VERDICTS: frozenset[str] = frozenset(VERDICTS)
@@ -300,7 +305,7 @@ def _split_whitespace(text: str) -> list[str]:
 
 
 def _get_trainer_callback_base():
-    """Lazy-resolve ``transformers.TrainerCallback`` (mirror v0.53.11)."""
+    """Lazy-resolve ``transformers.TrainerCallback``."""
     try:
         from transformers import TrainerCallback
 
@@ -309,10 +314,7 @@ def _get_trainer_callback_base():
         return object
 
 
-_TrainerCallbackBase = _get_trainer_callback_base()
-
-
-class EchoTrapCallback(_TrainerCallbackBase):  # type: ignore[misc, valid-type]
+class _EchoTrapCallback_body:  # type: ignore[misc, valid-type]  # noqa: N801
     """Live HF TrainerCallback for echo-trap detection (v0.71.11 #240).
 
     Reads the GRPO step's generated completions (via the shared
@@ -458,6 +460,8 @@ def build_echo_trap_callback(
     at the public boundary (mirrors v0.50.0 / v0.61.0 fail-fast policy),
     then returns an :class:`EchoTrapCallback`.
     """
+    from soup_cli.utils.echo_trap import EchoTrapCallback
+
     return EchoTrapCallback(
         threshold=threshold,
         halt_on_trap=halt_on_trap,
@@ -473,7 +477,7 @@ def build_echo_trap_callback(
 # without circular dependencies.
 __all__ = [
     "VERDICTS",
-    "EchoTrapCallback",
+    "EchoTrapCallback",  # noqa: F822
     "EchoTrapReport",
     "build_echo_trap_callback",
     "classify_echo_signal",
@@ -489,3 +493,22 @@ TrajectoryTokens = Sequence[str]
 TrajectoryBatch = Iterable[TrajectoryTokens]
 TokenIdTrajectory = Sequence[int]
 TokenIdTrajectoryBatch = Iterable[TokenIdTrajectory]
+
+
+_LAZY_CALLBACKS = {
+    "EchoTrapCallback": _EchoTrapCallback_body,
+}
+_BODY_SKIP = frozenset(("__dict__", "__weakref__"))
+
+
+def __getattr__(name: str):  # PEP 562
+    body = _LAZY_CALLBACKS.get(name)
+    if body is not None:
+        base = _get_trainer_callback_base()
+        ns = {k: v for k, v in vars(body).items() if k not in _BODY_SKIP}
+        cls = type(name, (base,), ns)
+        cls.__module__ = __name__
+        cls.__qualname__ = name
+        globals()[name] = cls
+        return cls
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

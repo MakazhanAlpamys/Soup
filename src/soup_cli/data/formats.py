@@ -77,6 +77,69 @@ def detect_format(data: list[dict]) -> str:
     )
 
 
+# Every format format_to_messages can convert. Kept as a module constant so
+# the plain and reason-returning entry points share one source of truth.
+VALID_FORMATS = (
+    "chatml", "alpaca", "sharegpt", "dpo", "kto", "llava", "sharegpt4v",
+    "plaintext", "embedding", "audio", "tool-calling",
+    # v0.42.0 Part A
+    "prm", "pre_tokenized", "input_output", "video", "multimodal",
+    # v0.62.0 Part A — RAFT (Retrieval-Augmented Fine-Tuning).
+    "raft",
+    # v0.71.32 — ASR (Whisper): {"audio": path, "text": transcript}.
+    "asr",
+)
+
+# A malformed row makes a converter raise one of these; the drop contract is
+# that format_to_messages turns them into a dropped row (None), which the
+# loader skips. Kept as a constant so validation drops rows on exactly the
+# same conditions the loader does, rather than a re-implementation that drifts.
+_DROP_EXCEPTIONS = (KeyError, TypeError, IndexError, ValueError)
+
+
+def _dispatch_conversion(row: dict, fmt: str) -> dict:
+    """Run the converter for ``fmt``, letting a malformed row raise.
+
+    Separated from :func:`format_to_messages` so callers that need the *reason*
+    a row was dropped (dataset validation) can catch the exception, rather than
+    only seeing the ``None`` that :func:`format_to_messages` returns.
+    """
+    if fmt == "chatml":
+        return _convert_chatml(row)
+    elif fmt == "alpaca":
+        return _convert_alpaca(row)
+    elif fmt == "sharegpt":
+        return _convert_sharegpt(row)
+    elif fmt == "dpo":
+        return _convert_dpo(row)
+    elif fmt == "kto":
+        return _convert_kto(row)
+    elif fmt == "plaintext":
+        return _convert_plaintext(row)
+    elif fmt == "embedding":
+        return _convert_embedding(row)
+    elif fmt == "audio":
+        return _convert_audio(row)
+    elif fmt == "tool-calling":
+        return _convert_tool_calling(row)
+    elif fmt == "prm":
+        return _convert_prm(row)
+    elif fmt == "pre_tokenized":
+        return _convert_pre_tokenized(row)
+    elif fmt == "input_output":
+        return _convert_input_output(row)
+    elif fmt == "video":
+        return _convert_video(row)
+    elif fmt == "multimodal":
+        return _convert_multimodal(row)
+    elif fmt == "raft":
+        return _convert_raft(row)
+    elif fmt == "asr":
+        return _convert_asr(row)
+    else:
+        return _convert_vision(row)
+
+
 def format_to_messages(row: dict, fmt: str) -> Optional[dict]:
     """Convert any format to normalized structure for training.
 
@@ -85,56 +148,34 @@ def format_to_messages(row: dict, fmt: str) -> Optional[dict]:
     - Vision formats: {"messages": [...], "image": "path"}
     - DPO format: {"prompt": ..., "chosen": ..., "rejected": ...}
     - KTO format: {"prompt": ..., "completion": ..., "label": bool}
+
+    A malformed row is dropped (returns ``None``) rather than raising, so one
+    bad line does not abort a whole dataset load.
     """
-    valid_formats = (
-        "chatml", "alpaca", "sharegpt", "dpo", "kto", "llava", "sharegpt4v",
-        "plaintext", "embedding", "audio", "tool-calling",
-        # v0.42.0 Part A
-        "prm", "pre_tokenized", "input_output", "video", "multimodal",
-        # v0.62.0 Part A — RAFT (Retrieval-Augmented Fine-Tuning).
-        "raft",
-        # v0.71.32 — ASR (Whisper): {"audio": path, "text": transcript}.
-        "asr",
-    )
-    if fmt not in valid_formats:
+    if fmt not in VALID_FORMATS:
         raise ValueError(f"Unknown format: {fmt}")
     try:
-        if fmt == "chatml":
-            return _convert_chatml(row)
-        elif fmt == "alpaca":
-            return _convert_alpaca(row)
-        elif fmt == "sharegpt":
-            return _convert_sharegpt(row)
-        elif fmt == "dpo":
-            return _convert_dpo(row)
-        elif fmt == "kto":
-            return _convert_kto(row)
-        elif fmt == "plaintext":
-            return _convert_plaintext(row)
-        elif fmt == "embedding":
-            return _convert_embedding(row)
-        elif fmt == "audio":
-            return _convert_audio(row)
-        elif fmt == "tool-calling":
-            return _convert_tool_calling(row)
-        elif fmt == "prm":
-            return _convert_prm(row)
-        elif fmt == "pre_tokenized":
-            return _convert_pre_tokenized(row)
-        elif fmt == "input_output":
-            return _convert_input_output(row)
-        elif fmt == "video":
-            return _convert_video(row)
-        elif fmt == "multimodal":
-            return _convert_multimodal(row)
-        elif fmt == "raft":
-            return _convert_raft(row)
-        elif fmt == "asr":
-            return _convert_asr(row)
-        else:
-            return _convert_vision(row)
-    except (KeyError, TypeError, IndexError, ValueError):
+        return _dispatch_conversion(row, fmt)
+    except _DROP_EXCEPTIONS:
         return None
+
+
+def format_to_messages_with_reason(
+    row: dict, fmt: str
+) -> tuple[Optional[dict], Optional[str]]:
+    """Like :func:`format_to_messages`, but also report why a row was dropped.
+
+    Returns ``(converted, None)`` for a good row, or ``(None, reason)`` for one
+    that :func:`format_to_messages` would drop, where ``reason`` is the
+    converter's own error message. This lets validation tell a user *which*
+    rows fail and *why*, using the exact same drop decision as the loader.
+    """
+    if fmt not in VALID_FORMATS:
+        raise ValueError(f"Unknown format: {fmt}")
+    try:
+        return _dispatch_conversion(row, fmt), None
+    except _DROP_EXCEPTIONS as exc:
+        return None, str(exc)
 
 
 def _require_str_content(value: object, field: str) -> str:
@@ -148,6 +189,19 @@ def _require_str_content(value: object, field: str) -> str:
     if not isinstance(value, str):
         raise TypeError(f"{field} must be a string, got {type(value).__name__}")
     return value
+
+
+def _require_dict_messages(messages: object, kind: str) -> None:
+    """Require a messages list whose elements are all dicts.
+
+    Raising ValueError routes the row to ``format_to_messages``'s drop path
+    instead of passing the malformed element through into training.
+    """
+    if not isinstance(messages, list):
+        raise ValueError(f"{kind} row 'messages' must be a list")
+    for msg in messages:
+        if not isinstance(msg, dict):
+            raise ValueError(f"{kind} message must be a dict")
 
 
 def _convert_alpaca(row: dict) -> dict:
@@ -183,8 +237,9 @@ def _convert_sharegpt(row: dict) -> dict:
 
 
 def _convert_chatml(row: dict) -> dict:
-    # Already in the right format
-    return {"messages": row["messages"]}
+    messages = row["messages"]
+    _require_dict_messages(messages, "chatml")
+    return {"messages": messages}
 
 
 def _convert_dpo(row: dict) -> dict:
@@ -276,6 +331,7 @@ def _convert_audio(row: dict) -> dict:
     messages = row["messages"]
     if not isinstance(messages, list) or len(messages) < 1:
         raise ValueError("Audio row must have a 'messages' list with at least one message")
+    _require_dict_messages(messages, "audio")
     return {"messages": messages, "audio": audio}
 
 
@@ -569,7 +625,10 @@ def _convert_video(row: dict) -> dict:
         raise ValueError("video row 'video' must not contain null bytes")
     if len(video) > 2048:
         raise ValueError("video row 'video' must be <= 2048 chars")
-    messages = row.get("messages") or []
+    messages = row.get("messages")
+    if messages is None:
+        messages = []
+    _require_dict_messages(messages, "video")
     return {"video": video, "messages": messages}
 
 
@@ -586,6 +645,8 @@ def _convert_multimodal(row: dict) -> dict:
         raise ValueError("multimodal row must have non-empty 'messages' list")
     valid_types = {"text", "image", "audio", "video"}
     for msg in messages:
+        if not isinstance(msg, dict):
+            raise ValueError("multimodal message must be a dict")
         content = msg.get("content")
         if isinstance(content, str):
             continue  # back-compat with plain strings

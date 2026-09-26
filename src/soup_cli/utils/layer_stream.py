@@ -10,9 +10,11 @@ wrapper) lives in ``layer_stream_runtime.py``; the checkpoint sharder lives in
 ``layer_shard.py``.
 
 Model of the mechanism: the frozen base lives in CPU RAM and is streamed into a
-small pool of pre-allocated VRAM buffers one decoder layer at a time, so peak
-VRAM is bounded by ONE layer rather than the whole model. Only the LoRA
-adapters, their gradients and optimizer state stay resident.
+small pool of pre-allocated VRAM buffers one decoder layer at a time. Vocabulary
+embeddings and an untied output head share a second, single-slot pool. Peak VRAM
+is therefore bounded by one decoder layer plus one vocabulary matrix rather than
+the whole model. Only the LoRA adapters, their gradients and optimizer state
+stay resident.
 """
 
 import math
@@ -33,13 +35,40 @@ TIER_RAM = "ram"
 TIER_DISK = "disk"
 STREAM_SOURCES = ("auto", "ram", "disk")
 
-#: model_bytes must be under this fraction of free RAM to claim the RAM tier.
+#: store_bytes must be under this fraction of free RAM to claim the RAM tier.
 RAM_TIER_HEADROOM = 0.7
+#: store_bytes plus resident extras must also stay under this fraction of total
+#: physical RAM. Pinned host memory is unevictable while shard reads pressure the
+#: page cache, so a run can OOM even when the dynamic MemAvailable check passes (#622).
+#: **A chosen safety margin, not a measured bound** — unlike the measured constants
+#: below, no benchmark derives 0.55. It is also not a tmpfs limit: Linux defaults
+#: /dev/shm to 50% of RAM and a container's is far smaller, so a store that clears
+#: this ceiling can still overflow the shared-memory mount it is allocated from.
+#: Reading that real limit (``os.statvfs("/dev/shm")``, ``RLIMIT_MEMLOCK``) is the
+#: follow-up this ceiling stands in for, not something it measures (#644 review).
+PHYSICAL_RAM_TIER_HEADROOM = 0.55
+PHYSICAL_RAM_TIER_HEADROOM_PERCENT = round(PHYSICAL_RAM_TIER_HEADROOM * 100)
+
+# Measured throughput a page-locked RAM store buys over a pageable one
+# (benchmarks/gate-h100-validation.md): 6.56x on real Qwen2.5-32B NF4, 7.41x on
+# a 32-layer synthetic. Stated out loud whenever pinning is disabled so the cost
+# is not absorbed silently — a silent fallback spends the entire margin.
+PIN_THROUGHPUT_GAIN_REAL = 6.56
+PIN_THROUGHPUT_GAIN_SYNTHETIC = 7.41
 
 # --- buffers --------------------------------------------------------------
 MIN_STREAM_BUFFERS = 2
 MAX_STREAM_BUFFERS = 8
 DEFAULT_STREAM_BUFFERS = 2
+
+# Re-exported, not redeclared: the schema imports its bound from here and the
+# runtime declares it, so the message and the check cannot disagree (the same
+# reasoning as stream_buffers).
+from soup_cli.utils.async_disk_source import (  # noqa: E402
+    DEFAULT_STREAM_READ_AHEAD,  # noqa: F401
+    MAX_STREAM_READ_AHEAD,  # noqa: F401
+    MIN_STREAM_READ_AHEAD,  # noqa: F401
+)
 
 # --- tasks ----------------------------------------------------------------
 #: Tasks whose trainers can run against a streamed base (v0.72.4).
@@ -75,6 +104,7 @@ SUPPORTED_STREAM_ARCHS = (
     "llama",
     "qwen2",
     "qwen3",
+    "qwen4_exp",
     "mistral",
     "gemma",
     "gemma2",
@@ -82,6 +112,17 @@ SUPPORTED_STREAM_ARCHS = (
     "phi",
     "phi3",
 )
+
+# Model types whose text decoders reuse an admitted streaming family.  Each
+# alias needs its own resident-vs-streamed parity control; mapping a model type
+# by name alone is not enough to establish that its decoder graph is safe.
+_STREAM_ARCH_ALIASES = {
+    "qwen3_5": "qwen3",
+    "qwen3_5_text": "qwen3",
+    "qwen3_5_moe": "qwen3",
+    "qwen3_5_moe_text": "qwen3",
+    "qwen4_exp_text": "qwen4_exp",
+}
 
 #: The loss path's own arithmetic, in VRAM bytes per logit element. **Measured
 #: stage by stage (issue #327), not derived.** ``ForCausalLMLoss`` upcasts to
@@ -191,16 +232,24 @@ def resolve_stream_dtype(device: str = "cuda") -> str:
     most of the hardware this feature exists for, and it could not fail on the
     Ampere card every published measurement was taken on (#385).
 
-    The capability question is delegated to ``utils.gpu.get_compute_dtype``
-    rather than answered again here — one question, one answer, or the two
-    drift. CPU stays float32: CPU streaming is a test convenience, and
-    half-precision CPU kernels are not uniformly available.
+    The CUDA capability question is delegated to
+    ``utils.gpu.get_compute_dtype`` rather than answered again here — one
+    question, one answer, or the two drift. MPS is separate: PyTorch supports
+    bfloat16 there from macOS 14, so a one-element allocation probes the exact
+    runtime rather than guessing from a version string. CPU stays float32: CPU
+    streaming is a test convenience, and half-precision CPU kernels are not
+    uniformly available.
 
     Correctness is unaffected by the choice. Streamed-vs-resident logits were
     measured bit-exact (``0.000000e+00``) in float16 as well as bfloat16, in
     both quantisations, against resident references of matching numerics.
     """
-    if not str(device).lower().startswith("cuda"):
+    device_name = str(device).lower()
+    if device_name.startswith("mps"):
+        from soup_cli.utils.gpu import mps_supports_bf16
+
+        return "bfloat16" if mps_supports_bf16() else "float32"
+    if not device_name.startswith("cuda"):
         return "float32"
 
     from soup_cli.utils.gpu import get_compute_dtype
@@ -222,15 +271,25 @@ def stream_arch_of(config: Any) -> str:
     wrong module and produces silently wrong numbers rather than a crash.
     """
     model_type = getattr(config, "model_type", None)
-    if not model_type or not isinstance(model_type, str):
+    text_config = getattr(config, "text_config", None)
+    text_model_type = getattr(text_config, "model_type", None)
+    raw_family = model_type
+    if isinstance(text_model_type, str):
+        alias = text_model_type.strip().lower()
+        if alias in _STREAM_ARCH_ALIASES:
+            raw_family = text_model_type
+        elif raw_family is None:
+            raw_family = text_model_type
+    if not raw_family or not isinstance(raw_family, str):
         raise ValueError(
-            "layer streaming needs config.model_type to pick an architecture; "
-            "none was found on the model config"
+            "layer streaming needs config.model_type or "
+            "config.text_config.model_type to pick an architecture; none was "
+            "found on the model config"
         )
-    family = model_type.strip().lower()
+    family = _STREAM_ARCH_ALIASES.get(raw_family.strip().lower(), raw_family.strip().lower())
     if family not in SUPPORTED_STREAM_ARCHS:
         raise ValueError(
-            f"layer streaming does not support model_type={family!r}. "
+            f"layer streaming does not support model_type={raw_family!r}. "
             f"Supported: {', '.join(SUPPORTED_STREAM_ARCHS)}. "
             f"More architectures land in v0.72.3."
         )
@@ -247,22 +306,52 @@ DISK_KINDS = (_NVME, "ssd", "hdd", "unknown")
 #: actually depends on the answer.
 DiskKind = Union[str, Callable[[], str]]
 
-_DISK_KIND_CACHE: Dict[str, str] = {}
+@dataclass(frozen=True)
+class DiskClassification:
+    """A disk verdict and, when the verdict was DERIVED from an O_DIRECT read,
+    the rate that produced it.
+
+    ``measured_bps`` is set ONLY when ``kind`` came from the measured-throughput
+    fallback (the virtio/#365 path). It is ``None`` for NVMe-by-name,
+    ``rotational=0``, a non-Linux probe, and — crucially — an explicit
+    ``training.stream_disk_kind`` override, whose verdict is the user's, not the
+    probe's. Carrying the rate ALONGSIDE the kind (not in module state) means a
+    refusal can only ever cite the rate that produced its OWN verdict: the two
+    cannot desync across a cache hit or an override.
+    """
+
+    kind: str
+    measured_bps: Optional[float] = None
 
 
-def detect_disk_kind(path: str = ".") -> str:
-    """Media type of the volume holding ``path``: nvme / ssd / hdd / unknown.
+_DISK_KIND_CACHE: Dict[str, DiskClassification] = {}
 
-    **Costs about 9 s on Windows** (measured), because the only reliable source
-    is a PowerShell ``Get-PhysicalDisk`` CIM query. That is why ``choose_tier``
-    takes a *callable* and only invokes it when the base does not fit in RAM —
-    the answer is irrelevant on the RAM tier, which is the common case. The
-    result is cached per process.
+# --- measured-throughput fallback (#365) ----------------------------------
+#: Bytes read by the O_DIRECT probe when the rotational flag is untrustworthy.
+#: 64 MiB clears a device's small write-back window yet reads in well under a
+#: second on anything at or above the tier floor (~0.06 s at 1 GB/s), keeping
+#: the fallback bounded (criterion 4).
+_MEASURE_READ_BYTES = 64 * 1024 * 1024
+#: How many times the O_DIRECT read is repeated; the best (fastest) sample wins.
+#: A single read can be slowed by a cold device queue or first-access latency and
+#: under-measure a genuinely fast disk, wrongly refusing it — the single-sample
+#: threshold weakness the #365 review called out. Three bounded reads of a 64 MiB
+#: file stay well under a second total on any tier-eligible device.
+_MEASURE_READ_SAMPLES = 3
+#: A device must sustain at least this sequential read rate to earn the NVMe
+#: disk-overflow tier. The tier is NVMe-class by policy — ``choose_tier``
+#: already refuses a SATA SSD (~550 MB/s) — so the floor sits above SATA at
+#: 1.0 GB/s: the reported virtio disk (1.5 GB/s read) clears it, a spinning
+#: disk (~0.1-0.25 GB/s) does not. Consulted ONLY when the rotational flag is
+#: unreliable; where a real media type is readable that route still wins.
+NVME_TIER_MIN_BYTES_PER_S = 1_000_000_000
 
-    ``unknown`` is returned rather than guessed whenever the platform cannot be
-    probed, and ``choose_tier`` refuses it. Refusing is the safe direction: the
-    cost of wrongly believing a spinning disk is NVMe is a run that thrashes for
-    hours (plan P11 — 80 shards x 2 reads = 160 seeks per step).
+
+def classify_disk_kind(path: str = ".") -> DiskClassification:
+    """Full disk verdict for ``path``: the ``kind`` plus, when the verdict was
+    measured, the rate that produced it. Cached per volume. The callable
+    ``choose_tier`` holds returns THIS, so a refusal cites the coupled rate and
+    never a stale/unrelated figure from module state.
     """
     import os
 
@@ -272,9 +361,58 @@ def detect_disk_kind(path: str = ".") -> str:
     key = os.path.splitdrive(resolved)[0] or resolved
     if key in _DISK_KIND_CACHE:
         return _DISK_KIND_CACHE[key]
-    kind = _probe_disk_kind(path)
-    _DISK_KIND_CACHE[key] = kind
-    return kind
+    result = _probe_disk_kind(path)
+    _DISK_KIND_CACHE[key] = result
+    return result
+
+
+def detect_disk_kind(path: str = ".") -> str:
+    """Media type of the volume holding ``path``: nvme / ssd / hdd / unknown.
+
+    **Costs about 9 s on Windows** (measured), because the only reliable source
+    is a PowerShell ``Get-PhysicalDisk`` CIM query. That is why ``choose_tier``
+    takes a *callable* and only invokes it when the base does not fit in RAM —
+    the answer is irrelevant on the RAM tier, which is the common case. The
+    result is cached per process. On Linux this WRITES a small scratch file to
+    probe throughput (see ``_measure_seq_read_bytes_per_s``).
+
+    ``unknown`` is returned rather than guessed whenever the platform cannot be
+    probed, and ``choose_tier`` refuses it. Refusing is the safe direction: the
+    cost of wrongly believing a spinning disk is NVMe is a run that thrashes for
+    hours (plan P11 — 80 shards x 2 reads = 160 seeks per step).
+    """
+    return classify_disk_kind(path).kind
+
+
+def resolve_disk_kind(
+    path: str,
+    override: Optional[str] = None,
+    *,
+    notify: Optional[Callable[[str], None]] = None,
+) -> DiskClassification:
+    """Detected classification, or an explicit override with a loud notice (#365).
+
+    ``training.stream_disk_kind`` is the escape hatch for the case where even
+    the measured fallback is wrong. When set it wins, but detection still runs
+    so the notice can report what was overridden and what was detected;
+    ``choose_tier`` then sees the override. Detection is wrapped because a
+    diagnostic read must not break a run the user has already told us how to
+    classify.
+    """
+    if override is None:
+        return classify_disk_kind(path)
+    try:
+        detected = detect_disk_kind(path)
+    except Exception:  # noqa: BLE001 — never let the probe break an overridden run
+        detected = "unknown"
+    if notify is not None:
+        notify(
+            f"[yellow]disk kind overridden:[/] using "
+            f"training.stream_disk_kind={override!r} (detected {detected!r})"
+        )
+    # The verdict is the user's override, NOT the probe's — carry no measured
+    # rate, so a refusal can never cite a reading the user deliberately overrode.
+    return DiskClassification(override)
 
 
 def _resolve_tool(name: str, *fallbacks: str) -> Optional[str]:
@@ -302,7 +440,239 @@ def _resolve_tool(name: str, *fallbacks: str) -> Optional[str]:
 _POWERSHELL_FALLBACK = r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"
 
 
-def _probe_disk_kind(path: str) -> str:
+def _darwin_bsd_whole_disk(identifier: Any) -> Optional[str]:
+    """Return the whole-disk BSD name for a validated ``diskNsM`` identifier."""
+    import re
+
+    match = re.fullmatch(r"/?(?:dev/)?(disk\d+)(?:s\d+)*", str(identifier).strip())
+    return match.group(1) if match is not None else None
+
+
+def _darwin_apfs_physical_stores(disk_info: dict) -> set[str]:
+    """Whole disks backing the APFS volume described by ``diskutil info``."""
+    stores = disk_info.get("APFSPhysicalStores")
+    if not isinstance(stores, list):
+        return set()
+    result = set()
+    for entry in stores:
+        if not isinstance(entry, dict):
+            continue
+        identifier = entry.get("APFSPhysicalStore") or entry.get("DeviceIdentifier")
+        whole_disk = _darwin_bsd_whole_disk(identifier)
+        if whole_disk is not None:
+            result.add(whole_disk)
+    return result
+
+
+def _darwin_nvme_whole_disks(profile: dict) -> set[str]:
+    """Whole disks explicitly listed by ``system_profiler SPNVMeDataType``."""
+    sections = profile.get("SPNVMeDataType")
+    if not isinstance(sections, list):
+        return set()
+    result = set()
+    pending: list[Any] = list(sections)
+    while pending:
+        value = pending.pop()
+        if isinstance(value, dict):
+            whole_disk = _darwin_bsd_whole_disk(value.get("bsd_name"))
+            if whole_disk is not None:
+                result.add(whole_disk)
+            pending.extend(value.values())
+        elif isinstance(value, list):
+            pending.extend(value)
+    return result
+
+
+def _darwin_disk_kind(path: str, diskutil: str) -> DiskClassification:
+    """Classify the exact macOS volume, resolving APFS through its physical store."""
+    import json
+    import os
+    import plistlib
+    import subprocess
+
+    resolved = os.path.realpath(os.path.expanduser(path))
+
+    def diskutil_info(target: str) -> Any:
+        return subprocess.run(
+            [diskutil, "info", "-plist", target],
+            capture_output=True,
+            timeout=60,
+            check=False,
+            shell=False,
+        )
+
+    info_result = diskutil_info(resolved)
+    if info_result.returncode != 0:
+        # ``diskutil info`` accepts a device or an exact mount point, not an
+        # arbitrary directory within that volume. Resolve the latter with the
+        # POSIX ``df -P`` format, validate its device token, then retry.
+        df_tool = _resolve_tool("df", "/bin/df")
+        if df_tool is None:
+            return DiskClassification("unknown")
+        df_result = subprocess.run(
+            [df_tool, "-P", resolved],
+            capture_output=True,
+            timeout=60,
+            check=False,
+            shell=False,
+        )
+        if df_result.returncode != 0 or not df_result.stdout:
+            return DiskClassification("unknown")
+        lines = [line for line in df_result.stdout.splitlines() if line.strip()]
+        fields = lines[-1].split() if len(lines) >= 2 else []
+        device = fields[0].decode("ascii", errors="strict") if fields else ""
+        if _darwin_bsd_whole_disk(device) is None:
+            return DiskClassification("unknown")
+        info_result = diskutil_info(device)
+    if info_result.returncode != 0 or not info_result.stdout:
+        return DiskClassification("unknown")
+    try:
+        disk_info = plistlib.loads(info_result.stdout)
+    except (plistlib.InvalidFileException, TypeError, ValueError):
+        return DiskClassification("unknown")
+    if not isinstance(disk_info, dict):
+        return DiskClassification("unknown")
+
+    protocol = str(disk_info.get("BusProtocol", "")).strip().lower()
+    if "nvme" in protocol or "nvmexpress" in protocol:
+        return DiskClassification(_NVME)
+
+    physical_stores = _darwin_apfs_physical_stores(disk_info)
+    if physical_stores:
+        profiler = _resolve_tool("system_profiler", "/usr/sbin/system_profiler")
+        if profiler is not None:
+            profile_result = subprocess.run(
+                [
+                    profiler,
+                    "-json",
+                    "-detailLevel",
+                    "mini",
+                    "SPNVMeDataType",
+                ],
+                capture_output=True,
+                timeout=60,
+                check=False,
+                shell=False,
+            )
+            if profile_result.returncode == 0 and profile_result.stdout:
+                try:
+                    profile = json.loads(profile_result.stdout)
+                except (UnicodeDecodeError, json.JSONDecodeError, TypeError):
+                    profile = None
+                if isinstance(profile, dict):
+                    nvme_disks = _darwin_nvme_whole_disks(profile)
+                    if physical_stores and physical_stores.issubset(nvme_disks):
+                        return DiskClassification(_NVME)
+
+    # ``SolidState`` establishes SSD, not NVMe. A failed or unmatched physical
+    # lookup must never promote an ordinary SATA SSD into the NVMe-only tier.
+    if disk_info.get("SolidState") is True:
+        return DiskClassification("ssd")
+    media_type = str(disk_info.get("MediaType", "")).strip().lower()
+    if "solid state" in media_type or media_type == "ssd":
+        return DiskClassification("ssd")
+    return DiskClassification("unknown")
+
+
+def _classify_measured_read(measured_bps: Optional[float]) -> str:
+    """Classify by a measured read a device the rotational flag calls spinning.
+
+    virtio and other paravirtual block devices expose no media hint, so the
+    guest kernel defaults ``rotational`` to 1 and a genuinely NVMe-backed cloud
+    disk is otherwise refused the overflow tier (#365). An actual HDD refusal is
+    correct (80 shards x 2 reads = 160 seeks per step, plan P11), so the
+    discriminator is throughput, not the flag: at or above
+    ``NVME_TIER_MIN_BYTES_PER_S`` the device is NVMe-class and usable; below it —
+    or unmeasurable (``None``) — it is treated as ``hdd`` and refused, the safe
+    direction.
+    """
+    if measured_bps is not None and measured_bps >= NVME_TIER_MIN_BYTES_PER_S:
+        return _NVME
+    return "hdd"
+
+
+def _measure_seq_read_bytes_per_s(path: str) -> Optional[float]:
+    """Sequential ``O_DIRECT`` read throughput of the volume holding ``path``.
+
+    Writes a small scratch file beside ``path``, reopens it with ``O_DIRECT`` to
+    bypass the page cache, and times ``_MEASURE_READ_SAMPLES`` page-aligned
+    sequential reads, returning the **best** (fastest) one. Repeating the read
+    and keeping the best rejects a single cold/slow sample that would otherwise
+    under-measure a fast device and wrongly refuse it. Best effort: any failure
+    (no ``O_DIRECT`` on this filesystem, no write permission, no monotonic clock)
+    returns ``None`` so the caller stays conservative, and the scratch file is
+    always removed. Each read is bounded by ``_MEASURE_READ_BYTES`` so the probe
+    cannot become the ~9 s cost the Windows probe already carries (criterion 4).
+    """
+    import mmap
+    import os
+    import tempfile
+    import time
+
+    o_direct = getattr(os, "O_DIRECT", None)
+    if o_direct is None:  # non-Linux — the caller only reaches here on Linux
+        return None
+    # Probe the volume that actually holds the shards. The caller passes a
+    # DIRECTORY (shard_dir), so write the scratch file inside it; only fall back
+    # to the parent for a file path. Taking dirname of a directory would measure
+    # the PARENT filesystem — wrong when the target is its own mount point.
+    resolved = os.path.realpath(os.path.expanduser(path))
+    directory = resolved if os.path.isdir(resolved) else (os.path.dirname(resolved) or ".")
+    fd_w = None
+    fd_r = None
+    scratch = None
+    buf = None
+    try:
+        fd_w, scratch = tempfile.mkstemp(dir=directory, prefix=".soup-diskprobe-")
+        block = b"\0" * (1024 * 1024)
+        written = 0
+        while written < _MEASURE_READ_BYTES:
+            written += os.write(fd_w, block[: _MEASURE_READ_BYTES - written])
+        os.fsync(fd_w)
+        os.close(fd_w)
+        fd_w = None
+
+        buf = mmap.mmap(-1, _MEASURE_READ_BYTES)  # page-aligned for O_DIRECT
+        fd_r = os.open(scratch, os.O_RDONLY | o_direct)
+        best_bps: Optional[float] = None
+        for _ in range(_MEASURE_READ_SAMPLES):
+            os.lseek(fd_r, 0, os.SEEK_SET)  # offset 0 stays O_DIRECT-aligned
+            start = time.monotonic()
+            read_total = os.readv(fd_r, [buf])
+            elapsed = time.monotonic() - start
+            if elapsed <= 0 or read_total <= 0:
+                continue
+            bps = read_total / elapsed
+            if best_bps is None or bps > best_bps:
+                best_bps = bps
+        return best_bps
+    except (OSError, ValueError):
+        return None
+    finally:
+        for fd in (fd_w, fd_r):
+            if fd is not None:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+        if buf is not None:
+            try:
+                buf.close()
+            except (BufferError, ValueError):
+                # Isolated from the unlink below so a mmap-close failure can
+                # never leak the 64 MiB scratch file.
+                pass
+        if scratch is not None:
+            try:
+                os.unlink(scratch)
+            except OSError:
+                pass
+
+
+def _probe_disk_kind(path: str) -> DiskClassification:
+    """Classify the volume holding ``path``, carrying the measured rate only when
+    the verdict was DERIVED from a read (so a refusal can never cite a rate that
+    did not produce its own verdict — see ``DiskClassification``)."""
     import os
     import platform
     import subprocess
@@ -311,22 +681,30 @@ def _probe_disk_kind(path: str) -> str:
     try:
         if system == "Linux":
             # /sys/block/<dev>/queue/rotational: 1 spinning, 0 solid state.
-            # Instant and authoritative; the device name distinguishes NVMe.
+            # The device name distinguishes NVMe, and rotational=0 is
+            # authoritative — a device that declares itself solid state is one.
+            # rotational=1 is NOT authoritative: virtio defaults it to 1 with no
+            # media hint, so a fast cloud disk lies as spinning (#365). Fall back
+            # to a measured read there rather than trust the flag.
             names = sorted(os.listdir("/sys/block"))
             for dev in names:
                 if not dev.startswith("nvme"):
                     continue
-                return _NVME
+                return DiskClassification(_NVME)
             for dev in names:
                 rot = os.path.join("/sys/block", dev, "queue", "rotational")
                 if os.path.exists(rot):
                     with open(rot, encoding="utf-8") as handle:
-                        return "hdd" if handle.read().strip() == "1" else "ssd"
-            return "unknown"
+                        value = handle.read().strip()
+                    if value == "0":
+                        return DiskClassification("ssd")
+                    measured = _measure_seq_read_bytes_per_s(path)
+                    return DiskClassification(_classify_measured_read(measured), measured)
+            return DiskClassification("unknown")
         if system == "Windows":
             shell = _resolve_tool("powershell", _POWERSHELL_FALLBACK)
             if shell is None:
-                return "unknown"
+                return DiskClassification("unknown")
             out = subprocess.run(
                 [
                     shell, "-NoProfile", "-NonInteractive", "-Command",
@@ -336,7 +714,7 @@ def _probe_disk_kind(path: str) -> str:
                 capture_output=True, text=True, timeout=60, check=False,
             )
             if out.returncode != 0 or not out.stdout.strip():
-                return "unknown"
+                return DiskClassification("unknown")
             import json
 
             payload = json.loads(out.stdout)
@@ -347,25 +725,16 @@ def _probe_disk_kind(path: str) -> str:
             # has NVMe.
             for candidate in ("hdd", "unknown", "ssd", _NVME):
                 if candidate in kinds:
-                    return candidate
-            return "unknown"
+                    return DiskClassification(candidate)
+            return DiskClassification("unknown")
         if system == "Darwin":
             tool = _resolve_tool("diskutil", "/usr/sbin/diskutil")
             if tool is None:
-                return "unknown"
-            out = subprocess.run(
-                [tool, "info", "-plist", "/"],
-                capture_output=True, text=True, timeout=60, check=False,
-            )
-            text = out.stdout.lower()
-            if "nvme" in text:
-                return _NVME
-            if "solid state" in text or ("<true/>" in text and "solidstate" in text):
-                return "ssd"
-            return "unknown"
+                return DiskClassification("unknown")
+            return _darwin_disk_kind(path, tool)
     except (OSError, ValueError, subprocess.SubprocessError):
-        return "unknown"
-    return "unknown"
+        return DiskClassification("unknown")
+    return DiskClassification("unknown")
 
 
 def _windows_kind(disk: dict) -> str:
@@ -385,11 +754,13 @@ def _windows_kind(disk: dict) -> str:
 
 
 def choose_tier(
-    model_bytes: int,
+    store_bytes: int,
     free_ram_bytes: int,
     disk_kind: DiskKind,
     *,
     headroom: float = RAM_TIER_HEADROOM,
+    resident_bytes: int = 0,
+    total_ram_bytes: Optional[int] = None,
 ) -> str:
     """RAM is Tier 1; disk is overflow only; spinning rust is refused.
 
@@ -402,15 +773,55 @@ def choose_tier(
     RAM. Passing ``detect_disk_kind`` here means that cost is paid only by runs
     that are actually about to use the disk tier.
     """
-    if model_bytes < free_ram_bytes * headroom:
+    physical_limit = (
+        None
+        if total_ram_bytes is None
+        else total_ram_bytes * PHYSICAL_RAM_TIER_HEADROOM
+    )
+    resident_store_bytes = store_bytes + int(resident_bytes)
+    fits_available_ram = resident_store_bytes < free_ram_bytes * headroom
+    fits_physical_ram = physical_limit is None or resident_store_bytes < physical_limit
+    if fits_available_ram and fits_physical_ram:
         return TIER_RAM
-    kind = disk_kind() if callable(disk_kind) else disk_kind
+    result = disk_kind() if callable(disk_kind) else disk_kind
+    # The callable may return a DiskClassification (kind + the rate that produced
+    # it) or a bare kind string (tests, explicit callers). Either way the rate is
+    # taken FROM the same result, so it can only ever describe THIS verdict.
+    if isinstance(result, DiskClassification):
+        kind, measured = result.kind, result.measured_bps
+    else:
+        kind, measured = result, None
     if kind == _NVME:
         return TIER_DISK
+    # When the verdict came from a measured read (the virtio/#365 path), cite the
+    # rate that earned the refusal so "not NVMe" is not an opaque verdict — the
+    # operator can see how far under the floor the disk landed. measured is None
+    # for a name/flag/override verdict, so the note only appears when it is true.
+    measured_note = (
+        f" (measured {measured / 1e9:.2f} GB/s, under the "
+        f"{NVME_TIER_MIN_BYTES_PER_S / 1e9:.1f} GB/s NVMe floor)"
+        if measured is not None
+        else ""
+    )
+    physical_note = (
+        ""
+        if physical_limit is None or fits_physical_ram
+        else (
+            f"; the store plus resident extras need {resident_store_bytes / 1e9:.1f} GB, "
+            f"which exceeds {PHYSICAL_RAM_TIER_HEADROOM_PERCENT}% of physical RAM"
+        )
+    )
+    resident_note = (
+        ""
+        if resident_bytes == 0
+        else f" plus {resident_bytes / 1e9:.1f} GB of resident extras"
+    )
     raise ValueError(
         f"layer streaming needs NVMe or more RAM: the base needs "
-        f"{model_bytes / 1e9:.1f} GB, only {free_ram_bytes / 1e9:.1f} GB of RAM "
-        f"is free, and the detected disk is {kind!r} (not NVMe). "
+        f"{store_bytes / 1e9:.1f} GB{resident_note}, only "
+        f"{free_ram_bytes / 1e9:.1f} GB of RAM "
+        f"is free{physical_note}, and the detected disk is {kind!r} "
+        f"(not NVMe){measured_note}. "
         f"Free RAM, pick a smaller base, or move the model to an NVMe drive."
     )
 
@@ -423,7 +834,12 @@ class PinDecision:
     reason: str
 
 
-def decide_pinning(store_bytes: int, pinned_limit_bytes: Optional[int]) -> PinDecision:
+def decide_pinning(
+    store_bytes: int,
+    pinned_limit_bytes: Optional[int],
+    *,
+    stream_pin: Optional[bool] = None,
+) -> PinDecision:
     """Pin the RAM store when the box can actually page-lock it.
 
     Measured on the dev box (RTX 3050 4 GB / 16.9 GB RAM): the maximum
@@ -433,7 +849,58 @@ def decide_pinning(store_bytes: int, pinned_limit_bytes: Optional[int]) -> PinDe
     ``copy_(non_blocking=True)`` synchronous and therefore costs overlap:
     measured GPU utilisation dropped from 96.8% (pinned) to 79.3% (pageable).
     That cost is stated out loud rather than absorbed silently.
+
+    ``stream_pin`` (``training.stream_pin``) overrides the automatic choice:
+    ``None`` keeps the behaviour above; ``False`` forces pageable host memory
+    and states its throughput cost; ``True`` forces the page-locked one — on a
+    CUDA target the run then refuses (in the runtime) rather than falling back
+    if the box cannot page-lock it. The refusal itself lives where the pin is
+    actually attempted, which is also why a non-CUDA target does not refuse:
+    nothing is attempted there. Here ``True`` only records the intent so the
+    pre-flight reflects it.
+
+    BOTH TIERS, since #971. The flag used to describe the RAM store alone,
+    because the disk tier held nothing to page-lock; it now decides whether the
+    async reader's host STAGING is page-locked, and the runtime honours or
+    refuses it there exactly as it does on the RAM tier. The reasons below name
+    what each tier actually has rather than assuming a RAM store.
     """
+    if stream_pin is False:
+        return PinDecision(
+            pinned=False,
+            reason=(
+                "training.stream_pin=false forces PAGEABLE host memory — the "
+                "base store on the RAM tier, the async reader's staging on the "
+                "disk tier. Host-to-device copies become synchronous, which "
+                "costs overlap: measured GPU utilisation drops from ~97% to "
+                f"~79%, and page-locking is worth up to "
+                f"{PIN_THROUGHPUT_GAIN_REAL:.2f}x measured throughput "
+                f"(Qwen2.5-32B NF4), {PIN_THROUGHPUT_GAIN_SYNTHETIC:.2f}x on a "
+                "synthetic. Unset stream_pin to let the box page-lock when it "
+                "can."
+            ),
+        )
+    if stream_pin is True:
+        return PinDecision(
+            pinned=True,
+            # The tier gate this note used to carry ("on the RAM tier the run
+            # refuses") was dropped in #971 because the disk tier now HAS
+            # staging to page-lock and does refuse over it. The gate's OTHER
+            # reason is answered in the sentence rather than dropped with it:
+            # on a non-CUDA target nothing is page-locked at all — setup passes
+            # ``pin=plan.pinned and on_cuda`` and gates ``require_pin`` on the
+            # same flag — so an unconditional "the run refuses" would print a
+            # promise that path does not keep. It announces and proceeds.
+            reason=(
+                "training.stream_pin=true forces page-locked host memory — the "
+                "base store on the RAM tier, the async reader's staging on the "
+                "disk tier. On a CUDA target the run refuses, on either tier, "
+                "rather than falling back to pageable memory if the box cannot "
+                "page-lock it; on a non-CUDA target there is no CUDA pinning to "
+                "force, so the request is announced as inapplicable and the run "
+                "proceeds with pageable host memory."
+            ),
+        )
     if pinned_limit_bytes is None:
         return PinDecision(
             pinned=True,
@@ -496,6 +963,18 @@ def free_ram_bytes() -> Optional[int]:
         return None
     try:
         return int(psutil.virtual_memory().available)
+    except (AttributeError, OSError, ValueError):
+        return None
+
+
+def total_ram_bytes() -> Optional[int]:
+    """Total physical host RAM, or None when psutil cannot report it."""
+    try:
+        import psutil
+    except ImportError:
+        return None
+    try:
+        return int(psutil.virtual_memory().total)
     except (AttributeError, OSError, ValueError):
         return None
 
@@ -722,6 +1201,7 @@ def estimate_stream_peak_vram(
     batch_size: int = 1,
     dtype: str = "bfloat16",
     logits_bytes_per_element: Optional[float] = None,
+    large_layer_bytes: int = 0,
 ) -> int:
     """Predicted ``torch.cuda.max_memory_allocated()`` for a streaming step.
 
@@ -732,9 +1212,12 @@ def estimate_stream_peak_vram(
     the published v0.72.2 Llama-3.1-8B NF4 row (untied embeddings, different
     quantisation, different session, nothing fitted to it) brackets it at +7.5%.
 
-    ``extras_bytes`` is what makes an 8B run predictable: its embeddings and
-    ``lm_head`` are UNTIED, so two 1.05 GB matrices sit resident and account for
-    2.10 GB of that run's 3.32 GB peak.
+    ``extras_bytes`` contains only the genuinely resident non-decoder weights.
+    ``large_layer_bytes`` is one reusable slot sized to the larger of
+    ``embed_tokens`` and an untied ``lm_head``; the two matrices no longer add
+    together at peak (#324). A loss with a second forward per step on an untied
+    checkpoint also holds a private copy of the head (#1049); the caller charges
+    that as a second slot, so pass the sum.
 
     Returns allocator-visible bytes only. The CUDA context and driver reservation
     sit outside the caching allocator (0.85 GB on the dev box, which also drives
@@ -747,6 +1230,7 @@ def estimate_stream_peak_vram(
     """
     return (
         layer_bytes * buffers
+        + large_layer_bytes
         + extras_bytes
         + estimate_optimizer_bytes(adapter_params)
         + STREAM_FIXED_SLACK_BYTES
@@ -825,15 +1309,17 @@ def decide_measured_fit(
 
     :func:`decide_stream_fit` compares a formula against free VRAM, and the
     formula's documented contract is that it never under-predicts. Measured on an
-    RTX 3050 Laptop against SmolLM2-135M streamed in bf16, that holds to seq 3072
-    (prediction 1.6%-2.9% high) and then fails: at seq 4096 the prediction is
-    0.992x the real peak and at seq 5120 it is 0.830x, i.e. it under-predicts by
-    17% on a shape a user can reach by editing one line of YAML. Three repeats at
-    4096 returned a bit-identical peak, so it is deterministic. The mechanism is
-    NOT established — an attention ``seq**2`` term is the obvious candidate and
-    does not fit the numbers — which is exactly why this takes a measurement
-    rather than another coefficient: a formula cannot model a term nobody has
-    identified.
+    RTX 3050 Laptop against SmolLM2-135M streamed in bf16, that holds to seq 4352
+    (1.081x the real peak) and then fails: at seq 5120 the prediction is 0.934x
+    the real peak and at seq 6144 it is 0.787x, i.e. it under-predicts by 21% on
+    a shape a user can reach by editing one line of YAML. Against the probe the
+    same formula reads 0.992x at seq 4096 and 0.830x at 5120, because the probe
+    itself runs 12.5-14.3% above the real training step — the direction that
+    makes it safe as a gate. The measurement is deterministic (repeats at a fixed
+    shape return bit-identical peaks, #395). The mechanism is NOT established —
+    an attention ``seq**2`` term is the obvious candidate and does not fit the
+    numbers — which is exactly why this takes a measurement rather than another
+    coefficient: a formula cannot model a term nobody has identified.
 
     ``measured_bytes`` is ``torch.cuda.max_memory_allocated``, deliberately not
     ``max_memory_reserved``. Reserved runs 1.08x-1.41x allocated here and
@@ -979,10 +1465,12 @@ def estimate_stream_vram(
     activation_bytes: int = 0,
     logits_bytes: int = 0,
     workspace_bytes: int = DEFAULT_WORKSPACE_BYTES,
+    large_layer_bytes: int = 0,
 ) -> int:
     """Peak VRAM for a streaming step (plan 4.1)."""
     return (
         layer_bytes * buffers
+        + large_layer_bytes
         + embed_bytes
         + adapter_bytes
         + activation_bytes
@@ -1020,10 +1508,42 @@ class StreamPlan:
     layer_bytes: int
     store_bytes: int
     embed_bytes: int
+    large_store_bytes: int
+    large_buffer_bytes: int
     buffers: int
     buffer_bytes: int
     pinned: bool
     notes: Tuple[str, ...]
+    read_ahead: int = DEFAULT_STREAM_READ_AHEAD
+    staging_bytes: int = 0
+
+
+def staging_bytes_for(
+    *,
+    read_ahead: int,
+    n_layers: int,
+    layer_bytes: int,
+    large_store_bytes: int = 0,
+) -> int:
+    """Host memory the disk tier's async reader page-locks, before it does.
+
+    THE one formula, so the pre-flight, the panel and the RAM refusal cannot
+    each keep their own. The disk tier used to predict zero host residency,
+    which was true of the synchronous source it replaced and false of this one:
+    ``AsyncDiskSource`` allocates ``min(read_ahead, members) x group_bytes``
+    per DISTINCT layer spec and holds it for the whole run.
+
+    ``read_ahead`` does NOT bound the vocabulary weights. The embedding and an
+    untied ``lm_head`` are one member each, so each takes a full slot at any
+    depth — and they are the largest tensors in the model, left unquantised by
+    ``replace_with_bnb_linear``. ``large_store_bytes`` is exactly that pair, so
+    it is charged once rather than multiplied. Worked, on the 70B NF4 shape at
+    the default depth 2: ~0.9 GB of decoder staging plus ~2.1 GB embed plus
+    ~2.1 GB head, i.e. ~5 GB of unswappable host memory on a box that reached
+    this tier BECAUSE its RAM could not hold the model.
+    """
+    depth = max(0, min(int(read_ahead), int(n_layers)))
+    return depth * int(layer_bytes) + int(large_store_bytes)
 
 
 def build_stream_plan(
@@ -1034,55 +1554,143 @@ def build_stream_plan(
     embed_bytes: int,
     available_ram_bytes: int,
     pinned_limit_bytes: Optional[int],
+    total_ram_bytes: Optional[int] = None,
     buffers: int = DEFAULT_STREAM_BUFFERS,
     disk_kind: DiskKind = _NVME,
+    stream_pin: Optional[bool] = None,
+    store_bytes: Optional[int] = None,
+    large_store_bytes: int = 0,
+    large_buffer_bytes: int = 0,
+    read_ahead: int = DEFAULT_STREAM_READ_AHEAD,
 ) -> StreamPlan:
     """Decide tier + pinning and record every caveat as a visible note."""
     buffers = validate_stream_buffers(buffers)
     if n_layers <= 0:
         raise ValueError(f"n_layers must be positive; got {n_layers}")
-    store_bytes = n_layers * layer_bytes
-    tier = choose_tier(store_bytes + embed_bytes, available_ram_bytes, disk_kind)
+    store_bytes = n_layers * layer_bytes if store_bytes is None else int(store_bytes)
+    host_store_bytes = store_bytes + int(large_store_bytes)
+    resident_bytes = int(embed_bytes)
+    model_bytes = host_store_bytes + resident_bytes
+    physical_limit = (
+        None
+        if total_ram_bytes is None
+        else total_ram_bytes * PHYSICAL_RAM_TIER_HEADROOM
+    )
+    available_budget_exceeded = (
+        model_bytes >= available_ram_bytes * RAM_TIER_HEADROOM
+        and host_store_bytes < available_ram_bytes * RAM_TIER_HEADROOM
+    )
+    physical_budget_exceeded = (
+        physical_limit is not None
+        and model_bytes >= physical_limit
+        and host_store_bytes < available_ram_bytes * RAM_TIER_HEADROOM
+    )
+    tier = choose_tier(
+        host_store_bytes,
+        available_ram_bytes,
+        disk_kind,
+        resident_bytes=resident_bytes,
+        total_ram_bytes=total_ram_bytes,
+    )
     notes = []
     if tier == TIER_DISK:
         # Falling back is the point of stream_source='auto', but a silent
         # fallback to a slower path is the failure mode this project keeps
-        # calling out elsewhere. Say what happened and be explicit that the
-        # slowdown is NOT quantified: safetensors memory-maps the shards, so the
-        # OS page cache blurs the RAM-vs-disk boundary, and the dev box could not
-        # produce a trustworthy gap measurement.
-        notes.append(
-            "base does not fit in RAM — streaming from the NVMe disk tier "
-            "instead. Nothing is held resident, and the slowdown versus the RAM "
-            "tier is unmeasured on this hardware. Set stream_source='ram' to "
-            "refuse rather than fall back."
-        )
-    decision = decide_pinning(store_bytes, pinned_limit_bytes)
-    if not decision.pinned:
+        # calling out elsewhere. Say what happened, and say what it costs:
+        # benchmarks/gate-971-async-nvme-source.md measured the gap against a
+        # same-day control of the synchronous source, cold on a store larger
+        # than RAM and warm with the store fully cached. The honest summary is
+        # that the disk tier is slower than RAM either way, which is why this
+        # is a fallback and not a choice.
+        if physical_budget_exceeded:
+            notes.append(
+                "base exceeds the physical RAM safety ceiling — streaming from "
+                "the NVMe disk tier instead. The RAM tier keeps the base "
+                "resident while shard reads pressure the page cache, so Soup "
+                f"requires the store plus resident extras to stay under "
+                f"{PHYSICAL_RAM_TIER_HEADROOM_PERCENT}% of physical RAM. Set "
+                "stream_source='ram' to refuse rather than fall back."
+            )
+        elif available_budget_exceeded:
+            notes.append(
+                "base plus resident extras do not fit the free-RAM safety "
+                "headroom — streaming from the NVMe disk tier instead. Set "
+                "stream_source='ram' to refuse rather than fall back."
+            )
+        else:
+            notes.append(
+                "base does not fit in RAM — streaming from the NVMe disk tier "
+                "instead. An async reader stages training.stream_read_ahead layers "
+                "in host RAM (page-locked where the box allows) rather than "
+                "holding the base resident. It is "
+                "slower than the RAM tier — measured 1.9-2.3x its step time with the "
+                "store fully cached, on one box "
+                "(benchmarks/gate-971-async-nvme-source.md); a store larger than "
+                "RAM has no RAM-tier comparison, which is what makes this a "
+                "fallback. Set stream_source='ram' to refuse rather than fall "
+                "back."
+            )
+    decision = decide_pinning(host_store_bytes, pinned_limit_bytes, stream_pin=stream_pin)
+    # #366 review round 3 — "record, never silence". An automatic pinned store is
+    # the unremarkable default and stays quiet, but an EXPLICIT stream_pin=true is
+    # a user decision, so the pre-flight states it too. Without this the forced-on
+    # branch was the one path that decided something and said nothing, which is
+    # also what decide_pinning's docstring already promised it did not do.
+    #
+    # NOT scoped to the RAM tier. It was, because the reason claimed a RAM store
+    # the disk tier did not have and the runtime announced the inapplicability
+    # instead — but #971 gave the disk tier host staging that stream_pin now
+    # honours or refuses, and deleted that announcement. Gating on the tier left
+    # the two spellings of reaching disk printing different prose for the same
+    # config: `stream_source: disk` on a RAM-sized box planned tier=ram, so this
+    # fired and printed a RAM-tier promise under a panel headed `tier disk`,
+    # while `auto` on a RAM-poor box planned tier=disk and recorded the explicit
+    # request nowhere at all. The reason above now names both tiers, so it is
+    # true wherever it prints.
+    if not decision.pinned or stream_pin is True:
         notes.append(decision.reason)
     return StreamPlan(
         arch=arch,
         tier=tier,
         n_layers=n_layers,
         layer_bytes=layer_bytes,
-        store_bytes=store_bytes,
+        store_bytes=host_store_bytes,
         embed_bytes=embed_bytes,
+        large_store_bytes=int(large_store_bytes),
+        large_buffer_bytes=int(large_buffer_bytes),
         buffers=buffers,
-        buffer_bytes=layer_bytes * buffers,
+        buffer_bytes=layer_bytes * buffers + int(large_buffer_bytes),
         pinned=decision.pinned,
         notes=tuple(notes),
+        read_ahead=int(read_ahead),
+        # Zero on the RAM tier because the reader does not exist there — the
+        # whole base is resident and already charged as `store_bytes`.
+        staging_bytes=(
+            staging_bytes_for(
+                read_ahead=read_ahead,
+                n_layers=n_layers,
+                layer_bytes=layer_bytes,
+                large_store_bytes=large_store_bytes,
+            )
+            if tier == TIER_DISK
+            else 0
+        ),
     )
 
 
 def render_stream_panel(plan: StreamPlan, extra_lines: Sequence[str] = ()) -> Panel:
     """Pre-flight summary. plan 10: tell the user the cost BEFORE the run."""
     if plan.tier == TIER_DISK:
-        # "store ... (pinned)" is meaningless here: the disk tier deliberately
-        # holds nothing resident, so reporting a pinned store of 0.00 GB reads
-        # as a bug rather than as the design.
+        # `plan.store_bytes` is 0 on this tier and reporting it as a pinned
+        # store would read as a bug rather than as the design. What the disk
+        # tier does hold is the reader's staging, whose size depends on
+        # training.stream_read_ahead and is not known until the source is
+        # built — the runtime's own ready line prints it. So this says the
+        # SHAPE and leaves the number to the line that has it, rather than
+        # claiming "nothing held resident", which stopped being true in #971.
         store_line = (
             f"  base         streamed from disk across {plan.n_layers} layers, "
-            f"nothing held resident"
+            f"staged by an async reader (no resident copy)"
         )
     else:
         store_line = (
@@ -1094,9 +1702,21 @@ def render_stream_panel(plan: StreamPlan, extra_lines: Sequence[str] = ()) -> Pa
         f"[bold]Layer streaming[/] [yellow]BETA[/] — arch [cyan]{plan.arch}[/], "
         f"tier [cyan]{plan.tier}[/]",
         store_line,
+    ]
+    if plan.tier == TIER_DISK:
+        # The number the disk tier used to predict as zero. It is host memory,
+        # so it does not belong in the VRAM line below, and it is held for the
+        # whole run — an operator choosing a depth is choosing this.
+        lines.append(
+            f"  host staging read_ahead {plan.read_ahead} -> "
+            f"{plan.staging_bytes / 1e6:.0f} MB "
+            f"(page-locked when the box allows)"
+        )
+    lines += [
         f"  VRAM buffers {plan.buffers} x {plan.layer_bytes / 1e6:.0f} MB "
+        f"+ 1 x {plan.large_buffer_bytes / 1e6:.0f} MB large-layer slot "
         f"= {plan.buffer_bytes / 1e6:.0f} MB",
-        f"  resident     {plan.embed_bytes / 1e6:.0f} MB embeddings + adapters",
+        f"  resident     {plan.embed_bytes / 1e6:.0f} MB extras + adapters",
     ]
     lines.extend(extra_lines)
     for note in plan.notes:

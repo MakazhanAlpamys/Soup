@@ -55,6 +55,14 @@ class _FakeCuda:
         return (8, 0) if self._bf16 else (7, 5)
 
 
+class _FakeMps:
+    def __init__(self, available: bool):
+        self._available = available
+
+    def is_available(self) -> bool:
+        return self._available
+
+
 @pytest.fixture()
 def fake_torch(monkeypatch):
     """Patch ``torch.cuda`` in place; the resolver imports torch lazily."""
@@ -64,6 +72,31 @@ def fake_torch(monkeypatch):
         fake = _FakeCuda(available, bf16, emulated)
         monkeypatch.setattr(torch, "cuda", fake)
         return fake
+
+    return apply
+
+
+@pytest.fixture()
+def fake_mps(monkeypatch):
+    """Patch the tiny MPS capability allocation without requiring a Mac."""
+    import torch
+
+    real_empty = torch.empty
+    probes = []
+
+    def apply(*, available: bool, bf16: bool):
+        monkeypatch.setattr(torch.backends, "mps", _FakeMps(available))
+
+        def _empty(*args, **kwargs):
+            if str(kwargs.get("device", "")) == "mps":
+                probes.append(kwargs.get("dtype"))
+                if not bf16:
+                    raise TypeError("MPS bfloat16 requires macOS 14 or newer")
+                return real_empty(*args, **{**kwargs, "device": "cpu"})
+            return real_empty(*args, **kwargs)
+
+        monkeypatch.setattr(torch, "empty", _empty)
+        return probes
 
     return apply
 
@@ -117,6 +150,28 @@ class TestResolveStreamDtype:
         fake_torch(available=True, bf16=True)
         assert resolve_stream_dtype("cpu") == "float32"
 
+    def test_available_mps_with_bfloat16_support_gets_bfloat16(self, fake_mps):
+        import torch
+
+        from soup_cli.utils.layer_stream import resolve_stream_dtype
+
+        probes = fake_mps(available=True, bf16=True)
+        assert resolve_stream_dtype("mps") == "bfloat16"
+        assert probes == [torch.bfloat16]
+
+    def test_mps_without_bfloat16_support_falls_back_to_float32(self, fake_mps):
+        from soup_cli.utils.layer_stream import resolve_stream_dtype
+
+        fake_mps(available=True, bf16=False)
+        assert resolve_stream_dtype("mps") == "float32"
+
+    def test_unavailable_mps_does_not_claim_bfloat16(self, fake_mps):
+        from soup_cli.utils.layer_stream import resolve_stream_dtype
+
+        probes = fake_mps(available=False, bf16=True)
+        assert resolve_stream_dtype("mps") == "float32"
+        assert probes == []
+
     def test_cuda_index_is_still_cuda(self, fake_torch):
         from soup_cli.utils.layer_stream import resolve_stream_dtype
 
@@ -156,6 +211,24 @@ class TestResolveStreamDtype:
                 "torch."
             )
         assert torch is not None  # the import is the point of the comparison
+
+    @pytest.mark.skipif(
+        not __import__("torch").backends.mps.is_available(),
+        reason="requires an available Apple Silicon MPS backend",
+    )
+    def test_real_mps_bfloat16_forward_and_backward(self):
+        import torch
+
+        from soup_cli.utils.layer_stream import resolve_stream_dtype
+
+        assert resolve_stream_dtype("mps") == "bfloat16"
+        value = torch.randn(16, 16, device="mps", dtype=torch.bfloat16)
+        value.requires_grad_(True)
+        loss = (value @ value).float().square().mean()
+        loss.backward()
+        torch.mps.synchronize()
+        assert value.grad is not None
+        assert value.grad.dtype == torch.bfloat16
 
 
 class TestStreamSetupUsesTheResolver:
@@ -278,7 +351,14 @@ class TestEveryTrainerAsksTheCard:
         assert 'bf16=self.device == "cuda"' in planted
 
     def test_the_wrappers_that_set_precision_use_the_shared_helper(self):
-        """Sites that set bf16 must take it from one place, or they drift."""
+        """Sites that set bf16 must take it from one place, or they drift.
+
+        Narrowed in #429: prm / mole_routing / ppo take the precision decision
+        through ``self.trainer.args`` (set upstream from ``bf16_fp16_flags``)
+        and call ``align_trainable_dtype_for_fp16``, so requiring the literal
+        helper name in every flagged file false-flagged them. A module counts
+        as covered if it names EITHER shared entry point.
+        """
         sources = self._trainer_sources()
         setters = {
             name
@@ -286,7 +366,12 @@ class TestEveryTrainerAsksTheCard:
             if ("bf16=" in src or '"bf16":' in src) and name not in {"grpo.py", "__init__.py"}
         }
         assert setters, "no wrapper sets a precision flag — the scan is broken"
-        missing = {n for n in setters if "bf16_fp16_flags" not in sources[n]}
+        missing = {
+            n
+            for n in setters
+            if "bf16_fp16_flags" not in sources[n]
+            and "align_trainable_dtype_for_fp16" not in sources[n]
+        }
         assert not missing, f"these set bf16 without the shared helper: {missing}"
 
 
@@ -294,18 +379,6 @@ class TestEveryTrainerAsksTheCard:
 # The gate: fp16 must be as exact as bf16, or choosing it on a T4 would trade
 # a silent unsupported-dtype run for a silent wrong-numbers one.
 # ==========================================================================
-def _cuda_available() -> bool:
-    try:
-        import torch
-
-        return torch.cuda.is_available()
-    except Exception:
-        return False
-
-
-CUDA = pytest.mark.skipif(
-    not _cuda_available(), reason="requires CUDA (layer streaming is a GPU feature)"
-)
 
 
 def _tiny_lora():
@@ -362,12 +435,17 @@ def _copy_lora(src, dst):
             dst_lora[key].copy_(val.to(dst_lora[key].dtype))
 
 
-@CUDA
+@pytest.mark.gpu(reason="layer streaming is a GPU feature")
 class TestFloat16StreamingIsBitExact:
-    """Acceptance item 4 of #385. The reference is a resident model of MATCHING
-    numerics — for NF4 that means a genuinely NF4-quantised reference, because
-    comparing a streamed fp16 run against a bf16 resident one would measure the
-    dtype rather than the streaming."""
+    """Acceptance item 4 of #385.
+
+    The reference matches the streamed model's computation path. For NF4 that
+    means a genuinely NF4-quantised resident reference with
+    ``install_dequant_forward`` applied. With ``bitsandbytes`` 0.50.2, NF4 may
+    dispatch through a different fused kernel depending on CUDA architecture
+    and projection shape, so comparing the native resident path would measure
+    kernel-path differences rather than layer streaming.
+    """
 
     def _run(self, tmp_path, dtype: str, quant: str) -> float:
         import torch
@@ -377,6 +455,7 @@ class TestFloat16StreamingIsBitExact:
         from soup_cli.utils.layer_stream_runtime import (
             build_meta_skeleton,
             build_streamed_model,
+            install_dequant_forward,
             quantised_layer_suffixes,
         )
 
@@ -417,6 +496,7 @@ class TestFloat16StreamingIsBitExact:
                     weights, quantization_config=build_nf4_config(dtype),
                     dtype=getattr(torch, dtype), device_map={"": "cuda"},
                 )
+                assert install_dequant_forward(base) > 0
             base.config.use_cache = False
             for param in base.parameters():
                 param.requires_grad = False

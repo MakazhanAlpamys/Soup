@@ -17,5 +17,6 @@ jobs:
         with:
           python-version: "3.11"
       - run: pip install build
+      - run: python scripts/assemble_changelog.py --check-empty
       - run: python -m build
       - uses: pypa/gh-action-pypi-publish@release/v1

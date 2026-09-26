@@ -234,7 +234,7 @@ def _load_model(
             base_model,
             trust_remote_code=trust_remote_code,
             device_map="auto",
-            dtype=torch.float16,
+            torch_dtype=torch.float16,
         )
         console.print(f"[dim]Loading LoRA adapter: {model_path}...[/]")
         model_obj = PeftModel.from_pretrained(base, model_path)
@@ -244,7 +244,7 @@ def _load_model(
             model_path,
             trust_remote_code=trust_remote_code,
             device_map="auto",
-            dtype=torch.float16,
+            torch_dtype=torch.float16,
         )
 
     model_obj.eval()
@@ -262,27 +262,11 @@ def _generate(
     """Generate a response from the model given message history."""
     import torch
 
-    # Apply chat template if available
-    if hasattr(tokenizer, "apply_chat_template") and tokenizer.chat_template:
-        text = tokenizer.apply_chat_template(
-            messages, tokenize=False, add_generation_prompt=True
-        )
-    else:
-        # Fallback: simple concatenation
-        parts = []
-        for msg in messages:
-            role = msg["role"]
-            content = msg["content"]
-            if role == "system":
-                parts.append(f"System: {content}")
-            elif role == "user":
-                parts.append(f"User: {content}")
-            elif role == "assistant":
-                parts.append(f"Assistant: {content}")
-        parts.append("Assistant:")
-        text = "\n".join(parts)
+    from soup_cli.utils.vllm import encode_chat_prompt
 
-    inputs = tokenizer(text, return_tensors="pt")
+    inputs = encode_chat_prompt(
+        messages, tokenizer, fallback_on_error=False, return_tensors="pt"
+    )
     input_ids = inputs["input_ids"].to(model.device)
     attention_mask = inputs["attention_mask"].to(model.device)
 

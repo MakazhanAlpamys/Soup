@@ -121,6 +121,52 @@ class TestGetTrainDataloaderReturnsMultipackDataloader:
         assert all(isinstance(x, int) for x in first_pack)
 
 
+class TestGetTrainDataloaderScalesBinCapByBatchSize:
+    """training.batch_size must reach the packer's bin cap (multipack.py's own
+    ``build_multipack_sampler_for_lengths`` branch: ``batch_max_len =
+    batch_size * max_seq_length`` for the flat, real_batches=False mode)."""
+
+    def test_batch_max_len_scales_with_batch_size(self):
+        try:
+            from torch.utils.data import Dataset
+        except ImportError:
+            pytest.skip("torch not installed")
+
+        class TinyDataset(Dataset):
+            def __init__(self, n):
+                self.n = n
+
+            def __len__(self):
+                return self.n
+
+            def __getitem__(self, idx):
+                return {"x": idx}
+
+        class Base:
+            def __init__(self):
+                self.train_dataset = TinyDataset(10)
+                self.data_collator = None
+                self.args = MagicMock(
+                    dataloader_num_workers=0, dataloader_pin_memory=False,
+                )
+
+            def get_train_dataloader(self):
+                return "should-not-be-called"
+
+        sub = make_multipack_trainer_class(Base)
+        instance = sub()
+        attach_multipack_state(
+            instance,
+            lengths=[10, 20, 30, 40, 50, 60, 70, 80, 90, 100],
+            max_seq_len=128,
+            batch_size=4,
+            seed=42,
+        )
+
+        dl = instance.get_train_dataloader()
+        assert dl.batch_sampler._batch_max_len == 128 * 4
+
+
 class TestGetTrainDataloaderForwardsDropLast:
     """v0.40.4 H3 — `args.dataloader_drop_last` must reach the
     MultipackBatchSampler; v0.40.4 first-cut hardcoded `drop_last=False`.

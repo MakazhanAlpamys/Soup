@@ -56,13 +56,27 @@ def prepare_model_for_qat(model):
     return model
 
 
-def validate_qat_config(quantization: str, backend: str, modality: str) -> list[str]:
+def validate_qat_config(
+    quantization: str,
+    backend: str,
+    modality: str,
+    quantization_aware: "bool | str" = True,
+    fp8_recipe: str = "tensorwise",
+    check_card: bool = True,
+) -> list[str]:
     """Validate QAT configuration and return warnings/errors.
 
     Args:
         quantization: The quantization setting (4bit, 8bit, none).
         backend: Training backend (transformers, unsloth).
         modality: Training modality (text, vision).
+        quantization_aware: ``True`` (int8 QAT) or ``"fp8"``. FP8 needs torchao's
+            float8 training, not the int8 ``quantize_`` this module probes, so its
+            dependency check is the FP8 one (#835 review of #1154).
+        fp8_recipe: The FP8 scaling recipe, for the FP8 card gate.
+        check_card: ``False`` leaves the card out, for ``--dry-run``: a config is
+            often written on one machine for another, so the caller reports the
+            local card as a note instead (#1154 review).
 
     Returns:
         List of warning/error messages. Empty list means valid.
@@ -81,10 +95,44 @@ def validate_qat_config(quantization: str, backend: str, modality: str) -> list[
             "Consider using quantization: 4bit for QLoRA + QAT."
         )
 
-    if not is_qat_available():
+    if quantization_aware == "fp8":
+        # Nested, so an FP8 request can never reach the int8 branch below: with
+        # the unsloth test in this condition, fp8 + unsloth fell through to
+        # "pip install torchao" (#1154 review, round 3).
+        if backend != "unsloth":
+            errors.extend(_fp8_preflight_errors(fp8_recipe, check_card))
+    elif not is_qat_available():
         errors.append(
             "torchao is not installed. "
             "Install it with: pip install torchao"
         )
 
     return errors
+
+
+def _fp8_preflight_errors(fp8_recipe: str, check_card: bool) -> list[str]:
+    """The FP8 card and dependency questions, in ``apply_fp8_training``'s order.
+
+    Not asked on unsloth: its refusal already stops the run, and an install hint
+    under it would point at a package that cannot help.
+    """
+    from soup_cli.utils.fp8 import (
+        FP8_TORCHAO_MISSING,
+        fp8_training_supported,
+        is_torchao_float8_available,
+    )
+
+    # Same order as apply_fp8_training (#1044): the card first, so a card that
+    # cannot run FP8 is named as the reason rather than a package that would
+    # not help. Checked here so the run stops before the model is loaded.
+    # torchao specifically: transformer-engine alone passes is_fp8_available()
+    # but this converter is torchao's, so that box would load the model and
+    # only then stop.
+    supported, reason = (
+        fp8_training_supported(fp8_recipe) if check_card else (True, "")
+    )
+    if not supported:
+        return [reason]
+    if not is_torchao_float8_available():
+        return [FP8_TORCHAO_MISSING]
+    return []

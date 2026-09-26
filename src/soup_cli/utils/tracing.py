@@ -5,14 +5,14 @@ All imports are lazy; tracing is a no-op when the SDK is missing.
 
 from __future__ import annotations
 
-import ipaddress
 import logging
 from typing import Any, Optional
 from urllib.parse import urlparse
 
-logger = logging.getLogger(__name__)
+from soup_cli.utils.net_guard import LOOPBACK_HOSTS as _LOOPBACK_HOSTS
+from soup_cli.utils.net_guard import is_private_or_link_local as _is_private_ip
 
-_LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1"}
+logger = logging.getLogger(__name__)
 
 
 def is_otel_available() -> bool:
@@ -22,21 +22,6 @@ def is_otel_available() -> bool:
         return True
     except ImportError:
         return False
-
-
-def _is_private_ip(host: str) -> bool:
-    """True if host resolves to a private, link-local, or unspecified IP."""
-    try:
-        addr = ipaddress.ip_address(host)
-    except ValueError:
-        return False
-    return (
-        addr.is_private
-        or addr.is_link_local
-        or addr.is_unspecified
-        or addr.is_reserved
-        or addr.is_multicast
-    )
 
 
 def validate_otlp_endpoint(endpoint: str) -> str:

@@ -52,6 +52,10 @@ _VALID_KINDS = frozenset(
         "grace_codebook",
         # v0.71.29 — depth-prune + distill-heal shrink reports.
         "shrink_report",
+        # #309 — provenance documents surfaced by `soup card`: the ML-BOM
+        # (`soup bom emit`) and the in-toto/SLSA attestation (`soup attest emit`).
+        "bom",
+        "attestation",
     }
 )
 _VALID_RELATIONS = frozenset(

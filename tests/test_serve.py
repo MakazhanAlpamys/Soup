@@ -276,7 +276,7 @@ class TestRecordThumbs:
             max_tokens_default=256,
             record_thumbs_db=db,
         )
-        return TestClient(app), db
+        return TestClient(app, base_url="http://127.0.0.1"), db
 
     def test_flag_in_help(self):
         import re
@@ -355,7 +355,7 @@ class TestRecordThumbs:
             model_name="test-model",
             max_tokens_default=256,
         )  # no record_thumbs_db
-        client = TestClient(app)
+        client = TestClient(app, base_url="http://127.0.0.1")
         resp = client.post(
             "/v1/thumbs",
             json={"prompt": "Q?", "response": "A.", "thumb": "up"},

@@ -6,6 +6,7 @@ from unittest.mock import patch
 import pytest
 
 from soup_cli.config.schema import SoupConfig
+from tests.conftest import strip_ansi
 
 # --- BUG-001: Windows UnicodeEncodeError (no Unicode arrows/dashes in output) ---
 
@@ -129,21 +130,23 @@ class TestComputeDtype:
             assert dtype == torch.float16
 
 
-# --- BUG-005: diff dtype -> torch_dtype ---
+# --- BUG-005: diff load dtype spelling (#478) ---
 
 
 class TestDiffModelLoading:
-    """Test diff command uses correct parameter names."""
+    """Test diff command uses Transformers kwargs compatible with the floor."""
 
-    def test_load_model_uses_dtype(self):
-        """_load_model should pass dtype= (not the old torch_dtype=)."""
+    def test_load_model_uses_torch_dtype(self):
+        """_load_model keeps the guarded Transformers load-kwarg policy (#478)."""
         import inspect
 
         from soup_cli.commands.diff import _load_model
 
         source = inspect.getsource(_load_model)
-        assert "dtype=torch.float16" in source
-        assert "torch_dtype=" not in source
+        assert "torch_dtype=torch.float16" in source
+        # Substring-safe: torch_dtype=... contains the letters dtype=
+        bare = source.replace("torch_dtype=", "")
+        assert "dtype=" not in bare
 
 
 # --- BUG-006: wandb version pin ---
@@ -163,17 +166,31 @@ class TestWandbVersionPin:
 
 
 class TestCPUQuantWarning:
-    """Test that CPU + quantization produces a warning."""
+    """Test that CPU + quantization produces a warning and downgrades."""
 
     def test_train_auto_disables_quant_on_cpu(self):
-        """train.py should auto-disable quantization on CPU."""
+        """gpu.py resolve_quantization should auto-disable quantization on CPU."""
         import inspect
 
-        from soup_cli.commands import train
+        from soup_cli.utils import gpu
+        from soup_cli.utils.gpu import resolve_quantization
 
-        source = inspect.getsource(train)
+        # Retargeted from commands/train.py to utils/gpu.py after extraction (#423)
+        source = inspect.getsource(gpu)
         assert "quantization is not" in source
-        assert 'cfg.training.quantization = "none"' in source
+
+        # Behavioral assertions on pure resolve_quantization function
+        resolved, warning = resolve_quantization(
+            device="cpu", backend=None, quantization="4bit"
+        )
+        assert resolved == "none"
+        assert warning is not None
+        assert "quantization is not supported on CPU" in warning
+
+        # MLX preserves 4bit without downgrade
+        assert resolve_quantization(
+            device="cpu", backend="mlx", quantization="4bit"
+        )[0] == "4bit"
 
 
 # --- v0.10.2: Display progress bar uses ASCII ---
@@ -1110,7 +1127,7 @@ class TestValidateAutoDetect:
         result = runner.invoke(app, ["data", "validate", str(filepath)])
         assert result.exit_code == 0
         assert "Auto-detected format: alpaca" in result.output
-        assert "2/2 rows valid" in result.output
+        assert "2/2 rows valid" in strip_ansi(result.output)
 
     def test_validate_plaintext_auto_detect(self, tmp_path):
         """Plaintext data should be auto-detected without --format flag."""
@@ -1130,7 +1147,7 @@ class TestValidateAutoDetect:
         result = runner.invoke(app, ["data", "validate", str(filepath)])
         assert result.exit_code == 0
         assert "Auto-detected format: plaintext" in result.output
-        assert "2/2 rows valid" in result.output
+        assert "2/2 rows valid" in strip_ansi(result.output)
 
     def test_validate_explicit_format_still_works(self, tmp_path):
         """Explicit --format flag should override auto-detection."""
@@ -1154,7 +1171,7 @@ class TestValidateAutoDetect:
         )
         assert result.exit_code == 0
         assert "Auto-detected" not in result.output
-        assert "1/1 rows valid" in result.output
+        assert "1/1 rows valid" in strip_ansi(result.output)
 
     def test_validate_dpo_auto_detect(self, tmp_path):
         """DPO data should be auto-detected."""
@@ -1235,11 +1252,20 @@ class TestStatsHistogramWindows:
         )
 
         try:
-            plt.clear_figure()
-            plt.hist([10, 20, 30, 40, 50], bins=3)
-            plt.title("Test")
-            plt.theme("dark")
-            plt.show()
+            from rich.console import Console
+
+            from soup_cli.utils.plotext_compat import render_histogram
+
+            render_histogram(
+                plt,
+                [10, 20, 30, 40, 50],
+                console=Console(file=sys.stdout),
+                bins=3,
+                title="Test",
+                xlabel="Value",
+                ylabel="Count",
+                theme="dark",
+            )
             # If we got here, no UnicodeEncodeError — success
         finally:
             sys.stdout = original_stdout

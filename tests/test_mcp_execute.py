@@ -53,6 +53,21 @@ class TestMcpExecutionGates:
             )
         assert "allow-execute" in str(exc.value).lower()
 
+    def test_refusal_message_names_tool_and_flag_without_claiming_unimplemented(self):
+        # The refusal must guide the operator: name the disabled tool and the
+        # flag that enables it. It must NOT claim execution is unimplemented --
+        # execution shipped in v0.73.3 (#297), so that sentence is false and
+        # tells operators the working --allow-execute flag is a stub (#483).
+        for name in ("train_execute", "export_execute"):
+            with pytest.raises(reg.McpToolError) as exc:
+                _spec(name, allow_mutating=False, allow_execute=False).handler(
+                    {"confirmation_token": "token123"}
+                )
+            message = str(exc.value)
+            assert name in message
+            assert "allow-execute" in message.lower()
+            assert "not implemented" not in message.lower()
+
     def test_allow_execute_enables_execution(self):
         manager = ExecutionManager()
         manager.issue(kind="train", argv=["soup"], display_command="soup")

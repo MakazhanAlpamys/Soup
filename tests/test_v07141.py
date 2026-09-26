@@ -133,7 +133,7 @@ class TestRunStress:
         assert rep.gameable is False
 
     def test_max_gameable_boundary_inclusive(self):
-        # Accepts exactly the 'sentinel' attack -> accept-rate = 1/4 across 4 kinds.
+        # Accepts exactly the 'sentinel' attack -> accept-rate = 1.0 for sentinel family.
         def reward_fn(completions, **kwargs):
             out = []
             for comp in completions:
@@ -141,10 +141,10 @@ class TestRunStress:
                 out.append(1.0 if "GOLD" in text else 0.0)
             return out
 
-        rep_at = rst.run_stress(reward_fn, ["x"], max_gameable=0.25)
-        assert rep_at.gameability == 0.25
-        assert rep_at.gameable is False  # 0.25 > 0.25 is False -> inclusive
-        rep_below = rst.run_stress(reward_fn, ["x"], max_gameable=0.2)
+        rep_at = rst.run_stress(reward_fn, ["x"], attacks=rst.CLASSIC_ATTACKS, max_gameable=1.0)
+        assert rep_at.gameability == 1.0
+        assert rep_at.gameable is False  # 1.0 > 1.0 is False -> inclusive
+        rep_below = rst.run_stress(reward_fn, ["x"], attacks=rst.CLASSIC_ATTACKS, max_gameable=0.99)
         assert rep_below.gameable is True
 
     def test_threshold_applied(self):
@@ -172,7 +172,7 @@ class TestRunStress:
         rep = rst.run_stress(self._numeric_verifier(), ["42", "7"])
         assert {a.kind for a in rep.attacks} == set(rst.ATTACKS)
         for a in rep.attacks:
-            assert a.n == 2 and a.accepted == 0
+            assert a.n == len(rst.generate_attack_variants(a.kind)) * 2 and a.accepted == 0
 
     def test_short_return_raises_not_false_robust(self):
         # A gold-requiring builtin scored with no answer returns [] (its
@@ -194,9 +194,11 @@ class TestRunStress:
     def test_real_accuracy_builtin_gold_path_robust(self):
         from soup_cli.trainer.rewards import load_reward_fn
 
-        rep = rst.run_stress(load_reward_fn("accuracy"), ["42", "7"])
-        # accuracy compares the completion tail against the gold; junk never matches,
-        # and a gold scored as its own completion is a perfect match.
+        rep = rst.run_stress(
+            load_reward_fn("accuracy"), ["42", "7"], attacks=rst.CLASSIC_ATTACKS
+        )
+        # Under classic attacks, accuracy compares the completion tail against the gold;
+        # classic junk never matches, and a gold scored as its own completion is a perfect match.
         assert rep.gameable is False
         assert rep.reference_accept == 1.0
 
@@ -408,6 +410,7 @@ class TestHardening:
         assert r.exit_code == 1, (r.output, repr(r.exception))
         assert "under cwd" in r.output.lower()
 
+    @pytest.mark.requires_symlink
     def test_symlinked_target_rejected(self, tmp_path, monkeypatch):
         # A symlinked .py target must be refused by enforce_under_cwd_and_no_symlink
         # (a symlink could point outside cwd). POSIX-only — Windows symlink creation
@@ -415,9 +418,6 @@ class TestHardening:
         monkeypatch.chdir(tmp_path)
         real = _write(tmp_path, "real.py", _ROBUST_VERIFIER)
         link = tmp_path / "link.py"
-        try:
-            link.symlink_to(real)
-        except (OSError, NotImplementedError):
-            pytest.skip("symlink creation not permitted on this platform")
+        link.symlink_to(real)
         r = runner.invoke(soup_app, ["reward", "stress", link.name])
         assert r.exit_code == 1, (r.output, repr(r.exception))

@@ -12,24 +12,92 @@ Two strategies:
 
 1. **Preferred**: ``tokenizer.apply_chat_template(..., return_assistant_tokens_mask=True,
    return_dict=True)``. Available on HF templates that declare ``{% generation %}``
-   markers. Honest, exact, no heuristic.
+   markers. Mapping outputs such as ``BatchEncoding`` are read through
+   ``input_ids`` and tensor-like ids/masks are normalised to Python integers.
+   If assistant messages are present but the returned mask is all zero, this
+   path is rejected so the fallback can avoid a silent all-``-100`` training row.
 
 2. **Fallback**: Render ``messages[:i]`` vs ``messages[:i+1]`` for each turn and
    take the token delta. The delta is the new turn's tokens (prefix + content +
-   suffix). Special tokens like BOS are added by the Jinja template itself
-   (not by the tokenizer ``__call__``), so monotone-prefix templates produce
-   stable deltas. We pass ``add_special_tokens=False`` to incremental tokenize
-   calls so HF does not double-prepend BOS at the front of each render. This
-   path is necessarily looser than the preferred path — the role-prefix tokens
-   (e.g. ``<|assistant|>``) end up in the loss too. Users wanting strict
+   suffix). Leading non-trainable context is deferred until the first user turn,
+   because some native templates reject an otherwise-transient system-only
+   prefix. Special tokens like BOS are added by the Jinja template itself (not
+   by the tokenizer ``__call__``), so monotone-prefix templates produce stable
+   deltas. We pass ``add_special_tokens=False`` to incremental tokenize calls so
+   HF does not double-prepend BOS at the front of each render. This path is
+   necessarily looser than the preferred path — the role-prefix tokens (e.g.
+   ``<|assistant|>``) end up in the loss too. Users wanting strict
    assistant-content-only must pass a tokenizer with ``{% generation %}`` markers.
 """
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from difflib import SequenceMatcher
+from operator import index
 from typing import Any, Optional, Sequence
 
 IGNORE_INDEX = -100
+_MISSING = object()
+
+
+class NoCausalLossTargetError(ValueError):
+    """Raised when truncation leaves a row with no shifted causal-LM target."""
+
+
+def _coerce_int_list(
+    values: Any, *, field: str, allow_bool: bool = False
+) -> list[int]:
+    """Return a one-dimensional tokenizer sequence as Python ``int`` values."""
+    try:
+        items = list(values)
+    except TypeError as exc:
+        raise ValueError(
+            f"tokenizer returned invalid {field}; expected a sequence of integers"
+        ) from exc
+
+    result: list[int] = []
+    for position, item in enumerate(items):
+        if isinstance(item, bool) and not allow_bool:
+            raise ValueError(
+                f"tokenizer returned non-integer {field}[{position}]={item!r}"
+            )
+        try:
+            item = index(item)
+        except TypeError as exc:
+            raise ValueError(
+                f"tokenizer returned non-integer {field}[{position}]={item!r}"
+            ) from exc
+        result.append(int(item))
+    return result
+
+
+def _is_mapping_like(out: Any) -> bool:
+    """True for ``Mapping`` *or* a duck-typed mapping with ``.get``.
+
+    ``collections.abc.Mapping`` covers ``dict`` and HF ``BatchEncoding``
+    (a ``UserDict``). A tokenizer that returns a dict-like object which is
+    not registered as a Mapping used to miss this gate: ``coerce_token_ids``
+    then iterated the object's *keys* and raised
+    ``input_ids[0]='input_ids'``, and ``_apply_template_with_mask`` silently
+    skipped the mask path. One predicate, two call sites (#441).
+    """
+    return isinstance(out, Mapping) or hasattr(out, "get")
+
+
+def coerce_token_ids(out: Any) -> list[int]:
+    """Extract and normalise token ids from a sequence or mapping output.
+
+    Mapping-like outputs are read through ``input_ids``. This is the shared
+    contract with ``utils.data_doctor`` — public so a private name cannot
+    hide a second copy of the logic (#441 / #430).
+    """
+    values = out
+    if _is_mapping_like(out):
+        values = out.get("input_ids", _MISSING)
+        if values is _MISSING:
+            raise ValueError("tokenizer output mapping has no 'input_ids'")
+    return _coerce_int_list(values, field="input_ids")
 
 
 def _validate_max_length(max_length: int) -> None:
@@ -61,19 +129,34 @@ def _apply_template_with_mask(
     except TypeError:
         # Old HF that doesn't recognise return_assistant_tokens_mask.
         return None
-    if not isinstance(out, dict):
+    if not _is_mapping_like(out):
         return None
     masks = out.get("assistant_masks")
-    ids = out.get("input_ids")
-    if masks is None or ids is None:
+    if masks is None:
         return None
-    if len(masks) != len(ids):
+    try:
+        ids = coerce_token_ids(out)
+        mask = _coerce_int_list(
+            masks, field="assistant_masks", allow_bool=True
+        )
+    except ValueError:
         return None
-    return list(ids), list(masks)
+    if len(mask) != len(ids):
+        return None
+    if any(msg.get("role") == "assistant" for msg in messages) and not any(mask):
+        # Some templates accept the mask kwargs but have no {% generation %}
+        # markers. Trusting their all-zero mask would silently train no tokens.
+        return None
+    return ids, mask
 
 
 def _tokenize_only(tokenizer: Any, messages: Sequence[dict]) -> list[int]:
-    """Render and tokenize ``messages``; never let HF auto-prepend BOS again."""
+    """Render ``messages`` into Python int ids without auto-prepending BOS.
+
+    Mapping outputs (including ``BatchEncoding``) are read through
+    ``input_ids``. Tensor-like sequences are normalised element by element;
+    missing or non-integer ids raise instead of flowing into a collator.
+    """
     try:
         out = tokenizer.apply_chat_template(
             messages,
@@ -88,9 +171,50 @@ def _tokenize_only(tokenizer: Any, messages: Sequence[dict]) -> list[int]:
             tokenize=True,
             add_generation_prompt=False,
         )
-    if isinstance(out, dict):
-        return list(out.get("input_ids", []))
-    return list(out)
+    return coerce_token_ids(out)
+
+
+def _has_user_turn(messages: Sequence[dict]) -> bool:
+    """Whether a cumulative conversation contains a user query.
+
+    Qwen3.8's native template refuses a system-only prefix. The incremental
+    fallback does not need to render leading ignored context by itself: the
+    first user render includes that context and establishes the same boundary
+    before an assistant turn is unmasked.
+    """
+    return any(message.get("role") == "user" for message in messages)
+
+
+def _unmask_render_insertions(
+    labels: list[int],
+    full_ids: Sequence[int],
+    *,
+    baseline_ids: Sequence[int],
+    rendered_ids: Sequence[int],
+) -> None:
+    """Unmask tokens introduced by one message in a renderable prefix."""
+    matcher = SequenceMatcher(a=baseline_ids, b=rendered_ids, autojunk=False)
+    for tag, _a1, _a2, b1, b2 in matcher.get_opcodes():
+        if tag not in {"insert", "replace"}:
+            continue
+        end = min(b2, len(full_ids))
+        labels[b1:end] = full_ids[b1:end]
+
+
+def _unmask_aligned_render(
+    labels: list[int],
+    full_ids: Sequence[int],
+    *,
+    selected_ids: Sequence[int],
+    rendered_ids: Sequence[int],
+) -> None:
+    """Unmask the tokens from a valid standalone turn inside a larger render."""
+    matcher = SequenceMatcher(a=selected_ids, b=rendered_ids, autojunk=False)
+    for tag, _a1, _a2, b1, b2 in matcher.get_opcodes():
+        if tag != "equal":
+            continue
+        end = min(b2, len(full_ids))
+        labels[b1:end] = full_ids[b1:end]
 
 
 def _truncate(
@@ -106,12 +230,53 @@ def _truncate(
     }
 
 
+def ensure_causal_loss_target(labels: Sequence[int], *, max_length: int) -> None:
+    """Reject a row that contributes no token to shifted causal-LM loss.
+
+    Causal language-model losses compare ``logits[:-1]`` with ``labels[1:]``.
+    A non-ignored label in position zero therefore does not make a trainable
+    row. Check the shifted label surface, not merely ``labels`` itself.
+    """
+    _validate_max_length(max_length)
+    if any(label != IGNORE_INDEX for label in labels[1:]):
+        return
+    raise NoCausalLossTargetError(
+        "no causal-loss target remains after tokenization/truncation at "
+        f"data.max_length={max_length}; the assistant response is absent or "
+        "fully truncated. Increase data.max_length or shorten the prompt."
+    )
+
+
+def keep_only_the_last_assistant_turn(labels: list[int]) -> list[int]:
+    """Mask every trained span but the final one (``data.mask_history``, #761).
+
+    Takes the labels of the assistant-only path, where a *turn* is a contiguous
+    run of non-:data:`IGNORE_INDEX` positions, and returns labels in which only
+    the last such run still contributes to the loss. Prior **assistant** turns
+    stop contributing; prior user and system turns were already masked by that
+    path and are untouched, so the field never widens what trains.
+
+    Returns the list unchanged when nothing was trained (an all-masked row), so a
+    template that reported no assistant span is not turned into a silent no-op
+    with a different failure mode.
+    """
+    index = len(labels) - 1
+    while index >= 0 and labels[index] == IGNORE_INDEX:
+        index -= 1
+    if index < 0:
+        return labels
+    while index >= 0 and labels[index] != IGNORE_INDEX:
+        index -= 1
+    return [IGNORE_INDEX] * (index + 1) + labels[index + 1:]
+
+
 def build_assistant_only_labels(
     messages: Sequence[dict],
     tokenizer: Any,
     max_length: int = 2048,
     *,
     include_eot: bool = False,
+    mask_history: bool = False,
 ) -> dict[str, list[int]]:
     """Build labels where only assistant tokens contribute to loss.
 
@@ -124,6 +289,11 @@ def build_assistant_only_labels(
             token in the unmasked region — so the model learns to predict
             the turn terminator. Default False matches HF Trainer's standard
             chat-template loss-mask behaviour. (v0.53.2 #137)
+        mask_history: When True (``data.mask_history``, #761), only the LAST
+            assistant turn contributes to the loss; earlier assistant turns are
+            masked along with the rest of the history. Earlier user and system
+            turns are already masked on this path, so this only ever removes
+            assistant tokens from the loss. (v0.42.0 Part D, wired in #761)
 
     Returns:
         ``{"input_ids": [...], "labels": [...], "attention_mask": [...]}``
@@ -131,12 +301,18 @@ def build_assistant_only_labels(
 
     Raises:
         ValueError: empty messages, non-positive max_length, or tokenizer
-            lacking a chat_template.
+            lacking a chat_template or returning invalid token ids. When a
+            template reports an all-zero assistant mask despite assistant
+            messages, Soup falls back to incremental rendering instead.
         TypeError: ``include_eot`` not bool.
     """
     if not isinstance(include_eot, bool):
         raise TypeError(
             f"include_eot must be bool, got {type(include_eot).__name__}"
+        )
+    if not isinstance(mask_history, bool):
+        raise TypeError(
+            f"mask_history must be bool, got {type(mask_history).__name__}"
         )
     _check_messages(messages)
     _validate_max_length(max_length)
@@ -152,6 +328,8 @@ def build_assistant_only_labels(
             tok if flag else IGNORE_INDEX
             for tok, flag in zip(input_ids, mask)
         ]
+        if mask_history:
+            labels = keep_only_the_last_assistant_turn(labels)
         return _truncate(input_ids, labels, max_length)
 
     # --- Fallback: incremental delta ---
@@ -161,6 +339,11 @@ def build_assistant_only_labels(
     cumulative: list[dict] = []
     for msg in messages:
         cumulative.append(msg)
+        if msg.get("role") != "assistant" and not _has_user_turn(cumulative):
+            # Do not feed a transient system/developer-only prefix to native
+            # templates that require a user query (#540). Those tokens remain
+            # ignored and are included in the first renderable user prefix.
+            continue
         rendered = _tokenize_only(tokenizer, cumulative)
         new_len = len(rendered)
         if msg.get("role") == "assistant":
@@ -173,7 +356,209 @@ def build_assistant_only_labels(
                     labels[extra] = full_ids[extra]
                     extra += 1
         prev_len = new_len
+    if mask_history:
+        labels = keep_only_the_last_assistant_turn(labels)
     return _truncate(full_ids, labels, max_length)
+
+
+def align_labels_to_ids(
+    source_ids: Sequence[int],
+    source_labels: Sequence[int],
+    target_ids: Sequence[int],
+) -> list[int]:
+    """Carry a loss mask built on one tokenization over onto another's ids.
+
+    ``soup data preprocess`` tokenizes the rendered template its own way (#876
+    settled the BOS question; #791 appends the training EOS), while the masking
+    builders above go through ``_tokenize_only``. The two need not agree token
+    for token, and after #876 they still differ by the trailing EOS. Rather than
+    re-deriving the mask against the cache's own tokenizer call — the drift that
+    produced #1054 in the first place — run the builders as-is and transfer
+    their mask onto the cache's ids by longest-common-subsequence alignment.
+
+    This holds whatever the two tokenizations differ by, so it does not need
+    revisiting each time one of them changes.
+
+    Positions with no aligned source token stay ``IGNORE_INDEX``.
+    """
+    labels = [IGNORE_INDEX] * len(target_ids)
+    matcher = SequenceMatcher(a=list(source_ids), b=list(target_ids), autojunk=False)
+    for tag, a1, _a2, b1, b2 in matcher.get_opcodes():
+        if tag != "equal":
+            continue
+        for offset in range(b2 - b1):
+            if source_labels[a1 + offset] != IGNORE_INDEX:
+                labels[b1 + offset] = target_ids[b1 + offset]
+    return labels
+
+
+def build_full_sequence_labels(
+    messages: Sequence[dict],
+    tokenizer: Any,
+    max_length: int = 2048,
+) -> dict[str, list[int]]:
+    """Build labels where EVERY token contributes to loss (no masking).
+
+    The ``train_on_responses_only=False`` / ``train_on_messages_with_train_field
+    =False`` path. Pre-tokenises with ``add_special_tokens=False`` (via
+    ``_tokenize_only``) so the chat template is the single source of special
+    tokens, matching inference and ``apply_chat_template(tokenize=True)`` (#785).
+
+    Previously this path handed TRL a ``{"text"}`` column, and TRL's
+    language-modeling ``tokenize_fn`` re-tokenised it with the tokenizer's
+    default ``add_special_tokens=True``. A template that renders
+    ``{{ bos_token }}`` then trained on a doubled BOS, one token off from
+    post-#782 inference.
+    """
+    _check_messages(messages)
+    _validate_max_length(max_length)
+    if not getattr(tokenizer, "chat_template", None):
+        raise ValueError(
+            "tokenizer has no chat_template — cannot render messages for the "
+            "text (train_on_responses_only=false) path"
+        )
+    full_ids = _tokenize_only(tokenizer, messages)
+    # #785/#788: the BOS fix must not cost the training EOS. On ``main`` the
+    # legacy text rows reached TRL as ``{"text": ...}``, and TRL 0.29.1's
+    # language-modeling path appends ``eos_token`` as a STRING to every row that
+    # does not already end with it (``sft_trainer.py`` ``add_eos``), before
+    # tokenizing -- independent of the tokenizer's post-processor. Pre-tokenising
+    # here skips that TRL step, so reproduce its rule in token space: append the
+    # EOS id when the sequence does not already end on it. Probing the
+    # post-processor instead (an earlier #788 attempt) under-appended for
+    # BOS-only and Qwen-shaped tokenizers, dropping the stop token ``main``
+    # trained on and teaching run-on generation (the failure `soup data doctor`'s
+    # eos_in_labels check exists to catch).
+    full_ids = append_training_eos(tokenizer, full_ids)
+    labels = list(full_ids)
+    return _truncate(full_ids, labels, max_length)
+
+
+def append_training_eos(tokenizer: Any, input_ids: list[int]) -> list[int]:
+    """Append the EOS the SFT language-modeling path trains on (TRL's rule).
+
+    Reproduces TRL 0.29.1's ``add_eos`` (``sft_trainer.py``): the trained text row
+    ends in ``eos_token`` unless it already does, regardless of whether the
+    tokenizer's post-processor would append one. #785 pre-tokenises the rendered
+    template so TRL never runs ``add_eos``; this puts the stop token back in token
+    space so the pre-tokenised row trains on the same EOS ``main`` did.
+
+    Used by the live-training path (:func:`build_full_sequence_labels`) and, since
+    #791, by the ``soup data preprocess`` cache path. The cache path tokenises as
+    ``main`` (``add_special_tokens=True``) and drops #785's duplicated leading BOS
+    via :func:`strip_doubled_leading_bos`; before #791 its EOS was then only
+    whatever the post-processor supplied, so a template rendering no EOS on a
+    tokenizer whose post-processor appends none (Qwen shape) cached zero stop
+    tokens while the live path trained on one. The cache now applies this same rule
+    so the two agree on the trained EOS count. (The leading BOS still differs
+    between the two paths by design — that divergence is tracked in #876.)
+    """
+    eos_id = _resolve_eos_token_id(tokenizer)
+    if eos_id is not None and (not input_ids or input_ids[-1] != eos_id):
+        return input_ids + [eos_id]
+    return input_ids
+
+
+def strip_doubled_leading_bos(
+    tokenizer: Any, input_ids: list[int], attention_mask: list[int]
+) -> tuple[list[int], list[int]]:
+    """Drop only the one duplicated leading BOS #785 introduced on the cache path.
+
+    ``soup data preprocess`` tokenises the rendered chat template exactly as
+    ``main`` did (``add_special_tokens=True``), which keeps ``main``'s truncation
+    reservation and post-processor EOS. The only #785 defect on this path is the
+    doubled BOS: a template rendering ``{{ bos_token }}`` on a tokenizer whose
+    post-processor also prepends BOS yields ``[bos, bos, ...]``. Drop exactly that
+    duplicate (the post-processor's leading copy) and nothing else, so the row is
+    byte-identical to ``main`` apart from the extra BOS and matches post-#782
+    inference's one BOS.
+
+    A single post-processor BOS (no template BOS, e.g. Zephyr/TinyLlama) or none
+    at all (Qwen) is not a duplicate and is left as ``main`` had it.
+
+    #876 settled that divergence: the cache path now calls
+    :func:`strip_post_processor_leading_bos`, which removes whatever the
+    post-processor prepended and so matches the live path for a
+    ``data.chat_template`` preset too. This function remains the fallback for a
+    tokenizer the probe cannot measure, where a lone BOS still cannot be
+    attributed and is left alone.
+    """
+    bos_id = _resolve_bos_token_id(tokenizer)
+    if (
+        bos_id is not None
+        and len(input_ids) >= 2
+        and input_ids[0] == bos_id
+        and input_ids[1] == bos_id
+    ):
+        return input_ids[1:], attention_mask[1:]
+    return input_ids, attention_mask
+
+
+def post_processor_leading_bos_count(tokenizer: Any) -> Optional[int]:
+    """How many leading BOS the tokenizer's post-processor prepends, or None.
+
+    Measured once per tokenizer by encoding a plain probe string with
+    ``add_special_tokens=True``: the text holds no BOS of its own, so every leading
+    BOS is the post-processor's, independent of anything a chat template renders.
+    ``None`` means it could not be measured, and the caller falls back to
+    :func:`strip_doubled_leading_bos`.
+    """
+    bos_id = _resolve_bos_token_id(tokenizer)
+    if bos_id is None:
+        return 0
+    try:
+        ids = coerce_token_ids(tokenizer("a", add_special_tokens=True)["input_ids"])
+    except Exception:  # noqa: BLE001 — tokenizer call shapes vary
+        return None
+    count = 0
+    while count < len(ids) and ids[count] == bos_id:
+        count += 1
+    return count
+
+
+def strip_post_processor_leading_bos(
+    tokenizer: Any,
+    input_ids: list[int],
+    attention_mask: list[int],
+    count: Optional[int],
+) -> tuple[list[int], list[int]]:
+    """Drop the leading BOS the post-processor added, keeping the template's own.
+
+    #876. The live path renders with ``add_special_tokens=False``, so its leading
+    BOS is whatever the chat template renders: one for a ``{{ bos_token }}``
+    template, zero for a ``data.chat_template`` preset (#781 established zero is
+    right there). The cache tokenises with ``add_special_tokens=True`` to keep
+    ``main``'s truncation reservation for the post-processor EOS, which also
+    prepends ``count`` BOS. Removing exactly those makes the two paths agree for
+    every template, and subsumes :func:`strip_doubled_leading_bos` -- the doubled
+    case is a template BOS plus one post-processor BOS.
+
+    ``count`` comes from :func:`post_processor_leading_bos_count`; ``None`` (not
+    measurable) falls back to removing only a doubled BOS, as before #876.
+    """
+    if count is None:
+        return strip_doubled_leading_bos(tokenizer, input_ids, attention_mask)
+    bos_id = _resolve_bos_token_id(tokenizer)
+    drop = 0
+    while drop < count and drop < len(input_ids) and input_ids[drop] == bos_id:
+        drop += 1
+    if drop:
+        return input_ids[drop:], attention_mask[drop:]
+    return input_ids, attention_mask
+
+
+def _resolve_bos_token_id(tokenizer: Any) -> Optional[int]:
+    """Return an int BOS token id, or None. Mirrors :func:`_resolve_eos_token_id`."""
+    candidate = getattr(tokenizer, "bos_token_id", None)
+    if isinstance(candidate, bool):
+        return None
+    if isinstance(candidate, int):
+        return candidate
+    if isinstance(candidate, list):
+        for entry in candidate:
+            if isinstance(entry, int) and not isinstance(entry, bool):
+                return entry
+    return None
 
 
 def _resolve_eos_token_id(tokenizer: Any) -> Optional[int]:
@@ -244,13 +629,54 @@ def build_per_message_train_labels(
     labels: list[int] = [IGNORE_INDEX] * len(full_ids)
     prev_len = 0
     cumulative: list[dict] = []
+    deferred: list[tuple[dict, bool]] = []
     for msg in messages:
         cumulative.append(msg)
-        rendered = _tokenize_only(tokenizer, cumulative)
-        new_len = len(rendered)
         train_flag = msg.get("train")
         if train_flag is None:
             train_flag = msg.get("role") == "assistant"
+        if not _has_user_turn(cumulative):
+            # Template validity is independent of the per-message train flag:
+            # defer every user-less prefix until it can be rendered (#540).
+            deferred.append((msg, bool(train_flag)))
+            continue
+        rendered = _tokenize_only(tokenizer, cumulative)
+        new_len = len(rendered)
+
+        if deferred:
+            # The first valid render contains both the deferred prefix and the
+            # first user turn. Recover each requested prefix span by comparing
+            # that render with the same conversation minus one deferred
+            # message. This preserves an explicit ``train: true`` without ever
+            # asking a native template to render an invalid system-only prefix.
+            for deferred_msg, deferred_train_flag in deferred:
+                if not deferred_train_flag:
+                    continue
+                without_message = [
+                    item for item in cumulative if item is not deferred_msg
+                ]
+                _unmask_render_insertions(
+                    labels,
+                    full_ids,
+                    baseline_ids=_tokenize_only(tokenizer, without_message),
+                    rendered_ids=rendered,
+                )
+
+            # A trainable first user must not accidentally absorb ignored
+            # system/developer tokens merely because the initial boundary was
+            # deferred. Align its valid standalone render back into the full
+            # prefix instead.
+            if train_flag:
+                _unmask_aligned_render(
+                    labels,
+                    full_ids,
+                    selected_ids=_tokenize_only(tokenizer, [msg]),
+                    rendered_ids=rendered,
+                )
+            deferred.clear()
+            prev_len = new_len
+            continue
+
         if train_flag:
             end = min(new_len, len(full_ids))
             labels[prev_len:end] = full_ids[prev_len:end]

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "soup-cli"
-version = "0.73.2"
+version = "0.75.0"
 description = "Fine-tune and post-train LLMs in one command. No SSH, no config hell."
 readme = "README.md"
 license = "Apache-2.0"
@@ -37,20 +37,39 @@ dependencies = [
     "pydantic>=2.0.0",
     "pyyaml>=6.0",
     "huggingface-hub>=0.16.0",
+    # Plotext 6 replaced the module-level plotting API with Figure methods.
+    # Soup supports both the 5.x and 6.x surfaces through plotext_compat (#522).
     "plotext>=5.2.0",
+    # `env check` reads declared bounds via packaging (Requirement/marker/version).
+    # It ships with pip and is pulled in transitively, but `env check` degrades to
+    # a silent "clean" without it — the wrong direction for a checker — so it is
+    # declared explicitly (#368 review).
+    "packaging>=21.0",
 ]
 
 [project.optional-dependencies]
 # v0.71.0 — heavy training stack. `pip install 'soup-cli[train]'` to fine-tune.
-# These were core dependencies through v0.70.0; pins are unchanged.
+# These were core dependencies through v0.70.0.
 train = [
-    "torch>=2.0.0",
-    "transformers>=4.36.0,<5.0.0",
-    "peft>=0.7.0",
-    # Capped below 0.29. #326 raised this from `<0.27` after migrating the six
-    # preference trainers (bco, dpo, ipo, kto, orpo, simpo) off the two trl APIs
-    # that moved. The cap is no longer set by those trainers at all — see the
-    # 0.29 note at the bottom, which is about `online_dpo`.
+    # Soup's training floor is 2.6.0 because TRL preference trainers
+    # require the public FSDP2 API introduced in PyTorch 2.6.0. This also
+    # subsumes Transformers 5.16.1's torch>=2.5 requirement (#651).
+    # tests/test_issue636_torch_floor.py pins this floor against the declared
+    # transformers floor's own requirement (real metadata, on the
+    # transformers-floor CI job that installs exactly 5.16.1) and pins
+    # doctor's literal copy against this file, so neither can drift silently.
+    "torch>=2.6.0",
+    # 5.16.1 is the validated Qwen4-Exp floor: an outer `qwen4_exp` config
+    # selects the text-only Qwen4ExpForCausalLM, and the patch release restores
+    # tensor-parallel compatibility needed by large-model training. The v5
+    # range also keeps `[train,mlx]` resolvable because mlx-lm requires v5.
+    "transformers>=5.16.1,<6.0.0",
+    # 0.20 is the validated Transformers 5 adapter floor. It still needs Soup's
+    # explicit qwen3_5_text target policy below the automatic PEFT mapping layer.
+    "peft>=0.20.0,<1.0.0",
+    # #326 migrated the six preference trainers (bco, dpo, ipo, kto, orpo,
+    # simpo) across TRL's staged API moves using capability probes instead of
+    # version checks. That lets the supported floor move to 0.29 here.
     #
     # trl removed `max_prompt_length` from the preference configs in STAGES
     # rather than in one release — which is why a single spot-check gives the
@@ -77,60 +96,65 @@ train = [
     # they live on under `trl.experimental.<algo>` — so those three trainers now
     # fall back to that path when the public import is gone.
     #
-    # WHY THE CAP IS 0.29 AND NOT HIGHER: `soup train --task online_dpo` is
-    # broken on 0.29.x, and the cause is not in these trainers. trl 0.29 moved
-    # `BasePairwiseJudge` to `trl.experimental.judges` while still accepting
-    # `judge=`, so the wrapper correctly selects the judge path and then
-    # `eval/judge.py::_base_pairwise_judge_cls` cannot import the base class.
-    # trl 1.x drops `judge=` entirely, so the wrapper falls back to
-    # `reward_funcs=` and online_dpo works again — measured: all nine tasks build
-    # on 1.9.2, and the six preference tasks train there. Raising the cap past
-    # 0.29 therefore needs (a) a `trl.experimental.judges` fallback in
-    # eval/judge.py and (b) validation of the trl surfaces this bump did not
-    # exercise (serve, GRPO variants, PPO with a real reward model). Shipping
-    # against a release nobody has validated is not a substitute for that.
+    # Transformers 5 changed a private availability helper that trl<=0.28
+    # imported, which makes absent optional packages look present and prevents
+    # DPO/GRPO modules from importing (#503). trl 0.29 vendors its own probe and
+    # is the first compatible release. It also moves BasePairwiseJudge to
+    # `trl.experimental.judges`; Soup resolves that capability from either home.
+    # Keep the upper bound below trl 1 because 1.x removes the pairwise `judge=`
+    # API and is a separate online-DPO migration.
     #
     # The underlying bug was latent, not new: the trl imports live inside
     # `setup()`, which no test had ever called on those wrappers, so CI stayed
     # green while anyone pip-installing got a broken install. v0.72.4's
     # end-to-end preference tests are what surfaced it.
     #
-    # The floor is 0.14.0, not 0.7.0: `setup()` imports GRPOTrainer
-    # unconditionally and trl first exports it at 0.14.0 (OnlineDPO / KTO / BCO /
-    # BasePairwiseJudge arrive at 0.11.0; trl 0.7.0 has none of them). Resolvers
-    # normally pick the newest allowed version, so the impossible floor only bit
-    # under a constraints file or anyone reading the metadata as a support claim.
-    "trl>=0.14.0,<0.29",
+    "trl>=0.29.0,<1.0.0",
     "datasets>=2.14.0",
     "bitsandbytes>=0.41.0",
-    "accelerate>=0.25.0",
+    # #352: 0.27.0 added `adapter_only` to `save_fsdp_model`/`load_fsdp_model`, which
+    # transformers 5.16.1 feature-detects to keep a PEFT run's FSDP resume checkpoint
+    # to the adapter instead of the full frozen base.
+    "accelerate>=0.27.0",
 ]
 # v0.71.0 — convenience meta-extra pulling the main optional stacks.
 all = ["soup-cli[train,serve,ui,data,mcp]"]
 eval = ["lm-eval>=0.4.0"]
+# Aider's normal CLI. Its Polyglot harness is source-only, so `soup eval aider`
+# additionally requires the upstream benchmark Docker image documented in
+# docs/evaluation.md; the wheel alone cannot supply benchmark/benchmark.py.
+aider = ["aider-chat>=0.86.2,<0.87"]
 data = ["datasketch>=1.6.0", "scikit-learn>=1.0.0"]
 wandb = ["wandb>=0.15.0,<0.18.0"]
 # Self-references `[train]` so CI / contributors get the full training stack
 # (CI runs `pip install -e ".[dev]"`; without this every test would fail at
 # `import torch`).
-dev = ["soup-cli[train,mcp,data]", "cryptography>=41.0.0", "reportlab>=4.0.0", "pytest>=7.0", "ruff>=0.1.0", "pytest-cov>=4.0", "httpx>=0.24.0", "mypy>=1.8.0", "pre-commit>=3.5.0"]
+dev = ["soup-cli[train,mcp,data]", "cryptography>=41.0.0", "reportlab>=4.0.0", "pytest>=7.0", "ruff>=0.1.0", "pytest-cov>=4.0", "httpx>=0.24.0", "mypy>=1.8.0", "pre-commit>=3.5.0", "fastapi>=0.104.0"]
 ui = ["fastapi>=0.104.0", "uvicorn>=0.24.0"]
 serve = ["fastapi>=0.104.0", "uvicorn>=0.24.0"]
-serve-fast = ["vllm>=0.4.0", "fastapi>=0.104.0", "uvicorn>=0.24.0"]
+serve-fast = ["vllm>=0.4.3", "fastapi>=0.104.0", "uvicorn>=0.24.0"]
 generate = ["httpx>=0.24.0"]
 deepspeed = ["deepspeed>=0.12.0"]
 fast = ["unsloth>=2024.8"]
 vision = ["Pillow>=9.0.0"]
-qat = ["torchao>=0.4.0"]
+# The floor lives in TORCHAO_MIN_VERSION (src/soup_cli/utils/torchao_compat.py);
+# tests/test_issue826_torchao_class_names.py pins this line to it (#826).
+qat = ["torchao>=0.18.0"]
 liger = ["liger-kernel>=0.3.0"]
 ring-attn = ["ring-flash-attn>=0.1.0"]
 onnx = ["optimum[onnxruntime]>=1.16.0"]
 tensorrt = ["tensorrt_llm>=0.9.0"]
-audio = ["librosa>=0.10.0", "soundfile>=0.12.0"]
+audio = ["librosa>=0.10.0", "soundfile>=0.12.0", "torchaudio>=2.6.0,<3.0.0"]
 awq = ["autoawq>=0.2.0"]
 gptq = ["auto-gptq>=0.7.0"]
-sglang = ["sglang>=0.2.0", "fastapi>=0.104.0", "uvicorn>=0.24.0"]
-mlx = ["mlx>=0.20.0", "mlx-lm>=0.31.3"]
+sglang = ["sglang>=0.2.0", "fastapi>=0.104.0", "uvicorn>=0.24.0", "httpx>=0.24.0"]
+mlx = [
+    "mlx>=0.20.0",
+    "mlx-lm>=0.31.3",
+    # mlx-lm imports transformers at runtime; keep the standalone contract from
+    # depending on that transitive requirement remaining undeclared here.
+    "transformers>=5.16.1,<6.0.0",
+]
 cce = ["cut-cross-entropy>=24.10.0"]
 tui = ["textual>=0.50.0"]
 # v0.53.8 #89 — bundle MLflow / SwanLab / Trackio for `--tracker` users.
@@ -140,14 +164,13 @@ remote = ["fsspec>=2024.1.0", "s3fs>=2024.1.0", "gcsfs>=2024.1.0", "adlfs>=2024.
 # v0.53.10 #150 — bundle scikit-optimize so `soup data mix --optimize` runs the
 # Bayesian-style loop instead of falling back to the v0.48.0 Dirichlet sampler.
 mix = ["scikit-optimize>=0.9.0"]
-# v0.53.10 #113 — production-grade data quality: langdetect (language) +
-# presidio-analyzer (PII). Llama-Guard-3-1B is documented as a manual recipe
-# (license + ~600 MB weight blob too large to bundle by default).
+# v0.53.10 #113 — optional language detection and PII analysis.
 data-pro = ["langdetect>=1.0.9", "presidio-analyzer>=2.2.0"]
-# v0.71.2 #179/#185 — ed25519 detached signing for `soup attest` / `soup
-# adapters sign`. Pure-offline; Sigstore keyless (OIDC + Fulcio/Rekor network)
-# stays infra-blocked and is NOT bundled here.
+# v0.71.2 #185 — small offline ed25519 signing extra.
 sign = ["cryptography>=41.0.0"]
+# #185 — Sigstore keyless OIDC/Fulcio/Rekor stack. Kept separate so
+# air-gapped ed25519 users do not pull the network/transparency dependencies.
+sigstore = ["sigstore>=4.4.0,<5.0.0"]
 # v0.71.3 #181 — reportlab PDF rendering for `soup train --annex-xi *.pdf`.
 pdf = ["reportlab>=4.0.0"]
 # v0.71.3 #180 — codecarbon offline energy/CO2 measurement for
@@ -171,7 +194,27 @@ modal = ["modal>=0.60.0"]
 # nine CI jobs the day it was published. 1.29.0 (the newest 1.x) still exposes
 # both, verified directly. Migrating to the 2.x API is its own piece of work,
 # and shipping against a major nobody has validated is not a substitute for it.
-mcp = ["mcp>=1.2.0,<2"]
+# v0.73.4 (#296): floor raised from 1.2.0 for the sse / streamable-http
+# transports. Measured against the published wheels rather than the
+# changelog: `mcp/server/streamable_http_manager.py` first appears in
+# 1.8.0 (absent in 1.7.0) and `mcp/server/transport_security.py` in
+# 1.10.0 (absent in 1.9.4). `--transport sse` alone would have run on
+# the old floor; DNS-rebinding protection would not, and a listener
+# whose origin checking silently vanishes on an older SDK is worse than
+# a resolver error. No new package: `mcp` already requires starlette,
+# uvicorn, sse-starlette and httpx-sse.
+#
+# v0.73.4 (#322): cap lifted to `<3`. The two removals that forced it are
+# bridged rather than pinned around. `build_server` probes the `Server`
+# constructor for `on_list_tools` — 2.x registers handlers there, 1.x through
+# decorators — and the round-trip tests were rebuilt on
+# `create_client_server_memory_streams`, which both majors still ship, instead
+# of the 2.x-removed `create_connected_server_and_client_session`. Verified by
+# running the MCP suite twice, once per major, not by reading release notes.
+# The three modules the sse / streamable-http transports depend on
+# (`sse`, `streamable_http_manager`, `transport_security`) all survive in 2.0.0,
+# so those needed no change at all. The floor stays 1.10.0 for the reason above.
+mcp = ["mcp>=1.10.0,<3"]
 
 [project.scripts]
 soup = "soup_cli.cli:run"
@@ -180,7 +223,7 @@ soup = "soup_cli.cli:run"
 Homepage = "https://github.com/MakazhanAlpamys/Soup"
 Repository = "https://github.com/MakazhanAlpamys/Soup"
 Issues = "https://github.com/MakazhanAlpamys/Soup/issues"
-Discord = "https://discord.gg/8RgVbFA6Zq"
+Discord = "https://discord.gg/dgd2pJcjwP"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/soup_cli"]
@@ -220,5 +263,8 @@ markers = [
     "smoke: slow smoke tests that download models and run training (run with: pytest -m smoke)",
     "unit: fast isolated tests — no subprocess, network, filesystem, or real model load",
     "integration: tests that touch real subprocess, SQLite, filesystem, or HTTP",
+    "gpu: needs a CUDA device; skipped without one (see tests/conftest.py, #833). Run: pytest -m gpu --no-cov",
+    "requires_symlink: creates a symlink; skipped when this account cannot (see tests/conftest.py, #832)",
+    "requires_hardlink: creates a hardlink; skipped when this account or filesystem cannot",
 ]
 addopts = "-m 'not smoke' --cov=soup_cli --cov-fail-under=77 --cov-report=term-missing:skip-covered"

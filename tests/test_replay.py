@@ -69,14 +69,64 @@ class TestDownsample:
     def test_long_capped(self):
         rows = [_row(i, 2.0) for i in range(10_000)]
         out = downsample(rows, max_points=200)
-        assert len(out) <= 210  # MAX_POINTS + endpoint pin tolerance
+        assert len(out) == 200  # hard cap, no endpoint-pin overshoot (#473)
         assert out[0] == rows[0]
         assert out[-1] == rows[-1]
 
     def test_default_cap(self):
         rows = [_row(i, 2.0) for i in range(MAX_PLOT_POINTS * 4)]
         out = downsample(rows)
-        assert len(out) <= MAX_PLOT_POINTS + 5
+        assert len(out) == MAX_PLOT_POINTS
+
+    def test_last_index_lands_on_last_row_no_duplicate(self):
+        # 5 rows, max_points=3 -> evenly spaced indices 0, 2, 4, so the final
+        # sample IS the last row and appears exactly once. Renamed from
+        # test_stride_lands_on_last_row_no_duplicate_pin (#470): the endpoint
+        # pin is gone, but this is still the only guard against an off-by-one
+        # in the index arithmetic.
+        rows = [_row(i, 2.0) for i in range(5)]
+        out = downsample(rows, max_points=3)
+        assert out == [rows[0], rows[2], rows[4]]
+        assert out[-1] is rows[-1]
+
+    @pytest.mark.parametrize("total", [3, 5, 8, 13, 101, 1000])
+    @pytest.mark.parametrize("max_points", [1, 2, 3, 7, 50])
+    def test_never_returns_more_than_max_points(self, total, max_points):
+        # The docstring promises "at most max_points"; before #473 a 5-row
+        # series with max_points=2 came back with 3 rows.
+        rows = [_row(i, 2.0) for i in range(total)]
+        out = downsample(rows, max_points=max_points)
+        assert len(out) <= max_points
+
+    def test_one_row_over_the_cap_drops_exactly_one_row(self):
+        # A ceil-based stride would halve a series sitting a single row over
+        # the cap (101 rows, cap 100 -> 51 points). Even spacing keeps 100.
+        rows = [_row(i, 2.0) for i in range(101)]
+        out = downsample(rows, max_points=100)
+        assert len(out) == 100
+        assert out[0] is rows[0]
+        assert out[-1] is rows[-1]
+
+    def test_endpoints_survive_every_shape(self):
+        for total in range(3, 40):
+            for max_points in range(2, total):
+                rows = [_row(i, 2.0) for i in range(total)]
+                out = downsample(rows, max_points=max_points)
+                assert out[0]["step"] == 0, (total, max_points)
+                assert out[-1]["step"] == total - 1, (total, max_points)
+
+    def test_order_preserved_without_duplicates(self):
+        rows = [_row(i, 2.0) for i in range(97)]
+        out = downsample(rows, max_points=13)
+        steps = [row["step"] for row in out]
+        assert steps == sorted(steps)
+        assert len(set(steps)) == len(steps)
+
+    def test_max_points_one_keeps_the_final_row(self):
+        # Both endpoints cannot fit in a single slot; the final loss wins,
+        # which is exactly what the old endpoint pin existed to guarantee.
+        rows = [_row(i, 2.0) for i in range(5)]
+        assert downsample(rows, max_points=1) == [rows[-1]]
 
     def test_zero_max_rejected(self):
         with pytest.raises(ValueError):
@@ -103,7 +153,17 @@ class TestCli:
 
     def test_replay_renders(self, tmp_path, monkeypatch):
         monkeypatch.setenv("SOUP_DB_PATH", str(tmp_path / "y.db"))
+        from rich.console import Console
+
+        from soup_cli.commands import runs as runs_command
         from soup_cli.experiment.tracker import ExperimentTracker
+
+        # force_terminal=False pins tty detection; no_color=True alone does not,
+        # so under FORCE_COLOR=1 Rich still styles the surrounding panel markup
+        # and the "\x1b" assertion below fails on sanitised output.
+        monkeypatch.setattr(
+            runs_command, "console", Console(force_terminal=False)
+        )
 
         tracker = ExperimentTracker()
         run_id = tracker.start_run(
@@ -118,8 +178,18 @@ class TestCli:
         )
         tracker.close()
         runner = CliRunner()
-        result = runner.invoke(app, ["runs", "replay", run_id, "--no-plot"])
+        result = runner.invoke(
+            app,
+            ["runs", "replay", run_id],
+        )
         assert result.exit_code == 0, (result.output, repr(result.exception))
         assert run_id in result.output
         # Summary should reference initial / final loss
+        # ansi-ok: console pinned to no-color under #987
         assert "2.0" in result.output or "2.00" in result.output
+        assert "Training Loss" in result.output
+        assert "\x1b" not in result.output
+
+        no_plot = runner.invoke(app, ["runs", "replay", run_id, "--no-plot"])
+        assert no_plot.exit_code == 0, (no_plot.output, repr(no_plot.exception))
+        assert "Training Loss" not in no_plot.output

@@ -17,6 +17,7 @@ import dataclasses
 import json
 import os
 import stat
+import sys
 from pathlib import Path
 
 import pytest
@@ -240,7 +241,7 @@ class TestBomSpec:
         with pytest.raises(ValueError):
             write_bom(entry, "cyclonedx", "/tmp/evil/bom.json")
 
-    @pytest.mark.skipif(os.name == "nt", reason="POSIX symlink rejection")
+    @pytest.mark.requires_symlink
     def test_write_bom_rejects_symlink_target(self, tmp_path, monkeypatch):
         from soup_cli.utils.bom import BomEntry, write_bom
 
@@ -792,6 +793,138 @@ class TestReproReceipt:
         # OS, python_version captured
         assert d.get("python_version")
         assert d.get("os")
+        assert "accelerator_backend" in d
+        assert "unified_memory_bytes" in d
+
+    def test_mps_receipt_captures_chip_and_unified_memory(self, monkeypatch):
+        from soup_cli.utils import repro_receipt
+
+        class _AvailableMPS:
+            @staticmethod
+            def is_available():
+                return True
+
+        class _Backends:
+            mps = _AvailableMPS()
+
+        class _Torch:
+            backends = _Backends()
+
+        values = {
+            "machdep.cpu.brand_string": "Apple M4 Max",
+            "hw.memsize": "137438953472",
+        }
+        monkeypatch.setattr(
+            repro_receipt,
+            "_read_macos_sysctl",
+            lambda name: values.get(name),
+        )
+
+        metadata = repro_receipt._detect_mps_metadata(_Torch())
+
+        assert metadata == {
+            "accelerator_backend": "mps",
+            "gpu_models": ("Apple M4 Max",),
+            "unified_memory_bytes": 137438953472,
+        }
+
+    def test_mps_metadata_reaches_serialized_receipt(self, monkeypatch):
+        from soup_cli.utils import repro_receipt
+
+        class _UnavailableCudnn:
+            @staticmethod
+            def is_available():
+                return False
+
+        class _AvailableMPS:
+            @staticmethod
+            def is_available():
+                return True
+
+        class _Backends:
+            cudnn = _UnavailableCudnn()
+            mps = _AvailableMPS()
+
+        class _Cuda:
+            nccl = None
+
+            @staticmethod
+            def is_available():
+                return False
+
+        class _Version:
+            cuda = None
+
+        class _Torch:
+            __version__ = "2.12.1"
+            backends = _Backends()
+            cuda = _Cuda()
+            version = _Version()
+
+        values = {
+            "machdep.cpu.brand_string": "Apple M4 Max",
+            "hw.memsize": "137438953472",
+        }
+        monkeypatch.setitem(sys.modules, "torch", _Torch())
+        monkeypatch.setattr(
+            repro_receipt,
+            "_read_macos_sysctl",
+            lambda name: values.get(name),
+        )
+
+        receipt = repro_receipt.build_repro_receipt(
+            seeds={"torch": 42},
+            run_id="mps-integration",
+        )
+        serialized = repro_receipt.receipt_to_dict(receipt)
+
+        assert serialized["accelerator_backend"] == "mps"
+        assert serialized["gpu_models"] == ["Apple M4 Max"]
+        assert serialized["unified_memory_bytes"] == 137438953472
+
+    def test_new_accelerator_fields_preserve_old_constructor_signature(self):
+        from soup_cli.utils.repro_receipt import ReproReceipt
+
+        receipt = ReproReceipt(
+            "run",
+            "0.73.3",
+            "3.12.0",
+            "Darwin",
+            "arm64",
+            {},
+            "2.12.1",
+            None,
+            None,
+            None,
+            (),
+            None,
+            "2026-08-25T00:00:00+00:00",
+        )
+
+        assert receipt.accelerator_backend is None
+        assert receipt.unified_memory_bytes is None
+
+    def test_mps_receipt_falls_back_without_sysctl_values(self, monkeypatch):
+        from soup_cli.utils import repro_receipt
+
+        class _AvailableMPS:
+            @staticmethod
+            def is_available():
+                return True
+
+        class _Backends:
+            mps = _AvailableMPS()
+
+        class _Torch:
+            backends = _Backends()
+
+        monkeypatch.setattr(repro_receipt, "_read_macos_sysctl", lambda _name: None)
+
+        metadata = repro_receipt._detect_mps_metadata(_Torch())
+
+        assert metadata["accelerator_backend"] == "mps"
+        assert metadata["gpu_models"] == ("Apple Silicon",)
+        assert metadata["unified_memory_bytes"] is None
 
     def test_receipt_frozen(self):
         from soup_cli.utils.repro_receipt import build_repro_receipt
@@ -1075,7 +1208,7 @@ class TestReviewFollowups:
         assert len(red.args) == len(ev.args)
 
     # --- Security HIGH H1: rotation symlink rejection at backup path ---
-    @pytest.mark.skipif(os.name == "nt", reason="POSIX symlink rejection")
+    @pytest.mark.requires_symlink
     def test_rotate_refuses_symlink_backup(self, tmp_path):
         from soup_cli.utils.audit_log import rotate_if_needed
 
@@ -1218,7 +1351,7 @@ class TestReviewFollowups:
         assert callable(audit_log.default_log_path)
 
     # --- TDD #1 / TOCTOU: symlink rejection on each write helper ---
-    @pytest.mark.skipif(os.name == "nt", reason="POSIX symlink rejection")
+    @pytest.mark.requires_symlink
     def test_write_attestation_rejects_symlink_target(self, tmp_path, monkeypatch):
         from soup_cli.utils.attest import AttestationStatement, write_attestation
 
@@ -1233,7 +1366,7 @@ class TestReviewFollowups:
         with pytest.raises(ValueError):
             write_attestation(s, str(target))
 
-    @pytest.mark.skipif(os.name == "nt", reason="POSIX symlink rejection")
+    @pytest.mark.requires_symlink
     def test_write_annex_doc_rejects_symlink_target(self, tmp_path, monkeypatch):
         from soup_cli.utils.annex_xi import AnnexXIData, write_annex_doc
 
@@ -1251,7 +1384,7 @@ class TestReviewFollowups:
         with pytest.raises(ValueError):
             write_annex_doc(d, "xi", str(target))
 
-    @pytest.mark.skipif(os.name == "nt", reason="POSIX symlink rejection")
+    @pytest.mark.requires_symlink
     def test_write_repro_receipt_rejects_symlink_target(self, tmp_path, monkeypatch):
         from soup_cli.utils.repro_receipt import build_repro_receipt, write_repro_receipt
 
@@ -1558,7 +1691,7 @@ class TestBomEnergyCli:
         )
         assert result.exit_code == 2
 
-    @pytest.mark.skipif(os.name == "nt", reason="POSIX symlink rejection")
+    @pytest.mark.requires_symlink
     def test_emit_energy_rejects_symlink(self, tmp_path, monkeypatch):
         """Symlink passed to --energy is rejected with exit code 2."""
         monkeypatch.chdir(tmp_path)

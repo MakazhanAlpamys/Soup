@@ -145,12 +145,7 @@ def filter_zero_advantage(advantages, *, eps: float = 1e-8) -> Any:
 
 
 def _get_trainer_callback_base():
-    """Lazy-resolve ``transformers.TrainerCallback`` (v0.53.11 review fix).
-
-    Project policy: every callback inherits TrainerCallback so HF Trainer
-    discovers it via the callback handler. We resolve at class-body
-    evaluation time so module import does not pull transformers.
-    """
+    """Lazy-resolve ``transformers.TrainerCallback``."""
     try:
         from transformers import TrainerCallback
 
@@ -159,10 +154,7 @@ def _get_trainer_callback_base():
         return object
 
 
-_TrainerCallbackBase = _get_trainer_callback_base()
-
-
-class GRPOStabilityCallback(_TrainerCallbackBase):  # type: ignore[misc, valid-type]
+class _GRPOStabilityCallback_body:  # type: ignore[misc, valid-type]  # noqa: N801
     """HF TrainerCallback that wires v0.50.0 Part D stability knobs.
 
     Lazy-inherits ``transformers.TrainerCallback`` so the module is
@@ -325,3 +317,22 @@ class GRPOStabilityCallback(_TrainerCallbackBase):  # type: ignore[misc, valid-t
             if entry:
                 log_history.append(entry)
         return control
+
+
+_LAZY_CALLBACKS = {
+    "GRPOStabilityCallback": _GRPOStabilityCallback_body,
+}
+_BODY_SKIP = frozenset(("__dict__", "__weakref__"))
+
+
+def __getattr__(name: str):  # PEP 562
+    body = _LAZY_CALLBACKS.get(name)
+    if body is not None:
+        base = _get_trainer_callback_base()
+        ns = {k: v for k, v in vars(body).items() if k not in _BODY_SKIP}
+        cls = type(name, (base,), ns)
+        cls.__module__ = __name__
+        cls.__qualname__ = name
+        globals()[name] = cls
+        return cls
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

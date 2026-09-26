@@ -2,7 +2,7 @@
 
 Renders a Rich panel with one row per detected GPU: Util / Temp / VRAM /
 Power. Polls `nvidia-smi` (Linux/Windows/CUDA) at the configured refresh
-rate. Apple Silicon variant is a stub note in v0.44.0.
+rate, or `powermetrics` on Apple Silicon.
 """
 
 from __future__ import annotations
@@ -18,8 +18,10 @@ from rich.table import Table
 
 from soup_cli.utils.gpu_monitor import (
     GpuSample,
+    PowermetricsStatus,
     detect_apple_silicon,
     query_nvidia_smi,
+    query_powermetrics,
 )
 
 console = Console()
@@ -65,6 +67,60 @@ def _build_table(samples: list[GpuSample]) -> Table:
     return table
 
 
+def _powermetrics_error(status: PowermetricsStatus) -> str:
+    if status is PowermetricsStatus.PERMISSION_DENIED:
+        return (
+            "[yellow]Apple GPU metrics require permission to run "
+            "`/usr/bin/powermetrics`.[/]\n"
+            "Run [bold]sudo -v[/] in a terminal, then rerun `soup monitor`. "
+            "Soup uses `sudo -n`: it never prompts for or reads your password."
+        )
+    if status is PowermetricsStatus.UNAVAILABLE:
+        return (
+            "[yellow]`/usr/bin/powermetrics` is unavailable on this Mac. "
+            "Use Activity Monitor → Window → GPU History.[/]"
+        )
+    if status is PowermetricsStatus.INVALID_OUTPUT:
+        return (
+            "[yellow]`powermetrics` returned no usable Apple GPU sample. "
+            "Its plist schema may not expose `gpu_power` on this Mac.[/]"
+        )
+    return "[yellow]`powermetrics` failed or timed out while reading Apple GPU metrics.[/]"
+
+
+def _monitor_apple_silicon(refresh: float, once: bool) -> None:
+    title = "Soup GPU Monitor — Apple Silicon"
+    result = query_powermetrics(refresh)
+    if result.status is not PowermetricsStatus.OK:
+        console.print(_powermetrics_error(result.status))
+        raise typer.Exit(code=1)
+
+    samples = list(result.samples)
+    if once or not samples:
+        console.print(Panel(_build_table(samples), title=title))
+        return
+
+    with Live(
+        Panel(_build_table(samples), title=title),
+        refresh_per_second=max(1.0, 1.0 / refresh),
+        screen=False,
+        console=console,
+    ) as live:
+        try:
+            while True:
+                # powermetrics itself blocks for the requested sample window;
+                # sleeping here as well would double the refresh interval.
+                fresh = query_powermetrics(refresh)
+                if fresh.status is not PowermetricsStatus.OK:
+                    live.update(Panel(_powermetrics_error(fresh.status), title=title))
+                    # Failure paths can return immediately; avoid a busy loop.
+                    time.sleep(refresh)
+                    continue
+                live.update(Panel(_build_table(list(fresh.samples)), title=title))
+        except KeyboardInterrupt:
+            console.print("[dim]exit[/]")
+
+
 def monitor(
     refresh: float = typer.Option(
         2.0,
@@ -80,18 +136,14 @@ def monitor(
 ) -> None:
     """Live GPU monitor: Util / Temp / VRAM / Power per GPU.
 
-    Requires nvidia-smi on PATH. On Apple Silicon use Activity Monitor or
-    powermetrics — full Apple Silicon support lands in v0.44.1.
+    Uses nvidia-smi on NVIDIA systems and powermetrics on Apple Silicon.
     """
     if not (0.25 <= refresh <= 30.0):
         console.print("[red]--refresh must be in [0.25, 30][/]")
         raise typer.Exit(code=2)
     if detect_apple_silicon():
-        console.print(
-            "[yellow]Apple Silicon detected — `soup monitor` is "
-            "Apple-Silicon-aware in v0.44.1.[/]\n"
-            "Use Activity Monitor → Window → GPU History for now."
-        )
+        _monitor_apple_silicon(refresh, once)
+        return
     ok, samples = query_nvidia_smi()
     if not ok:
         console.print(

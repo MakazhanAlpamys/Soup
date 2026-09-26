@@ -51,8 +51,9 @@ def test_detect_base_model_bad_json(tmp_path: Path):
 
 # --- _find_quantize_binary ---
 
-def test_find_quantize_binary_not_found(tmp_path: Path):
+def test_find_quantize_binary_not_found(tmp_path: Path, monkeypatch):
     """Should return None if no quantize binary exists."""
+    monkeypatch.setattr("soup_cli.commands.export.shutil.which", lambda _name: None)
     assert _find_quantize_binary(tmp_path) is None
 
 
@@ -63,6 +64,17 @@ def test_find_quantize_binary_in_build(tmp_path: Path):
     quantize = bin_dir / "llama-quantize"
     quantize.write_text("fake binary")
     assert _find_quantize_binary(tmp_path) == quantize
+
+
+def test_find_quantize_binary_on_path(tmp_path: Path, monkeypatch):
+    """Should retain production discovery of a globally installed binary."""
+    global_binary = tmp_path.parent / "global-bin" / "llama-quantize"
+    monkeypatch.setattr(
+        "soup_cli.commands.export.shutil.which",
+        lambda name: str(global_binary) if name == "llama-quantize" else None,
+    )
+
+    assert _find_quantize_binary(tmp_path) == global_binary
 
 
 # --- Constants ---

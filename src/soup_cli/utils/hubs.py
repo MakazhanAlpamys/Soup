@@ -18,13 +18,15 @@ that the live wiring will call.
 """
 from __future__ import annotations
 
-import ipaddress
 import logging
 import os
 import tempfile
 from types import MappingProxyType
 from typing import Callable, Mapping, Optional, Tuple
 from urllib.parse import urlparse
+
+from soup_cli.utils.net_guard import LOOPBACK_HOSTS as _LOOPBACK_HOSTS
+from soup_cli.utils.net_guard import is_private_or_link_local as _is_private_or_link_local
 
 _LOG = logging.getLogger(__name__)
 
@@ -45,14 +47,22 @@ _HUB_ENDPOINT_ENV: Mapping[str, str] = MappingProxyType({
     "modelers": "MODELERS_ENDPOINT",
 })
 
+# Per-hub credential env var. Each hub authenticates with its OWN token; a
+# token for one hub is never offered to another. MODELSCOPE_API_TOKEN is the
+# ModelScope SDK's own variable; openMind has none, so MODELERS_TOKEN mirrors
+# MODELERS_ENDPOINT.
+_HUB_TOKEN_ENV: Mapping[str, str] = MappingProxyType({
+    "hf": "HF_TOKEN",
+    "modelscope": "MODELSCOPE_API_TOKEN",
+    "modelers": "MODELERS_TOKEN",
+})
+
 # Per-hub pip-install hint, surfaced when the live downloader complains.
 _HUB_PACKAGE: Mapping[str, str] = MappingProxyType({
     "hf": "huggingface-hub",
     "modelscope": "modelscope",
     "modelers": "openmind-hub",
 })
-
-_LOOPBACK_HOSTS: frozenset[str] = frozenset({"localhost", "127.0.0.1", "::1"})
 
 _MAX_HUB_NAME_LEN: int = 32
 
@@ -110,16 +120,25 @@ def endpoint_env_var(hub: str) -> str:
     return _HUB_ENDPOINT_ENV[canonical]
 
 
-def _is_private_or_link_local(host: str) -> bool:
-    """Whether ``host`` is a private / link-local / loopback IP.
+def hub_token_env_var(hub: str) -> str:
+    """Env var holding ``hub``'s own upload credential."""
+    canonical = validate_hub_name(hub)
+    return _HUB_TOKEN_ENV[canonical]
 
-    DNS resolution intentionally not performed (matches v0.29.0 hf.py policy).
+
+def resolve_hub_token(hub: str, explicit: str | None = None) -> str | None:
+    """Credential for a non-HF hub: ``explicit`` or the hub's own env var.
+
+    Never consults Hugging Face credentials. HF resolution stays in
+    :func:`soup_cli.utils.hf.resolve_token`.
     """
-    try:
-        addr = ipaddress.ip_address(host)
-    except ValueError:
-        return False
-    return addr.is_private or addr.is_link_local or addr.is_loopback
+    canonical = validate_hub_name(hub)
+    if canonical == "hf":
+        raise ValueError("use soup_cli.utils.hf.resolve_token for the hf hub")
+    if explicit and explicit.strip():
+        return explicit.strip()
+    value = os.environ.get(_HUB_TOKEN_ENV[canonical], "").strip()
+    return value or None
 
 
 def validate_hub_endpoint(endpoint: str, *, hub: str | None = None) -> str:
@@ -164,7 +183,8 @@ def validate_hub_endpoint(endpoint: str, *, hub: str | None = None) -> str:
         raise ValueError(
             f"{label} 0.0.0.0 is ambiguous; use 127.0.0.1 or localhost"
         )
-    if parsed.scheme == "http" and host not in _LOOPBACK_HOSTS:
+    host_clean = host.lower().rstrip(".")
+    if parsed.scheme == "http" and host_clean not in _LOOPBACK_HOSTS:
         if _is_private_or_link_local(host):
             raise ValueError(
                 f"{label} plain HTTP is only allowed for loopback "
@@ -400,27 +420,29 @@ def _validate_cache_dir(cache_dir: str, *, field: str = "cache_dir") -> str:
 def snapshot_download(
     repo_id: str,
     *,
-    cache_dir: str,
+    cache_dir: str | None,
     revision: str | None = None,
     allow_patterns: list[str] | None = None,
     namespace_check: bool = True,
     allow_namespace_shift: str | None = None,
     _metadata_fn: Optional[Callable[[str], Optional[Tuple[str, str]]]] = None,
 ) -> str:
-    """HF Hub snapshot download into a ``$HOME/.soup``-style cache (v0.71.8 #216).
+    """HF Hub snapshot download, optionally into a contained local directory.
 
     Thin SSRF-hardened wrapper over :func:`huggingface_hub.snapshot_download`
-    used by the SAE / probe weight fetchers. Differs from :func:`download_repo`
-    in that the cache dir may live under ``$HOME`` (not just cwd) so a reusable
-    artifact cache survives a ``cd``; the namespace-pin gate (#186) still runs
-    so a TOFU author-mismatch refuses the download.
+    used by the SAE / probe weight fetchers. A string ``cache_dir`` preserves
+    the historical behaviour and materialises a regular-file snapshot there.
+    ``None`` asks Hugging Face for its canonical cached snapshot instead; this
+    is used by layer streaming to inspect and reuse an existing non-symlinked
+    cache entry before deciding whether a second materialised copy is needed.
+    The namespace-pin gate (#186) runs in both cases.
 
     Returns the absolute path to the downloaded snapshot directory. Raises
     ``ImportError`` (with a pip-install hint) when ``huggingface_hub`` is
     missing, ``ValueError`` for invalid args / a refused namespace.
     """
     _validate_repo_id_shape(repo_id)
-    canonical_cache = _validate_cache_dir(cache_dir)
+    canonical_cache = None if cache_dir is None else _validate_cache_dir(cache_dir)
     if revision is not None:
         if not isinstance(revision, str):
             raise TypeError("revision must be str or None")
@@ -446,13 +468,15 @@ def snapshot_download(
             "huggingface_hub required for snapshot_download; "
             "pip install huggingface-hub"
         ) from exc
+    kwargs = {
+        "repo_id": repo_id,
+        "revision": revision,
+        "allow_patterns": allow_patterns,
+    }
+    if canonical_cache is None:
+        return hf_snapshot_download(**kwargs)
     os.makedirs(canonical_cache, exist_ok=True)
-    return hf_snapshot_download(
-        repo_id=repo_id,
-        local_dir=canonical_cache,
-        revision=revision,
-        allow_patterns=allow_patterns,
-    )
+    return hf_snapshot_download(local_dir=canonical_cache, **kwargs)
 
 
 def download_repo(

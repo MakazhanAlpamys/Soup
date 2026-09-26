@@ -16,7 +16,6 @@ from __future__ import annotations
 import dataclasses
 import json
 import os
-import sys
 
 import pytest
 
@@ -110,7 +109,7 @@ class TestEditGovernorStore:
         with pytest.raises(GovernedEditError):
             restored.check_can_edit()
 
-    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX symlink")
+    @pytest.mark.requires_symlink
     def test_symlink_db_rejected(self, tmp_path, monkeypatch):
         from soup_cli.utils.edit_governor import EditGovernorStore
 
@@ -629,17 +628,16 @@ class TestEditDiffLive:
         n_changed = sum(1 for c in report.changes if c.changed)
         assert n_changed == 1
 
-    def test_placeholder_without_models(self, monkeypatch, tmp_path):
+    def test_probes_without_models_rejected(self, monkeypatch, tmp_path):
         from soup_cli.utils.edit_diff import build_diff_report
 
         monkeypatch.chdir(tmp_path)
         probes = tmp_path / "p.jsonl"
         probes.write_text(json.dumps({"prompt": "x"}) + "\n", encoding="utf-8")
-        report = build_diff_report(
-            before_run_id="r1", after_run_id="r2", probe_file="p.jsonl",
-        )
-        assert report.changes[0].changed is False
-        assert "supply" in report.changes[0].before.lower()
+        with pytest.raises(ValueError, match="both --before-model and --after-model"):
+            build_diff_report(
+                before_run_id="r1", after_run_id="r2", probe_file="p.jsonl",
+            )
 
 
 # ===========================================================================
@@ -810,7 +808,7 @@ class TestReviewFollowups:
         with pytest.raises(ValueError, match="null"):
             _validated_output_dir("x\x00y")
 
-    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX symlink")
+    @pytest.mark.requires_symlink
     def test_validated_output_dir_symlink(self, tmp_path, monkeypatch):
         from soup_cli.trainer.unlearn import _validated_output_dir
 
@@ -820,7 +818,7 @@ class TestReviewFollowups:
         with pytest.raises(ValueError, match="symlink"):
             _validated_output_dir("link")
 
-    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX symlink")
+    @pytest.mark.requires_symlink
     def test_load_unlearn_rows_symlink_rejected(self, tmp_path, monkeypatch):
         from soup_cli.trainer.unlearn import _load_unlearn_rows
 
@@ -838,7 +836,7 @@ class TestReviewFollowups:
         with pytest.raises(ValueError, match="null"):
             _load_unlearn_rows("a\x00b.jsonl")
 
-    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX symlink")
+    @pytest.mark.requires_symlink
     def test_save_edited_model_symlink_rejected(self, tmp_path, monkeypatch):
         import soup_cli.utils.edit_kernels as ek
         import soup_cli.utils.live_eval as live_eval
@@ -862,7 +860,7 @@ class TestReviewFollowups:
         with pytest.raises(ValueError, match="symlink"):
             apply_edit(plan, output_dir="out")
 
-    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX symlink")
+    @pytest.mark.requires_symlink
     def test_load_codebook_symlink_rejected(self, tmp_path, monkeypatch):
         from soup_cli.utils.grace_codebook import load_codebook
 

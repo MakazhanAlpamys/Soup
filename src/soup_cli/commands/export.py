@@ -96,7 +96,7 @@ def export(
     calibration_data: Optional[str] = typer.Option(
         None,
         "--calibration-data",
-        help="Path to calibration JSONL for AWQ/GPTQ (default: use built-in sample)",
+        help="Path to calibration JSONL. Required for AWQ and GPTQ.",
     ),
     calibration_samples: int = typer.Option(
         128,
@@ -401,7 +401,7 @@ def _merge_adapter(
     console.print(f"[dim]Loading base model: {base_model}...[/]")
     model = AutoModelForCausalLM.from_pretrained(
         base_model,
-        dtype=torch.float16,
+        torch_dtype=torch.float16,
         trust_remote_code=trc,
         device_map="cpu",
     )
@@ -709,6 +709,20 @@ def _export_tensorrt(
         )
         raise typer.Exit(1)
 
+    try:
+        import tensorrt_llm.commands.convert_checkpoint  # noqa: F401
+    except ImportError:
+        console.print(
+            "[red]tensorrt_llm.commands.convert_checkpoint not found in the "
+            "installed tensorrt_llm package.[/]\n"
+            "This entry point does not exist in current TensorRT-LLM releases; "
+            "checkpoint conversion now ships as a per-architecture "
+            "examples/<arch>/convert_checkpoint.py script in the NVIDIA/TensorRT-LLM "
+            "source tree instead.\n"
+            "See: https://github.com/NVIDIA/TensorRT-LLM#installation"
+        )
+        raise typer.Exit(1)
+
     # Check if LoRA adapter
     adapter_config_path = model_path / "adapter_config.json"
     is_adapter = adapter_config_path.exists()
@@ -843,28 +857,56 @@ def _validate_calibration_path(calibration_data: Optional[str]) -> Optional[Path
     return cal_path
 
 
+class _CalibrationDataReadError(ValueError):
+    """A calibration JSONL could not be decoded or read safely."""
+
+
 def _load_calibration_texts(cal_path: Optional[Path], max_samples: int = 128) -> list:
     """Load calibration texts from JSONL file."""
     if cal_path is None:
         return []
     texts = []
-    with open(cal_path, encoding="utf-8") as fh:
-        for line in fh:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                row = json.loads(line)
-                # Support "text" field or concatenate all string values
+    try:
+        with open(cal_path, encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(row, dict):
+                    continue
+                # Support "text" field or concatenate all non-empty values.
                 if "text" in row:
-                    texts.append(str(row["text"]))
+                    value = row["text"]
+                    text = "" if value is None else str(value)
                 else:
-                    texts.append(" ".join(str(v) for v in row.values() if v))
-            except json.JSONDecodeError:
-                continue
-            if len(texts) >= max_samples:
-                break
+                    text = " ".join(str(v) for v in row.values() if v)
+                if text.strip():
+                    texts.append(text)
+                if len(texts) >= max_samples:
+                    break
+    except UnicodeError as exc:
+        raise _CalibrationDataReadError(
+            f"Calibration data is not valid UTF-8: {cal_path}"
+        ) from exc
+    except OSError as exc:
+        raise _CalibrationDataReadError(
+            f"Could not read calibration data {cal_path}: {exc}"
+        ) from exc
     return texts
+
+
+def _standardize_gptq_shard_name(output_path: Path, bits: int, group_size: int) -> None:
+    """auto_gptq's save_quantized names its shard gptq_model-<bits>bit-<group>g.safetensors,
+    a name AutoModelForCausalLM.from_pretrained does not look for; rename it to the
+    standard model.safetensors so the exported directory reloads."""
+    shard = output_path / f"gptq_model-{bits}bit-{group_size}g.safetensors"
+    standard = output_path / "model.safetensors"
+    if shard.exists() and not standard.exists():
+        shard.rename(standard)
 
 
 def _export_awq(
@@ -891,10 +933,28 @@ def _export_awq(
 
     # Validate calibration path (security: path traversal protection)
     cal_path = _validate_calibration_path(calibration_data)
+    if cal_path is None:
+        console.print(
+            "[red]AWQ export requires --calibration-data.[/]\n"
+            "AutoAWQ otherwise downloads its large default calibration dataset: "
+            "pass a calibration JSONL, e.g. [bold]--calibration-data path/to/data.jsonl[/]."
+        )
+        raise typer.Exit(1)
+    try:
+        calib_data = _load_calibration_texts(cal_path, max_samples=calibration_samples)
+    except _CalibrationDataReadError as exc:
+        console.print(f"[red]{exc}[/]")
+        raise typer.Exit(1) from exc
+    if not calib_data:
+        console.print(f"[red]No usable calibration samples found in {cal_path}.[/]")
+        raise typer.Exit(1)
 
     try:
         from awq import AutoAWQForCausalLM
-    except ImportError:
+    except ImportError as exc:
+        if exc.name != "awq":
+            console.print(f"[red]autoawq import failed:[/] {exc}")
+            raise typer.Exit(1)
         console.print(
             "[red]autoawq not installed.[/]\n"
             "Install with: [bold]pip install \"soup-cli\\[awq]\"[/]\n"
@@ -963,17 +1023,8 @@ def _export_awq(
 
         quant_config = {"zero_point": True, "q_group_size": group_size, "w_bit": bits}
 
-        # Load calibration data if provided
-        calib_data = (
-            _load_calibration_texts(cal_path, max_samples=calibration_samples)
-            if cal_path else None
-        )
-
         console.print(f"[dim]Quantizing to AWQ {bits}-bit (group_size={group_size})...[/]")
-        if calib_data:
-            model.quantize(tokenizer, quant_config=quant_config, calib_data=calib_data)
-        else:
-            model.quantize(tokenizer, quant_config=quant_config)
+        model.quantize(tokenizer, quant_config=quant_config, calib_data=calib_data)
 
         console.print("[dim]Saving quantized model...[/]")
         model.save_quantized(str(output_path))
@@ -1023,10 +1074,28 @@ def _export_gptq(
 
     # Validate calibration path (security: path traversal protection)
     cal_path = _validate_calibration_path(calibration_data)
+    if cal_path is None:
+        console.print(
+            "[red]GPTQ export requires --calibration-data.[/]\n"
+            "auto-gptq has no built-in calibration dataset: "
+            "pass a calibration JSONL, e.g. [bold]--calibration-data path/to/data.jsonl[/]."
+        )
+        raise typer.Exit(1)
+    try:
+        calib_texts = _load_calibration_texts(cal_path, max_samples=calibration_samples)
+    except _CalibrationDataReadError as exc:
+        console.print(f"[red]{exc}[/]")
+        raise typer.Exit(1) from exc
+    if not calib_texts:
+        console.print(f"[red]No usable calibration samples found in {cal_path}.[/]")
+        raise typer.Exit(1)
 
     try:
         from auto_gptq import AutoGPTQForCausalLM, BaseQuantizeConfig
-    except ImportError:
+    except ImportError as exc:
+        if exc.name != "auto_gptq":
+            console.print(f"[red]auto-gptq import failed:[/] {exc}")
+            raise typer.Exit(1)
         console.print(
             "[red]auto-gptq not installed.[/]\n"
             "Install with: [bold]pip install \"soup-cli\\[gptq]\"[/]\n"
@@ -1100,23 +1169,15 @@ def _export_gptq(
         )
         tokenizer = AutoTokenizer.from_pretrained(str(source_path), trust_remote_code=trc_tok)
 
-        # Load calibration data if provided
-        calib_data = None
-        if cal_path:
-            texts = _load_calibration_texts(
-                cal_path, max_samples=calibration_samples,
-            )
-            calib_data = [tokenizer(t, return_tensors="pt") for t in texts]
+        calib_data = [tokenizer(t, return_tensors="pt") for t in calib_texts]
 
         console.print(f"[dim]Quantizing to GPTQ {bits}-bit (group_size={group_size})...[/]")
-        if calib_data:
-            model.quantize(calib_data)
-        else:
-            model.quantize(tokenizer)
+        model.quantize(calib_data)
 
         console.print("[dim]Saving quantized model...[/]")
         model.save_quantized(str(output_path))
         tokenizer.save_pretrained(str(output_path))
+        _standardize_gptq_shard_name(output_path, bits, group_size)
 
     except Exception as exc:
         console.print(f"[red]GPTQ export failed:[/] {exc}")
@@ -1265,6 +1326,7 @@ def _export_torchao_cli(
         load_quant_config,
         validate_torchao_scheme,
     )
+    from soup_cli.utils.torchao_compat import TORCHAO_MIN_VERSION
 
     try:
         cfg_data = load_quant_config(quant_config)
@@ -1308,7 +1370,7 @@ def _export_torchao_cli(
         console.print(f"[red]TorchAO export failed: {exc}[/]")
         console.print(
             "Try: [bold]pip install torchao[/] "
-            "(NVFP4 requires torchao>=0.5)"
+            f"(Soup needs torchao>={TORCHAO_MIN_VERSION})"
         )
         raise typer.Exit(1)
     except (TypeError, ValueError, FileNotFoundError) as exc:

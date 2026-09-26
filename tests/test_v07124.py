@@ -269,8 +269,18 @@ class TestGlm5RepoIdFix:
 
 
 class TestCatalogCount:
-    def test_total_recipe_count_is_142(self) -> None:
-        assert len(RECIPES) == 142
+    def test_total_recipe_count_matches_the_catalog(self) -> None:
+        """Renamed 2026-09-02: the old name said 158 while asserting 162.
+
+        It had drifted through 116 -> 134 -> 137 -> 158 -> 162 without the name
+        following, so the one thing a reader saw first was the one thing that
+        was false. The count itself is pinned in `test_recipes.py` and by
+        `test_recipe_count_is_synced.py`; this row is
+        the milestone file's own copy and does not need the number twice.
+        """
+        from tests.recipe_count import EXPECTED_RECIPE_COUNT, recipe_count_hint
+
+        assert len(RECIPES) == EXPECTED_RECIPE_COUNT, recipe_count_hint(len(RECIPES))
 
     def test_list_recipes_matches_dict(self) -> None:
         assert len(list_recipes()) == len(RECIPES)

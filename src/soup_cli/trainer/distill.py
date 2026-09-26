@@ -22,6 +22,7 @@ LoRA per the standard PEFT pipeline.
 
 from __future__ import annotations
 
+import logging
 import math
 import time
 from pathlib import Path
@@ -30,12 +31,16 @@ from typing import TYPE_CHECKING, Any
 from rich.console import Console
 
 from soup_cli.config.schema import SoupConfig
+from soup_cli.trainer.loss_summary import summarize_training_loss
 from soup_cli.utils.gpu import bf16_fp16_flags, resolve_device_map
 from soup_cli.utils.seeding import apply_training_seed, training_seed_kwargs
 
 if TYPE_CHECKING:
     import torch as _torch_typ
 
+from soup_cli.utils.mixed_precision import align_trainable_dtype_for_fp16
+
+logger = logging.getLogger(__name__)
 console = Console()
 
 # 50/50 CE / distillation blend — matches Hinton et al. 2015.
@@ -51,6 +56,8 @@ def _compute_distill_term(
     temperature: float,
     labels: "_torch_typ.Tensor | None" = None,
     attention_mask: "_torch_typ.Tensor | None" = None,
+    chunk_size: int | None = None,
+    use_checkpoint: bool = False,
 ) -> "_torch_typ.Tensor":
     """Pure tensor kernel: divergence between student and teacher logits.
 
@@ -59,13 +66,16 @@ def _compute_distill_term(
     a scalar mean over the token-level divergences, restricted to the trained
     tokens: ``labels != -100`` when ``labels`` is given (excludes padding AND
     prompt), else ``attention_mask`` (excludes padding), else all positions.
-    Averaging over padding/prompt tokens (the pre-fix behaviour) diluted the
-    signal with the divergence on positions the student is not trained on.
+
+    Supports token chunking and non-reentrant activation checkpointing via
+    ``chunk_size`` and ``use_checkpoint`` to drastically reduce the peak
+    memory of autograd saved tensors across large vocabularies and sequences (#722).
 
     Raises:
-        TypeError: ``temperature`` not numeric or is bool.
-        ValueError: ``temperature`` non-finite or non-positive; ``divergence``
-            outside the supported set.
+        TypeError: ``temperature`` not numeric or is bool; ``chunk_size`` not int
+            or is bool; ``use_checkpoint`` not bool.
+        ValueError: ``temperature`` non-finite or non-positive; ``chunk_size < 1``;
+            ``divergence`` outside the supported set.
     """
     import torch
 
@@ -78,6 +88,21 @@ def _compute_distill_term(
     if not math.isfinite(float(temperature)) or float(temperature) <= 0:
         raise ValueError(
             f"temperature must be finite and positive, got {temperature!r}"
+        )
+    if divergence not in ("forward_kl", "reverse_kl", "js"):
+        raise ValueError(f"Unknown divergence {divergence!r}")
+    if chunk_size is not None:
+        if isinstance(chunk_size, bool):
+            raise TypeError(f"chunk_size must not be bool, got {chunk_size!r}")
+        if not isinstance(chunk_size, int):
+            raise TypeError(
+                f"chunk_size must be int, got {type(chunk_size).__name__}"
+            )
+        if chunk_size < 1:
+            raise ValueError(f"chunk_size must be >= 1, got {chunk_size}")
+    if not isinstance(use_checkpoint, bool):
+        raise TypeError(
+            f"use_checkpoint must be bool, got {type(use_checkpoint).__name__}"
         )
 
     # Causal-LM alignment: logits at position i predict token i+1, so the CE
@@ -94,47 +119,262 @@ def _compute_distill_term(
         if attention_mask is not None:
             attention_mask = attention_mask[:, 1:]
 
+    # Keep the divergence kernel in FP32. In lower precision, valid logits at
+    # low temperatures readily underflow probabilities to zero; target-side
+    # derivatives in torch.kl_div then become non-finite even when the reduced
+    # loss is finite (#719).
     temp = float(temperature)
-    s = student_logits / temp
-    t = teacher_logits / temp
+    s = student_logits.float() / temp
+    t = teacher_logits.float() / temp
 
-    def _masked_mean(per_token: "_torch_typ.Tensor") -> "_torch_typ.Tensor":
-        """Mean of a ``(batch, seq)`` per-token divergence over trained tokens."""
-        if labels is not None:
-            mask = labels != -100
-        elif attention_mask is not None:
-            mask = attention_mask.bool()
+    if labels is not None:
+        mask = labels != -100
+    elif attention_mask is not None:
+        mask = attention_mask.bool()
+    else:
+        mask = None
+
+    if mask is not None:
+        if not mask.any():
+            return (student_logits.sum() * 0.0).float()
+        s_flat = s[mask]
+        t_flat = t[mask]
+        denom = mask.sum().float()
+    else:
+        s_flat = s.reshape(-1, s.size(-1))
+        t_flat = t.reshape(-1, t.size(-1))
+        denom = torch.tensor(s_flat.size(0), dtype=torch.float32, device=s.device)
+
+    def _chunk_kernel(s_c: "_torch_typ.Tensor", t_c: "_torch_typ.Tensor") -> "_torch_typ.Tensor":
+        log_s = torch.log_softmax(s_c, dim=-1)
+        log_t = torch.log_softmax(t_c, dim=-1)
+        if divergence == "forward_kl":
+            p_t = log_t.exp()
+            return (p_t * (log_t - log_s)).sum()
+        if divergence == "reverse_kl":
+            p_s = log_s.exp()
+            return (p_s * (log_s - log_t)).sum()
+        if divergence == "js":
+            p_s = log_s.exp()
+            p_t = log_t.exp()
+            log_m = torch.logaddexp(log_s, log_t) - math.log(2.0)
+            kl_pm = (p_s * (log_s - log_m)).sum()
+            kl_qm = (p_t * (log_t - log_m)).sum()
+            return 0.5 * (kl_pm + kl_qm)
+        raise ValueError(f"Unknown divergence {divergence!r}")
+
+    n_tokens = s_flat.size(0)
+    c_size = chunk_size if (chunk_size is not None and chunk_size > 0) else n_tokens
+
+    if c_size >= n_tokens and not use_checkpoint:
+        total_sum = _chunk_kernel(s_flat, t_flat).float()
+    else:
+        total_sum = torch.tensor(0.0, device=s.device, dtype=torch.float32)
+        if use_checkpoint:
+            from torch.utils.checkpoint import checkpoint
+
+            for i in range(0, n_tokens, c_size):
+                s_chunk = s_flat[i : i + c_size]
+                t_chunk = t_flat[i : i + c_size]
+                if t_chunk.requires_grad:
+                    chunk_sum = checkpoint(
+                        _chunk_kernel, s_chunk, t_chunk, use_reentrant=False
+                    )
+                else:
+                    def _step(s_in: "_torch_typ.Tensor", _t=t_chunk) -> "_torch_typ.Tensor":
+                        return _chunk_kernel(s_in, _t)
+
+                    chunk_sum = checkpoint(_step, s_chunk, use_reentrant=False)
+                total_sum = total_sum + chunk_sum.float()
         else:
-            return per_token.mean()
-        mask = mask.to(per_token.dtype)
-        denom = mask.sum().clamp(min=1.0)
-        return (per_token * mask).sum() / denom
+            for i in range(0, n_tokens, c_size):
+                s_chunk = s_flat[i : i + c_size]
+                t_chunk = t_flat[i : i + c_size]
+                chunk_sum = _chunk_kernel(s_chunk, t_chunk)
+                total_sum = total_sum + chunk_sum.float()
 
-    kl_div = torch.nn.functional.kl_div
-    if divergence == "forward_kl":
-        # KL(teacher || student): student log-probs, teacher probs. reduction=
-        # "none" keeps per-token so we can mask before averaging.
-        log_s = torch.log_softmax(s, dim=-1)
-        p_t = torch.softmax(t, dim=-1)
-        per_token = kl_div(log_s, p_t, reduction="none").sum(dim=-1)
-        return _masked_mean(per_token) * (temp * temp)
-    if divergence == "reverse_kl":
-        log_t = torch.log_softmax(t, dim=-1)
-        p_s = torch.softmax(s, dim=-1)
-        per_token = kl_div(log_t, p_s, reduction="none").sum(dim=-1)
-        return _masked_mean(per_token) * (temp * temp)
-    if divergence == "js":
-        # Jensen-Shannon: 0.5 (KL(p||m) + KL(q||m)), m = 0.5 (p + q).
-        log_s = torch.log_softmax(s, dim=-1)
-        log_t = torch.log_softmax(t, dim=-1)
-        p_s = log_s.exp()
-        p_t = log_t.exp()
-        m = 0.5 * (p_s + p_t)
-        log_m = m.clamp(min=1e-12).log()
-        kl_pm = kl_div(log_m, p_s, reduction="none").sum(dim=-1)
-        kl_qm = kl_div(log_m, p_t, reduction="none").sum(dim=-1)
-        return 0.5 * (_masked_mean(kl_pm) + _masked_mean(kl_qm)) * (temp * temp)
-    raise ValueError(f"Unknown divergence {divergence!r}")
+    loss = (total_sum / denom.float()) * (temp * temp)
+    return loss.to(dtype=s.dtype)
+
+
+def _require_uld_id_compatible_tokenizers(
+    strategy: str, student_tokenizer: Any, teacher_tokenizer: Any
+) -> None:
+    """Refuse ``wasserstein`` / ``topk_align`` on tokenizers that disagree.
+
+    Both strategies forward the student's own ``input_ids`` straight to the
+    teacher (see the caller), which is only correct when a given id decodes
+    to the same text in both tokenizers. ``wasserstein_aligned`` handles the
+    general case by re-tokenizing and aligning; these two do not, so an
+    incompatible pair must fail here rather than train on logits the teacher
+    computed for the wrong text (#681).
+
+    Reuses :func:`soup_cli.utils.draft.same_tokenizer`, the same probe this
+    codebase already trusts to decide whether a draft tokenizer is
+    interchangeable with a target one for speculative decoding (#304).
+    """
+    from soup_cli.utils.draft import same_tokenizer
+
+    if strategy in ("wasserstein", "topk_align") and not same_tokenizer(
+        student_tokenizer, teacher_tokenizer
+    ):
+        raise ValueError(
+            f"training.uld_strategy={strategy!r} forwards the student's "
+            "token ids to the teacher unchanged, which only holds when the "
+            "two tokenizers are interchangeable. This student/teacher pair "
+            "is not, so the teacher would be conditioned on the wrong text "
+            "with no visible failure (a finite loss either way). Use "
+            "training.uld_strategy='wasserstein_aligned', which "
+            "re-tokenizes and aligns text for mismatched tokenizers."
+        )
+
+
+class DistillNonfiniteTracker:
+    """Tracks consecutive non-finite distillation terms without per-step device sync (#887).
+
+    A broken teacher (e.g. corrupt weights, unsupported dtype underflow, or mismatched
+    tokenizer) produces inf/nan logits every step. GradScaler then skips every step,
+    allowing training to complete silently while learning nothing.
+
+    This tracker accumulates consecutive non-finite steps directly on device using
+    asynchronous PyTorch operations (``torch.isfinite``, ``torch.where``) with zero host
+    synchronization on the per-step path. It synchronizes to the host only periodically
+    (every ``check_interval`` steps) or at train end, and emits a single actionable
+    warning once the consecutive non-finite count reaches ``threshold``.
+    """
+
+    def __init__(
+        self,
+        teacher_name: str = "teacher",
+        temperature: float | None = None,
+        threshold: int = 3,
+        check_interval: int = 5,
+        console: Console | None = None,
+    ) -> None:
+        if isinstance(threshold, bool) or not isinstance(threshold, int) or threshold < 1:
+            raise ValueError(f"threshold must be an int >= 1, got {threshold!r}")
+        if (
+            isinstance(check_interval, bool)
+            or not isinstance(check_interval, int)
+            or check_interval < 1
+        ):
+            raise ValueError(f"check_interval must be an int >= 1, got {check_interval!r}")
+
+        self.teacher_name = str(teacher_name or "teacher")
+        self.temperature = temperature
+        self.threshold = threshold
+        self.check_interval = check_interval
+        self.console = console
+        self._device_counter: _torch_typ.Tensor | None = None
+        self._step_count: int = 0
+        self._warned: bool = False
+
+    @property
+    def warned(self) -> bool:
+        """Whether the diagnostic warning has been emitted."""
+        return self._warned
+
+    def record_step(self, distill_loss: "_torch_typ.Tensor") -> None:
+        """Record a step's distillation loss on device without per-step host sync.
+
+        Accumulates consecutive non-finite steps asynchronously. If the loss is
+        finite, the on-device counter is reset to 0 with no host sync.
+        Host sync occurs only every ``check_interval`` steps while not yet warned.
+        """
+        if self._warned:
+            return
+
+        import torch
+
+        with torch.no_grad():
+            if (
+                self._device_counter is None
+                or self._device_counter.device != distill_loss.device
+            ):
+                self._device_counter = torch.zeros(
+                    (), dtype=torch.int32, device=distill_loss.device
+                )
+
+            is_finite = torch.isfinite(distill_loss).all()
+            self._device_counter = torch.where(
+                is_finite,
+                torch.zeros_like(self._device_counter),
+                self._device_counter + 1,
+            )
+
+        self._step_count += 1
+        if self._step_count % self.check_interval == 0:
+            self.check_and_warn()
+
+    def check_and_warn(self) -> bool:
+        """Check the on-device counter and emit a diagnostic warning if threshold reached.
+
+        Returns True if a warning was emitted, False otherwise.
+        """
+        if self._warned or self._device_counter is None:
+            return False
+
+        count = int(self._device_counter.item())
+        if count >= self.threshold:
+            self._warn(count)
+            self._warned = True
+            return True
+        return False
+
+    def _warn(self, consecutive_count: int) -> None:
+        import warnings
+
+        from rich.markup import escape
+        from rich.panel import Panel
+
+        temp_str = (
+            f" (distill_temperature={self.temperature})"
+            if self.temperature is not None
+            else ""
+        )
+        teacher_display = escape(str(self.teacher_name))
+        msg = (
+            f"Distillation teacher {self.teacher_name!r} produced non-finite logits "
+            f"({consecutive_count} consecutive non-finite steps detected{temp_str}). "
+            "GradScaler will skip optimizer steps and training may learn nothing. "
+            "Likely causes:\n"
+            "  1. Teacher model saved/loaded in an unsupported dtype (e.g. float16 underflow).\n"
+            "  2. Mismatched tokenizer between student and teacher producing garbage logits.\n"
+            "  3. training.distill_temperature is set too small."
+        )
+        logger.warning(
+            "Distillation teacher %r produced non-finite logits "
+            "(%d consecutive non-finite steps%s). "
+            "Likely causes: unsupported dtype underflow, mismatched tokenizer, "
+            "or distill_temperature too small.",
+            self.teacher_name,
+            consecutive_count,
+            temp_str,
+        )
+        warnings.warn(msg, UserWarning, stacklevel=2)
+
+        if self.console is not None:
+            try:
+                body = (
+                    "[bold yellow]Warning: Persistently non-finite distillation loss[/]\n\n"
+                    f"Teacher [bold cyan]{teacher_display}[/] produced non-finite logits "
+                    f"for [bold red]{consecutive_count}[/] consecutive steps{temp_str}.\n"
+                    "Training will skip optimizer steps and may learn nothing.\n\n"
+                    "[bold]Likely causes:[/]\n"
+                    "  1. Teacher model saved/loaded in an unsupported dtype "
+                    "(e.g. float16 underflow)\n"
+                    "  2. Mismatched tokenizer between student and teacher producing "
+                    "garbage logits\n"
+                    "  3. training.distill_temperature is set too small"
+                )
+                panel = Panel(
+                    body,
+                    title="[bold red]Distillation Warning[/bold red]",
+                    border_style="yellow",
+                )
+                self.console.print(panel)
+            except (RuntimeError, ValueError, TypeError):
+                pass
 
 
 class DistillTrainerWrapper:
@@ -182,12 +422,13 @@ class DistillTrainerWrapper:
         self.teacher: Any = None
         self.tokenizer: Any = None
         self.trainer: Any = None
+        self.nonfinite_tracker: DistillNonfiniteTracker | None = None
         self._output_dir: str | None = None
 
     def setup(self, dataset: dict) -> None:
         """Load student + teacher, build distillation Trainer."""
         from datasets import Dataset
-        from peft import LoraConfig, TaskType, get_peft_model
+        from peft import TaskType, get_peft_model
         from transformers import (
             AutoModelForCausalLM,
             AutoTokenizer,
@@ -239,18 +480,22 @@ class DistillTrainerWrapper:
         )
 
         # LoRA on the student — bracket with v0.40.6 #67 surgical PEFT patches.
-        target_modules = tcfg.lora.target_modules
-        if target_modules == "auto":
-            target_modules = None
-        lora_config = LoraConfig(
-            r=tcfg.lora.r,
-            lora_alpha=tcfg.lora.alpha,
-            lora_dropout=tcfg.lora.dropout,
+        from soup_cli.utils.peft_wiring import (
+            build_lora_config,
+            resolve_lora_target_modules,
+        )
+
+        target_modules = resolve_lora_target_modules(self.model, tcfg.lora.target_modules, console)
+        # #1151: moe_lora picks the expert-FFN targets; see sft.py.
+        from soup_cli.utils.moe import resolve_moe_lora_targets
+
+        target_modules = resolve_moe_lora_targets(
+            self.model, tcfg, target_modules, console
+        )
+        lora_config = build_lora_config(
+            tcfg.lora,
             target_modules=target_modules,
             task_type=TaskType.CAUSAL_LM,
-            bias="none",
-            use_dora=tcfg.lora.use_dora,
-            use_rslora=tcfg.lora.use_rslora,
         )
         from soup_cli.utils.peft_wiring import (
             apply_post_lora_patches,
@@ -368,6 +613,15 @@ class DistillTrainerWrapper:
                     uld_teacher_tokenizer.pad_token = uld_teacher_tokenizer.eos_token
             else:
                 uld_teacher_tokenizer = None
+                # #681: wasserstein / topk_align reuse the student's ids as
+                # the teacher's, so fail before training starts if this pair
+                # can't support that.
+                _teacher_tok_for_check = AutoTokenizer.from_pretrained(
+                    tcfg.teacher_model, trust_remote_code=teacher_trc
+                )
+                _require_uld_id_compatible_tokenizers(
+                    tcfg.uld_strategy, self.tokenizer, _teacher_tok_for_check
+                )
             console.print(
                 f"[green]Cross-tokenizer ULD enabled[/] "
                 f"(strategy={tcfg.uld_strategy})"
@@ -477,7 +731,6 @@ class DistillTrainerWrapper:
         )
 
         teacher_ref = self.teacher
-        _teacher_vocab = teacher_vocab
         _uld_projection = uld_projection
         _minillm_cb = minillm_cb
         _sequence_mode = sequence_mode
@@ -489,8 +742,35 @@ class DistillTrainerWrapper:
         _uld_aligned = tcfg.uld_strategy == "wasserstein_aligned"
         _uld_teacher_tokenizer = uld_teacher_tokenizer
         _student_tokenizer = self.tokenizer
+        _distill_chunk_size = tcfg.distill_chunk_size
+        _distill_checkpoint = bool(tcfg.distill_checkpoint)
+
+        # #887: Track persistently non-finite distillation loss without per-step sync.
+        nonfinite_tracker = (
+            DistillNonfiniteTracker(
+                teacher_name=str(tcfg.teacher_model or "teacher"),
+                temperature=temperature,
+                threshold=3,
+                check_interval=5,
+                console=console,
+            )
+            if not sequence_mode
+            else None
+        )
+        self.nonfinite_tracker = nonfinite_tracker
 
         class _DistillTrainer(Trainer):
+            def __init__(
+                self, *args, tracker: DistillNonfiniteTracker | None = None, **kwargs
+            ):
+                super().__init__(*args, **kwargs)
+                # compute_loss consumes Trainer's full accumulation-window
+                # target count. Keeping this True makes Trainer collect that
+                # count and skip its fixed 1 / gradient_accumulation_steps
+                # fallback, which would weight unequal microbatches equally.
+                self.model_accepts_loss_kwargs = True
+                self.nonfinite_tracker = tracker
+
             def compute_loss(
                 self,
                 model,
@@ -503,6 +783,32 @@ class DistillTrainerWrapper:
                 labels = inputs.get("labels")
                 outputs = model(**{k: v for k, v in inputs.items() if k != "labels"})
                 student_logits = outputs.logits
+
+                def _token_weighted_accumulation(loss):
+                    """Turn this microbatch mean into its share of the window mean."""
+                    if num_items_in_batch is None or labels is None:
+                        return loss
+                    local_items = labels[..., 1:].ne(-100).sum().to(
+                        device=loss.device, dtype=loss.dtype
+                    )
+                    if torch.is_tensor(num_items_in_batch):
+                        window_items = num_items_in_batch.to(
+                            device=loss.device, dtype=loss.dtype
+                        )
+                    else:
+                        window_items = loss.new_tensor(num_items_in_batch)
+                    weighted = loss * local_items / window_items.clamp(min=1)
+
+                    # Match Trainer.compute_loss when it gathers one global
+                    # token count: DDP averages gradients, so compensate for
+                    # that average after normalising by the global denominator.
+                    if self.args.average_tokens_across_devices:
+                        loss_scale = self.accelerator.num_processes
+                        parallelism = getattr(self.accelerator, "parallelism_config", None)
+                        if parallelism is not None:
+                            loss_scale //= parallelism.tp_size
+                        weighted *= loss_scale if self.args.n_gpu <= 1 else self.args.n_gpu
+                    return weighted
 
                 ce_loss = torch.tensor(0.0, device=student_logits.device)
                 if labels is not None:
@@ -519,6 +825,7 @@ class DistillTrainerWrapper:
                 # been used (and freed) during dataset construction, so there
                 # is no teacher forward / logit term here.
                 if _sequence_mode:
+                    ce_loss = _token_weighted_accumulation(ce_loss)
                     return (ce_loss, outputs) if return_outputs else ce_loss
 
                 # v0.71.18 #257 — true on-policy MiniLLM rollout. Samples a
@@ -531,10 +838,14 @@ class DistillTrainerWrapper:
                         inputs["input_ids"],
                         inputs.get("attention_mask"),
                     )
+                    _tracker = getattr(self, "nonfinite_tracker", None)
+                    if _tracker is not None:
+                        _tracker.record_step(rollout_loss)
                     anchor = _minillm_cb.anchor_term(model)
                     total = _CE_WEIGHT * ce_loss + _DISTILL_WEIGHT * rollout_loss
                     if anchor is not None:
                         total = total + anchor
+                    total = _token_weighted_accumulation(total)
                     return (total, outputs) if return_outputs else total
 
                 # v0.71.18 #258 — aligned ULD. Decode the student ids to text,
@@ -597,8 +908,13 @@ class DistillTrainerWrapper:
                         t_strings,
                         config=_uld_projection.config,
                         attention_mask=s_mask,
+                        labels=labels,
                     )
+                    _tracker = getattr(self, "nonfinite_tracker", None)
+                    if _tracker is not None:
+                        _tracker.record_step(distill_loss)
                     total = _CE_WEIGHT * ce_loss + _DISTILL_WEIGHT * distill_loss
+                    total = _token_weighted_accumulation(total)
                     return (total, outputs) if return_outputs else total
 
                 # Bridge devices: HF Trainer may auto-move the student to
@@ -615,17 +931,6 @@ class DistillTrainerWrapper:
                     for k, v in inputs.items()
                     if k != "labels"
                 }
-                # v0.71.11 #236 — when ULD bridges different vocabs, clamp the
-                # student token ids to the teacher's range so the (possibly
-                # smaller) teacher embedding never index-errors.
-                if (
-                    _uld_projection is not None
-                    and _teacher_vocab is not None
-                    and "input_ids" in teacher_inputs
-                ):
-                    teacher_inputs["input_ids"] = teacher_inputs[
-                        "input_ids"
-                    ].clamp(max=int(_teacher_vocab) - 1)
                 with torch.no_grad():
                     teacher_out = teacher_ref(**teacher_inputs)
                     teacher_logits = teacher_out.logits.to(student_logits.device)
@@ -633,10 +938,13 @@ class DistillTrainerWrapper:
                 anchor = None
                 if _uld_projection is not None:
                     # v0.71.11 #236 — cross-tokenizer ULD distillation loss.
+                    # #682: pass labels so masking matches the CE term,
+                    # trained tokens only, not every attended position.
                     distill_loss = _uld_projection(
                         student_logits,
                         teacher_logits,
                         attention_mask=inputs.get("attention_mask"),
+                        labels=labels,
                     )
                 elif _minillm_cb is not None:
                     # v0.71.11 #237 — MiniLLM teacher-mixed reverse-KL +
@@ -652,30 +960,59 @@ class DistillTrainerWrapper:
                         student_logits, teacher_logits, divergence, temperature,
                         labels=labels,
                         attention_mask=inputs.get("attention_mask"),
+                        chunk_size=_distill_chunk_size,
+                        use_checkpoint=_distill_checkpoint,
                     )
+                _tracker = getattr(self, "nonfinite_tracker", None)
+                if _tracker is not None:
+                    _tracker.record_step(distill_loss)
                 total = _CE_WEIGHT * ce_loss + _DISTILL_WEIGHT * distill_loss
                 if anchor is not None:
                     total = total + anchor
+                total = _token_weighted_accumulation(total)
                 return (total, outputs) if return_outputs else total
 
         # ``DataCollatorForSeq2Seq`` pads ``input_ids`` and ``attention_mask``
         # via the tokenizer AND pads ``labels`` with ``label_pad_token_id``
         # (-100 = IGNORE_INDEX). ``DataCollatorForLanguageModeling`` does
         # NOT pad labels — incorrect for our pre-tokenised loss-masked rows.
-        from transformers import DataCollatorForSeq2Seq
+        from transformers import DataCollatorForSeq2Seq, TrainerCallback
 
         self.trainer = _DistillTrainer(
             model=self.model,
             args=args,
             train_dataset=train_ds,
             eval_dataset=eval_ds,
-            tokenizer=self.tokenizer,
+            processing_class=self.tokenizer,
             data_collator=DataCollatorForSeq2Seq(
                 tokenizer=self.tokenizer,
                 label_pad_token_id=-100,
                 padding=True,
             ),
+            tracker=nonfinite_tracker,
         )
+
+        class _NonfiniteTrackerCallback(TrainerCallback):
+            def __init__(self, tracker: DistillNonfiniteTracker | None = None) -> None:
+                super().__init__()
+                self.tracker = tracker
+
+            def on_train_end(self, args, state, control, **kwargs):
+                if self.tracker is not None:
+                    self.tracker.check_and_warn()
+
+        self.trainer.add_callback(_NonfiniteTrackerCallback(tracker=nonfinite_tracker))
+
+        # #359 - the same exposure #336 fixed in sft.py: with LoRA the
+        # no-decay optimizer group is empty, DeepSpeed drops it, and the LR
+        # scheduler keeps two base_lrs until torch's strict zip raises at the
+        # first step. The guard prunes inside create_optimizer, i.e. before
+        # the scheduler is built. No-op for full fine-tuning, and only under
+        # DeepSpeed so the ordinary path keeps its own optimizer.
+        if self.deepspeed_config:
+            from soup_cli.utils.deepspeed import attach_empty_param_group_guard
+
+            attach_empty_param_group_guard(self.trainer)
 
         # v0.71.11 #237 — attach the MiniLLM callback for lifecycle (the
         # loss terms are applied directly in compute_loss above).
@@ -695,6 +1032,7 @@ class DistillTrainerWrapper:
         attach_plugin_callback(self.trainer, console)
 
         self._output_dir = str(output_dir)
+        self._batch_size = batch_size
 
     def train(
         self,
@@ -710,32 +1048,46 @@ class DistillTrainerWrapper:
             )
         start = time.time()
         if display is not None:
-            from soup_cli.monitoring.callback import SoupTrainerCallback
+            from soup_cli.monitoring.callback import (
+                SoupTrainerCallback,
+                soup_callback_kwargs,
+            )
 
             self.trainer.add_callback(
                 SoupTrainerCallback(
-                    display, tracker=tracker, run_id=run_id,
-                    loss_watchdog=self.config.training.loss_watchdog,
-                    loss_watchdog_threshold=self.config.training.loss_watchdog_threshold,
-                    loss_watchdog_patience=self.config.training.loss_watchdog_patience,
+                    display,
+                    tracker=tracker,
+                    run_id=run_id,
                     eval_gate_config=self.config.training.eval_gate,
+                    **soup_callback_kwargs(
+                        self.config.training,
+                        batch_size=self._batch_size,
+                        output_dir=self._output_dir,
+                        include_eval_gate=False,
+                    ),
                 )
             )
+        align_trainable_dtype_for_fp16(
+            self.trainer.model,
+            fp16=getattr(self.trainer.args, "fp16", False),
+            bf16=getattr(self.trainer.args, "bf16", False),
+        )
         self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)
+        if getattr(self, "nonfinite_tracker", None) is not None:
+            self.nonfinite_tracker.check_and_warn()
         duration = time.time() - start
 
         self.trainer.save_model(self._output_dir)
         self.tokenizer.save_pretrained(self._output_dir)
 
         logs = self.trainer.state.log_history
-        train_losses = [entry["loss"] for entry in logs if "loss" in entry]
+        loss_summary = summarize_training_loss(logs)
 
         hours = int(duration // 3600)
         minutes = int((duration % 3600) // 60)
         duration_str = f"{hours}h {minutes}m" if hours > 0 else f"{minutes}m"
         return {
-            "initial_loss": train_losses[0] if train_losses else 0,
-            "final_loss": train_losses[-1] if train_losses else 0,
+            **loss_summary,
             "duration": duration_str,
             "duration_secs": duration,
             "output_dir": self._output_dir,

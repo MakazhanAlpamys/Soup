@@ -510,3 +510,136 @@ class TestJudgeModelValidation:
                 prompts="prompts.jsonl",
                 judge_model="http://localhost.attacker.com/model",
             )
+
+
+# ---------------------------------------------------------------------------
+# Judge task score normalization
+# ---------------------------------------------------------------------------
+
+
+class TestJudgeTaskNormalization:
+    """Regression tests for judge score normalization against active rubric scale."""
+
+    @pytest.fixture
+    def prompts_file(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        prompts = tmp_path / "prompts.jsonl"
+        prompts.write_text('{"prompt": "test prompt"}\n', encoding="utf-8")
+        return prompts
+
+    def _run_with_mock_judge(self, prompts_file, overall_score, rubric=None):
+        from soup_cli.eval.gate import GateTask, _run_judge_task
+        from soup_cli.eval.judge import DEFAULT_RUBRIC, JudgeResults
+
+        task = GateTask(
+            type="judge",
+            name="quality",
+            threshold=0.7,
+            prompts=str(prompts_file.name),
+            judge_model="ollama://llama3",
+        )
+
+        mock_evaluator = MagicMock()
+        mock_evaluator.rubric = rubric if rubric is not None else DEFAULT_RUBRIC
+        mock_evaluator.evaluate_batch.return_value = JudgeResults(
+            scores=[], overall_score=overall_score,
+        )
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr("soup_cli.eval.judge.JudgeEvaluator", lambda **kw: mock_evaluator)
+            return _run_judge_task(task, generate_fn=lambda p: "test response")
+
+    def test_perfect_score_default_rubric_normalizes_to_one(self, prompts_file):
+        """A 5.0 score on the default 1-5 rubric must normalize to 1.0, not 0.50."""
+        score = self._run_with_mock_judge(prompts_file, overall_score=5.0)
+        assert score == pytest.approx(1.0)
+
+    def test_midpoint_score_default_rubric(self, prompts_file):
+        """A 3.0 score on the default 1-5 rubric must normalize to 0.50, not 0.30."""
+        score = self._run_with_mock_judge(prompts_file, overall_score=3.0)
+        assert score == pytest.approx(0.50)
+
+    def test_minimum_score_default_rubric(self, prompts_file):
+        """A 1.0 score on the default 1-5 rubric must normalize to 0.0, not 0.10."""
+        score = self._run_with_mock_judge(prompts_file, overall_score=1.0)
+        assert score == pytest.approx(0.0)
+
+    def test_intermediate_score_default_rubric(self, prompts_file):
+        """A 4.0 score on the default 1-5 rubric must normalize to 0.75, not 0.40."""
+        score = self._run_with_mock_judge(prompts_file, overall_score=4.0)
+        assert score == pytest.approx(0.75)
+
+    def test_custom_rubric_scale_dynamic_normalization(self, prompts_file):
+        """A 1-10 custom rubric must normalize dynamically: (8-1)/9 = 7/9."""
+        custom_rubric = {"scale": {"min": 1, "max": 10}}
+        score = self._run_with_mock_judge(
+            prompts_file, overall_score=8.0, rubric=custom_rubric,
+        )
+        assert score == pytest.approx(7.0 / 9.0)
+
+        score_max = self._run_with_mock_judge(
+            prompts_file, overall_score=10.0, rubric=custom_rubric,
+        )
+        assert score_max == pytest.approx(1.0)
+
+        score_min = self._run_with_mock_judge(
+            prompts_file, overall_score=1.0, rubric=custom_rubric,
+        )
+        assert score_min == pytest.approx(0.0)
+
+    def test_clamping_out_of_bounds_scores(self, prompts_file):
+        """Pathological scores outside [min, max] must clamp strictly to [0.0, 1.0]."""
+        # Score above max
+        score_high = self._run_with_mock_judge(prompts_file, overall_score=7.0)
+        assert score_high == pytest.approx(1.0)
+
+        # Score below min
+        score_low = self._run_with_mock_judge(prompts_file, overall_score=0.0)
+        assert score_low == pytest.approx(0.0)
+
+    def test_degenerate_scale_handled_safely(self, prompts_file):
+        """If min == max, division by zero is avoided and score is safely clamped."""
+        degenerate_rubric = {"scale": {"min": 5, "max": 5}}
+        score = self._run_with_mock_judge(
+            prompts_file, overall_score=5.0, rubric=degenerate_rubric,
+        )
+        assert 0.0 <= score <= 1.0
+
+    def test_end_to_end_gate_passes_for_perfect_judge_score(self, tmp_path, monkeypatch):
+        """End-to-end: a perfect 5/5 score must pass a threshold of 0.70."""
+        monkeypatch.chdir(tmp_path)
+        from soup_cli.eval.gate import EvalSuite, GateTask, run_gate
+        from soup_cli.eval.judge import DEFAULT_RUBRIC, JudgeResults
+
+        prompts = tmp_path / "eval_prompts.jsonl"
+        prompts.write_text('{"prompt": "Summarize this article"}\n', encoding="utf-8")
+
+        suite = EvalSuite(
+            suite="judge_quality_suite",
+            tasks=[
+                GateTask(
+                    type="judge",
+                    name="quality_check",
+                    threshold=0.70,
+                    prompts=str(prompts.name),
+                    judge_model="ollama://llama3.1",
+                ),
+            ],
+        )
+
+        mock_evaluator = MagicMock()
+        mock_evaluator.rubric = DEFAULT_RUBRIC
+        # Perfect 5/5 score from judge
+        mock_evaluator.evaluate_batch.return_value = JudgeResults(
+            scores=[], overall_score=5.0,
+        )
+
+        monkeypatch.setattr("soup_cli.eval.judge.JudgeEvaluator", lambda **kw: mock_evaluator)
+
+        result = run_gate(suite, generate_fn=lambda prompt: "Summary output")
+        assert len(result.task_results) == 1
+        task_res = result.task_results[0]
+        # Under the old buggy implementation, score was 0.50 and failed threshold 0.70!
+        assert task_res.score == pytest.approx(1.0)
+        assert task_res.passed is True
+        assert result.passed is True

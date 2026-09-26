@@ -74,7 +74,7 @@ soup lock write \
   --dataset-sha $DATA_SHA \
   --env-hash $(jq -r .closure soup-env.lock) \
   -o soup.lock
-# Teammates re-check the lock; exit 3 on drift.
+# Teammates re-check the lock; exit 2 on drift.
 soup lock check soup.lock \
   --base-model meta-llama/Llama-3.1-8B \
   --base-sha $BASE_SHA --dataset-sha $DATA_SHA --env-hash $ENV_HASH
@@ -89,7 +89,8 @@ soup adapters bisect \
 
 CMA-ES is pure-Python (no `cma` dependency); the eval is operator-supplied via a closure so any scoring code works. PR rendering escapes Markdown table cells, so crafted metric names cannot inject table rows or links. The lockfile composes with v0.64 `soup env lock` — drift in any of `{base_model, base_model_sha, dataset_sha, env_hash, closure_sha}` exits 3 (`soup_version` and `created_at` are advisory-only). Bisect uses `shlex.split` + `shlex.quote(ckpt)` in argv-list mode (no `shell=True`), so checkpoint ids cannot inject shell metacharacters.
 
-VeRA / VB-LoRA bank storage (`soup_cli.utils.vector_bank`) and MoLE per-token routing (`task='moe_lora_routing'`) ship as schema-only in v0.67.0 — live multi-tenant serving and gating-kernel training land in v0.67.1.
+VeRA / VB-LoRA bank storage (`soup_cli.utils.vector_bank`) supports live multi-tenant serving,
+and `task='moe_lora_routing'` trains the live sparse per-token MoLE gating kernel.
 
 
 ## Data Flywheel (`soup loop`)
@@ -204,14 +205,14 @@ soup edit set --base ./model --method grace \
 ```
 
 ```yaml
-# Or via soup.yaml when training a model with GRACE-aware lookups
-training:
-  grace_codebook: true
-  grace_codebook_size: 1024    # codebook entries (max 100k)
-  grace_codebook_dim: 768      # residual-stream width
+# Planned for soup.yaml when training with GRACE-aware lookups (staged; refused as of v0.77 — #808):
+# training:
+#   grace_codebook: true
+#   grace_codebook_size: 1024    # codebook entries (max 100k)
+#   grace_codebook_dim: 768      # residual-stream width
 ```
 
-`grace` joins the existing `rome` / `memit` / `alphaedit` allowlist on `soup edit set`; the sequential edit governor still gates the call when the per-base-model edit count or norm-blowup verdict trips. GRACE is live: `soup edit set --method grace --output ./ckpt` captures the residual key at the subject's last token, optimises a replacement value, and appends a `(key, value)` triple to a `grace_codebook.json` sidecar (atomic, cwd-contained). At inference the codebook is applied via a forward hook that substitutes the residual whenever it falls within an epsilon ball of a stored key — so the base weights are never modified and thousands of edits survive without norm blowup.
+`grace` joins the existing `rome` / `memit` / `alphaedit` allowlist on `soup edit set`; the sequential edit governor still gates the call when the per-base-model edit count or norm-blowup verdict trips. GRACE is live for editing: `soup edit set --method grace --output ./ckpt` captures the residual key at the subject's last token, optimises a replacement value, and appends a `(key, value)` triple to a `grace_codebook.json` sidecar (atomic, cwd-contained). At inference the codebook is applied via a forward hook that substitutes the residual whenever it falls within an epsilon ball of a stored key — so the base weights are never modified and thousands of edits survive without norm blowup. Training-time lookup integration remains staged.
 
 
 ## Model Registry & Lineage
@@ -481,7 +482,9 @@ best-effort — a broken audit log never crashes the CLI.
 ## Reproducibility Receipt (`soup train --repro-receipt`)
 
 SR 11-7-style reproducibility receipt captures seeds (torch + numpy + python), kernel
-versions (CUDA + cuDNN + NCCL), GPU model + driver, OS + arch:
+versions (CUDA + cuDNN + NCCL), accelerator backend, GPU model + driver, OS + arch.
+On Apple Silicon it records the privacy-safe chip name and unified-memory capacity, but
+never a serial number, hardware UUID, or user-specific path:
 
 ```bash
 soup train --config soup.yaml --repro-receipt repro.json
@@ -490,6 +493,88 @@ soup train --config soup.yaml --repro-receipt repro.json
 Bank model-risk teams and regulated-org auditors get a single JSON file that fingerprints
 the exact environment the run executed in. Atomic write, cwd-contained.
 
+
+## Run-vs-Config Audit (`soup adapters audit`)
+
+Does the finished adapter match the config that asked for it? Five merged
+fixes taught the MLX path to record what it actually did into
+`adapter_config.json` — #683 (masking), #684 (accumulation), #685 (gradient
+checkpointing), #686 (optimizer and schedule), #749 (gradient clipping). Each
+existed because a setting was accepted and silently dropped. Nothing read that
+record back until this command.
+
+```bash
+soup adapters audit ./output --config soup.yaml
+soup adapters audit ./output --config soup.yaml --json   # machine-readable
+```
+
+```
+Audit: output
+│ optimizer                    │ adamw_torch │ AdamW  │ ok      │
+│ learning_rate                │ 0.0001      │ 0.0001 │ ok      │
+│ warmup_ratio                 │ 0.03        │ —      │ unknown │
+│ weight_decay                 │ 0.01        │ 0.01   │ ok      │
+│ lora.r                       │ 8           │ 8      │ ok      │
+```
+
+**`unknown` is never `ok`.** A setting the record cannot speak to is reported
+`unknown`, never agreement — a false clean bill turns "I do not know" into "I
+checked", which is exactly the substitution this command exists to undo. It is
+not a failure either: an older adapter predates the keys, which is not the
+user's fault.
+
+The config is read through the schema, so a setting you omitted is audited
+against the default Soup would actually have used, not against a second copy
+of the defaults kept by the audit.
+
+**The MLX learning-rate comparand is `peak_lr`.** `training.lr` is the target
+peak/base value passed to the resolved optimizer schedule. Warmup starts below
+it and controls when the schedule reaches it; cosine or linear decay controls
+what follows. Comparing `training.lr` with an early schedule sample would
+therefore flag a correct warmup run. The audit instead compares it with the
+optimizer plan's recorded `peak_lr`. It deliberately does not use the record's
+`learning_rate`, because that field is only the config value echoed when the
+file is written, not evidence of what reached the optimizer.
+
+PEFT's `adapter_config.json` on the transformers backend does not record the
+effective optimizer learning rate. That row is therefore `unknown`, and the
+output says explicitly that the effective learning rate was **not checked**;
+it never presents a transformers adapter with a false clean bill.
+
+**Masking is audited by effect, not by request.** The record's
+`train_on_responses_only` is the config's own request echoed back; the effect
+is `mask_prompt` (upstream's single masked prefix) and `response_token_mask`
+(Soup's per-token mask). Plain-text rows carry no role boundaries, so a run
+that asked for response-only masking on them warns once and trains on the full
+sequence — leaving a record that says `train_on_responses_only: true` beside
+two false effect keys. The audit compares against the effect, so that run is
+reported `DIVERGED`.
+
+Evidence is weighed the same way everywhere else in this command: one truthy
+key proves masking *happened*, whatever the other says, but proving it did
+**not** happen needs both keys. A record carrying neither (written before
+#683) — or carrying one false key with the other absent — is `unknown`, not a
+divergence, because a missing key read as `False` would claim a check the
+record cannot support.
+
+`--json` emits `checked_count` alongside `diverged_count` and `unknown_count`,
+so a CI job can tell "everything agreed" from "nothing was checkable" — both
+of which exit 0 — plus `unknown_reason`, the same explanation the table
+prints. Config warnings (an unknown key, for instance) go to stderr, so stdout
+under `--json` is the payload and nothing else.
+
+**Exit codes: 0 = agreement, 2 = DIVERGED, 1 = usage or read error.** The
+verdict is kept off `1` so a CI gate can tell "the run did not do what the
+config asked" from "the path was wrong" -- a missing `adapter_config.json`, a
+missing `--config` and a path outside the working directory all exit `1`.
+This follows `soup ship` / `soup shrink` (0 pass / 2 failed gate / 1 error)
+rather than the older `adapters scan`, which predates that convention.
+`unknown` rows exit `0`.
+
+Strings in `adapter_config.json` are untrusted -- an adapter can be downloaded
+-- so record-derived text is stripped of ANSI/OSC control bytes and escaped
+against Rich markup before it is printed. `--json` is not sanitised: a machine
+consumer gets the bytes the record actually holds.
 
 ## Adapter Backdoor Scanner (`soup adapters scan`)
 
@@ -522,13 +607,32 @@ soup adapters verify ./adapter --public-key trusted.pub
 ```
 
 `verify` fails closed — any tamper, wrong/missing/unreadable key, or a
-signature from an untrusted key marks the adapter invalid. Signing keys and
+signature from an untrusted key marks the adapter invalid. With `--public-key`,
+an adapter whose signature record is not `ed25519` is also invalid. Signing keys and
 trusted public keys are symlink-rejected and size-capped but **not**
 cwd-contained (keys are secrets that live outside the project). Signature
-persists as `.soup-signature.json` (atomic write). `sigstore` keyless signing
-stays infra-blocked (needs an OIDC identity provider + Fulcio/Rekor network —
-it can't be honestly validated offline). `--strict` mode exits 3 on any verify
-failure (CI gate code distinct from generic errors).
+persists as `.soup-signature.json` (atomic write).
+
+The **`sigstore` backend is also live** with `pip install soup-cli[sigstore]`.
+It uses an ambient OIDC identity when one is available (for example GitHub
+Actions), requests a Fulcio certificate, submits to Rekor, and stores the
+complete Sigstore bundle with the adapter signature record. Browser OIDC is
+**not** opened implicitly on headless/default runs; opt in explicitly with
+`--interactive-oidc`. Verification is deliberately fail-closed and requires
+both certificate identity and OIDC issuer supplied out of band:
+
+```bash
+soup adapters sign ./adapter --backend sigstore
+soup adapters verify ./adapter \
+  --cert-identity 'https://github.com/acme/repo/.github/workflows/release.yml@refs/heads/main' \
+  --cert-oidc-issuer 'https://token.actions.githubusercontent.com'
+```
+
+The identity embedded in the bundle is **not** trusted automatically; doing so
+would reduce authentication to self-consistency. Identity and issuer are one
+certificate policy: either value without the other is refused. `--strict` mode
+exits 3 on any verify failure
+(CI gate code distinct from generic errors).
 
 
 ## Strict Safetensors Mode (`soup adapters check-safetensors`)

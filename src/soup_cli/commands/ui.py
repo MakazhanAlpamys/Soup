@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ipaddress
 from typing import Optional
 
 import typer
@@ -9,6 +10,16 @@ from rich.console import Console
 from rich.panel import Panel
 
 console = Console()
+
+
+def _is_loopback(host: str) -> bool:
+    """Return True if host is a loopback address or localhost."""
+    if host.lower() == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host.strip("[]")).is_loopback
+    except ValueError:
+        return False
 
 
 def ui(
@@ -56,7 +67,7 @@ def ui(
     """Launch the Soup Web UI.
 
     A Bearer auth token is auto-generated at startup and printed to the console.
-    Mutating API endpoints (POST/DELETE) require 'Authorization: Bearer <token>'.
+    API endpoints require 'Authorization: Bearer <token>'.
 
     `--public` exposes the server on 0.0.0.0 for phone-on-LAN access. The
     auth token is embedded in a phone-scannable URL + ASCII QR code so a
@@ -88,7 +99,27 @@ def ui(
     if public and host == "127.0.0.1":
         host = "0.0.0.0"
 
+    # Security: refusing startup on non-loopback when authentication token is
+    # missing or invalid (#687)
     token = get_auth_token()
+    if not _is_loopback(host):
+        valid = False
+        if token:
+            try:
+                from soup_cli.utils.qr_url import validate_token
+
+                validate_token(token)
+                valid = True
+            except (TypeError, ValueError):
+                valid = False
+        if not valid:
+            from rich.markup import escape as _rich_escape
+
+            console.print(
+                f"[red]Error:[/] binding non-loopback host '{_rich_escape(str(host))}' "
+                "requires a valid authentication token."
+            )
+            raise typer.Exit(code=2)
 
     if show_token:
         console.print(token)
@@ -101,7 +132,7 @@ def ui(
     panel_body = (
         f"URL:    [bold]{url}[/]\n"
         f"Token:  [bold]{token}[/]\n\n"
-        f"Mutating API endpoints require:\n"
+        f"API endpoints require:\n"
         f"  [dim]Authorization: Bearer {token}[/]\n\n"
         f"Pages:\n"
         f"  [bold]Dashboard[/]      - View experiments, loss charts, system info\n"

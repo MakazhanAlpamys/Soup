@@ -6,11 +6,32 @@ v0.51.0 / v0.52.0 single-file test layout).
 
 from __future__ import annotations
 
-from types import MappingProxyType
+import sys
+from types import MappingProxyType, ModuleType
 
 import pytest
 
 from soup_cli.config.loader import load_config_from_string
+
+
+def _tiny_linear_model(with_attention: bool = True):
+    """A real module, so a gate that lets the call through fails on an assertion
+    instead of on ``object().named_modules`` (#834)."""
+    torch = pytest.importorskip("torch")
+    nn = torch.nn
+
+    class _Tiny(nn.Module):
+        def __init__(self):
+            super().__init__()
+            if with_attention:
+                self.q_proj = nn.Linear(4, 4)
+                self.k_proj = nn.Linear(4, 4)
+                self.v_proj = nn.Linear(4, 4)
+                self.o_proj = nn.Linear(4, 4)
+            else:
+                self.up_proj = nn.Linear(4, 4)
+
+    return _Tiny()
 
 # ---------------------------------------------------------------------------
 # Part A — Unsloth Dynamic 2.0 GGUF ladder
@@ -412,12 +433,30 @@ class TestFP8Attention:
                 "training: {fp8_attention: true}\n"
             )
 
-    def test_apply_live_gated(self):
-        """v0.71.21 #141 lifted the stub — now a friendly hw/dep gate."""
+    # #834: each gate is its own test with the gate patched, so the result is the
+    # same on a CPU box, a Hopper box and a Blackwell box, with or without
+    # torchao. The previous single test called the real gates with ``object()``
+    # and passed only while one of them happened to refuse on the test machine.
+
+    def test_apply_refuses_without_torchao(self, monkeypatch):
+        """No attention projections on purpose: the conversion step's own torchao
+        import also refuses, so on a model WITH projections the up-front gate is
+        invisible. Here only the gate can answer "torchao" -- without it the walk
+        runs first and reports "no attention projections" instead."""
         from soup_cli.utils.advanced_precision import apply_fp8_attention
 
-        with pytest.raises((RuntimeError, ValueError), match="(?i)torchao|hopper"):
-            apply_fp8_attention(object())
+        monkeypatch.setattr("soup_cli.utils.fp8.is_fp8_gpu_supported", lambda: True)
+        monkeypatch.setitem(sys.modules, "torchao", None)
+        with pytest.raises(RuntimeError, match="torchao"):
+            apply_fp8_attention(_tiny_linear_model(with_attention=False))
+
+    def test_apply_refuses_off_hopper(self, monkeypatch):
+        from soup_cli.utils.advanced_precision import apply_fp8_attention
+
+        monkeypatch.setitem(sys.modules, "torchao", ModuleType("torchao"))
+        monkeypatch.setattr("soup_cli.utils.fp8.is_fp8_gpu_supported", lambda: False)
+        with pytest.raises(RuntimeError, match="Hopper"):
+            apply_fp8_attention(_tiny_linear_model())
 
 
 class TestNVFP4:
@@ -496,12 +535,29 @@ class TestNVFP4:
                 "training: {nvfp4: true}\n"
             )
 
-    def test_apply_live_gated(self):
-        """v0.71.21 #141 lifted the stub — now a friendly Blackwell gate."""
+    # #834: as for FP8 above. The previous test branched on the real
+    # ``is_blackwell_gpu()``, so it still depended on the machine, one gate later.
+
+    def test_apply_refuses_off_blackwell(self, monkeypatch):
         from soup_cli.utils.advanced_precision import apply_nvfp4
 
-        with pytest.raises(RuntimeError, match="Blackwell"):
-            apply_nvfp4(object())
+        monkeypatch.setattr(
+            "soup_cli.utils.advanced_precision.is_blackwell_gpu", lambda: False
+        )
+        with pytest.raises(RuntimeError, match="no Blackwell device detected"):
+            apply_nvfp4(_tiny_linear_model())
+
+    def test_apply_on_blackwell_refuses_without_torchao(self, monkeypatch):
+        """On Blackwell the hardware gate passes and torchao decides."""
+        from soup_cli.utils.advanced_precision import apply_nvfp4
+
+        monkeypatch.setattr(
+            "soup_cli.utils.advanced_precision.is_blackwell_gpu", lambda: True
+        )
+        monkeypatch.setitem(sys.modules, "torchao", None)
+        with pytest.raises(RuntimeError, match="requires torchao") as excinfo:
+            apply_nvfp4(_tiny_linear_model())
+        assert "no Blackwell device detected" not in str(excinfo.value)
 
 
 class TestUnslothBNB4Bit:
@@ -570,11 +626,41 @@ class TestUnslothBNB4Bit:
 
 
 class TestLFParity:
-    def test_double_quant_default_false(self):
+    def test_double_quant_default_is_unset_but_resolves_on(self):
+        # #321 — the schema field is tri-state: unset is None (so it round-trips
+        # through model_dump() without emitting `true` and tripping the footgun),
+        # while `double_quant_on` resolves the shipped default: every 4-bit load
+        # path has always double-quantized.
         cfg = load_config_from_string(
             "base: a/b\n"
             "task: sft\n"
             "data: {train: x.jsonl}\n"
+        )
+        assert cfg.training.bnb_4bit_use_double_quant is None
+        assert cfg.training.double_quant_on is True
+
+    def test_double_quant_default_does_not_trip_non_4bit_footgun(self):
+        # #321 — an unset flag (None) carries no intent, so a config that never
+        # sets it must NOT be rejected for using a non-4bit quantization. The
+        # footgun fires only on an explicit `true`.
+        cfg = load_config_from_string(
+            "base: a/b\n"
+            "task: sft\n"
+            "data: {train: x.jsonl}\n"
+            "training: {quantization: 8bit}\n"
+        )
+        assert cfg.training.quantization == "8bit"
+        assert cfg.training.bnb_4bit_use_double_quant is None
+        assert cfg.training.double_quant_on is True
+
+    def test_double_quant_explicit_false_allowed_without_4bit(self):
+        # Explicit False on a non-4bit config is a no-op, not a footgun —
+        # unchanged behaviour (the raise only guards an explicit True).
+        cfg = load_config_from_string(
+            "base: a/b\n"
+            "task: sft\n"
+            "data: {train: x.jsonl}\n"
+            "training: {bnb_4bit_use_double_quant: false, quantization: none}\n"
         )
         assert cfg.training.bnb_4bit_use_double_quant is False
 
@@ -854,6 +940,38 @@ class TestSaveFormats:
 
         with pytest.raises(TypeError):
             merge_4bit()  # type: ignore[call-arg]
+
+    def test_merge_4bit_bnb_kwargs_honours_double_quant(self):
+        """#321 — the 4-bit save path threads its ``double_quant`` argument into
+        the BNB kwargs instead of hardcoding True. Dict-shaped helper keeps this
+        assertable without constructing the heavy config."""
+        from soup_cli.utils.save_formats import _build_merge_4bit_bnb_kwargs
+
+        off = _build_merge_4bit_bnb_kwargs(
+            compute_dtype="bfloat16", forced=False, double_quant=False
+        )
+        assert off["bnb_4bit_use_double_quant"] is False
+        assert off["load_in_4bit"] is True
+        assert off["bnb_4bit_quant_type"] == "nf4"
+        assert "bnb_4bit_skip_modules" not in off
+
+        on = _build_merge_4bit_bnb_kwargs(
+            compute_dtype="bfloat16", forced=True, double_quant=True
+        )
+        assert on["bnb_4bit_use_double_quant"] is True
+        # ``forced`` still quantizes every Linear (empty skip list) — unchanged.
+        assert on["bnb_4bit_skip_modules"] == []
+
+    def test_merge_4bit_rejects_non_bool_double_quant(self):
+        """Matches the existing ``forced``/``dtype`` type guards."""
+        from soup_cli.utils.save_formats import merge_4bit
+
+        with pytest.raises(TypeError, match="double_quant must be bool"):
+            merge_4bit(
+                merged_dir="m",
+                output_dir="o",
+                double_quant=1,  # type: ignore[arg-type]
+            )
 
     def test_export_torchao_now_live(self):
         """v0.53.1 #142 — live wiring landed; signature now requires kwargs."""

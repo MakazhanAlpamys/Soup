@@ -24,6 +24,7 @@ from types import SimpleNamespace
 import pytest
 
 from soup_cli import __version__
+from tests.conftest import cuda_available
 
 _SRC = Path(__file__).resolve().parent.parent / "src" / "soup_cli"
 
@@ -35,10 +36,13 @@ class TestTtsCodecPackage:
     def test_per_family_packages(self):
         from soup_cli.utils.tts import TTS_CODEC_PACKAGES, tts_codec_package
 
-        for fam in ("orpheus", "sesame_csm", "llasa", "spark", "oute"):
+        for fam in ("orpheus", "llasa", "spark", "oute"):
             assert tts_codec_package(fam) == TTS_CODEC_PACKAGES[fam]
         assert tts_codec_package("orpheus") == "snac"
+        assert tts_codec_package("llasa") == "torchaudio"
         assert tts_codec_package("spark") == "sparktts"
+        with pytest.raises(RuntimeError, match="no Soup-compatible"):
+            tts_codec_package("sesame_csm")
 
     def test_case_insensitive(self):
         from soup_cli.utils.tts import tts_codec_package
@@ -360,17 +364,9 @@ class TestTtsSchemaAndRouting:
 # --------------------------------------------------------------------------- #
 # #134 BitNet
 # --------------------------------------------------------------------------- #
-class TestBuildBitnetTrainer:
-    def test_no_arg_typeerror(self):
-        from soup_cli.utils.bitnet import build_bitnet_trainer
-
-        with pytest.raises(TypeError):
-            build_bitnet_trainer()
-
-    def test_returns_wrapper(self):
+class TestBitNetTrainerWrapper:
+    def test_config_refuses_unwired_training(self):
         from soup_cli.config.loader import load_config_from_string
-        from soup_cli.trainer.bitnet import BitNetTrainerWrapper
-        from soup_cli.utils.bitnet import build_bitnet_trainer
 
         yaml_str = (
             "base: hf-internal-testing/tiny-random-gpt2\n"
@@ -381,9 +377,8 @@ class TestBuildBitnetTrainer:
             "training:\n"
             "  quantization: bitnet_1.58\n"
         )
-        cfg = load_config_from_string(yaml_str)
-        wrapper = build_bitnet_trainer(cfg, device="cpu")
-        assert isinstance(wrapper, BitNetTrainerWrapper)
+        with pytest.raises(ValueError, match="training is not implemented yet"):
+            load_config_from_string(yaml_str)
 
     def test_setup_gates_on_onebitllms(self):
         from soup_cli.trainer.bitnet import BitNetTrainerWrapper
@@ -460,7 +455,7 @@ class TestExportBitnetGguf:
                 llama_cpp_dir="missing_llama",
             )
 
-    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX symlink")
+    @pytest.mark.requires_symlink
     def test_symlink_model_rejected(self, monkeypatch, tmp_path):
         import os
 
@@ -650,21 +645,22 @@ class TestApplyMoeExpertQuant:
         return Model()
 
     def test_gates_without_bnb_or_cuda(self):
-        torch = pytest.importorskip("torch")
-        if torch.cuda.is_available() and _spec("bitsandbytes"):
+        pytest.importorskip("torch")
+        if cuda_available() and _spec("bitsandbytes"):
             pytest.skip("CUDA + bitsandbytes present; real quant path used")
         from soup_cli.utils.moe_quant import apply_moe_expert_quant
 
         with pytest.raises(RuntimeError, match="bitsandbytes|CUDA"):
             apply_moe_expert_quant(self._moe_with_experts(), "nf4")
 
+    @pytest.mark.gpu(reason="the real per-expert NF4 quant needs bitsandbytes' CUDA kernels")
     def test_real_nf4_quant_swaps_experts(self):
         """When CUDA + bitsandbytes are present (dev box; skipped on CI),
         the real per-expert quant replaces each expert Linear with a bnb
         Linear4bit. Validated live on an RTX 3050 (Step 6)."""
-        torch = pytest.importorskip("torch")
-        if not (torch.cuda.is_available() and _spec("bitsandbytes")):
-            pytest.skip("requires CUDA + bitsandbytes")
+        pytest.importorskip("torch")
+        if not _spec("bitsandbytes"):
+            pytest.skip("requires bitsandbytes")
         import bitsandbytes as bnb  # noqa: PLC0415
 
         from soup_cli.utils.moe_quant import apply_moe_expert_quant

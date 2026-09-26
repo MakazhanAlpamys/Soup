@@ -30,7 +30,10 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
+
+if TYPE_CHECKING:
+    from soup_cli.utils.rl_checkpoint import RLCheckpointCallback
 
 logger = logging.getLogger(__name__)
 
@@ -197,16 +200,13 @@ class RLCheckpointState:
 
 
 def _get_trainer_callback_base():
-    """Lazy-resolve ``transformers.TrainerCallback`` (mirror v0.53.11)."""
+    """Lazy-resolve ``transformers.TrainerCallback``."""
     try:
         from transformers import TrainerCallback
 
         return TrainerCallback
     except ImportError:
         return object
-
-
-_TrainerCallbackBase = _get_trainer_callback_base()
 
 
 def _step_number(name: str) -> int:
@@ -244,7 +244,7 @@ def _is_main_process() -> bool:
     return True
 
 
-class RLCheckpointCallback(_TrainerCallbackBase):  # type: ignore[misc, valid-type]
+class _RLCheckpointCallback_body:  # type: ignore[misc, valid-type]  # noqa: N801
     """Live HF TrainerCallback for mid-epoch RL checkpoints (v0.71.11 #238).
 
     Saves an RL-aware checkpoint every ``save_every_steps`` steps under
@@ -475,9 +475,30 @@ def build_rl_checkpoint_callback(
         )
     if output_dir is None:
         raise ValueError("output_dir is required to build the RL checkpoint callback")
+    from soup_cli.utils.rl_checkpoint import RLCheckpointCallback
+
     return RLCheckpointCallback(
         config,
         output_dir=output_dir,
         task=task,
         soup_version=soup_version,
     )
+
+
+_LAZY_CALLBACKS = {
+    "RLCheckpointCallback": _RLCheckpointCallback_body,
+}
+_BODY_SKIP = frozenset(("__dict__", "__weakref__"))
+
+
+def __getattr__(name: str):  # PEP 562
+    body = _LAZY_CALLBACKS.get(name)
+    if body is not None:
+        base = _get_trainer_callback_base()
+        ns = {k: v for k, v in vars(body).items() if k not in _BODY_SKIP}
+        cls = type(name, (base,), ns)
+        cls.__module__ = __name__
+        cls.__qualname__ = name
+        globals()[name] = cls
+        return cls
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

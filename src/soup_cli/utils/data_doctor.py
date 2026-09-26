@@ -258,7 +258,11 @@ def _build_row_labels(
     actually train on for a given ``soup.yaml``. Raises on a row the
     template can't render — callers decide whether to skip or propagate.
     """
-    from soup_cli.data.loss_mask import build_assistant_only_labels, build_per_message_train_labels
+    from soup_cli.data.loss_mask import (
+        build_assistant_only_labels,
+        build_full_sequence_labels,
+        build_per_message_train_labels,
+    )
 
     if train_on_messages_with_train_field:
         return build_per_message_train_labels(messages, tokenizer, max_length=max_length)
@@ -266,16 +270,12 @@ def _build_row_labels(
         return build_assistant_only_labels(
             messages, tokenizer, max_length=max_length, include_eot=include_eot
         )
-    ids = tokenizer.apply_chat_template(messages, tokenize=True, add_generation_prompt=False)
-    if isinstance(ids, dict):
-        ids = ids.get("input_ids", [])
-    # Truncate to max_length like the other two strategies (both delegate
-    # to data.loss_mask._truncate) — otherwise legacy_text is the only path
-    # where --show-mask can render more tokens than the trainer actually
-    # would, and the max_length-truncation check above would never trigger
-    # for this strategy either.
-    ids = list(ids)[:max_length]
-    return {"input_ids": ids, "labels": ids}
+    # #788: legacy full-sequence path — call the SAME builder the trainer uses
+    # (build_full_sequence_labels) so --show-mask reflects the one-BOS,
+    # add_eos-EOS tokenization. Re-rendering here with the tokenizer's default
+    # add_special_tokens=True instead doubled the BOS and skipped TRL's EOS rule,
+    # so the X-ray stopped matching what training actually consumes.
+    return build_full_sequence_labels(messages, tokenizer, max_length=max_length)
 
 
 def _mask_strategy_name(
@@ -361,7 +361,7 @@ def check_generation_markers(tokenizer: Any) -> DoctorCheck:
             probe, tokenize=True, add_generation_prompt=False,
             return_assistant_tokens_mask=True, return_dict=True,
         )
-        has_markers = isinstance(out, dict) and bool(out.get("assistant_masks")) and any(
+        has_markers = isinstance(out, Mapping) and bool(out.get("assistant_masks")) and any(
             out["assistant_masks"]
         )
     except Exception:  # noqa: BLE001 — any failure means no usable markers
@@ -609,6 +609,7 @@ def check_truncation_risk(
             name="truncation_risk", verdict="OK", message="skipped (no chat_template)"
         )
 
+    from soup_cli.data.loss_mask import coerce_token_ids
     from soup_cli.utils.tail_latency import percentile
 
     lengths: List[float] = []
@@ -617,13 +618,13 @@ def check_truncation_risk(
         if not messages:
             continue
         try:
-            ids = tokenizer.apply_chat_template(
-                messages, tokenize=True, add_generation_prompt=False
+            ids = coerce_token_ids(
+                tokenizer.apply_chat_template(
+                    messages, tokenize=True, add_generation_prompt=False
+                )
             )
         except Exception:  # noqa: BLE001 — render failures are reported by template_render
             continue
-        if isinstance(ids, dict):
-            ids = ids.get("input_ids", [])
         lengths.append(float(len(ids)))
     if not lengths:
         return DoctorCheck(name="truncation_risk", verdict="OK", message="no rows to measure")

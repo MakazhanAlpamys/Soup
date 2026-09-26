@@ -10,13 +10,40 @@ Usage:
 from __future__ import annotations
 
 import json
+import os
 import secrets
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
 from soup_cli.utils.constants import EXPERIMENTS_DB, SOUP_DIR
+from soup_cli.utils.crash import redact_secrets
+from soup_cli.utils.process_liveness import process_is_alive as _process_is_alive
+
+# error_message is operator-facing text read in `soup runs show`, not a
+# diagnostic dump — capped well short of a full traceback so one runaway
+# stack trace can't bloat the runs table (#764/#767 review).
+_MAX_ERROR_MESSAGE_CHARS = 2000
+
+# Run status values this module reconciles. A watcher that never unwound (its
+# daemon thread was killed when the MCP server exited) leaves the run at
+# _STATUS_RUNNING forever. Reconcile-on-read rewrites such a row to
+# _STATUS_TERMINATED with an unknown (None) exit code so a lost outcome is never
+# mistaken for success. See issue #401.
+_STATUS_RUNNING = "running"
+_STATUS_TERMINATED = "terminated"
+_STATUS_LAUNCHING = "launching"
+
+
+class ActiveLaunchingRunError(RuntimeError):
+    """A stale launching row still identifies a live child process."""
+
+    def __init__(self, run_id: str, pid: int):
+        self.run_id = run_id
+        self.pid = pid
+        super().__init__(f"launching run {run_id} still has live PID {pid}")
+
 
 _SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS runs (
@@ -41,7 +68,8 @@ CREATE TABLE IF NOT EXISTS runs (
     pid             INTEGER,
     command_digest  TEXT,
     log_path        TEXT,
-    exit_code       INTEGER
+    exit_code       INTEGER,
+    error_message   TEXT
 );
 
 CREATE TABLE IF NOT EXISTS metrics (
@@ -50,6 +78,7 @@ CREATE TABLE IF NOT EXISTS metrics (
     step      INTEGER NOT NULL,
     epoch     REAL,
     loss      REAL,
+    val_loss  REAL,
     lr        REAL,
     grad_norm REAL,
     speed     REAL,
@@ -99,7 +128,6 @@ CREATE INDEX IF NOT EXISTS idx_forgetting_run_id ON forgetting_eval(run_id);
 
 def _get_db_path() -> Path:
     """Return path to experiments DB, creating parent dir if needed."""
-    import os
 
     # Allow override via env var (useful for tests and CI)
     env_path = os.environ.get("SOUP_DB_PATH")
@@ -136,23 +164,37 @@ class ExperimentTracker:
     def _ensure_schema(self) -> None:
         """Create tables if they don't exist.
 
-        Lazy migration adds the v0.34.0 cost columns to legacy DBs. The
+        Lazy migration adds the v0.34.0 cost columns and the ``val_loss``
+        metrics column to legacy DBs -- ``~/.soup/experiments.db`` exists on
+        every machine that has ever run ``soup train``, so the schema is
+        upgraded in place rather than assumed. Each column is gated on its own
+        table's ``PRAGMA table_info``, so a second run is a no-op rather than a
+        caught exception. The
         ALTER TABLE calls are guarded against the "duplicate column" race
         that can occur when two processes start simultaneously on the same
         DB (fork-based multi-GPU training, TUI auto-refresh, etc.).
         """
         conn = self._get_conn()
         conn.executescript(_SCHEMA_SQL)
-        for column, ddl in (
-            ("cost_usd", "ALTER TABLE runs ADD COLUMN cost_usd REAL"),
-            ("cost_gpu_label", "ALTER TABLE runs ADD COLUMN cost_gpu_label TEXT"),
-            ("run_kind", "ALTER TABLE runs ADD COLUMN run_kind TEXT NOT NULL DEFAULT 'train'"),
-            ("pid", "ALTER TABLE runs ADD COLUMN pid INTEGER"),
-            ("command_digest", "ALTER TABLE runs ADD COLUMN command_digest TEXT"),
-            ("log_path", "ALTER TABLE runs ADD COLUMN log_path TEXT"),
-            ("exit_code", "ALTER TABLE runs ADD COLUMN exit_code INTEGER"),
+        for table, column, ddl in (
+            ("runs", "cost_usd", "ALTER TABLE runs ADD COLUMN cost_usd REAL"),
+            ("runs", "cost_gpu_label", "ALTER TABLE runs ADD COLUMN cost_gpu_label TEXT"),
+            ("runs", "run_kind",
+             "ALTER TABLE runs ADD COLUMN run_kind TEXT NOT NULL DEFAULT 'train'"),
+            ("runs", "pid", "ALTER TABLE runs ADD COLUMN pid INTEGER"),
+            ("runs", "command_digest", "ALTER TABLE runs ADD COLUMN command_digest TEXT"),
+            ("runs", "log_path", "ALTER TABLE runs ADD COLUMN log_path TEXT"),
+            ("runs", "exit_code", "ALTER TABLE runs ADD COLUMN exit_code INTEGER"),
+            ("runs", "error_message", "ALTER TABLE runs ADD COLUMN error_message TEXT"),
+            # Deliberately nullable with no default: a row written before this
+            # column existed has no evaluation loss, and NULL says so. A 0.0
+            # would read as a measurement nobody took.
+            ("metrics", "val_loss", "ALTER TABLE metrics ADD COLUMN val_loss REAL"),
         ):
-            existing = {row[1] for row in conn.execute("PRAGMA table_info(runs)").fetchall()}
+            existing = {
+                row[1]
+                for row in conn.execute(f"PRAGMA table_info({table})").fetchall()
+            }
             if column in existing:
                 continue
             try:
@@ -253,6 +295,49 @@ class ExperimentTracker:
         )
         conn.commit()
 
+    def expunge_stale_launching_runs(self, *, older_than_seconds: int) -> list[str]:
+        """Delete stale MCP launching rows unless one still has a live PID.
+
+        The write transaction keeps ``mark_running`` from racing the liveness
+        check and deletion. If any candidate has a live PID, nothing is
+        removed: the operator must resolve that process before retrying.
+        """
+        if (
+            not isinstance(older_than_seconds, int)
+            or isinstance(older_than_seconds, bool)
+            or older_than_seconds < 1
+        ):
+            raise ValueError("older_than_seconds must be a positive integer")
+
+        cutoff = (datetime.now() - timedelta(seconds=older_than_seconds)).isoformat()
+        conn = self._get_conn()
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            rows = conn.execute(
+                """SELECT run_id, pid FROM runs
+                   WHERE status = ? AND created_at <= ?
+                   ORDER BY created_at, rowid""",
+                (_STATUS_LAUNCHING, cutoff),
+            ).fetchall()
+            for row in rows:
+                pid = row["pid"]
+                if pid is not None and _process_is_alive(pid):
+                    raise ActiveLaunchingRunError(row["run_id"], pid)
+
+            removed = [str(row["run_id"]) for row in rows]
+            for run_id in removed:
+                conn.execute("DELETE FROM metrics WHERE run_id = ?", (run_id,))
+                conn.execute("DELETE FROM eval_results WHERE run_id = ?", (run_id,))
+                conn.execute(
+                    "DELETE FROM runs WHERE run_id = ? AND status = ?",
+                    (run_id, _STATUS_LAUNCHING),
+                )
+            conn.commit()
+            return removed
+        except Exception:
+            conn.rollback()
+            raise
+
     def log_metrics(
         self,
         run_id: str,
@@ -260,18 +345,24 @@ class ExperimentTracker:
         epoch: float = 0.0,
         loss: float = 0.0,
         lr: float = 0.0,
-        grad_norm: float = 0.0,
+        grad_norm: Optional[float] = None,
         speed: float = 0.0,
         gpu_mem: str = "",
+        val_loss: Optional[float] = None,
     ) -> None:
-        """Log a single metrics row for the given run."""
+        """Log a single metrics row for the given run.
+
+        ``val_loss`` and ``grad_norm`` default to ``None`` rather than ``0.0``:
+        an omitted measurement must not look like a genuinely measured zero.
+        """
         now = datetime.now().isoformat()
         conn = self._get_conn()
         conn.execute(
             """INSERT INTO metrics
-               (run_id, step, epoch, loss, lr, grad_norm, speed, gpu_mem, timestamp)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (run_id, step, epoch, loss, lr, grad_norm, speed, gpu_mem, now),
+               (run_id, step, epoch, loss, val_loss, lr, grad_norm, speed,
+                gpu_mem, timestamp)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (run_id, step, epoch, loss, val_loss, lr, grad_norm, speed, gpu_mem, now),
         )
         conn.commit()
 
@@ -325,11 +416,48 @@ class ExperimentTracker:
         )
         conn.commit()
 
-    def fail_run(self, run_id: str) -> None:
-        """Mark run as failed."""
+    def fail_run(self, run_id: str, *, error: Optional[str] = None) -> None:
+        """Mark run as failed, optionally recording why (#764).
+
+        ``error`` distinguishes a run that never got past setup from one that
+        diverged mid-training — both used to read as an identical 'failed'
+        row with nothing else to go on. Redacted and length-capped before
+        storage: an exception message can embed a token from a failed HF/hub
+        auth call, and this column must not become the place secrets leak
+        into a locally-readable database (#764/#767 review).
+        """
         conn = self._get_conn()
-        conn.execute("UPDATE runs SET status = 'failed' WHERE run_id = ?", (run_id,))
+        if error is not None:
+            error = redact_secrets(error)
+            if len(error) > _MAX_ERROR_MESSAGE_CHARS:
+                error = error[:_MAX_ERROR_MESSAGE_CHARS] + "...(truncated)"
+        conn.execute(
+            "UPDATE runs SET status = 'failed', error_message = ? WHERE run_id = ?",
+            (error, run_id),
+        )
         conn.commit()
+
+    def _reconcile_orphaned_run(self, run: dict) -> dict:
+        """Rewrite a stale 'running' row whose process is gone (issue #401).
+
+        Only MCP-spawned runs carry a pid; a run recorded without one is left
+        untouched because its liveness cannot be checked here. A dead pid is
+        persisted as _STATUS_TERMINATED with exit_code None (unknown) through
+        finish_execution, whose guard keeps a richer 'completed'/'failed'
+        terminal status intact and makes the rewrite idempotent.
+        """
+        pid = run.get("pid")
+        if (
+            run.get("status") == _STATUS_RUNNING
+            and pid is not None
+            and not _process_is_alive(pid)
+        ):
+            self.finish_execution(
+                run["run_id"], status=_STATUS_TERMINATED, exit_code=None
+            )
+            run["status"] = _STATUS_TERMINATED
+            run["exit_code"] = None
+        return run
 
     def list_runs(self, limit: int = 50) -> list[dict]:
         """Return list of runs ordered by created_at desc."""
@@ -337,7 +465,20 @@ class ExperimentTracker:
         rows = conn.execute(
             "SELECT * FROM runs ORDER BY created_at DESC, rowid DESC LIMIT ?", (limit,)
         ).fetchall()
-        return [dict(row) for row in rows]
+        return [self._reconcile_orphaned_run(dict(row)) for row in rows]
+
+    def list_active_execution_runs(self) -> list[dict]:
+        """Return every 'launching' or 'running' run, newest first, with no limit.
+
+        The MCP one-active-execution cap reads this rather than ``list_runs``,
+        whose 50-row window lets an older live run fall out of view.
+        """
+        conn = self._get_conn()
+        rows = conn.execute(
+            "SELECT * FROM runs WHERE status IN ('launching', 'running') "
+            "ORDER BY created_at DESC, rowid DESC"
+        ).fetchall()
+        return [self._reconcile_orphaned_run(dict(row)) for row in rows]
 
     def get_run(self, run_id: str) -> Optional[dict]:
         """Get full details of a single run. Supports prefix matching."""
@@ -365,7 +506,7 @@ class ExperimentTracker:
             elif len(rows) > 1:
                 return None  # ambiguous prefix
 
-        return dict(row) if row else None
+        return self._reconcile_orphaned_run(dict(row)) if row else None
 
     def get_metrics(self, run_id: str) -> list[dict]:
         """Get all metric rows for a run, ordered by step."""
@@ -446,7 +587,17 @@ class ExperimentTracker:
     ) -> None:
         """Save an evaluation result."""
         now = datetime.now().isoformat()
-        details_json = json.dumps(details, default=str)
+        # #404 — stamp scorer provenance so registry:// baselines can be checked.
+        if not isinstance(details, dict):
+            raise TypeError(
+                f"details must be a dict, got {type(details).__name__}"
+            )
+        stamped_details = dict(details)
+        if "provenance" not in stamped_details:
+            from soup_cli.eval.gate import current_baseline_stamp
+
+            stamped_details["provenance"] = current_baseline_stamp()
+        details_json = json.dumps(stamped_details, default=str)
         conn = self._get_conn()
         conn.execute(
             """INSERT INTO eval_results

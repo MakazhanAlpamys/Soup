@@ -18,6 +18,8 @@ import re
 from dataclasses import dataclass
 from typing import Any, Iterable, List, Optional, Set, Tuple
 
+from soup_cli.utils.safe_regex import check_config_regex
+
 MAX_LR_GROUPS = 32
 _MAX_PATTERN_LEN = 256
 _LR_LOWER_EXCLUSIVE = 0.0
@@ -114,24 +116,14 @@ def _validate_pattern(raw: object) -> str:
             f"lr_groups pattern exceeds {_MAX_PATTERN_LEN} chars"
         )
     try:
-        compiled = re.compile(raw)
+        re.compile(raw)
     except re.error as exc:
         raise ValueError(
             f"lr_groups pattern {raw!r} is not a valid regex: {exc}"
         ) from None
-    # Best-effort ReDoS probe: a 256-char pattern compiled against a
-    # 128-char benign sample completes in microseconds for sane regexes.
-    # Catastrophic-backtracking patterns like ``(a+)+`` will hang on
-    # this synthetic input. We bound the work via signal-free timing
-    # (Python's re has no timeout pre-3.11). The probe is a sanity
-    # check, not a hard guarantee — the 256-char length cap above is
-    # the primary defence.
-    try:
-        compiled.search("a" * 128)
-    except re.error as exc:  # pragma: no cover — runtime regex errors
-        raise ValueError(
-            f"lr_groups pattern {raw!r} failed runtime probe: {exc}"
-        ) from None
+    # Structural check, never a probe match: running a pattern that can
+    # backtrack super-linearly is exactly what must not happen here.
+    check_config_regex(raw, "training.lr_groups")
     return raw
 
 

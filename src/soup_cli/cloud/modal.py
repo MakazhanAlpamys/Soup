@@ -7,7 +7,13 @@ base64-embedded — no code interpolation, no secrets) that:
 
 1. builds an image with ``soup-cli[train]`` pinned to the running version,
 2. writes the embedded config to ``/root/soup.yaml`` inside the container,
-3. runs ``soup train --config /root/soup.yaml --yes`` on the chosen GPU.
+3. runs ``soup train --config /root/soup.yaml --yes`` on the chosen GPU, with
+   its working directory on the named ``soup-outputs`` Modal volume
+   (``/outputs/<run name>``), so the config's relative ``output`` survives the
+   container; the volume is committed even when training fails,
+4. downloads every file under that run directory into the local output
+   directory when the run ends (also after a failed run) and prints the
+   ``modal volume get`` command that retries the download.
 
 Default behaviour is **plan-only**: write the stub + print the planned
 ``modal run`` command (matching the ``soup quantize`` / ``soup agent train``
@@ -32,18 +38,22 @@ from __future__ import annotations
 import base64
 import os
 import re
+import secrets
 import types
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
 from typing import Optional
 
-_MAX_NAME_LEN = 32
-_MAX_PATH_LEN = 4096
-_MAX_VERSION_LEN = 64
-_MAX_CONFIG_BYTES = 1_000_000  # 1 MiB cap on the embedded soup.yaml
-# PEP 440-ish version shape — defence-in-depth so a crafted soup_version can't
-# break out of the embedded ``pip_install("soup-cli[train]==<ver>")`` string.
-_VERSION_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.+_-]*$")
+from soup_cli.cloud._common import (
+    _MAX_CONFIG_BYTES,
+    _MAX_VERSION_LEN,
+    _VERSION_RE,
+    CloudPlan,
+    validate_choice,
+    write_cloud_stub,
+)
+from soup_cli.cloud._common import (
+    validate_path_shape as _validate_path_shape,
+)
 
 SUPPORTED_CLOUDS: frozenset[str] = frozenset({"modal"})
 
@@ -60,6 +70,13 @@ _GPU_MODAL_NAME: Mapping[str, str] = types.MappingProxyType({
 })
 SUPPORTED_GPUS: frozenset[str] = frozenset(_GPU_MODAL_NAME)
 
+# Named Modal volume the rendered app writes run outputs to. Each run gets its
+# own top-level directory, so concurrent runs never overwrite each other.
+MODAL_OUTPUT_VOLUME = "soup-outputs"
+# Run names become a volume directory AND a repr()-embedded literal in the stub,
+# so they are restricted to a closed alphabet.
+_RUN_NAME_RE = re.compile(r"[a-z0-9][a-z0-9-]{0,62}")
+
 # Test / advanced-operator seam — replaces the live submit. Signature mirrors
 # :func:`submit_modal_run` body -> returns an int exit code.
 _MODAL_SUBMIT_OVERRIDE: Optional[Callable[["CloudPlan"], int]] = None
@@ -67,65 +84,12 @@ _MODAL_SUBMIT_OVERRIDE: Optional[Callable[["CloudPlan"], int]] = None
 
 def validate_cloud(name: object) -> str:
     """Validate + normalise a ``--cloud`` provider name (closed allowlist)."""
-    if isinstance(name, bool):
-        raise ValueError("cloud must be a string, got bool")
-    if not isinstance(name, str):
-        raise ValueError(f"cloud must be a string, got {type(name).__name__}")
-    if not name:
-        raise ValueError("cloud must be a non-empty string")
-    if "\x00" in name:
-        raise ValueError("cloud must not contain null bytes")
-    if len(name) > _MAX_NAME_LEN:
-        raise ValueError(f"cloud exceeds {_MAX_NAME_LEN} chars")
-    normalised = name.lower()
-    if normalised not in SUPPORTED_CLOUDS:
-        raise ValueError(
-            f"cloud={name!r} is not supported. "
-            f"Valid: {sorted(SUPPORTED_CLOUDS)}"
-        )
-    return normalised
+    return validate_choice(name, "cloud", SUPPORTED_CLOUDS)
 
 
 def validate_gpu(gpu: object) -> str:
     """Validate + normalise a ``--gpu`` type against the Modal allowlist."""
-    if isinstance(gpu, bool):
-        raise ValueError("gpu must be a string, got bool")
-    if not isinstance(gpu, str):
-        raise ValueError(f"gpu must be a string, got {type(gpu).__name__}")
-    if not gpu:
-        raise ValueError("gpu must be a non-empty string")
-    if "\x00" in gpu:
-        raise ValueError("gpu must not contain null bytes")
-    if len(gpu) > _MAX_NAME_LEN:
-        raise ValueError(f"gpu exceeds {_MAX_NAME_LEN} chars")
-    normalised = gpu.lower()
-    if normalised not in SUPPORTED_GPUS:
-        raise ValueError(
-            f"gpu={gpu!r} is not supported. Valid: {sorted(SUPPORTED_GPUS)}"
-        )
-    return normalised
-
-
-def _validate_path_shape(value: object, field: str) -> str:
-    if not isinstance(value, str) or not value:
-        raise ValueError(f"{field} must be a non-empty string")
-    if "\x00" in value or "\n" in value or "\r" in value:
-        raise ValueError(f"{field} must not contain NUL / newline")
-    if len(value) > _MAX_PATH_LEN:
-        raise ValueError(f"{field} exceeds {_MAX_PATH_LEN} chars")
-    return value
-
-
-@dataclass(frozen=True)
-class CloudPlan:
-    """A rendered cloud-training plan (plan-only by default)."""
-
-    cloud: str
-    gpu: str
-    output_dir: str
-    stub_path: str
-    stub_text: str
-    run_command: str
+    return validate_choice(gpu, "gpu", SUPPORTED_GPUS)
 
 
 def render_modal_stub(
@@ -134,12 +98,22 @@ def render_modal_stub(
     gpu: str,
     output_dir: str,
     soup_version: str,
+    run_name: str | None = None,
 ) -> str:
     """Render the Modal app stub for ``config_yaml`` (v0.71.18 #16).
 
     ``config_yaml`` is base64-embedded as data (no interpolation). ``gpu``
-    is validated + mapped to Modal's name. Returns the stub source text.
+    is validated + mapped to Modal's name. ``run_name`` names the run's
+    directory on the ``soup-outputs`` volume (default: ``soup-<12 hex>``) and
+    must match ``[a-z0-9][a-z0-9-]{0,62}``. Returns the stub source text.
     """
+    if run_name is None:
+        run_name = f"soup-{secrets.token_hex(6)}"
+    if not isinstance(run_name, str) or not _RUN_NAME_RE.fullmatch(run_name):
+        raise ValueError(
+            f"run_name must match {_RUN_NAME_RE.pattern} (lower-case letters, "
+            "digits and '-', at most 63 chars)"
+        )
     if not isinstance(config_yaml, str):
         raise TypeError("config_yaml must be a string")
     encoded = config_yaml.encode("utf-8")
@@ -163,8 +137,9 @@ def render_modal_stub(
     # (defence-in-depth on top of the _VERSION_RE allowlist above).
     pip_spec = f"soup-cli[train]=={soup_version}"
 
-    # Built by concatenation so there is no triple-quote / brace escaping; the
-    # only embedded user-derived value is the base64 blob (injection-free).
+    # Built by concatenation so there is no triple-quote / brace escaping. The
+    # embedded values are the base64 blob and repr()-embedded literals only
+    # (output_dir, run_name from a closed alphabet, the volume constant).
     return (
         '"""Auto-generated by `soup train --cloud modal` (v0.71.18 #16).\n'
         "Run with: modal run soup_modal_app.py\n"
@@ -176,32 +151,99 @@ def render_modal_stub(
         "import modal\n"
         "\n"
         f'_CONFIG_B64 = "{cfg_b64}"\n'
-        f'_LOCAL_OUTPUT = {output_dir!r}\n'
+        f"_LOCAL_OUTPUT = {output_dir!r}\n"
+        f"_RUN_NAME = {run_name!r}\n"
+        f"_VOLUME_NAME = {MODAL_OUTPUT_VOLUME!r}\n"
+        '_REMOTE_ROOT = "/outputs"\n'
+        '_CONFIG_PATH = "/root/soup.yaml"\n'
         "\n"
         'app = modal.App("soup-train")\n'
         "image = modal.Image.debian_slim().pip_install(\n"
         f"    {pip_spec!r}\n"
         ")\n"
+        "outputs = modal.Volume.from_name(_VOLUME_NAME, create_if_missing=True)\n"
         "\n"
-        f'@app.function(image=image, gpu="{modal_gpu}", timeout=86400)\n'
+        "\n"
+        "@app.function(\n"
+        f'    image=image, gpu="{modal_gpu}", timeout=86400,'
+        " volumes={_REMOTE_ROOT: outputs}\n"
+        ")\n"
         "def train() -> None:\n"
+        "    # The config's relative `output` resolves against this directory,\n"
+        "    # which lives on the volume and therefore outlives the container.\n"
+        "    run_dir = pathlib.Path(_REMOTE_ROOT) / _RUN_NAME\n"
+        "    run_dir.mkdir(parents=True, exist_ok=True)\n"
         '    cfg = base64.b64decode(_CONFIG_B64).decode("utf-8")\n'
-        '    pathlib.Path("/root/soup.yaml").write_text(cfg)\n'
-        "    subprocess.run(\n"
-        '        ["soup", "train", "--config", "/root/soup.yaml", "--yes"],\n'
-        "        check=True,\n"
+        "    pathlib.Path(_CONFIG_PATH).write_text(cfg)\n"
+        "    try:\n"
+        "        subprocess.run(\n"
+        '            ["soup", "train", "--config", _CONFIG_PATH, "--yes"],\n'
+        "            check=True,\n"
+        "            cwd=str(run_dir),\n"
+        "        )\n"
+        "    finally:\n"
+        "        outputs.commit()\n"
+        "\n"
+        "\n"
+        "def _is_file(entry) -> bool:\n"
+        "    return entry.type == modal.volume.FileEntryType.FILE\n"
+        "\n"
+        "\n"
+        "def _download(prefix: str, local_root: str) -> int:\n"
+        "    root = pathlib.Path(local_root).resolve()\n"
+        "    count = 0\n"
+        "    for entry in outputs.listdir(prefix, recursive=True):\n"
+        "        if not _is_file(entry):\n"
+        "            continue\n"
+        "        # Volume paths may or may not carry a leading '/'; the entry's\n"
+        "        # path below the run directory is kept, '..' included, and the\n"
+        "        # RESOLVED destination must stay inside the local output root.\n"
+        '        rel = pathlib.PurePosixPath(entry.path.lstrip("/")).relative_to(\n'
+        '            prefix.strip("/")\n'
+        "        )\n"
+        "        dest = root.joinpath(*rel.parts).resolve()\n"
+        "        if root not in dest.parents:\n"
+        '            raise RuntimeError(f"refusing to write outside {root}: {entry.path}")\n'
+        "        dest.parent.mkdir(parents=True, exist_ok=True)\n"
+        '        with dest.open("wb") as handle:\n'
+        "            for chunk in outputs.read_file(entry.path):\n"
+        "                handle.write(chunk)\n"
+        "        count += 1\n"
+        "    return count\n"
+        "\n"
+        "\n"
+        # Only already-repr()-embedded names are referenced, through runtime
+        # f-strings in the GENERATED code — no user value is interpolated into
+        # the stub source here. (Interpolating raw ``{output_dir}`` was a code-
+        # injection hole; ``{output_dir!r}`` alone would still break for a path
+        # containing a quote because the repr is nested inside a "..." literal.)
+        "def _fetch_outputs() -> None:\n"
+        '    count = _download(f"/{_RUN_NAME}", _LOCAL_OUTPUT)\n'
+        "    print(\n"
+        '        f"Downloaded {count} file(s) from volume "\n'
+        '        f"{_VOLUME_NAME}/{_RUN_NAME} to {_LOCAL_OUTPUT}"\n'
+        "    )\n"
+        "    print(\n"
+        '        "Retry the download with: "\n'
+        '        f"modal volume get {_VOLUME_NAME} /{_RUN_NAME} {_LOCAL_OUTPUT} --force"\n'
+        '        f" (files land under {_LOCAL_OUTPUT}/{_RUN_NAME})"\n'
         "    )\n"
         "\n"
         "\n"
         "@app.local_entrypoint()\n"
         "def main() -> None:\n"
-        "    train.remote()\n"
-        # Reference the already-repr()-embedded ``_LOCAL_OUTPUT`` via a runtime
-        # f-string in the GENERATED code — no user value is interpolated into
-        # the stub source here. (Interpolating raw ``{output_dir}`` was a code-
-        # injection hole; ``{output_dir!r}`` alone would still break for a path
-        # containing a quote because the repr is nested inside a "..." literal.)
-        '    print(f"Training submitted; download checkpoints to {_LOCAL_OUTPUT}")\n'
+        "    try:\n"
+        "        train.remote()\n"
+        "    except BaseException:\n"
+        "        # Save whatever the failed run left on the volume, but never let a\n"
+        "        # download error (e.g. the run directory was never created)\n"
+        "        # replace the training error that explains the failure.\n"
+        "        try:\n"
+        "            _fetch_outputs()\n"
+        "        except Exception as exc:\n"
+        '            print(f"Could not download outputs after the failed run: {exc!r}")\n'
+        "        raise  # the training error, not the download error\n"
+        "    _fetch_outputs()\n"
     )
 
 
@@ -228,6 +270,13 @@ def plan_modal_run(
         raise ValueError(f"config exceeds {_MAX_CONFIG_BYTES} bytes")
     gpu_key = validate_gpu(gpu)
     _validate_path_shape(output_dir, "output_dir")
+    # output_dir is the LOCAL root the generated stub's _download() writes the
+    # remote run's files into. The stub keeps each downloaded ENTRY inside that
+    # root, but the root itself came straight from a shareable soup.yaml whose
+    # author need not be whoever runs it — an absolute or '..' path put remote
+    # bytes anywhere the user can write (_download() mkdirs on the way). Same
+    # containment requirement as config_path / stub_path at this call site.
+    enforce_under_cwd_and_no_symlink(output_dir, "output_dir")
     _validate_path_shape(stub_path, "stub_path")
     stub_text = render_modal_stub(
         config_yaml,
@@ -248,9 +297,7 @@ def plan_modal_run(
 
 def write_stub(plan: CloudPlan) -> str:
     """Write the plan's stub atomically under cwd; return the realpath."""
-    from soup_cli.utils.paths import atomic_write_text
-
-    return atomic_write_text(plan.stub_text, plan.stub_path, field="stub_path")
+    return write_cloud_stub(plan)
 
 
 def submit_modal_run(plan: CloudPlan, *, env: Optional[Mapping] = None) -> int:

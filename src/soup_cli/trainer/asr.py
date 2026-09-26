@@ -30,7 +30,9 @@ from typing import Any
 from rich.console import Console
 
 from soup_cli.config.schema import SoupConfig, TrainingConfig
+from soup_cli.trainer.loss_summary import summarize_training_loss
 from soup_cli.utils.gpu import bf16_fp16_flags
+from soup_cli.utils.mixed_precision import align_trainable_dtype_for_fp16
 from soup_cli.utils.seeding import apply_training_seed, training_seed_kwargs
 
 console = Console()
@@ -234,19 +236,17 @@ class AsrTrainerWrapper:
         # Optional LoRA on the attention q/v projections — opt-in via
         # ``training.asr_lora`` (default full-FT; tiny Whisper fits the dev box).
         if self._should_use_lora(tcfg):
-            from peft import LoraConfig, get_peft_model
+            from peft import get_peft_model
+
+            from soup_cli.utils.peft_wiring import build_lora_config
 
             target_modules = tcfg.lora.target_modules
             if target_modules == "auto":
                 target_modules = ["q_proj", "v_proj"]
-            lora_config = LoraConfig(
-                r=tcfg.lora.r,
-                lora_alpha=tcfg.lora.alpha,
-                lora_dropout=tcfg.lora.dropout,
+            lora_config = build_lora_config(
+                tcfg.lora,
                 target_modules=target_modules,
-                bias="none",
-                use_dora=tcfg.lora.use_dora,
-                use_rslora=tcfg.lora.use_rslora,
+                task_type=None,
             )
             self.model = get_peft_model(self.model, lora_config)
             self._lora_active = True
@@ -364,9 +364,21 @@ class AsrTrainerWrapper:
             train_dataset=train_ds,
             eval_dataset=eval_ds,
             data_collator=collator,
-            tokenizer=self.processor.feature_extractor,
+            processing_class=self.processor.feature_extractor,
         )
+
+        # #359 - the same exposure #336 fixed in sft.py: with LoRA the
+        # no-decay optimizer group is empty, DeepSpeed drops it, and the LR
+        # scheduler keeps two base_lrs until torch's strict zip raises at the
+        # first step. The guard prunes inside create_optimizer, i.e. before
+        # the scheduler is built. No-op for full fine-tuning, and only under
+        # DeepSpeed so the ordinary path keeps its own optimizer.
+        if self.deepspeed_config:
+            from soup_cli.utils.deepspeed import attach_empty_param_group_guard
+
+            attach_empty_param_group_guard(self.trainer)
         self._output_dir = str(output_dir)
+        self._batch_size = batch_size
 
     def _unwrapped_model(self) -> Any:
         """Return the underlying Whisper model (unwrap a PEFT wrapper)."""
@@ -401,17 +413,31 @@ class AsrTrainerWrapper:
             )
         start = time.time()
         if display is not None:
-            from soup_cli.monitoring.callback import SoupTrainerCallback
+            from soup_cli.monitoring.callback import (
+                SoupTrainerCallback,
+                soup_callback_kwargs,
+            )
 
             self.trainer.add_callback(
                 SoupTrainerCallback(
-                    display, tracker=tracker, run_id=run_id,
-                    loss_watchdog=self.config.training.loss_watchdog,
-                    loss_watchdog_threshold=self.config.training.loss_watchdog_threshold,
-                    loss_watchdog_patience=self.config.training.loss_watchdog_patience,
+                    display,
+                    tracker=tracker,
+                    run_id=run_id,
                     eval_gate_config=self.config.training.eval_gate,
+                    **soup_callback_kwargs(
+                        self.config.training,
+                        batch_size=self._batch_size,
+                        output_dir=self._output_dir,
+                        include_eval_gate=False,
+                    ),
                 )
             )
+        _asr_args = getattr(self.trainer, "args", None)
+        align_trainable_dtype_for_fp16(
+            getattr(self.trainer, "model", None),
+            fp16=getattr(_asr_args, "fp16", False),
+            bf16=getattr(_asr_args, "bf16", False),
+        )
         self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)
         duration = time.time() - start
 
@@ -427,14 +453,13 @@ class AsrTrainerWrapper:
             )
 
         logs = self.trainer.state.log_history
-        train_losses = [entry["loss"] for entry in logs if "loss" in entry]
+        loss_summary = summarize_training_loss(logs)
 
         hours = int(duration // 3600)
         minutes = int((duration % 3600) // 60)
         duration_str = f"{hours}h {minutes}m" if hours > 0 else f"{minutes}m"
         return {
-            "initial_loss": train_losses[0] if train_losses else 0,
-            "final_loss": train_losses[-1] if train_losses else 0,
+            **loss_summary,
             "duration": duration_str,
             "duration_secs": duration,
             "output_dir": self._output_dir,

@@ -24,9 +24,13 @@ from typing import Any, Optional
 from rich.console import Console
 
 from soup_cli.config.schema import SoupConfig
+from soup_cli.trainer.loss_summary import summarize_training_loss
+from soup_cli.utils.gpu import bf16_fp16_flags
+from soup_cli.utils.mixed_precision import align_trainable_dtype_for_fp16
 from soup_cli.utils.seeding import apply_training_seed, training_seed_kwargs
 
 logger = logging.getLogger(__name__)
+
 console = Console()
 
 
@@ -102,22 +106,15 @@ def build_prm_train_result(
     missing ``initial_loss`` / ``final_loss`` / ``duration`` / ``total_steps``,
     crashing the CLI with a ``KeyError`` right after ``save_model``.
     """
-    train_losses = [e["loss"] for e in log_history if isinstance(e, dict) and "loss" in e]
-    fallback = 0.0
-    if isinstance(metrics, dict):
-        try:
-            fallback = float(metrics.get("train_loss", 0.0))
-        except (TypeError, ValueError):
-            fallback = 0.0
-    initial = train_losses[0] if train_losses else fallback
-    final = train_losses[-1] if train_losses else fallback
+    loss_summary = summarize_training_loss(
+        log_history, metrics if isinstance(metrics, dict) else None
+    )
     hours = int(duration_secs // 3600)
     minutes = int((duration_secs % 3600) // 60)
     duration = f"{hours}h {minutes}m" if hours > 0 else f"{minutes}m"
     return {
         "status": "ok",
-        "initial_loss": initial,
-        "final_loss": final,
+        **loss_summary,
         "duration": duration,
         "duration_secs": duration_secs,
         "total_steps": global_step,
@@ -262,6 +259,11 @@ class PRMTrainerWrapper:
         base_model = AutoModelForCausalLM.from_pretrained(
             cfg.base,
             trust_remote_code=self._trust_remote_code,
+            # MPS PRM keeps fp32 master weights while TrainingArguments below
+            # autocasts the forward to bf16. Loading the trainable base itself
+            # as bf16 makes the Metal optimizer abort: its accumulator and
+            # destination matrix dtypes differ. CUDA retains its established
+            # bf16-parameter policy; CPU remains fp32.
             torch_dtype=torch.bfloat16 if self.device == "cuda" else torch.float32,
         )
         hidden_size = base_model.config.hidden_size
@@ -311,6 +313,7 @@ class PRMTrainerWrapper:
             bs = 1
         else:
             bs = tcfg.batch_size
+        use_bf16, use_fp16 = bf16_fp16_flags(self.device, allow_mps_bf16=True)
         args = TrainingArguments(
             output_dir=str(output_dir),
             num_train_epochs=tcfg.epochs,
@@ -320,6 +323,8 @@ class PRMTrainerWrapper:
             logging_steps=tcfg.logging_steps,
             save_steps=tcfg.save_steps,
             save_total_limit=3,
+            bf16=use_bf16,
+            fp16=use_fp16,
             report_to=self.report_to,
             remove_unused_columns=False,
             deepspeed=self.deepspeed_config,
@@ -339,8 +344,24 @@ class PRMTrainerWrapper:
             eval_dataset=eval_ds,
             data_collator=collator,
         )
+
+        # #359 - the same exposure #336 fixed in sft.py: with LoRA the
+        # no-decay optimizer group is empty, DeepSpeed drops it, and the LR
+        # scheduler keeps two base_lrs until torch's strict zip raises at the
+        # first step. The guard prunes inside create_optimizer, i.e. before
+        # the scheduler is built. No-op for full fine-tuning, and only under
+        # DeepSpeed so the ordinary path keeps its own optimizer.
+        if self.deepspeed_config:
+            from soup_cli.utils.deepspeed import attach_empty_param_group_guard
+
+            attach_empty_param_group_guard(self.trainer)
         console.print("[green]Starting PRM training...[/]")
         start = time.time()
+        align_trainable_dtype_for_fp16(
+            self.trainer.model,
+            fp16=getattr(self.trainer.args, "fp16", False),
+            bf16=getattr(self.trainer.args, "bf16", False),
+        )
         result = self.trainer.train()
         self.trainer.save_model(str(output_dir))
         # v0.71.30 — save the tokenizer alongside the model so the PRM

@@ -1525,9 +1525,7 @@ class TestCanaryManifest:
         with pytest.raises(ValueError, match="too many canaries"):
             load_manifest("big.json")
 
-    @pytest.mark.skipif(
-        not hasattr(__import__("os"), "symlink"), reason="POSIX only"
-    )
+    @pytest.mark.requires_symlink
     def test_symlinked_manifest_rejected(self, tmp_path, monkeypatch):
         import os
 
@@ -1536,10 +1534,7 @@ class TestCanaryManifest:
         monkeypatch.chdir(tmp_path)
         real = tmp_path / "real.json"
         real.write_text('{"canaries": []}', encoding="utf-8")
-        try:
-            os.symlink(real, tmp_path / "link.json")
-        except (OSError, NotImplementedError):
-            pytest.skip("symlink unavailable")
+        os.symlink(real, tmp_path / "link.json")
         with pytest.raises(ValueError):
             load_manifest("link.json")
 
@@ -2136,12 +2131,16 @@ class TestDataCanaryCli:
         """
         from pathlib import Path
 
+        from rich.console import Console
         from typer.testing import CliRunner
 
         from soup_cli.cli import app
         from soup_cli.commands import data_canary as cmd
 
         monkeypatch.chdir(tmp_path)
+        # Pin tty detection so the assertion tests the manifest sanitisation,
+        # not the ambient shell's colour forcing.
+        monkeypatch.setattr(cmd, "console", Console(force_terminal=False))
         evil = "7c3f\x1b]52;c;ZXZpbA==\x07-9a21"
         Path("m.json").write_text(
             json.dumps({"canaries": [{"carrier": "c", "secret": evil}]}),
@@ -2164,6 +2163,8 @@ class TestDataCanaryCli:
         assert "\x1b" not in res.output, (
             "a raw ESC byte from the manifest reached the terminal"
         )
+        # Paired visibility: stripped, not swallowed.
+        assert "]52;c;" in res.output
 
     def test_check_missing_manifest(self, tmp_path, monkeypatch):
         from typer.testing import CliRunner

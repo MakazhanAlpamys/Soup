@@ -1,0 +1,28 @@
+[
+  {
+    "schema": "soup.autodistill.consumption-event.v1",
+    "event_id": "consume-0001-reserve",
+    "sequence": 0,
+    "artifact_sha256": "0404040404040404040404040404040404040404040404040404040404040404",
+    "view": "student_rollout",
+    "from": "available",
+    "to": "reserved",
+    "run_id": "student-run-0001",
+    "reservation_id": "reservation-0001",
+    "checkpoint_sha256": null,
+    "replay_of": null
+  },
+  {
+    "schema": "soup.autodistill.consumption-event.v1",
+    "event_id": "consume-0001-commit",
+    "sequence": 1,
+    "artifact_sha256": "0404040404040404040404040404040404040404040404040404040404040404",
+    "view": "student_rollout",
+    "from": "reserved",
+    "to": "committed",
+    "run_id": "student-run-0001",
+    "reservation_id": "reservation-0001",
+    "checkpoint_sha256": "0505050505050505050505050505050505050505050505050505050505050505",
+    "replay_of": null
+  }
+]

@@ -70,9 +70,8 @@ class TestMerge4bitWiring:
                 forced=False,
             )
 
+    @pytest.mark.requires_symlink
     def test_rejects_symlink_output(self, tmp_path, monkeypatch):
-        if sys.platform == "win32":
-            pytest.skip("symlink rejection POSIX-only")
         from soup_cli.utils.save_formats import merge_4bit
 
         monkeypatch.chdir(tmp_path)
@@ -297,6 +296,59 @@ class TestMergeSaveFormatCLI:
         assert result.exit_code != 0
         assert "save_format" in result.output or "save-format" in result.output
 
+    def test_no_double_quant_flag_reaches_merge_4bit(self, tmp_path, monkeypatch):
+        """#321 re-review: the ``--no-double-quant`` CLI flag had ZERO coverage —
+        renaming it away left the suite green. Drive it end-to-end with the model
+        loads mocked and assert the value reaches ``merge_4bit``. Mutations:
+        deleting the flag makes the invocation error on an unknown option;
+        hardcoding ``double_quant=True`` at the call site fails the assertion."""
+        from unittest.mock import MagicMock, patch
+
+        from soup_cli.commands.merge import merge
+
+        monkeypatch.chdir(tmp_path)
+        adapter = tmp_path / "adapter"
+        adapter.mkdir()
+        (adapter / "adapter_config.json").write_text(
+            '{"base_model_name_or_path": "some/base"}', encoding="utf-8"
+        )
+        monkeypatch.setattr(
+            "soup_cli.utils.trust_remote.model_requires_trust_remote_code",
+            lambda *_a, **_k: False,
+        )
+        monkeypatch.setattr(
+            "soup_cli.utils.trust_remote.resolve_trust_remote_code",
+            lambda *_a, **_k: False,
+        )
+        fake_model = MagicMock()
+        fake_model.merge_and_unload.return_value = fake_model
+        captured = {}
+
+        app = typer.Typer()
+        app.command()(merge)
+        with patch(
+            "transformers.AutoModelForCausalLM.from_pretrained", return_value=fake_model
+        ), patch(
+            "peft.PeftModel.from_pretrained", return_value=fake_model
+        ), patch(
+            "transformers.AutoTokenizer.from_pretrained", return_value=MagicMock()
+        ), patch(
+            "soup_cli.utils.save_formats.merge_4bit",
+            side_effect=lambda **k: captured.update(k),
+        ):
+            result = runner.invoke(
+                app,
+                [
+                    "--adapter", str(adapter),
+                    "--base", "some/base",
+                    "--save-format", "4bit",
+                    "--output", str(tmp_path / "out"),
+                    "--no-double-quant",
+                ],
+            )
+        assert result.exit_code == 0, result.output
+        assert captured.get("double_quant") is False, captured
+
 
 # --- CLI plumbing for `soup export --format torchao` ------------------------
 
@@ -401,9 +453,8 @@ class TestValidateQuantConfigPath:
         with pytest.raises(ValueError, match="under cwd"):
             load_quant_config(str(outside))
 
+    @pytest.mark.requires_symlink
     def test_load_quant_config_yaml_symlink(self, tmp_path, monkeypatch):
-        if sys.platform == "win32":
-            pytest.skip("symlink rejection POSIX-only")
         from soup_cli.utils.save_formats import load_quant_config
 
         monkeypatch.chdir(tmp_path)
@@ -458,7 +509,6 @@ class TestTorchAOKwargAllowlist:
         fake_tokenizer = MagicMock()
         fake_torchao = MagicMock()
         fake_torchao.quantization.Int4WeightOnlyConfig.return_value = MagicMock()
-        fake_torchao.quantization.NVFP4Config.return_value = MagicMock()
         fake_torchao.quantize_ = MagicMock()
 
         original_torchao = sys.modules.get("torchao")
@@ -518,9 +568,7 @@ class TestTorchAOKwargAllowlist:
 
 
 class TestDetectPrequantizedSymlinkRejection:
-    @pytest.mark.skipif(
-        sys.platform == "win32", reason="symlink rejection POSIX-only"
-    )
+    @pytest.mark.requires_symlink
     def test_config_json_symlink_returns_none(self, tmp_path, monkeypatch):
         """Security regression — `config.json` as a symlink is refused."""
         from soup_cli.autopilot.decisions import detect_prequantized_format_from_path

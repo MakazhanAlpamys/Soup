@@ -1,9 +1,9 @@
-"""Kernel auto-composition — benchmark and pick the fastest kernel combo.
+"""Legacy kernel-combination enumeration and timing helpers.
 
-Enumerates installed performance kernels (Liger, FlashAttention, torch
-baseline) and picks the fastest combination for the current GPU. Benchmarks
-each candidate on a small warm-up loop and selects the one with the lowest
-observed step time.
+``training.kernel_auto_compose`` is rejected at config load because these
+helpers cannot change kernels on an already-loaded model. They are retained
+for compatibility with internal callers and tests, but their timings must not
+be presented as a comparison between kernel combinations.
 
 This is a config-resolver helper: the benchmarking loop is expected to be
 driven by the trainer wrapper (a few warm-up steps before the real train
@@ -129,7 +129,7 @@ def benchmark_kernel_combos(
     num_steps: int = 10,
     vocab_size: int = 32_000,
 ) -> list[dict[str, Any]]:
-    """Run a tiny forward+backward warm-up loop per candidate and record time_ms.
+    """Time repeated forward-only passes and record ``time_ms`` per entry.
 
     v0.35.0 #45 — closes the picker's "deterministic name-hash tiebreak"
     fallback by feeding it real measurements from the trainer's own model.
@@ -140,11 +140,9 @@ def benchmark_kernel_combos(
     set to ``None`` — :func:`pick_best_kernel` will reject the result and
     the caller is expected to degrade to picker-without-bench.
 
-    The benchmark intentionally does NOT swap kernels mid-loop (that would
-    require model re-instantiation per candidate which is too expensive on
-    CI-sized models). Instead we run identical forward+backward across
-    candidates and record the relative ordering — useful as a coarse
-    "did anything install correctly" health check.
+    The benchmark does not swap or apply candidate kernels: it times the same
+    already-loaded model for every entry. Consequently, results are not a
+    meaningful kernel comparison and must not be used to auto-select a config.
     """
     # bool is a subclass of int — reject explicitly so that True / False
     # don't sneak in as 1 / 0 (matches v0.30.0 Candidate / v0.34.0 cost

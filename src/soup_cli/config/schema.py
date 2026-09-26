@@ -9,8 +9,11 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 # runtime validator's message can never disagree (layer_stream has no torch).
 from soup_cli.utils.layer_stream import (
     DEFAULT_STREAM_BUFFERS,
+    DEFAULT_STREAM_READ_AHEAD,
     MAX_STREAM_BUFFERS,
+    MAX_STREAM_READ_AHEAD,
     MIN_STREAM_BUFFERS,
+    MIN_STREAM_READ_AHEAD,
 )
 from soup_cli.utils.layer_stream import (
     ROLLOUT_STREAM_TASKS as _STREAM_ROLLOUT_TASKS,
@@ -19,18 +22,48 @@ from soup_cli.utils.layer_stream import (
     SUPPORTED_STREAM_TASKS as _STREAM_SUPPORTED_TASKS,
 )
 
+# Stdlib-only structural check shared by every regex a config can carry.
+from soup_cli.utils.safe_regex import check_config_regex
+
+# Noise-floor bounds live with the ship verdict so the schema bound and the
+# `--noise-floor` CLI validator can never disagree (ship_verdict has no torch,
+# same reasoning as stream_buffers importing its bounds from layer_stream).
+from soup_cli.utils.ship_verdict import (
+    MAX_NOISE_FLOOR_RUNS,
+    MIN_NOISE_FLOOR_RUNS,
+)
+
 # v0.39.0 Part C — per-pattern LoRA rank/alpha bounds
 _MAX_LORA_RANK_PATTERN_KEYS = 256
 _MAX_LORA_RANK_PATTERN_VALUE = 1024
+_MAX_LORA_TARGET_PARAMETERS = 256
+_MAX_LORA_TARGET_PARAMETER_LEN = 512
+# One rank_pattern/alpha_pattern KEY is a regex peft matches against every
+# module name, so its length is bounded for the same reason the sibling regex
+# fields bound theirs (training.unfrozen_parameters at 512 chars, lr_groups at
+# 256): soup.yaml is shareable config, and the key-count cap above says how
+# MANY patterns it may carry, not how long a single one may be.
+_MAX_LORA_PATTERN_KEY_LEN = 512
+# How much of an over-long key the refusal quotes back: enough to recognise
+# which key it was, not enough to paste kilobytes into a terminal or a log.
+_MAX_LORA_PATTERN_KEY_SHOWN = 80
 
 # v0.71.23 #266 — Spectrum targeted-training unfrozen-parameter caps
 _MAX_UNFROZEN_PARAMETERS = 50_000
 _MAX_UNFROZEN_PATTERN_LEN = 512
-# Reject nested-unbounded-quantifier regexes — e.g. ``(x+)+y`` / ``(a*)*`` —
-# which catastrophically backtrack (ReDoS) when re.search'd against parameter
-# names in apply_unfrozen_parameters. soup.yaml is shareable config, so the
-# pattern *class* is rejected at parse time, not just compile failures.
-_UNFROZEN_REDOS_RE = re.compile(r"\([^)]*[+*][^)]*\)\s*[+*]")
+# Patterns whose structure allows super-linear backtracking — e.g. ``(x+)+y`` /
+# ``(.+){2,}z`` / ``(?:.|.)+z`` — would stall re.search against parameter names
+# in apply_unfrozen_parameters. soup.yaml is shareable config, so the pattern
+# *class* is refused at parse time by utils/safe_regex, not just compile failures.
+
+# v0.71.34 #267 / #307 — tasks whose transformers trainer wires LisaCallback.
+# LISA is full-FT of a rotating set of decoder layers, so a task only belongs
+# here once its trainer skips PEFT, keeps the model trainable, and calls
+# ``attach_lisa_callback``. Adding a task to this tuple without that wiring
+# would accept a config the trainer silently ignores.
+_LISA_SUPPORTED_TASKS = ("sft", "pretrain")
+# #725 — tasks whose transformers trainer wires attach_lorafa_optimizer.
+_LORAFA_SUPPORTED_TASKS = ("sft", "pretrain", "embedding")
 
 
 class LoraConfig(BaseModel):
@@ -47,7 +80,7 @@ class LoraConfig(BaseModel):
         ge=0,
         description=(
             "LoRA rank. 0 = full fine-tuning: no adapter, every base "
-            "parameter trains (sft + transformers + text + "
+            "parameter trains (sft / embedding + transformers + text + "
             "quantization='none' only)."
         ),
     )
@@ -56,6 +89,16 @@ class LoraConfig(BaseModel):
     target_modules: Union[str, List[str]] = Field(
         default="auto",
         description="Target modules for LoRA. 'auto' = let peft decide.",
+    )
+    target_parameters: Optional[Union[Literal["auto"], List[str]]] = Field(
+        default=None,
+        description=(
+            "Raw 2-D/3-D nn.Parameter tensors to adapt with PEFT LoRA. "
+            "Use 'auto' to select architecture-specific parameter targets "
+            "(currently Qwen4-Exp routed experts), a list of parameter-name "
+            "suffixes for explicit control, or omit to disable. Requires "
+            "dropout=0 and is wired for transformers SFT/pretrain."
+        ),
     )
     use_dora: bool = Field(
         default=False,
@@ -186,7 +229,7 @@ class LoraConfig(BaseModel):
 
     @field_validator("rank_pattern", "alpha_pattern", mode="before")
     @classmethod
-    def _validate_pattern_dict(cls, value) -> Optional[Dict[str, int]]:
+    def _validate_pattern_dict(cls, value, info) -> Optional[Dict[str, int]]:
         if value is None:
             return None
         if not isinstance(value, dict):
@@ -197,6 +240,7 @@ class LoraConfig(BaseModel):
                 f"got {len(value)}"
             )
         cleaned: Dict[str, int] = {}
+        field = f"lora.{info.field_name}"
         for key, val in value.items():
             if not isinstance(key, str) or not key:
                 raise ValueError(
@@ -204,6 +248,20 @@ class LoraConfig(BaseModel):
                 )
             if "\x00" in key:
                 raise ValueError("rank_pattern/alpha_pattern keys cannot contain null bytes")
+            if len(key) > _MAX_LORA_PATTERN_KEY_LEN:
+                shown = key[:_MAX_LORA_PATTERN_KEY_SHOWN]
+                raise ValueError(
+                    f"{field}: pattern {shown!r}... is {len(key)} characters, "
+                    f"over the {_MAX_LORA_PATTERN_KEY_LEN}-character cap"
+                )
+            # peft matches each key as a regex against every module name
+            # (peft.utils.other.get_pattern_key), so the key is held to the
+            # same complexity check as unfrozen_parameters / lr_groups.
+            try:
+                re.compile(key)
+            except re.error as exc:
+                raise ValueError(f"{field}: invalid regex {key!r}: {exc}") from None
+            check_config_regex(key, field)
             if isinstance(val, bool) or not isinstance(val, int):
                 raise ValueError(
                     f"rank_pattern/alpha_pattern values must be int, "
@@ -216,6 +274,67 @@ class LoraConfig(BaseModel):
                 )
             cleaned[key] = val
         return cleaned
+
+    @field_validator("target_parameters", mode="before")
+    @classmethod
+    def _validate_target_parameters(cls, value):
+        if value is None or value == "auto":
+            return value
+        if not isinstance(value, list):
+            raise ValueError("target_parameters must be 'auto', a list[str], or null")
+        if len(value) > _MAX_LORA_TARGET_PARAMETERS:
+            raise ValueError(
+                f"target_parameters caps at {_MAX_LORA_TARGET_PARAMETERS} entries, "
+                f"got {len(value)}"
+            )
+        cleaned: List[str] = []
+        seen = set()
+        for index, entry in enumerate(value):
+            if not isinstance(entry, str) or not entry.strip():
+                raise ValueError(
+                    f"target_parameters[{index}] must be a non-empty string"
+                )
+            target = entry.strip()
+            if target == "auto":
+                raise ValueError(
+                    "target_parameters: use scalar 'auto', not ['auto']"
+                )
+            if "\x00" in target:
+                raise ValueError("target_parameters entries cannot contain null bytes")
+            if len(target) > _MAX_LORA_TARGET_PARAMETER_LEN:
+                raise ValueError(
+                    "target_parameters entries cap at "
+                    f"{_MAX_LORA_TARGET_PARAMETER_LEN} characters"
+                )
+            if target not in seen:
+                cleaned.append(target)
+                seen.add(target)
+        return cleaned
+
+    @model_validator(mode="after")
+    def _validate_target_parameter_compat(self) -> "LoraConfig":
+        if not self.target_parameters:
+            return self
+        if self.dropout != 0:
+            raise ValueError(
+                "target_parameters requires lora.dropout=0 because PEFT cannot "
+                "apply dropout correctly to raw nn.Parameter tensors"
+            )
+        if self.use_dora:
+            raise ValueError(
+                "target_parameters is incompatible with use_dora=True in PEFT"
+            )
+        if self.use_vera:
+            raise ValueError(
+                "target_parameters is a LoRA-only PEFT feature and is incompatible "
+                "with use_vera=True"
+            )
+        if self.init_strategy != "random":
+            raise ValueError(
+                "target_parameters currently requires init_strategy='random'; "
+                "PiSSA, OLoRA, and LoftQ are not validated for raw 3-D parameters"
+            )
+        return self
 
     @model_validator(mode="after")
     def _validate_pattern_vera_exclusivity(self) -> "LoraConfig":
@@ -234,7 +353,38 @@ class LoraConfig(BaseModel):
 
 
 class DataConfig(BaseModel):
-    train: str = Field(..., description="Path to training data or HF dataset name")
+    train: Union[str, List[str]] = Field(
+        ...,
+        description=(
+            "Path to training data or HF dataset name, or a list of >= 2 "
+            "local file paths to combine via data.interleave. (#443)"
+        ),
+    )
+
+    @field_validator("train", mode="before")
+    @classmethod
+    def _validate_train_shape(cls, v):
+        if isinstance(v, str):
+            return v
+        if isinstance(v, list):
+            if len(v) == 0:
+                raise ValueError("data.train list must not be empty")
+            if len(v) == 1:
+                raise ValueError(
+                    "data.train list must have >= 2 entries for "
+                    "data.interleave — use a single string path for one "
+                    "dataset"
+                )
+            for i, entry in enumerate(v):
+                if not isinstance(entry, str) or not entry.strip():
+                    raise ValueError(
+                        f"data.train[{i}] must be a non-empty string"
+                    )
+            return v
+        raise ValueError(
+            "data.train must be a string or a list of strings "
+            f"(got {type(v).__name__})"
+        )
     format: Literal[
         "alpaca", "sharegpt", "chatml", "dpo", "kto", "llava", "sharegpt4v",
         "plaintext", "embedding", "audio", "tool-calling", "auto",
@@ -519,18 +669,19 @@ class DataConfig(BaseModel):
         ),
     )
     remove_unused_columns: bool = Field(
-        default=True,
+        default=False,
         description=(
-            "HF Trainer remove_unused_columns. Set False when feeding "
-            "extra cols to a custom collator. (v0.42.0 Part E)"
+            "HF Trainer remove_unused_columns. No trainer reads this field; the "
+            "trainers that set it pass False so a custom collator can still see "
+            "the extra columns. An explicit `true` loads with a warning and is "
+            "ignored, and a later release refuses it. (v0.42.0 Part E; #759)"
         ),
     )
     prompt_strategy: Optional[str] = Field(
         default=None,
         description=(
-            "Axolotl-style 'module.path:function_name' Python transform. "
-            "Schema-only in v0.42.0 — runtime invocation lands in v0.42.1. "
-            "(v0.42.0 Part E)"
+            "Axolotl-style 'module.path:function_name' Python transform, "
+            "resolved lazily and applied to each row during SFT formatting."
         ),
     )
     # ---- v0.61.0 Part A — Unlearning data sources --------------------------
@@ -661,10 +812,13 @@ class DataConfig(BaseModel):
     @field_validator("interleave")
     @classmethod
     def _validate_interleave_v042(cls, value):
-        # Shape validation only — full ``parse_interleave`` requires
-        # ``num_datasets`` which the trainer supplies at runtime. We accept
-        # None / str / dict here and reject obvious type errors so a YAML
-        # like ``data.interleave: 99`` fails loudly at config load.
+        # Shape validation only, independent of `train`. We accept None /
+        # str / dict here and reject obvious type errors so a YAML like
+        # ``data.interleave: 99`` fails loudly at config load. The full
+        # parse (which needs num_datasets = len(data.train)) now happens
+        # in SoupConfig._validate_interleave_compat below — num_datasets is
+        # a parse-time constant since #443 widened data.train to accept a
+        # list.
         if value is None:
             return None
         if isinstance(value, str):
@@ -730,6 +884,27 @@ class DataConfig(BaseModel):
                 "are mutually exclusive. Disable one. The per-message 'train' "
                 "field is opt-in for fine-grained per-message control."
             )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_mask_history_has_a_mask_to_narrow(self) -> "DataConfig":
+        # #761: mask_history narrows the assistant-only loss mask to its LAST
+        # span. Without that mask there is nothing to narrow, and the two
+        # readings of "mask the history" (train on nothing but the last turn,
+        # or train on everything as asked) contradict each other. Refuse at
+        # parse naming both fields rather than picking one silently.
+        if self.mask_history and not self.train_on_responses_only:
+            raise ValueError(
+                "data.mask_history requires data.train_on_responses_only: true "
+                "— it masks all but the LAST assistant turn, and only the "
+                "assistant-only path marks assistant turns. With "
+                "train_on_responses_only: false every token trains, including "
+                "the history mask_history asks to exclude."
+            )
+        # train_on_messages_with_train_field needs no clause of its own: it is
+        # already mutually exclusive with train_on_responses_only
+        # (_validate_loss_mask_exclusivity), so the requirement above refuses
+        # that pair transitively. A second clause here would be unreachable.
         return self
 
     @model_validator(mode="after")
@@ -810,6 +985,29 @@ class DataConfig(BaseModel):
                 "at a cache directory produced by `soup data preprocess`."
             )
         return self
+
+    @field_validator("remove_unused_columns", mode="after")
+    @classmethod
+    def _ignore_remove_unused_columns_true(cls, value: bool) -> bool:
+        """``true`` never took effect: warn, and load it as ``false`` (#759).
+
+        No trainer reads this field; the trainers that set the HF argument pass
+        ``False`` so a custom collator still receives the columns the model's
+        ``forward()`` does not name. The declared default used to say ``True``,
+        so ``soup autopilot`` wrote ``remove_unused_columns: true`` into every
+        config it generated. Refusing that would break files Soup wrote itself,
+        so for one release an explicit ``true`` loads, is ignored, and says so.
+        The release that refuses it is named once, in ``config/deprecation.py``.
+        """
+        if value:
+            from soup_cli.config.deprecation import warn_deprecated_value
+
+            warn_deprecated_value(
+                "data.remove_unused_columns: true has no effect and is ignored "
+                "(no trainer reads it; the trainers that set it pass false). "
+                "Delete the line."
+            )
+        return False
 
 
 class AdviseConfig(BaseModel):
@@ -1004,7 +1202,7 @@ class TrainingConfig(BaseModel):
             "aqlm (extreme 2-bit), eetq (8-bit fast), "
             "mxfp4 (BNB 4-bit MXFP4 quant_type), "
             "fp8 (load FP8 checkpoint with dequantize-on-load), "
-            "bitnet_1.58 (BitNet ternary, v0.52.0 schema-only)."
+            "bitnet_1.58 (reserved until BitNet trainer routing is available)."
         ),
     )
     gptq_disable_exllama: bool = Field(
@@ -1019,16 +1217,17 @@ class TrainingConfig(BaseModel):
     ] = Field(
         default=None,
         description=(
-            "v0.38.0 Part G — BNB 4-bit storage dtype. Required for FSDP+QLoRA "
-            "(set to 'bfloat16' or 'float16' to match compute dtype). "
-            "When None, BNB picks 'uint8' (legacy default)."
+            "v0.38.0 Part G — BNB 4-bit storage dtype. FSDP+QLoRA resolves "
+            "this automatically to the effective floating compute dtype; "
+            "outside FSDP, None keeps BNB's legacy uint8 default."
         ),
     )
-    quantization_aware: Union[bool, Literal["fp8"]] = Field(
+    quantization_aware: Union[bool, Literal["fp8", "quest"]] = Field(
         default=False,
         description=(
             "Quantization-Aware Training. False=off, True=int8 QAT (torchao), "
-            "'fp8'=FP8 training on H100/B100 (v0.28.0)."
+            "'fp8'=FP8 training on H100/B100 (v0.28.0), "
+            "'quest'=experimental mixed W4/A4+A16 QuEST route (#674)."
         ),
     )
     fp8_recipe: Literal["tensorwise", "rowwise", "rowwise_with_gw_hp"] = Field(
@@ -1063,8 +1262,7 @@ class TrainingConfig(BaseModel):
         default=None, ge=1, le=64,
         description=(
             "LLaMA Pro: append N zero-init transformer blocks and freeze "
-            "the original ones. Schema lands in v0.41.0 — full live wiring "
-            "deferred to v0.41.1."
+            "the original ones before SFT or pre-training."
         ),
     )
     freeze_trainable_layers: Optional[int] = Field(
@@ -1369,8 +1567,8 @@ class TrainingConfig(BaseModel):
         description=(
             "GRPO objective variant: standard | gspo | dapo | dr_grpo | "
             "bnpo | two_sided | rft. Defaults to None (legacy GRPO). "
-            "Requires task='grpo'. Live wiring for v0.50.0 additions is "
-            "deferred to v0.50.1 (schema gate only)."
+            "Requires task='grpo'; the selected loss is installed by the "
+            "GRPO trainer."
         ),
     )
     grpo_delta: Optional[float] = Field(
@@ -1378,17 +1576,17 @@ class TrainingConfig(BaseModel):
         gt=0.0,
         le=1.0,
         description=(
-            "Symmetric clipping radius for grpo_variant='two_sided'. "
-            "Required when grpo_variant='two_sided'; rejected otherwise."
+            "Symmetric clipping radius for grpo_variant='two_sided' (required) "
+            "or grpo_variant='gspo' (optional sequence clipping radius, "
+            "defaults to 0.2). Rejected for all other variants."
         ),
     )
     grpo_fp16: bool = Field(
         default=False,
         description=(
-            "Force FP16 mixed precision for GRPO/RL. Soup currently has "
-            "FP8 RL support; this flag is the explicit FP16 opt-in (unsloth "
-            "parity). v0.50.0: schema-only; live mixed-precision routing "
-            "deferred to v0.50.1."
+            "Force FP16 mixed precision for GRPO/RL (unsloth parity). "
+            "On CUDA, the GRPO trainer forwards fp16=True and bf16=False; "
+            "on non-CUDA devices this flag does not enable FP16."
         ),
     )
     # v0.50.0 Part B — Long-context + memory-efficient RL
@@ -1396,9 +1594,9 @@ class TrainingConfig(BaseModel):
         default=False,
         description=(
             "Enable long-context GRPO (unsloth: 380K B200 / 110K H100). "
-            "Wires Tiled MLP from v0.56.0 Part A; schema-only in v0.50.0. "
-            "Requires task='grpo' on a non-mlx backend and "
-            "use_ring_attention=False (both rewrite attention)."
+            "Compatibility validation only: no trainer consumes this flag "
+            "yet. Requires task='grpo' on a non-mlx backend and "
+            "use_ring_attention=False."
         ),
     )
     vllm_sleep_mode: bool = Field(
@@ -1406,8 +1604,8 @@ class TrainingConfig(BaseModel):
         description=(
             "Enable vLLM sleep/standby between rollouts (memory savings "
             "during the optimisation step). Requires backend in "
-            "{transformers, unsloth}. Schema-only in v0.50.0; live wiring "
-            "in v0.50.1."
+            "{transformers, unsloth}; forwarded to compatible TRL and vLLM "
+            "runtimes by the GRPO trainer."
         ),
     )
     # v0.50.0 Part C — Multi-turn agent rollout backend (live v0.71.21 #125)
@@ -1517,18 +1715,18 @@ class TrainingConfig(BaseModel):
             "Enable Vision RL / VLM RL — extends GRPO/PPO to vision "
             "modality (Qwen2-VL / Pixtral / InternVL). Requires "
             "modality='vision', task in {grpo, ppo}, backend in "
-            "{transformers, unsloth}. Schema-only in v0.50.0; live VLM-RL "
-            "rollout wiring deferred to v0.50.1."
+            "{transformers, unsloth}. Compatibility validation is available, "
+            "but no trainer consumes this flag yet."
         ),
     )
     # v0.51.0 Part E — alternative model hubs (ModelScope / Modelers)
     hub: Literal["hf", "modelscope", "modelers"] = Field(
         default="hf",
         description=(
-            "Model hub for downloads + pushes. 'hf' (default), 'modelscope' "
+            "Training-time model-download hub. 'hf' (default), 'modelscope' "
             "(China-hosted; mirrors most Llama/Qwen/etc.), 'modelers' "
-            "(Openmind hub). Schema-only in v0.51.0; live downloader / "
-            "uploader wiring deferred to v0.51.1."
+            "(Openmind hub). `soup push --hub` selects its upload destination "
+            "independently of this field."
         ),
     )
 
@@ -1539,9 +1737,10 @@ class TrainingConfig(BaseModel):
     ]] = Field(
         default=None,
         description=(
-            "TTS model family — required when task='tts'. One of: orpheus, "
-            "sesame_csm, llasa, spark, oute. Schema-only in v0.52.0; live "
-            "trainer wrapper deferred to v0.52.1."
+            "TTS model family — required when task='tts'. Runnable choices are "
+            "orpheus, llasa, spark, and oute. sesame_csm is retained only so "
+            "legacy configs receive an explicit refusal until Soup has a native "
+            "CSM multimodal trainer."
         ),
     )
     tts_emotion: Optional[str] = Field(
@@ -1604,8 +1803,8 @@ class TrainingConfig(BaseModel):
         default=None,
         description=(
             "Teacher model HF id or local path — required when task='distill'. "
-            "Null-byte rejected, capped at 512 chars. Schema-only in v0.52.0; "
-            "live distill trainer deferred to v0.52.1."
+            "Loaded frozen by the distillation trainer. Null-byte rejected, "
+            "capped at 512 chars."
         ),
     )
     distill_divergence: Optional[Literal[
@@ -1636,6 +1835,22 @@ class TrainingConfig(BaseModel):
             "teacher)."
         ),
     )
+    distill_chunk_size: Optional[int] = Field(
+        default=None,
+        description=(
+            "Token chunk size for evaluating the distillation divergence kernel. "
+            "Chunks the active supervised tokens to reduce peak memory retention. "
+            "Unset (None) processes all tokens in a single chunk. (#722)"
+        ),
+    )
+    distill_checkpoint: bool = Field(
+        default=False,
+        description=(
+            "Enable non-reentrant activation checkpointing per token chunk during "
+            "distillation divergence computation to minimize autograd retained "
+            "memory. (#722)"
+        ),
+    )
     # v0.71.12 #146 — opt-in LoRA / PEFT path for classifier-family tasks.
     classifier_lora: bool = Field(
         default=False,
@@ -1652,8 +1867,8 @@ class TrainingConfig(BaseModel):
     ebft_variant: Optional[Literal["structured", "strided"]] = Field(
         default=None,
         description=(
-            "Energy-Based FT variant. SFT-task-only; live loss kernel "
-            "deferred to v0.52.1. (v0.52.0)"
+            "Energy-Based FT variant. SFT-task-only; replaces the trainer's "
+            "loss with the selected energy-based objective."
         ),
     )
     ebft_temperature: Optional[float] = Field(
@@ -1668,8 +1883,8 @@ class TrainingConfig(BaseModel):
     ]] = Field(
         default=None,
         description=(
-            "Generalized DPO variant. DPO-family-task-only; live loss kernel "
-            "deferred to v0.52.1. (v0.52.0)"
+            "Generalized DPO variant. DPO-family-task-only; replaces the "
+            "trainer's preference loss with the selected objective."
         ),
     )
     # Part F — MoE expert quantization + router-only training
@@ -1691,9 +1906,8 @@ class TrainingConfig(BaseModel):
     reasoning_effort: Optional[Literal["low", "medium", "high"]] = Field(
         default=None,
         description=(
-            "gpt-oss train-time reasoning effort level. Routes through a "
-            "prompt prefix at training time; live formatter wiring deferred "
-            "to v0.52.1. (v0.52.0)"
+            "gpt-oss train-time reasoning effort level. Injected as a prompt "
+            "prefix by the SFT-family data formatter."
         ),
     )
     train_on_eot: bool = Field(
@@ -1710,7 +1924,8 @@ class TrainingConfig(BaseModel):
         default=None,
         description=(
             "KV-cache element type for inference (q8_0 / bf16 / f16 / fp8). "
-            "Schema-only in v0.53.0; live wiring deferred to v0.53.1."
+            "Applied by soup serve on the transformers backend; backend and "
+            "hardware compatibility are validated before model loading."
         ),
     )
     # Part D — Train-time advanced precision.
@@ -1719,14 +1934,18 @@ class TrainingConfig(BaseModel):
         description=(
             "Extend the v0.28.0 FP8 menu to FP8 attention "
             "(axolotl-parity flag). Requires quantization_aware='fp8'. "
-            "Schema-only in v0.53.0; live wiring deferred to v0.53.1."
+            "DPO-family, GRPO/PPO, pre-training, reward-model, and embedding "
+            "wrappers route it through the shared advanced-precision setup; "
+            "the default SFT path does not consume it."
         ),
     )
     nvfp4: bool = Field(
         default=False,
         description=(
-            "Blackwell-only NVFP4 training (unsloth + axolotl). "
-            "Schema-only in v0.53.0; live wiring deferred to v0.53.1."
+            "Blackwell-only NVFP4 training (unsloth + axolotl). DPO-family, "
+            "GRPO/PPO, pre-training, reward-model, and embedding wrappers "
+            "route it through torchao conversion; the default SFT path does "
+            "not consume it."
         ),
     )
     unsloth_bnb_4bit: bool = Field(
@@ -1737,13 +1956,32 @@ class TrainingConfig(BaseModel):
         ),
     )
     # Part E — LF / Axolotl parity.
-    bnb_4bit_use_double_quant: bool = Field(
-        default=False,
+    bnb_4bit_use_double_quant: Optional[bool] = Field(
+        # #321 — tri-state so an unset flag round-trips cleanly. Every 4-bit load
+        # path has always double-quantized, so `None` (unset) means "use the
+        # shipped default", which each 4-bit consumer resolves to True. A literal
+        # `default=True` here would make `model_dump()` emit the key on EVERY
+        # config, so re-validating a dumped non-4bit config (train.py replay,
+        # sweep round-trips, the 21 bundled recipes) would trip the footgun below.
+        # With `None` the footgun fires only on an explicit `true`. Only
+        # meaningful when quantization='4bit'.
+        default=None,
         description=(
             "Apply BNB 4-bit double-quantization (LF / Axolotl parity). "
-            "Only meaningful when quantization='4bit'. (v0.53.0)"
+            "Unset means the shipped default (on, to match every 4-bit load "
+            "path); set false to disable it. Only meaningful when "
+            "quantization='4bit'. (v0.53.0)"
         ),
     )
+
+    @property
+    def double_quant_on(self) -> bool:
+        """Resolve the tri-state ``bnb_4bit_use_double_quant`` for the 4-bit load
+        paths: unset (``None``) uses the shipped default (double-quantize), so
+        every consumer that builds a ``BitsAndBytesConfig`` reads a real bool and
+        stays in agreement (#321)."""
+        return self.bnb_4bit_use_double_quant is not False
+
     llm_int8: bool = Field(
         default=False,
         description=(
@@ -1772,7 +2010,7 @@ class TrainingConfig(BaseModel):
         description=(
             "Enable RAGEN-style echo-trap detection during multi-turn "
             "agent RL. Requires task in {'grpo', 'ppo'} on a non-mlx "
-            "backend. Schema-only in v0.70.0; live callback in v0.70.1."
+            "backend; installs the shared RL signal callback."
         ),
     )
     echo_trap_threshold: float = Field(
@@ -1809,8 +2047,8 @@ class TrainingConfig(BaseModel):
         description=(
             "Save an RL-aware mid-epoch checkpoint every N steps. None "
             "= use HF Trainer's per-epoch checkpoint only. Requires "
-            "task in {'grpo', 'ppo'}. Schema-only in v0.70.0; live "
-            "save_state / load_state in v0.70.1."
+            "task in {'grpo', 'ppo'}; the callback persists the policy "
+            "adapter, optional optimizer state, and a manifest."
         ),
     )
     rl_checkpoint_keep_last: int = Field(
@@ -1852,8 +2090,8 @@ class TrainingConfig(BaseModel):
         default=False,
         description=(
             "Enable MiniLLM-style on-policy distillation (Gu et al. 2024). "
-            "Requires task='distill' on a non-mlx backend. v0.70.0 "
-            "schema-only; live callback in v0.70.1."
+            "Requires task='distill' on a non-mlx backend; installs the "
+            "teacher-mixed sampling and reverse-KL loss path."
         ),
     )
     minillm_teacher_mix_ratio: float = Field(
@@ -1861,9 +2099,15 @@ class TrainingConfig(BaseModel):
         ge=0.0,
         le=1.0,
         description=(
-            "Probability of sampling from the teacher distribution at "
-            "rollout time. 0.0 = student-only; 1.0 = teacher-only. "
-            "Typical range 0.2-0.5. (v0.70.0)"
+            "Teacher mixture used by MiniLLM. Offline "
+            "(minillm_on_policy=false): weight of the teacher distribution "
+            "in the reverse-KL target "
+            "(ratio * teacher + (1 - ratio) * stopgrad(student)). 0.0 is "
+            "rejected when MiniLLM is enabled because the teacher then has "
+            "zero weight. On-policy: probability of sampling from the "
+            "teacher at rollout time; 0.0 = student-only sampling, and the "
+            "loss is still KL(student || teacher). Typical range 0.2-0.5. "
+            "(v0.70.0; offline zero rejected in #692)"
         ),
     )
     minillm_length_normalize: bool = Field(
@@ -1949,8 +2193,8 @@ class TrainingConfig(BaseModel):
             "Reward-hacking detector for GRPO/PPO. 'info_rm' tracks "
             "InfoRM cluster-separation across training; 'rm_ensemble' "
             "tracks pairwise variance across an RM ensemble. Requires "
-            "task in {'grpo', 'ppo'} on a non-mlx backend. Schema-only "
-            "in v0.70.0; live HF Trainer callback wired in v0.70.1."
+            "task in {'grpo', 'ppo'} on a non-mlx backend; installs the "
+            "shared reward-signal callback."
         ),
     )
     reward_hack_halt: bool = Field(
@@ -2396,6 +2640,36 @@ class TrainingConfig(BaseModel):
 
         return validate_distill_mode(v)
 
+    @field_validator("distill_chunk_size", mode="before")
+    @classmethod
+    def _validate_distill_chunk_size(cls, v):
+        """v0.74.0 #722 — positive integer token chunk size, rejecting bool."""
+        if v is None:
+            return None
+        if isinstance(v, bool):
+            raise ValueError("training.distill_chunk_size must not be bool")
+        if not isinstance(v, int):
+            raise ValueError(
+                f"training.distill_chunk_size must be int, got {type(v).__name__}"
+            )
+        if v < 1:
+            raise ValueError(
+                f"training.distill_chunk_size must be >= 1, got {v}"
+            )
+        return v
+
+    @field_validator("distill_checkpoint", mode="before")
+    @classmethod
+    def _validate_distill_checkpoint(cls, v):
+        """v0.74.0 #722 — boolean activation checkpointing flag."""
+        if v is None:
+            return False
+        if not isinstance(v, bool):
+            raise ValueError(
+                f"training.distill_checkpoint must be bool, got {type(v).__name__}"
+            )
+        return v
+
     @field_validator("mod_capacity_factor", mode="before")
     @classmethod
     def _validate_mod_capacity_factor(cls, v):
@@ -2579,6 +2853,14 @@ class TrainingConfig(BaseModel):
         gt=0,
         description="LoRA+ lr ratio: lr_B = lr × ratio. None = disabled (standard LoRA).",
     )
+    # LoRA-FA — freeze LoRA A matrices and train B matrices to reduce activation memory
+    use_lorafa: bool = Field(
+        default=False,
+        description=(
+            "Enable LoRA-FA (Frozen-A LoRA) optimizer: freezes LoRA A matrices "
+            "to reduce activation memory"
+        ),
+    )
     # GaLore — memory-efficient full-parameter training
     use_galore: bool = Field(
         default=False,
@@ -2662,9 +2944,9 @@ class TrainingConfig(BaseModel):
     use_longlora: bool = Field(
         default=False,
         description=(
-            "Enable LongLoRA S² shifted-sparse attention (v0.49.0, schema-only). "
-            "Requires task=sft, backend=transformers, Llama-family base. "
-            "Mutually exclusive with use_ring_attention."
+            "Enable the LongLoRA S² shifted-sparse attention override. "
+            "Requires task=sft, backend=transformers, a supported decoder "
+            "architecture, and use_ring_attention=false."
         ),
     )
     gradient_checkpointing: Union[
@@ -2687,20 +2969,24 @@ class TrainingConfig(BaseModel):
             "Mutually exclusive with Unsloth/MLX backends."
         ),
     )
-    # v0.28.0 — Kernel auto-composition (Liger + Unsloth + FlashAttn per-layer)
+    # v0.28.0 — reserved compatibility field; the implementation never applied
+    # the selected kernel combination (#801).
     kernel_auto_compose: bool = Field(
         default=False,
         description=(
-            "Benchmark and auto-select the fastest kernel combination "
-            "(Liger / FlashAttn / baseline) on the first few steps. (v0.28.0)."
+            "Unsupported compatibility field. Set use_liger and/or "
+            "use_flash_attn explicitly instead."
         ),
     )
     # v0.28.0 — Cross-document attention masking for sample packing
     packing_cross_doc_attn_mask: bool = Field(
         default=False,
         description=(
-            "When packing is enabled, prevent attention bleed between packed "
-            "documents. Requires packing=true. (v0.28.0)."
+            "Never worked: Soup mapped this to packing_strategy="
+            "'attention_free', which is not in TRL's allowlist "
+            "(bfd / bfd-requeue / wrapped) on any released trl. "
+            "Use packing: true with FlashAttention instead. "
+            "(v0.28.0 / #691 / #709)."
         ),
     )
     # v0.28.0 — Activation offloading (CPU/disk) for small-VRAM large-batch
@@ -2792,12 +3078,23 @@ class TrainingConfig(BaseModel):
         le=1000,
         description="Consecutive high-loss steps before stopping",
     )
+    # Flight recorder read by `soup rewind`
+    rewind_log: bool = Field(
+        default=True,
+        description=(
+            "Write <output>/rewind.jsonl: the dataset rows in every training "
+            "micro-batch with each row's loss, read by `soup rewind` to name the "
+            "rows behind a loss spike. SFT only (transformers and MLX, single "
+            "process); resumed runs and packing turn it off with one warning."
+        ),
+    )
     # Loss spike auto-recovery (v0.32.0 Part E) — extends watchdog
     loss_spike_recovery: bool = Field(
         default=False,
         description=(
-            "On watchdog trigger: rollback to last checkpoint, decay LR, "
-            "and resume (instead of stopping). Requires loss_watchdog=true."
+            "On watchdog trigger: write <output>/spike_recovery.json with "
+            "decayed LR and attempt count for re-launch (instead of bare stop). "
+            "Requires loss_watchdog=true."
         ),
     )
     loss_spike_recovery_max_attempts: int = Field(
@@ -2868,8 +3165,8 @@ class TrainingConfig(BaseModel):
         default=False,
         description=(
             "Monitor VRAM each step; warn (and recommend new batch/accum) "
-            "when memory pressure is high. Advisory in v0.32.0; live "
-            "DataLoader rebuild deferred to v0.32.1."
+            "when memory pressure is high. Advisory only: it does not rebuild "
+            "the DataLoader or change accumulation during a run."
         ),
     )
     grad_accum_pressure_threshold: float = Field(
@@ -2936,13 +3233,13 @@ class TrainingConfig(BaseModel):
                 raise ValueError(
                     f"training.unfrozen_parameters: invalid regex {pat!r}: {exc}"
                 ) from exc
-            if _UNFROZEN_REDOS_RE.search(pat):
+            try:
+                check_config_regex(pat, "training.unfrozen_parameters")
+            except ValueError as exc:
                 raise ValueError(
-                    f"training.unfrozen_parameters: pattern {pat!r} has nested "
-                    f"unbounded quantifiers (ReDoS risk). Use a literal "
-                    f"parameter-name prefix such as "
-                    f"'model.layers.0.mlp.down_proj' (run `soup spectrum scan`)."
-                )
+                    f"{exc}, such as 'model.layers.0.mlp.down_proj' "
+                    f"(run `soup spectrum scan`). ReDoS risk otherwise."
+                ) from None
         return value
 
     # v0.71.34 #267 — LISA (Layerwise Importance Sampled AdamW,
@@ -2956,9 +3253,9 @@ class TrainingConfig(BaseModel):
             "Enable LISA layerwise importance sampling (#267): every "
             "lisa_interval_steps, freeze all decoder layers except a random "
             "lisa_num_layers set (embeddings + head always trainable). Full "
-            "fine-tuning, LoRA off. sft + transformers + text + "
+            "fine-tuning, LoRA off. sft or pretrain + transformers + text + "
             "quantization=none only; mutually exclusive with LoRA features / "
-            "freeze_layers / unfrozen_parameters."
+            "freeze_layers / freeze_ratio / unfrozen_parameters."
         ),
     )
     lisa_num_layers: int = Field(
@@ -2978,6 +3275,18 @@ class TrainingConfig(BaseModel):
             "Clear optimizer state for decoder layers that LISA re-freezes on "
             "each interval (avoids stale Adam moments). Mirrors "
             "relora_reset_optimizer."
+        ),
+    )
+    lisa_train_embeddings: bool = Field(
+        default=True,
+        description=(
+            "Keep the always-on group (input embeddings + LM head + final "
+            "norm) trainable every LISA interval. Default true is LISA as "
+            "published (#267). Set false to freeze that group so only the "
+            "sampled lisa_num_layers decoder layers train — the always-on set "
+            "is the majority of LISA's memory, so this is the knob that buys "
+            "the memory saving (#377). It is a real trade: the always-on set "
+            "may be load-bearing for quality, so measure both ways."
         ),
     )
 
@@ -3010,7 +3319,21 @@ class TrainingConfig(BaseModel):
         description=(
             "Where the streamed base lives. 'ram' (the only tier implemented in "
             "v0.72.0) pins the base in CPU RAM; 'disk' is the v0.72.3 overflow "
-            "tier; 'auto' picks per free RAM."
+            "tier; 'auto' picks RAM only when the store fits free-RAM headroom "
+            "and the store plus resident extras fits the physical RAM ceiling."
+        ),
+    )
+    stream_ngram_source: Literal["auto", "ram", "disk"] = Field(
+        default="auto",
+        description=(
+            "Where Qwen4-Exp's frozen PLE N-gram embedding lives while layer "
+            "streaming. 'disk' gathers only requested rows from the original "
+            "safetensors through a read-only mmap; 'ram' keeps the table in "
+            "CPU RAM; 'auto' uses RAM only when the table and selected base "
+            "tier plus resident extras fit within free-RAM headroom and the "
+            "physical RAM ceiling. oMLX/oQ affine PLE tables require 'disk' "
+            "(or 'auto') so only selected rows are dequantized. A non-default "
+            "value warns when the checkpoint has no external PLE table."
         ),
     )
     stream_buffers: int = Field(
@@ -3031,6 +3354,64 @@ class TrainingConfig(BaseModel):
         if isinstance(v, bool):
             raise ValueError("training.stream_buffers must be an int, not bool")
         return v
+
+    # #971 — depth of the async disk-tier reader's background lookahead. NOT
+    # the same quantity as stream_buffers (VRAM buffers): this is HOST-side
+    # pinned-memory staging ahead of the disk read. One staging slot is always
+    # held by the layer currently being consumed, so a setting of N stages
+    # N-1 layers ahead of it, not N — measured across settings 1/2/4/8 giving
+    # 0/1/3/7 layers staged ahead, on both forward and backward passes. A
+    # description that promised N layers of lookahead from a setting of N
+    # would repeat the exact defect #748 exists to catch: a documented number
+    # that does not do what it says.
+    stream_read_ahead: int = Field(
+        default=DEFAULT_STREAM_READ_AHEAD,
+        ge=MIN_STREAM_READ_AHEAD,
+        le=MAX_STREAM_READ_AHEAD,
+        description=(
+            "Layers the async disk tier stages ahead on its background "
+            "thread. One staging slot is always held by the layer currently "
+            "being consumed, so a setting of N stages N-1 layers ahead, not "
+            "N: 1 = the read merely leaves the compute thread (nothing "
+            "staged ahead of the one in use), 2 = one layer in flight while "
+            "one is consumed, up to "
+            f"{MAX_STREAM_READ_AHEAD - 1} staged ahead at the maximum "
+            f"setting of {MAX_STREAM_READ_AHEAD}. Each level costs one layer "
+            "of pinned host memory, which is 441 MB on a 70B."
+        ),
+    )
+
+    @field_validator("stream_read_ahead", mode="before")
+    @classmethod
+    def _validate_stream_read_ahead_int(cls, v: Any) -> Any:
+        """Reject bool-as-int (bool subclasses int), mirrors stream_buffers."""
+        if isinstance(v, bool):
+            raise ValueError("training.stream_read_ahead must be an int, not bool")
+        return v
+
+    stream_pin: Optional[bool] = Field(
+        default=None,
+        description=(
+            "Force the page-locked (pinned) host memory on or off — the RAM "
+            "tier's base store, or the disk tier's async-reader host staging "
+            "(#971). None (the default) lets the box decide: it attempts to "
+            "page-lock that memory and falls back to pageable — announcing "
+            "the cost — when the host cannot page-lock it. 'false' forces "
+            "the pageable store, the only known escape hatch when a pinning "
+            "path is suspect (it was the sole mitigation while #331 was "
+            "live). 'true' forces pinning and REFUSES the run rather than "
+            "silently degrading if the box cannot page-lock it: on the RAM "
+            "tier naming the store size, on the disk tier naming "
+            "training.stream_read_ahead as the depth that decides how much "
+            "staging gets locked — page-locking is worth up to 6.56x "
+            "measured throughput, so a silent fallback spends the whole "
+            "margin the feature exists to provide. Non-CUDA targets (CPU or "
+            "MPS) are the one case pinning stays INAPPLICABLE: 'true' is "
+            "announced there and the run proceeds with a pageable CPU "
+            "source, so the key stays committable to a config shared "
+            "between CUDA and non-CUDA boxes."
+        ),
+    )
 
     stream_vram_override: Optional[int] = Field(
         default=None,
@@ -3065,14 +3446,34 @@ class TrainingConfig(BaseModel):
             "the configured shape after the streamed model is built, and its "
             "peak decides whether the run proceeds; the prediction is printed "
             "beside it so a divergence is visible. The formula under-predicts "
-            "past seq 4096 (measured 0.830x the real peak at seq 5120), which "
-            "is the direction that does not announce itself — an OOM on Linux, "
-            "a silent spill to host memory on Windows. Off by default: it costs "
-            "one step (1-5 s measured) and it can refuse a run the formula "
-            "accepts. task='sft' only: the probe runs a plain causal-LM "
-            "forward+backward, which IS the SFT step but is not a preference "
-            "loss, and it under-measures those badly enough to make the gate "
-            "unsafe."
+            "past seq 4352 (measured 0.934x the real peak at seq 5120 and "
+            "0.787x at 6144), which is the direction that does not announce "
+            "itself — an OOM on Linux, a silent spill to host memory on "
+            "Windows. Against the probe the same formula reads 0.992x at seq "
+            "4096 and 0.830x at 5120, because the probe itself runs "
+            "12.5-14.3% above the real training step — the direction that "
+            "makes it safe as a gate. Off by default: it costs one step "
+            "(1-5 s measured) and it can refuse a run the formula accepts. "
+            "task='sft' only: the "
+            "probe runs a plain causal-LM forward+backward, which IS the SFT "
+            "step but not a preference loss. At the one preference shape "
+            "measured it reads +13.5% high (probe 6.021 GB against a real "
+            "DPO step's 5.304 GB) — the same safe direction it shows for SFT "
+            "— but one shape is not a validation, so the restriction stands "
+            "until it is measured across shapes."
+        ),
+    )
+    stream_disk_kind: Optional[Literal["nvme", "ssd", "hdd"]] = Field(
+        default=None,
+        description=(
+            "Override the auto-detected disk media type for the streaming disk "
+            "overflow tier. Detection classifies a device by a measured "
+            "sequential read when the kernel's rotational flag is unreliable — "
+            "virtio and other paravirtual disks report spinning with no media "
+            "hint, so a fast cloud disk is otherwise refused (#365). Set this "
+            "for the case where even that is wrong: 'nvme' forces the disk tier "
+            "on, 'ssd'/'hdd' force it off. The resolved value is printed beside "
+            "what was detected."
         ),
     )
 
@@ -3102,52 +3503,69 @@ class TrainingConfig(BaseModel):
     # Forgetting detection
     forgetting_detection: bool = Field(
         default=False,
-        description="Enable periodic general-knowledge eval to detect catastrophic forgetting",
+        description=(
+            "Staged, not enforced during training: enable periodic general-knowledge "
+            "eval to detect catastrophic forgetting"
+        ),
     )
     forgetting_eval_steps: int = Field(
         default=100, ge=10, le=10000,
-        description="Run forgetting eval every N steps",
+        description="Staged, not enforced during training: run forgetting eval every N steps",
     )
     forgetting_threshold: float = Field(
         default=0.10, ge=0.01, le=0.50,
-        description="Warn if accuracy drops > threshold from baseline (0.01-0.50)",
+        description=(
+            "Staged, not enforced during training: warn if accuracy drops beyond "
+            "this threshold (0.01-0.50)"
+        ),
     )
     forgetting_benchmark: Literal["mini_mmlu", "mini_common_sense", "mini_instruction"] = Field(
         default="mini_mmlu",
-        description="Built-in mini benchmark used for forgetting detection",
+        description=(
+            "Staged, not enforced during training: built-in mini benchmark for "
+            "forgetting detection"
+        ),
     )
     forgetting_stop: bool = Field(
         default=False,
-        description="Auto-stop training on severe forgetting (red-level alert)",
+        description="Staged, not enforced during training: stop on severe forgetting",
     )
     # Checkpoint intelligence
     checkpoint_intelligence: bool = Field(
         default=False,
-        description="Enable auto-best-checkpoint tracking by quality (not just loss)",
+        description=(
+            "Staged, not enforced during training: track best checkpoints by quality"
+        ),
     )
     checkpoint_eval_steps: int = Field(
         default=200, ge=50, le=10000,
-        description="Run checkpoint quality eval every N steps",
+        description="Staged, not enforced during training: evaluate checkpoint quality",
     )
     checkpoint_eval_metric: Literal["judge", "mmlu", "custom", "composite"] = Field(
         default="composite",
-        description="Metric used for checkpoint quality selection",
+        description="Staged, not enforced during training: checkpoint quality metric",
     )
     checkpoint_eval_tasks: Optional[str] = Field(
         default=None,
-        description="Optional JSONL file with custom eval tasks for checkpoint scoring",
+        description=(
+            "Staged, not enforced during training: JSONL tasks for checkpoint scoring"
+        ),
     )
     checkpoint_keep_top: int = Field(
         default=3, ge=1, le=20,
-        description="Keep top-N checkpoints by quality, delete the rest",
+        description="Staged, not enforced during training: keep top-N quality checkpoints",
     )
     early_stop_on_regression: bool = Field(
         default=False,
-        description="Stop training when quality regresses across consecutive evals",
+        description=(
+            "Staged, not enforced during training: stop after consecutive regressions"
+        ),
     )
     early_stop_patience: int = Field(
         default=2, ge=1, le=10,
-        description="Consecutive regressions before early stopping (1-10)",
+        description=(
+            "Staged, not enforced during training: regressions before stopping (1-10)"
+        ),
     )
     # Eval-Gated Training — Part B of v0.26.0
     eval_gate: Optional["EvalGateConfig"] = Field(
@@ -3259,32 +3677,45 @@ class TrainingConfig(BaseModel):
 
     @model_validator(mode="after")
     def _validate_grpo_variant_delta(self) -> "TrainingConfig":
-        """v0.50.0 Part A — grpo_variant='two_sided' requires grpo_delta.
+        """v0.50.0 Part A / #744 — grpo_variant='two_sided' requires grpo_delta.
 
-        Conversely, grpo_delta is only meaningful for the two_sided variant;
-        setting it on any other variant (or with no variant) is rejected
-        as a probable footgun (matches v0.40.0 Part D ``preference_loss_weights``
-        + ``preference_loss`` mutually-exclusive policy).
+        grpo_variant='gspo' optionally accepts grpo_delta as sequence clipping radius.
+        Setting grpo_delta on any other variant (or with no variant) is rejected.
         """
         if self.grpo_variant == "two_sided" and self.grpo_delta is None:
             raise ValueError(
                 "grpo_variant='two_sided' requires grpo_delta "
                 "(symmetric clipping radius, (0, 1])"
             )
-        if self.grpo_delta is not None and self.grpo_variant != "two_sided":
+        if self.grpo_delta is not None and self.grpo_variant not in ("two_sided", "gspo"):
             raise ValueError(
-                "grpo_delta is only valid when grpo_variant='two_sided'; "
+                "grpo_delta is only valid when grpo_variant is 'two_sided' or 'gspo'; "
                 f"got grpo_variant={self.grpo_variant!r}"
             )
         return self
 
     @model_validator(mode="after")
     def _validate_cross_doc_attn_mask(self) -> "TrainingConfig":
-        """Cross-document attention masking requires packing=True."""
-        if self.packing_cross_doc_attn_mask and not self.packing:
+        """packing_cross_doc_attn_mask never mapped to a valid TRL strategy."""
+        if self.packing_cross_doc_attn_mask:
             raise ValueError(
-                "packing_cross_doc_attn_mask requires packing=true "
-                "(cross-doc attention masking only applies to packed sequences)"
+                "packing_cross_doc_attn_mask is not supported: it never mapped "
+                "to a valid TRL packing_strategy (allowlist is 'bfd', "
+                "'bfd-requeue', or 'wrapped'). Use packing: true with a "
+                "FlashAttention attn_implementation; TRL's default bfd "
+                "strategy already isolates packed documents when FA is present"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _reject_kernel_auto_compose(self) -> "TrainingConfig":
+        """Reject a selector that never applied the combination it reported."""
+        if self.kernel_auto_compose:
+            raise ValueError(
+                "kernel_auto_compose is not supported: it benchmarks the same "
+                "already-loaded model for every candidate and does not apply "
+                "the selected flags. Set kernel_auto_compose: false and enable "
+                "supported kernels explicitly with use_liger and/or use_flash_attn"
             )
         return self
 
@@ -3531,6 +3962,41 @@ class TrainingConfig(BaseModel):
             )
         return self
 
+    @model_validator(mode="after")
+    def _validate_lorafa_compat(self) -> "TrainingConfig":
+        """#725 — LoRA-FA mutual exclusion with LoRA+, GaLore, and VeRA."""
+        if self.use_lorafa and self.loraplus_lr_ratio is not None:
+            raise ValueError(
+                "training.use_lorafa and training.loraplus_lr_ratio are mutually exclusive: "
+                "LoRA-FA freezes LoRA A matrices while LoRA+ tunes them with separate learning "
+                "rates. Enable one, not both."
+            )
+        if self.use_lorafa and self.use_galore:
+            raise ValueError(
+                "training.use_lorafa and training.use_galore are mutually exclusive: "
+                "LoRA-FA tunes LoRA B matrices while GaLore projects full-parameter gradients. "
+                "Enable one, not both."
+            )
+        if self.use_lorafa and getattr(self.lora, "use_vera", False):
+            raise ValueError(
+                "training.use_lorafa and training.lora.use_vera are mutually exclusive: "
+                "VeRA freezes random projection matrices and trains scaling vectors, "
+                "so peft's create_lorafa_optimizer finds no trainable lora_* matrices "
+                "and silently degrades to plain AdamW."
+            )
+        if self.use_lorafa and self.optimizer is not None and self.optimizer not in (
+            "adamw_torch",
+            "adamw",
+            "adamw_hf",
+            "adamw_torch_fused",
+        ):
+            raise ValueError(
+                f"training.use_lorafa uses an AdamW-based gradient projection and is "
+                f"incompatible with training.optimizer={self.optimizer!r}. Leave optimizer "
+                f"unset (defaulting to adamw) or use 'adamw_torch'."
+            )
+        return self
+
     # ---- v0.61.0 Part A — Unlearning ---------------------------------------
     # Schema-only release: validators here are reused by the SoupConfig
     # cross-validator + UnlearnTrainerWrapper. Live trainer in v0.61.1.
@@ -3540,8 +4006,7 @@ class TrainingConfig(BaseModel):
             "Unlearning method backend — required when task='unlearn'. "
             "npo (Negative Preference Optimization, DPO-shaped negative-only "
             "loss); simnpo (length-normalised NPO without ref model); rmu "
-            "(Representation Misdirection Unlearning, residual-stream noise). "
-            "Schema-only in v0.61.0; live trainer deferred to v0.61.1."
+            "(Representation Misdirection Unlearning, residual-stream noise)."
         ),
     )
     unlearn_alpha: Optional[float] = Field(
@@ -3631,16 +4096,16 @@ class TrainingConfig(BaseModel):
         description=(
             "Opt INTO citation-precision / recall scoring + a loss-mask "
             "rule that emphasises citation spans. Requires "
-            "`data.format='raft'`. Schema-only in v0.62.0; live span-mask "
-            "ships in v0.62.1. (v0.62.0 Part D)"
+            "`data.format='raft'`; SFT and RAFT trainers apply the weighted "
+            "citation-span mask."
         ),
     )
     citation_style: Optional[Literal["bracket", "inline", "footnote"]] = Field(
         default=None,
         description=(
             "Citation rendering style. 'bracket' = `[doc-1]` inline tag "
-            "(canonical RAFT default); 'inline' / 'footnote' are stub "
-            "placeholders for v0.62.1. (v0.62.0 Part D)"
+            "(canonical RAFT default), 'inline' = `(doc-1)`, and 'footnote' "
+            "= `[^doc-1]`. Used by citation scoring and span masking."
         ),
     )
     citation_recall_threshold: Optional[float] = Field(
@@ -3676,24 +4141,25 @@ class TrainingConfig(BaseModel):
     grace_codebook: bool = Field(
         default=False,
         description=(
-            "Opt INTO the GRACE codebook — discrete latent-space (key, "
-            "value) store for thousands of sequential knowledge edits "
-            "without norm-blowup. Schema-only in v0.62.0; live lookup / "
-            "write ships in v0.62.1. (v0.62.0 Part E)"
+            "Reserve GRACE codebook configuration for training. Compatibility "
+            "validation only: no trainer or knowledge-edit command consumes "
+            "this field yet."
         ),
     )
     grace_codebook_size: Optional[int] = Field(
         default=None,
         description=(
-            "Codebook entry count. Required when grace_codebook=True. "
-            "Bounded [1, 100_000]. (v0.62.0 Part E)"
+            "Reserved GRACE codebook entry count. Required when "
+            "grace_codebook=True and bounded [1, 100_000], but not consumed "
+            "at runtime yet."
         ),
     )
     grace_codebook_dim: Optional[int] = Field(
         default=None,
         description=(
-            "Codebook entry dim (residual-stream width). Required when "
-            "grace_codebook=True. Bounded [1, 16_384]. (v0.62.0 Part E)"
+            "Reserved GRACE codebook entry dimension. Required when "
+            "grace_codebook=True and bounded [1, 16_384], but not consumed "
+            "at runtime yet."
         ),
     )
 
@@ -3750,8 +4216,35 @@ class ShipConfig(BaseModel):
     )
     baseline: Optional[str] = Field(
         default=None,
-        description="registry://<id> | file JSON of base leg-2 scores",
+        description=(
+            "registry://<id> | stamped baseline JSON "
+            "({scores, provenance.scorer_revision}) of base leg-2 scores"
+        ),
     )
+    # v0.73.2 shipped `--noise-floor` (#376) without its config surface, so it
+    # was the one gate-policy flag that could not be committed to soup.yaml
+    # (#406). Bounds import from ship_verdict so the schema and the CLI
+    # validator (_validate_noise_floor_flag) share one source of truth.
+    noise_floor: Optional[int] = Field(
+        default=None,
+        ge=MIN_NOISE_FLOOR_RUNS,
+        le=MAX_NOISE_FLOOR_RUNS,
+        description=(
+            "Repeats of the BASE run used to measure a leg-2 noise floor; a "
+            "leg-2 drop within the floor is treated as noise, not regression. "
+            f"Bounded [{MIN_NOISE_FLOOR_RUNS}, {MAX_NOISE_FLOOR_RUNS}]. A live "
+            "input: measured when producing evidence, refused under --evidence."
+        ),
+    )
+
+    @field_validator("noise_floor", mode="before")
+    @classmethod
+    def _validate_noise_floor_int(cls, v: Any) -> Any:
+        """Reject bool-as-int (bool subclasses int), mirrors stream_buffers and
+        the ``--noise-floor`` CLI validator."""
+        if isinstance(v, bool):
+            raise ValueError("eval.ship.noise_floor must be an int, not bool")
+        return v
 
 
 class EvalConfig(BaseModel):
@@ -3776,7 +4269,8 @@ class EvalConfig(BaseModel):
     ship: Optional[ShipConfig] = Field(
         default=None,
         description="soup ship verdict defaults (task_eval / task_mode / "
-        "general_suite / forgetting_threshold / judge_model / baseline)",
+        "general_suite / forgetting_threshold / judge_model / baseline / "
+        "noise_floor)",
     )
 
 
@@ -3933,6 +4427,71 @@ def _validate_reward_hack_controller(tcfg: Any) -> None:
             )
 
 
+#: Root-level keys that :class:`SoupConfig` accepts and moves under ``training``
+#: before validation (v0.40.1 Part B). The unknown-key detector reads this
+#: tuple too, so the two can never disagree about which spellings are legal.
+ROOT_LEVEL_MISPLACED_KEYS: tuple[str, ...] = ("lora",)
+
+
+def remap_root_level_misplaced_keys(values):
+    """Move a root-level ``lora`` block under ``training`` (v0.40.1 Part B).
+
+    Users naturally write top-level ``lora:`` (LlamaFactory / Axolotl
+    convention) while Soup nests it under ``training``. Without the remap,
+    Pydantic silently dropped the misplaced key — including its
+    ``init_strategy`` validation.
+
+    The caller's dict is never mutated — the work happens on shallow copies,
+    matching the v0.33.0 #47 / v0.40.0 Part B immutability policy. A key
+    present at BOTH levels is a ``ValueError``: there is no right answer to
+    pick silently.
+    """
+    if not isinstance(values, dict):
+        return values
+    # Detect any misplaced key first so we avoid copying when not needed.
+    misplaced_keys = [k for k in ROOT_LEVEL_MISPLACED_KEYS if k in values]
+    if not misplaced_keys:
+        return values
+    new_values = dict(values)
+    new_training = dict(new_values.get("training") or {})
+    for misplaced in misplaced_keys:
+        if misplaced in new_training:
+            raise ValueError(
+                f"{misplaced!r} found at both root and training level — "
+                f"keep only one (training.{misplaced} preferred)."
+            )
+        new_training[misplaced] = new_values.pop(misplaced)
+    new_values["training"] = new_training
+    return new_values
+
+
+# task values whose trainer wrapper subclasses SFTTrainerWrapper and so reads
+# training.use_flash_attn / training.use_liger (sft.py:_setup_transformers,
+# inherited by tts.py via super()). Every other task ignores both fields.
+SFT_KERNEL_AWARE_TASKS: frozenset[str] = frozenset({"sft", "tts"})
+
+
+# #795: trainers that load the base at checkpoint precision and never read
+# ``training.quantization``.
+_QUANTIZATION_UNHONOURED_TASKS = frozenset({
+    "distill", "classifier", "reranker", "cross_encoder", "prm",
+    "moe_lora_routing", "unlearn", "asr",
+})
+
+#: #798 — the tasks whose trainers actually read each MoE flag, mapped from the
+#: readers rather than from the docs: ``moe_expert_quant`` and
+#: ``train_router_only`` are applied only by ``trainer/sft.py`` (``tts`` inherits
+#: its setup through ``super()``), and ``moe_aux_loss_coeff`` is read by
+#: ``sft.py`` and ``pretrain.py``. Everywhere else the field was accepted and
+#: never applied.
+_MOE_EXPERT_KNOB_TASKS = frozenset({"sft", "tts"})
+_MOE_AUX_LOSS_TASKS = frozenset({"sft", "tts", "pretrain"})
+
+#: The bitsandbytes values: ``4bit`` was the default, so every config Soup dumped
+#: for these tasks carries one of them literally (#795 review).
+_BNB_QUANTIZATION_VALUES = frozenset({"4bit", "8bit"})
+
+
 class SoupConfig(BaseModel):
     """Root config for soup.yaml."""
 
@@ -3987,10 +4546,7 @@ class SoupConfig(BaseModel):
     )
     advise: Optional[AdviseConfig] = Field(
         default=None,
-        description=(
-            "Pre-flight decision settings consumed by `soup advise` "
-            "(v0.54.0 — schema-only on SoupConfig)."
-        ),
+        description="Pre-flight decision settings consumed by `soup advise`.",
     )
 
     @field_validator("experiment_name")
@@ -4005,6 +4561,257 @@ class SoupConfig(BaseModel):
             )
         return value
 
+    @model_validator(mode="after")
+    def _resolve_quantization_for_unhonouring_tasks(self) -> "SoupConfig":
+        """#795 — these trainers load the base at checkpoint precision and never
+        read ``training.quantization``.
+
+        The field defaults to ``4bit``, so an UNSET value resolves to ``none`` here
+        -- a minimal config still parses, and the stored config, config hash and
+        registry entry say what actually trained. A dumped config carries the
+        resolved ``none`` and reloads.
+
+        An explicit bitsandbytes value (``4bit``, ``8bit``, or ``load_in_8bit:
+        true``, which rewrites the field to ``8bit``) loads with a warning and
+        resolves to ``none``, rather than being refused. Every config Soup dumped
+        while ``4bit`` was the default carries it literally -- stored run configs,
+        ``train --replay`` -- and refusing those would break files Soup wrote
+        itself. The release that refuses it is named in ``config/deprecation.py``.
+        A quant-menu value (``gptq``, ``awq``, ...) was never a default Soup wrote,
+        so it is still refused.
+
+        Runs before every other ``SoupConfig`` validator so the ones that read
+        ``quantization`` see the resolved value. In particular it must stay before
+        ``_validate_peft_variant_backend_and_quantization`` if that lands (#1037).
+        """
+        if self.task not in _QUANTIZATION_UNHONOURED_TASKS:
+            return self
+        tcfg = self.training
+        if tcfg.quantization == "none":
+            return self
+        # ``bnb_4bit_quant_storage`` is checked against ``quantization`` by a
+        # TrainingConfig validator that has already run on the unresolved default,
+        # so it passed; setting it is a request for 4-bit and is refused here
+        # rather than left meaning nothing. (``bnb_4bit_use_double_quant`` and
+        # ``llm_int8`` are checked by SoupConfig validators that run after this one.)
+        if tcfg.bnb_4bit_quant_storage is None:
+            if "quantization" not in tcfg.model_fields_set:
+                tcfg.quantization = "none"
+                return self
+            if tcfg.quantization in _BNB_QUANTIZATION_VALUES:
+                from soup_cli.config.deprecation import warn_deprecated_value
+
+                warn_deprecated_value(
+                    f"training.quantization: {tcfg.quantization} has no effect on "
+                    f"task={self.task!r} and is ignored: its trainer loads the base at "
+                    "checkpoint precision, so the run trains unquantised. Set "
+                    "quantization: none."
+                )
+                tcfg.quantization = "none"
+                return self
+        raise ValueError(
+            f"task={self.task!r} does not apply training.quantization: its trainer "
+            "loads the base at checkpoint precision, so "
+            f"quantization={tcfg.quantization!r} would record a quantised run that "
+            "never happens. Remove it or set quantization: none."
+        )
+
+    @model_validator(mode="after")
+    def _validate_quest_first_slice(self) -> "SoupConfig":
+        """Keep #674 on the one route supported by the measured prototype."""
+        tcfg = self.training
+        if tcfg.quantization_aware != "quest":
+            return self
+        if tcfg.auto_mixed_precision:
+            raise ValueError(
+                "training.quantization_aware='quest' requires "
+                "training.auto_mixed_precision=false; the QuEST route has only "
+                "been measured under BF16"
+            )
+        if self.task != "sft":
+            raise ValueError("quantization_aware='quest' requires task='sft'")
+        if self.backend != "transformers":
+            raise ValueError(
+                "quantization_aware='quest' requires backend='transformers'"
+            )
+        if self.modality != "text":
+            raise ValueError("quantization_aware='quest' requires modality='text'")
+        if tcfg.quantization != "none":
+            raise ValueError(
+                "quantization_aware='quest' requires training.quantization='none'"
+            )
+        if tcfg.lora.r != 0:
+            raise ValueError("quantization_aware='quest' requires training.lora.r=0")
+        if not isinstance(tcfg.batch_size, int):
+            raise ValueError(
+                "quantization_aware='quest' requires an explicit training.batch_size"
+            )
+        if tcfg.stream_layers:
+            raise ValueError(
+                "quantization_aware='quest' requires training.stream_layers=false"
+            )
+        if tcfg.nvfp4:
+            raise ValueError(
+                "quantization_aware='quest' requires training.nvfp4=false"
+            )
+        if tcfg.activation_offloading is not None:
+            raise ValueError(
+                "quantization_aware='quest' requires "
+                "training.activation_offloading to be unset"
+            )
+
+        partial_routes = []
+        if tcfg.freeze_layers is not None:
+            partial_routes.append("freeze_layers")
+        if tcfg.freeze_ratio is not None:
+            partial_routes.append("freeze_ratio")
+        if tcfg.unfrozen_parameters:
+            partial_routes.append("unfrozen_parameters")
+        if tcfg.lisa_enabled:
+            partial_routes.append("lisa_enabled")
+        if tcfg.expand_layers is not None:
+            partial_routes.append("expand_layers")
+        if tcfg.freeze_trainable_layers is not None:
+            partial_routes.append("freeze_trainable_layers")
+        if partial_routes:
+            joined = ", ".join(partial_routes)
+            raise ValueError(
+                "quantization_aware='quest' first slice requires unmodified full "
+                f"fine-tuning; remove: {joined}"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_prm_lora_block(self) -> "SoupConfig":
+        """#795 — ``trainer/prm.py`` never reads ``training.lora``: every base
+        parameter trains. A LoRA block that differs from the schema default is
+        decorative and refused; ``r: 0`` states full fine-tuning, which is what
+        PRM does, so it is allowed. The default block is not intent -- a dumped
+        config writes it out -- so it is compared by value, not by fields-set."""
+        if self.task != "prm":
+            return self
+        lora = self.training.lora
+        if lora == LoraConfig() or lora.r == 0:
+            return self
+        raise ValueError(
+            "task='prm' does not apply training.lora: the PRM trainer fine-tunes "
+            "every base parameter. Remove the lora block (or set lora.r: 0)."
+        )
+
+    @model_validator(mode="after")
+    def _validate_moe_lora_task(self) -> "SoupConfig":
+        """#1151 — ``moe_lora`` selects expert-FFN LoRA targets, so it is refused
+        where no trainer can act on it: ``asr`` only ever loads Whisper, which has
+        no experts, and ``moe_lora_routing`` builds no LoRA adapter at all. The
+        classifier family reads it only on its opt-in adapter path
+        (``classifier_lora: true`` with ``lora.r > 0``, as ``trainer/classifier.py``
+        decides); without it that trainer full-fine-tunes, and there is no adapter
+        for the flag to select targets for. Across tasks: every ``_setup_unsloth``
+        attaches ``utils/unsloth.py``'s fixed attention list, and SFT's vision and
+        audio setups build their adapter without the MoE step, so neither reads it
+        (found by a local CodeRabbit review of #1179). MLX stays declared-ignored in
+        ``backend_support`` instead, which ``soup doctor`` reports."""
+        if not self.training.moe_lora:
+            return self
+        tcfg = self.training
+        if self.task in ("classifier", "reranker", "cross_encoder") and not (
+            tcfg.classifier_lora and tcfg.lora.r > 0
+        ):
+            raise ValueError(
+                f"training.moe_lora is not applied by task={self.task!r} unless "
+                "training.classifier_lora is true and training.lora.r > 0: without them that "
+                "trainer full-fine-tunes and builds no adapter for the flag to select. Set "
+                "classifier_lora: true and lora.r >= 1, or remove moe_lora."
+            )
+        if self.backend == "unsloth":
+            raise ValueError(
+                "training.moe_lora is not applied on backend='unsloth': unsloth attaches "
+                "its own fixed attention targets and never reads the flag. Use backend: "
+                "transformers, or remove moe_lora."
+            )
+        if self.task == "sft" and self.modality in ("vision", "audio"):
+            raise ValueError(
+                f"training.moe_lora is not applied by task='sft' with "
+                f"modality={self.modality!r}: that setup builds its adapter without the "
+                "MoE target step. Remove moe_lora, or train with modality: text."
+            )
+        why = {
+            "asr": "that trainer loads Whisper, which has no expert layers",
+            "moe_lora_routing": "that trainer routes between existing adapters "
+            "and builds no LoRA adapter of its own",
+            "prm": "that trainer fine-tunes every base parameter and builds no LoRA adapter",
+        }.get(self.task)
+        if why is None:
+            return self
+        raise ValueError(
+            f"training.moe_lora is not applied by task={self.task!r}: {why}. "
+            "Remove moe_lora (or set it to false)."
+        )
+
+    @model_validator(mode="after")
+    def _validate_peft_variant_backend_and_quantization(self) -> "SoupConfig":
+        """Keep advertised PEFT variants on paths that actually implement them."""
+        lcfg = self.training.lora
+        variant = "vera" if lcfg.use_vera else lcfg.init_strategy
+        if variant == "random":
+            return self
+        if self.task == "moe_lora_routing":
+            raise ValueError(
+                f"training.lora variant {variant!r} is not applied by "
+                "task='moe_lora_routing': that trainer loads existing adapters "
+                "with PeftModel.from_pretrained instead of constructing a new "
+                "adapter. Choose plain defaults here and configure the adapters "
+                "through training.mole_task_adapters."
+            )
+        if self.backend != "transformers":
+            raise ValueError(
+                f"training.lora variant {variant!r} requires backend='transformers'; "
+                f"backend={self.backend!r} has its own adapter constructor and cannot "
+                "apply this PEFT method. Use backend='transformers' or choose plain LoRA."
+            )
+        if variant == "pissa" and self.training.quantization != "none":
+            raise ValueError(
+                "training.lora.init_strategy='pissa' requires "
+                "training.quantization='none': PEFT PiSSA computes an SVD of the "
+                "floating-point base weights during adapter initialization, so an "
+                f"already quantized base ({self.training.quantization!r}) is invalid."
+            )
+        if variant == "loftq" and self.training.quantization != "none":
+            raise ValueError(
+                "training.lora.init_strategy='loftq' requires "
+                "training.quantization='none': PEFT LoftQ quantizes the base model "
+                "during adapter initialization, so passing an already quantized model "
+                f"({self.training.quantization!r}) is invalid."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_chat_template_supported_tasks(self) -> "SoupConfig":
+        """Reject chat-template overrides on trainers that never render chat."""
+        unsupported = {
+            "pretrain",
+            "embedding",
+            "classifier",
+            "reranker",
+            "cross_encoder",
+            "prm",
+            "asr",
+            "moe_lora_routing",
+            "unlearn",
+        }
+        if (
+            self.data.chat_template is not None
+            and self.task in unsupported
+            # Streaming supports only SFT/pretrain and has its own task-specific
+            # rejection below; keep that more actionable error when enabled.
+            and not self.training.stream_layers
+        ):
+            raise ValueError(
+                "data.chat_template is not used by "
+                f"task={self.task!r}; remove it or choose a conversational training task"
+            )
+        return self
+
     @model_validator(mode="before")
     @classmethod
     def _remap_root_level_misplaced_keys(cls, values):
@@ -4013,29 +4820,12 @@ class SoupConfig(BaseModel):
         under ``training``. Without remap, Pydantic silently drops the
         misplaced key — including ``lora.init_strategy`` validation.
 
-        Migrate root-level ``lora`` into ``training.lora`` so nested
-        validation (Literal["random","pissa","olora"]) actually fires.
-
-        Caller's dict is never mutated — we work on shallow copies, matching
-        v0.33.0 #47 / v0.40.0 Part B immutability policy.
+        Delegates to :func:`remap_root_level_misplaced_keys` so the unknown-key
+        detector (``config/unknown_keys.py``) applies the *same* normalisation
+        before it walks a raw config: a spelling this validator accepts must
+        not be one the detector refuses (#879).
         """
-        if not isinstance(values, dict):
-            return values
-        # Detect any misplaced key first so we avoid copying when not needed.
-        misplaced_keys = [k for k in ("lora",) if k in values]
-        if not misplaced_keys:
-            return values
-        new_values = dict(values)
-        new_training = dict(new_values.get("training") or {})
-        for misplaced in misplaced_keys:
-            if misplaced in new_training:
-                raise ValueError(
-                    f"{misplaced!r} found at both root and training level — "
-                    f"keep only one (training.{misplaced} preferred)."
-                )
-            new_training[misplaced] = new_values.pop(misplaced)
-        new_values["training"] = new_training
-        return new_values
+        return remap_root_level_misplaced_keys(values)
 
     @model_validator(mode="after")
     def _validate_v028_speed_memory_supported_tasks(self) -> "SoupConfig":
@@ -4056,8 +4846,10 @@ class SoupConfig(BaseModel):
             offenders.append('quantization_aware="fp8"')
         if tcfg.activation_offloading is not None:
             offenders.append("activation_offloading")
-        if tcfg.kernel_auto_compose:
-            offenders.append("kernel_auto_compose")
+        if tcfg.fp8_attention and self.backend != "mlx":
+            offenders.append("fp8_attention")
+        if tcfg.nvfp4 and self.backend != "mlx":
+            offenders.append("nvfp4")
         if not offenders:
             return self
         # Distinct reasons get distinct messages so users don't waste time
@@ -4185,7 +4977,7 @@ class SoupConfig(BaseModel):
 
         Delegates to :func:`grpo_long_context.validate_long_context_grpo_compat`
         so the rules are single-source-of-truth (mirrors v0.49.0 LongLoRA).
-        Live Tiled MLP wiring is deferred to v0.56.0.
+        Staged field is accepted but unconsumed, and refused as of v0.77 (#808).
         """
         if not self.training.long_context_grpo:
             return self
@@ -4356,8 +5148,17 @@ class SoupConfig(BaseModel):
                 raise ValueError(str(exc)) from exc
             if tcfg.tts_family is None:
                 raise ValueError(
-                    "task='tts' requires training.tts_family in "
-                    "(orpheus, sesame_csm, llasa, spark, oute)"
+                    "task='tts' requires a runnable training.tts_family in "
+                    "(orpheus, llasa, spark, oute); sesame_csm is currently refused"
+                )
+            if tcfg.tts_family == "sesame_csm":
+                raise ValueError(
+                    "training.tts_family='sesame_csm' is not supported by Soup yet: "
+                    "CSM trains text plus 32 Mimi codebooks as parallel multimodal "
+                    "frames, so neither raw data.format='audio' nor pre-encoded "
+                    "data.format='chatml' is a valid text-SFT substitute. Use the "
+                    "model's native CSM/AutoProcessor training path until Soup has "
+                    "a dedicated CSM trainer."
                 )
             if tcfg.tts_emotion is not None:
                 try:
@@ -4458,6 +5259,8 @@ class SoupConfig(BaseModel):
             or tcfg.distill_divergence is not None
             or tcfg.distill_temperature is not None
             or distill_mode_set
+            or tcfg.distill_chunk_size is not None
+            or bool(tcfg.distill_checkpoint)
         )
         if self.task == "distill":
             from soup_cli.utils.distill import validate_distill_compat
@@ -4470,6 +5273,37 @@ class SoupConfig(BaseModel):
                 )
             except ValueError as exc:
                 raise ValueError(str(exc)) from exc
+
+            chunk_offenders = [
+                name
+                for name, val in (
+                    ("distill_chunk_size", tcfg.distill_chunk_size),
+                    (
+                        "distill_checkpoint",
+                        tcfg.distill_checkpoint if tcfg.distill_checkpoint else None,
+                    ),
+                )
+                if val is not None
+            ]
+            if chunk_offenders:
+                if tcfg.uld_strategy is not None:
+                    raise ValueError(
+                        f"Distillation fields {chunk_offenders} are incompatible with "
+                        f"training.uld_strategy={tcfg.uld_strategy!r}; "
+                        "chunked evaluation applies only to standard token-level distillation"
+                    )
+                if tcfg.minillm_enabled:
+                    raise ValueError(
+                        f"Distillation fields {chunk_offenders} are incompatible with "
+                        "training.minillm_enabled=True; "
+                        "chunked evaluation applies only to standard token-level distillation"
+                    )
+                if tcfg.distill_mode == "sequence":
+                    raise ValueError(
+                        f"Distillation fields {chunk_offenders} are incompatible with "
+                        "training.distill_mode='sequence'; "
+                        "chunked evaluation applies only to token-level distillation"
+                    )
             return self
         if distill_fields_set:
             offenders = [
@@ -4478,6 +5312,11 @@ class SoupConfig(BaseModel):
                     ("distill_divergence", tcfg.distill_divergence),
                     ("distill_temperature", tcfg.distill_temperature),
                     ("distill_mode", tcfg.distill_mode if distill_mode_set else None),
+                    ("distill_chunk_size", tcfg.distill_chunk_size),
+                    (
+                        "distill_checkpoint",
+                        tcfg.distill_checkpoint if tcfg.distill_checkpoint else None,
+                    ),
                 ) if value is not None
             ]
             raise ValueError(
@@ -4491,17 +5330,11 @@ class SoupConfig(BaseModel):
         """v0.52.0 Part D — ``quantization='bitnet_1.58'`` gate."""
         if self.training.quantization != "bitnet_1.58":
             return self
-        from soup_cli.utils.bitnet import validate_bitnet_compat
-
-        try:
-            validate_bitnet_compat(
-                task=self.task,
-                backend=self.backend,
-                modality=self.modality,
-            )
-        except ValueError as exc:
-            raise ValueError(str(exc)) from exc
-        return self
+        raise ValueError(
+            "BitNet 1.58 training is not implemented yet; "
+            "the export path `soup export --format tq1_0` works on an "
+            "existing BitNet checkpoint."
+        )
 
     @model_validator(mode="after")
     def _validate_ebft_compat(self) -> "SoupConfig":
@@ -4566,6 +5399,65 @@ class SoupConfig(BaseModel):
                 f"training.train_on_eot=true requires task in "
                 f"{sorted(sft_family_tasks)}; got task={self.task!r}"
             )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_kernel_flags_task_gate(self) -> "SoupConfig":
+        """#806: use_flash_attn / use_liger are read only by the SFT-family
+        trainer (sft.py, inherited by tts.py's ``TTSTrainerWrapper``); every
+        other task ignores both, so reject rather than silently no-op.
+        """
+        tcfg = self.training
+        if tcfg.use_liger and self.task not in SFT_KERNEL_AWARE_TASKS:
+            raise ValueError(
+                f"training.use_liger=true requires task in "
+                f"{sorted(SFT_KERNEL_AWARE_TASKS)}; got task={self.task!r}"
+            )
+        if tcfg.use_flash_attn and self.task not in SFT_KERNEL_AWARE_TASKS:
+            raise ValueError(
+                f"training.use_flash_attn=true requires task in "
+                f"{sorted(SFT_KERNEL_AWARE_TASKS)}; got task={self.task!r}"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_moe_flags_reach_a_trainer(self) -> "SoupConfig":
+        """#798 — refuse MoE flags on tasks whose trainer never reads them.
+
+        ``moe_expert_quant`` and ``train_router_only`` are applied in
+        ``trainer/sft.py`` only; ``moe_aux_loss_coeff`` in ``sft.py`` and
+        ``pretrain.py``. On every other task they were accepted, stored in the
+        run's config, and silently not applied -- the defect class this release
+        cycle spent its time removing. (The version is deliberately not spelled
+        out here: ``config/unknown_keys.py`` is the one file allowed to hold it,
+        and ``test_issue627...::test_the_version_is_written_out_in_exactly_one_source_file``
+        fails on a second copy.)
+
+        ``moe_aux_loss_coeff``'s default is ``0.01``, and a dumped config writes
+        it out, so only a NON-DEFAULT value is refused: refusing the default
+        would break every stored config and the eleven shipped recipes that
+        write it explicitly.
+        """
+        tcfg = self.training
+        if self.task not in _MOE_EXPERT_KNOB_TASKS:
+            for field in ("moe_expert_quant", "train_router_only"):
+                value = getattr(tcfg, field, None)
+                if value:
+                    raise ValueError(
+                        f"training.{field} is not applied by task={self.task!r}: "
+                        f"only {sorted(_MOE_EXPERT_KNOB_TASKS)} read it "
+                        f"(trainer/sft.py), so it would be stored and never take "
+                        f"effect. Remove it, or use one of those tasks."
+                    )
+        if self.task not in _MOE_AUX_LOSS_TASKS:
+            default = type(tcfg).model_fields["moe_aux_loss_coeff"].default
+            if tcfg.moe_aux_loss_coeff != default:
+                raise ValueError(
+                    f"training.moe_aux_loss_coeff={tcfg.moe_aux_loss_coeff!r} is "
+                    f"not applied by task={self.task!r}: only "
+                    f"{sorted(_MOE_AUX_LOSS_TASKS)} read it (sft.py, "
+                    f"pretrain.py). Remove it, or use one of those tasks."
+                )
         return self
 
     @model_validator(mode="after")
@@ -4655,6 +5547,8 @@ class SoupConfig(BaseModel):
             lora_conflicts.append("lora.use_olora")
         if lcfg.use_rslora:
             lora_conflicts.append("lora.use_rslora")
+        if lcfg.target_parameters:
+            lora_conflicts.append("lora.target_parameters")
         if tcfg.moe_lora:
             lora_conflicts.append("moe_lora")
         if tcfg.use_longlora:
@@ -4663,6 +5557,8 @@ class SoupConfig(BaseModel):
             lora_conflicts.append("relora_steps")
         if tcfg.loraplus_lr_ratio is not None:
             lora_conflicts.append("loraplus_lr_ratio")
+        if tcfg.use_lorafa:
+            lora_conflicts.append("use_lorafa")
         if lora_conflicts:
             raise ValueError(
                 f"training.unfrozen_parameters (Spectrum full fine-tuning, "
@@ -4676,9 +5572,13 @@ class SoupConfig(BaseModel):
         """v0.71.34 #267 — LISA compatibility gates.
 
         LISA is full-FT of a rotating set of decoder layers (LoRA off), so it
-        shares Spectrum's ``unfrozen_parameters`` gate: sft + transformers +
-        text + quantization=none, mutually exclusive with the LoRA feature
-        flags, the other freeze mechanisms, and ``unfrozen_parameters`` itself.
+        shares Spectrum's ``unfrozen_parameters`` gate: transformers + text +
+        quantization=none, mutually exclusive with the LoRA feature flags, the
+        other freeze mechanisms, and ``unfrozen_parameters`` itself.
+
+        #307 — the task gate is ``_LISA_SUPPORTED_TASKS`` rather than ``sft``
+        alone: continued pre-training is the same full-FT-of-active-layers
+        mechanism, and ``trainer/pretrain.py`` wires the callback the same way.
         """
         tcfg = self.training
         if not tcfg.lisa_enabled:
@@ -4688,16 +5588,19 @@ class SoupConfig(BaseModel):
                 tcfg.lisa_num_layers != 2
                 or tcfg.lisa_interval_steps != 20
                 or tcfg.lisa_reset_optimizer is not True
+                or tcfg.lisa_train_embeddings is not True
             ):
                 raise ValueError(
                     "training.lisa_* set but lisa_enabled is false — set "
                     "lisa_enabled=true to use LISA layer sampling."
                 )
             return self
-        if self.task != "sft":
+        if self.task not in _LISA_SUPPORTED_TASKS:
             raise ValueError(
                 f"training.lisa_enabled (LISA layerwise sampling) requires "
-                f"task='sft'; got task={self.task!r}"
+                f"task in "
+                f"{', '.join(repr(t) for t in _LISA_SUPPORTED_TASKS)}; "
+                f"got task={self.task!r}"
             )
         if self.backend != "transformers":
             raise ValueError(
@@ -4707,7 +5610,7 @@ class SoupConfig(BaseModel):
         if self.modality != "text":
             raise ValueError(
                 f"training.lisa_enabled requires modality='text' (the LISA "
-                f"callback is wired in the text SFT trainer); "
+                f"callback is wired in the text SFT and pretrain trainers); "
                 f"got modality={self.modality!r}"
             )
         if tcfg.quantization != "none":
@@ -4745,6 +5648,8 @@ class SoupConfig(BaseModel):
             lora_conflicts.append("lora.use_olora")
         if lcfg.use_rslora:
             lora_conflicts.append("lora.use_rslora")
+        if lcfg.target_parameters:
+            lora_conflicts.append("lora.target_parameters")
         if tcfg.moe_lora:
             lora_conflicts.append("moe_lora")
         if tcfg.use_longlora:
@@ -4753,11 +5658,30 @@ class SoupConfig(BaseModel):
             lora_conflicts.append("relora_steps")
         if tcfg.loraplus_lr_ratio is not None:
             lora_conflicts.append("loraplus_lr_ratio")
+        if tcfg.use_lorafa:
+            lora_conflicts.append("use_lorafa")
         if lora_conflicts:
             raise ValueError(
                 f"training.lisa_enabled (LISA full fine-tuning, LoRA off) is "
                 f"mutually exclusive with LoRA features: "
                 f"{', '.join(lora_conflicts)}"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_lorafa_task_and_backend(self) -> "SoupConfig":
+        """#725 — LoRA-FA task and backend gating."""
+        if not self.training.use_lorafa:
+            return self
+        if self.backend != "transformers":
+            raise ValueError(
+                f"training.use_lorafa requires backend='transformers'; "
+                f"got backend={self.backend!r}"
+            )
+        if self.task not in _LORAFA_SUPPORTED_TASKS:
+            raise ValueError(
+                f"training.use_lorafa (LoRA-FA optimizer) is currently only supported for tasks "
+                f"{', '.join(sorted(_LORAFA_SUPPORTED_TASKS))}; got task={self.task!r}"
             )
         return self
 
@@ -4770,9 +5694,9 @@ class SoupConfig(BaseModel):
         mutually exclusive with the LoRA feature flags and with the other two
         (each independently decides what trains).
 
-        Scoped to ``task='sft'`` ON PURPOSE. ``classifier`` / ``reranker`` /
-        ``cross_encoder`` (``classifier_lora``, v0.71.12 #146) and ``asr``
-        (``asr_lora``, v0.71.32) have gated LoRA behind their own opt-in flag
+        Scoped to ``task in ('sft', 'embedding')`` (#340, #700). ``classifier`` /
+        ``reranker`` / ``cross_encoder`` (``classifier_lora``, v0.71.12 #146) and
+        ``asr`` (``asr_lora``, v0.71.32) have gated LoRA behind their own opt-in flag
         for releases, so ``lora.r: 0`` already parses and is already harmless
         there; a blanket gate would break configs that work today. Tasks that
         do pass the rank straight to peft keep their existing behaviour
@@ -4780,7 +5704,7 @@ class SoupConfig(BaseModel):
         a new refusal this issue never measured.
         """
         tcfg = self.training
-        if tcfg.lora.r != 0 or self.task != "sft":
+        if tcfg.lora.r != 0 or self.task not in ("sft", "embedding"):
             return self
         if tcfg.stream_layers:
             # Streaming has its own, more specific refusal (the decoder lives
@@ -4791,7 +5715,7 @@ class SoupConfig(BaseModel):
             raise ValueError(
                 f"training.lora.r=0 (full fine-tuning) requires "
                 f"backend='transformers'; got backend={self.backend!r}. The "
-                f"full-FT branch is wired in the transformers SFT trainer."
+                f"full-FT branch is wired in the transformers SFT and embedding trainers."
             )
         if self.modality != "text":
             raise ValueError(
@@ -4833,6 +5757,8 @@ class SoupConfig(BaseModel):
             lora_conflicts.append("lora.rank_pattern")
         if lcfg.alpha_pattern is not None:
             lora_conflicts.append("lora.alpha_pattern")
+        if lcfg.target_parameters:
+            lora_conflicts.append("lora.target_parameters")
         if getattr(lcfg, "init_strategy", "random") != "random":
             lora_conflicts.append("lora.init_strategy")
         if tcfg.moe_lora:
@@ -4843,11 +5769,41 @@ class SoupConfig(BaseModel):
             lora_conflicts.append("relora_steps")
         if tcfg.loraplus_lr_ratio is not None:
             lora_conflicts.append("loraplus_lr_ratio")
+        if tcfg.use_lorafa:
+            lora_conflicts.append("use_lorafa")
         if lora_conflicts:
             raise ValueError(
                 f"training.lora.r=0 means full fine-tuning (no adapter), so it "
                 f"is mutually exclusive with LoRA features: "
                 f"{', '.join(lora_conflicts)}. Set lora.r >= 1 to use them."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_lora_target_parameters_scope(self) -> "SoupConfig":
+        """#573 — raw-parameter LoRA is live in resident SFT/pretrain only."""
+        targets = self.training.lora.target_parameters
+        if not targets:
+            return self
+        if self.task not in ("sft", "pretrain"):
+            raise ValueError(
+                "training.lora.target_parameters requires task='sft' or "
+                f"task='pretrain'; got task={self.task!r}"
+            )
+        if self.backend != "transformers":
+            raise ValueError(
+                "training.lora.target_parameters requires backend='transformers'; "
+                f"got backend={self.backend!r}"
+            )
+        if self.modality != "text":
+            raise ValueError(
+                "training.lora.target_parameters requires modality='text'; "
+                f"got modality={self.modality!r}"
+            )
+        if self.training.stream_layers:
+            raise ValueError(
+                "training.lora.target_parameters is not yet supported with "
+                "training.stream_layers=true; use resident SFT/pretrain"
             )
         return self
 
@@ -4866,17 +5822,42 @@ class SoupConfig(BaseModel):
             # certainly means the user forgot stream_layers=true.
             if (
                 tcfg.stream_source != "auto"
+                or tcfg.stream_ngram_source != "auto"
                 or tcfg.stream_buffers != 2
+                or tcfg.stream_read_ahead != DEFAULT_STREAM_READ_AHEAD
                 or tcfg.stream_vram_override is not None
                 or tcfg.stream_vram_probe
+                or tcfg.stream_disk_kind is not None
+                or tcfg.stream_pin is not None
             ):
                 raise ValueError(
-                    "training.stream_source / training.stream_buffers / "
+                    "training.stream_source / training.stream_ngram_source / "
+                    "training.stream_buffers / training.stream_read_ahead / "
                     "training.stream_vram_override / training.stream_vram_probe "
-                    "set but stream_layers is false; set stream_layers=true to "
-                    "stream the base layer-by-layer."
+                    "/ training.stream_disk_kind / training.stream_pin set but "
+                    "stream_layers is false; set stream_layers=true to stream the "
+                    "base layer-by-layer."
                 )
             return self
+        # #971 — `stream_source: 'ram'` INSISTS on the RAM tier: 'ram' insists,
+        # 'disk' forces, 'auto' falls back (trainer/stream_setup.py). The
+        # read-ahead reader belongs to the NVMe disk tier, so a non-default
+        # depth beside 'ram' is a setting that validates, is documented, and
+        # reaches nothing — the class of defect #748 exists to catch, and the
+        # one this very field was caught by. The DEFAULT is accepted, because a
+        # default is not a decision: refusing it would make `stream_source: ram`
+        # unusable with every config that never mentions the depth.
+        if (
+            tcfg.stream_source == "ram"
+            and tcfg.stream_read_ahead != DEFAULT_STREAM_READ_AHEAD
+        ):
+            raise ValueError(
+                f"training.stream_read_ahead={tcfg.stream_read_ahead} has no "
+                "effect with training.stream_source='ram': the read-ahead reader "
+                "belongs to the NVMe disk tier, and 'ram' never falls back to "
+                "it. Set stream_source='auto' or 'disk', or drop "
+                "stream_read_ahead."
+            )
         # v0.72.4 — the four preference losses join SFT. DPO and KTO take their
         # reference from the SAME streamed base with adapters disabled (TRL's
         # `null_ref_context`), so the reference costs no extra weights: measured
@@ -4998,6 +5979,34 @@ class SoupConfig(BaseModel):
                 "training.stream_layers is incompatible with lora.use_vera: "
                 "VeRA's shared projections are built from the materialised "
                 "base weights, which streaming keeps on the meta device."
+            )
+        # #1012 follow-up: the forward pass for a LoRA target on the streamed
+        # large-layer boundary modules (lm_head / embed_tokens) is correct
+        # (#1019), and a save -> load_adapter round trip now preserves the
+        # adapter's tensors (#1048), but save_pretrained() still raises
+        # trying to copy a meta tensor. Refuse by name at parse time rather
+        # than let a run train for hours and die at its first save_steps.
+        target_modules = tcfg.lora.target_modules
+        named_targets = (
+            {target_modules} if isinstance(target_modules, str) else set(target_modules)
+        )
+        head_targets = sorted(named_targets & {"lm_head", "embed_tokens"})
+        if head_targets:
+            raise ValueError(
+                "training.stream_layers does not yet support a LoRA target on "
+                f"{', '.join(head_targets)}: the forward pass is correct, but "
+                "saving or resuming an adapter that targets the streamed "
+                "head/embedding boundary is not supported yet. Drop "
+                f"{', '.join(head_targets)} from training.lora.target_modules, "
+                "or train without stream_layers."
+            )
+        if tcfg.moe_expert_quant is not None:
+            raise ValueError(
+                "training.stream_layers is incompatible with "
+                f"training.moe_expert_quant={tcfg.moe_expert_quant!r}: expert "
+                "quantization is applied only by the resident model-construction "
+                "path and would otherwise be silently ignored. Leave "
+                "moe_expert_quant unset when streaming."
             )
         if getattr(tcfg.lora, "init_strategy", "random") != "random":
             raise ValueError(
@@ -5237,6 +6246,138 @@ class SoupConfig(BaseModel):
         return self
 
     @model_validator(mode="after")
+    def _validate_interleave_compat(self) -> "SoupConfig":
+        """#443 — data.interleave requires data.train to be a list, and is
+        fully parsed here rather than in the field validator:
+        num_datasets = len(data.train) is a parse-time constant now that
+        train can be list-shaped.
+
+        packing / multipack concatenate rows into fixed-length blocks, so a
+        per-source mixture ratio stops being meaningful at block
+        boundaries — reject rather than silently mis-mix. Mirrors
+        _validate_replay_compat's identical reasoning for the same
+        packing/multipack conflict, one validator up.
+
+        #459 extends #443's local-files-only v1 to two more shapes, each a
+        DECIDED dispatch rather than an emergent one — every entry is
+        classified once (local file / remote URI / HF-hub name) and the
+        classes may not mix within one data.train list:
+
+        - All entries local files or remote URIs, data.streaming=true: the
+          streaming interleave path (loader._load_interleaved_streaming_datasets)
+          delegates to datasets.interleave_datasets / concatenate_datasets —
+          see that function's docstring for the strategy-name mapping. A
+          remote URI entry without streaming=true still refuses (no
+          non-streaming multi-remote-file loader exists).
+        - All entries HF-hub dataset names: the hub interleave path
+          (loader._load_interleaved_hub_datasets), always eager (never
+          streamed) in this cut — streaming N separately-shaped hub
+          datasets through their own split negotiation is a distinct,
+          larger effort this issue does not implement, so that combination
+          keeps refusing, by name.
+        - Anything else (a list mixing hub names with local/remote entries)
+          keeps refusing — there is no decided answer for how a hub split
+          and a local file's row count should reconcile.
+        """
+        from pathlib import Path
+
+        from soup_cli.utils.data_pipeline import parse_interleave
+
+        data = self.data
+        train_is_list = isinstance(data.train, list)
+
+        if data.interleave is not None:
+            if not train_is_list:
+                raise ValueError(
+                    "data.interleave requires data.train to be a list of "
+                    ">= 2 local file paths, remote URIs, or HF-hub dataset "
+                    "names"
+                )
+            # Full parse now that num_datasets is a parse-time constant —
+            # validates strategy/probs shape against the actual dataset
+            # count (parse_interleave is otherwise unmodified by #443).
+            parse_interleave(data.interleave, num_datasets=len(data.train))
+
+            if self.training.packing:
+                raise ValueError(
+                    "data.interleave is incompatible with training.packing "
+                    "(packing concatenates rows into fixed blocks, so a "
+                    "per-source mixture ratio stops being meaningful)"
+                )
+            if self.training.multipack:
+                raise ValueError(
+                    "data.interleave is incompatible with "
+                    "training.multipack (bin-packing breaks the "
+                    "per-source mixture ratio)"
+                )
+
+            # #459 — classify every entry, then dispatch. Kept local to this
+            # validator (rather than exported) since loader.py has its own
+            # copy for the actual load-time dispatch; the two must agree,
+            # so keep the classification RULE (suffix-in-allowlist /
+            # "://"-in-entry) the only thing either site encodes, not the
+            # classify function itself — see loader._classify_train_entry's
+            # docstring.
+            #
+            # _local_file_extensions duplicates loader.SUPPORTED_EXTENSIONS
+            # literally (not imported — that would import loader.py, which
+            # imports DataConfig from this module, an import cycle; also
+            # loader.py intentionally carries the torch-adjacent deps this
+            # module stays light of). A suffix must be one of these to
+            # count as 'local' (#468 review fix) — "any non-empty
+            # Path.suffix" previously misclassified any hub name with a
+            # version number (``teknium/OpenHermes-2.5``,
+            # ``mlfoundations/dclm-baseline-1.0``) as a local file.
+            _local_file_extensions = {".jsonl", ".json", ".csv", ".parquet", ".txt"}
+
+            def _kind(entry: str) -> str:
+                # Scheme-agnostic "://" sniff (#468 review fix), not an
+                # is_remote_uri allowlist check — mirrors loader.py's
+                # _looks_like_remote_uri. The scheme allowlist is enforced
+                # downstream, at load time, by validate_remote_uri (refuses
+                # a non-allowlisted scheme BY NAME); classifying only
+                # allowlisted schemes as 'remote' here let e.g. an
+                # https://... entry with a familiar suffix fall through to
+                # 'local' and reach hf_load unvalidated instead.
+                if "://" in entry:
+                    return "remote"
+                if Path(entry).suffix.lower() in _local_file_extensions:
+                    return "local"
+                return "hub"
+
+            kinds = {_kind(entry) for entry in data.train}
+
+            if kinds == {"hub"}:
+                if data.streaming:
+                    raise ValueError(
+                        "data.interleave with an all-HF-hub-dataset-name "
+                        "data.train does not support data.streaming=true — "
+                        "streaming N separately-shaped hub datasets and "
+                        "reconciling their splits is unimplemented; drop "
+                        "streaming or use local files"
+                    )
+            elif kinds <= {"local", "remote"}:
+                if not data.streaming and "remote" in kinds:
+                    raise ValueError(
+                        "data.interleave list entries that are remote URIs "
+                        "require data.streaming=true (no non-streaming "
+                        "multi-remote-file loader exists) — set "
+                        "data.streaming: true or use only local file paths"
+                    )
+            else:
+                raise ValueError(
+                    "data.interleave list entries must be all local file "
+                    "paths / remote URIs, or all HF-hub dataset names — "
+                    f"not a mix (got kinds={sorted(kinds)})"
+                )
+        elif train_is_list:
+            raise ValueError(
+                "data.train as a list requires data.interleave to be set "
+                "— otherwise the mixture strategy is undefined"
+            )
+        return self
+
+    @model_validator(mode="after")
     def _validate_vllm_sleep_mode(self) -> "SoupConfig":
         """v0.50.0 Part B — ``vllm_sleep_mode`` requires task='grpo' and a
         vLLM-compatible backend (transformers/unsloth).
@@ -5329,9 +6470,15 @@ class SoupConfig(BaseModel):
     def _validate_bnb_4bit_double_quant(self) -> "SoupConfig":
         """v0.53.0 Part E — ``bnb_4bit_use_double_quant=True`` requires
         ``quantization='4bit'`` (silent-no-op footgun otherwise).
+
+        #321 — the field is tri-state (`None` = unset = shipped default). The
+        footgun fires only on an explicit ``True``: ``None`` and ``False`` carry
+        no intent to double-quantize, so a non-4bit config is not rejected — and
+        because unset serializes as ``None`` (not ``True``), a dumped-and-reloaded
+        config no longer trips this, unlike the old ``model_fields_set`` gate.
         """
         tcfg = self.training
-        if not tcfg.bnb_4bit_use_double_quant:
+        if tcfg.bnb_4bit_use_double_quant is not True:
             return self
         if tcfg.quantization != "4bit":
             raise ValueError(
@@ -5962,6 +7109,12 @@ class SoupConfig(BaseModel):
         backend. Setting any minillm_* tunable without
         ``minillm_enabled=True`` is rejected (silent no-op footgun
         mirroring v0.52 distill / v0.62 grace_codebook policy).
+
+        #692 — ``minillm_enabled`` + offline blend + mix ratio 0
+        is the inverse footgun: the teacher is loaded and forwarded, then
+        given zero weight. Rejected at parse. Ratio 0 stays legal on the
+        on-policy path (student-only sampling, loss still KL(student ||
+        teacher)).
         """
         tcfg = self.training
         any_field_set = (
@@ -6023,6 +7176,19 @@ class SoupConfig(BaseModel):
                 "minillm_rollout_length requires minillm_on_policy=True "
                 "(unused by the offline distribution blend)"
             )
+        # #692 — offline blend at mix 0 is KL(student || stopgrad(student)).
+        if (
+            not tcfg.minillm_on_policy
+            and tcfg.minillm_teacher_mix_ratio == 0.0
+        ):
+            raise ValueError(
+                "minillm_enabled with minillm_on_policy=false requires "
+                "minillm_teacher_mix_ratio > 0; ratio 0 makes the offline "
+                "reverse-KL target the detached student (no teacher signal). "
+                "Set minillm_teacher_mix_ratio in (0, 1], or set "
+                "minillm_on_policy=true (ratio 0 then means student-only "
+                "sampling while the loss stays KL(student || teacher))"
+            )
         return self
 
     @model_validator(mode="after")
@@ -6079,6 +7245,53 @@ class SoupConfig(BaseModel):
         # mutual exclusion) only when a mode is active.
         if mitigation != "off":
             _validate_reward_hack_controller(tcfg)
+        return self
+
+    @model_validator(mode="after")
+    def _validate_callback_monitoring_task_compat(self) -> "SoupConfig":
+        """#802, #1069 — prm, moe_lora_routing, and unlearn attach no
+        SoupTrainerCallback, and on backend=mlx the callback has no stop control,
+        no checkpoint-rollback path, and no VRAM budget, so reject loss_watchdog,
+        loss_spike_recovery, and grad_accum_auto_tune when set to True on these
+        tasks or on backend=mlx.
+        """
+        unsupported = ("prm", "moe_lora_routing", "unlearn")
+        if self.task in unsupported:
+            tcfg = self.training
+            if getattr(tcfg, "loss_spike_recovery", False):
+                raise ValueError(
+                    f"training.loss_spike_recovery is not supported for task={self.task!r} "
+                    f"because {self.task!r} does not attach a live training callback"
+                )
+            if getattr(tcfg, "loss_watchdog", False):
+                raise ValueError(
+                    f"training.loss_watchdog is not supported for task={self.task!r} "
+                    f"because {self.task!r} does not attach a live training callback"
+                )
+            if getattr(tcfg, "grad_accum_auto_tune", False):
+                raise ValueError(
+                    f"training.grad_accum_auto_tune is not supported for task={self.task!r} "
+                    f"because {self.task!r} does not attach a live training callback"
+                )
+        if self.backend == "mlx":
+            tcfg = self.training
+            if getattr(tcfg, "loss_spike_recovery", False):
+                raise ValueError(
+                    f"training.loss_spike_recovery is not supported for backend={self.backend!r} "
+                    "because spike recovery is driven by the watchdog and the watchdog "
+                    "cannot fire on MLX"
+                )
+            if getattr(tcfg, "loss_watchdog", False):
+                raise ValueError(
+                    f"training.loss_watchdog is not supported for backend={self.backend!r} "
+                    "because Soup does not implement the watchdog on the MLX callback, "
+                    "which has no stop control"
+                )
+            if getattr(tcfg, "grad_accum_auto_tune", False):
+                raise ValueError(
+                    f"training.grad_accum_auto_tune is not supported for backend={self.backend!r} "
+                    "because there is no VRAM total to measure pressure against on unified memory"
+                )
         return self
 
 
@@ -6429,6 +7642,10 @@ training:
     r: 64
     alpha: 16
     target_modules: auto
+    # peft adapts fused expert parameters through a ParamWrapper, which refuses a
+    # non-zero dropout, so moe_lora: true and the 0.05 default cannot both hold
+    # (#798). Every shipped MoE recipe pins this line for the same reason.
+    dropout: 0.0
   quantization: 4bit
   moe_lora: true
   moe_aux_loss_coeff: 0.01

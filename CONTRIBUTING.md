@@ -17,11 +17,21 @@ cd Soup
 exactly those three; `tests/test_requires_python_bound.py` derives the declared bound from
 the CI matrix, so widening one without the other fails the suite.
 
-Install the project in editable mode with dev dependencies:
+Work inside a virtualenv, then install the project in editable mode with dev
+dependencies:
 
 ```bash
+python3 -m venv .venv
+source .venv/bin/activate          # Windows: .venv\Scripts\activate
 pip install -e ".[dev]"
 ```
+
+The `venv` step is not optional on Debian 12, Ubuntu 23.04 or later: without it
+`pip` refuses with `error: externally-managed-environment`, because those distros
+stop pip writing into the system Python that `apt` manages
+([PEP 668](https://peps.python.org/pep-0668/)). `pipx` is the answer for
+*installing* Soup and the wrong tool here, since an editable checkout needs to be
+importable by the test suite rather than isolated from it.
 
 This installs:
 - `pytest` for testing
@@ -49,7 +59,7 @@ pytest tests/ -v --tb=short
 Run the linter:
 
 ```bash
-ruff check src/soup_cli/ tests/
+ruff check src/soup_cli/ scripts/ tests/ benchmarks/
 ```
 
 If both pass — you're ready to contribute!
@@ -60,10 +70,10 @@ We use **ruff** for all code style and linting. Before committing, run:
 
 ```bash
 # Check for issues
-ruff check src/soup_cli/ tests/
+ruff check src/soup_cli/ scripts/ tests/ benchmarks/
 
 # Auto-fix issues
-ruff check --fix src/soup_cli/ tests/
+ruff check --fix src/soup_cli/ scripts/ tests/
 ```
 
 ### Style Guidelines
@@ -72,6 +82,7 @@ ruff check --fix src/soup_cli/ tests/
 - **Imports:** Sorted and organized (ruff I rule)
 - **Naming:** No single-letter variable names (ruff E741) — use `entry`, `part`, `length` instead of `l`, `p`, etc.
 - **Lazy imports:** Heavy dependencies (torch, transformers, peft, trl, etc.) should be imported inside functions, not at module level, to keep the CLI responsive
+- **No third-party licence headers.** This project is Apache-2.0 and ships to PyPI, so an `SPDX-License-Identifier` or copyright line naming anyone else is a licensing claim we cannot make. If you generate files from a template — including with automated tooling, which is how this has happened three times — strip its header before you push. `tests/test_no_foreign_license_headers.py` fails the build on this rather than relying on you or me to spot it in a diff.
 - **Config validation:** Always use Pydantic v2 with `BaseModel` and `Field`
 - **Output:** Use `rich.console.Console` for all output — never bare `print()`
 - **Type hints:** Always include type hints for function parameters and return values
@@ -112,7 +123,7 @@ src/soup_cli/
   experiment/         - SQLite experiment tracking
   eval/               - Eval platform (custom tasks, LLM judge, human eval, leaderboard)
   migrate/            - Config migration (LLaMA-Factory, Axolotl, Unsloth)
-  recipes/            - Ready-made configs for popular models (142 recipes)
+  recipes/            - Ready-made configs for popular models (174 recipes)
   autopilot/          - Zero-config decision engine (v0.25.0)
   registry/           - Model Registry (hashing, store, diff, attach) (v0.26.0 + v0.33.0)
   cans/               - Shareable .can artifact format + run/publish orchestrator (v0.26.0 + v0.33.0)
@@ -122,7 +133,7 @@ src/soup_cli/
   templates/          - 21 built-in soup.yaml templates (YAML + manifest.json) with load_template loader (v0.39.0, +bco v0.40.0, +4 compliance v0.71.35)
   ui/                 - Web UI (FastAPI + HTML/JS SPA)
 
-tests/                - Test suite (360 files, 17907 tests)
+tests/                - Test suite covering all CLI commands, trainers, and model architectures
 examples/             - Real-world config examples and datasets
 ```
 
@@ -152,7 +163,35 @@ pytest tests/test_data.py::test_detect_alpaca_format -v
 pytest tests/ --cov=soup_cli --cov-report=html
 ```
 
-### Test Files (360 files)
+### GPU Tests
+
+Every CI runner is GPU-less, so the tests that need a CUDA device skip there and
+only mean something on a real card. They carry the `gpu` marker (#833):
+
+```bash
+pytest tests/ -m gpu --no-cov -v
+```
+
+`--no-cov` matters: the default `--cov-fail-under` gate is computed over the whole
+package and fails a subset run. To gate a new test on CUDA, decorate it with
+`@pytest.mark.gpu` (or `@pytest.mark.gpu(reason="...")`); do not write your own
+`torch.cuda.is_available()` check. `tests/conftest.py` holds the one probe, and
+`tests/test_issue833_gpu_marker.py` fails on a private one. Use
+`tests.conftest.cuda_available()` only to pick a device, never to skip.
+
+If you have a card, a run is a real contribution: both recorded runs so far found
+defects CI could not see. Open an issue (or comment on #833) with:
+
+- the card, its compute capability (`torch.cuda.get_device_capability()`), and VRAM
+- the driver version, and the torch build (`torch.__version__`, `torch.version.cuda`)
+- the `bitsandbytes` version, if installed
+- the commit you ran (`git rev-parse HEAD`)
+- the summary line (`N passed, N failed, N skipped`), and the name and first error
+  line of every failure
+
+Accepted runs are recorded in [`benchmarks/gpu-test-runs.md`](benchmarks/gpu-test-runs.md).
+
+### Test Files
 
 > A representative sample of the suite below. Run `pytest tests/ -v` for the complete list.
 
@@ -247,14 +286,14 @@ pytest tests/ --cov=soup_cli --cov-report=html
 | test_multi_gpu.py | Multi-GPU Mastery: topology, --gpus, accelerate launcher, ZeRO++, FSDP2+compile, pipeline (v0.27.0) |
 | test_training_speed.py | Training Speed & Memory: CCE, FP8, grad-ckpt tiers, kernel picker, cross-doc attn, activation offload (v0.28.0) |
 | test_hf_integration.py | HF Hub Deep Integration: token/endpoint/repo_id, auto-push callback, model card v2, collections, data push, HF Spaces, private-IP SSRF (v0.29.0) |
-| test_inference_advanced.py | Inference Excellence: prefix caching, spec-decoding auto-pairing, LoRA hot-swap, structured output, dashboard + /metrics, OpenTelemetry tracing, auto-quant picker (v0.30.0) |
+| test_inference_advanced.py | Inference Excellence: prefix caching, spec-decoding auto-pairing, LoRA hot-swap, structured output, dashboard + /metrics, OpenTelemetry tracing, dormant auto-quant helpers (v0.30.0; serving refuses auto-quant since #816) |
 | test_recipes_v031.py | Model & Recipe Breadth: 34 new recipes (vision/audio/reasoning/edge/domain/multimodal); catalog-wide invariants; CI workflow validation (v0.31.0) |
 | test_auto_tuning.py | Training Stability & Auto-Tuning: LR range finder, grad-accum monitor, auto mixed-precision, auto warmup, spike recovery, convergence detector, autopilot wiring (v0.32.0) |
 | test_part_f_hardening.py | Live Wire Part F: RLVR OS-level sandbox isolation + prune_checkpoints TOCTOU (v0.33.0) |
 | test_part_a_wave1.py | Live Wire Part A: live eval-gate scoring + registry attach (v0.33.0) |
 | test_part_a_wave2.py | Live Wire Part A: soup can run / publish + DeployTarget schema (v0.33.0) |
 | test_part_e.py | Live Wire Part E: --find-lr live loop + spike recovery hint + auto mixed-precision push + grad-accum advisory (v0.33.0) |
-| test_part_d.py | Live Wire Part D: structured-output LogitsProcessor + auto-quant live picker + HF push integration smoke (v0.33.0) |
+| test_part_d.py | Historical Part D primitives: structured-output LogitsProcessor + dormant auto-quant helpers + HF push integration smoke (v0.33.0; serving refuses auto-quant since #816) |
 | test_part_c.py | Live Wire Part C: multi-trainer v0.28.0 features + selective ckpt hooks + CrossDocCollator (v0.33.0) |
 | test_part_b.py | Live Wire Part B: auto-reexec under accelerate launch + DeepSpeed-MII live serve (v0.33.0) |
 | test_log_level.py | Smart logging tiers `--log-level quiet/normal/verbose/debug` (v0.34.0 Part A) |
@@ -288,7 +327,9 @@ pytest tests/ --cov=soup_cli --cov-report=html
 | test_v0580.py | v0.58.0 `soup loop` CLI-first data flywheel — `LoopState` frozen + 3 closed allowlist + bool/null/oversize/non-string reject; `with_status` / `bumped` (unknown counter + bool delta rejected); state file I/O atomic + cwd containment + POSIX symlink rejection + 1 MiB cap + forward-compat unknown-field-dropping; `init_state` refuses overwrite without `--force`; `CanaryPolicy` (cross-field, NaN/Inf, frozen); deterministic SHA-256 routing (stable-only / 0% / 100% / determinism / 25% split approximate / empty key / NUL key / non-policy); `rollback` (clears canary / route-after-rollback all-stable / reason / non-policy); `BucketStats` (record + verdict OK/MAJOR/UNKNOWN + bounds + invalid bucket + snapshot MappingProxyType); `parse_budget_string` (5 happy + empty/garbage/NUL/negative/overflow); `check_budget` (within/budget-blocked/daily-cap-blocked/None=unlimited + negative/NaN/bool guards); `reset_daily_counter_if_new_day` (same-day/new-day/None-prior/negative); `IterationRecord` frozen + verdict allowlist + path-separator id; iteration write/read roundtrip + outside-cwd + missing + sorted listing + non-record + invalid manifest; `new_iteration_id` unique × 20; `run_once` (defaults + budget-skip + custom callbacks + invalid types); `WatchConfig` (defaults + bad poll_interval/max_iterations/callable); `watch` finite-runs + on_iteration flips status to stop; `maybe_rollback` (OK no-op / MAJOR clears / UNKNOWN no-op / non-policy / non-str); CLI smoke (loop --help / init / refuse overwrite / --force / invalid budget / status without init / status / pause+resume cycle / pause-stopped / resume-running / watch --max-iterations / --foreground/--detach mutex / canary / canary invalid traffic / canary same-as-stable / replay list-empty / replay show / replay unknown); source-grep (cli.py registers loop / `__init__.py` == 0.58.0 / no top-level torch in 5 loop modules / typer.Typer). Review-fix coverage: 1 CRITICAL + 3 HIGH + 3 MEDIUM + 1 LOW. Test count: 160 (188 pass + 1 POSIX-skipped). (v0.58.0) |
 | test_v0570_part_d.py | v0.57.0 Part D `soup adapters branch/checkout/branches` — `create_branch` happy + with-dataset + invalid-name + null-byte name + bool name + config-outside-cwd + missing-config + empty-base-model + null-byte base + **bool base_model rejected** + oversize 1MiB config + atomic write; `list_branches` empty + sorted; `load_branch` roundtrip + missing + invalid-name + **POSIX symlink rejection**; `delete_branch` true-when-present + false-missing + **POSIX symlink rejection** + traversal rejection; `write_checkout` writes target + drift detection + outside-cwd reject + non-branch + missing source; `Branch` FrozenInstanceError; SOUP_BRANCHES_DIR env override (valid-honoured + null-byte falls-back via mocked os.environ.get + CRLF falls-back); CLI smoke create / list / checkout / invalid-name / missing-config / missing-branch / empty-list. Test count: 37 (v0.57.0 Part D, 4 POSIX-skipped on Windows) |
 | test_issue349_measured_fit.py | v0.73.1 #349 — measured stream VRAM fit: `training.stream_vram_probe` (bool, default false, sft-only) decides layer-streaming VRAM pre-flight by MEASURING a real forward+backward at the configured shape instead of using the fitted formula; justified on RTX 3050 where the formula under-predicts 0.934x at seq 5120 / 0.787x at seq 6144. Config validation + schema bounds (task gate sft, rejects stream_layers=false). Plus: `training.batch_size` field_validator now rejects 0 and negative values (was accepting `-4` before). Test count: 33 (v0.73.1) |
+| test_issue372_no_reexec_hint.py | #372 — `--no-reexec` hint is derived from the same argv as auto-reexec (`build_train_reexec_argv` + `hint_argv_from_reexec`); tokenised printed command is a superset of user flags parametrised over `--fsdp` / `--deepspeed` / `--config` / `--trust-remote-code`; control with no extra flags still prints a valid minimal command; CLI smoke does not skip. |
 | test_issue392_mlx_target_keys.py | v0.73.1 #392 — the MLX `adapter_config.json` serialised `target_modules` UNRESOLVED, so a default MLX adapter loaded as a silent no-op. `_apply_lora` resolved `auto` into a LOCAL variable and trained the resolved modules; the writer serialised the raw config value, so the file carried `{"keys": ["auto"]}`, `linear_to_lora_layers` matched no module and `load_weights(strict=False)` dropped all 96 LoRA tensors WITHOUT A WORD — generation with the adapter bit-identical to the base. `auto` is the schema DEFAULT, so this was every MLX run that did not name its modules by hand, and `adapter_config.json` exists specifically to promise the output dir loads with `mlx_lm.load(..., adapter_path=...)`. Reported by @armanbot-jpg with the control that isolates it: hand-editing `keys` makes the very same `adapters.safetensors` produce the tuned behaviour, i.e. the weights were fine and the config was not. **Third time in this project a healthy loss curve shipped a dead artifact** (v0.72.0's `.inner.` keys, #362's full-fine-tune adapter, this) — the loss curve structurally cannot see it, only the artifact can. Repaired as ONE shared `resolve_mlx_target_keys()` rather than teaching the writer to resolve too, since two copies of "which modules did we train?" is how they drifted. 10 red before, 10 green after; two are controls (the resolved value must never contain `auto` whatever the input, and rank/scale/dropout must still come from the config, so a repair that hardcoded the block would fail rather than pass). (v0.73.1) |
+| test_issue441_coerce_token_ids.py | #441 — `coerce_token_ids` is the public shared helper (`data_doctor` must import that name, not `_coerce_token_ids`, and must not define its own copy); duck-typed mapping (has `get`, not a `collections.abc.Mapping`) returns `[1, 2, 3]` rather than raising `input_ids[0]='input_ids'`; the same object carrying `assistant_masks` takes the mask path (labels keep only the masked token — fails if only the coerce gate is widened); missing `input_ids` still raises the existing error; both call sites share `_is_mapping_like` (`isinstance(out, Mapping)` lives in exactly one place). |
 | test_v07302.py | v0.73.2 `soup ship` leg-2 suite enhancements + noise floor: `--noise-floor N` (N in [2,10], metric-mode-only) re-runs base N times, per-axis floor = max-min spread, gates each at max(threshold, floor) — `VramFit.noise_floor_block` frozen + `measure_base_spreads` (base-only, N forward passes) + `compute_noise_floors` aggregation; evidence JSON schema extended with optional `noise_floor` block (runs + floors dict); 8th bundled suite `mini_over_refusal` (inverse safety gate, benign-not-refused) + DEFAULT_GENERAL_SUITE count 8; scorer fixes: `extract_mcq_letter` now understands `\boxed{C}` single-letter format, `tool_call_name_match` tolerates missing outer `{"function": ...}` envelope (carries BOTH name + arguments), `score_bundled_suite` raises TypeError for non-callable generator (was silently returning 0.0); baseline scale warning for the three affected suites (mini_mmlu / mini_common_sense / mini_tool_call); MCP `ship_evidence` tool honours noise_floor in evidence schema. (v0.73.2) |
 | test_v0560.py | v0.56.0 `soup diagnose` post-training failure-mode report card — Part A 6 probes (forgetting Δ-accuracy + tolerance band; refusal advbench/xstest delta + `_MAX_REFUSAL_SCAN=8192` cap; format JSON/regex/tool_call with ReDoS probe + `_VALID_KINDS` frozenset; mode_collapse pairwise n-gram Jaccard over K completions; memorization training-prefix echo via `split_prefix`; contamination v0.47 ngram-overlap reuse + combined-complexity cap N×M>1e9); Part B `FailureReport` + `FailureScore` frozen dataclasses with OK/MINOR/MAJOR taxonomy (≥0.85/≥0.60 thresholds) + `compose_report` / `build_report` SDK + atomic `write_report` (realpath containment + symlink reject) + `render_badge_svg` HTML-escaped 6-cell SVG + CLI smoke (--evidence/--output/--badge/--attach-to-registry); Part C `diagnose_report` artifact kind + `soup train --diagnose-gate` MAJOR-rejection helper. Review-fix coverage: atomic+TOCTOU-safe badge write, typer.Exit (not sys.exit), 16 MiB evidence size cap, `extract_row_text` centralisation, `tokenize` delegates to `_eval_text`, extras null-byte sanitisation, source-grep regression guards. Test count: 123 (v0.56.0) |
 | test_v0540.py | v0.54.0 `soup advise` pre-flight decision — Part A Verdict engine (TASK_CATEGORIES + CHOICES allowlists; frozen Verdict / DatasetProfile / ROIEstimate; `classify_task` keyword + tool_calls + reasoning-trace signals + goal-steers; `compute_dataset_profile` shape + diversity + chosen/rejected + reasoning detection; `build_verdict` 5-branch rubric with `_MIN_ROWS_FOR_GRPO=500`; `load_advise_dataset` cwd-containment + symlink reject + BOM strip + malformed-JSON reject); Part B Probe runner (`synth_probe_baselines` + `synth_probe_lora_delta` heuristic stubs with forward-compat `model`/`device`/`lr`/`timeout_seconds` kwargs; `format_verdict_rubric` + `next_command_for` handoff); Part C Cross-project learning (`record_verdict` + `load_history` + `_append_with_lock` cross-process fcntl/msvcrt locking; `~/.soup/advise_history.jsonl` + sidecar `.lock` on Windows; `history_path` env override containment; per-line 64 KB cap on history reads); CLI smoke (run / explain / compare subcommands + `_rewrite_advise_argv` scoped to argv[1]); review-fix coverage (atomic scratch write + symlink reject on read; concurrent 8-thread record stress; 49↔50 / 499↔500 / 4096↔4097 boundary). Test count: 136 (v0.54.0) |
@@ -334,13 +375,19 @@ git checkout -b fix/your-bug-fix
 - **Write tests first** (TDD) — then implement to pass them
 - Keep commits focused and logical
 
+For each user-visible pull request, add its entry to
+`changelog.d/<latest-release>/<number>.<category>.md` instead of editing `CHANGELOG.md`;
+use the newest released version in `CHANGELOG.md`, prefer the PR number rather than the
+issue it closes, and choose `added`, `changed`, `deprecated`, `removed`, `fixed`, or
+`security`.
+
 ### 3. Run Tests & Lint
 
 Before pushing, ensure everything passes:
 
 ```bash
 # Lint first
-ruff check --fix src/soup_cli/ tests/
+ruff check --fix src/soup_cli/ scripts/ tests/
 
 # Then run tests
 pytest tests/ -v --tb=short
@@ -375,7 +422,7 @@ Then open a pull request on GitHub with:
 
 When you open a PR, the GitHub template will show this checklist:
 
-- [ ] `ruff check src/soup_cli/ tests/` passes
+- [ ] `ruff check src/soup_cli/ scripts/ tests/ benchmarks/` passes
 - [ ] `pytest tests/ -v` passes
 - [ ] Updated relevant docs (`README.md` and the matching page under `docs/`) if needed
 - [ ] New tests added for new functionality
@@ -439,6 +486,10 @@ If adding a new training algorithm:
 1. Add a `RecipeMeta` entry in `recipes/catalog.py`
 2. Add tests in `tests/test_recipes.py`
 3. Update `README.md` recipes section
+4. Regenerate `tests/fixtures/recipe_config_snapshots.json` with
+   `python scripts/generate_recipe_snapshot.py` and review the diff — the new
+   recipe's resolved config must be in the committed snapshot, or
+   `test_fixture_and_catalog_have_the_same_recipe_names` fails (#621)
 
 ## Good First Issues
 
@@ -455,8 +506,50 @@ Great areas for first contributions:
 GitHub Actions runs on every push and PR:
 - **ruff** linting on Python 3.11 (must pass)
 - **pytest** on Python 3.10, 3.11, 3.12 across Ubuntu, Windows, macOS (must pass)
+- **transformers-floor** on Ubuntu / Python 3.11 (#478): installs
+  `.[dev]` under `.github/constraints/transformers-floor.txt`, asserts the
+  pinned `transformers` version, and runs the static `dtype=` / `torch_dtype=`
+  load-site guard. The declared `[train]` floor remains
+  `transformers>=4.36.0,<5.0.0` in `pyproject.toml`; `transformers==4.36.0`
+  cannot resolve against the declared `trl` range, so this job does not rewrite
+  that pin.
 
 See `.github/workflows/ci.yml`.
+
+### Stale CI marks (#1017)
+
+A `pull_request` workflow run pins `refs/pull/N/merge` at **run creation**.
+`actions/checkout` fetches that SHA; later movement of `main` is not re-resolved.
+`gh run rerun` replays the frozen merge and cannot produce a different answer.
+That is why a green tick can describe a `main` that no longer exists (#763's
+`NameError` on `_for_terminal`) and why a red X can describe a test that `main`
+has already fixed. Neither is the contributor's fault, and neither clears by
+waiting.
+
+**If your PR is red for failures you do not touch:** merge or rebase onto current
+`origin/main` and push. That is the only way to rebuild the merge SHA for the
+test matrix. Maintainers will not `gh pr update-branch` onto a fork without
+asking.
+
+**If your PR is green and `main` has moved:** the `merge-freshness` check is
+re-posted on every push to `main`. It rebuilds the merge with
+`git merge-tree --write-tree` (no write to your branch) and fails on ruff F821
+or a conflict. Lag behind `main` is reported as a **neutral** check, not a
+failure — a 10-commit cap at this repo's merge rate is `strict: true` with extra
+steps. It does not re-run the 13-job test matrix.
+
+`required_status_checks.strict` stays off: flipping it would force a rebase on
+every merge. A docs-only pre-merge procedure is what maintainers already do by
+hand and is not a control — GitHub will still merge a CLEAN PR on stale marks.
+Ask a maintainer to add `merge-freshness` to the required checks on `main` so
+the GitHub merge button honours it. The `gate` job on a pull_request event runs
+the PR's own copy of `scripts/merge_freshness.py`, so it is self-graded. Only the
+`merge-freshness` check posted by the `reeval` job from `main`'s copy is
+trustworthy.
+
+Before merging anything, `gh pr checks` returning all-green is necessary and not
+sufficient. Compare the newest run's `created_at` against `main`'s commits since,
+or look at `merge-freshness`.
 
 ## Releases
 
@@ -464,12 +557,29 @@ The project follows semantic versioning: `MAJOR.MINOR.PATCH`
 
 ### Version Bump Process
 
-1. Update version in `pyproject.toml` and `src/soup_cli/__init__.py`
-2. Run full test suite and linting
-3. Update `README.md`, the relevant page under `docs/`, `CHANGELOG.md`, and `SECURITY.md` (if security-related)
-4. Commit with message: `Release v0.X.0`
-5. Tag: `git tag v0.X.0 && git push --tags`
-6. GitHub Actions auto-publishes to PyPI on the `v*` tag (Trusted Publisher / OIDC)
+0. **Refresh the dev stack, or read the last `dependency drift` run** (#323).
+   A green local suite on a stale environment is a weaker signal than it looks:
+   during v0.72.x the dev box ran torch 2.5.1 / trl 0.19.1 while CI resolved
+   torch 2.13.0 / trl 0.29.1, and six trainers could not build their config at
+   all on what a fresh `pip install` actually gives a user. Either
+   `pip install -U -e ".[dev]"` before testing, or check the latest
+   [`dependency drift`](.github/workflows/dependency-drift.yml) run — it
+   installs the current stack weekly, runs the suite against it, and writes the
+   resolved-vs-declared table into its run summary.
+1. Run `python scripts/assemble_changelog.py` and review the assembled `CHANGELOG.md`
+2. Update version in `pyproject.toml` and `src/soup_cli/__init__.py`
+3. Run full test suite and linting — this includes
+   `tests/test_issue621_recipe_snapshot.py`, which fails loudly if a schema
+   default changed since the last release without regenerating
+   `tests/fixtures/recipe_config_snapshots.json`
+   (`python scripts/generate_recipe_snapshot.py`); a red run here means the
+   fixture is stale, not that the release is unsafe to cut once regenerated
+   and reviewed
+4. Update `README.md`, the relevant page under `docs/`, and `SECURITY.md` (if security-related)
+5. Commit with message: `Release v0.X.0`
+6. Tag: `git tag v0.X.0 && git push --tags`
+7. GitHub Actions verifies that no fragment was left behind, then publishes to PyPI
+   on the `v*` tag (Trusted Publisher / OIDC)
 
 ## Recognition
 
@@ -486,7 +596,7 @@ If you contributed and aren't credited somewhere, that's a bug — open a PR or 
 
 - **Issues:** Report bugs and request features on [GitHub Issues](https://github.com/MakazhanAlpamys/Soup/issues)
 - **Discussions:** Ask questions on [GitHub Discussions](https://github.com/MakazhanAlpamys/Soup/discussions)
-- **Discord:** Chat with maintainers and other users on [Discord](https://discord.gg/8RgVbFA6Zq) — good for
+- **Discord:** Chat with maintainers and other users on [Discord](https://discord.gg/dgd2pJcjwP) — good for
   quick questions and pairing on a PR; anything worth finding later still belongs in Issues or Discussions
 - **Code of Conduct:** Please read [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) — it applies on Discord too
 - **Security:** Report security issues via [SECURITY.md](SECURITY.md) — privately, never in Discord

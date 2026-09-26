@@ -598,6 +598,14 @@ def render_mix_recipe_yaml(report: MixOptimizationReport) -> str:
     ``data:``. Defends against YAML key injection by rejecting newlines and
     null bytes in dataset paths (mirrors v0.46.0 Part A
     ``render_recipe_yaml``).
+
+    ``data.train`` renders as the full dataset list, index-aligned with
+    ``data.interleave.probs`` — #443 wired ``data.interleave`` into
+    ``load_dataset()``, so ``soup train`` can now consume the real
+    N-dataset mixture this search found, rather than the
+    single-highest-weighted-dataset collapse #330 used as a stopgap while
+    there was no training-time reader. The full ranked weight/path
+    breakdown is still kept in a comment for quick human review.
     """
     if not isinstance(report, MixOptimizationReport):
         raise TypeError(
@@ -623,15 +631,38 @@ def render_mix_recipe_yaml(report: MixOptimizationReport) -> str:
     )
     if report.partial:
         lines.append("# Budget exceeded — partial results.")
+    if not report.best_weights:
+        raise ValueError("report.best_weights is empty — nothing to render.")
+    if len(report.best_weights) != len(report.datasets):
+        raise ValueError(
+            "report.best_weights length "
+            f"({len(report.best_weights)}) must match report.datasets length "
+            f"({len(report.datasets)})."
+        )
+    lines.append("#")
+    lines.append("# Full ranked result:")
+    ranked = sorted(
+        zip(report.datasets, report.best_weights), key=lambda dw: -dw[1]
+    )
+    for path, w in ranked:
+        lines.append(f"#   {w:.6f}  {path}")
     lines.append("data:")
-    lines.append("  interleave:")
-    lines.append("    strategy: probs")
-    lines.append("    probs:")
-    for w in report.best_weights:
-        lines.append(f"      - {w:.6f}")
-    lines.append("  train:")
-    for path in report.datasets:
-        lines.append(f"    - {json.dumps(path)}")
+    if len(report.datasets) >= 2:
+        # #443 — soup train now consumes a real N-dataset mixture, so
+        # data.train renders every searched dataset, index-aligned with
+        # data.interleave.probs below (build_optimization_plan already
+        # requires >= 2 datasets, so the single-dataset branch is a
+        # defensive fallback, not a reachable optimizer output).
+        lines.append("  interleave:")
+        lines.append("    strategy: probs")
+        lines.append("    probs:")
+        for w in report.best_weights:
+            lines.append(f"      - {w:.6f}")
+        lines.append("  train:")
+        for path in report.datasets:
+            lines.append(f"    - {json.dumps(path)}")
+    else:
+        lines.append(f"  train: {json.dumps(report.datasets[0])}")
     return "\n".join(lines) + "\n"
 
 

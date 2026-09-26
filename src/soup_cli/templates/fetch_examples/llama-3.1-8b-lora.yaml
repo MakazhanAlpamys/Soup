@@ -11,8 +11,8 @@ training:
   batch_size: auto
   quantization: 4bit
   optimizer: adamw_bnb_8bit
-lora:
-  r: 16
-  alpha: 32
-  dropout: 0.05
+  lora:
+    r: 16
+    alpha: 32
+    dropout: 0.05
 output: ./out
