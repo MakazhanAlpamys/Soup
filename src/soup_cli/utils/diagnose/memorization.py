@@ -58,6 +58,9 @@ def _split_with_resolved(
         tokens = text.split()
         if not tokens:
             return ("", "")
+        if len(tokens) <= 1 and len(text) > 1:
+            cut = max(1, int(len(text) * fraction))
+            return (text[:cut], text[cut:])
         cut = max(1, int(len(tokens) * fraction))
         return (" ".join(tokens[:cut]), " ".join(tokens[cut:]))
     ids = encode_ids(tok, text)
@@ -95,7 +98,12 @@ def score_memorization(
     tok = resolve_tokenizer(tokenizer) if tokenizer is not None else None
 
     def _overlap_tokens(value: str) -> list:
-        return subword_tokens(tok, value) if tok is not None else tokenize(value)
+        if tok is not None:
+            sub = subword_tokens(tok, value)
+            if len(sub) >= 2:
+                return [f"{a}_{b}" for a, b in zip(sub[:-1], sub[1:])]
+            return sub
+        return tokenize(value)
 
     echoes = []
     scanned = 0
@@ -109,7 +117,12 @@ def score_memorization(
             continue
         scanned += 1
         completion = call_generator(adapter_gen, prefix)
-        overlap = jaccard(_overlap_tokens(completion), _overlap_tokens(suffix))
+        tok_comp = _overlap_tokens(completion)
+        tok_suff = _overlap_tokens(suffix)
+        if not tok_comp or not tok_suff:
+            overlap = 0.0
+        else:
+            overlap = jaccard(tok_comp, tok_suff)
         echoes.append(1.0 if overlap >= echo_threshold else 0.0)
         if scanned >= 1000:
             break

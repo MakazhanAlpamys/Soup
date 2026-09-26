@@ -69,7 +69,7 @@ def call_generator(gen: object, prompt: str) -> str:
     return result
 
 
-def tokenize(text: str) -> list:
+def tokenize(text: str, *, filter_stopwords: bool = True) -> list:
     """Cheap whitespace tokeniser — delegates to ``utils/_eval_text``.
 
     Kept as a thin shim so the canonical implementation lives in one
@@ -78,7 +78,7 @@ def tokenize(text: str) -> list:
     """
     from soup_cli.utils._eval_text import tokenize as _shared
 
-    return list(_shared(text))
+    return list(_shared(text, filter_stopwords=filter_stopwords))
 
 
 def extract_row_text(row: object) -> str:
