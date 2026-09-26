@@ -1000,13 +1000,9 @@ class StreamPrefetcher:
         # behind. A smaller index issues it earlier in the forward: the
         # embedding's bytes in the slot are dead once the lookup has run, and
         # the lookup precedes layer 0's `advance`, so layer 0 is the earliest
-        # point. It is a plain attribute on purpose, so a harness can flip it
-        # between steps and run both timings in one process.
-        if head_prefetch_layer is not None and not 0 <= head_prefetch_layer < self.n_layers:
-            raise ValueError(
-                f"head_prefetch_layer must be None or in [0, {self.n_layers}), "
-                f"got {head_prefetch_layer}"
-            )
+        # point. It is a property, so a harness can flip it between steps and
+        # run both timings in one process, and an assignment is checked the same
+        # way the constructor argument is.
         self.head_prefetch_layer = head_prefetch_layer
         # #975 — the embedding's `_prime`-time load pays a full head-sized H2D
         # copy with nothing to overlap it against, because it fires right as
@@ -1018,6 +1014,25 @@ class StreamPrefetcher:
         # blocking the next step's first op.
         self.backward_tail_prefetch = backward_tail_prefetch
         self.backward_tail_prefetched = False
+
+    @property
+    def head_prefetch_layer(self) -> Optional[int]:
+        return self._head_prefetch_layer
+
+    @head_prefetch_layer.setter
+    def head_prefetch_layer(self, value: Optional[int]) -> None:
+        # `bool` is an `int`, so `True` would otherwise pass as layer 1. A bad
+        # value assigned later would only surface at the head's forward as
+        # "large-layer scheduler bug: slot holds ...", which names the wrong cause.
+        if value is not None and (
+            isinstance(value, bool)
+            or not isinstance(value, int)
+            or not 0 <= value < self.n_layers
+        ):
+            raise ValueError(
+                f"head_prefetch_layer must be None or in [0, {self.n_layers}), got {value!r}"
+            )
+        self._head_prefetch_layer = value
 
     def prime(self) -> None:
         """Start of a forward pass: layer 0, walking upward."""

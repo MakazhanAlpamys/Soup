@@ -112,12 +112,31 @@ class TestTheTrigger:
         _walk(prefetcher, 4)
         assert fired == [0, 0]
 
-    @pytest.mark.parametrize("bad", [-1, 4, 99])
+    @pytest.mark.parametrize("bad", [-1, 4, 99, True, 1.0])
     def test_an_out_of_range_layer_is_refused(self, bad):
         from soup_cli.utils.layer_stream_runtime import StreamPrefetcher
 
         with pytest.raises(ValueError, match="head_prefetch_layer"):
             StreamPrefetcher(_FakePool(4), None, 4, head_prefetch_layer=bad)
+
+    @pytest.mark.parametrize("bad", [-1, 4, 99, True, False, 1.0, "0"])
+    def test_an_assignment_is_checked_like_the_constructor_and_leaves_the_value(self, bad):
+        """The harness switch is an assignment, which skipped the constructor's check;
+        a bad value then only surfaced at the head's forward as a "scheduler bug"."""
+        from soup_cli.utils.layer_stream_runtime import StreamPrefetcher
+
+        prefetcher = StreamPrefetcher(_FakePool(4), None, 4, head_prefetch_layer=0)
+        with pytest.raises(ValueError, match="head_prefetch_layer"):
+            prefetcher.head_prefetch_layer = bad
+        assert prefetcher.head_prefetch_layer == 0
+
+    @pytest.mark.parametrize("good", [None, 0, 1, 3])
+    def test_a_valid_assignment_is_accepted_and_read_back(self, good):
+        from soup_cli.utils.layer_stream_runtime import StreamPrefetcher
+
+        prefetcher = StreamPrefetcher(_FakePool(4), None, 4, head_prefetch_layer=2)
+        prefetcher.head_prefetch_layer = good
+        assert prefetcher.head_prefetch_layer == good
 
 
 # --------------------------------------------------------------------------
