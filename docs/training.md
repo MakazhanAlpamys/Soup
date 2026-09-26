@@ -824,6 +824,19 @@ validated on SmolLM2-135M with a synthetic judge (not a production RLHF claim; #
 An `https://` judge URL uses `OPENAI_API_KEY` only when its host is `api.openai.com`; other
 hosts are called as an OpenAI-compatible server without that key.
 
+A pair the judge cannot rank is left out of the loss: a tie, a failed or unreadable judge
+call, or a verdict that changes when the two completions are swapped. Such a pair adds no
+gradient, and the loss is the mean over the ranked pairs of each batch. The share of unranked
+pairs is logged as `judge/invalid_rate`, with a WARNING the first time it happens and on every
+step in which nothing was ranked. The logged `loss` and `train_loss` average only the batches
+that ranked a pair, and a logging window in which nothing was ranked logs no `loss` at all.
+A step in which nothing was ranked is not skipped: the optimizer still steps, so AdamW
+momentum and weight decay keep moving the weights and the learning-rate schedule advances.
+That drift is bounded: if the judge ranks none of 32 pairs in a row (for example because its
+server is down), training stops with an error that names the judge, and a shorter run in
+which it ranked no pair at all fails the same way instead of saving an adapter. Before this,
+TRL trained every such pair as if the second completion had won (#1225).
+
 
 ## Weighted Multi-Objective Preference Loss
 

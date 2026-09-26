@@ -24,6 +24,15 @@ normalized to the OnlineDPO ``prompt`` column (chat, minus the assistant turn).
 ``_ONLINE_DPO_JUDGE_OVERRIDE`` is a test seam for injecting a synthetic Soup
 evaluator (has ``.compare_pair`` + ``.evaluate``); it is adapted to whichever
 API the installed trl exposes.
+
+**Pairs the judge cannot rank (#1225).** The pairwise judge answers ``-1`` for a
+tie, a failed or unreadable call, or a verdict that changes when the two
+completions are swapped. trl's ``OnlineDPOTrainer`` reads every rank that is not
+``0`` as "the second completion wins", so on the ``judge=`` path Soup builds the
+trainer from :func:`soup_cli.trainer.online_dpo_ranking.make_ranked_pairs_trainer`,
+which leaves those pairs out of the loss, logs their share as
+``judge/invalid_rate``, and stops the run when the judge ranks nothing for too
+long.
 """
 
 import time
@@ -35,6 +44,11 @@ from rich.console import Console
 from soup_cli.config.schema import SoupConfig
 from soup_cli.data.chat_templates import apply_chat_template_override
 from soup_cli.trainer.loss_summary import summarize_training_loss
+from soup_cli.trainer.online_dpo_ranking import (
+    judge_label,
+    make_ranked_pairs_trainer,
+    report_unranked_pairs,
+)
 from soup_cli.utils.gpu import (
     bf16_fp16_flags,
     estimate_batch_size,
@@ -125,6 +139,7 @@ def _trl_has_judges() -> bool:
     reality only by coincidence.
     """
     return _trl_accepts("judge")
+
 
 # Fallback chat template for base models that ship none. Unlike the shared
 # ``constants.DEFAULT_CHAT_TEMPLATE``, this one emits an assistant generation
@@ -301,6 +316,11 @@ class OnlineDPOTrainerWrapper:
         )
 
         judge_or_reward = self._build_judge_or_reward(tcfg)
+        uses_judge = "judge" in judge_or_reward
+        if uses_judge:
+            # #1225: trl trains a pair its judge could not rank as "the second
+            # completion wins"; this subclass leaves such pairs out instead.
+            online_dpo_trainer_cls = make_ranked_pairs_trainer(online_dpo_trainer_cls)
 
         self.trainer = online_dpo_trainer_cls(
             model=self.model,
@@ -310,6 +330,8 @@ class OnlineDPOTrainerWrapper:
             peft_config=self.peft_config,
             **judge_or_reward,
         )
+        if uses_judge:
+            self.trainer._soup_judge_label = judge_label(tcfg.online_dpo_judge)
 
         # #359 - the same exposure #336 fixed in sft.py: with LoRA the
         # no-decay optimizer group is empty, DeepSpeed drops it, and the LR
@@ -528,6 +550,11 @@ class OnlineDPOTrainerWrapper:
             )
             self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)
         duration = time.time() - start
+        # #1225: a run in which the judge ranked nothing trained nothing; it
+        # raises here instead of saving an adapter as if it had succeeded.
+        unranked_summary = report_unranked_pairs(self.trainer)
+        if unranked_summary:
+            console.print(f"[yellow]Online DPO: {unranked_summary}[/]")
 
         self.trainer.save_model(self._output_dir)
         self.tokenizer.save_pretrained(self._output_dir)

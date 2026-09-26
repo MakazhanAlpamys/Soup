@@ -343,7 +343,7 @@ class ExperimentTracker:
         run_id: str,
         step: int,
         epoch: float = 0.0,
-        loss: float = 0.0,
+        loss: Optional[float] = 0.0,
         lr: float = 0.0,
         grad_norm: Optional[float] = None,
         speed: float = 0.0,
@@ -354,6 +354,7 @@ class ExperimentTracker:
 
         ``val_loss`` and ``grad_norm`` default to ``None`` rather than ``0.0``:
         an omitted measurement must not look like a genuinely measured zero.
+        ``loss`` is None for a training log that carried no loss (#1225).
         """
         now = datetime.now().isoformat()
         conn = self._get_conn()
