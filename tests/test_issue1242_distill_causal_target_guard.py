@@ -211,6 +211,7 @@ class TestComputeLossDefenseInDepth:
             "attention_mask": torch.tensor([[1, 1, 1, 1]], dtype=torch.long),
             "labels": torch.tensor([[-100, -100, -100, -100]], dtype=torch.long),
         }
+        inputs = wrapper.trainer._prepare_inputs(inputs)
         loss = wrapper.trainer.compute_loss(wrapper.model, inputs)
         assert torch.isfinite(loss), f"Loss should be finite, got {loss}"
         assert loss.item() == 0.0
