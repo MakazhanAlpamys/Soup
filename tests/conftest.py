@@ -146,10 +146,12 @@ def _isolate_experiments_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
 
 @pytest.fixture
 def aten_half_matmuls(monkeypatch: pytest.MonkeyPatch):
-    """Run a CPU bf16/fp16 step's matmuls on ATen's kernels, not oneDNN's or MKL's.
+    """Keep a CPU bf16/fp16 step off oneDNN and off MKL's half-precision GEMMs.
 
-    For a test that runs a real step under CPU autocast. Two routes in such a step
-    pick their instruction set at run time from the library's own CPU probe:
+    For a test that runs a real step under CPU autocast: its half-precision matmuls
+    run on ATen's precompiled kernels instead, and attention runs in fp32. Two routes
+    in such a step pick their instruction set at run time from the library's own CPU
+    probe:
 
     * a bf16 matmul whose ``m*n*k`` exceeds 16**3 goes to oneDNN whenever oneDNN
       reports bf16 for the CPU (an AVX-512 or AVX2-VNNI-2 host), and to ATen's
