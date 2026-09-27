@@ -66,12 +66,15 @@ class TestSFTTrainerV028Wiring:
             wrapper._apply_quantization_aware(cfg.training)
             mock_nvfp4.assert_called_once_with(wrapper.model)
 
-    def test_sft_int8_qat_and_v028_speed_memory(self) -> None:
+    def test_sft_v028_speed_memory_runs_without_the_int8_qat_path(self) -> None:
+        # This used `quantization_aware: true`, which is refused at load since
+        # #1222, so the int8 helper is unreachable; the v0.28 wiring must still
+        # run, with Cut-CE skipped, on every config that does load.
         cfg = SoupConfig(
             base="test/model",
             task="sft",
             data={"train": "tests/fixtures/sample_train.jsonl"},
-            training={"quantization_aware": True},
+            training={"quantization_aware": False},
         )
         wrapper = SFTTrainerWrapper(config=cfg, device="cpu")
         wrapper.model = MagicMock()
@@ -84,7 +87,7 @@ class TestSFTTrainerV028Wiring:
             wraps=apply_v028_speed_memory,
         ) as mock_v028:
             wrapper._apply_quantization_aware(cfg.training)
-            mock_qat.assert_called_once_with(wrapper.model)
+            mock_qat.assert_not_called()
             mock_v028.assert_called_once()
             assert mock_v028.call_args.kwargs["skip_cut_ce"] is True
 

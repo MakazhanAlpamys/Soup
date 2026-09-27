@@ -269,7 +269,8 @@ above.
 ## Which tasks apply `training.quantization`
 
 `quantization` defaults to `4bit`, but not every trainer reads it. These eight load the base
-(and, for `distill`, the teacher) at checkpoint precision whatever the field says:
+(and, for `distill`, the teacher) unquantised whatever the field says; `prm` loads it as fp32
+master weights (see [Process Reward Model](#process-reward-model-prm)):
 
 | task | quantization | notes |
 |---|---|---|
@@ -644,23 +645,28 @@ masking it out. Both are gated to the SFT-family of tasks.
 
 ## EBFT / GDPO Loss Variants
 
-Entropy-regularised SFT (`ebft_variant: structured | strided`) and generalised
-DPO (`gdpo_variant: standard | length_normalized | margin`) — both attach
-idempotently via `compute_loss` wrappers and auto-fire when the corresponding
-variant field is set on `TrainingConfig`.
+Generalised DPO (`gdpo_variant: standard | length_normalized | margin`) loads for
+`task: dpo` and `task: preference`, but on the trl versions Soup supports (0.29 and
+later) it is not applied: the run trains exactly as it would without the field, and
+nothing says so ([#1309](https://github.com/MakazhanAlpamys/Soup/issues/1309)).
+The config shape:
 
 ```yaml
-# SFT with EBFT structured
-training:
-  ebft_variant: structured
-  ebft_temperature: 1.0
-
 # DPO with GDPO length_normalized
 task: dpo
 training:
   gdpo_variant: length_normalized
   dpo_beta: 0.1
 ```
+
+EBFT (`ebft_variant: structured | strided`) is refused at config load
+([#1230](https://github.com/MakazhanAlpamys/Soup/issues/1230)): it is not yet a
+distinct objective. The term it added scored each position's logits against that
+position's own input token, with no causal shift, so it rewarded copying the input
+over predicting the next token; shifted onto the next token it is the model's own
+cross-entropy, so the loss would count cross-entropy twice. A config that set it
+never trained correctly. Remove `ebft_variant` and `ebft_temperature`; the refusal
+stays until the intended EBFT objective is implemented from its reference.
 
 
 ## GRPO Objective Variants
@@ -727,6 +733,19 @@ reward head, and computes MSE between predicted scalars at step-boundary tokens
 and the per-step labels. The reward head is saved inside the model checkpoint
 (`reward_head.*` in `model.safetensors`) and the tokenizer is saved alongside it,
 so the resulting directory is loadable standalone.
+
+PRM trains every base parameter along with the head, so all of them load as fp32
+master weights on every device. On CUDA, autocast runs the forward pass in bf16 (fp16 on
+pre-Ampere cards); on MPS it uses bf16 where the runtime supports it; CPU trains in fp32.
+With the default optimizer (AdamW), budget about 16 bytes per parameter before
+activations (fp32 weights, fp32 gradients and two fp32 AdamW moments), which is what the
+VRAM pre-flight predicts for `task: prm` when `batch_size` is an integer (with the
+default `batch_size: auto` the pre-flight does not run). The saved checkpoint is fp32, and
+without DeepSpeed loading the fp32 base needs about twice the host RAM of a bf16 load. Under DeepSpeed,
+each rank loads the base in fp32 on the host before the engine exists (4 bytes per
+parameter of host RAM per rank); the engine then casts it to its bf16/fp16 dtype, keeps
+its own fp32 master copy and saves a 16-bit checkpoint. A bf16 base without master
+weights would round most updates away at these learning rates (#1235).
 
 
 ## PRM-guided GRPO (process-supervised RL)
@@ -809,6 +828,19 @@ B,A orders agree). Recipe: `online-dpo-smollm2-135m`. Proof-of-mechanism was
 validated on SmolLM2-135M with a synthetic judge (not a production RLHF claim; #286).
 An `https://` judge URL uses `OPENAI_API_KEY` only when its host is `api.openai.com`; other
 hosts are called as an OpenAI-compatible server without that key.
+
+A pair the judge cannot rank is left out of the loss: a tie, a failed or unreadable judge
+call, or a verdict that changes when the two completions are swapped. Such a pair adds no
+gradient, and the loss is the mean over the ranked pairs of each batch. The share of unranked
+pairs is logged as `judge/invalid_rate`, with a WARNING the first time it happens and on every
+step in which nothing was ranked. The logged `loss` and `train_loss` average only the batches
+that ranked a pair, and a logging window in which nothing was ranked logs no `loss` at all.
+A step in which nothing was ranked is not skipped: the optimizer still steps, so AdamW
+momentum and weight decay keep moving the weights and the learning-rate schedule advances.
+That drift is bounded: if the judge ranks none of 32 pairs in a row (for example because its
+server is down), training stops with an error that names the judge, and a shorter run in
+which it ranked no pair at all fails the same way instead of saving an adapter. Before this,
+TRL trained every such pair as if the second completion had won (#1225).
 
 
 ## Weighted Multi-Objective Preference Loss
@@ -1179,8 +1211,47 @@ soup train --config soup.yaml
 ```
 
 **Built-in reward functions:**
-- `accuracy` — checks if the final answer matches expected (supports `####` and `\boxed{}` formats)
+- `accuracy` — 1.0 when the completion's final answer matches the gold's, else 0.0 (no partial credit)
 - `format` — checks for structured `<think>...</think>` reasoning blocks
+
+`accuracy` and verifiable `math` read the completion and the gold with the same parser. The final
+answer is, in this order of precedence:
+
+1. the rest of the line after the last `####` (a `#### Final Answer` heading means the next line);
+2. the content of the last `\boxed{}` (a space before the brace and nested braces such as
+   `\boxed{\frac{1}{2}}` are fine);
+3. what follows the last `The answer is` or `Answer:` (also `**Answer**:`, and the answer may be
+   on the next line), up to the end of its clause: a `. `, `, ` or `; ` outside brackets. A comma
+   or semicolon that a number follows continues a list instead (`41, 42 or 43`), and a
+   parenthetical aside belongs to the clause. So `The answer is Washington, D.C.` reads
+   `Washington`, `The answer is 42 (six times seven).` reads `42`, and `The answer is (3, 4).`
+   reads `(3, 4)`.
+
+A box outranks a phrase, and a `\boxed{}` or phrase that comes after a `####` line outranks it (the
+line was a markdown heading, or an answer the text went on to correct). That includes chatter:
+`#### Paris` followed by `I hope this answer is helpful!` reads `helpful`, so end a completion at
+its `####` line. A completion with none of these is read by its last line and its last number, so
+`Six times seven is 42.` and even `Not 42.` read as 42; only the final number counts, so listing
+candidates earns nothing.
+
+An answer phrase's number is read from its own clause: `The answer is 41 apples, not 42.` reads
+41, because the clause ends at the comma. A clause that names **more than one distinct value** is
+a hedge and states no answer: `The answer is either 41 or 42.`, `Answer: 41 or 42`,
+`The answer is 42 (or 43).` and `the answer is 41, 42 or 43` score 0.0 against every gold, and a
+gold written that way is refused. Every number in the clause counts, a justification's too:
+`The answer is 42 because 6*7=42.` is a hedge, while `The answer is 42, because 6*7=42.` reads 42.
+The same value twice is not a hedge (`42 (i.e. 42.0)`), and the digits of one bracketed or LaTeX
+answer (`(3, 4)`, `\frac{14}{3}`, `2^{10}`) or of a time or a ratio (`3:45`, `1:1,000`) are not
+separate values; such an answer is compared as text. `\boxed{}` and `####` answers are compared
+whole, so a list there is one answer, and it can only match a gold that is the same list.
+
+A numeric gold is compared by value, so `#### 1,000`, `\boxed{1000}` and `The answer is $1000.`
+all match a gold of `1000`. Any other gold (`\frac{14}{3}`, `p - q`, `Paris`) is compared as text,
+ignoring case and whitespace, `$`, `\(...\)` and `\[...\]`, `\left` / `\right`, and `\dfrac` /
+`\tfrac` versus `\frac`; so `\boxed{\dfrac{14}{3}}` matches a gold of `\frac{14}{3}`. Both sides
+also drop the trailing punctuation `. , ; : !`, LaTeX thousands separators such as `1{,}000`, and a
+Unicode minus sign. Units, `^\circ`, `\text{}` and `x = ` prefixes are not stripped, and nothing is
+evaluated (`\frac{1}{2}` does not equal `0.5`).
 
 For GRPO, Soup preserves source dataset columns and TRL passes them to reward functions as
 keyword arguments. An Alpaca `output` or the final assistant turn in ShareGPT/ChatML is also
@@ -1189,9 +1260,20 @@ validate their inputs before generation:
 
 | Reward | Required source metadata |
 |---|---|
-| `accuracy` or verifiable `math` | `answer`, or an assistant reference response |
+| `accuracy` or verifiable `math` | `answer`, or an assistant reference response, that states a final answer |
 | verifiable `code` | `expected` or `answer` |
 | verifiable `json_schema` | `schema` |
+
+A gold states its final answer with `####`, `\boxed{}`, `The answer is` or `Answer:`, or by being
+the bare answer on one line (`42`, `Paris`, `\frac{14}{3}`). A row whose gold states none (for
+example a multi-line reference solution with no marked answer, or one under a `#### Solution`
+heading: a `####` line that is not a number and has more text after it may be a markdown heading,
+so a gold cannot rely on it), or whose answer phrase hedges between values
+(`The answer is either 41 or 42.`), is refused before generation, with its split,
+row number and field and a count of the other rows with the same problem, because such a gold
+would score every completion 0.0 and give GRPO no signal. A dataset that mixes numeric and
+LaTeX golds, such as MATH-500, loads under `math` too; validation prints how many golds are
+non-numeric and therefore compared as normalised text.
 
 **Custom reward functions** — point to a Python file:
 ```python
@@ -1295,7 +1377,7 @@ Three built-in domains:
 
 | Domain | What it checks |
 |---|---|
-| `math` | Extracts the final numeric answer (supports `####`, `\boxed{}`) and compares via `float()` equality — no `eval()` on user output |
+| `math` | Reads the final answer of the completion and of the gold with the shared parser described under "Built-in reward functions" (`####`, `\boxed{}`, `The answer is` / `Answer:`, else the completion's last number). A numeric gold scores 1.0 within 1e-4 and 0.6 within 1e-2 (compared as exact decimals); any other gold scores 1.0 on a normalised text match. Nothing is evaluated: no `eval()` on user output |
 | `code` | Executes generated Python with a 5s timeout, 512 MB RLIMIT on POSIX, `python -I -S`, socket patch, ephemeral cwd. Output capped at 10KB. Warning panel on first use |
 | `json_schema` | Validates output against a JSON Schema provided per-example in the dataset |
 
@@ -1701,7 +1783,7 @@ The cross-validator rejects `task='distill'` without `teacher_model`, and reject
 
 ## EBFT + GDPO (BETA, v0.52.0)
 
-Energy-Based Fine-Tuning (axolotl) lands as `training.ebft_variant ∈ {structured, strided}` + `training.ebft_temperature` (bounded `[1e-4, 100.0]`). Gated to `task: sft`. Generalized DPO lands as `training.gdpo_variant ∈ {standard, length_normalized, margin}` — gated to `task ∈ {dpo, preference}`. Live loss kernels in v0.52.1.
+Generalized DPO lands as `training.gdpo_variant ∈ {standard, length_normalized, margin}` — gated to `task ∈ {dpo, preference}`; on trl 0.29 and later it is not applied ([#1309](https://github.com/MakazhanAlpamys/Soup/issues/1309)). Energy-Based Fine-Tuning (`training.ebft_variant ∈ {structured, strided}` + `training.ebft_temperature`) is refused at config load ([#1230](https://github.com/MakazhanAlpamys/Soup/issues/1230)): its term had no causal shift, so it rewarded copying the input, and shifted it would duplicate the cross-entropy. See [EBFT / GDPO Loss Variants](#ebft--gdpo-loss-variants).
 
 
 ## gpt-oss `reasoning_effort` + `train_on_eot` (v0.52.0)
@@ -1743,8 +1825,8 @@ only — there is no serve-time MoLE path yet. (v0.71.12)
 
 ## Architecture Knobs — Mixture-of-Depths, LLaMA Pro, LongLoRA
 
-Three architecture transforms that were schema-only are now live for SFT / Pretrain on
-Llama / Qwen / Mistral (LongLoRA also covers Phi). All apply at trainer setup:
+Two architecture transforms that were schema-only are now live for SFT / Pretrain on
+Llama / Qwen / Mistral. Both apply at trainer setup:
 
 ```yaml
 training:
@@ -1757,15 +1839,17 @@ training:
   # ones (freeze_trainable_layers freezes the originals).
   expand_layers: 4
   freeze_trainable_layers: 4
-
-  # LongLoRA S²: shifted-sparse attention on the Q/K projections for long-context tuning.
-  use_longlora: true
 ```
 
 `use_mod` / `expand_layers` attach AFTER `get_peft_model` so the new routers / blocks are
-trainable. Unsupported architectures warn + skip (MoD, block expansion); `use_longlora` is
-rejected at the schema gate for non-supported arches and for `use_ring_attention` / FlashAttention-3.
-Pick one of MoD / LLaMA Pro / LongLoRA per run. (v0.71.12)
+trainable. Unsupported architectures warn + skip. Pick one of MoD / LLaMA Pro per run. (v0.71.12)
+
+LongLoRA S² (`use_longlora: true`) is refused at config load
+([#1240](https://github.com/MakazhanAlpamys/Soup/issues/1240)). Its override rolled the
+query/key projections of half the heads with wrap-around under full causal attention, so
+earlier positions saw the last tokens of the sequence, and it applied no grouped attention.
+To extend the context, use `rope_scaling_type` with plain LoRA; see
+[Long Context](peft-and-efficiency.md#long-context--yarn-llama-31-ntk-longlora).
 
 
 ## Spectrum — Targeted Training on Layer SNR (`soup spectrum scan`, v0.71.23)

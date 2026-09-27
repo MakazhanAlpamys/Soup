@@ -12,6 +12,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+import yaml
 
 from soup_cli.config.loader import load_config_from_string
 from soup_cli.config.schema import SoupConfig
@@ -168,6 +169,38 @@ def test_config_loader_keeps_non_quest_auto_mixed_precision() -> None:
         "  auto_mixed_precision: true\n"
     )
     assert cfg.training.auto_mixed_precision is True
+
+
+@pytest.mark.parametrize(
+    "field,value,primary_error",
+    [
+        ("task", "dpo", "task='sft'"),
+        ("backend", "unsloth", "backend='transformers'"),
+        ("modality", "vision", "modality='text'"),
+    ],
+)
+def test_quest_route_error_precedes_auto_mixed_precision(
+    field: str, value: str, primary_error: str
+) -> None:
+    payload = {
+        "base": "ahxt/LiteLlama-460M-1T",
+        "task": "sft",
+        "backend": "transformers",
+        "modality": "text",
+        "data": {"train": "data.jsonl"},
+        "training": {
+            "quantization_aware": "quest",
+            "auto_mixed_precision": True,
+            "quantization": "none",
+            "batch_size": 2,
+            "lora": {"r": 0},
+        },
+    }
+    payload[field] = value
+
+    with pytest.raises(ValueError, match=primary_error) as error:
+        load_config_from_string(yaml.safe_dump(payload))
+    assert "auto_mixed_precision" not in str(error.value)
 
 
 @pytest.mark.parametrize(
