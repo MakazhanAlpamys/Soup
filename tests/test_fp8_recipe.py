@@ -118,18 +118,22 @@ class TestFP8RecipeRequiresFP8:
             )
         assert "quantization_aware" in str(exc.value)
 
-    def test_rowwise_with_bool_true_qat_rejected(self):
-        """Bool True = int8 QAT, not FP8 — recipe should be rejected."""
+    def test_rowwise_with_non_fp8_quantization_aware_rejected(self):
+        """A truthy value other than 'fp8' does not satisfy the recipe either.
+
+        This used `true`, which is now refused on its own (#1222) before this
+        validator runs; `quest` keeps the recipe check itself under test.
+        """
         with pytest.raises(ValidationError) as exc:
             SoupConfig(
                 base="test/model",
                 data={"train": "./data.jsonl"},
                 training={
-                    "quantization_aware": True,
+                    "quantization_aware": "quest",
                     "fp8_recipe": "rowwise",
                 },
             )
-        assert "quantization_aware" in str(exc.value)
+        assert "fp8_recipe='rowwise' requires quantization_aware='fp8'" in str(exc.value)
 
 
 # ─── Dispatch: apply_fp8_training recipe parameter ────────────────────────
@@ -397,15 +401,14 @@ class TestFP8RecipeBackwardCompat:
         assert cfg.training.quantization_aware == "fp8"
         assert cfg.training.fp8_recipe == "tensorwise"
 
-    def test_v028_bool_true_unaffected(self):
-        """Bool True (int8 QAT) is unaffected by fp8_recipe field."""
-        cfg = SoupConfig(
-            base="test/model",
-            data={"train": "./data.jsonl"},
-            training={"quantization_aware": True},
-        )
-        assert cfg.training.quantization_aware is True
-        assert cfg.training.fp8_recipe == "tensorwise"  # default, unused
+    def test_v028_bool_true_is_refused(self):
+        """Bool True (int8 QAT) no longer loads at all (#1222)."""
+        with pytest.raises(ValidationError, match="#1222"):
+            SoupConfig(
+                base="test/model",
+                data={"train": "./data.jsonl"},
+                training={"quantization_aware": True},
+            )
 
     def test_training_config_fp8_recipe_default(self):
         """TrainingConfig alone defaults fp8_recipe to tensorwise."""

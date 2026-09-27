@@ -201,6 +201,7 @@ jobs:
         run: |
           pytest -o addopts= -q \
             tests/test_issue826_torchao_class_names.py \
+            tests/test_issue835_fp8_gate.py \
             tests/test_v07121.py
   pytorch-smoke:
     # #596: exercise the real PyTorch SFT + DPO training pipeline on every PR.

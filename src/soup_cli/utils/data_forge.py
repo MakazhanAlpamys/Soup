@@ -318,6 +318,38 @@ def build_forge_plan(
 
 JudgeFn = Callable[[str], Mapping[str, Any]]
 
+_MAX_ERROR_DETAIL = 200
+
+
+@dataclass
+class ForgeJudgeStats:
+    """Judge-call accounting filled in by :func:`synthesise_forge_rows` (#1221).
+
+    ``failures`` counts every call that produced no usable answer: the judge
+    raised (e.g. :class:`ProviderCallError` from a live backend), returned a
+    malformed reply, or returned empty/whitespace-only text. None of those
+    become rows. ``first_error`` describes the first such failure.
+    """
+
+    calls: int = 0
+    failures: int = 0
+    first_error: Optional[str] = None
+
+    def record_failure(self, detail: str) -> None:
+        self.failures += 1
+        if self.first_error is None:
+            self.first_error = detail[:_MAX_ERROR_DETAIL]
+
+
+def _describe_judge_error(exc: BaseException) -> str:
+    """One-line description of a judge exception, including its cause."""
+    text = str(exc) or type(exc).__name__
+    cause = exc.__cause__
+    if cause is not None:
+        cause_text = str(cause) or type(cause).__name__
+        text = f"{text} ({type(cause).__name__}: {cause_text})"
+    return text
+
 
 def _read_doc_text(path: str) -> str:
     try:
@@ -352,12 +384,17 @@ def synthesise_forge_rows(
     teacher: str = "local-judge",
     uncertainty_threshold: float = 0.0,
     max_chunk_chars: int = 1000,
+    stats: Optional[ForgeJudgeStats] = None,
 ) -> List[ForgeRow]:
     """Run the pipeline: chunk → judge → active-prune → ForgeRow rows.
 
-    The ``judge`` callable is invoked once per chunk; failures are swallowed
-    at DEBUG (mirrors v0.33.0 #47 CrossDocCollator policy — single bad call
-    must not crash the run).
+    The ``judge`` callable is invoked once per chunk. A single bad call must
+    not crash the run (v0.33.0 #47 policy), but it must not become a row
+    either: a call that raises, returns a malformed reply, or returns empty
+    text is skipped whatever ``uncertainty_threshold`` is (an empty answer is
+    no answer, not a "maximally uncertain" one — #1221). Pass ``stats`` to
+    receive the call / failure counts and the first error so the caller can
+    report them.
     """
     task = _validate_task(task)
     target_rows = _validate_int(
@@ -369,6 +406,10 @@ def synthesise_forge_rows(
     )
     if not callable(judge):
         raise TypeError("judge must be a callable")
+    if stats is None:
+        stats = ForgeJudgeStats()
+    elif not isinstance(stats, ForgeJudgeStats):
+        raise TypeError("stats must be a ForgeJudgeStats")
 
     rows: List[ForgeRow] = []
     for doc_idx, doc_path in enumerate(docs):
@@ -387,15 +428,24 @@ def synthesise_forge_rows(
             if len(rows) >= target_rows:
                 break
             prompt = _make_prompt(chunk, task)
+            stats.calls += 1
             try:
                 reply = judge(prompt)
             except Exception as exc:  # noqa: BLE001 — judge backends vary
                 _LOG.debug("judge raised on %s#%d: %s", doc_path, chunk_idx, exc)
+                stats.record_failure(_describe_judge_error(exc))
                 continue
             if not isinstance(reply, Mapping):
+                stats.record_failure("judge returned a malformed reply")
                 continue
             reply_text = reply.get("text") or ""
             if not isinstance(reply_text, str):
+                stats.record_failure("judge returned non-string text")
+                continue
+            if not reply_text.strip():
+                # #1221: never keep an empty answer — score_uncertainty rates
+                # it 1.0, so no threshold could prune it.
+                stats.record_failure("judge returned an empty reply")
                 continue
             try:
                 # Active pruning — Jaccard distance between chunk and reply.
@@ -737,6 +787,7 @@ def make_judge_provider_fn(
 
 __all__ = [
     "VALID_TASKS",
+    "ForgeJudgeStats",
     "ForgePlan",
     "ForgeRow",
     "JUDGE_PROVIDERS",
