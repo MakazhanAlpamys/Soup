@@ -228,7 +228,15 @@ def run_correctness(
         labels=input_ids,
     ).loss
 
-    if not __import__("torch").equal(
+    torch = __import__("torch")
+    if not torch.isfinite(streamed_loss).all() or not torch.isfinite(
+        reference_loss
+    ).all():
+        raise RuntimeError(
+            f"pin={pin} produced a non-finite loss before timing"
+        )
+
+    if not torch.equal(
         streamed_loss,
         reference_loss,
     ):
@@ -243,6 +251,13 @@ def run_correctness(
 
     streamed_loss.backward()
     reference_loss.backward()
+
+    for model_name, model in (("streamed", streamed), ("reference", reference)):
+        for name, parameter in model.named_parameters():
+            if parameter.grad is not None and not torch.isfinite(parameter.grad).all():
+                raise RuntimeError(
+                    f"pin={pin} {model_name} gradient is non-finite: {name}"
+                )
 
     ok, max_diff, layer0_sum = bitexact.compare_initial_gradients(
         streamed,
@@ -409,7 +424,6 @@ def build_shards_and_input(
 
 def run_measurement(args: argparse.Namespace) -> int:
     import torch
-    from peft import LoraConfig, TaskType
 
     from soup_cli.utils.layer_stream_runtime import build_streamed_model
 
@@ -456,14 +470,7 @@ def run_measurement(args: argparse.Namespace) -> int:
         input_ids,
     ) = build_shards_and_input(args)
 
-    lora_config = LoraConfig(
-        r=16,
-        lora_alpha=32,
-        lora_dropout=0.0,
-        bias="none",
-        target_modules=["q_proj", "v_proj"],
-        task_type=TaskType.CAUSAL_LM,
-    )
+    lora_config = bitexact.lora_config()
 
     print("RUN: STEP 8 pinned-versus-pageable NF4 cost")
     print(f"torch         {torch.__version__}")
@@ -640,9 +647,6 @@ def run_measurement(args: argparse.Namespace) -> int:
         "observed spread"
     )
     return 1
-
-    return 0
-
 
 def main() -> int:
     args = parse_args()
