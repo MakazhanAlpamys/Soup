@@ -529,6 +529,9 @@ def exact_gradient_count(
     if set(reference) != set(candidate):
         raise RuntimeError("gradient key sets differ")
 
+    _assert_finite_gradients(reference, "reference gradients")
+    _assert_finite_gradients(candidate, "candidate gradients")
+
     exact = sum(
         torch.equal(reference[name], candidate[name])
         for name in reference
@@ -614,6 +617,14 @@ def main() -> int:
             f"correctness  {repetition + 1}/{CORRECTNESS_REPEATS}"
         )
 
+        print("running       resident")
+        resident = run_once(
+            sources,
+            arm_states["clone"],
+            "clone",
+            bypass_pool=True,
+        )
+
         print("running       clone")
         clone = run_once(
             sources,
@@ -622,15 +633,11 @@ def main() -> int:
             bypass_pool=False,
         )
 
-        clone_reference = {
-            name: gradient.clone()
-            for name, gradient in clone.items()
-        }
         clone_exact, clone_total = exact_gradient_count(
-            clone_reference,
+            resident,
             clone,
         )
-        clone_diff = max_gradient_diff(clone_reference, clone)
+        clone_diff = max_gradient_diff(resident, clone)
         exact_results["clone"].append(
             f"{clone_exact}/{clone_total}"
         )
@@ -645,8 +652,8 @@ def main() -> int:
                 bypass_pool=args.bypass_pool if arm == "control" else False,
             )
 
-            exact, total = exact_gradient_count(clone, candidate)
-            diff = max_gradient_diff(clone, candidate)
+            exact, total = exact_gradient_count(resident, candidate)
+            diff = max_gradient_diff(resident, candidate)
 
             exact_results[arm].append(f"{exact}/{total}")
             diff_results[arm].append(diff)
