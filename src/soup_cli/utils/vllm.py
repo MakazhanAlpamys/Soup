@@ -290,7 +290,6 @@ def create_vllm_engine(
             engine_args.max_model_len = max_model_len
         engine_model_name = model_path
 
-    # v0.35.0 #61 — Auto-quant live picker forwards the chosen quant here.
     # vLLM accepts ``quantization`` on AsyncEngineArgs (string: awq/gptq/fp8).
     # ``None`` is the default (baseline / model's native dtype).
     if quantization:

@@ -152,7 +152,11 @@ class TestGenerateResponseSignature:
         assert "model.generate(**gen_kwargs)" in src
 
 
+# ---------------------------------------------------------------------------
 # #49 — End-to-end --push-as integration test (mocked HF)
+# ---------------------------------------------------------------------------
+
+
 class TestPushAsResumeIntegration:
     def test_train_push_resume_cycle_with_mocked_hf(self, tmp_path, monkeypatch):
         """Verify the --push-as → --hf-resume contract with mocked HF Hub.
