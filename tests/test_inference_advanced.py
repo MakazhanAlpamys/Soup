@@ -1,5 +1,5 @@
 """Tests for v0.30.0 Inference Excellence — prefix caching, spec-decoding pairing,
-LoRA hot-swap, structured output, batching dashboard, request tracing, auto-quant.
+LoRA hot-swap, structured output, batching dashboard, request tracing.
 """
 
 from __future__ import annotations

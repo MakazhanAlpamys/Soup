@@ -286,14 +286,14 @@ Accepted runs are recorded in [`benchmarks/gpu-test-runs.md`](benchmarks/gpu-tes
 | test_multi_gpu.py | Multi-GPU Mastery: topology, --gpus, accelerate launcher, ZeRO++, FSDP2+compile, pipeline (v0.27.0) |
 | test_training_speed.py | Training Speed & Memory: CCE, FP8, grad-ckpt tiers, kernel picker, cross-doc attn, activation offload (v0.28.0) |
 | test_hf_integration.py | HF Hub Deep Integration: token/endpoint/repo_id, auto-push callback, model card v2, collections, data push, HF Spaces, private-IP SSRF (v0.29.0) |
-| test_inference_advanced.py | Inference Excellence: prefix caching, spec-decoding auto-pairing, LoRA hot-swap, structured output, dashboard + /metrics, OpenTelemetry tracing, dormant auto-quant helpers (v0.30.0; serving refuses auto-quant since #816) |
+| test_inference_advanced.py | Inference Excellence: prefix caching, spec-decoding auto-pairing, LoRA hot-swap, structured output, dashboard + /metrics, OpenTelemetry tracing (v0.30.0) |
 | test_recipes_v031.py | Model & Recipe Breadth: 34 new recipes (vision/audio/reasoning/edge/domain/multimodal); catalog-wide invariants; CI workflow validation (v0.31.0) |
 | test_auto_tuning.py | Training Stability & Auto-Tuning: LR range finder, grad-accum monitor, auto mixed-precision, auto warmup, spike recovery, convergence detector, autopilot wiring (v0.32.0) |
 | test_part_f_hardening.py | Live Wire Part F: RLVR OS-level sandbox isolation + prune_checkpoints TOCTOU (v0.33.0) |
 | test_part_a_wave1.py | Live Wire Part A: live eval-gate scoring + registry attach (v0.33.0) |
 | test_part_a_wave2.py | Live Wire Part A: soup can run / publish + DeployTarget schema (v0.33.0) |
 | test_part_e.py | Live Wire Part E: --find-lr live loop + spike recovery hint + auto mixed-precision push + grad-accum advisory (v0.33.0) |
-| test_part_d.py | Historical Part D primitives: structured-output LogitsProcessor + dormant auto-quant helpers + HF push integration smoke (v0.33.0; serving refuses auto-quant since #816) |
+| test_part_d.py | Historical Part D primitives: structured-output LogitsProcessor + HF push integration smoke (v0.33.0) |
 | test_part_c.py | Live Wire Part C: multi-trainer v0.28.0 features + selective ckpt hooks + CrossDocCollator (v0.33.0) |
 | test_part_b.py | Live Wire Part B: auto-reexec under accelerate launch + DeepSpeed-MII live serve (v0.33.0) |
 | test_log_level.py | Smart logging tiers `--log-level quiet/normal/verbose/debug` (v0.34.0 Part A) |
@@ -303,7 +303,7 @@ Accepted runs are recorded in [`benchmarks/gpu-test-runs.md`](benchmarks/gpu-tes
 | test_replay.py | `soup runs replay`: summarise + downsample + CLI rendering (v0.34.0 Part E) |
 | test_profiling.py | Auto-profiling: ProfilerSchedule + path containment + torch-less degradation (v0.34.0 Part F) |
 | test_tui.py | `soup tui`: CLI bounds + missing-textual error + row builders (v0.34.0 Part G) |
-| test_trainer_coverage_v035.py | Multi-trainer v0.28.0 wiring smoke matrix: every trainer × every speed/memory feature + auto-quant translators + try_reload_with_fallback + benchmark_kernel_combos + schema-gate lift (v0.35.0 Parts A / B / C / D — #60, #61, #45) |
+| test_trainer_coverage_v035.py | Multi-trainer v0.28.0 wiring smoke matrix: every trainer × every speed/memory feature + benchmark_kernel_combos + schema-gate lift (v0.35.0 Parts A / B / C / D — #60, #61, #45) |
 | test_v0470_part_a.py | Synthetic Data Forge: ForgePlan / ProvenanceRecord / ForgeRow frozen dataclasses + VALID_TASKS allowlist + chunk_document + score_uncertainty + discover_documents (cwd-contained, symlink-rejecting, extension allowlist) + build_forge_plan validators (task / target_rows / teacher / NaN+Inf threshold) + synthesise_forge_rows (judge-exception swallow at DEBUG) + write_forge_dataset + write_provenance (atomic, TOCTOU-safe) + CLI smoke (v0.47.0) |
 | test_v0470_part_b.py | Data Quality Moat: BENCHMARKS MappingProxyType + ScoreReport frozen + ngram_set / ngram_overlap_ratio / decontaminate_rows (containment ratio) + detect_pii (ReDoS-hardened regexes + 50 KB pre-cap) + detect_language (6-language stopword heuristic) + score_toxicity (keyword baseline) + score_educational_value + compute_scorecard + load_jsonl_rows / write_jsonl_rows (cwd-contained, symlink-rejecting, atomic) + CLI smoke per subcommand (v0.47.0) |
 | test_v0480_part_a.py | Curriculum-Aware Trainer (BETA): DynamicCurriculumPolicy frozen + bounds; compute_bucket_weights softmax + water-fill (floor-strict invariant); validate_distributed_curriculum DDP gate; render_curve + parse_history_jsonl with 100k-row DoS cap; SoupConfig cross-validators (requires-curriculum / mlx-rejected / non-SFT-rejected / floor ≤ 1/buckets); `soup runs curriculum-curve` CLI (TOCTOU symlink reject + 50 MB cap + corrupt-JSONL exit 2) (v0.48.0) |
