@@ -53,16 +53,15 @@ _DIFF3_BASE = re.compile(r"^\|{7}(?: .*)?$", re.M)
 def _tracked_files() -> list[Path]:
     try:
         out = subprocess.run(
-            ["git", "ls-files"],
+            ["git", "ls-files", "-z"],
             cwd=REPO_ROOT,
             capture_output=True,
-            text=True,
             check=True,
         )
     except (subprocess.CalledProcessError, FileNotFoundError):
         pytest.skip("guard requires a git checkout")
 
-    return [REPO_ROOT / line for line in out.stdout.splitlines() if line]
+    return [REPO_ROOT / name for name in out.stdout.decode("utf-8").split("\0") if name]
 
 
 def _read_text(path: Path) -> str | None:
@@ -180,6 +179,10 @@ class TestNoCommittedConflictMarkers:
             problem.startswith("docs/performance-and-quantization.md:")
             for problem in problems
         ), problems[:5]
+        assert (
+            "docs/performance-and-quantization.md:1: stray conflict marker <<<<<<<"
+            in problems
+        ), problems[:5]
 
     def test_the_repo_scan_checks_every_tracked_text_file(self, monkeypatch):
         """Plant a marker in every file the scan reads; every text file must be reported."""
@@ -195,13 +198,26 @@ class TestNoCommittedConflictMarkers:
         )
 
         reported = {problem.rsplit(":", 2)[0] for problem in _scan_repo()}
-        expected = {
-            path.relative_to(REPO_ROOT).as_posix()
-            for path in _tracked_files()
-            if original_read_text(path) is not None
-        }
+        # The oracle must not come from the code under test: list the index
+        # directly and decide text-ness here, so narrowing _tracked_files()
+        # or _read_text() cannot narrow both sides of the comparison.
+        listed = subprocess.run(
+            ["git", "ls-files", "-z"],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            check=True,
+        ).stdout.decode("utf-8")
 
-        assert reported == expected, sorted(expected - reported)[:10]
+        def is_utf8_text(name):
+            try:
+                (REPO_ROOT / name).read_bytes().decode("utf-8")
+            except (OSError, UnicodeDecodeError):
+                return False
+            return True
+
+        expected = {name for name in listed.split("\0") if name and is_utf8_text(name)}
+
+        assert reported == expected, sorted(expected ^ reported)[:10]
 
 
 class TestTheScannerCanActuallyFail:
@@ -225,6 +241,15 @@ class TestTheScannerCanActuallyFail:
 
         found = find_conflict_markers(text)
         assert (3, "|||||||") in found, found
+
+    def test_it_catches_unlabelled_markers(self):
+        text = "<<<<<<<\nours\n|||||||\nbase\n=======\ntheirs\n>>>>>>>\n"
+        assert find_conflict_markers(text) == [
+            (1, "<<<<<<<"),
+            (3, "|||||||"),
+            (5, "======="),
+            (7, ">>>>>>>"),
+        ]
 
     def test_it_catches_an_end_marker(self):
         text = "# header\ntheir\n>>>>>>> abc1234\n"
