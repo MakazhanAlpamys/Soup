@@ -12,7 +12,7 @@ Two opt-in controls for DPO-family preference training:
    Useful for self-improving loops where the policy quickly outpaces
    the original reference.
 
-Both helpers are duck-typed callbacks (no ``transformers`` import at
+Both helpers are lazily-subclassed TrainerCallbacks (no ``transformers`` import at
 module scope) so they cost nothing on a torch-less interpreter and stay
 unit-testable on CI without GPUs.
 """

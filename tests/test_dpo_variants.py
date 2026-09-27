@@ -11,7 +11,10 @@ constant-ref-model path is unchanged when both flags are unset.
 
 from __future__ import annotations
 
+import ast
+import importlib
 import math
+from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
@@ -28,16 +31,17 @@ class TestDPOVariantsConfig:
             base="some-model",
             task="dpo",
             data={"train": "./data.jsonl", "format": "dpo"},
-            training={"dpo_beta": 0.1, "lora": {"r": 0}, **training},
+            training={"dpo_beta": 0.1, **training},
         )
 
-    def test_ref_regen_epochs_rejected_with_lora(self):
-        with pytest.raises(ValidationError, match="dpo_ref_regen_epochs.*[Ll]o[Rr][Aa]"):
+    @pytest.mark.parametrize("lora_r", [0, 16])
+    def test_ref_regen_epochs_refused_at_load(self, lora_r):
+        with pytest.raises(ValidationError, match="dpo_ref_regen_epochs is not wired yet"):
             SoupConfig(
                 base="some-model",
                 task="dpo",
                 data={"train": "./data.jsonl", "format": "dpo"},
-                training={"dpo_ref_regen_epochs": 2, "lora": {"r": 16}},
+                training={"dpo_ref_regen_epochs": 2, "lora": {"r": lora_r}},
             )
 
 
@@ -63,10 +67,6 @@ class TestDPOVariantsConfig:
         """Setting end without schedule is meaningless."""
         with pytest.raises(ValidationError, match="dpo_beta_schedule"):
             self._base(dpo_beta_end=0.01)
-
-    def test_ref_regen_epochs_positive(self):
-        cfg = self._base(dpo_ref_regen_epochs=2)
-        assert cfg.training.dpo_ref_regen_epochs == 2
 
     def test_ref_regen_epochs_zero_rejected(self):
         with pytest.raises(ValidationError, match="dpo_ref_regen_epochs"):
@@ -541,124 +541,109 @@ output: {out_dir}
         )
         assert wrapper.trainer.beta == pytest.approx(expected_beta, abs=1e-5)
 
-    def test_ipo_train_beta_schedule(self, tmp_path):
-        from soup_cli.config.loader import load_config_from_string
-        from soup_cli.trainer.ipo import IPOTrainerWrapper
+def _run_schedule(tmp_path, task, training):
+    from soup_cli.config.loader import load_config_from_string
 
-        rows = [
-            {"prompt": f"Q{i}?", "chosen": f"A{i} good.", "rejected": f"A{i} bad."}
-            for i in range(4)
-        ]
-        out_dir = (tmp_path / "out_ipo").as_posix()
-        cfg = load_config_from_string(f"""
-base: sshleifer/tiny-gpt2
-task: ipo
-data:
-  train: x.jsonl
-  max_length: 64
-training:
-  epochs: 1
-  batch_size: 2
-  quantization: none
-  lr: 1e-4
-  ipo_tau: 0.1
-  dpo_beta_schedule: linear
-  dpo_beta_end: 0.05
-output: {out_dir}
-""")
-        wrapper = IPOTrainerWrapper(cfg, device="cpu")
-        wrapper.setup({"train": list(rows)})
-        res = wrapper.train()
-        assert res.get("total_steps", 0) > 0
-
-    def test_preference_dispatcher_dpo_beta_schedule(self, tmp_path):
-        from soup_cli.config.loader import load_config_from_string
-        from soup_cli.trainer.preference import PreferenceTrainerWrapper
-
-        rows = [
-            {"prompt": f"Q{i}?", "chosen": f"A{i} good.", "rejected": f"A{i} bad."}
-            for i in range(4)
-        ]
-        out_dir = (tmp_path / "out_pref").as_posix()
-        cfg = load_config_from_string(f"""
-base: sshleifer/tiny-gpt2
-task: preference
-data:
-  train: x.jsonl
-  max_length: 64
-training:
-  preference_loss: dpo
-  epochs: 1
-  batch_size: 2
-  quantization: none
-  lr: 1e-4
-  dpo_beta: 0.1
-  dpo_beta_schedule: cosine
-  dpo_beta_end: 0.05
-output: {out_dir}
-""")
-        wrapper = PreferenceTrainerWrapper(cfg, device="cpu")
-        wrapper.setup({"train": list(rows)})
-        res = wrapper.train()
-        assert res.get("total_steps", 0) > 0
+    rows = [
+        {"prompt": f"Q{i}?", "chosen": f"A{i} good.", "rejected": f"A{i} bad."}
+        for i in range(4)
+    ]
+    cfg = load_config_from_string(
+        "base: sshleifer/tiny-gpt2\n"
+        f"task: {task}\n"
+        "data:\n  train: x.jsonl\n  max_length: 64\n"
+        "training:\n  epochs: 2\n  batch_size: 2\n  quantization: none\n  lr: 1e-4\n"
+        f"{training}"
+        f"output: {(tmp_path / 'out').as_posix()}\n"
+    )
+    if task == "ipo":
+        from soup_cli.trainer.ipo import IPOTrainerWrapper as Wrapper
+    else:
+        from soup_cli.trainer.preference import PreferenceTrainerWrapper as Wrapper
+    wrapper = Wrapper(cfg, device="cpu")
+    wrapper.setup({"train": list(rows)})
+    return wrapper, wrapper.train()
 
 
-class TestRatchetNoBareCallbacks:
-    """Ratchet: every callback class defining on_* methods must subclass TrainerCallback."""
+def test_ipo_schedule_anneals_from_ipo_tau(tmp_path):
+    from soup_cli.utils.dpo_variants import compute_beta_at_step
 
-    def test_all_callbacks_in_soup_cli_subclass_trainer_callback(self):
-        import ast
-        from pathlib import Path
+    wrapper, result = _run_schedule(
+        tmp_path, "ipo", "  ipo_tau: 0.2\n  dpo_beta_schedule: linear\n  dpo_beta_end: 0.05\n"
+    )
+    assert result.get("total_steps", 0) >= 2
+    expected = compute_beta_at_step(
+        beta_start=0.2, beta_end=0.05, step=1,
+        total_steps=wrapper.trainer.state.max_steps, schedule="linear",
+    )
+    assert wrapper.trainer.beta == pytest.approx(expected, abs=1e-6)
 
-        import soup_cli
 
-        root = Path(soup_cli.__file__).parent
-        hf_events = {
-            "on_init_end",
-            "on_train_begin",
-            "on_train_end",
-            "on_epoch_begin",
-            "on_epoch_end",
-            "on_step_begin",
-            "on_step_end",
-            "on_substep_end",
-            "on_evaluate",
-            "on_predict",
-            "on_save",
-            "on_log",
-            "on_prediction_step",
-        }
+@pytest.mark.parametrize("loss", ["dpo", "ipo"])
+def test_preference_dispatcher_schedule_acts(tmp_path, loss):
+    from soup_cli.utils.dpo_variants import compute_beta_at_step
 
-        bare_callbacks = []
-        for py_path in root.rglob("*.py"):
-            tree = ast.parse(py_path.read_text(encoding="utf-8"), str(py_path))
+    start, start_key = (0.1, "dpo_beta") if loss == "dpo" else (0.2, "ipo_tau")
+    wrapper, result = _run_schedule(
+        tmp_path,
+        "preference",
+        f"  preference_loss: {loss}\n  {start_key}: {start}\n"
+        "  dpo_beta_schedule: cosine\n  dpo_beta_end: 0.05\n",
+    )
+    assert result.get("total_steps", 0) >= 2
+    expected = compute_beta_at_step(
+        beta_start=start, beta_end=0.05, step=1,
+        total_steps=wrapper.trainer.state.max_steps, schedule="cosine",
+    )
+    assert wrapper.trainer.beta == pytest.approx(expected, abs=1e-6)
 
-            lazy_classes = set()
-            for node in ast.walk(tree):
-                if isinstance(node, ast.Assign):
-                    for target in node.targets:
-                        if (
-                            isinstance(target, ast.Name)
-                            and target.id == "_LAZY_CALLBACKS"
-                            and isinstance(node.value, ast.Dict)
-                        ):
-                            for v in node.value.values:
-                                if isinstance(v, ast.Name):
-                                    lazy_classes.add(v.id)
 
-            for node in ast.walk(tree):
-                if isinstance(node, ast.ClassDef):
-                    methods = {
-                        n.name for n in node.body if isinstance(n, ast.FunctionDef)
-                    }
-                    if methods & hf_events:
-                        if not node.bases and node.name not in lazy_classes:
-                            bare_callbacks.append(
-                                f"{py_path.relative_to(root)}::{node.name}"
-                            )
+def _lazy_body_names(tree):
+    names = set()
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Assign) and isinstance(node.value, ast.Dict)):
+            continue
+        if any(isinstance(t, ast.Name) and t.id == "_LAZY_CALLBACKS" for t in node.targets):
+            names |= {v.id for v in node.value.values if isinstance(v, ast.Name)}
+    return names
 
-        assert not bare_callbacks, (
-            "Found bare callback class(es) without TrainerCallback base: "
-            f"{bare_callbacks}. All callbacks must subclass TrainerCallback lazily."
-        )
+
+def test_no_bare_callback_classes():
+    from transformers import TrainerCallback
+
+    import soup_cli
+
+    root = Path(soup_cli.__file__).parent
+    events = {name for name in dir(TrainerCallback) if name.startswith("on_")}
+    bare = []
+    for path in sorted(root.rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"), str(path))
+        lazy = _lazy_body_names(tree)
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.ClassDef) or node.name in lazy:
+                continue
+            methods = {n.name for n in node.body if isinstance(n, ast.FunctionDef)}
+            if not methods & events:
+                continue
+            bases = [b.id for b in node.bases if isinstance(b, ast.Name)]
+            if not node.bases or bases == ["object"]:
+                bare.append(f"{path.relative_to(root).as_posix()}::{node.name}")
+    assert not bare, f"callback classes without a TrainerCallback base: {bare}"
+
+
+def test_every_lazy_callback_builds_a_trainer_callback():
+    from transformers import TrainerCallback
+
+    import soup_cli
+
+    root = Path(soup_cli.__file__).parent
+    for path in sorted(root.rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"), str(path))
+        if not _lazy_body_names(tree):
+            continue
+        dotted = ".".join(path.relative_to(root.parent).with_suffix("").parts)
+        module = importlib.import_module(dotted)
+        for name in module._LAZY_CALLBACKS:
+            cls = getattr(module, name)
+            assert issubclass(cls, TrainerCallback), f"{dotted}.{name}"
 

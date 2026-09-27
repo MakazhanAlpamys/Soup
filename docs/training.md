@@ -1147,7 +1147,7 @@ unified surface is additive.
 
 ### KL-controlled DPO variants
 
-Anneal β over training, periodically refresh the reference model:
+Anneal β over training with `dpo_beta_schedule`:
 
 ```yaml
 task: dpo   # or task: preference + preference_loss: dpo, or task: ipo
@@ -1155,12 +1155,9 @@ training:
   dpo_beta: 0.1
   dpo_beta_schedule: linear   # linear | cosine | exponential
   dpo_beta_end: 0.01
-  dpo_ref_regen_epochs: 2     # copy student → ref model every 2 epochs
 ```
 
-Both controls are gated to DPO-family tasks (`dpo`, `ipo`, or
-`preference` with `preference_loss in {dpo, ipo}`); transformers
-backend only.
+Gated to DPO-family tasks (`dpo`, `ipo`, or `preference` with `preference_loss in {dpo, ipo}`); transformers backend only. `dpo_ref_regen_epochs` is refused at config load (#1229) because it is not wired yet.
 
 ### Multi-objective preference loss (schema-only in v0.40.0)
 
