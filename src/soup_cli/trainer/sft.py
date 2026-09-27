@@ -166,6 +166,20 @@ def _map_text_sft_rows(
     )
 
 
+def _ensure_assistant_masks(dataset: Any) -> Any:
+    """Ensure `assistant_masks` column exists alongside `labels` for TRL packing (#1236)."""
+    if dataset is None:
+        return None
+    cols = getattr(dataset, "column_names", ())
+    if "labels" in cols and "assistant_masks" not in cols:
+        return dataset.map(
+            lambda row: {
+                "assistant_masks": [1 if int(x) != -100 else 0 for x in row["labels"]]
+            }
+        )
+    return dataset
+
+
 def _validate_pretokenized_targets(dataset: Any, *, split: str, max_length: int) -> None:
     """Apply the same target invariant to trusted pre-tokenized datasets."""
     from soup_cli.data.loss_mask import (
@@ -458,7 +472,7 @@ def _make_vision_trainer(
 
 
 def _maybe_load_pretokenized(
-    dcfg, base: str, console_obj: Console, tcfg=None, task: str = "sft",
+    dcfg, base: str, console_obj: Console, tcfg=None, *, task: str,
 ) -> Optional[Tuple[object, object]]:
     """v0.53.7 #86 — short-circuit tokenization when caller pre-tokenized via
     ``soup data preprocess``.
@@ -484,6 +498,7 @@ def _maybe_load_pretokenized(
     from soup_cli.utils.data_pipeline import (
         load_pretokenized_dataset,
         make_preprocess_cache_key,
+        preprocess_dataset_key_diff,
         preprocess_dataset_key_input,
         preprocess_mask_mode,
     )
@@ -508,8 +523,9 @@ def _maybe_load_pretokenized(
         source_format = metadata.get("format")
         if not isinstance(source_format, str) or not source_format:
             source_format = dcfg.format
+        dataset_key = preprocess_dataset_key_input(dcfg)
         current_key = make_preprocess_cache_key(
-            dataset_path=preprocess_dataset_key_input(dcfg),
+            dataset_path=dataset_key,
             tokenizer_name=base,
             max_length=dcfg.max_length,
             format_name=source_format,
@@ -528,8 +544,19 @@ def _maybe_load_pretokenized(
                 predates = "the cache predates chat_template keying (#1067); "
             elif "mask_mode" not in metadata:
                 predates = "the cache predates loss-mask keying (#1054); "
+            elif "key_schema" not in metadata:
+                predates = "the cache predates row-set keying (#1127); "
             else:
-                predates = ""
+                changed = preprocess_dataset_key_diff(
+                    metadata.get("dataset_key"), dataset_key
+                )
+                predates = (
+                    "the cache was built with a different "
+                    + ", ".join(f"data.{name}" for name in changed)
+                    + "; "
+                    if changed
+                    else ""
+                )
             raise ValueError(
                 "pre_tokenized cache hash mismatch: was generated with "
                 f"{stored_key!r}, current config implies {current_key!r}; "
@@ -884,6 +911,11 @@ class SFTTrainerWrapper(StreamingSetupMixin):
                     split="validation",
                     max_length=cfg.data.max_length,
                 )
+
+        # #1236 - Ensure assistant_masks exists alongside labels for TRL packing
+        train_ds = _ensure_assistant_masks(train_ds)
+        if eval_ds is not None:
+            eval_ds = _ensure_assistant_masks(eval_ds)
 
         # --- Output dir ---
         output_dir = Path(cfg.output)
@@ -2199,6 +2231,7 @@ class SFTTrainerWrapper(StreamingSetupMixin):
         attach_plugin_callback(self.trainer, console)
 
         # v0.53.2 #135 — EBFT compute_loss hook (no-op if ebft_variant unset).
+        # Always a no-op today: ebft_variant is refused at config load (#1230).
         from soup_cli.utils.ebft_gdpo import attach_ebft_compute_loss
         attach_ebft_compute_loss(self.trainer, self.config.training)
 
@@ -2245,6 +2278,8 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             # plain attention). Enter defensively: an install failure on the
             # current transformers degrades to plain attention with a warning
             # instead of crashing the run. Arch compat is already schema-gated.
+            # Unreachable: use_longlora: true is refused at config load until
+            # real S² attention exists (#1240).
             if getattr(tcfg, "use_longlora", False) and self.config.backend == "transformers":
                 from soup_cli.utils.longlora import apply_longlora_forward_override
 

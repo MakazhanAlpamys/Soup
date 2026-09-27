@@ -2716,6 +2716,7 @@ def preprocess_dataset(
         raise
 
     from soup_cli import __version__ as _soup_version
+    from soup_cli.utils.data_pipeline import _PREPROCESS_TOKENIZE_SCHEMA
 
     metadata = {
         "cache_key": cache_key,
@@ -2726,6 +2727,10 @@ def preprocess_dataset(
         "chat_template": cfg.data.chat_template,
         "mask_mode": mask_mode,
         "task": cfg.task,
+        # #1272: what the gate needs to say why a cache is refused -- the key
+        # generation, and the row-set inputs so it can name the fields that differ.
+        "key_schema": _PREPROCESS_TOKENIZE_SCHEMA,
+        "dataset_key": json.loads(dataset_path),
         "soup_version": _soup_version,
     }
     metadata_path = target / "metadata.json"
