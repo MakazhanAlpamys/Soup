@@ -187,19 +187,13 @@ training:
 
 ## Optimizer & PEFT Zoo
 
-Pick from a wider catalogue of optimizers, target individual modules with their own LR, and use quantization-aware LoRA initialisation:
+Pick from a wider catalogue of optimizers and use quantization-aware LoRA initialisation:
 
 ```yaml
 training:
   # 30+ optimizers — HF-native, bnb, BAdam, APOLLO, Adam-mini, lomo,
   # grokadamw, schedule_free, muon, dion, came_pytorch, ao_adamw_{fp8,4bit,8bit}
   optimizer: badam
-
-  # Per-module LR override (first match wins; remaining params use base lr)
-  lr_groups:
-    q_proj: 1e-4
-    v_proj: 5e-5
-    mlp:    1e-5
 
   # Friendly aliases for users coming from LlamaFactory / Axolotl
   # load_in_8bit: true      # equivalent to quantization: 8bit
@@ -217,7 +211,9 @@ training:
   freeze_trainable_layers: 4
 ```
 
-Catch-all friendly errors: typos in `optimizer:` are rejected at config-load with the v0.41.0 additions listed in the message; `lr_groups` patterns are validated as compilable regexes (length-capped + benign-string ReDoS probe); `load_in_8bit` mixed with `load_in_16bit` raises rather than picking one silently.
+Catch-all friendly errors: typos in `optimizer:` are rejected at config-load with the v0.41.0 additions listed in the message; `load_in_8bit` mixed with `load_in_16bit` raises rather than picking one silently.
+
+**`lr_groups` is not applied.** The per-module learning rate it describes is parsed and validated (patterns must be compilable regexes) but no optimizer reads it, so every parameter trains at `lr`. From v0.76 setting it prints a warning, and v0.77 refuses it (#761).
 
 PiSSA, OLoRA, LoftQ, and VeRA are applied through the shared PEFT constructor on
 the Transformers backend. Soup refuses these variants on MLX and Unsloth rather
@@ -698,7 +694,9 @@ reserved for planned in-training callbacks. They are accepted by the schema but
 are not enforced during training in this build. `soup train` prints an advisory note
 when one is set away from its default, directing users to `--gate <suite.yaml>`.
 (Other unconsumed configuration fields staged for features that have not landed emit
-a load-time warning in v0.76 and are refused as of v0.77 per #808).
+a load-time warning in v0.76 and are refused as of v0.77 per #808. That includes
+`early_stop_patience`, which moved from the advisory note to the load-time warning
+in #761, so it is reported once, with the refusal date.)
 
 Use the live eval gate for regression detection and automatic stopping today:
 
