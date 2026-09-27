@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -69,6 +70,19 @@ class TestSingleMarkupSink:
 
 
 NODE = shutil.which("node")
+
+
+def test_ci_runs_the_javascript_tests():
+    """On CI a missing node is a failure, not a skip.
+
+    The class below holds the only tests that execute the real escaping
+    logic; everything above it reads the source text. If node ever leaves
+    the runner image those tests would vanish quietly, so CI pins node
+    (`actions/setup-node`) and this test is what notices when it does not.
+    """
+    if os.environ.get("CI", "").lower() != "true":
+        pytest.skip("local run: node is optional")
+    assert NODE is not None, "CI must provide node so the escaping tests run"
 
 
 @pytest.mark.skipif(NODE is None, reason="node not installed")

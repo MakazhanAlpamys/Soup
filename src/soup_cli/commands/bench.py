@@ -95,11 +95,11 @@ def bench(
             "'owner/repo-name' (no leading './').[/]"
         )
         raise typer.Exit(1) from exc
-    model_path = Path(model_ref)
     if model_kind == "hf":
         console.print(
             f"[dim]Local path not found; treating {model_ref!r} as a HF repo id.[/]"
         )
+    model_target = model_ref
 
     device, _ = detect_device()
 
@@ -108,7 +108,7 @@ def bench(
 
     backend_lower = (backend or "auto").strip().lower()
     if backend_lower == "auto":
-        backend_resolved = detect_backend(str(model_path))
+        backend_resolved = detect_backend(model_target)
         console.print(
             f"[dim]Backend auto-detected:[/] [bold]{backend_resolved}[/]"
         )
@@ -197,7 +197,7 @@ def bench(
 
     console.print(
         Panel(
-            f"Model:    [bold]{model_path}[/]\n"
+            f"Model:    [bold]{model_target}[/]\n"
             f"Device:   [bold]{device}[/]\n"
             f"Prompts:  [bold]{actual_num_prompts}[/]\n"
             f"Tokens/P: [bold]{max_tokens}[/]",
@@ -214,7 +214,9 @@ def bench(
 
     start_load = time.time()
     try:
-        model_obj, tokenizer = _load_model(str(model_path), base, device)
+        model_obj, tokenizer = _load_model(
+            model_target, base, device, is_local=(model_kind == "local")
+        )
     except typer.Exit:
         # typer.Exit subclasses RuntimeError, so the broad except below would
         # swallow an already-reported CLI exit and mis-print "Failed to load

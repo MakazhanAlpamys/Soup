@@ -67,6 +67,9 @@ class ParamSnapshot:
 def summarize_step_times(step_times: Sequence[float], warmup_steps: int) -> dict:
     """Median and p95 over the post-warm-up steps, saying how many it dropped.
 
+    ``step_seconds`` keeps every counted step in run order: two quantiles show
+    that a run changed mode mid-flight, only the sequence shows where (#1166).
+
     p95 is nearest-rank: the reported figure is a step that was actually
     measured, not an interpolation between two of them.
 
@@ -94,6 +97,48 @@ def summarize_step_times(step_times: Sequence[float], warmup_steps: int) -> dict
         "counted_steps": len(counted),
         "warmup_steps_discarded": warmup_steps,
         "total_seconds": sum(counted),
+        "step_seconds": counted,
+    }
+
+
+def summarize_clock_samples(
+    samples: Sequence[tuple[float, int]],
+    window_start: Optional[float],
+    window_end: Optional[float] = None,
+    *,
+    unavailable_reason: Optional[str] = None,
+) -> dict:
+    """min / median / max SM clock over the samples inside the counted window.
+
+    Samples before ``window_start`` (warm-up) or after ``window_end`` (teardown)
+    are dropped: the card is ramping there, not doing the measured work. No
+    sample in the window reports ``None`` rather than a number from outside it,
+    and ``unavailable_reason`` always says why: the caller's reason (no CUDA, no
+    tool), no readable sample at all, or samples that all fell outside the window.
+    """
+    clocks = sorted(
+        clock
+        for stamp, clock in samples
+        if window_start is not None
+        and stamp >= window_start
+        and (window_end is None or stamp <= window_end)
+    )
+    median = None
+    if not clocks and unavailable_reason is None:
+        unavailable_reason = (
+            "no sample fell inside the counted steps"
+            if samples
+            else "nvidia-smi returned no readable SM clock"
+        )
+    if clocks:
+        middle, odd = divmod(len(clocks), 2)
+        median = clocks[middle] if odd else (clocks[middle - 1] + clocks[middle]) / 2
+    return {
+        "min": clocks[0] if clocks else None,
+        "median": median,
+        "max": clocks[-1] if clocks else None,
+        "sample_count": len(clocks),
+        "unavailable_reason": unavailable_reason,
     }
 
 

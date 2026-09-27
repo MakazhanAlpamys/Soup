@@ -166,6 +166,20 @@ def _map_text_sft_rows(
     )
 
 
+def _ensure_assistant_masks(dataset: Any) -> Any:
+    """Ensure `assistant_masks` column exists alongside `labels` for TRL packing (#1236)."""
+    if dataset is None:
+        return None
+    cols = getattr(dataset, "column_names", ())
+    if "labels" in cols and "assistant_masks" not in cols:
+        return dataset.map(
+            lambda row: {
+                "assistant_masks": [1 if int(x) != -100 else 0 for x in row["labels"]]
+            }
+        )
+    return dataset
+
+
 def _validate_pretokenized_targets(dataset: Any, *, split: str, max_length: int) -> None:
     """Apply the same target invariant to trusted pre-tokenized datasets."""
     from soup_cli.data.loss_mask import (
@@ -174,7 +188,15 @@ def _validate_pretokenized_targets(dataset: Any, *, split: str, max_length: int)
     )
 
     if "labels" not in getattr(dataset, "column_names", ()):
-        return
+        # #1054: skipping here let a label-less cache through to TRL, whose
+        # collator then falls back to ``labels = input_ids`` and trained on the
+        # prompt. A pre-tokenized cache without labels is never trustworthy.
+        raise ValueError(
+            f"pre_tokenized {split} dataset has no 'labels' column — its loss "
+            "mask is unknown and TRL would train on every token. Re-run "
+            "`soup data preprocess` with a current Soup version, or add a "
+            "'labels' column to a dataset you built yourself."
+        )
     for row_index in range(len(dataset)):
         try:
             ensure_causal_loss_target(
@@ -450,7 +472,7 @@ def _make_vision_trainer(
 
 
 def _maybe_load_pretokenized(
-    dcfg, base: str, console_obj: Console,
+    dcfg, base: str, console_obj: Console, tcfg=None, *, task: str,
 ) -> Optional[Tuple[object, object]]:
     """v0.53.7 #86 — short-circuit tokenization when caller pre-tokenized via
     ``soup data preprocess``.
@@ -461,8 +483,10 @@ def _maybe_load_pretokenized(
 
     Cache-hash gate: when ``<tokenized_path>/metadata.json`` exists, its
     ``cache_key`` is cross-checked against the current
-    ``(base, max_length, format, train)`` config via
-    :func:`make_preprocess_cache_key`. Mismatch raises ``ValueError`` with
+    ``(dataset, base, max_length, format, chat_template, mask_mode, task)``
+    config via :func:`make_preprocess_cache_key`: every input that changes which
+    rows are cached or what a cached row looks like (``PREPROCESS_KEY_FIELDS``).
+    Mismatch raises ``ValueError`` with
     the keyword ``"cache hash mismatch"`` so users know to re-run
     ``soup data preprocess``. Missing ``metadata.json`` falls back to
     "trusted" mode with a yellow advisory.
@@ -474,7 +498,9 @@ def _maybe_load_pretokenized(
     from soup_cli.utils.data_pipeline import (
         load_pretokenized_dataset,
         make_preprocess_cache_key,
+        preprocess_dataset_key_diff,
         preprocess_dataset_key_input,
+        preprocess_mask_mode,
     )
 
     tokenized_path = dcfg.tokenized_path
@@ -497,22 +523,40 @@ def _maybe_load_pretokenized(
         source_format = metadata.get("format")
         if not isinstance(source_format, str) or not source_format:
             source_format = dcfg.format
+        dataset_key = preprocess_dataset_key_input(dcfg)
         current_key = make_preprocess_cache_key(
-            dataset_path=preprocess_dataset_key_input(dcfg),
+            dataset_path=dataset_key,
             tokenizer_name=base,
             max_length=dcfg.max_length,
             format_name=source_format,
             # #1067: unlike the format, the template is restated in this config. It
             # has to match, since training saves the tokenizer with this template.
             chat_template=resolve_chat_template(dcfg.chat_template),
+            mask_mode=preprocess_mask_mode(dcfg, tcfg),
+            task=task,
         )
         if stored_key != current_key:
-            # A cache without the field was written before #1067 keyed on the template.
-            predates = (
-                "the cache predates chat_template keying (#1067); "
-                if "chat_template" not in metadata
-                else ""
-            )
+            # A cache without the field was written before that input joined the
+            # key, so name the reason rather than leaving two hashes to compare
+            # by eye. Oldest gap first: a cache missing both predates #1067, and
+            # saying so places it further back than naming #1054 alone would.
+            if "chat_template" not in metadata:
+                predates = "the cache predates chat_template keying (#1067); "
+            elif "mask_mode" not in metadata:
+                predates = "the cache predates loss-mask keying (#1054); "
+            elif "key_schema" not in metadata:
+                predates = "the cache predates row-set keying (#1127); "
+            else:
+                changed = preprocess_dataset_key_diff(
+                    metadata.get("dataset_key"), dataset_key
+                )
+                predates = (
+                    "the cache was built with a different "
+                    + ", ".join(f"data.{name}" for name in changed)
+                    + "; "
+                    if changed
+                    else ""
+                )
             raise ValueError(
                 "pre_tokenized cache hash mismatch: was generated with "
                 f"{stored_key!r}, current config implies {current_key!r}; "
@@ -596,6 +640,7 @@ class SFTTrainerWrapper(StreamingSetupMixin):
         self.trainer = None
         self._is_raft = False  # set in setup() when data.format == 'raft'
         self._quest_metadata: Optional[dict[str, Any]] = None
+        self._quest_base_identity_before: Optional[str] = None
         # Resolve once — raises ValueError if model needs custom code but
         # the user did not opt in. Result is cached on the wrapper for use
         # by every from_pretrained() call below.
@@ -823,7 +868,9 @@ class SFTTrainerWrapper(StreamingSetupMixin):
         self._raft_epoch_shuffle = self._is_raft and bool(
             getattr(cfg.data, "raft_epoch_shuffle", False)
         )
-        pretok = _maybe_load_pretokenized(cfg.data, cfg.base, console)
+        pretok = _maybe_load_pretokenized(
+            cfg.data, cfg.base, console, tcfg, task=cfg.task
+        )
         if pretok is not None:
             train_ds, eval_ds = pretok
             _validate_pretokenized_targets(
@@ -864,6 +911,11 @@ class SFTTrainerWrapper(StreamingSetupMixin):
                     split="validation",
                     max_length=cfg.data.max_length,
                 )
+
+        # #1236 - Ensure assistant_masks exists alongside labels for TRL packing
+        train_ds = _ensure_assistant_masks(train_ds)
+        if eval_ds is not None:
+            eval_ds = _ensure_assistant_masks(eval_ds)
 
         # --- Output dir ---
         output_dir = Path(cfg.output)
@@ -1237,6 +1289,7 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             calibrate_activation_scales,
             calibration_rows_sha256,
             install_mixed_quest,
+            resolve_base_model_identity,
             validate_cuda_hardware,
         )
 
@@ -1257,10 +1310,14 @@ class SFTTrainerWrapper(StreamingSetupMixin):
         ]
         calibration_sha256 = calibration_rows_sha256(calibration_rows)
         scales = calibrate_activation_scales(self.model, calibration_rows)
+        base_identity = resolve_base_model_identity(self.config.base)
+        before = getattr(self, "_quest_base_identity_before", None)
+        if before is not None and before != base_identity:
+            raise ValueError("QuEST local base changed while the model was loading")
         self._quest_metadata = install_mixed_quest(
             self.model,
             activation_scales=scales,
-            base_model=self.config.base,
+            base_model=base_identity,
             calibration_sha256=calibration_sha256,
         )
         # Store a second copy in HF config so generic artifact inspection says
@@ -1517,9 +1574,10 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             # several visible cards; this first engineering slice is explicitly
             # single-GPU and its dense Hadamard route has not been measured
             # under DDP, DataParallel, DeepSpeed or FSDP.
-            from soup_cli.utils.quest import validate_cuda_hardware
+            from soup_cli.utils.quest import resolve_base_model_identity, validate_cuda_hardware
 
             validate_cuda_hardware()
+            self._quest_base_identity_before = resolve_base_model_identity(cfg.base)
 
         # Liger Kernel — apply fused ops BEFORE model loading
         if tcfg.use_liger:
@@ -1750,7 +1808,7 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             )
 
             target_modules = resolve_lora_target_modules(
-                self.model, tcfg.lora.target_modules
+                self.model, tcfg.lora.target_modules, console
             )
             target_parameters = resolve_lora_target_parameters(
                 self.model, tcfg.lora.target_parameters
@@ -1917,7 +1975,7 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             resolve_lora_target_modules,
         )
 
-        target_modules = resolve_lora_target_modules(self.model, tcfg.lora.target_modules)
+        target_modules = resolve_lora_target_modules(self.model, tcfg.lora.target_modules, console)
 
         lora_config = build_lora_config(
             tcfg.lora,
@@ -2039,7 +2097,7 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             resolve_lora_target_modules,
         )
 
-        target_modules = resolve_lora_target_modules(self.model, tcfg.lora.target_modules)
+        target_modules = resolve_lora_target_modules(self.model, tcfg.lora.target_modules, console)
 
         lora_config = build_lora_config(
             tcfg.lora,
@@ -2171,6 +2229,7 @@ class SFTTrainerWrapper(StreamingSetupMixin):
         attach_plugin_callback(self.trainer, console)
 
         # v0.53.2 #135 — EBFT compute_loss hook (no-op if ebft_variant unset).
+        # Always a no-op today: ebft_variant is refused at config load (#1230).
         from soup_cli.utils.ebft_gdpo import attach_ebft_compute_loss
         attach_ebft_compute_loss(self.trainer, self.config.training)
 
@@ -2184,7 +2243,11 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             from soup_cli.utils.quest import validate_resume_metadata, write_metadata
 
             if resume_from_checkpoint is not None:
-                validate_resume_metadata(resume_from_checkpoint, self._quest_metadata)
+                validate_resume_metadata(
+                    resume_from_checkpoint,
+                    self._quest_metadata,
+                    legacy_base_model=self.config.base,
+                )
             # Write only after a resumed checkpoint has proved compatible. A
             # rejected resume must not overwrite the root artifact's previous
             # route declaration during setup.
@@ -2203,6 +2266,7 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             offload_save_dir = candidate
         # v0.72.3 — the shared context releases the streaming weight source even
         # if training raises (see StreamingSetupMixin._training_context).
+        self._attach_streamed_save_guard()
         with self._training_context(
             offload_context(tcfg.activation_offloading, save_dir=offload_save_dir)
         ) as train_ctx:
@@ -2212,6 +2276,8 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             # plain attention). Enter defensively: an install failure on the
             # current transformers degrades to plain attention with a warning
             # instead of crashing the run. Arch compat is already schema-gated.
+            # Unreachable: use_longlora: true is refused at config load until
+            # real S² attention exists (#1240).
             if getattr(tcfg, "use_longlora", False) and self.config.backend == "transformers":
                 from soup_cli.utils.longlora import apply_longlora_forward_override
 
@@ -2244,6 +2310,7 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             from soup_cli.utils.quest import write_metadata
 
             write_metadata(self._output_dir, self._quest_metadata)
+        self._assert_streamed_adapter_saved(self._output_dir)
         # #335 — under torch.compile the Trainer saves THROUGH the wrapper, so
         # every key gains `_orig_mod.` and PeftModel.from_pretrained then matches
         # none of them: it warns and leaves lora_B at zero init, i.e. the run
