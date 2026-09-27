@@ -341,6 +341,42 @@ def delete(
     console.print(f"[green]Deleted run: {run['run_id']}[/]")
 
 
+def _checkpoint_step(checkpoint: Path) -> Optional[int]:
+    """The step of a ``checkpoint-<step>`` directory, or None for another name."""
+    try:
+        return int(checkpoint.name.split("-")[-1])
+    except ValueError:
+        return None
+
+
+def _checkpoint_to_keep(
+    metrics: list[dict], checkpoint_steps: set[int]
+) -> tuple[Optional[int], bool]:
+    """The step of the checkpoint ``runs clean`` leaves whole, and whether it is a fallback.
+
+    It is the checkpoint with the lowest finite loss recorded at its step. The
+    comparison is made among the checkpoints: the run's lowest loss is often
+    logged between two of them, and requiring an exact match left no
+    checkpoint whole. When no checkpoint has a recorded loss (a run shorter
+    than ``logging_steps`` records none at all, #1225), the latest checkpoint
+    is kept, so the run can still be resumed.
+    """
+    import math
+
+    at_checkpoints = [
+        row
+        for row in metrics
+        if row.get("step") in checkpoint_steps
+        and isinstance(row.get("loss"), (int, float))
+        and math.isfinite(row["loss"])
+    ]
+    if at_checkpoints:
+        return min(at_checkpoints, key=lambda row: row["loss"])["step"], False
+    if checkpoint_steps:
+        return max(checkpoint_steps), True
+    return None, False
+
+
 @app.command()
 def clean(
     run_id: Optional[str] = typer.Argument(
@@ -359,7 +395,11 @@ def clean(
         ),
     ),
 ):
-    """Intelligently clean up redundant checkpoint files to reclaim disk space."""
+    """Intelligently clean up redundant checkpoint files to reclaim disk space.
+
+    The checkpoint with the lowest loss recorded at its step is left whole; when
+    no checkpoint has a recorded loss, the latest one is.
+    """
     import shutil
 
     from soup_cli.experiment.tracker import ExperimentTracker
@@ -410,23 +450,16 @@ def clean(
 
         metrics = tracker.get_metrics(run["run_id"])
 
-        best_step = -1
-        valid_metrics = [m for m in metrics if m.get("loss") is not None]
-        if valid_metrics:
-            best_metric = min(valid_metrics, key=lambda x: x["loss"])
-            best_step = best_metric["step"]
-
         checkpoints = [d for d in output_dir.glob("checkpoint-*") if d.is_dir()]
+        steps = {step for step in map(_checkpoint_step, checkpoints) if step is not None}
+        keep_step, fallback = _checkpoint_to_keep(metrics, steps)
+        if fallback:
+            console.print(
+                f"[dim]{for_terminal(run['run_id'])}: no checkpoint has a recorded loss; "
+                f"keeping the latest, checkpoint-{keep_step}, whole.[/]"
+            )
         for ckpt in checkpoints:
-            is_best = False
-            try:
-                step = int(ckpt.name.split("-")[-1])
-                if step == best_step:
-                    is_best = True
-            except ValueError:
-                pass
-
-            if is_best:
+            if keep_step is not None and _checkpoint_step(ckpt) == keep_step:
                 continue
 
             if keep_weights:

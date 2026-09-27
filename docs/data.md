@@ -547,6 +547,8 @@ soup migrate --from llamafactory config.yaml --dry-run
 
 Automatically maps model, LoRA, training params, quantization, and task type. Warns about unsupported features.
 
+An axolotl `rl:` value with no Soup task (for example `rl: ebft`) stops the migration: `soup migrate` exits 1 and names the value instead of writing a `task: sft` config.
+
 
 ## Data Formats
 
@@ -935,7 +937,7 @@ soup data forge \
 
 Three tasks supported: `sft` (Q&A pairs), `preference` (chosen/rejected), `tool` (tool-call hypotheses). Active learning prunes rows whose judge reply is too close to the source chunk (low Jaccard distance), keeping only uncertain / informative samples. The provenance manifest is a separate JSON file mapping every row id to `{source_doc, judge_id, chunk_id, filter_score}` so you have a complete audit trail for compliance.
 
-Document discovery is one level deep over `.txt` / `.md` / `.json` / `.jsonl`; dotfiles + symlinked directories are skipped. All paths are cwd-contained, all writes are atomic via staged-tempfile + `os.replace`, and write targets are rejected if they're symlinks. **Judge providers are live**: `--judge-provider ollama` (localhost-only), `--judge-provider anthropic` (env-only API key), `--judge-provider vllm` (scheme-validated). Per-call judge exceptions logged at DEBUG.
+Document discovery is one level deep over `.txt` / `.md` / `.json` / `.jsonl`; dotfiles + symlinked directories are skipped. All paths are cwd-contained, all writes are atomic via staged-tempfile + `os.replace`, and write targets are rejected if they're symlinks. **Judge providers are live**: `--judge-provider ollama` (localhost-only), `--judge-provider anthropic` (env-only API key), `--judge-provider vllm` (scheme-validated). A judge call that fails (transport error, non-200 status, malformed response) or returns an empty reply never becomes a row, whatever `--uncertainty-threshold` is. The summary reports `N of M judge calls failed` with the first error, and the command exits 1 without writing files when no usable row was produced.
 
 **Alternative teacher hubs (v0.71.5).** `--hub modelscope|modelers` pre-fetches the `--teacher` from that hub when the teacher is a routable repo id (`owner/name`); `--hub hf` (default) is a no-op and leaves the teacher as a provenance label. If `--hub` is non-HF but `--teacher` is not a repo id (e.g. the default `local-judge`), Soup prints a loud yellow warning rather than silently dropping the flag.
 
@@ -1081,7 +1083,7 @@ dataset without `labels` trains on every token, because TRL's collator copies
 `input_ids` into `labels`. That is the pretraining objective, and a
 `soup data preprocess` cache built for `task: pretrain` records the same labels.
 
-The full key, as `PREPROCESS_KEY_FIELDS` in `soup_cli/utils/data_pipeline.py`
+The full key, as `PREPROCESS_KEY_FIELDS` in `src/soup_cli/utils/data_pipeline.py`
 declares it:
 
 | Key input | Config fields |
@@ -1100,6 +1102,13 @@ loaders choose rows and their order. Every other `data` field is listed in
 `NOT_PREPROCESS_KEY_FIELDS` with the reason it cannot change a cached row, and a
 new field must be added to one of the two tables. Caches written before this
 (tokenizer schema `v6` and earlier) are refused; re-run `soup data preprocess`.
+
+The `pre_tokenized` training config must keep `data.val_split`, `data.replay`,
+`data.replay_ratio`, `data.replay_seed`, `data.streaming`, `data.buffer_size`,
+`data.image_dir` and `data.audio_dir` as they were when the cache was built, as it
+must keep the chat template. A cache built under different values is refused, and
+the message names the fields that changed. A cache written before this keying
+says so instead of showing two bare hashes.
 
 
 ## Data Recipe DAG Runner (`soup data recipe --execute`)

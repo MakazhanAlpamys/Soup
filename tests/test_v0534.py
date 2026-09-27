@@ -122,36 +122,40 @@ class TestFlashAttnV3Available:
 
 
 class TestLongLoraRejectsFlashAttnV3:
-    def test_schema_rejects_longlora_when_fa3_present(self, monkeypatch):
-        # Force FA3 detected -> SoupConfig schema gate must reject.
+    """The FA3 gate lives in ``validate_longlora_compat``. Since #1240 the
+    schema refuses ``use_longlora: true`` before any gate runs, so the gate is
+    exercised directly; it stays for the real S² implementation."""
+
+    def test_gate_rejects_longlora_when_fa3_present(self, monkeypatch):
+        from soup_cli.utils.longlora import validate_longlora_compat
+
+        # Force FA3 detected -> the LongLoRA gate must reject.
         monkeypatch.setattr(
             "soup_cli.utils.flash_attn.is_flash_attn_v3_available",
             lambda: True,
         )
-        yaml_in = """
-base: meta-llama/Llama-3.1-8B
-task: sft
-training:
-  use_longlora: true
-"""
-        with pytest.raises(
-            (ValidationError, ValueError), match="FlashAttention v3"
-        ):
-            _load(yaml_in)
+        with pytest.raises(ValueError, match="FlashAttention v3"):
+            validate_longlora_compat(
+                model_name="meta-llama/Llama-3.1-8B",
+                task="sft",
+                backend="transformers",
+                use_ring_attention=False,
+            )
 
-    def test_schema_passes_when_fa3_absent(self, monkeypatch):
+    def test_gate_passes_when_fa3_absent(self, monkeypatch):
+        from soup_cli.utils.longlora import validate_longlora_compat
+
         monkeypatch.setattr(
             "soup_cli.utils.flash_attn.is_flash_attn_v3_available",
             lambda: False,
         )
-        yaml_in = """
-base: meta-llama/Llama-3.1-8B
-task: sft
-training:
-  use_longlora: true
-"""
-        cfg = _load(yaml_in)
-        assert cfg.training.use_longlora is True
+        # Should not raise.
+        validate_longlora_compat(
+            model_name="meta-llama/Llama-3.1-8B",
+            task="sft",
+            backend="transformers",
+            use_ring_attention=False,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -234,9 +238,11 @@ class TestIsSupportedLongloraArch:
         assert is_supported_longlora_arch("databricks/dbrx-base") is False
 
 
-class TestLongloraSchemaAcceptsNewArches:
+class TestLongloraGateAcceptsNewArches:
     """v0.53.4 #120 — Mistral / Qwen / Phi base models must now be accepted
-    by the LongLoRA schema gate (formerly Llama-only)."""
+    by the LongLoRA allowlist gate (formerly Llama-only). Since #1240 the
+    schema refuses ``use_longlora: true`` before the gate runs, so the gate,
+    ``validate_longlora_compat``, is called directly."""
 
     @pytest.mark.parametrize(
         "base",
@@ -247,18 +253,19 @@ class TestLongloraSchemaAcceptsNewArches:
         ],
     )
     def test_accepts(self, monkeypatch, base):
+        from soup_cli.utils.longlora import validate_longlora_compat
+
         monkeypatch.setattr(
             "soup_cli.utils.flash_attn.is_flash_attn_v3_available",
             lambda: False,
         )
-        yaml_in = f"""
-base: {base}
-task: sft
-training:
-  use_longlora: true
-"""
-        cfg = _load(yaml_in)
-        assert cfg.training.use_longlora is True
+        # Should not raise.
+        validate_longlora_compat(
+            model_name=base,
+            task="sft",
+            backend="transformers",
+            use_ring_attention=False,
+        )
 
 
 # ---------------------------------------------------------------------------

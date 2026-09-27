@@ -561,6 +561,7 @@ def test_eval_gate_hook_exit_code_dispatch(
         ["data", "validate", "--bogus"],
         ["data", "lint", "--bogus"],
         ["ship", "--bogus"],
+        ["recipes", "verify", "--bogus"],
     ],
 )
 def test_gate_command_invalid_flag_exits_3(cmd: list[str]) -> None:
