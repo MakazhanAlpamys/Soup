@@ -4,7 +4,7 @@
 returned ``None`` for everything else, delegating to peft. peft has no default
 for any MoE ``model_type`` Soup ships a recipe for, so the attach did not fall
 back -- it raised ``No target_modules passed but also no target_parameters
-found``, and every one of the 31 shipped MoE recipes uses ``target_modules:
+found``, and every one of the 33 shipped MoE recipes uses ``target_modules:
 auto``.
 
 Measured on peft 0.20 / transformers 5.16.1, shrunk real models on CPU, before
