@@ -255,13 +255,13 @@ NOT_PREPROCESS_KEY_FIELDS: Mapping[str, str] = types.MappingProxyType({
     "shards": "no runtime code reads it",
     "raft_shuffle_seed": "RAFT rows carry no messages, so preprocess caches none",
     "raft_epoch_shuffle": "RAFT rows carry no messages, so preprocess caches none",
-    "eval_on_each_dataset": "affects evaluation only; the cache holds the train split",
+    "eval_on_each_dataset": "no runtime code reads it (staged, #808)",
     "split_thinking": "no runtime code reads it",
-    "image_min_pixels": "image processing only; the cache holds text tokens",
-    "image_max_pixels": "image processing only; the cache holds text tokens",
-    "image_resize_algorithm": "image processing only; the cache holds text tokens",
-    "video_fps": "video processing only; the cache holds text tokens",
-    "video_maxlen": "video processing only; the cache holds text tokens",
+    "image_min_pixels": "no runtime code reads it (staged, #808)",
+    "image_max_pixels": "no runtime code reads it (staged, #808)",
+    "image_resize_algorithm": "no runtime code reads it (staged, #808)",
+    "video_fps": "no runtime code reads it (staged, #808)",
+    "video_maxlen": "no runtime code reads it (staged, #808)",
     "add_new_tokens": (
         "preprocess tokenizes with the base tokenizer and never adds these "
         "tokens (the live path does, in apply_vocab_expansion), so the cached ids "
@@ -275,7 +275,10 @@ NOT_PREPROCESS_KEY_FIELDS: Mapping[str, str] = types.MappingProxyType({
     "resize_vocab": "no runtime code reads it",
     "extend_conversation": "no runtime code reads it",
     "skip_prepare_dataset": "no runtime code reads it",
-    "remove_unused_columns": "trainer argument, applied after the cache is loaded",
+    "remove_unused_columns": (
+        "no trainer reads it; the trainers that set remove_unused_columns pass "
+        "False (#759)"
+    ),
     "prompt_strategy": (
         "applied by the live SFT formatter only; preprocess renders messages "
         "directly and never calls it"
@@ -308,6 +311,22 @@ def preprocess_dataset_key_input(data_cfg: Any) -> str:
         {name: getattr(data_cfg, name, None) for name in _DATASET_KEY_FIELDS},
         sort_keys=True,
     )
+
+
+def preprocess_dataset_key_diff(stored: Any, current: str) -> List[str]:
+    """The ``data.*`` fields whose values differ between two dataset key inputs (#1272).
+
+    ``stored`` is the ``dataset_key`` a cache recorded in ``metadata.json`` (a
+    dict); ``current`` is ``preprocess_dataset_key_input``'s JSON for the config
+    being trained. Returns the differing field names in table order, so a refused
+    cache can name what changed rather than leave two hashes to compare. A
+    ``stored`` value that is not a dict (a hand-edited file) names no field
+    rather than claim differences it cannot see.
+    """
+    now = json.loads(current)
+    if not isinstance(stored, dict):
+        return []
+    return [name for name in _DATASET_KEY_FIELDS if stored.get(name) != now.get(name)]
 
 
 def preprocess_mask_mode(data_cfg, training_cfg=None) -> str:

@@ -8,6 +8,8 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.syntax import Syntax
 
+from soup_cli.utils.terminal import for_terminal
+
 console = Console()
 
 SUPPORTED_SOURCES = ("llamafactory", "axolotl", "unsloth")
@@ -106,7 +108,7 @@ def migrate(
             from soup_cli.migrate.unsloth import migrate_unsloth
             result = migrate_unsloth(input_path)
     except ValueError as exc:
-        console.print(f"[red]Migration failed:[/] {exc}")
+        console.print(f"[red]Migration failed:[/] {for_terminal(exc)}")
         raise typer.Exit(1)
 
     # Show warnings (escape Rich markup from untrusted config values)
