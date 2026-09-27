@@ -48,6 +48,11 @@ class TestIssue1347TheScanReadsEveryClosedBox:
         assert (box.start, box.end) == (3, len(text) - 1)
         assert (box.answer, text[box.start : box.end]) == ("42", r"\boxed{ 42 }")
 
+    def test_the_last_box_that_closes_is_the_answer(self):
+        """Two boxes in one completion: the LAST one is the commitment, as on main."""
+        parsed = parse_completion(r"first \boxed{1}, so \boxed{42}")
+        assert parsed is not None and parsed.text == "42"
+
     def test_a_box_that_never_closes_is_skipped(self):
         assert list(iter_boxed_answers(r"\boxed{B")) == []
         assert list(iter_boxed_answers(r"\boxed{B \boxed{C}"))[0].answer == "C"
