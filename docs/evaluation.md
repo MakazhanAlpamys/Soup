@@ -263,24 +263,13 @@ Baselines may be a registry reference (`registry://<name-or-id>`), a file path, 
 
 ## Sequential A/B Harness (`soup ab`)
 
-Proper sequential testing with early-stop guarantees on `latency` / `judge_score` / `retry_rate`. The test is two-sided: the statistic averages Wald's likelihood ratios for a treatment-minus-control difference of `+effect-size` and of `-effect-size` (a symmetric two-point mixture). Under H0 each ratio has expectation 1 at every step, and so does their average. With a known variance, a simulation of peeking after every new pair keeps the false-positive rate below `--alpha`, unlike a naive repeated t-test, which inflates it.
+Proper sequential testing with early-stop guarantees on `latency` / `judge_score` / `retry_rate`. You can re-run `soup ab` after every new row and stop at the first `reject_h0` or `accept_h0`: the chance of a false `reject_h0` stays at most `--alpha` however often you look and however many rows you collect, unlike a naive repeated t-test, which inflates it.
 
-`soup ab` estimates the variance from the rows, and from a handful of rows that estimate is too noisy. Without a burn-in, re-running after every new pair, the two-sided test would reject a true H0 up to 16% of the time at `--alpha 0.05` (the one-sided test it replaces: 11%) when `--effect-size` is close to the metric's row-to-row standard deviation. So `soup ab` gives no verdict, only `continue`, until each arm has enough rows. That burn-in depends on `--alpha`, and the verdict table shows the value in use:
+The statistic is a Bayes factor that averages over both the size of the difference and the unknown row-to-row spread (a normal-inverse-gamma mixture). It depends on the rows only through the two-sample t statistic, so its false-positive guarantee does not rely on estimating the spread well, and there is no burn-in: a clear difference can be decided from 7 rows per arm. The test is two-sided, and a difference of either sign is equal evidence. It rejects H0 once the Bayes factor reaches `1 / --alpha`, and accepts H0 once it falls to `--beta / (1 - --alpha)`.
 
-| `--alpha` | rows per arm before a verdict | worst simulated false-positive rate, up to 1000 rows per arm |
-|---|---|---|
-| 0.05 and above | 30 | 0.051 at `--alpha 0.05` |
-| from 0.01 to below 0.05 | 40 | 0.011 at `--alpha 0.01` |
-| below 0.01 | 40, **not calibrated** | 0.0058 at `--alpha 0.005` |
+`--effect-size` is in the metric's units, but the statistic needs it in standard deviations. So the first 5 rows of each arm set that scale (their pooled standard deviation) and are not otherwise tested; the verdict table shows this as `prior_scale`, and the reported means and row counts still cover every row. If an arm's first rows are all identical, more rows are held out until one differs.
 
-The values come from a simulation of that re-run-after-every-pair procedure: beta 0.20, `--effect-size` from 0.1 to 5 standard deviations, and runs followed up to 1000 rows per arm (200 checked too). Each value is the smallest that keeps the false-positive rate within Monte-Carlo error of `--alpha` at every effect size, at every alpha the simulation checked in its range (0.05 and 0.10; 0.01 and 0.025). The record, script and results are in [`benchmarks/gate-1227-ab-burn-in.md`](../benchmarks/gate-1227-ab-burn-in.md).
-
-The calibration has two limits, and `soup ab` prints a warning past either:
-
-- **Below `--alpha 0.01` it is not calibrated.** At `--alpha 0.005`, 40 rows leave a simulated rate slightly above the level asked for.
-- **It holds up to 1000 rows per arm.** Past that, a test that keeps being re-run has not been measured.
-
-**At `--alpha 0.01` itself the rate sits slightly above the level asked for**, near 0.011 across seeds, because the variance is estimated from the rows; more rows do not lower it, and `soup ab` prints no warning for it. A variance-robust statistic, which would remove that floor and need no burn-in, is tracked in [#1265](https://github.com/MakazhanAlpamys/Soup/issues/1265).
+A simulation of the re-run-after-every-pair procedure (`--effect-size` from 0.1 to 5 standard deviations, 100,000 runs each, up to 1000 rows per arm) gives a worst false-positive rate of 0.033 at `--alpha 0.05` and 0.0066 at `--alpha 0.01`. The burn-in design this replaced (#1227) sat at 0.051 and 0.011. Against a true difference of exactly `--effect-size`, the test finds it with probability above 0.99 when `--effect-size` is at least 0.3 standard deviations (1000 rows per arm). There are two costs. When `--effect-size` is below about 0.2 standard deviations, 1000 rows are too few for either design to be reliable, and this one detects less often (0.31 against 0.45 at 0.1 standard deviations, `--alpha 0.05`). And when there is no difference, reaching `accept_h0` takes longer: about 280 pairs at 0.5 standard deviations, where the burn-in design stopped near 43. The record, script and results are in [`benchmarks/gate-1265-ab-nig.md`](../benchmarks/gate-1265-ab-nig.md).
 
 ```bash
 soup ab --input ab.jsonl --metric latency --effect-size 0.5
@@ -290,7 +279,7 @@ soup ab --input ab.jsonl --metric judge_score --alpha 0.01 --beta 0.10 --effect-
 
 `--alpha` and `--beta` are each in (0, 1), and their sum must stay below 1. At or above 1 the reject boundary `log((1 - beta) / alpha)` is no longer above the accept boundary `log(beta / (1 - alpha))`, so there is no `continue` band left and any verdict between them rejects — two identical arms included. `soup ab` exits `2` naming both values. `--beta` is the Type-II error rate, not the power: a power of 0.95 is `--beta 0.05`, not `--beta 0.95`.
 
-A `--effect-size` that is more than about 1.3e154 pooled standard errors overflows the test statistic; `soup ab` exits `1` naming the flag and the standard error it measured. Because it is the ratio that overflows, a near-constant metric column reaches it at the default `--effect-size` too.
+A `--effect-size` that is more than about 1.3e154 standard deviations of the rows that set the prior scale overflows the test statistic; `soup ab` exits `1` naming the flag and the standard deviation it measured, from the first run (before those rows are all in, it checks the rows so far). Because it is the ratio that overflows, a near-constant metric column reaches it at the default `--effect-size` too.
 
 Input rows look like `{"arm": "control", "latency": 1.23}` or `{"arm": "treatment", "judge_score": 0.91}`. Decision is one of `continue` (keep collecting samples), `reject_h0` (real difference detected, in either direction), `accept_h0` (no significant difference). A `reject_h0` also reports a `direction`, `better` or `worse`, read through the metric's polarity: `judge_score` is higher-is-better, `latency` and `retry_rate` are lower-is-better. Composes with `soup loop canary` (v0.58): the panel recommends promoting a `better` treatment and a rollback only for a `worse` one.
 
