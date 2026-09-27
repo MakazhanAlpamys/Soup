@@ -11,29 +11,30 @@ Why mSPRT and not a t-test:
   errors *for any stopping time*. You can monitor live and stop as soon as
   the log-likelihood ratio crosses either decision boundary.
 
-The test is two-sided (#1227). The statistic is a symmetric two-point
-mixture: the average of Wald's likelihood ratios for a treatment-minus-control
-difference of `+effect_size` and of `-effect_size`, averaged as ratios (in log
-space, via logsumexp), never as log-ratios and never via `|z|`. Averaging keeps
-what each ratio has: E[LR_n] = 1 under H0 at every n. The boundaries are
-`log(beta/(1-alpha))` (accept H0) and `log((1-beta)/alpha)` (reject H0); with a
-known variance the simulated Type-I rate of this test under peeking stays below
-alpha (benchmarks/gate-1227-ab-burn-in.md). A `reject_h0` reports its direction,
-`better` or `worse`, from the metric's polarity in `HIGHER_IS_BETTER`.
+The test is two-sided (#1227). Since #1265 the statistic is a Bayes factor
+that mixes over the variance as well as the mean: the normal-inverse-gamma
+mixture in its right-Haar limit (a flat prior on the common mean, 1/sigma on
+the standard deviation) with a N(0, g) prior on the standardised difference
+delta / sigma. It depends on the rows only through the two-sample t statistic,
+so it is scale-invariant, and under H0 it is a test martingale whatever sigma
+is. Ville's inequality then bounds the chance that it EVER reaches 1/alpha by
+alpha, from the first rows on and at any horizon, with no burn-in.
 
-Three known limitations:
+`effect_size` is in the metric's units, but the prior needs it in standard
+deviations. So the first `PRIOR_SCALE_ROWS` rows of each arm are held out:
+their pooled standard deviation s0 sets g = (effect_size / s0) ** 2, and the
+Bayes factor runs on the rows after them. The prior is fixed before those rows
+are seen, which is what keeps the guarantee exact. The boundaries are
+`log(1/alpha)` (reject H0) and `log(beta/(1-alpha))` (accept H0). A
+`reject_h0` reports its direction, `better` or `worse`, from the metric's
+polarity in `HIGHER_IS_BETTER`. Record: benchmarks/gate-1265-ab-nig.md.
+
+Two known limitations:
 1. Single metric per pass — multi-metric correction (Bonferroni / Holm)
    is operator-controlled. The CLI accepts one metric at a time.
 2. Assumes Gaussian-like data. For binary metrics (e.g. retry_rate as
    a boolean), the operator should pre-aggregate per-prompt rates so the
    resulting per-prompt averages are approximately Gaussian.
-3. The variance is estimated from the rows, not known, and from a handful of
-   rows the estimate is too noisy. So no verdict is given (`continue`) until
-   each arm has `min_rows_per_arm(alpha)` rows; `BURN_IN_ROWS_BY_ALPHA` says
-   how those were chosen and what Type-I rate remains. The calibration holds
-   up to `CALIBRATED_HORIZON_ROWS` rows per arm and for alpha >= 0.01
-   (`burn_in_is_calibrated`). A variance-robust statistic that would need no
-   burn-in is #1265.
 """
 
 from __future__ import annotations
@@ -56,43 +57,20 @@ SUPPORTED_METRICS: frozenset[str] = frozenset(
 HIGHER_IS_BETTER: Mapping[str, bool] = MappingProxyType(
     {"judge_score": True, "latency": False, "retry_rate": False}
 )
-# Burn-in (#1227): rows per arm required before any verdict, by the Type-I level
-# alpha. While either arm has fewer, the verdict is `continue` whatever the
-# log-likelihood ratio says. The pooled variance is estimated from the rows, and
-# from a handful of them it can come out far too small, so without a burn-in an
-# operator who re-runs after every new pair would reject a true H0 up to 0.164
-# of the time at alpha 0.05. Calibrated by a Monte-Carlo sweep of that peeking
-# procedure: H0, a look after every pair, the first verdict stops the run,
-# beta 0.20, 22 values of effect_size / sigma from 0.1 to 5, 100,000 runs per
-# ratio, and a horizon of 1000 rows per arm (200 checked too). Each value is the
-# smallest candidate in {20, 30, 40, 50, 60} whose Type-I rate stays within
-# alpha + 3 binomial standard errors at every ratio, at both horizons, at every
-# alpha measured in its range.
-#   alpha >= 0.05       -> 30 rows. Alpha 0.05: worst 0.0512 at ratio 0.35
-#                          (bound 0.0521); 20 rows reach 0.0534. Alpha 0.10:
-#                          worst 0.0994 (bound 0.1029).
-#   0.01 <= alpha < 0.05 -> 40 rows. Alpha 0.01: worst 0.01088 at ratio 0.4
-#                          (bound 0.01094) in this sweep, but up to 0.0116 on
-#                          other seeds: a floor near 0.0108 set by the
-#                          estimated variance, which 50/60 rows do not lower
-#                          (#1265); 30 rows reach 0.0114. Alpha 0.025:
-#                          worst 0.0261 (bound 0.0265); 30 rows reach 0.0269.
-#   alpha < 0.01        -> 40 rows, NOT calibrated: at alpha 0.005 the worst is
-#                          0.0058, above its bound 0.0057. `soup ab` warns.
-# With the true variance the same sweep stays below alpha (worst 0.0468 at 0.05,
-# 0.0095 at 0.01). Record: benchmarks/gate-1227-ab-burn-in.md; script:
-# benchmarks/harness/ab_burn_in_sweep.py; results and log:
-# benchmarks/results/gate-1227-ab-burn-in/. Changing a value means re-running it.
-BURN_IN_ROWS_BY_ALPHA: tuple[tuple[float, int], ...] = ((0.05, 30), (0.01, 40))
-_BURN_IN_ROWS_UNCALIBRATED = 40
-# The sweep followed runs up to this many rows per arm; past it the Type-I
-# figures above are not established, and `soup ab` says so.
-CALIBRATED_HORIZON_ROWS = 1000
+# Rows per arm held out to put `effect_size` in standard deviations (#1265).
+# Their pooled standard deviation sets the prior scale, and the Bayes factor
+# runs on the rows after them. While both arms are still constant, more rows are
+# held out until one varies. This is not a Type-I burn-in: the guarantee holds
+# for any value. It trades power at small effect_size / sigma (fewer rows left)
+# against power at large ones (a less noisy prior scale). Chosen by the sweep in
+# benchmarks/gate-1265-ab-nig.md; changing it means re-running that sweep.
+PRIOR_SCALE_ROWS = 5
 
 # #1339 - the largest standardised effect whose square is still a float. The
-# drift term in _verdict_from_summary squares mu_h1, and ** raises
-# OverflowError where * would have returned inf, so the bound is checked
-# rather than the result.
+# prior variance below squares effect_size / s0, and ** raises OverflowError
+# where * would have returned inf, so the bound is checked rather than the
+# result. Division does not raise: a near-constant held-out column would turn
+# the ratio into inf and the Bayes factor into -inf, a silent accept_h0.
 MAX_STANDARDISED_EFFECT = math.sqrt(sys.float_info.max)
 _MAX_METRIC_NAME_LEN = 32
 _MAX_SAMPLES_PER_ARM = 1_000_000
@@ -136,24 +114,6 @@ def _require_unit_open(value: object, *, field: str) -> float:
     if not (0.0 < f_val < 1.0):
         raise ValueError(f"{field} must be in (0.0, 1.0) exclusive, got {f_val}")
     return f_val
-
-
-def min_rows_per_arm(alpha: float) -> int:
-    """Rows each arm needs before `soup ab` gives any verdict at Type-I level ``alpha``.
-
-    From ``BURN_IN_ROWS_BY_ALPHA``: 30 at alpha >= 0.05, 40 below. Below alpha
-    0.01 the value is 40 but not calibrated; see :func:`burn_in_is_calibrated`.
-    """
-    value = _require_unit_open(alpha, field="alpha")
-    for lowest_alpha, rows in BURN_IN_ROWS_BY_ALPHA:
-        if value >= lowest_alpha:
-            return rows
-    return _BURN_IN_ROWS_UNCALIBRATED
-
-
-def burn_in_is_calibrated(alpha: float) -> bool:
-    """False below alpha 0.01, where Type-I control under peeking was not calibrated."""
-    return _require_unit_open(alpha, field="alpha") >= BURN_IN_ROWS_BY_ALPHA[-1][0]
 
 
 def _require_positive_finite(value: object, *, field: str) -> float:
@@ -269,117 +229,111 @@ def _validate_sample_list(samples: object, *, arm: str) -> list[float]:
     return out
 
 
-def _log_mean_exp(first: float, second: float) -> float:
-    """``log((exp(first) + exp(second)) / 2)`` without overflow (two-term logsumexp)."""
-    top = max(first, second)
-    return top + math.log1p(math.exp(-abs(first - second))) - math.log(2.0)
-
-
 def _direction(metric: str, diff: float) -> str:
     """``better`` / ``worse`` for a treatment-minus-control difference, by polarity."""
     treatment_higher = diff > 0.0
     return "better" if treatment_higher == HIGHER_IS_BETTER[metric] else "worse"
 
 
-def _verdict_from_summary(
-    config: MsprtConfig,
+def _nig_log_bayes_factor(
     *,
     n_control: int,
     n_treatment: int,
-    mean_control: float,
-    mean_treatment: float,
+    mean_difference: float,
     pooled_variance: float,
-) -> MsprtVerdict:
-    """Decide from per-arm summaries (``n >= 2`` per arm, ``pooled_variance > 0``).
+    prior_variance: float,
+) -> float:
+    """Log Bayes factor of the normal-inverse-gamma mixture (right-Haar limit).
 
-    The decision half of :func:`msprt_step`, split out so a peeking simulation
-    can drive exactly this code from running sums instead of re-reading every
-    row at every peek. Below ``min_rows_per_arm(config.alpha)`` rows in either
-    arm the log-likelihood ratio is still reported, but the decision is
-    ``continue``.
+    H1: the treatment-minus-control difference is delta = d * sigma with
+    d ~ N(0, ``prior_variance``); H0: delta = 0. Both share a flat prior on the
+    common mean and 1/sigma on sigma, which integrate out in closed form
+    (Gönen, Johnson, Lu and Westfall, 2005). With the pooled two-sample t
+    statistic, nu = n_c + n_t - 2 and n_eff = n_c * n_t / (n_c + n_t):
+
+        log BF = -0.5 * log(1 + n_eff * g)
+                 - (nu + 1) / 2 * [log1p(t**2 / (nu * (1 + n_eff * g)))
+                                   - log1p(t**2 / nu)]
+
+    It depends on the rows only through t, so under H0 its distribution does
+    not depend on sigma, and as a ratio of two marginal likelihoods it is a
+    martingale under H0 in the order the rows arrive. Ville's inequality then
+    gives P(sup_n BF_n >= 1/alpha) <= alpha. Needs ``n >= 2`` per arm and
+    ``pooled_variance > 0``; split out so the sweep in
+    benchmarks/harness/ab_nig_sweep.py can check its vectorised copy
+    against exactly this code.
     """
-    pooled_se = math.sqrt(pooled_variance * (1.0 / n_control + 1.0 / n_treatment))
-    # #1384 - a positive but subnormal pooled variance can still underflow to
-    # 0.0 once scaled by 1/n (values 0 and 1e-161 at 40 rows per arm), and the
-    # z below then divides by zero. The square root of the smallest positive
-    # float is about 2.2e-162, so an underflow shows here as exactly 0.0.
-    if pooled_se == 0.0:
-        raise ValueError(
-            f"The {config.metric!r} column's spread is below what the test "
-            f"statistic can represent: its pooled variance {pooled_variance:.3g} "
-            f"over {n_control} + {n_treatment} rows gives a standard error that "
-            "underflows to 0. Rescale the metric (multiply its values by a large "
-            "constant) and re-run."
-        )
-
-    # Standardised effect size (z-statistic of the difference of means).
-    diff = mean_treatment - mean_control
-    z = diff / pooled_se
-
-    # Two-sided SPRT (#1227). For a point alternative H1: delta = +d (d =
-    # effect_size, in standardised units mu_h1) Wald's log-likelihood ratio is
-    #
-    # log(LR+_n) = z * mu_h1 * sqrt(n_eff / (n_eff + 1))
-    #            - 0.5 * mu_h1**2 * n_eff / (n_eff + 1)
-    #
-    # and for H1: delta = -d the first term flips sign. With a known variance
-    # E[LR_n] = 1 under H0 at every n for each ratio, and so for their average.
-    # (The n_eff / (n_eff + 1) shrink moves the alternative with n, so neither
-    # is exactly a martingale; the Type-I rate under peeking is measured, not
-    # derived: benchmarks/gate-1227-ab-burn-in.md. Here the variance is also
-    # estimated; see limitation 3 in the module docstring.)
-    #
-    # It must be the average of the RATIOS. The mean of the log-ratios is just
-    # -drift (it ignores the data), and |z| in the one-sided formula is the
-    # larger of the two log-ratios, whose expectation exceeds 1 and which
-    # roughly doubles the Type-I rate under peeking.
-    #
-    # (Code-review CRITICAL fix v0.63.0: earlier draft used a malformed
-    # mixture-prior LLR with the wrong sign on the log term, which drove
-    # the LLR positive under H0 as n grew → unbounded Type-I error.)
+    nu = n_control + n_treatment - 2
     n_eff = (n_control * n_treatment) / (n_control + n_treatment)
-    mu_h1 = config.effect_size / pooled_se  # in standardised units
-    # #1339 - drift squares mu_h1 below, and ** raises OverflowError instead
-    # of returning inf, which left `soup ab` exiting on a bare
-    # "OverflowError: (34, 'Result too large')" that names no flag. It is the
-    # RATIO that overflows, so a near-constant metric column reaches it at the
-    # default --effect-size too; the message therefore names both sides.
-    if mu_h1 > MAX_STANDARDISED_EFFECT:
+    t_squared = mean_difference**2 * n_eff / pooled_variance
+    spread = 1.0 + n_eff * prior_variance
+    return -0.5 * math.log(spread) - 0.5 * (nu + 1) * (
+        math.log1p(t_squared / (nu * spread)) - math.log1p(t_squared / nu)
+    )
+
+
+def _held_out_rows(control: Sequence[float], treatment: Sequence[float]) -> int | None:
+    """Rows per arm that set the prior scale, or ``None`` if there are not enough yet.
+
+    ``PRIOR_SCALE_ROWS``, or more while the held-out rows of both arms are still
+    constant (their pooled standard deviation would be 0). The count depends
+    only on the held-out rows themselves, so the rows after them are still
+    untouched by the prior, and the guarantee is unchanged.
+    """
+    def first_change(values: Sequence[float]) -> int:
+        return next((i for i, x in enumerate(values) if x != values[0]), len(values))
+
+    shortest = min(len(control), len(treatment))
+    held = max(PRIOR_SCALE_ROWS, min(first_change(control), first_change(treatment)) + 1)
+    return held if held <= shortest else None
+
+
+def _means_and_pooled_variance(
+    control: Sequence[float], treatment: Sequence[float]
+) -> tuple[float, float, float]:
+    """Per-arm means and the Bessel-pooled variance (each arm needs ``>= 2`` rows)."""
+    mean_c = sum(control) / len(control)
+    mean_t = sum(treatment) / len(treatment)
+    sum_sq = sum((x - mean_c) ** 2 for x in control) + sum(
+        (x - mean_t) ** 2 for x in treatment
+    )
+    return mean_c, mean_t, sum_sq / (len(control) + len(treatment) - 2)
+
+
+def _standardised_effect(
+    config: MsprtConfig,
+    control: Sequence[float],
+    treatment: Sequence[float],
+    *,
+    scale_rows: int,
+) -> float:
+    """``effect_size`` over the pooled standard deviation of the first ``scale_rows``.
+
+    Those are the held-out rows once there are enough of them, and until then
+    every row so far, which are the first of them. Checking that early refuses an
+    impossible ``--effect-size`` on the first run instead of after
+    ``PRIOR_SCALE_ROWS`` rows (#1339). Returns 0.0 while the scale is not known yet
+    (fewer than 2 rows per arm, or all of them equal); the caller does not use it
+    then.
+    """
+    if scale_rows < 2:
+        return 0.0
+    _, _, variance = _means_and_pooled_variance(
+        control[:scale_rows], treatment[:scale_rows]
+    )
+    if variance <= 0.0:
+        return 0.0
+    scale = math.sqrt(variance)
+    effect = config.effect_size / scale
+    if effect > MAX_STANDARDISED_EFFECT:
         raise ValueError(
-            f"--effect-size {config.effect_size!r} is {mu_h1:.3g} standard "
-            f"errors at a pooled standard error of {pooled_se:.3g}, and the "
+            f"--effect-size {config.effect_size!r} is {effect:.3g} standard "
+            f"deviations at a pooled standard deviation of {scale:.3g}, and the "
             f"test statistic overflows above {MAX_STANDARDISED_EFFECT:.3g}. "
             f"Lower --effect-size, or check the {config.metric!r} column: a "
             "near-constant column reaches this at any --effect-size."
         )
-    n_ratio = n_eff / (n_eff + 1.0)
-    shift = z * mu_h1 * math.sqrt(n_ratio)
-    drift = 0.5 * mu_h1**2 * n_ratio
-    llr = _log_mean_exp(shift - drift, -shift - drift)
-
-    upper = math.log((1.0 - config.beta) / config.alpha)
-    lower = math.log(config.beta / (1.0 - config.alpha))
-
-    direction = None
-    if min(n_control, n_treatment) < min_rows_per_arm(config.alpha):
-        decision = "continue"  # burn-in: see BURN_IN_ROWS_BY_ALPHA
-    elif llr >= upper:
-        decision = "reject_h0"
-        direction = _direction(config.metric, diff)
-    elif llr <= lower:
-        decision = "accept_h0"
-    else:
-        decision = "continue"
-
-    return MsprtVerdict(
-        decision=decision,
-        log_likelihood_ratio=llr,
-        n_control=n_control,
-        n_treatment=n_treatment,
-        mean_control=mean_control,
-        mean_treatment=mean_treatment,
-        direction=direction,
-    )
+    return effect
 
 
 def msprt_step(
@@ -391,79 +345,58 @@ def msprt_step(
     """Run a single two-sided mSPRT decision step.
 
     Returns ``MsprtVerdict`` with one of:
-    - ``continue``: keep collecting samples; always the answer while either
-      arm has fewer than ``min_rows_per_arm(config.alpha)`` rows (burn-in)
+    - ``continue``: keep collecting samples; always the answer until each arm
+      has at least 2 rows past the ``PRIOR_SCALE_ROWS`` held-out ones
     - ``reject_h0``: difference is real (treatment != control), in either
       direction; ``direction`` says whether the treatment is ``better`` or
       ``worse`` than control, by the metric's polarity
     - ``accept_h0``: difference is not significant
+
+    ``mean_control`` / ``mean_treatment`` and the row counts cover every row;
+    the statistic and the direction use the rows after the held-out ones.
     """
     ctrl = _validate_sample_list(control, arm="control")
     treat = _validate_sample_list(treatment, arm="treatment")
 
     n_c, n_t = len(ctrl), len(treat)
-    mean_c = sum(ctrl) / n_c if n_c else 0.0
-    mean_t = sum(treat) / n_t if n_t else 0.0
 
-    if n_c < 2 or n_t < 2:
+    def verdict(llr: float = 0.0, decision: str = "continue", direction: str | None = None):
         return MsprtVerdict(
-            decision="continue",
-            log_likelihood_ratio=0.0,
+            decision=decision,
+            log_likelihood_ratio=llr,
             n_control=n_c,
             n_treatment=n_t,
-            mean_control=mean_c,
-            mean_treatment=mean_t,
+            mean_control=sum(ctrl) / n_c if n_c else 0.0,
+            mean_treatment=sum(treat) / n_t if n_t else 0.0,
+            direction=direction,
         )
 
-    # #1384 - an arm whose values sum past the largest float has an infinite
-    # mean however little they spread: name their size, not their spread.
-    if not (math.isfinite(mean_c) and math.isfinite(mean_t)):
-        values = ctrl + treat
-        raise ValueError(
-            f"The {config.metric!r} column's values are too large for the test "
-            f"statistic: they run from {min(values):.3g} to {max(values):.3g}, "
-            "and an arm's sum overflows a float. Rescale the metric (divide its "
-            "values by a large constant) and re-run."
-        )
-
-    # Pooled variance with Bessel correction. Squared as d * d, not d ** 2:
-    # ** raises OverflowError where * returns inf, and inf is refused below.
-    var_c = sum((x - mean_c) * (x - mean_c) for x in ctrl) / (n_c - 1)
-    var_t = sum((x - mean_t) * (x - mean_t) for x in treat) / (n_t - 1)
-    raw_pooled_var = ((n_c - 1) * var_c + (n_t - 1) * var_t) / (n_c + n_t - 2)
-    # #1384 - deviations past about 1.3e154 square past the largest float.
-    if not math.isfinite(raw_pooled_var):
-        values = ctrl + treat
-        raise ValueError(
-            f"The {config.metric!r} column's spread is above what the test "
-            f"statistic can represent: its values run from {min(values):.3g} to "
-            f"{max(values):.3g}, and their variance overflows a float. Rescale "
-            "the metric (divide its values by a large constant) and re-run."
-        )
-    # Degenerate (zero variance) — both arms are constant. If the means
-    # are also identical, defer to ``continue`` (no information). If the
-    # means differ, fall back to ``continue`` as well: with zero observed
-    # variance the SPRT cannot bound Type-I error honestly. Operators
-    # need real measurement noise to use sequential testing (code-review
-    # LOW fix v0.63.0 — the equality check was previously dead under the
-    # `max(_, 1e-9)` floor).
-    if raw_pooled_var <= 0.0:
-        return MsprtVerdict(
-            decision="continue",
-            log_likelihood_ratio=0.0,
-            n_control=n_c,
-            n_treatment=n_t,
-            mean_control=mean_c,
-            mean_treatment=mean_t,
-        )
-    return _verdict_from_summary(
-        config,
-        n_control=n_c,
-        n_treatment=n_t,
-        mean_control=mean_c,
-        mean_treatment=mean_t,
-        pooled_variance=raw_pooled_var,
+    held = _held_out_rows(ctrl, treat)
+    standardised_effect = _standardised_effect(
+        config, ctrl, treat, scale_rows=held if held is not None else min(n_c, n_t)
     )
+    if held is None or n_c - held < 2 or n_t - held < 2:
+        return verdict()
+    rest_c, rest_t = ctrl[held:], treat[held:]
+    mean_c, mean_t, pooled_variance = _means_and_pooled_variance(rest_c, rest_t)
+    # Both tested arms constant: t is 0/0, and without measurement noise
+    # sequential testing cannot bound the Type-I error honestly (code-review LOW
+    # fix v0.63.0), so keep collecting.
+    if pooled_variance <= 0.0:
+        return verdict()
+    diff = mean_t - mean_c
+    llr = _nig_log_bayes_factor(
+        n_control=len(rest_c),
+        n_treatment=len(rest_t),
+        mean_difference=diff,
+        pooled_variance=pooled_variance,
+        prior_variance=standardised_effect**2,
+    )
+    if llr >= math.log(1.0 / config.alpha):
+        return verdict(llr, "reject_h0", _direction(config.metric, diff))
+    if llr <= math.log(config.beta / (1.0 - config.alpha)):
+        return verdict(llr, "accept_h0")
+    return verdict(llr)
 
 
 def run_msprt(
@@ -518,15 +451,12 @@ def run_msprt(
 
 
 __all__ = [
-    "BURN_IN_ROWS_BY_ALPHA",
-    "CALIBRATED_HORIZON_ROWS",
     "HIGHER_IS_BETTER",
     "MAX_STANDARDISED_EFFECT",
     "MsprtConfig",
     "MsprtVerdict",
+    "PRIOR_SCALE_ROWS",
     "SUPPORTED_METRICS",
-    "burn_in_is_calibrated",
-    "min_rows_per_arm",
     "msprt_step",
     "run_msprt",
     "validate_metric_name",
