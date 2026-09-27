@@ -72,6 +72,7 @@ def _make_cfg(
     max_length: int = 64,
     gradient_accumulation_steps: int = 1,
     train_on_messages_with_train_field: bool = False,
+    extra_training: str = "",
 ) -> str:
     train_field_opt = (
         "  train_on_responses_only: false\n  train_on_messages_with_train_field: true\n"
@@ -91,7 +92,7 @@ data:
   batch_size: 1
   epochs: 1
   gradient_accumulation_steps: {gradient_accumulation_steps}
-  lora:
+{extra_training}  lora:
     r: 4
     alpha: 8
     target_modules: ['q_proj', 'v_proj']
@@ -194,6 +195,28 @@ class TestDistillCausalTargetGuard:
             match=r"train row 1.*no causal-loss target",
         ):
             wrapper.setup({"train": [row_all_false]})
+
+    @pytest.mark.parametrize(
+        "extra",
+        [
+            "  uld_strategy: wasserstein\n",
+            "  minillm_enabled: true\n  minillm_teacher_mix_ratio: 0.5\n",
+            "  minillm_enabled: true\n  minillm_on_policy: true\n",
+            "  distill_mode: sequence\n",
+        ],
+        ids=["uld", "minillm", "minillm_on_policy", "sequence"],
+    )
+    def test_distill_variants_refuse_row_with_no_loss_target(
+        self, tmp_path: pathlib.Path, extra: str
+    ) -> None:
+        weights = _tiny_llama_dir(tmp_path)
+        cfg = load_config_from_string(_make_cfg(weights, tmp_path, extra_training=extra))
+        wrapper = DistillTrainerWrapper(cfg, device="cpu")
+        with pytest.raises(
+            ValueError,
+            match=r"train row 2.*no causal-loss target.*data\.max_length=64",
+        ):
+            wrapper.setup({"train": [SHORT_ROW, LONG_ROW]})
 
 
 class TestComputeLossDefenseInDepth:

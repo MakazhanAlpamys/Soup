@@ -506,7 +506,7 @@ soup train
 
 ## Knowledge Distillation
 
-Train a small student model to match a larger teacher's output distribution.
+Train a small student model to match a larger teacher's output distribution. Every train/val row must keep at least one causal-loss target after truncation at `data.max_length`, and a row without one is refused at setup by split and row number, as SFT does.
 
 ```yaml
 base: HuggingFaceTB/SmolLM2-135M
