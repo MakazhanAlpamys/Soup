@@ -699,13 +699,14 @@ class TestEbftGdpoUtils:
 
 
 class TestEbftGdpoSchema:
-    def test_ebft_happy(self):
-        cfg = load_config_from_string(
-            "base: x\ntask: sft\ndata: {train: ./d.jsonl}\n"
-            "training: {ebft_variant: structured, ebft_temperature: 1.0}\n"
-        )
-        assert cfg.training.ebft_variant == "structured"
-        assert cfg.training.ebft_temperature == 1.0
+    def test_ebft_refused_until_it_is_a_distinct_objective(self):
+        # #1230 — loaded before: the term had no causal shift (it rewarded
+        # copying the input) and, shifted, it duplicates the cross-entropy.
+        with pytest.raises(ValueError, match="#1230"):
+            load_config_from_string(
+                "base: x\ntask: sft\ndata: {train: ./d.jsonl}\n"
+                "training: {ebft_variant: structured, ebft_temperature: 1.0}\n"
+            )
 
     def test_ebft_temp_requires_variant(self):
         yaml = (
@@ -716,11 +717,13 @@ class TestEbftGdpoSchema:
             load_config_from_string(yaml)
 
     def test_ebft_on_dpo_rejected(self):
+        # The #1230 refusal comes before the task gate; the gate itself is
+        # tested directly in TestEbftGdpoUtils.test_validate_ebft_compat_dpo_rejected.
         yaml = (
             "base: x\ntask: dpo\ndata: {train: ./d.jsonl}\n"
             "training: {ebft_variant: strided}\n"
         )
-        with pytest.raises(Exception, match="sft"):
+        with pytest.raises(Exception, match="#1230"):
             load_config_from_string(yaml)
 
     def test_gdpo_dpo_happy(self):
