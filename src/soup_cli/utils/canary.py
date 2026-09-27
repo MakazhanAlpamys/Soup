@@ -40,8 +40,10 @@ _SLUG = "zorbex"
 # exactly how ``check`` scores a canary (``_tokenize_pair`` in
 # utils/live_eval.py renders the carrier through the chat template). Any
 # other format is refused: dpo/kto/embedding have no single supervised
-# target, plaintext trains on raw text with no template, and the
-# multimodal formats need a real image or audio file per row.
+# target, plaintext trains on raw text with no template, tool-calling's
+# converter puts a tool-schema system turn before the prompt (which
+# ``check`` does not render), and the multimodal formats need a real image
+# or audio file per row.
 CANARY_FORMATS = ("alpaca", "sharegpt", "chatml")
 # Every manifest written before #1216 has no format field and describes
 # chatml rows, since that is all ``insert`` ever wrote.

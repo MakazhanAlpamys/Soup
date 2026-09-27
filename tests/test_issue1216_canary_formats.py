@@ -173,6 +173,51 @@ def test_empty_dataset_needs_an_explicit_format(tmp_path, monkeypatch):
     assert all(secret in json.dumps(rows) for secret in _secrets())
 
 
+def test_a_file_whose_format_cannot_be_detected_is_refused(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    Path("train.jsonl").write_text(
+        json.dumps({"input": "q", "output": "a"}) + "\n", encoding="utf-8"
+    )
+
+    result = _insert("-o", "canaried.jsonl")
+
+    assert result.exit_code == 1, result.output
+    output = _plain(result.output)
+    assert "Cannot detect format" in output
+    assert "canary insert supports: alpaca, sharegpt, chatml" in output
+    assert not Path("canaried.jsonl").exists()
+    assert not Path("m.json").exists()
+
+
+@pytest.mark.parametrize(
+    ("name", "content", "json_type"),
+    [
+        ("train.jsonl", "42\n", "number"),
+        ("train.json", json.dumps(["q", "a"]), "string"),
+        ("train.jsonl", "null\n", "null"),
+    ],
+)
+def test_a_first_row_that_is_not_an_object_is_refused_by_name(
+    tmp_path, monkeypatch, name, content, json_type
+):
+    monkeypatch.chdir(tmp_path)
+    Path(name).write_text(content, encoding="utf-8")
+
+    result = CliRunner().invoke(
+        app,
+        ["data", "canary", "insert", name, "--manifest", "m.json",
+         "--count", "4", "-o", "canaried.jsonl"],
+    )
+
+    assert result.exit_code == 1, result.output
+    assert result.exception is None or isinstance(result.exception, SystemExit)
+    output = _plain(result.output)
+    assert f"the first row is a JSON {json_type}, not an object" in output
+    assert "AttributeError" not in output
+    assert not Path("canaried.jsonl").exists()
+    assert not Path("m.json").exists()
+
+
 def test_json_output_is_an_array_that_loads_back(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     _write_dataset(Path("train.jsonl"), "alpaca")

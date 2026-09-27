@@ -160,8 +160,9 @@ soup data canary check --manifest secrets.json --base ./my-model --adapter ./lor
 does. Alpaca, sharegpt and chatml are supported, each with the carrier as the prompt
 and the secret as the trained response. Every other format is refused: dpo, kto and
 embedding have no single supervised response, plaintext trains on raw text rather
-than the chat turn `check` scores, and the multimodal formats need a real image or
-audio file per row. `-o` takes `.jsonl`, or `.json` for a JSON array.
+than the chat turn `check` scores, tool-calling puts a tool-schema system turn
+before the prompt, which `check` does not render, and the multimodal formats need a
+real image or audio file per row. `-o` takes `.jsonl`, or `.json` for a JSON array.
 
 `check` measures the model's loss on each inserted secret and ranks it against
 never-inserted **controls** drawn from the same secret space and sharing the same

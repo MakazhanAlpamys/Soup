@@ -79,6 +79,19 @@ def _refuse(message: str) -> NoReturn:
     raise typer.Exit(1)
 
 
+def _json_type(value: object) -> str:
+    """The JSON name for a parsed value, for error messages."""
+    if isinstance(value, bool):
+        return "boolean"
+    if isinstance(value, (int, float)):
+        return "number"
+    if isinstance(value, str):
+        return "string"
+    if isinstance(value, list):
+        return "array"
+    return "null" if value is None else type(value).__name__
+
+
 def _resolve_format(rows: list, requested: str, path: str) -> str:
     """The format the canaries are rendered in, or refuse (#1216).
 
@@ -100,6 +113,13 @@ def _resolve_format(rows: list, requested: str, path: str) -> str:
                 f"pass --format ({supported})"
             )
         return requested
+    if not isinstance(rows[0], dict):
+        # detect_format reads the first row's keys; anything else would
+        # surface as a bare AttributeError.
+        _refuse(
+            f"{path}: the first row is a JSON {_json_type(rows[0])}, not an "
+            "object; canary insert reads each row as a JSON object"
+        )
     try:
         detected = detect_format(rows)
     except ValueError as exc:
