@@ -4829,10 +4829,11 @@ class SoupConfig(BaseModel):
         (found by a local CodeRabbit review of #1179). MLX stays declared-ignored in
         ``backend_support`` instead, which ``soup doctor`` reports.
 
-        #1264: the refusals that hold on every backend run before the unsloth one,
-        so switching backend never surfaces a second refusal, and the unsloth
-        reason is split by :data:`UNSLOTH_SETUP_TASKS`: a task with no unsloth
-        setup does read the flag; there it is the backend that goes unapplied."""
+        #1264: the refusals in this check that hold on every backend run before
+        the unsloth one, so switching backend never meets a second refusal from
+        this check, and the unsloth reason is split by
+        :data:`UNSLOTH_SETUP_TASKS`: a task with no unsloth setup does read the
+        flag; there it is the backend that goes unapplied."""
         if not self.training.moe_lora:
             return self
         tcfg = self.training

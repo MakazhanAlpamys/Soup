@@ -131,6 +131,23 @@ class TestTheTaskRefusalComesFirst:
         assert f"modality={modality!r}" in on_unsloth, on_unsloth
         assert on_unsloth == _refusal("sft", "transformers", modality=modality)
 
+    @pytest.mark.parametrize("task", ["classifier", "reranker", "cross_encoder"])
+    def test_the_classifier_family_without_its_adapter_too(self, task):
+        """Without classifier_lora the flag has nothing to select on any backend,
+        so that refusal must come before the unsloth one, whose advice would be false."""
+
+        def refusal(backend):
+            raw = yaml.safe_load(_yaml(task, backend))
+            del raw["training"]["classifier_lora"]
+            with pytest.raises(ValueError) as info:
+                load_config_from_string(yaml.safe_dump(raw))
+            return " ".join(str(info.value).split())
+
+        on_unsloth = refusal("unsloth")
+
+        assert f"not applied by task={task!r} unless" in on_unsloth, on_unsloth
+        assert on_unsloth == refusal("transformers")
+
 
 class TestTheSplitMatchesTheTrainers:
     """The task lists in the schema must follow the trainers: a task whose wrapper
