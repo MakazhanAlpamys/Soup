@@ -26,8 +26,9 @@ reviewed for them.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from soup_cli.config.schema import SoupConfig
@@ -50,6 +51,16 @@ DEFAULT_BACKEND = "transformers"
 DEFAULT_MODALITY = "text"
 
 
+def _default_active(value: Any) -> bool:
+    """A setting is active when truthy and not None."""
+    return bool(value) and value is not None
+
+
+def _seed_active(value: Any) -> bool:
+    """0 is a valid random seed, so any non-None value is active."""
+    return value is not None
+
+
 @dataclass(frozen=True)
 class SupportEntry:
     """One declared gap: a field, what happens to it, and why."""
@@ -64,6 +75,7 @@ class SupportEntry:
     #: (this is what happens to ``max_grad_norm`` when #750 lands), and a
     #: ``True`` entry the trainer stops reading means the warning was deleted.
     trainer_reads: bool = False
+    active: Callable[[Any], bool] = _default_active
 
     def describe(self) -> str:
         suffix = f" (#{self.issue})" if self.issue else ""
@@ -81,12 +93,14 @@ _MLX_SFT: tuple[SupportEntry, ...] = (
         IGNORED,
         "MLX seeds through mx.random, not this field",
         trainer_reads=True,
+        active=_seed_active,
     ),
     SupportEntry(
         "training.data_seed",
         IGNORED,
         "MLX seeds through mx.random, not this field",
         trainer_reads=True,
+        active=_seed_active,
     ),
     SupportEntry(
         "training.use_galore",
@@ -285,9 +299,10 @@ def unsupported_for(
 def check_config(cfg: "SoupConfig") -> list[SupportEntry]:
     """The declared gaps that apply to the fields this config actually sets.
 
-    Only fields the user wrote are reported. Pydantic's ``model_fields_set``
-    distinguishes those from the ones sitting at their schema default, which is
-    the difference between a useful pre-flight check and a wall of 275 rows.
+    Only fields the user wrote in an active state are reported.
+    Pydantic's ``model_fields_set`` distinguishes those from the ones
+    sitting at their schema default, and ``entry.active(value)`` filters out
+    fields explicitly set to inactive values (e.g. ``false``).
     """
     backend = getattr(cfg, "backend", DEFAULT_BACKEND)
     modality = getattr(cfg, "modality", DEFAULT_MODALITY)
@@ -295,12 +310,34 @@ def check_config(cfg: "SoupConfig") -> list[SupportEntry]:
     if not entries:
         return []
 
-    written: set[str] = set()
-    for namespace in ("training", "data"):
-        section = getattr(cfg, namespace, None)
-        if section is None:
+    results: list[SupportEntry] = []
+    for entry in entries:
+        parts = entry.field.split(".")
+        namespace = parts[0]
+        curr = getattr(cfg, namespace, None)
+        if curr is None:
             continue
-        for name in getattr(section, "model_fields_set", ()):
-            written.add(f"{namespace}.{name}")
 
-    return [entry for entry in entries if entry.field in written]
+        is_set = True
+        for part in parts[1:]:
+            model_fields_set = getattr(curr, "model_fields_set", None)
+            if model_fields_set is not None:
+                if part not in model_fields_set:
+                    is_set = False
+                    break
+                curr = getattr(curr, part, None)
+            elif isinstance(curr, dict):
+                if part not in curr:
+                    is_set = False
+                    break
+                curr = curr[part]
+            elif hasattr(curr, part):
+                curr = getattr(curr, part, None)
+            else:
+                is_set = False
+                break
+
+        if is_set and entry.active(curr):
+            results.append(entry)
+
+    return results
