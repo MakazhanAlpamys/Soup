@@ -28,12 +28,11 @@ the disk tier at ``--read-ahead 3``. It is not a TRL loss.
 This needs a tree that has ``head_prefetch_layer`` (the #1258 branch). On any other
 tree it exits with a message instead of measuring nothing.
 
-I build the shards once and discard that process's numbers before recording
-anything: the sharding itself runs on the same card as the arms, so a process
-that also shards measures both arms slower than one handed an already-sharded
-directory (I saw a last-layer head wait of 27.2 ms in the sharding process
-against 10.9-11.5 ms in five later ones). Point ``--shards`` at an existing
-directory to skip sharding in the measured process entirely; it also keeps the
+The RTX 5070 run on #1258 measured a last-layer head wait of 27.2 ms in the
+process that also built the NF4 shards, against 10.9-11.5 ms in five later
+processes; the cause was not isolated. Build the shards once and discard that
+process's numbers, or point ``--shards`` at an already-sharded directory to
+skip sharding in the measured process entirely. ``--shards`` also keeps the
 shard directory's name off the weights path, which matters on Windows, where
 ``resolve_shard_dir`` names it after that path and a long one trips ``WinError
 206`` (MAX_PATH).
@@ -129,8 +128,9 @@ def _source_sha() -> str:
     the driver and the ``soup_cli`` it measures can come from different
     checkouts (a ``PYTHONPATH`` override, an editable install elsewhere), and I
     want the tree that was actually measured. ``-dirty`` covers an uncommitted
-    change on top of that commit. Written the way ``variant2_gate.py``'s
-    ``_source_sha`` is.
+    change on top of that commit, scoped to ``src`` so an untracked output file
+    left at the repo root (this driver's own ``--out``, say) does not turn a
+    clean tree dirty. Written the way ``variant2_gate.py``'s ``_source_sha`` is.
     """
     import soup_cli
 
@@ -162,7 +162,7 @@ def _source_sha() -> str:
             .lower()
         )
         dirty = subprocess.run(
-            ["git", "status", "--porcelain", "--untracked-files=normal"],
+            ["git", "status", "--porcelain", "--untracked-files=normal", "--", "src"],
             cwd=Path(root),
             check=True,
             capture_output=True,
@@ -343,6 +343,9 @@ def main() -> int:
         # the card, its NVIDIA driver and PCIe link, torch, and soup_cli_file
         "gpu": stream_probe.gpu_facts(device),
         "git_sha": _source_sha(),
+        # every --flag, so a record like "NF4" in a changelog fragment can be read
+        # back from the JSON itself instead of trusted from the invocation.
+        "args": vars(cli),
         "label": cli.label,
         "weights": cli.weights,
         "shard_dir": shard_dir,
