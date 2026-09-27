@@ -1225,7 +1225,8 @@ class TrainingConfig(BaseModel):
     quantization_aware: Union[bool, Literal["fp8", "quest"]] = Field(
         default=False,
         description=(
-            "Quantization-Aware Training. False=off, True=int8 QAT (torchao), "
+            "Quantization-Aware Training. False=off, "
+            "True=refused at load (int8 QAT is not implemented, #1222), "
             "'fp8'=FP8 training on H100/B100 (v0.28.0), "
             "'quest'=experimental mixed W4/A4+A16 QuEST route (#674)."
         ),
@@ -1737,9 +1738,10 @@ class TrainingConfig(BaseModel):
     ]] = Field(
         default=None,
         description=(
-            "TTS model family — required when task='tts'. One of: orpheus, "
-            "sesame_csm, llasa, spark, oute. Selects the family-specific "
-            "codec and trainer preparation path."
+            "TTS model family — required when task='tts'. Runnable choices are "
+            "orpheus, llasa, spark, and oute. sesame_csm is retained only so "
+            "legacy configs receive an explicit refusal until Soup has a native "
+            "CSM multimodal trainer."
         ),
     )
     tts_emotion: Optional[str] = Field(
@@ -3814,6 +3816,45 @@ class TrainingConfig(BaseModel):
             )
         return self
 
+    @field_validator("quantization_aware")
+    @classmethod
+    def _refuse_int8_qat(
+        cls, value: Union[bool, Literal["fp8", "quest"]]
+    ) -> Union[bool, Literal["fp8", "quest"]]:
+        """#1222 — ``true`` is refused: it never ran quantization-aware training.
+
+        Where it was applied (the transformers model setup of the sft, dpo,
+        kto, orpo, ipo, bco, simpo, grpo, ppo and pretrain trainers, which
+        ``task: tts`` and ``task: preference`` also run), it handed
+        torchao's ``Int8WeightOnlyConfig``, a post-training weight-only
+        quantizer, to ``quantize_`` after LoRA, over every ``nn.Linear``
+        including ``lora_A``/``lora_B``, and froze them all: a LoRA run had
+        nothing left to train, and every run tested through ``soup train``
+        exited 1. Elsewhere it was not applied at all: ``backend: mlx`` warned
+        and trained without it, no ``_setup_unsloth`` calls it (#1248), the
+        other tasks' trainers never read it, and neither do SFT's audio and
+        layer-streaming paths.
+
+        This runs after pydantic's own coercion, so every spelling the field
+        reads as ``True`` (``yes``, ``on``, ``1``, ``"true"`` ...) is caught by
+        one comparison. ``fp8`` and ``quest`` never reach that path: FP8 goes
+        through ``utils/fp8.py`` and QuEST through ``utils/quest.py``.
+        """
+        if value is True:
+            raise ValueError(
+                "training.quantization_aware: true is refused (#1222): int8 "
+                "quantization-aware training is not implemented. Where it was "
+                "applied, it ran torchao's post-training int8 weight-only "
+                "quantization over every Linear layer after LoRA, adapter "
+                "included, and froze them all: a LoRA run had zero trainable "
+                "parameters, and every run tested failed. Elsewhere, including "
+                "backend: mlx and backend: unsloth, it was not applied at all. "
+                "Remove the key or set it to false. quantization_aware: fp8 and "
+                "quantization_aware: quest are unaffected; they use their own "
+                "code paths."
+            )
+        return value
+
     @model_validator(mode="after")
     def _validate_prequantized_no_qat(self) -> "TrainingConfig":
         """v0.38.0 — Pre-quantized formats + QAT is incompatible.
@@ -4470,7 +4511,7 @@ def remap_root_level_misplaced_keys(values):
 SFT_KERNEL_AWARE_TASKS: frozenset[str] = frozenset({"sft", "tts"})
 
 
-# #795: trainers that load the base at checkpoint precision and never read
+# #795: trainers that load the base unquantised and never read
 # ``training.quantization``.
 _QUANTIZATION_UNHONOURED_TASKS = frozenset({
     "distill", "classifier", "reranker", "cross_encoder", "prm",
@@ -4562,7 +4603,7 @@ class SoupConfig(BaseModel):
 
     @model_validator(mode="after")
     def _resolve_quantization_for_unhonouring_tasks(self) -> "SoupConfig":
-        """#795 — these trainers load the base at checkpoint precision and never
+        """#795 — these trainers load the base unquantised and never
         read ``training.quantization``.
 
         The field defaults to ``4bit``, so an UNSET value resolves to ``none`` here
@@ -4602,15 +4643,15 @@ class SoupConfig(BaseModel):
 
                 warn_deprecated_value(
                     f"training.quantization: {tcfg.quantization} has no effect on "
-                    f"task={self.task!r} and is ignored: its trainer loads the base at "
-                    "checkpoint precision, so the run trains unquantised. Set "
+                    f"task={self.task!r} and is ignored: its trainer never quantises "
+                    "the base, so the run trains unquantised. Set "
                     "quantization: none."
                 )
                 tcfg.quantization = "none"
                 return self
         raise ValueError(
             f"task={self.task!r} does not apply training.quantization: its trainer "
-            "loads the base at checkpoint precision, so "
+            "never quantises the base, so "
             f"quantization={tcfg.quantization!r} would record a quantised run that "
             "never happens. Remove it or set quantization: none."
         )
@@ -4629,6 +4670,12 @@ class SoupConfig(BaseModel):
             )
         if self.modality != "text":
             raise ValueError("quantization_aware='quest' requires modality='text'")
+        if tcfg.auto_mixed_precision:
+            raise ValueError(
+                "training.quantization_aware='quest' requires "
+                "training.auto_mixed_precision=false; the QuEST route has only "
+                "been measured under BF16"
+            )
         if tcfg.quantization != "none":
             raise ValueError(
                 "quantization_aware='quest' requires training.quantization='none'"
@@ -4689,6 +4736,56 @@ class SoupConfig(BaseModel):
         raise ValueError(
             "task='prm' does not apply training.lora: the PRM trainer fine-tunes "
             "every base parameter. Remove the lora block (or set lora.r: 0)."
+        )
+
+    @model_validator(mode="after")
+    def _validate_moe_lora_task(self) -> "SoupConfig":
+        """#1151 — ``moe_lora`` selects expert-FFN LoRA targets, so it is refused
+        where no trainer can act on it: ``asr`` only ever loads Whisper, which has
+        no experts, and ``moe_lora_routing`` builds no LoRA adapter at all. The
+        classifier family reads it only on its opt-in adapter path
+        (``classifier_lora: true`` with ``lora.r > 0``, as ``trainer/classifier.py``
+        decides); without it that trainer full-fine-tunes, and there is no adapter
+        for the flag to select targets for. Across tasks: every ``_setup_unsloth``
+        attaches ``utils/unsloth.py``'s fixed attention list, and SFT's vision and
+        audio setups build their adapter without the MoE step, so neither reads it
+        (found by a local CodeRabbit review of #1179). MLX stays declared-ignored in
+        ``backend_support`` instead, which ``soup doctor`` reports."""
+        if not self.training.moe_lora:
+            return self
+        tcfg = self.training
+        if self.task in ("classifier", "reranker", "cross_encoder") and not (
+            tcfg.classifier_lora and tcfg.lora.r > 0
+        ):
+            raise ValueError(
+                f"training.moe_lora is not applied by task={self.task!r} unless "
+                "training.classifier_lora is true and training.lora.r > 0: without them that "
+                "trainer full-fine-tunes and builds no adapter for the flag to select. Set "
+                "classifier_lora: true and lora.r >= 1, or remove moe_lora."
+            )
+        if self.backend == "unsloth":
+            raise ValueError(
+                "training.moe_lora is not applied on backend='unsloth': unsloth attaches "
+                "its own fixed attention targets and never reads the flag. Use backend: "
+                "transformers, or remove moe_lora."
+            )
+        if self.task == "sft" and self.modality in ("vision", "audio"):
+            raise ValueError(
+                f"training.moe_lora is not applied by task='sft' with "
+                f"modality={self.modality!r}: that setup builds its adapter without the "
+                "MoE target step. Remove moe_lora, or train with modality: text."
+            )
+        why = {
+            "asr": "that trainer loads Whisper, which has no expert layers",
+            "moe_lora_routing": "that trainer routes between existing adapters "
+            "and builds no LoRA adapter of its own",
+            "prm": "that trainer fine-tunes every base parameter and builds no LoRA adapter",
+        }.get(self.task)
+        if why is None:
+            return self
+        raise ValueError(
+            f"training.moe_lora is not applied by task={self.task!r}: {why}. "
+            "Remove moe_lora (or set it to false)."
         )
 
     @model_validator(mode="after")
@@ -4920,7 +5017,7 @@ class SoupConfig(BaseModel):
 
         Delegates to :func:`grpo_long_context.validate_long_context_grpo_compat`
         so the rules are single-source-of-truth (mirrors v0.49.0 LongLoRA).
-        Live Tiled MLP wiring is deferred to v0.56.0.
+        Staged field is accepted but unconsumed, and refused as of v0.77 (#808).
         """
         if not self.training.long_context_grpo:
             return self
@@ -5091,8 +5188,17 @@ class SoupConfig(BaseModel):
                 raise ValueError(str(exc)) from exc
             if tcfg.tts_family is None:
                 raise ValueError(
-                    "task='tts' requires training.tts_family in "
-                    "(orpheus, sesame_csm, llasa, spark, oute)"
+                    "task='tts' requires a runnable training.tts_family in "
+                    "(orpheus, llasa, spark, oute); sesame_csm is currently refused"
+                )
+            if tcfg.tts_family == "sesame_csm":
+                raise ValueError(
+                    "training.tts_family='sesame_csm' is not supported by Soup yet: "
+                    "CSM trains text plus 32 Mimi codebooks as parallel multimodal "
+                    "frames, so neither raw data.format='audio' nor pre-encoded "
+                    "data.format='chatml' is a valid text-SFT substitute. Use the "
+                    "model's native CSM/AutoProcessor training path until Soup has "
+                    "a dedicated CSM trainer."
                 )
             if tcfg.tts_emotion is not None:
                 try:
@@ -6697,6 +6803,10 @@ class SoupConfig(BaseModel):
           footgun — mirrors v0.52.0 distill / classifier task-gate).
         - ``data.forget_set`` is present when ``task='unlearn'``.
         - Backend != mlx (live wiring deferred to v0.61.1).
+        - ``loraplus_lr_ratio`` is refused (#745): unlearn drives its own
+          ``torch.optim.AdamW`` loop, not a ``Trainer``, so there is nothing
+          for ``attach_loraplus_optimizer`` to attach to and LoRA+ would be
+          silently ignored. Every other PEFT-building task wires it.
         """
         tcfg = self.training
         method = tcfg.unlearn_method
@@ -6733,6 +6843,23 @@ class SoupConfig(BaseModel):
                 "dataset id pointing at rows to unlearn)."
             )
 
+        # LoRA+ is refused here rather than wired (#745). unlearn.py drives a
+        # self-contained torch.optim.AdamW loop, not a transformers Trainer, so
+        # there is no trainer.optimizer for attach_loraplus_optimizer to
+        # replace — LoRA+ would train the B matrices at the base rate the user
+        # did not ask for, silently. Every Trainer-based task wires LoRA+; this
+        # one names the incompatibility at parse (before sharding costs time)
+        # instead of ignoring it.
+        if tcfg.loraplus_lr_ratio is not None:
+            raise ValueError(
+                "Refused: training.loraplus_lr_ratio is not supported on "
+                "task='unlearn'. Unlearning runs its own optimizer loop, not a "
+                "Trainer, so the LoRA+ split learning rate (B at lr*ratio) "
+                "cannot be applied and would be silently ignored. Remove "
+                "training.loraplus_lr_ratio, or use a Trainer-based task "
+                "(sft/dpo/kto/orpo/simpo/...) to train with LoRA+."
+            )
+
         # Delegate backend gate to the pure helper so the runtime path
         # and schema-load path stay consistent.
         from soup_cli.utils.unlearning import validate_unlearn_compat
@@ -6742,6 +6869,76 @@ class SoupConfig(BaseModel):
         except ValueError as exc:
             raise ValueError(str(exc)) from exc
         return self
+
+    @model_validator(mode="after")
+    def _validate_loraplus_has_a_trainable_lora_b(self) -> "SoupConfig":
+        """#745: refuse ``loraplus_lr_ratio`` where no LoRA B matrix trains.
+
+        LoRA+ gives the LoRA B matrices ``lr * ratio``. On these tasks there is
+        no trainable B, so the ratio is either silently ignored or fails only
+        after the base model has loaded:
+
+        - ``prm`` is a full fine-tune with no adapter (``trainer/prm.py``).
+        - ``moe_lora_routing`` loads existing adapters frozen and trains only
+          the routing gate.
+        - ``classifier`` / ``reranker`` / ``cross_encoder`` without
+          ``classifier_lora``, and ``asr`` without ``asr_lora``, full fine-tune
+          by default; the adapter exists only when the flag is on and
+          ``lora.r > 0``.
+
+        - ``lora.use_vera`` on any task: VeRA's A/B projections are frozen and
+          shared, and it trains the ``vera_lambda_b`` / ``vera_lambda_d``
+          scaling vectors instead. peft's
+          ``create_loraplus_optimizer`` puts all of them in the ``lr * ratio``
+          groups and leaves group A empty, so every trainable tensor would run
+          at ``ratio`` times the learning rate.
+
+        ``unlearn`` is refused in :meth:`_validate_unlearn_compat` for a
+        different reason (it has an adapter but no ``Trainer`` optimizer).
+        """
+        tcfg = self.training
+        if tcfg.loraplus_lr_ratio is None:
+            return self
+        task = self.task
+        if getattr(tcfg.lora, "use_vera", False):
+            raise ValueError(
+                "Refused: training.loraplus_lr_ratio needs trainable LoRA A/B "
+                "matrices. lora.use_vera trains scaling vectors, not A/B "
+                "matrices, and peft's LoRA+ optimizer would put every one of "
+                "them in the lr * ratio groups, so the whole adapter would "
+                "train at ratio times the learning rate. Remove "
+                "training.loraplus_lr_ratio or set lora.use_vera: false."
+            )
+        if task == "prm":
+            reason = (
+                "task='prm' is a full fine-tune with no LoRA adapter, so there "
+                "are no LoRA B matrices to give the higher learning rate."
+            )
+        elif task == "moe_lora_routing":
+            reason = (
+                "task='moe_lora_routing' loads its adapters frozen and trains "
+                "only the routing gate, so no LoRA B matrix is trained."
+            )
+        elif task in ("classifier", "reranker", "cross_encoder") and not (
+            tcfg.classifier_lora and tcfg.lora.r > 0
+        ):
+            reason = (
+                f"task={task!r} full fine-tunes unless training.classifier_lora "
+                "is true with lora.r > 0, so there is no LoRA adapter here. Set "
+                "training.classifier_lora: true to train a LoRA adapter."
+            )
+        elif task == "asr" and not (tcfg.asr_lora and tcfg.lora.r > 0):
+            reason = (
+                "task='asr' full fine-tunes unless training.asr_lora is true "
+                "with lora.r > 0, so there is no LoRA adapter here. Set "
+                "training.asr_lora: true to train a LoRA adapter."
+            )
+        else:
+            return self
+        raise ValueError(
+            "Refused: training.loraplus_lr_ratio needs a trainable LoRA adapter. "
+            f"{reason} Remove training.loraplus_lr_ratio for this run."
+        )
 
     @model_validator(mode="after")
     def _validate_grace_codebook_compat(self) -> "SoupConfig":

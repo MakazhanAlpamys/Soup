@@ -541,7 +541,7 @@ class TestTheRatchet:
         moe = _moe_bases()
         flagless = [b for b in moe if b not in _flagged_bases()]
 
-        assert len(_record()) == 117
+        assert len(_record()) == 116
         assert len(moe) == 20
         assert len(flagless) == 6, sorted(flagless)
         assert len({info["model_type"] for info in moe.values()}) == 11

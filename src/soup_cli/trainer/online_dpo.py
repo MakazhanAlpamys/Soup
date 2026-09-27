@@ -325,9 +325,15 @@ class OnlineDPOTrainerWrapper:
         # Curriculum + plugin callbacks (relora is a no-op unless relora_steps).
         from soup_cli.utils.peft_wiring import (
             attach_curriculum_callback,
+            attach_loraplus_optimizer,
             attach_plugin_callback,
         )
 
+        # LoRA+ optimizer (#724/#745). TRL applies the adapter from peft_config
+        # inside its __init__, so trainer.model is the PEFT model by now, and
+        # OnlineDPOTrainer builds its optimizer lazily at train(), so the
+        # scheduler is still built around the one attached here.
+        attach_loraplus_optimizer(self.trainer, tcfg)
         attach_curriculum_callback(self.trainer, tcfg, str(output_dir), console)
         attach_plugin_callback(self.trainer, console)
 

@@ -273,7 +273,7 @@ jobs:
         with:
           python-version: "3.11"
       - name: Install with Transformers floor constraints
-        run: pip install -e ".[dev]" -c .github/constraints/transformers-floor.txt
+        run: pip install -e ".[dev,audio]" -c .github/constraints/transformers-floor.txt
       - name: Verify constrained dependency graph
         run: python -m pip check
       - name: Assert installed versions match floor constraints
@@ -293,7 +293,7 @@ jobs:
           )
           expected = dict(pairs)
           assert len(expected) == len(pairs), "duplicate package pin in floor constraints"
-          for name in ("torch", "transformers", "trl", "peft", "plotext"):
+          for name in ("torch", "torchaudio", "transformers", "trl", "peft", "plotext"):
               assert name in expected, f"floor constraints missing exact {name} pin"
               want = expected[name]
               got = md.version(name)
@@ -332,6 +332,7 @@ jobs:
           tests/test_plotext_compat.py
           tests/test_bugfixes.py::TestDiffModelLoading
           tests/test_issue636_torch_floor.py
+          tests/test_issue265_xcodec2_audio_contract.py
 
   test:
     strategy:

@@ -132,14 +132,22 @@ class TestSign:
         assert payload["backend"] == "unsigned"
         assert "merkle_root" in payload
 
-    def test_sign_sigstore_deferred(self, tmp_path, monkeypatch):
-        # Sigstore keyless signing is infra-blocked (needs OIDC + Fulcio/Rekor
-        # network); it stays a NotImplementedError after v0.71.2 #185.
+    def test_sign_sigstore_missing_extra_is_actionable(self, tmp_path, monkeypatch):
+        import builtins
+
         monkeypatch.chdir(tmp_path)
         adapter = _make_adapter(tmp_path)
         from soup_cli.utils.adapter_sign import sign_adapter
 
-        with pytest.raises(NotImplementedError, match="sigstore|infra-blocked"):
+        real_import = builtins.__import__
+
+        def force_missing_sigstore(name, *args, **kwargs):
+            if name == "sigstore" or name.startswith("sigstore."):
+                raise ImportError("forced missing sigstore")
+            return real_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", force_missing_sigstore)
+        with pytest.raises(ValueError, match=r"soup-cli\[sigstore\]"):
             sign_adapter(str(adapter), backend="sigstore")
 
     def test_sign_ed25519_now_live(self, tmp_path, monkeypatch):

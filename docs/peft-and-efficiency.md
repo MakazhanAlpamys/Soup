@@ -376,6 +376,8 @@ training:
     alpha: 16
 ```
 
+- **Compatibility:** Wired on every Trainer-based task that trains a LoRA adapter, including the preference and RL tasks (`dpo`, `kto`, `orpo`, `simpo`, `ipo`, `bco`, `grpo`, `online_dpo`, `ppo`, `reward_model`, `distill`). Most attach the LoRA+ optimizer once the trainer is built; `ppo` passes it to the trainer's constructor instead, because trl's PPO trainer builds its optimizer and LR scheduler eagerly, and adds the value model to it at the base learning rate, as trl's default optimizer does. `classifier`, `reranker`, `cross_encoder` and `asr` full fine-tune by default, so LoRA+ applies there only with `classifier_lora: true` / `asr_lora: true` and `lora.r > 0`. Refused at config parse on tasks with no trainable LoRA $B$ matrix: `prm` (full fine-tune), `moe_lora_routing` (only the routing gate trains), and `classifier` / `reranker` / `cross_encoder` / `asr` without their LoRA flag. Also refused on `unlearn`, which runs its own optimizer loop rather than a Trainer. Refused with `lora.use_vera` (VeRA trains scaling vectors, not $A$/$B$ matrices, so every trainable tensor would run at `lr * ratio`). Mutually exclusive with `use_lorafa`.
+
 
 ## LoRA-FA (Frozen-A LoRA)
 
@@ -615,6 +617,8 @@ soup train --config soup.yaml \
 
 The report contains the geometric `lrs[]`, raw + EMA-smoothed `losses[]`, the recommended LR (steepest negative gradient before divergence), the LR with min loss, and the divergence point if any.
 
+The sweep takes one training row per step. With fewer rows than `--find-lr-steps`, it runs one step per row over the same `--find-lr-start` → `--find-lr-end` range and prints a line saying so. The recommendation needs at least 4 points, so `--find-lr-steps` must be at least 4 and a training set with fewer than 4 rows is refused before the model loads. If the loss turns non-finite partway through, the report covers the steps before it; if that leaves fewer than 4, the command says where it diverged instead of writing a report.
+
 ### Auto Warmup Schedule
 
 ```yaml
@@ -633,6 +637,10 @@ training:
 ```
 
 Picks `bf16` on Ampere+, `fp16` on Turing or known fp16-stable models (Qwen2 / Qwen2.5 / Phi-3 / Phi-3.5), `no` on pre-Pascal. Multi-version pairs (`qwen2.5` vs `qwen2`, `phi-3.5` vs `phi-3`) match the longest substring deterministically.
+
+The experimental QuEST route (`quantization_aware: quest`) refuses this flag at
+config load because its evidence covers BF16, not FP16; see the
+[QuEST evidence boundary](performance-and-quantization.md#evidence-boundary).
 
 ### Loss Spike Auto-Recovery
 
@@ -678,10 +686,12 @@ Records peak memory each step. When pressure crosses the threshold, recommends a
 
 ## Training Intelligence (Forgetting + Checkpoint Quality)
 
-The `forgetting_*`, `checkpoint_*`, and `early_stop_on_regression` settings are
+The `forgetting_*`, `checkpoint_*`, `early_stop_on_regression`, and `convergence_*` settings are
 reserved for planned in-training callbacks. They are accepted by the schema but
-are not enforced during training in this build. `soup train` warns when one is
-set away from its default, and Autopilot does not enable or advertise them.
+are not enforced during training in this build. `soup train` prints an advisory note
+when one is set away from its default, directing users to `--gate <suite.yaml>`.
+(Other unconsumed configuration fields staged for features that have not landed emit
+a load-time warning in v0.76 and are refused as of v0.77 per #808).
 
 Use the live eval gate for regression detection and automatic stopping today:
 

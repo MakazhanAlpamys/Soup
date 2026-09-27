@@ -42,7 +42,7 @@ class TestRunLogSymlinkRefusal:
 
         with patch("subprocess.Popen") as mock_popen:
             mock_popen.return_value = _mock_proc()
-            with pytest.raises(ExecutionError):
+            with pytest.raises(ExecutionError, match="symbolic link or junction"):
                 manager.execute(token=token, kind="train")
             # The child must never be spawned through the redirected log.
             assert not mock_popen.called

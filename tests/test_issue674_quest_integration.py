@@ -12,7 +12,9 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+import yaml
 
+from soup_cli.config.loader import load_config_from_string
 from soup_cli.config.schema import SoupConfig
 from tests.conftest import strip_ansi
 
@@ -133,6 +135,74 @@ def test_schema_accepts_only_the_explicit_first_slice():
     assert cfg.training.batch_size == 2
 
 
+def test_config_loader_rejects_quest_auto_mixed_precision() -> None:
+    config = (
+        "base: ahxt/LiteLlama-460M-1T\n"
+        "task: sft\n"
+        "backend: transformers\n"
+        "modality: text\n"
+        "data:\n"
+        "  train: data.jsonl\n"
+        "training:\n"
+        "  quantization_aware: quest\n"
+        "  quantization: none\n"
+        "  batch_size: 2\n"
+        "  lora:\n"
+        "    r: 0\n"
+    )
+    with pytest.raises(ValueError) as error:
+        load_config_from_string(config + "  auto_mixed_precision: true\n")
+    assert "training.quantization_aware" in str(error.value)
+    assert "training.auto_mixed_precision" in str(error.value)
+
+    assert load_config_from_string(config).training.quantization_aware == "quest"
+    allowed = load_config_from_string(config + "  auto_mixed_precision: false\n")
+    assert allowed.training.quantization_aware == "quest"
+
+
+def test_config_loader_keeps_non_quest_auto_mixed_precision() -> None:
+    cfg = load_config_from_string(
+        "base: org/model\n"
+        "data:\n"
+        "  train: data.jsonl\n"
+        "training:\n"
+        "  auto_mixed_precision: true\n"
+    )
+    assert cfg.training.auto_mixed_precision is True
+
+
+@pytest.mark.parametrize(
+    "field,value,primary_error",
+    [
+        ("task", "dpo", "task='sft'"),
+        ("backend", "unsloth", "backend='transformers'"),
+        ("modality", "vision", "modality='text'"),
+    ],
+)
+def test_quest_route_error_precedes_auto_mixed_precision(
+    field: str, value: str, primary_error: str
+) -> None:
+    payload = {
+        "base": "ahxt/LiteLlama-460M-1T",
+        "task": "sft",
+        "backend": "transformers",
+        "modality": "text",
+        "data": {"train": "data.jsonl"},
+        "training": {
+            "quantization_aware": "quest",
+            "auto_mixed_precision": True,
+            "quantization": "none",
+            "batch_size": 2,
+            "lora": {"r": 0},
+        },
+    }
+    payload[field] = value
+
+    with pytest.raises(ValueError, match=primary_error) as error:
+        load_config_from_string(yaml.safe_dump(payload))
+    assert "auto_mixed_precision" not in str(error.value)
+
+
 @pytest.mark.parametrize(
     "root,training,match",
     [
@@ -142,6 +212,7 @@ def test_schema_accepts_only_the_explicit_first_slice():
         ({}, {"quantization": "4bit"}, "quantization='none'"),
         ({}, {"lora": {"r": 8}}, "lora.r=0"),
         ({}, {"batch_size": "auto"}, "explicit training.batch_size"),
+        ({}, {"auto_mixed_precision": True}, "auto_mixed_precision=false"),
         ({}, {"stream_layers": True}, "stream_layers=false"),
         ({}, {"nvfp4": True}, "nvfp4=false"),
         ({}, {"activation_offloading": "cpu"}, "activation_offloading"),
@@ -380,6 +451,22 @@ def test_provenance_correction_does_not_invalidate_resume_or_restore(tmp_path):
     restored = _tiny_litellama()
     assert restore_mixed_quest(restored, historical) is restored
     assert int(restored.model.layers[0].self_attn.q_proj.quest_activation_bits) == 4
+
+
+def test_v1_local_sidecar_restores_without_the_original_base_directory():
+    from soup_cli.utils.quest import install_mixed_quest, restore_mixed_quest
+
+    source = _tiny_litellama()
+    historical = install_mixed_quest(
+        source,
+        activation_scales=_scales(source),
+        base_model="C:/Users/old-account/models/base",
+        calibration_sha256=_TEST_CALIBRATION_SHA256,
+        format_version=1,
+    )
+    target = _tiny_litellama()
+    assert restore_mixed_quest(target, historical) is target
+    assert int(target.model.layers[0].self_attn.q_proj.quest_activation_bits) == 4
 
 
 def test_quantizer_matches_the_retained_grid_and_trust_gradient():
@@ -1029,7 +1116,7 @@ def test_train_validates_resume_and_rewrites_final_metadata(monkeypatch, tmp_pat
     monkeypatch.setattr(
         quest,
         "validate_resume_metadata",
-        lambda checkpoint, value: events.append(("resume", checkpoint, value)),
+        lambda checkpoint, value, **kwargs: events.append(("resume", checkpoint, value, kwargs)),
     )
     monkeypatch.setattr(
         quest,
@@ -1039,7 +1126,12 @@ def test_train_validates_resume_and_rewrites_final_metadata(monkeypatch, tmp_pat
 
     result = wrapper.train(resume_from_checkpoint="checkpoint-4")
     assert events[:5] == [
-        ("resume", "checkpoint-4", metadata),
+        (
+            "resume",
+            "checkpoint-4",
+            metadata,
+            {"legacy_base_model": "ahxt/LiteLlama-460M-1T"},
+        ),
         ("metadata", str(tmp_path), metadata),
         ("train", "checkpoint-4"),
         ("save", str(tmp_path)),
@@ -1053,7 +1145,9 @@ def test_train_validates_resume_and_rewrites_final_metadata(monkeypatch, tmp_pat
     monkeypatch.setattr(
         quest,
         "validate_resume_metadata",
-        lambda checkpoint, value: (_ for _ in ()).throw(ValueError("resume route mismatch")),
+        lambda checkpoint, value, **kwargs: (
+            _ for _ in ()
+        ).throw(ValueError("resume route mismatch")),
     )
     with pytest.raises(ValueError, match="resume route mismatch"):
         wrapper.train(resume_from_checkpoint="checkpoint-5")

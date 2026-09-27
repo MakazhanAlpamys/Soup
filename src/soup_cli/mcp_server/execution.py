@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
 import logging
@@ -19,6 +20,7 @@ from soup_cli.utils.paths import (
     atomic_write_text,
     enforce_under_cwd_and_no_symlink,
     open_no_follow,
+    refuse_linked_dirs,
 )
 from soup_cli.utils.process_liveness import process_is_alive as _pid_is_alive
 
@@ -290,7 +292,6 @@ class ExecutionManager:
             run_id = plan.run_id or generate_run_id()
             self._active_run_id = run_id
 
-        log_path = self._log_path(run_id)
         digest = hashlib.sha256(
             json.dumps(plan.argv, separators=(",", ":")).encode("utf-8")
         ).hexdigest()
@@ -298,6 +299,7 @@ class ExecutionManager:
         env["SOUP_MCP_RUN_ID"] = run_id
 
         try:
+            log_path = self._log_path(run_id)
             tracker = ExperimentTracker()
             tracker.launch_run(
                 run_id=run_id,
@@ -307,19 +309,33 @@ class ExecutionManager:
                 log_path=log_path,
             )
             try:
-                # open_no_follow (#820): a file symlink planted at the run-log
-                # path itself is refused rather than followed, so the child's
-                # output cannot be redirected to the link's target. Mode 0o666
-                # keeps plain open()'s permissions (umask still applies); the
-                # OSError on refusal maps to the path-free ExecutionError below.
-                log_handle = os.fdopen(
-                    open_no_follow(
+                # open_no_follow (#820, #1138, #1158): refuses a file symlink at
+                # the log path, a directory symlink or junction in its parent
+                # hierarchy, or a pre-planted hardlink (refuse_hardlink=True).
+                # Note: this check closes uncoordinated redirection; a residual
+                # TOCTOU window remains between the parent walk and os.open if an
+                # attacker has concurrent write access inside .soup. Mode 0o666
+                # keeps plain open()'s permissions (umask still applies).
+                try:
+                    log_fd = open_no_follow(
                         log_path,
                         os.O_WRONLY | os.O_CREAT | os.O_APPEND,
                         0o666,
-                    ),
-                    "ab",
-                )
+                        check_parent=True,
+                        refuse_hardlink=True,
+                    )
+                    log_handle = os.fdopen(log_fd, "ab")
+                except OSError as exc:
+                    if exc.errno == errno.ELOOP:
+                        raise ExecutionError(
+                            "cannot execute: run log directory or file is a "
+                            "symbolic link or junction"
+                        ) from exc
+                    if exc.errno == errno.EMLINK:
+                        raise ExecutionError(
+                            "cannot execute: run log path is a hard link"
+                        ) from exc
+                    raise
                 process = subprocess.Popen(  # noqa: S603 - internal argv, no shell
                     list(plan.argv),
                     cwd=plan.cwd,
@@ -452,5 +468,12 @@ class ExecutionManager:
 
     def _log_path(self, run_id: str) -> str:
         root = Path(self.cwd) / ".soup" / "mcp-runs"
+        try:
+            refuse_linked_dirs(root, stop_at=self.cwd)
+        except OSError as exc:
+            raise ExecutionError(
+                "cannot execute: run log directory or file is a "
+                "symbolic link or junction"
+            ) from exc
         root.mkdir(parents=True, exist_ok=True)
         return str(root / f"{run_id}.log")

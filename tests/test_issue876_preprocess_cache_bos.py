@@ -22,7 +22,6 @@ chat template is the genuine Jinja renderer and BOS/EOS come from a genuine
 ``tokenizers`` post-processor.
 """
 
-import hashlib
 
 import pytest
 
@@ -263,24 +262,20 @@ class TestCacheKey:
         """The cached bytes change for preset rows, so a cache built under #791's
         v3 encoding must not be silently reused."""
         from soup_cli.utils.data_pipeline import make_preprocess_cache_key
+        from tests.preprocess_cache_blob import CURRENT_SCHEMA, blob_key
 
         args = dict(
             dataset_path="data/train.jsonl",
             tokenizer_name="meta-llama/Llama-3.1-8B",
             max_length=2048,
             format_name="chatml",
+            mask_mode="responses_only",
+            task="sft",
+            chat_template=None,
         )
 
-        def _blob_key(schema):
-            # Six fields: #1067 appended the resolved chat template (empty for the
-            # tokenizer's shipped one) after format_name.
-            blob = (
-                f"{schema}\x1f{args['dataset_path']}\x1f{args['tokenizer_name']}"
-                f"\x1f{args['max_length']}\x1f{args['format_name']}\x1f"
-            )
-            return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:16]
-
         current = make_preprocess_cache_key(**args)
-        assert current != _blob_key("v3"), "a v3 (#791) cache must be rejected"
-        assert current != _blob_key("v4"), "a v4 (#1067) cache must be rejected"
-        assert current == _blob_key("v5"), "current schema is v5 (#876)"
+        assert current != blob_key("v3", **args), "a v3 (#791) cache must be rejected"
+        assert current != blob_key("v4", **args), "a v4 (#1067) cache must be rejected"
+        assert current != blob_key("v5", **args), "a v5 (#876) cache must be rejected"
+        assert current == blob_key(CURRENT_SCHEMA, **args)

@@ -204,18 +204,32 @@ def apply_variant_loss(
     - ``logp_new``: policy log-probs from current model, shape ``[B, T]``.
     - ``logp_old``: log-probs from rollout policy (detached), shape ``[B, T]``.
     - ``advantages``: group-relative advantages, shape ``[B]`` or ``[B, T]``.
-    - ``beta``: PPO-style KL coefficient (used by variants that reference
-      a frozen ref model).
+    - ``beta``: KL coefficient (``GRPOConfig.beta``, i.e. ``grpo_beta``).
+      Every variant applies it -- see *KL penalty* below; ``0`` means no KL
+      term.
     - ``delta``: symmetric clipping radius (used by ``two_sided`` and, as the
       sequence-level clipping radius, by ``gspo``).
     - ``completion_mask``: optional ``[B, T]`` 0/1 mask (1 where token is in
       the completion). When supplied, length-normalising variants
       (``bnpo``) divide by ``mask.sum(-1).clamp(min=1)``.
-    - ``reference_logp``: frozen reference log-probs ``[B, T]`` for KL
-      penalty (used by ``standard``-with-beta and ``dr_grpo``).
+    - ``reference_logp``: the frozen reference policy's per-token log-probs,
+      shape ``[B, T]`` (trl's ``ref_per_token_logps``). Required when
+      ``beta > 0``; not read at all when ``beta == 0``.
 
     Returns a scalar torch tensor (or ``None`` for the standard variant —
-    callers should fall through to the existing TRL ``GRPOTrainer.compute_loss``).
+    callers should fall through to the existing TRL ``GRPOTrainer.compute_loss``,
+    which applies ``beta`` itself).
+
+    KL penalty (#1232). With ``beta > 0`` every variant adds trl 0.29's
+    per-token KL estimate against the reference,
+    ``kl_t = exp(ref_t - logp_t) - (ref_t - logp_t) - 1``, as
+    ``per_token_loss + beta * kl_t`` ahead of the variant's own reduction --
+    where ``GRPOTrainer._compute_loss`` puts it -- so ``beta`` weighs the KL
+    against the policy term per token exactly as it does in trl. A policy
+    equal to its reference adds exactly zero. ``beta > 0`` with
+    ``reference_logp=None`` raises ``ValueError`` instead of dropping the
+    term; ``beta == 0`` skips it and reproduces the pre-#1232 loss bit for
+    bit.
 
     The math is intentionally minimal — these are *reference* kernels for
     routing + unit tests. Production correctness on multi-billion-param
@@ -227,17 +241,24 @@ def apply_variant_loss(
       Sequence-level importance ratio length-normalized by completion length:
       ``s_i = exp((1/|y_i|) * sum (log p_new - log p_old))``, optimized with
       sequence-level surrogate clipping: ``-min(s * A, clip(s, 1-eps, 1+eps) * A)``.
+      KL: each sequence's masked mean ``kl_t`` joins that sequence's loss
+      before the mean over non-empty sequences.
     - ``dapo``: decoupled-clip — uses asymmetric clipping bounds
       ``[1-eps_lo, 1+eps_hi]`` (here ``eps_lo=0.2, eps_hi=0.28`` per the
-      paper).
+      paper). KL: per token, inside the masked token mean over the batch.
     - ``dr_grpo``: GRPO without length normalisation (the doubly-robust
       bias-correction term is left to v0.53.12+; the schema gate keeps
-      misconfigured runs out).
+      misconfigured runs out). KL: per token, inside the masked token sum
+      that is then averaged over the batch, like the policy term.
     - ``bnpo``: length-normalised PPO loss — divides by ``mask.sum(-1)``.
+      KL: per token, inside the per-sequence length-normalised mean.
     - ``two_sided``: symmetric clipping with operator-supplied ``delta``;
-      ``delta=None`` raises ``ValueError`` (schema requires it).
+      ``delta=None`` raises ``ValueError`` (schema requires it). KL: per
+      token, inside the masked token mean over the batch.
     - ``rft``: rejection-sampling fine-tuning — only positive-advantage
-      samples contribute (zero-advantage rows masked out before mean).
+      samples contribute (zero-advantage rows masked out before mean). KL:
+      on those same accepted tokens only, over the same denominator, so a
+      batch with no accepted completion still contributes zero.
     - ``standard``: returns ``None`` so the caller delegates to the
       existing v0.50.0 ``GRPOTrainerWrapper`` path.
     """
@@ -256,6 +277,13 @@ def apply_variant_loss(
     beta_f = float(beta)
     if not math.isfinite(beta_f) or beta_f < 0.0:
         raise ValueError("beta must be a finite non-negative number")
+
+    # #1232 — at beta == 0 the reference is not read at all, so the loss is the
+    # pre-#1232 one bit for bit and a reference whose exp() overflows cannot
+    # leak NaN into it through a 0 * inf.
+    per_token_kl = (
+        _per_token_kl(normalised, beta_f, logp_new, reference_logp) if beta_f > 0.0 else None
+    )
 
     if normalised == "two_sided":
         if delta is None:
@@ -310,6 +338,15 @@ def apply_variant_loss(
         surr1 = seq_ratio * adv_seq
         surr2 = torch.clamp(seq_ratio, min=1.0 - eps, max=1.0 + eps) * adv_seq
         seq_loss = -torch.min(surr1, surr2)
+        if per_token_kl is not None:
+            # Sequence level, like the policy term: trl's sequence-level
+            # importance sampling adds beta * kl_t to the per-sequence loss and
+            # takes each sequence's masked token mean.
+            if completion_mask is not None:
+                seq_kl = (per_token_kl * mask).sum(dim=-1) / lengths.clamp(min=1.0)
+            else:
+                seq_kl = per_token_kl.mean(dim=-1)
+            seq_loss = seq_loss + beta_f * seq_kl
         denom = valid_seq_mask.sum().clamp(min=1.0)
         return (seq_loss * valid_seq_mask).sum() / denom
 
@@ -319,11 +356,13 @@ def apply_variant_loss(
         clipped = torch.clamp(ratio, min=1 - eps_lo, max=1 + eps_hi)
         # PPO surrogate: min(ratio * A, clipped * A).
         token_loss = -torch.min(ratio * advantages_2d, clipped * advantages_2d)
+        token_loss = _with_kl(token_loss, per_token_kl, beta_f)
         return _masked_mean(token_loss, completion_mask)
 
     if normalised == "dr_grpo":
         # No length normalisation — sum across tokens then mean across batch.
         token_loss = -(ratio * advantages_2d)
+        token_loss = _with_kl(token_loss, per_token_kl, beta_f)
         if completion_mask is not None:
             token_loss = token_loss * completion_mask
         # sum-over-tokens, mean-over-batch (no division by completion length)
@@ -334,12 +373,14 @@ def apply_variant_loss(
         eps = 0.2
         clipped = torch.clamp(ratio, min=1 - eps, max=1 + eps)
         token_loss = -torch.min(ratio * advantages_2d, clipped * advantages_2d)
+        token_loss = _with_kl(token_loss, per_token_kl, beta_f)
         return _masked_mean(token_loss, completion_mask, normalize_by_length=True)
 
     if normalised == "two_sided":
         # Symmetric clipping at [1-delta, 1+delta].
         clipped = torch.clamp(ratio, min=1 - delta_f, max=1 + delta_f)
         token_loss = -torch.min(ratio * advantages_2d, clipped * advantages_2d)
+        token_loss = _with_kl(token_loss, per_token_kl, beta_f)
         return _masked_mean(token_loss, completion_mask)
 
     if normalised == "rft":
@@ -350,11 +391,51 @@ def apply_variant_loss(
             positive_mask = positive_mask * completion_mask
         # Standard SFT-style negative log-likelihood weighted by positive mask.
         token_loss = -(logp_new * positive_mask)
+        if per_token_kl is not None:
+            # rft trains on the accepted completions only, so its KL covers the
+            # same tokens over the same denominator (#1232): a batch with no
+            # accepted completion still contributes zero.
+            token_loss = token_loss + beta_f * per_token_kl * positive_mask
         denom = positive_mask.sum().clamp(min=1.0)
         return token_loss.sum() / denom
 
     # Defensive fallback — schema rejects everything outside the allowlist.
     raise ValueError(f"Unhandled grpo_variant={normalised!r}")
+
+
+def _per_token_kl(variant: str, beta: float, logp_new, reference_logp):
+    """trl 0.29's per-token KL estimate against the frozen reference (#1232).
+
+    ``exp(ref - logp) - (ref - logp) - 1``: the expression
+    ``GRPOTrainer._compute_loss`` weights by ``beta``. It is non-negative and
+    exactly zero where the policy equals the reference. The reference is
+    detached because it is a frozen policy, not a parameter.
+    """
+    import torch  # lazy import — utility module is dependency-light
+
+    if reference_logp is None:
+        # Inside the trainer this text reaches the user through the #159
+        # fallback warning, where beta=0 is no remedy (grpo_beta must be > 0),
+        # so it names the batch key trl should have filled instead.
+        raise ValueError(
+            f"grpo_variant={variant!r} with beta={beta} needs reference_logp, the "
+            "frozen reference policy's per-token log-probs, for its KL penalty "
+            "(#1232); in a trl batch that is 'ref_per_token_logps', and it is missing"
+        )
+    if tuple(reference_logp.shape) != tuple(logp_new.shape):
+        raise ValueError(
+            f"reference_logp shape {tuple(reference_logp.shape)} does not match "
+            f"logp_new shape {tuple(logp_new.shape)}"
+        )
+    ref_minus_logp = reference_logp.detach() - logp_new
+    return torch.exp(ref_minus_logp) - ref_minus_logp - 1
+
+
+def _with_kl(token_loss, per_token_kl, beta: float):
+    """``token_loss + beta * kl_t``, trl's placement; a no-op without a KL term."""
+    if per_token_kl is None:
+        return token_loss
+    return token_loss + beta * per_token_kl
 
 
 def _masked_mean(
