@@ -122,11 +122,26 @@ def _load_csv(path: Path) -> list[dict]:
 
 def _load_parquet(path: Path) -> list[dict]:
     try:
-        import pandas as pd
+        import pyarrow.parquet as pq
     except ImportError:
-        raise ImportError("Install pandas to read parquet files: pip install pandas pyarrow")
-    df = pd.read_parquet(path)
-    return df.to_dict(orient="records")
+        raise ImportError("Install pyarrow to read parquet files: pip install pyarrow")
+
+    table = pq.read_table(path)
+
+    # pandas stores an unnamed, non-default index (after df.sample() or a filter)
+    # as a hidden __index_level_N__ column; pd.read_parquet restored it as the index.
+    pandas_meta = table.schema.pandas_metadata or {}
+    hidden = {
+        name
+        for name in pandas_meta.get("index_columns", [])
+        if isinstance(name, str) and name.startswith("__index_level_")
+    }
+
+    if hidden:
+        table = table.select(
+            [name for name in table.column_names if name not in hidden]
+        )
+    return table.to_pylist()
 
 
 def _load_txt(path: Path) -> list[dict]:
