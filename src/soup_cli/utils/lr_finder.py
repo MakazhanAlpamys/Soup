@@ -29,6 +29,17 @@ class SweepTooShortError(ValueError):
     A refusal for the user, never a reason to fall back to a synthetic curve.
     """
 
+
+class LrSweepUnavailableError(RuntimeError):
+    """The live sweep cannot run at all (#1203).
+
+    Raised instead of answering with a synthetic curve, whose shape depends only
+    on the LR schedule: a base model that does not exist, or a config that will
+    not parse, used to write a report with a confident ``recommended_lr`` and
+    exit 0.
+
+    """
+
 # Bounds prevent runaway sweeps and silly inputs.
 MAX_NUM_STEPS = 10_000
 # find_optimal_lr needs 4 (lr, loss) pairs; a shorter sweep can never produce a report.
