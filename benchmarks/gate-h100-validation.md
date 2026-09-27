@@ -4985,19 +4985,20 @@ that does not, given that #331 and this record are both public.
 
 ## Reproducing
 
-Harness scripts live in the session scratchpad, not in the repo. Each is small
-and self-contained:
+Published harnesses are indexed in [`benchmarks/README.md`](README.md#harnesses)
+and linked below where available. Each is a small reconstruction of the
+recorded protocol, not a verbatim copy of the unpublished session scripts:
 
 | script | what it does |
 |---|---|
 | `bitexact.py` | shard -> stream -> compare logits/gradients/loss curve against a resident reference of matching numerics |
-| `graddiff.py` | gradients after one backward + each model's own curve twice |
-| `determinism.py` | forward, backward and curve reproducibility of one model |
-| `repeat_backward.py` | N streamed backwards against one deterministic resident reference; `--pin`, `--buffers`, `--order` |
-| `layercount.py` / `depth_vs_bytes.py` | synthetic Llamas sweeping depth, per-layer bytes and quantisation |
+| [`graddiff.py`](harness/graddiff.py) | gradients after one backward + each model's own curve twice |
+| [`determinism.py`](harness/determinism.py) | forward, backward and curve reproducibility of one model |
+| [`repeat_backward.py`](harness/repeat_backward.py) | N streamed backwards against one deterministic resident reference; `--pin`, `--buffers`, `--order` |
+| [`layercount.py`](harness/layercount.py) / [`depth_vs_bytes.py`](harness/depth_vs_bytes.py) | synthetic Llamas sweeping depth, per-layer bytes and quantisation |
 | `ckpt_hypothesis.py` | flips `StreamedDecoderLayer.use_checkpoint` at runtime, both arms |
-| `mechanism.py` / `mechanism_cost.py` | `sync` vs `clone` vs control, and what each costs |
-| `pincost.py` | pinned vs pageable throughput, correctness asserted in the same process |
+| [`mechanism.py`](harness/mechanism.py) / [`mechanism_cost.py`](harness/mechanism_cost.py) | reconstruction of `sync` vs `clone` vs control, and what each costs |
+| [`pincost.py`](harness/pincost.py) | pinned vs pageable throughput, correctness asserted in the same process |
 | `prep_convergence.py` | the emotion-classification subsets and held-out set |
 | `runbench.sh` / `variance.sh` / `runbench8.sh` | one `soup train` with VRAM and SM-clock sampling; n repeats; 8-GPU variant under torchrun |
 | `numerics.py` | STEP 13, first attempt — kept because it is VACUOUS: it measured at M=2048, above `_gemm_4bit_custom_max_m`, so both arms ran the same fallback |
