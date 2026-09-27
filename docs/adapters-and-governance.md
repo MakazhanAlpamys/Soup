@@ -147,8 +147,13 @@ buckets in `.soup/canary-stats.json`. `soup loop watch` evaluates those observat
 after at least 30 canary samples. If the canary success rate trails the stable rate by
 more than five percentage points, the verdict is `MAJOR`; with
 `--autoroll-on-regress`, the watcher atomically clears the canary and its traffic share
-from `loop.yaml`. `/v1/adapters/activate/<name>` remains an explicit 100% cutover and
-does not change the canary policy.
+from `loop.yaml`. `/v1/adapters/activate/<name>` remains an explicit 100% cutover for
+requests without a conversation key and does not change the canary policy. Keyed
+requests still follow the canary split; their stable bucket uses the served base
+model, even when another adapter was activated manually. Start `soup serve` from the
+directory containing `.soup/`, because the loop state and canary statistics paths are
+resolved from the working directory. Clients choose their own stable key, so a client
+can deliberately select a key that hashes into the canary bucket.
 
 
 ## Knowledge Editing (`soup edit set`, ROME / MEMIT / AlphaEdit)

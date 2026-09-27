@@ -1911,7 +1911,10 @@ def _create_app(
         ),
     ):
         # Check adapter selection (from request body)
-        requested_adapter = request.adapter
+        # Treat an empty public request value like an omitted adapter. The
+        # empty string is reserved internally as the explicit base-model
+        # sentinel used by keyed stable canary traffic.
+        requested_adapter = request.adapter or None
         if requested_adapter and _adapter_map:
             if requested_adapter not in _adapter_map:
                 raise HTTPException(
