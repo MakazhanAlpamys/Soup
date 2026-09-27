@@ -1214,6 +1214,13 @@ soup init --template reasoning
 soup train --config soup.yaml
 ```
 
+**Gradient watchdog (#342).** If non-finite gradients (NaN or Inf) appear during
+a GRPO run, the optimizer step is skipped: weights and optimizer state are
+unchanged, and the step still counts toward the step total and the LR schedule.
+The skipped-step count is logged at the end of the run (as a console warning
+when the fraction exceeds 5%) and persisted in `trainer_state.json` so
+`soup adapters audit` can see it.
+
 **Built-in reward functions:**
 - `accuracy` — 1.0 when the completion's final answer matches the gold's, else 0.0 (no partial credit)
 - `format` — checks for structured `<think>...</think>` reasoning blocks
