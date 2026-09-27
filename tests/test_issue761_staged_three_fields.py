@@ -53,20 +53,23 @@ class TestEachFieldWarnsThenRefuses:
 
 
 class TestTheDefaultsStaySilent:
+    @pytest.mark.parametrize("severity", ["warn", "error"])
     @pytest.mark.parametrize(
         "training",
         [
             "  early_stop_patience: 2\n",  # the schema default, written out
             "  lr_groups: []\n",  # parses to None: no groups
+            "  lr_groups: {}\n",  # the dict spelling, also None
+            "  citation_recall_threshold: null\n",  # the default, written out
             "  lr: 2.0e-5\n",  # none of the three set
         ],
     )
-    def test_a_default_prints_nothing(self, training, capsys, monkeypatch):
-        monkeypatch.setattr(loader, "STAGED_FIELD_SEVERITY", "error")
+    def test_a_default_prints_nothing(self, training, severity, capsys, monkeypatch):
+        monkeypatch.setattr(loader, "STAGED_FIELD_SEVERITY", severity)
 
         loader.load_config_from_string(_BASE + "training:\n" + training)
 
-        assert "read by nothing" not in capsys.readouterr().out
+        assert "read by nothing" not in _plain(capsys.readouterr().out)
 
 
 class TestOneDiagnosticForEarlyStopPatience:

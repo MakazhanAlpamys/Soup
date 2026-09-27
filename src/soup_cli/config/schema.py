@@ -1253,9 +1253,9 @@ class TrainingConfig(BaseModel):
     lr_groups: Optional[List[Dict[str, Union[str, float]]]] = Field(
         default=None,
         description=(
-            "Per-module LR override. List of {pattern, lr} entries (or a "
-            "{pattern: lr} dict). First match wins; remaining params fall "
-            "through to the base lr. Capped at 32 entries. (v0.41.0)"
+            "Staged, not applied: a per-module LR override (list of {pattern, lr} "
+            "entries or a {pattern: lr} dict, capped at 32) that no optimizer reads; "
+            "warns in v0.76 and is refused as of v0.77 (#761). (v0.41.0)"
         ),
     )
     # v0.41.0 Part C — LLaMA Pro block expansion.
@@ -4219,9 +4219,9 @@ class TrainingConfig(BaseModel):
     citation_recall_threshold: Optional[float] = Field(
         default=None,
         description=(
-            "Reject final-save when measured citation recall < this "
-            "threshold. Bounded [0.0, 1.0]. Composes with v0.56.0 "
-            "diagnose-gate. (v0.62.0 Part D)"
+            "Staged, not applied: a citation-recall threshold in [0.0, 1.0] that "
+            "nothing gates a save or a run on; warns in v0.76 and is refused as of "
+            "v0.77 (#761). (v0.62.0 Part D)"
         ),
     )
 

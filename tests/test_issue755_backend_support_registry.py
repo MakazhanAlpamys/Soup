@@ -487,7 +487,9 @@ def _fields_read_outside(repo_root: pathlib.Path, modules) -> set[str]:
     declared = {(repo_root / "src" / m).resolve() for m in modules}
     names: set[str] = set()
     for path in src.rglob("*.py"):
-        if path.resolve() in declared or path.name == "schema.py":
+        # schema.py declares every field, and config/staged_fields.py lists the
+        # ones nothing reads (#808): naming a field there is not reading it.
+        if path.resolve() in declared or path.name in ("schema.py", "staged_fields.py"):
             continue
         names |= _fields_read_by(path)
     return names
@@ -595,12 +597,11 @@ def test_an_unfounded_gap_claim_is_caught():
     import soup_cli.config.backend_support as bs
 
     repo_root = pathlib.Path(__file__).resolve().parents[1]
-    # #761 wired data.mask_history, which used to stand in here, and then staged
-    # training.lr_groups, whose name config/staged_fields.py now carries. The
-    # claim only has to be about a field no module names, and training.llm_int8
-    # is one (a schema alias; see #748's KNOWN_UNCONSUMED).
+    # #761 wired data.mask_history, which used to stand in here; the claim only
+    # has to be about a field nothing consumes, and training.lr_groups is one
+    # (see #748's KNOWN_UNCONSUMED).
     fabricated = bs.SupportEntry(
-        "training.llm_int8", bs.IGNORED, "fabricated, unfounded claim"
+        "training.lr_groups", bs.IGNORED, "fabricated, unfounded claim"
     )
     real = bs.REGISTRY[("sft", "mlx", "text")]
     try:
@@ -610,7 +611,7 @@ def test_an_unfounded_gap_claim_is_caught():
         bs.REGISTRY[("sft", "mlx", "text")] = real
 
     assert any(
-        "llm_int8" in p and "globally unconsumed" in p for p in problems
+        "lr_groups" in p and "globally unconsumed" in p for p in problems
     ), problems
 
 

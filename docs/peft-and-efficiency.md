@@ -213,7 +213,7 @@ training:
 
 Catch-all friendly errors: typos in `optimizer:` are rejected at config-load with the v0.41.0 additions listed in the message; `load_in_8bit` mixed with `load_in_16bit` raises rather than picking one silently.
 
-**`lr_groups` is not applied.** The per-module learning rate it describes is parsed and validated (patterns must be compilable regexes) but no optimizer reads it, so every parameter trains at `lr`. From v0.76 setting it prints a warning, and v0.77 refuses it (#761).
+**`lr_groups` is not applied.** The per-module learning rate it describes is parsed and validated (patterns must be compilable regexes) but no optimizer reads it, so every parameter trains at `lr`. Setting it warns in v0.76 and is refused as of v0.77 (#761).
 
 PiSSA, OLoRA, LoftQ, and VeRA are applied through the shared PEFT constructor on
 the Transformers backend. Soup refuses these variants on MLX and Unsloth rather
