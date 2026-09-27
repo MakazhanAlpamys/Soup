@@ -883,7 +883,9 @@ prints `Warning: N of M rows dropped` with the first row's index and the
 converter's reason. For a local file it also prints the `soup data validate`
 command that lists them all. The
 count agrees with `soup data validate` for the same file. Before #1181 the rows
-were dropped without a word.
+were dropped without a word. If a load ends with zero training rows, `soup train`
+stops with exit 1 before loading the model, `--dry-run` included, naming the format
+the rows were read as and the first row's drop reason (#1217).
 
 
 ## Demo Datasets (`soup data demo`)
