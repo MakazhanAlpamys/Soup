@@ -80,9 +80,6 @@ def install_measurement_stubs(
     streamed_loss: float = 1.0,
     reference_loss: float = 1.0,
 ) -> None:
-    weights = Path("weights")
-    weights.mkdir(exist_ok=True)
-
     monkeypatch.setattr(module, "cuda_available", lambda: True)
     monkeypatch.setattr(module, "DEVICE", "cpu")
 
@@ -162,17 +159,6 @@ def install_measurement_stubs(
         module,
         "backward_once",
         lambda *args, **kwargs: next(backward_calls),
-    )
-
-    monkeypatch.setattr(
-        module,
-        "compare_gradients",
-        lambda *args, **kwargs: (
-            exact,
-            total,
-            0.0,
-            0.0,
-        ),
     )
 
     curve_calls = iter(
@@ -292,6 +278,17 @@ def test_run_measurement_rejects_non_matching_gradients(
         exact=0,
         total=1,
     )
+    backward_calls = iter(
+        [
+            (torch.tensor(1.0), {"lora_A": torch.ones(1)}),
+            (torch.tensor(1.0), {"lora_A": torch.full((1,), 2.0)}),
+        ]
+    )
+    monkeypatch.setattr(
+        module,
+        "backward_once",
+        lambda *args, **kwargs: next(backward_calls),
+    )
 
     args = make_args(tmp_path)
     args.weights = str(weights)
@@ -329,6 +326,121 @@ def test_run_measurement_rejects_mismatched_initial_losses(
         module.run_measurement(args)
 
 
+def test_compare_gradients_uses_streamed_values_and_requires_shared_parameters():
+    streamed = FakeModel()
+    reference = FakeModel()
+
+    exact, total, max_abs, max_rel = module.compare_gradients(
+        streamed,
+        reference,
+        {"lora_A": torch.tensor([1.0])},
+        {"lora_A": torch.tensor([2.0])},
+    )
+
+    assert (exact, total) == (0, 1)
+    assert max_abs == pytest.approx(1.0)
+    assert max_rel == pytest.approx(0.5)
+
+    class NamedParameter(torch.nn.Module):
+        def __init__(self, name):
+            super().__init__()
+            self.register_parameter(name, torch.nn.Parameter(torch.ones(1)))
+
+    with pytest.raises(ValueError, match="empty"):
+        module.compare_gradients(
+            NamedParameter("lora_left"),
+            NamedParameter("lora_right"),
+            {},
+            {},
+        )
+
+
+def test_compare_gradients_rejects_non_finite_streamed_values():
+    with pytest.raises(module.MeasurementInvalidError, match="streamed gradient"):
+        module.compare_gradients(
+            FakeModel(),
+            FakeModel(),
+            {"lora_A": torch.tensor([float("nan")])},
+            {"lora_A": torch.tensor([1.0])},
+        )
+
+
+def test_compare_gradients_rejects_different_gradient_sets():
+    with pytest.raises(RuntimeError, match="gradient sets differ"):
+        module.compare_gradients(
+            FakeModel(),
+            FakeModel(),
+            {"lora_A": torch.ones(1)},
+            {"other": torch.ones(1)},
+        )
+
+
+def test_train_curve_once_restores_initial_lora_state():
+    class CurveModel(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.lora_A = torch.nn.Parameter(torch.ones(1))
+
+        def forward(self, input_ids, labels):
+            return SimpleNamespace(loss=(self.lora_A * input_ids).sum())
+
+    model = CurveModel()
+    batches = [torch.ones(1), torch.ones(1)]
+    initial = {"lora_A": torch.ones(1)}
+
+    first = module.train_curve_once(model, batches, initial)
+    second = module.train_curve_once(model, batches, initial)
+
+    assert second == pytest.approx(first)
+
+
+def test_run_measurement_rejects_unpinned_stream(monkeypatch, tmp_path):
+    install_measurement_stubs(
+        monkeypatch,
+        streamed_curves=([1.0, 2.0], [1.0, 2.1]),
+        resident_curves=([1.0, 2.0], [1.0, 2.0]),
+    )
+    args = make_args(tmp_path)
+    (tmp_path / "weights").mkdir()
+    import soup_cli.utils.layer_stream_runtime as layer_runtime
+    monkeypatch.setattr(
+        layer_runtime,
+        "build_streamed_model",
+        lambda *args, **kwargs: (
+            FakeModel(),
+            SimpleNamespace(
+                pinned=False,
+                source=SimpleNamespace(nbytes=1),
+                close=lambda: None,
+            ),
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="pinned"):
+        module.run_measurement(args)
+
+
+def test_run_measurement_rejects_missing_meta_parameters(monkeypatch, tmp_path):
+    install_measurement_stubs(
+        monkeypatch,
+        streamed_curves=([1.0, 2.0], [1.0, 2.1]),
+        resident_curves=([1.0, 2.0], [1.0, 2.0]),
+    )
+    args = make_args(tmp_path)
+    (tmp_path / "weights").mkdir()
+    model = FakeModel()
+    model.meta_parameter = SimpleNamespace(is_meta=False)
+    import soup_cli.utils.layer_stream_runtime as layer_runtime
+    monkeypatch.setattr(
+        layer_runtime,
+        "build_streamed_model",
+        lambda *args, **kwargs: (model, FakeRuntime()),
+    )
+
+    with pytest.raises(RuntimeError, match="meta parameters"):
+        module.run_measurement(args)
+
+
 def test_main_executes_real_measurement_path(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -345,6 +457,20 @@ def test_main_executes_real_measurement_path(
     monkeypatch.setattr(module, "parse_args", lambda: args)
 
     assert module.main() == 0
+
+
+def test_main_returns_exit_3_for_invalid_measurements(monkeypatch):
+    args = argparse.Namespace(self_test=False)
+    monkeypatch.setattr(module, "parse_args", lambda: args)
+    monkeypatch.setattr(
+        module,
+        "run_measurement",
+        lambda _args: (_ for _ in ()).throw(
+            module.MeasurementInvalidError("non-finite measurement")
+        ),
+    )
+
+    assert module.main() == 3
 
 
 def test_run_measurement_restores_historical_runtime_control(

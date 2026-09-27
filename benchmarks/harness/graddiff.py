@@ -8,8 +8,10 @@ backward variant. The documented H100 observation was:
 - Qwen2.5-32B-Instruct NF4, bf16 compute
 - first backward: streamed vs resident LoRA gradients were 256/256 exact
 - streamed self-curve: not identical on the second run
-- resident self-curve identical: a deliberate reconstruction/control condition
-  used by this harness, not a claim about the recorded measurement
+- recorded resident self-curve: ``C resident self-identical: False``
+  Measurement 1. This harness deliberately rebuilds/restores the adapter
+  state for its resident self-curve control, so its resident result is a
+  harness-owned reconstruction choice rather than a causal explanation.
 
 The historical record is the source of truth for the expected pattern. The
 reconstruction choices below intentionally mirror the original experiment's
@@ -347,7 +349,12 @@ def historical_pattern_reproduced(
     streamed_equal: bool,
     resident_equal: bool,
 ) -> bool:
-    """Return the historical GRADDIFF verdict for the recorded control pattern."""
+    """Apply the conservative reconstruction gate to the recorded pattern.
+
+    ``exact == total`` is a harness-owned validation requirement. The
+    published record reported varying first-backward exactness across runs;
+    this gate must not be read as claiming that every recorded run was exact.
+    """
 
     return (
         exact == total
@@ -695,7 +702,8 @@ def run_measurement(args: argparse.Namespace) -> int:
             "ERROR: historical GRADDIFF pattern was not reproduced"
         )
         print(
-            "Expected: all initial gradients exact, "
+            "Expected for this conservative reconstruction gate: all initial "
+            "gradients exact, "
             "streamed self-curve non-identical, "
             "resident self-curve identical"
         )
@@ -723,6 +731,11 @@ def main() -> int:
             return run_self_test()
 
         return run_measurement(args)
+    except MeasurementInvalidError as exc:
+        print(
+            f"ERROR: graddiff.py invalid measurement: {exc}"
+        )
+        return 3
     except Exception as exc:
         print(
             f"ERROR: graddiff.py failed: "
