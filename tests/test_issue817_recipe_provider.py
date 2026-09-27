@@ -551,3 +551,88 @@ def test_provider_failure_endpoint_label_omits_credentials_path_and_query() -> N
         )
         == "http://localhost:11434"
     )
+
+
+@pytest.mark.parametrize("provider_name", ["anthropic", "Anthropic", "ANTHROPIC"])
+def test_provider_failure_endpoint_label_ignores_anthropic_base_url(
+    provider_name: str,
+) -> None:
+    """#1340: Anthropic ignores --judge-base-url / --base-url entirely (API key
+    from env var only, make_judge_provider_fn always posts to the same URL),
+    so a failure message built from the given base_url named a host that was
+    never contacted. The label must name the endpoint actually called instead,
+    whatever case or base_url the caller passed."""
+    from soup_cli.utils.recipe_run import _provider_endpoint_label
+
+    assert (
+        _provider_endpoint_label(provider_name, "http://127.0.0.1:9")
+        == "https://api.anthropic.com"
+    )
+
+
+def test_provider_failure_endpoint_label_anthropic_without_base_url_is_unchanged() -> None:
+    """Control: the no-base-url case already named the right thing before
+    #1340; the fix must not regress it to something else."""
+    from soup_cli.utils.recipe_run import _provider_endpoint_label
+
+    assert _provider_endpoint_label("anthropic", None) == "https://api.anthropic.com"
+
+
+@pytest.mark.parametrize(
+    ("provider_name", "base_url"),
+    [("ollama", "http://127.0.0.1:9"), ("vllm", "http://127.0.0.1:9")],
+)
+def test_provider_failure_endpoint_label_non_anthropic_still_uses_base_url(
+    provider_name: str, base_url: str
+) -> None:
+    """Control: only Anthropic ignores base_url -- ollama/vllm callers do
+    pass it through to httpx.post, so their failure messages must keep
+    naming the endpoint the caller actually gave."""
+    from soup_cli.utils.recipe_run import _provider_endpoint_label
+
+    assert _provider_endpoint_label(provider_name, base_url) == base_url
+
+
+def test_recipe_cli_anthropic_failure_names_the_real_endpoint_not_base_url(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """#1340: soup data recipe --provider anthropic --base-url <x> failed with
+    a message and a .checkpoint.json['failed_reason'] naming <x>, even though
+    every call actually went to https://api.anthropic.com."""
+    import httpx
+
+    from soup_cli.cli import app
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "synthetic-test-value")
+
+    class _FailingResponse:
+        status_code = 500
+
+        def json(self) -> dict:
+            return {"error": "stub"}
+
+    monkeypatch.setattr(httpx, "post", lambda *_a, **_k: _FailingResponse())
+    recipe_path = _write_single_provider_recipe(tmp_path, kind="llm_text")
+    given_base_url = "http://127.0.0.1:9"
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "data", "recipe", str(recipe_path),
+            "--execute", "--output", "out",
+            "--provider", "anthropic",
+            "--base-url", given_base_url,
+        ],
+    )
+
+    output = _terminal_text(result)
+    assert result.exit_code == 1, (output, repr(result.exception))
+    assert "all 2 provider calls failed" in output
+    assert "https://api.anthropic.com" in output
+    assert given_base_url not in output
+    checkpoint = json.loads((tmp_path / "out" / ".checkpoint.json").read_text())
+    assert checkpoint["status"] == "failed"
+    assert "https://api.anthropic.com" in checkpoint["failed_reason"]
+    assert given_base_url not in checkpoint["failed_reason"]
