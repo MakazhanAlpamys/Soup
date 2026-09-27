@@ -222,7 +222,7 @@ class TestMemorizationUnicode:
             score = score_memorization(
                 rows, gen, prefix_fraction=0.4, echo_threshold=0.5, tokenizer="gpt2"
             )
-        except OSError as exc:
+        except (OSError, ValueError) as exc:
             pytest.skip(f"gpt2 tokenizer unavailable: {exc}")
         assert score.verdict == "OK"
 
@@ -236,7 +236,7 @@ class TestMemorizationUnicode:
             score = score_memorization(
                 rows, gen, prefix_fraction=0.4, echo_threshold=0.5, tokenizer="gpt2"
             )
-        except OSError as exc:
+        except (OSError, ValueError) as exc:
             pytest.skip(f"gpt2 tokenizer unavailable: {exc}")
         assert score.verdict == "MAJOR"
 
@@ -268,8 +268,17 @@ class TestTokenF1Unicode:
         assert token_f1("", "x") == 0.0
 
 
-def test_long_combining_mark_run_tokenizes_in_linear_time() -> None:
-    text = "a" + "́" * 50_000 + "̖" * 50_000
+@pytest.mark.parametrize(
+    "text",
+    [
+        "a" + "\u0301" * 50_000 + "\u0316" * 50_000,
+        # U+0F73 has combining class 0 but decomposes into two non-starters,
+        # so only a category-based filter bounds this run.
+        "\u0f40" + "\u0f73\u0f71" * 50_000,
+    ],
+    ids=["reverse_ordered_marks", "tibetan_decomposing_sign"],
+)
+def test_long_mark_runs_tokenize_in_linear_time(text: str) -> None:
     start = time.perf_counter()
     tokenize(text)
     token_f1(text, text)
@@ -290,12 +299,20 @@ def test_token_f1_english_scores_are_unchanged(pred: str, gold: str, expected: f
     assert token_f1(pred, gold) == pytest.approx(expected)
 
 
+def test_english_joiners_preserved_in_tokenize() -> None:
+    assert tokenize("state-of-the-art snake_case gpt-4") == [
+        "state-of-the-art",
+        "snake_case",
+        "gpt-4",
+    ]
+
+
 def test_composed_and_decomposed_accents_match() -> None:
-    assert token_f1("café", "café") == pytest.approx(1.0)
+    assert token_f1("café", "cafe\u0301") == pytest.approx(1.0)
 
 
 def test_emoji_variation_selector_does_not_produce_token() -> None:
-    assert tokenize("❤️") == []
+    assert tokenize("\u2764\ufe0f") == []
 
 
 def test_forgetting_reads_major_when_a_greek_adapter_answers_dots() -> None:
