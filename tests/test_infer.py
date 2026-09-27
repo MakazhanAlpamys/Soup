@@ -943,7 +943,11 @@ class TestGenerateBatch:
                 return_tensors=None,
             ):
                 rows = [
-                    [ord(text[-1])]
+                    [1] * len(text)
+                    + [
+                        1000
+                        + ord(text.rsplit("say ", 1)[1][0])
+                    ]
                     for text in (texts if isinstance(texts, list) else [texts])
                 ]
                 width = max(len(row) for row in rows)
@@ -951,19 +955,31 @@ class TestGenerateBatch:
                     "input_ids": torch.tensor(
                         [row + [self.pad_token_id] * (width - len(row)) for row in rows]
                     ),
-                    "attention_mask": torch.ones(
-                        (len(rows), width), dtype=torch.long
+                    "attention_mask": torch.tensor(
+                        [
+                            [1] * len(row) + [0] * (width - len(row))
+                            for row in rows
+                        ],
+                        dtype=torch.long,
                     ),
                 }
 
             def decode(self, token_ids, skip_special_tokens=True):
-                return chr(int(token_ids[-1]))
+                content = [
+                    int(token)
+                    for token in token_ids
+                    if int(token) != self.pad_token_id
+                ]
+                return chr(content[-1])
 
         class PairingModel:
             device = torch.device("cpu")
 
             def generate(self, input_ids, attention_mask, **kwargs):
-                responses = (input_ids[:, -1] + 32).unsqueeze(1)
+                last_prompt = torch.stack(
+                    [row[mask.bool()].max() for row, mask in zip(input_ids, attention_mask)]
+                )
+                responses = (last_prompt - 1000 - 32).unsqueeze(1)
                 return torch.cat([input_ids, responses], dim=1)
 
         model = PairingModel()
