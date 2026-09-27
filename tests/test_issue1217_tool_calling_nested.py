@@ -342,6 +342,53 @@ def test_tool_calling_is_still_detected_before_audio():
     assert detect_format([row]) == "tool-calling"
 
 
+def test_tools_as_a_json_string_convert_like_a_list(tmp_path):
+    row = {**_OPENAI_ROW, "tools": json.dumps([_WEATHER_TOOL])}
+    path = tmp_path / "agent.jsonl"
+    _write_jsonl(path, [row])
+
+    assert format_to_messages(row, "tool-calling") == format_to_messages(
+        _OPENAI_ROW, "tool-calling"
+    )
+    assert len(_loaded_rows(str(path), "auto")) == 1
+
+
+def test_tools_as_a_string_that_is_not_json_drops_the_row():
+    row = {**_OPENAI_ROW, "tools": "{not json"}
+
+    converted, why = format_to_messages_with_reason(row, "tool-calling")
+
+    assert converted is None
+    assert "'tools' is a string that is not JSON" in why
+
+
+# --- Null content is only allowed on a call-only assistant turn --------------
+
+
+# A call-only turn with null content converting to "" is pinned by
+# test_the_openai_fine_tuning_shape above.
+
+
+@pytest.mark.parametrize(
+    "turn",
+    [
+        {"role": "assistant", "content": None, "tool_calls": []},
+        {"role": "assistant", "content": None},
+        {"role": "user", "content": None},
+        {"role": "tool", "tool_call_id": "call_0", "content": None},
+    ],
+    ids=["assistant-empty-calls", "assistant-no-calls", "user", "tool"],
+)
+def test_null_content_outside_a_call_turn_drops_the_row(turn):
+    # A template printing {{ message.content }} would render the literal "None".
+    row = {"messages": [{"role": "user", "content": "q"}, turn]}
+
+    converted, why = format_to_messages_with_reason(row, "tool-calling")
+
+    assert converted is None
+    assert f"tool-calling {turn['role']} content must be a string" in why
+
+
 # --- Malformed nested calls are still dropped, with a reason -----------------
 
 

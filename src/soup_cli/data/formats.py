@@ -461,6 +461,15 @@ def _convert_tool_calling(row: dict) -> dict:
     by the outer handler.
     """
     tools = row.get("tools")
+    if isinstance(tools, str):
+        # Some exported datasets store the schema list as a JSON string, since
+        # per-tool parameter schemas differ from row to row.
+        try:
+            tools = json.loads(tools)
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                f"tool-calling 'tools' is a string that is not JSON: {exc}"
+            ) from exc
     if tools is not None:
         if not isinstance(tools, list):
             raise ValueError("tool-calling 'tools' must be a list")
@@ -507,15 +516,22 @@ def _convert_tool_calling(row: dict) -> dict:
             # Merge user system message into our synthesized system content
             messages[0]["content"] = msg.get("content", "") + "\n\n" + messages[0]["content"]
             continue
-        out = {"role": role, "content": msg.get("content", "")}
+        content = msg.get("content", "")
+        calls = []
         if role == "assistant" and msg.get("tool_calls") is not None:
             calls = _normalize_tool_calls(msg["tool_calls"], "messages.tool_calls")
-            if calls:
-                has_nested_calls = True
-                out["tool_calls"] = calls
-                # The OpenAI shape writes "content": null on a call-only turn.
-                if out["content"] is None:
-                    out["content"] = ""
+        if calls and content is None:
+            # The OpenAI shape writes "content": null on a call-only turn.
+            content = ""
+        # Any other null content would render as the literal text "None" in a
+        # chat template, so the row is dropped, as the other converters do.
+        out = {
+            "role": role,
+            "content": _require_str_content(content, f"tool-calling {role} content"),
+        }
+        if calls:
+            has_nested_calls = True
+            out["tool_calls"] = calls
         elif role == "tool" and msg.get("tool_call_id") is not None:
             if not isinstance(msg["tool_call_id"], str):
                 raise ValueError("tool-calling 'tool_call_id' must be a string")
