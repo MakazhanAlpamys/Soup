@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from pathlib import Path
 
 from rich.console import Console
@@ -153,6 +154,28 @@ def _load_txt(path: Path) -> list[dict]:
     return [{"text": line} for line in lines]
 
 
+@dataclass
+class LoadOutcome:
+    """What the most recent :func:`load_dataset` call converted (#1217).
+
+    ``fmt`` is the format the rows were converted as (resolved, never
+    ``"auto"``); ``first_drop`` is ``(format, row index, reason, source)`` for
+    the first row a converter dropped. ``soup train`` reads it to say why a
+    load ended with zero training rows instead of printing "Ready to train".
+    """
+
+    fmt: str | None = None
+    first_drop: tuple[str, int, str, str | None] | None = None
+
+
+_last_load = LoadOutcome()
+
+
+def last_load_outcome() -> LoadOutcome:
+    """The :class:`LoadOutcome` of the most recent :func:`load_dataset` call."""
+    return _last_load
+
+
 def _format_rows(
     raw_data: list[dict],
     fmt: str,
@@ -186,6 +209,10 @@ def _format_rows(
         formatted.append(normalized)
     if dropped and first_drop is not None:
         _report_dropped_rows(dropped, len(raw_data), fmt, first_drop, source)
+        if _last_load.first_drop is None:
+            _last_load.first_drop = (fmt, first_drop[0], first_drop[1], source)
+    if _last_load.fmt is None:
+        _last_load.fmt = fmt
     return formatted
 
 
@@ -376,6 +403,9 @@ def load_dataset(
       consistently whenever data.train is a list, so this branch only has
       to pick which loader — not re-validate the shape.
     """
+    global _last_load
+    _last_load = LoadOutcome()
+
     train_path = data_config.train
 
     if isinstance(train_path, list):
