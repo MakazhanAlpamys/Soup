@@ -101,7 +101,7 @@ def score_memorization(
         if tok is not None:
             sub = subword_tokens(tok, value)
             if len(sub) >= 2:
-                return [f"{a}_{b}" for a, b in zip(sub[:-1], sub[1:])]
+                return list(zip(sub[:-1], sub[1:]))
             return sub
         return tokenize(value)
 

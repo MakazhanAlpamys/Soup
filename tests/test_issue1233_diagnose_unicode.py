@@ -9,9 +9,12 @@ collapse, memorization, and forgetting probes.
 
 from __future__ import annotations
 
+import time
+
 import pytest
 
 from soup_cli.utils._eval_text import tokenize
+from soup_cli.utils.diagnose.forgetting import score_forgetting
 from soup_cli.utils.diagnose.memorization import score_memorization
 from soup_cli.utils.diagnose.mode_collapse import score_mode_collapse
 from soup_cli.utils.live_eval import token_f1
@@ -215,9 +218,12 @@ class TestMemorizationUnicode:
         ]
         # Completely unrelated Greek sentence
         gen = lambda p: "Ο καιρός σήμερα στην Αθήνα είναι πολύ καλός και ηλιόλουστος"  # noqa: E731
-        score = score_memorization(
-            rows, gen, prefix_fraction=0.4, echo_threshold=0.5, tokenizer="gpt2"
-        )
+        try:
+            score = score_memorization(
+                rows, gen, prefix_fraction=0.4, echo_threshold=0.5, tokenizer="gpt2"
+            )
+        except OSError as exc:
+            pytest.skip(f"gpt2 tokenizer unavailable: {exc}")
         assert score.verdict == "OK"
 
     def test_tokenizer_aware_greek_catches_echo(self) -> None:
@@ -226,9 +232,12 @@ class TestMemorizationUnicode:
         ]
         # Generator echoes Greek suffix
         gen = lambda p: "πηδά πάνω από σαράντα δύο σκυλιά στο χωράφι"  # noqa: E731
-        score = score_memorization(
-            rows, gen, prefix_fraction=0.4, echo_threshold=0.5, tokenizer="gpt2"
-        )
+        try:
+            score = score_memorization(
+                rows, gen, prefix_fraction=0.4, echo_threshold=0.5, tokenizer="gpt2"
+            )
+        except OSError as exc:
+            pytest.skip(f"gpt2 tokenizer unavailable: {exc}")
         assert score.verdict == "MAJOR"
 
 
@@ -257,3 +266,117 @@ class TestTokenF1Unicode:
         assert token_f1("hello world", "hello world") == pytest.approx(1.0)
         assert token_f1("foo", "bar") == 0.0
         assert token_f1("", "x") == 0.0
+
+
+def test_long_combining_mark_run_tokenizes_in_linear_time() -> None:
+    text = "a" + "́" * 50_000 + "̖" * 50_000
+    start = time.perf_counter()
+    tokenize(text)
+    token_f1(text, text)
+    assert time.perf_counter() - start < 2.0
+
+
+@pytest.mark.parametrize(
+    "pred,gold,expected",
+    [
+        ("state of the art model", "state-of-the-art model", 1.0),
+        ("GPT 4 is a model", "GPT-4 is a model", 1.0),
+        ("the snake case name", "the snake_case name", 1.0),
+        ("well known fact", "well-known fact", 1.0),
+        ("It costs 42 dollars", "It costs 43 dollars", 0.75),
+    ],
+)
+def test_token_f1_english_scores_are_unchanged(pred: str, gold: str, expected: float) -> None:
+    assert token_f1(pred, gold) == pytest.approx(expected)
+
+
+def test_composed_and_decomposed_accents_match() -> None:
+    assert token_f1("café", "café") == pytest.approx(1.0)
+
+
+def test_emoji_variation_selector_does_not_produce_token() -> None:
+    assert tokenize("❤️") == []
+
+
+def test_forgetting_reads_major_when_a_greek_adapter_answers_dots() -> None:
+    targets = [
+        "Η πρωτεύουσα είναι η Αθήνα και το λιμάνι είναι ο Πειραιάς",
+        "Μία ώρα έχει εξήντα λεπτά και ένα λεπτό εξήντα δευτερόλεπτα",
+    ]
+    base = sum(token_f1(t, t) for t in targets) / len(targets)
+    adapter = sum(token_f1("...", t) for t in targets) / len(targets)
+    assert score_forgetting({"heldout": base}, {"heldout": adapter}).verdict == "MAJOR"
+
+
+SCRIPTS = {
+    "greek": [
+        "Η πρωτεύουσα είναι η Αθήνα και το λιμάνι είναι ο Πειραιάς",
+        "Μία ώρα έχει εξήντα λεπτά και ένα λεπτό εξήντα δευτερόλεπτα",
+        "Η μπανάνα είναι κίτρινη και έχει κάλιο",
+        "Ο ουρανός είναι μπλε λόγω της σκέδασης του φωτός",
+    ],
+    "hebrew": [
+        "ירושלים היא בירת ישראל ועיר עתיקה מאוד",
+        "בשעה אחת יש שישים דקות ובדקה שישים שניות",
+        "הבננה צהובה ומכילה הרבה אשלגן",
+        "השמיים כחולים בגלל פיזור של אור השמש",
+    ],
+    "hindi": [
+        "नई दिल्ली भारत की राजधानी और बड़ा शहर है",
+        "एक घंटे में साठ मिनट और एक मिनट में साठ सेकंड होते हैं",
+        "केला पीला होता है और उसमें पोटैशियम होता है",
+        "आकाश नीला दिखता है क्योंकि सूर्य का प्रकाश बिखरता है",
+    ],
+    "japanese": [
+        "東京は日本の首都で大きな港もあります",
+        "一時間は六十分で一分は六十秒です",
+        "バナナは黄色くてカリウムを含みます",
+        "空が青いのは太陽の光が散乱するからです",
+    ],
+    "korean": [
+        "서울은 한국의 수도이며 큰 항구가 있습니다",
+        "한 시간은 육십 분이고 일 분은 육십 초입니다",
+        "바나나는 노랗고 칼륨이 들어 있습니다",
+        "하늘이 파란 이유는 햇빛이 산란되기 때문입니다",
+    ],
+    "thai": [
+        "กรุงเทพเป็นเมืองหลวงของประเทศไทย",
+        "หนึ่งชั่วโมงมีหกสิบนาที",
+        "กล้วยมีสีเหลืองและมีโพแทสเซียม",
+        "ท้องฟ้าเป็นสีฟ้าเพราะแสงอาทิตย์กระเจิง",
+    ],
+    "vietnamese": [
+        "Hà Nội là thủ đô của Việt Nam và có nhiều hồ",
+        "Một giờ có sáu mươi phút và một phút có sáu mươi giây",
+        "Chuối có màu vàng và chứa nhiều kali",
+        "Bầu trời màu xanh vì ánh nắng bị tán xạ",
+    ],
+    "turkish": [
+        "İstanbul Türkiye'nin en büyük şehri ve önemli bir limandır",
+        "Bir saatte altmış dakika ve bir dakikada altmış saniye vardır",
+        "Muz sarıdır ve içinde bol potasyum bulunur",
+        "Gökyüzü güneş ışığı saçıldığı için mavi görünür",
+    ],
+    "french": [
+        "Ça coûte très cher à Zürich et le port est loin",
+        "Une heure compte soixante minutes et une minute soixante secondes",
+        "La banane est jaune et contient du potassium",
+        "Le ciel paraît bleu parce que la lumière est diffusée",
+    ],
+}
+
+
+@pytest.mark.parametrize("script", sorted(SCRIPTS))
+def test_probes_discriminate_in_both_directions(script: str) -> None:
+    answers = SCRIPTS[script]
+    diverse = score_mode_collapse(["p"], lambda p, k: answers[:k], k=4)
+    same = score_mode_collapse(["p"], lambda p, k: [answers[0]] * k, k=4)
+    assert (diverse.verdict, same.verdict) == ("OK", "MAJOR"), (diverse, same)
+
+    row = answers[1]
+    unrelated = score_memorization([{"text": row}], lambda prefix: answers[3])
+    echo = score_memorization(
+        [{"text": row}],
+        lambda prefix: row[len(prefix):].strip() if row.startswith(prefix) else row,
+    )
+    assert (unrelated.verdict, echo.verdict) == ("OK", "MAJOR"), (unrelated, echo)

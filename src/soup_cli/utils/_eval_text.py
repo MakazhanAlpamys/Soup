@@ -64,6 +64,23 @@ def row_text(row: Mapping[str, object]) -> str:
     return ""
 
 
+_MAX_MARK_RUN = 30  # UAX #15 stream-safe bound; NFC reordering is quadratic in a mark run
+
+
+def _stream_safe(text: str) -> str:
+    out: List[str] = []
+    run = 0
+    for ch in text:
+        if unicodedata.category(ch)[0] == "M":
+            run += 1
+            if run > _MAX_MARK_RUN:
+                continue
+        else:
+            run = 0
+        out.append(ch)
+    return "".join(out)
+
+
 def tokenize(text: str, *, filter_stopwords: bool = True) -> List[str]:
     """Tokenise to lowercase word/subword runs across Latin and non-Latin scripts.
 
@@ -78,7 +95,7 @@ def tokenize(text: str, *, filter_stopwords: bool = True) -> List[str]:
     if not text or not isinstance(text, str):
         return []
     norm = (
-        unicodedata.normalize("NFC", text)
+        unicodedata.normalize("NFC", _stream_safe(text))
         .replace("İ", "i")
         .lower()
         .replace("\u0307", "")
@@ -100,7 +117,7 @@ def tokenize(text: str, *, filter_stopwords: bool = True) -> List[str]:
     result: List[str] = []
     for tok in raw_tokens:
         clean = tok.strip("-_")
-        if not clean:
+        if not clean or all(unicodedata.category(c)[0] == "M" for c in clean):
             continue
         if any(_is_no_space(c) for c in clean):
             if len(clean) == 1:

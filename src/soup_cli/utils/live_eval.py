@@ -55,8 +55,17 @@ def token_f1(predicted: str, target: str) -> float:
     """
     from soup_cli.utils._eval_text import tokenize
 
-    pred = tokenize(predicted, filter_stopwords=False)
-    gold = tokenize(target, filter_stopwords=False)
+    def _words(text: str) -> List[str]:
+        # Joiners split, as the old [A-Za-z0-9]+ did: "GPT-4" == "GPT 4".
+        return [
+            part
+            for token in tokenize(text, filter_stopwords=False)
+            for part in token.replace("_", "-").split("-")
+            if part
+        ]
+
+    pred = _words(predicted)
+    gold = _words(target)
     if not pred or not gold:
         return 0.0
     counts: Dict[str, int] = {}

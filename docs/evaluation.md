@@ -321,7 +321,7 @@ soup diagnose my-run-id --output diag.json --attach-to-registry abc123
 
 **Live runners (v0.71.7).** With `--base-model` the six probes run against the loaded model
 (+ optional `--adapter` LoRA path, `--dataset` for the forgetting / format / memorization probes,
-`--tokenizer` for a sub-word memorization variant) instead of emitting neutral OK. `refusal` uses
+`--tokenizer` for a sub-word bigram memorization variant) instead of emitting neutral OK. `refusal` uses
 a built-in probe set; `format` only fires when the dataset's own targets look like JSON;
 `contamination` stays neutral unless a benchmark corpus is supplied. Validated on SmolLM2-135M.
 
