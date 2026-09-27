@@ -513,6 +513,14 @@ GitHub Actions runs on every push and PR:
   `transformers>=4.36.0,<5.0.0` in `pyproject.toml`; `transformers==4.36.0`
   cannot resolve against the declared `trl` range, so this job does not rewrite
   that pin.
+- **benchmark** (`.github/workflows/codspeed.yml`, #1065): a CodSpeed
+  regression benchmark, its own workflow and not part of the matrix above.
+  The job is **skipped** everywhere until the repository variable
+  `CODSPEED_ENABLED` is `true` (set once the CodSpeed GitHub App is installed),
+  and always on fork PRs — GitHub does not grant a `pull_request` run from a
+  fork an OIDC token, so the upload could not authenticate. Since most
+  contributions here are fork PRs, expect "skipped" on yours; it is not a
+  required check and blocks nothing.
 
 See `.github/workflows/ci.yml`.
 

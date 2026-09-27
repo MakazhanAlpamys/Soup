@@ -84,9 +84,11 @@ def validate_qat_config(
     errors = []
 
     if backend == "unsloth":
+        # Reached by `quantization_aware: fp8`; `true` is refused at config
+        # load (#1222), so the fix is the backend alone.
         errors.append(
             "QAT is not compatible with the unsloth backend. "
-            "Use backend: transformers with quantization_aware: true."
+            "Use backend: transformers."
         )
 
     if quantization not in ("4bit", "none"):
