@@ -209,10 +209,72 @@ class TestRealTrainerBetaZero:
         assert not loss.isnan()
 
 
+class TestTheRealTrainerComputesTheKlFreeLoss:
+    """Acceptance 2 on the real trainer: at grpo_beta 0 every variant computes the
+    KL-free loss itself (no #159 fallback to trl's stock loss), bit for bit."""
+
+    @pytest.mark.parametrize("variant", ["gspo", "dapo", "dr_grpo", "bnpo", "two_sided", "rft"])
+    def test_loss_and_gradient_equal_the_kl_free_loss(self, tmp_path, monkeypatch, variant):
+        for mod in ("torch", "transformers", "peft", "trl", "datasets"):
+            pytest.importorskip(mod)
+        import torch
+
+        from tests.test_issue1232_grpo_variant_kl import (
+            _build_real,
+            _loss_and_grad,
+            _pre_1232_loss,
+        )
+
+        trainer = _build_real(tmp_path, monkeypatch, variant, grpo_beta=0.0).trainer
+        torch.manual_seed(0)
+        inputs = trainer._prepare_inputs(next(iter(trainer.get_train_dataloader())))
+        assert inputs.get("ref_per_token_logps") is None
+        rows = inputs["advantages"].shape[0]
+        inputs["advantages"] = torch.tensor([1.0, -1.0] * (rows // 2))
+        trainer.model.train()
+        trainer.current_gradient_accumulation_steps = 1
+
+        loss, grad = _loss_and_grad(trainer, lambda: trainer._compute_loss(trainer.model, inputs))
+        assert not trainer._soup_fallback_warned, f"{variant}: fell back to trl's stock loss"
+
+        def kl_free():
+            input_ids = torch.cat([inputs["prompt_ids"], inputs["completion_ids"]], dim=1)
+            attention_mask = torch.cat([inputs["prompt_mask"], inputs["completion_mask"]], dim=1)
+            logp, _ = trainer._get_per_token_logps_and_entropies(
+                trainer.model,
+                input_ids,
+                attention_mask,
+                inputs["completion_ids"].size(1),
+                compute_entropy=False,
+            )
+            old = inputs.get("old_per_token_logps")
+            return _pre_1232_loss(
+                torch,
+                variant,
+                logp_new=logp,
+                logp_old=logp.detach() if old is None else old,
+                advantages=inputs["advantages"],
+                delta=getattr(trainer, "_soup_grpo_delta", None),
+                completion_mask=inputs["completion_mask"],
+            )
+
+        expected, expected_grad = _loss_and_grad(trainer, kl_free)
+        assert torch.equal(loss, expected), (variant, loss.item(), expected.item())
+        assert torch.equal(grad, expected_grad), f"{variant}: gradient is not the KL-free one"
+
+
 class TestDocumentationMentionsKlFree:
-    def test_training_docs_mention_grpo_beta_zero(self):
-        docs_path = Path(__file__).parents[1] / "docs" / "training.md"
-        content = docs_path.read_text(encoding="utf-8")
-        assert "grpo_beta: 0" in content
-        assert "KL-free" in content
-        assert "1247" in content
+    def test_training_docs_say_how_to_run_a_kl_free_recipe(self):
+        docs = Path(__file__).parents[1] / "docs" / "training.md"
+        content = " ".join(docs.read_text(encoding="utf-8").split())
+        assert "`grpo_beta` must be greater than zero" not in content
+        assert "Set `grpo_beta: 0` for a KL-free run" in content
+
+
+@pytest.mark.parametrize("spelling", ["inf", "Infinity", "1e400", ".inf", ".nan", "'nan'"])
+def test_grpo_beta_non_finite_yaml_spellings_rejected(spelling):
+    with pytest.raises(ValueError, match="grpo_beta"):
+        load_config_from_string(
+            "base: test-model\ntask: grpo\ndata:\n  train: dummy.jsonl\n"
+            f"training:\n  grpo_beta: {spelling}\n"
+        )

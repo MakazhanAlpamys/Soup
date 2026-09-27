@@ -1387,8 +1387,9 @@ class TrainingConfig(BaseModel):
     grpo_beta: float = Field(
         default=0.1,
         ge=0.0,
+        allow_inf_nan=False,
         description=(
-            "GRPO beta — KL penalty coefficient (default 0.1). Set to 0 to "
+            "GRPO beta - KL penalty coefficient (default 0.1). Set to 0 to "
             "disable the KL penalty entirely (KL-free recipes like DAPO and "
             "Dr. GRPO, #1247)."
         ),
@@ -1403,8 +1404,6 @@ class TrainingConfig(BaseModel):
             fval = float(v)
             if math.isnan(fval) or math.isinf(fval):
                 raise ValueError("grpo_beta must be finite")
-            if fval < 0.0:
-                raise ValueError("grpo_beta must be >= 0")
         return v
     num_generations: int = Field(
         default=4, ge=2, description="Number of generations per prompt for GRPO"
@@ -4352,7 +4351,7 @@ def _customized_reward_hack_tunables(tcfg: Any) -> list[str]:
     return offenders
 
 
-def _validate_reward_hack_controller(tcfg: Any) -> None:
+def _validate_reward_hack_controller(tcfg: Any, task: str = "grpo") -> None:
     """Validate the mitigation-controller config (only when a mode is active).
 
     Numeric consistency (β floor < ceil, release < trip band), the signal
@@ -4406,14 +4405,15 @@ def _validate_reward_hack_controller(tcfg: Any) -> None:
                 "exclusive with ref_model_ema_alpha (both drive the KL/ref "
                 "dynamics); pick one"
             )
-        beta_val = getattr(tcfg, "grpo_beta", None)
-        if beta_val is not None and not isinstance(beta_val, bool) and float(beta_val) == 0.0:
-            raise ValueError(
-                "grpo_beta: 0 is mutually exclusive with "
-                f"reward_hack_mitigation={tcfg.reward_hack_mitigation!r} "
-                "(the mitigation controller requires a positive beta to steer); "
-                "use grpo_beta > 0 or disable mitigation"
-            )
+        if task == "grpo":
+            beta_val = getattr(tcfg, "grpo_beta", None)
+            if beta_val is not None and not isinstance(beta_val, bool) and float(beta_val) == 0.0:
+                raise ValueError(
+                    "grpo_beta: 0 is mutually exclusive with "
+                    f"reward_hack_mitigation={tcfg.reward_hack_mitigation!r} "
+                    "(the mitigation controller requires a positive beta to steer); "
+                    "use grpo_beta > 0 or disable mitigation"
+                )
     # v0.71.26 Stage 2 — PID / rollback tunables require pid_lagrangian mode.
     if tcfg.reward_hack_mitigation != "pid_lagrangian":
         stage2_offenders = [
@@ -7272,7 +7272,7 @@ class SoupConfig(BaseModel):
         # Controller config (numeric bounds, signal allowlist, β-schedule
         # mutual exclusion) only when a mode is active.
         if mitigation != "off":
-            _validate_reward_hack_controller(tcfg)
+            _validate_reward_hack_controller(tcfg, task=self.task)
         return self
 
     @model_validator(mode="after")

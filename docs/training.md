@@ -1161,7 +1161,7 @@ data:
 training:
   epochs: 3
   lr: 1e-5
-  grpo_beta: 0.1
+  grpo_beta: 0.1  # KL penalty; 0 = KL-free (DAPO / Dr. GRPO)
   num_generations: 4
   reward_fn: accuracy   # or 'format', or path to custom .py
   lora:
