@@ -358,9 +358,20 @@ def model_size_from_name(model_name: str) -> float:
             return 141.0
         return n_exp * exp_sz
 
-    # Strip active-parameter tokens like "-a22b", "-a3b", "-a17b" (e.g. Qwen3-235B-A22B
-    # or Qwen3.5-35B-A3B) so the total-parameter token is parsed rather than the
-    # active-parameter count (#1198).
+    # Llama 4 names carry the ACTIVE count and the expert count ("17B-16E"), so the
+    # size token is not the total (#1198). Known totals first; otherwise active x
+    # experts, an over-estimate, which is the safe direction for this gate.
+    llama4_totals = {(17.0, 16): 109.0, (17.0, 128): 400.0}
+    active_experts = re.search(
+        r"(?<![a-z0-9.])(\d+(?:\.\d+)?)b-(\d+)e(?![a-z0-9])", name_lower
+    )
+    if active_experts:
+        active, experts = float(active_experts.group(1)), int(active_experts.group(2))
+        return llama4_totals.get((active, experts), active * experts)
+
+    # Strip active-parameter tokens with separator spellings (e.g. "-a-22b",
+    # "_act_22b") so total parameters are parsed rather than active parameters
+    # if the active count appears earlier or uses hyphenated separators (#1198).
     cleaned = re.sub(r"[-_]a(?:ct(?:ive)?)?[-_]?\d+(?:\.\d+)?b(?![a-z0-9])", "", name_lower)
 
     # Parse total parameter size token in billions (e.g. 72b, 32b, 14b, 405b, 4b, 1.7b).

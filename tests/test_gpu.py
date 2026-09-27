@@ -22,7 +22,7 @@ def test_model_size_detection():
     assert model_size_from_name("mistralai/Mixtral-8x22B-v0.1") == 141.0
     # #1198: Boundary-safe regex avoids substring false matches
     assert model_size_from_name("meta-llama/Llama-3.2-11B-Vision-Instruct") == 11
-    assert model_size_from_name("meta-llama/Llama-4-Scout-17B-16E-Instruct") == 17
+    assert model_size_from_name("meta-llama/Llama-4-Scout-17B-16E-Instruct") == 109
     assert model_size_from_name("Qwen/Qwen3.5-27B") == 27
     assert model_size_from_name("Qwen/Qwen3.5-0.8B") == 0.8
 
