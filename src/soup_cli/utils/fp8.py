@@ -279,7 +279,7 @@ def apply_fp8_training(
     try:
         config = Float8LinearConfig.from_recipe_name(recipe)
         convert_to_float8_training(model, config=config)
-    except (RuntimeError, ValueError) as exc:
+    except Exception as exc:  # noqa: BLE001 — in-place mutation honesty
         raise RuntimeError(
             "quantization_aware=fp8: the float8 conversion failed and the model may "
             "be partly converted, so the run stops instead of training without FP8 "

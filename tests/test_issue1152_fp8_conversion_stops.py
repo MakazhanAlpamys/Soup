@@ -145,3 +145,33 @@ class TestTheSuccessfulPathIsUnchanged:
 
         assert applied["fp8"] is True and applied["fp8_attention"] is True
         assert "FP8 attention enabled (4 projections)" in out.getvalue()
+
+
+class TestEveryConversionErrorNamesFp8:
+    """torchao 0.18's own conversion path raises AssertionError (swap_linear_layers,
+    a root nn.Linear with children) and TypeError (Float8Linear.from_float, partway
+    through the swap), not only RuntimeError/ValueError."""
+
+    @pytest.mark.parametrize(
+        "error",
+        [
+            RuntimeError("scaled_mm needs K % 16 == 0"),
+            ValueError("bad shape"),
+            AssertionError("Does not support a root nn.Linear with children"),
+            TypeError("cannot assign 'torch.FloatTensor' as parameter 'weight'"),
+        ],
+        ids=lambda e: type(e).__name__,
+    )
+    def test_row3_every_conversion_error_names_fp8(self, monkeypatch, converts, error):
+        from soup_cli.config.schema import TrainingConfig
+
+        _card(monkeypatch, (9, 0))
+        _break_the_converter(monkeypatch, error)
+        out, console = _console()
+
+        with pytest.raises(RuntimeError, match="float8 conversion failed") as info:
+            _apply(TrainingConfig(quantization_aware="fp8"), console)
+
+        assert f"{type(error).__name__}: {error}" in str(info.value)
+        assert info.value.__cause__ is error
+        assert "enabled" not in out.getvalue()
