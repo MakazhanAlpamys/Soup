@@ -125,10 +125,10 @@ class TestTheTrigger:
         a bad value then only surfaced at the head's forward as a "scheduler bug"."""
         from soup_cli.utils.layer_stream_runtime import StreamPrefetcher
 
-        prefetcher = StreamPrefetcher(_FakePool(4), None, 4, head_prefetch_layer=0)
+        prefetcher = StreamPrefetcher(_FakePool(4), None, 4, head_prefetch_layer=2)
         with pytest.raises(ValueError, match="head_prefetch_layer"):
             prefetcher.head_prefetch_layer = bad
-        assert prefetcher.head_prefetch_layer == 0
+        assert prefetcher.head_prefetch_layer == 2
 
     @pytest.mark.parametrize("good", [None, 0, 1, 3])
     def test_a_valid_assignment_is_accepted_and_read_back(self, good):

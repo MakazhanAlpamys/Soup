@@ -376,8 +376,10 @@ def main() -> int:
                 row = one_step()
                 row["block"] = block
                 records[arm_name(arm)].append(row)
-        print(f"block {block + 1}/{cli.blocks} done (order {[arm_name(a) for a in order]})",
-              flush=True)
+        print(
+            f"block {block + 1}/{cli.blocks} done (order {[arm_name(a) for a in order]})",
+            flush=True,
+        )
         # After every block, so a run that dies keeps its earlier points.
         Path(cli.out).write_text(json.dumps(payload, indent=1), encoding="utf-8")
 

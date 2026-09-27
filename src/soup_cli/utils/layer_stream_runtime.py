@@ -1025,9 +1025,7 @@ class StreamPrefetcher:
         # value assigned later would only surface at the head's forward as
         # "large-layer scheduler bug: slot holds ...", which names the wrong cause.
         if value is not None and (
-            isinstance(value, bool)
-            or not isinstance(value, int)
-            or not 0 <= value < self.n_layers
+            isinstance(value, bool) or not isinstance(value, int) or not 0 <= value < self.n_layers
         ):
             raise ValueError(
                 f"head_prefetch_layer must be None or in [0, {self.n_layers}), got {value!r}"
