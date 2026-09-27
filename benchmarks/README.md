@@ -145,7 +145,7 @@ figure, and why the fit decision refuses rather than warns.
 
 | File | Historical scope | Verdict | Requirements and limitations |
 |---|---|---|---|
-| repeat_backward.py | STEP 2b / Measurements 3-4 | Repeated streamed backwards against one resident NF4 reference; requires first-pass exactness and later corruption, with canonical gradients and finite checks | CUDA GPU + local checkpoint required for live measurement; seq 128, batch 1, two buffers, five repeats; no downloads |
+| [`repeat_backward.py`](harness/repeat_backward.py) | STEP 2b / Measurements 3-4 | In-process repeated streamed backwards against one persistent resident NF4 reference; requires first-pass exactness and later corruption, with canonical gradients and finite checks | CUDA GPU + local checkpoint required for live measurement; seq 128, batch 1, two buffers, five repeats; no downloads; CPU verdict tests cover healthy and later-corruption controls |
 
 ## Reproducing
 
