@@ -1255,7 +1255,7 @@ class TrainingConfig(BaseModel):
         description=(
             "Staged, not applied: a per-module LR override (list of {pattern, lr} "
             "entries or a {pattern: lr} dict, capped at 32) that no optimizer reads; "
-            "warns in v0.76 and is refused as of v0.77 (#761). (v0.41.0)"
+            "setting it warns at load, then is refused (#761). (v0.41.0)"
         ),
     )
     # v0.41.0 Part C — LLaMA Pro block expansion.
@@ -4220,8 +4220,8 @@ class TrainingConfig(BaseModel):
         default=None,
         description=(
             "Staged, not applied: a citation-recall threshold in [0.0, 1.0] that "
-            "nothing gates a save or a run on; warns in v0.76 and is refused as of "
-            "v0.77 (#761). (v0.62.0 Part D)"
+            "nothing gates a save or a run on; setting it warns at load, then is "
+            "refused (#761). (v0.62.0 Part D)"
         ),
     )
 
