@@ -103,6 +103,32 @@ def arm_name(arm: Optional[int]) -> str:
     return "last" if arm is None else str(arm)
 
 
+def _source_sha() -> str:
+    """The tree I measured, or ``unknown``.
+
+    ``soup_cli_file`` (from ``stream_probe.gpu_facts``) tells me which installed
+    tree got imported; I add the commit that tree is at so I don't have to
+    cross-reference a path against a checkout by hand later.
+    """
+    import shutil
+    import subprocess
+
+    tool = shutil.which("git")
+    if tool is None:
+        return "unknown"
+    try:
+        out = subprocess.run(
+            [tool, "rev-parse", "HEAD"],
+            cwd=Path(__file__).resolve().parents[2],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return "unknown"
+    return out.stdout.strip() or "unknown"
+
+
 def group_of(name: str) -> str:
     """Bucket one labelled wait: embedding, head, layer 0, or another decoder layer."""
     if name.startswith("large:"):
@@ -266,6 +292,10 @@ def main() -> int:
 
     records: Dict[str, List[Dict[str, Any]]] = {arm_name(arm): [] for arm in arms}
     payload = {
+        # I want soup_cli_file and git_sha in here so I can tell which tree a run
+        # measured without cross-referencing a path against a checkout by hand.
+        **stream_probe.gpu_facts(device),
+        "git_sha": _source_sha(),
         "driver": "benchmarks/harness/head_prefetch_ab.py",
         "label": cli.label,
         "weights": cli.weights,
@@ -286,7 +316,6 @@ def main() -> int:
             "transition": cli.transition,
             "measure": cli.measure,
         },
-        "gpu": stream_probe.gpu_facts(device),
         "started": time.strftime("%Y-%m-%dT%H:%M:%S"),
         "records": records,
     }
