@@ -28,11 +28,22 @@ the disk tier at ``--read-ahead 3``. It is not a TRL loss.
 This needs a tree that has ``head_prefetch_layer`` (the #1258 branch). On any other
 tree it exits with a message instead of measuring nothing.
 
+I build the shards once and discard that process's numbers before recording
+anything: the sharding itself runs on the same card as the arms, so a process
+that also shards measures both arms slower than one handed an already-sharded
+directory (I saw a last-layer head wait of 27.2 ms in the sharding process
+against 10.9-11.5 ms in five later ones). Point ``--shards`` at an existing
+directory to skip sharding in the measured process entirely; it also keeps the
+shard directory's name off the weights path, which matters on Windows, where
+``resolve_shard_dir`` names it after that path and a long one trips ``WinError
+206`` (MAX_PATH).
+
 Typical invocations::
 
     python benchmarks/harness/head_prefetch_ab.py --weights D:/synth/untied-8l \
         --tier ram --arms last,0 --out ab_ram.json
     python benchmarks/harness/head_prefetch_ab.py --weights D:/synth/untied-8l \
+        --shards D:/synth/untied-8l-shards \
         --tier disk --read-ahead 3 --step-shape preference --out ab_disk_pref.json
 
 A machine without CUDA is an intentional skip and exits 0.
@@ -40,7 +51,9 @@ A machine without CUDA is an intentional skip and exits 0.
 
 import argparse
 import json
+import re
 import statistics
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -61,6 +74,12 @@ def _harness() -> Any:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--weights", required=True)
+    parser.add_argument(
+        "--shards",
+        default=None,
+        help="an already-sharded directory, so stream_probe.build() does not shard in "
+        "the measured process (sharding there slows every arm)",
+    )
     parser.add_argument("--tier", choices=("ram", "disk"), default="ram")
     parser.add_argument("--quant", choices=("none", "nf4"), default="nf4")
     parser.add_argument("--seq", type=int, default=512)
@@ -104,29 +123,57 @@ def arm_name(arm: Optional[int]) -> str:
 
 
 def _source_sha() -> str:
-    """The tree I measured, or ``unknown``.
+    """The commit of the tree that ``soup_cli`` got imported from, or ``unknown``.
 
-    ``soup_cli_file`` (from ``stream_probe.gpu_facts``) tells me which installed
-    tree got imported; I add the commit that tree is at so I don't have to
-    cross-reference a path against a checkout by hand later.
+    I resolve this from ``soup_cli.__file__``, not from this driver's own file:
+    the driver and the ``soup_cli`` it measures can come from different
+    checkouts (a ``PYTHONPATH`` override, an editable install elsewhere), and I
+    want the tree that was actually measured. ``-dirty`` covers an uncommitted
+    change on top of that commit. Written the way ``variant2_gate.py``'s
+    ``_source_sha`` is.
     """
-    import shutil
-    import subprocess
+    import soup_cli
 
-    tool = shutil.which("git")
-    if tool is None:
+    package_file = getattr(soup_cli, "__file__", None)
+    if package_file is None:
         return "unknown"
     try:
-        out = subprocess.run(
-            [tool, "rev-parse", "HEAD"],
-            cwd=Path(__file__).resolve().parents[2],
+        package_dir = Path(package_file).resolve().parent
+        root = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            cwd=package_dir,
+            check=True,
             capture_output=True,
             text=True,
-            timeout=10,
+            timeout=5,
+        ).stdout.strip()
+        if not root:
+            return "unknown"
+        commit = (
+            subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=Path(root),
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            .stdout.strip()
+            .lower()
         )
+        dirty = subprocess.run(
+            ["git", "status", "--porcelain", "--untracked-files=normal"],
+            cwd=Path(root),
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        ).stdout
     except (OSError, subprocess.SubprocessError):
         return "unknown"
-    return out.stdout.strip() or "unknown"
+    if not re.fullmatch(r"[0-9a-f]{40}", commit):
+        return "unknown"
+    return f"{commit}-dirty" if dirty else commit
 
 
 def group_of(name: str) -> str:
@@ -205,7 +252,7 @@ def main() -> int:
     dtype = resolve_stream_dtype(device)
     args = argparse.Namespace(
         weights=cli.weights,
-        shards=None,
+        shards=cli.shards,
         quant=cli.quant,
         tier=cli.tier,
         no_pin=cli.no_pin,
@@ -292,11 +339,10 @@ def main() -> int:
 
     records: Dict[str, List[Dict[str, Any]]] = {arm_name(arm): [] for arm in arms}
     payload = {
-        # I want soup_cli_file and git_sha in here so I can tell which tree a run
-        # measured without cross-referencing a path against a checkout by hand.
-        **stream_probe.gpu_facts(device),
-        "git_sha": _source_sha(),
         "driver": "benchmarks/harness/head_prefetch_ab.py",
+        # the card, its NVIDIA driver and PCIe link, torch, and soup_cli_file
+        "gpu": stream_probe.gpu_facts(device),
+        "git_sha": _source_sha(),
         "label": cli.label,
         "weights": cli.weights,
         "shard_dir": shard_dir,
