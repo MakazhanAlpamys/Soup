@@ -39,7 +39,19 @@ import importlib
 import inspect
 from typing import Any
 
-DEFAULT_PROMPT_TRUNCATION_MODE = "keep_start"
+# TRL's own KTO/BCO/CPO/ORPO tokenizers historically truncate an over-length
+# prompt with ``keep_end`` — the tail carries a chat template's generation
+# header (the assistant turn the completion must follow), so cutting from the
+# start would strip that header. KTOConfig exposes no ``truncation_mode`` field
+# for the wrappers to read, so the cap KTO applies through
+# ``enforce_preference_sequence_limit`` uses this default; it must match TRL's
+# historical direction rather than the ``keep_start`` most other configs default
+# to.
+DEFAULT_PROMPT_TRUNCATION_MODE = "keep_end"
+
+#: Hugging Face's cross-entropy ignore index; masks prompt tokens out of the
+#: completion loss.
+_IGNORE_INDEX = -100
 
 
 def _installed_trl_version() -> str:
@@ -175,7 +187,39 @@ def _cap_combined_preference_sequence(
     return {
         f"{prefix}_input_ids": prompt_ids + completion_ids,
         f"{prefix}_attention_mask": prompt_mask + completion_mask,
-        f"{prefix}_labels": [-100] * len(prompt_ids) + completion_labels,
+        f"{prefix}_labels": [_IGNORE_INDEX] * len(prompt_ids) + completion_labels,
+    }
+
+
+def _rebuild_unpaired_completion_row(row: dict[str, Any]) -> dict[str, list[int]]:
+    """Reassemble the KTO/BCO completion from the untruncated answer tokens.
+
+    TRL's KTO/BCO tokenizer caps the answer to ``max_length - len(prompt)``
+    while ignoring ``max_prompt_length`` (``_process_tokens`` truncates
+    ``answer_input_ids`` before concatenating). An over-length prompt therefore
+    fills the whole budget and leaves ``completion_input_ids`` with the answer
+    already sliced away, so capping that column can only recover an empty
+    completion. The matched answer survives verbatim in ``answer_input_ids`` /
+    ``answer_attention_mask`` (columns the loss never reads) and the prompt in
+    ``prompt_input_ids``, so rebuild the combined sequence from those before the
+    real cap runs. TRL guarantees ``completion_input_ids`` ends with EOS; reuse
+    that token so a prompt-driven cap never drops the stop signal.
+    """
+    prompt_ids = list(row["prompt_input_ids"])
+    prompt_mask = list(row["prompt_attention_mask"])
+    answer_ids = list(row["answer_input_ids"])
+    answer_mask = list(row["answer_attention_mask"])
+    eos_id = list(row["completion_input_ids"])[-1]
+    if answer_ids and answer_ids[-1] == eos_id:
+        eos_ids: list[int] = []
+        eos_mask: list[int] = []
+    else:
+        eos_ids = [eos_id]
+        eos_mask = [1]  # EOS is a real, attended token
+    return {
+        "completion_input_ids": prompt_ids + answer_ids + eos_ids,
+        "completion_attention_mask": prompt_mask + answer_mask + eos_mask,
+        "completion_labels": [_IGNORE_INDEX] * len(prompt_ids) + answer_ids + eos_ids,
     }
 
 
@@ -270,11 +314,19 @@ def enforce_preference_sequence_limit(
             prompt_mask = _truncate_tokens(
                 list(row["prompt_attention_mask"]), max_prompt_length, truncation_mode
             )
+            # TRL already sliced the answer out of ``completion_input_ids`` when
+            # the prompt overflowed; rebuild it from the untruncated answer
+            # columns so the cap keeps real completion tokens, not just the EOS.
+            completion_source = (
+                _rebuild_unpaired_completion_row(row)
+                if {"answer_input_ids", "answer_attention_mask"} <= columns
+                else row
+            )
             capped = {
                 "prompt_input_ids": prompt_ids,
                 "prompt_attention_mask": prompt_mask,
                 **_cap_combined_preference_sequence(
-                    row,
+                    completion_source,
                     "completion",
                     max_length=max_length,
                     max_prompt_length=max_prompt_length,
