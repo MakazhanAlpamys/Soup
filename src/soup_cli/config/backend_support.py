@@ -26,7 +26,7 @@ reviewed for them.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from soup_cli.config.schema import SoupConfig
@@ -48,6 +48,16 @@ STATUSES = frozenset({IGNORED, REJECTED})
 DEFAULT_BACKEND = "transformers"
 
 
+def _is_on(value: object) -> bool:
+    """The default sense of *on*: truthy (and not ``None``).
+
+    A field written in its off position (``use_liger: false``) has nothing
+    for the backend to ignore or reject, so it reports nothing (#1330).
+    Entries whose zero value is meaningful (``seed: 0``) override this.
+    """
+    return bool(value)
+
+
 @dataclass(frozen=True)
 class SupportEntry:
     """One declared gap: a field, what happens to it, and why."""
@@ -62,6 +72,10 @@ class SupportEntry:
     #: (this is what happens to ``max_grad_norm`` when #750 lands), and a
     #: ``True`` entry the trainer stops reading means the warning was deleted.
     trainer_reads: bool = False
+    #: Is a written value in its *on* position? A field the schema refuses
+    #: in its on position (the ``REJECTED`` rows) can therefore only ever be
+    #: seen at its off value, so it never fires on a loadable config (#1330).
+    active: Callable[[object], bool] = _is_on
 
     def describe(self) -> str:
         suffix = f" (#{self.issue})" if self.issue else ""
@@ -79,12 +93,14 @@ _MLX_SFT: tuple[SupportEntry, ...] = (
         IGNORED,
         "MLX seeds through mx.random, not this field",
         trainer_reads=True,
+        active=lambda value: value is not None,
     ),
     SupportEntry(
         "training.data_seed",
         IGNORED,
         "MLX seeds through mx.random, not this field",
         trainer_reads=True,
+        active=lambda value: value is not None,
     ),
     SupportEntry(
         "training.use_galore",
@@ -225,17 +241,27 @@ def check_config(cfg: "SoupConfig") -> list[SupportEntry]:
     Only fields the user wrote are reported. Pydantic's ``model_fields_set``
     distinguishes those from the ones sitting at their schema default, which is
     the difference between a useful pre-flight check and a wall of 275 rows.
+
+    A written field is reported only when its written value is *active*
+    (#1330): ``loss_watchdog: false`` on MLX is not a gap -- the schema
+    already refuses the value that would be -- and a config written out in
+    full by ``autopilot``'s ``write_yaml`` must report the same as the
+    minimal config it came from.
     """
     entries = unsupported_for(cfg.task, getattr(cfg, "backend", DEFAULT_BACKEND))
     if not entries:
         return []
 
-    written: set[str] = set()
+    by_field = {entry.field: entry for entry in entries}
+    reported: list[SupportEntry] = []
     for namespace in ("training", "data"):
         section = getattr(cfg, namespace, None)
         if section is None:
             continue
         for name in getattr(section, "model_fields_set", ()):
-            written.add(f"{namespace}.{name}")
-
-    return [entry for entry in entries if entry.field in written]
+            entry = by_field.get(f"{namespace}.{name}")
+            if entry is None:
+                continue
+            if entry.active(getattr(section, name, None)):
+                reported.append(entry)
+    return reported
