@@ -12,17 +12,17 @@ SPEC.loader.exec_module(module)
 
 def test_recorded_threshold_pattern_passes():
     assert module.depth_vs_bytes_verdict([
-        {"quant": "nf4", "layer_mib": 150.0, "exact": 192, "total": 192},
-        {"quant": "nf4", "layer_mib": 180.0, "exact": 8, "total": 192},
-        {"quant": "bf16", "layer_mib": 480.0, "exact": 128, "total": 128},
+        {"depth": 2, "quant": "nf4", "layer_mib": 150.0, "exact": 192, "total": 192},
+        {"depth": 8, "quant": "nf4", "layer_mib": 180.0, "exact": 8, "total": 192},
+        {"depth": 2, "quant": "bf16", "layer_mib": 480.0, "exact": 128, "total": 128},
     ])
 
 
 def test_wrong_relationship_and_degenerate_data_fail():
     assert not module.depth_vs_bytes_verdict([
-        {"quant": "nf4", "layer_mib": 150.0, "exact": 192, "total": 192},
-        {"quant": "nf4", "layer_mib": 180.0, "exact": 192, "total": 192},
-        {"quant": "bf16", "layer_mib": 480.0, "exact": 128, "total": 128},
+        {"depth": 2, "quant": "nf4", "layer_mib": 150.0, "exact": 192, "total": 192},
+        {"depth": 8, "quant": "nf4", "layer_mib": 180.0, "exact": 192, "total": 192},
+        {"depth": 2, "quant": "bf16", "layer_mib": 480.0, "exact": 128, "total": 128},
     ])
     assert not module.depth_vs_bytes_verdict([])
 
@@ -30,7 +30,7 @@ def test_wrong_relationship_and_degenerate_data_fail():
 def test_nonfinite_and_malformed_data_fail():
     with pytest.raises(module.MeasurementInvalidError):
         module.depth_vs_bytes_verdict([
-            {"quant": "nf4", "layer_mib": float("inf"), "exact": 1, "total": 1},
-            {"quant": "nf4", "layer_mib": 180.0, "exact": 0, "total": 1},
-            {"quant": "bf16", "layer_mib": 480.0, "exact": 1, "total": 1},
+            {"depth": 2, "quant": "nf4", "layer_mib": float("inf"), "exact": 1, "total": 1},
+            {"depth": 8, "quant": "nf4", "layer_mib": 180.0, "exact": 0, "total": 1},
+            {"depth": 2, "quant": "bf16", "layer_mib": 480.0, "exact": 1, "total": 1},
         ])

@@ -145,7 +145,7 @@ figure, and why the fit decision refuses rather than warns.
 
 | File | Historical scope | Verdict | Requirements and limitations |
 |---|---|---|---|
-| depth_vs_bytes.py | STEP 6 / rejected per-layer-bytes hypothesis | Historical reconstruction validator for the NF4 transition bracket (163.8-171.5 MiB/layer) with exact bf16 control; accepts measured JSON rows | CPU/static record replay; live synthetic Llama CUDA measurement requires the historical torch/bitsandbytes stack; one point or non-finite data fails |
+| [`depth_vs_bytes.py`](harness/depth_vs_bytes.py) | STEP 6 / rejected per-layer-bytes hypothesis | Historical reconstruction with an explicit synthetic depth sweep, NF4 transition bracket (163.8-171.5 MiB/layer), and bf16 control; JSON replay is separate from the measurement API | CUDA synthetic Llama measurement requires the historical torch/bitsandbytes stack; distinct depths, finite rows, both NF4 sides, and the bf16 control are required |
 
 ## Reproducing
 

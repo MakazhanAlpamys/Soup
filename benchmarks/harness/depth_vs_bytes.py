@@ -30,11 +30,16 @@ def depth_vs_bytes_verdict(samples: list[dict[str, Any]]) -> bool:
     below = False
     above = False
     bf16_control = False
+    depths: set[int] = set()
     for sample in samples:
         quant = sample.get("quant")
         mib = sample.get("layer_mib")
         exact = sample.get("exact")
         total = sample.get("total")
+        depth = sample.get("depth")
+        if not isinstance(depth, int) or depth <= 0:
+            raise MeasurementInvalidError("depth must be a positive integer")
+        depths.add(depth)
         if quant not in {"nf4", "bf16"}:
             raise MeasurementInvalidError("quant must be nf4 or bf16")
         if not isinstance(mib, (int, float)) or not math.isfinite(mib) or mib <= 0:
@@ -49,21 +54,36 @@ def depth_vs_bytes_verdict(samples: list[dict[str, Any]]) -> bool:
             above = True
         if quant == "bf16" and exact == total:
             bf16_control = True
-    return below and above and bf16_control
+    return len(depths) >= 2 and below and above and bf16_control
+
+
+def measure_synthetic_sweep(*, depths: list[int], measure) -> list[dict[str, Any]]:
+    """Run a caller-supplied synthetic Llama measurement for every depth."""
+    if len(set(depths)) < 2:
+        raise MeasurementInvalidError("the sweep must contain at least two depths")
+    rows = []
+    for depth in depths:
+        for quant in ("nf4", "bf16"):
+            row = dict(measure(depth=depth, quant=quant))
+            row["depth"] = depth
+            row["quant"] = quant
+            rows.append(row)
+    return rows
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Check the STEP 6 depth-vs-bytes sweep.")
     parser.add_argument("--records", type=Path, help="JSON array of measured sweep rows")
+    parser.add_argument("--measure", action="store_true", help="run the synthetic CUDA sweep")
     parser.add_argument("--self-test", action="store_true")
     return parser.parse_args()
 
 
 def run_self_test() -> int:
     assert depth_vs_bytes_verdict([
-        {"quant": "nf4", "layer_mib": 163.8, "exact": 192, "total": 192},
-        {"quant": "nf4", "layer_mib": 171.5, "exact": 8, "total": 192},
-        {"quant": "bf16", "layer_mib": 480.0, "exact": 128, "total": 128},
+        {"depth": 2, "quant": "nf4", "layer_mib": 163.8, "exact": 192, "total": 192},
+        {"depth": 8, "quant": "nf4", "layer_mib": 171.5, "exact": 8, "total": 192},
+        {"depth": 2, "quant": "bf16", "layer_mib": 480.0, "exact": 128, "total": 128},
     ])
     print("PASS: depth-vs-bytes verdict requires both NF4 sides and bf16 control")
     return 0
@@ -73,6 +93,9 @@ def main() -> int:
     args = parse_args()
     if args.self_test:
         return run_self_test()
+    if args.measure:
+        print("ERROR: synthetic CUDA sweep requires the historical torch/bitsandbytes stack")
+        return 2
     if args.records is None:
         print("ERROR: --records is required; no CUDA measurement was performed")
         return 2
