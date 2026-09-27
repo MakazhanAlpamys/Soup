@@ -194,6 +194,7 @@ def test_expect_no_refusal_pattern_dpo_chosen_string() -> None:
     res = expect_no_refusal_pattern([row])
     assert res.passed is False
     assert res.num_violations == 1
+    assert "refusal pattern matched" in res.details[0]
 
 
 def test_expect_no_refusal_pattern_dpo_chosen_messages() -> None:
@@ -205,6 +206,7 @@ def test_expect_no_refusal_pattern_dpo_chosen_messages() -> None:
     res = expect_no_refusal_pattern([row])
     assert res.passed is False
     assert res.num_violations == 1
+    assert "refusal pattern matched" in res.details[0]
 
 
 def test_expect_no_refusal_pattern_kto_completion() -> None:
@@ -216,6 +218,7 @@ def test_expect_no_refusal_pattern_kto_completion() -> None:
     res = expect_no_refusal_pattern([row])
     assert res.passed is False
     assert res.num_violations == 1
+    assert "refusal pattern matched" in res.details[0]
 
 
 def test_expect_no_refusal_pattern_controls() -> None:
@@ -357,3 +360,126 @@ expectations:
     assert "FAIL" in clean_out
     assert "Violations: expect_no_pii" in clean_out
     assert "Violations: expect_no_refusal_pattern" in clean_out
+
+
+# -----------------------------------------------------------------------------
+# 7. Comprehensive matrix: every field of every format scanned
+# -----------------------------------------------------------------------------
+
+NON_TEXT_FIELDS = frozenset({"label", "image", "audio"})
+
+_SHAPES = {
+    "conversations": lambda t: [{"from": "human", "value": "q"}, {"from": "gpt", "value": t}],
+    "messages": lambda t: [{"role": "user", "content": "q"}, {"role": "assistant", "content": t}],
+    "tools": lambda t: [{"type": "function", "function": {"name": "f", "description": t}}],
+    "tool_calls": lambda t: [{"function": {"name": "f", "arguments": t}}],
+    "label": lambda t: True,
+    "image": lambda t: "img.png",
+    "audio": lambda t: "a.wav",
+}
+
+
+def _row(fmt: str, field: str, payload: str) -> dict:
+    keys = (
+        set(FORMAT_SIGNATURES[fmt])
+        | set(FORMAT_EXTRACTION_RULES[fmt]["text_fields"])
+        | {field}
+    )
+    return {
+        key: _SHAPES.get(key, lambda t: t)(payload if key == field else "plain words")
+        for key in sorted(keys)
+    }
+
+
+def _text_fields(fmt: str) -> list:
+    declared = set(FORMAT_EXTRACTION_RULES[fmt]["text_fields"])
+    return sorted(declared | (set(FORMAT_SIGNATURES[fmt]) - NON_TEXT_FIELDS))
+
+
+PII_CASES = [(fmt, field) for fmt in sorted(FORMAT_SIGNATURES) for field in _text_fields(fmt)]
+REFUSAL_CASES = [
+    (fmt, field)
+    for fmt in sorted(FORMAT_SIGNATURES)
+    for field in FORMAT_EXTRACTION_RULES[fmt]["assistant_fields"]
+]
+
+
+@pytest.mark.parametrize("fmt,field", PII_CASES, ids=[f"{f}.{k}" for f, k in PII_CASES])
+def test_every_text_field_of_every_format_is_scanned(fmt: str, field: str) -> None:
+    res = expect_no_pii([_row(fmt, field, PII_SAMPLE)])
+    assert any("PII detected" in d for d in res.details), (fmt, field, res)
+
+
+@pytest.mark.parametrize("fmt,field", REFUSAL_CASES, ids=[f"{f}.{k}" for f, k in REFUSAL_CASES])
+def test_every_assistant_field_of_every_format_is_scanned(fmt: str, field: str) -> None:
+    res = expect_no_refusal_pattern([_row(fmt, field, REFUSAL_SAMPLE)])
+    assert any("refusal pattern matched" in d for d in res.details), (fmt, field, res)
+
+
+@pytest.mark.parametrize(
+    "row",
+    [
+        {"prompt": "What is 2+2?"},
+        {"messages": [{"role": "user", "content": "What is 2+2?"}]},
+        {"conversations": [{"from": "human", "value": "What is 2+2?"}]},
+        {"anchor": "a cat", "positive": "a feline"},
+    ],
+    ids=["prompt_only", "chatml_user_only", "sharegpt_human_only", "embedding"],
+)
+def test_rows_without_an_assistant_turn_are_not_refusal_violations(row: dict) -> None:
+    assert expect_no_refusal_pattern([row]).passed is True
+
+
+def test_refusal_in_a_user_message_is_not_an_assistant_refusal() -> None:
+    row = {
+        "messages": [
+            {"role": "user", "content": REFUSAL_SAMPLE},
+            {"role": "assistant", "content": "Sure, here is how."},
+        ]
+    }
+    assert expect_no_refusal_pattern([row]).passed is True
+
+
+def test_pii_after_a_long_field_is_still_found() -> None:
+    row = {"instruction": "Summarise", "input": "lorem ipsum " * 5000, "output": PII_SAMPLE}
+    res = expect_no_pii([row])
+    assert any("PII detected" in d for d in res.details), res
+
+
+def test_plaintext_assistant_refusal_flags_and_ok_passes() -> None:
+    assert expect_no_refusal_pattern([{"text": REFUSAL_SAMPLE}]).passed is False
+    assert expect_no_refusal_pattern([{"text": "ok"}]).passed is True
+
+
+def test_raft_and_prm_formats_are_scanned_properly() -> None:
+    raft_clean = {
+        "query": "What is Python?",
+        "golden_doc": "Python is a language.",
+        "distractor_docs": ["Cats are pets."],
+        "answer": "A programming language.",
+    }
+    assert expect_no_pii([raft_clean]).passed is True
+    assert expect_no_refusal_pattern([raft_clean]).passed is True
+
+    raft_refusal = dict(raft_clean, answer=REFUSAL_SAMPLE)
+    res_refusal = expect_no_refusal_pattern([raft_refusal])
+    assert res_refusal.passed is False
+    assert "refusal pattern matched" in res_refusal.details[0]
+
+    prm_row_pii = {
+        "prompt": "What is 2+2?",
+        "completions": [f"Step 1: {PII_SAMPLE}"],
+        "labels": [True],
+    }
+    res_prm_pii = expect_no_pii([prm_row_pii])
+    assert res_prm_pii.passed is False
+    assert any("PII detected" in d for d in res_prm_pii.details)
+
+
+def test_chosen_user_message_refusal_does_not_flag_assistant_refusal() -> None:
+    row = {
+        "prompt": "p",
+        "chosen": [{"role": "user", "content": REFUSAL_SAMPLE}],
+        "rejected": "r",
+    }
+    assert expect_no_refusal_pattern([row]).passed is True

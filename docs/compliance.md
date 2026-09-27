@@ -135,6 +135,16 @@ expectations:
 Supported names: `expect_no_pii`, `expect_token_length_between`,
 `expect_no_refusal_pattern`, `expect_chosen_preferred_over_rejected_by_judge`.
 
+Scanned fields per format:
+- ChatML / ShareGPT / Vision: all conversational turns (`content`, text parts). Assistant-only gates inspect assistant turns exclusively.
+- DPO: `chosen` and `rejected` (both string and conversational list formats).
+- KTO: `completion`.
+- Alpaca: `instruction`, `input`, `output`, `system`.
+- Sentence embeddings: `query`, `positive`, `negative`, `texts`, `pairs`.
+- Plain SFT / Text: `text`, `response`, `completion`.
+
+Empty-text safeguard: rows containing no extractable text fail closed on all expectation gates to prevent unparseable or blank rows from passing CI.
+
 Every path is shell-quoted and validated to stay under the repo root, so the
 rendered workflow is injection-safe. Edit the paths to match your repo.
 

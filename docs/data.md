@@ -208,6 +208,8 @@ expectations:
   - {name: expect_no_refusal_pattern}
 EOF
 soup expect data.jsonl suite.yaml   # exit 2 on suite failure
+# Inspects ChatML, ShareGPT, DPO (chosen/rejected), KTO (completion), Alpaca,
+# and sentence embedding formats. Fails closed if any row yields zero extractable text.
 
 # Magpie synthetic data — chat-template-prefix harvest (live, v0.71.6)
 soup data gen-magpie --base meta-llama/Llama-3.1-8B-Instruct \

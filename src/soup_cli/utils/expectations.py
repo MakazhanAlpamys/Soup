@@ -203,6 +203,18 @@ FORMAT_EXTRACTION_RULES: Mapping[str, Mapping[str, Tuple[str, ...]]] = {
         "text_fields": ("messages", "tools", "tool_calls"),
         "assistant_fields": ("messages", "tool_calls"),
     },
+    "raft": {
+        "text_fields": ("query", "golden_doc", "distractor_docs", "answer"),
+        "assistant_fields": ("answer",),
+    },
+    "prm": {
+        "text_fields": ("prompt", "completions"),
+        "assistant_fields": ("completions",),
+    },
+    "input_output": {
+        "text_fields": ("segments",),
+        "assistant_fields": ("segments",),
+    },
 }
 
 
@@ -305,6 +317,10 @@ def _extract_field_text_or_messages(
             if isinstance(item, str) and item:
                 str_parts.append(item)
             elif isinstance(item, Mapping):
+                if assistant_only:
+                    role = item.get("role") or item.get("from")
+                    if role is not None and role not in _ASSISTANT_ROLES:
+                        continue
                 for k in ("content", "text", "value"):
                     v = item.get(k)
                     if isinstance(v, str) and v:
@@ -313,8 +329,8 @@ def _extract_field_text_or_messages(
     return []
 
 
-def _extract_row_text(row: Mapping[str, Any]) -> str:
-    """Extract all text across all format fields (PII / length scans)."""
+def _extract_row_parts(row: Mapping[str, Any]) -> List[str]:
+    """Extract all text parts across all format fields (PII / length scans)."""
     parts: List[str] = []
 
     for key in (
@@ -328,6 +344,9 @@ def _extract_row_text(row: Mapping[str, Any]) -> str:
         "negative",
         "text",
         "content",
+        "query",
+        "golden_doc",
+        "answer",
     ):
         val = row.get(key)
         if isinstance(val, str) and val:
@@ -341,6 +360,26 @@ def _extract_row_text(row: Mapping[str, Any]) -> str:
         val = row.get(key)
         if val is not None:
             parts.extend(_extract_field_text_or_messages(val, assistant_only=False))
+
+    completions = row.get("completions")
+    if isinstance(completions, list):
+        for c in completions:
+            if isinstance(c, str) and c:
+                parts.append(c)
+
+    distractors = row.get("distractor_docs")
+    if isinstance(distractors, list):
+        for d in distractors:
+            if isinstance(d, str) and d:
+                parts.append(d)
+
+    segments = row.get("segments")
+    if isinstance(segments, list):
+        for seg in segments:
+            if isinstance(seg, Mapping):
+                t = seg.get("text")
+                if isinstance(t, str) and t:
+                    parts.append(t)
 
     if "conversations" in row:
         parts.extend(_extract_conversations_text(row.get("conversations"), assistant_only=False))
@@ -361,14 +400,19 @@ def _extract_row_text(row: Mapping[str, Any]) -> str:
                     if isinstance(desc, str) and desc:
                         parts.append(desc)
 
-    return "\n".join(parts)
+    return parts
 
 
-def _extract_assistant_text(row: Mapping[str, Any]) -> str:
-    """Extract assistant-side text (for refusal scans)."""
+def _extract_row_text(row: Mapping[str, Any]) -> str:
+    """Extract all text across all format fields as a single string."""
+    return "\n".join(_extract_row_parts(row))
+
+
+def _extract_assistant_parts(row: Mapping[str, Any]) -> List[str]:
+    """Extract assistant-side text parts (for refusal scans)."""
     parts: List[str] = []
 
-    for key in ("output", "response"):
+    for key in ("output", "response", "answer"):
         val = row.get(key)
         if isinstance(val, str) and val:
             parts.append(val)
@@ -379,6 +423,9 @@ def _extract_assistant_text(row: Mapping[str, Any]) -> str:
     if "messages" in row:
         parts.extend(_extract_messages_text(row.get("messages"), assistant_only=True))
 
+    if "tool_calls" in row:
+        parts.extend(_extract_tool_calls_text(row.get("tool_calls")))
+
     if "chosen" in row:
         val = row.get("chosen")
         if val is not None:
@@ -388,6 +435,20 @@ def _extract_assistant_text(row: Mapping[str, Any]) -> str:
         val = row.get("completion")
         if val is not None:
             parts.extend(_extract_field_text_or_messages(val, assistant_only=True))
+
+    completions = row.get("completions")
+    if isinstance(completions, list):
+        for c in completions:
+            if isinstance(c, str) and c:
+                parts.append(c)
+
+    segments = row.get("segments")
+    if isinstance(segments, list):
+        for seg in segments:
+            if isinstance(seg, Mapping) and seg.get("label", True):
+                t = seg.get("text")
+                if isinstance(t, str) and t:
+                    parts.append(t)
 
     if not parts and ("text" in row or "content" in row):
         is_chat_or_pref = any(
@@ -400,6 +461,10 @@ def _extract_assistant_text(row: Mapping[str, Any]) -> str:
                 "prompt",
                 "chosen",
                 "completion",
+                "query",
+                "answer",
+                "segments",
+                "completions",
             )
         )
         if not is_chat_or_pref:
@@ -407,7 +472,12 @@ def _extract_assistant_text(row: Mapping[str, Any]) -> str:
             if isinstance(val, str) and val:
                 parts.append(val)
 
-    return "\n".join(parts)
+    return parts
+
+
+def _extract_assistant_text(row: Mapping[str, Any]) -> str:
+    """Extract assistant-side text as a single string."""
+    return "\n".join(_extract_assistant_parts(row))
 
 
 def _check_rows(rows: object) -> Sequence[Mapping[str, Any]]:
@@ -450,22 +520,28 @@ def expect_no_pii(rows: Any) -> ExpectationResult:
             details.append(_truncate_detail(f"rows[{index}]: not a dict"))
             num_violations += 1
             continue
-        text = _extract_row_text(row)
-        if not text or not text.strip():
+        parts = _extract_row_parts(row)
+        if not parts or not any(p.strip() for p in parts):
             num_violations += 1
             if len(details) < _MAX_DETAILS_PER_RESULT:
                 details.append(
                     _truncate_detail(f"rows[{index}]: no extractable text")
                 )
             continue
-        try:
-            hits = detect_pii(text)
-        except (TypeError, ValueError):
-            continue
-        if hits:
+        all_hits = []
+        for part in parts:
+            if not part:
+                continue
+            try:
+                hits = detect_pii(part)
+                if hits:
+                    all_hits.extend(hits)
+            except (TypeError, ValueError):
+                continue
+        if all_hits:
             num_violations += 1
             if len(details) < _MAX_DETAILS_PER_RESULT:
-                kinds = sorted({hit.get("kind", "?") for hit in hits})
+                kinds = sorted({hit.get("kind", "?") for hit in all_hits})
                 details.append(
                     _truncate_detail(
                         f"rows[{index}]: PII detected ({', '.join(kinds)})"
@@ -541,13 +617,16 @@ def expect_no_refusal_pattern(rows: Any) -> ExpectationResult:
             if len(details) < _MAX_DETAILS_PER_RESULT:
                 details.append(_truncate_detail(f"rows[{index}]: not a dict"))
             continue
-        text = _extract_assistant_text(row)
-        if not text or not text.strip():
+        full_text = _extract_row_text(row)
+        if not full_text or not full_text.strip():
             num_violations += 1
             if len(details) < _MAX_DETAILS_PER_RESULT:
                 details.append(
                     _truncate_detail(f"rows[{index}]: no extractable text")
                 )
+            continue
+        text = _extract_assistant_text(row)
+        if not text or not text.strip():
             continue
         if looks_like_refusal(text):
             num_violations += 1
