@@ -18,8 +18,9 @@ drift -- every entry must name a real field, and every dotted field name in
 ``trainer/mlx_sft.py``'s own warning list must appear here. It cannot originate
 the truth; it can only stop it rotting, which is the failure that produced #749.
 
-Scope today: ``task=sft`` on ``backend=mlx``, plus multimodal vision and audio
-on ``backend=transformers`` (#1156). Other combinations report nothing rather
+Scope today: ``task=sft`` on ``backend=mlx`` and on ``backend=unsloth`` (#1124;
+both apply to every modality), plus multimodal vision and audio on
+``backend=transformers`` (#1156). Other combinations report nothing rather
 than guessing, which is the honest default for a table that has not been
 reviewed for them.
 """

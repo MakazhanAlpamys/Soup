@@ -1,4 +1,4 @@
-"""Tests for issue #1124 вЂ” SFT audio FP8 wiring and stream_layers/unsloth gating.
+"""Tests for issue #1124 - SFT audio FP8 wiring and stream_layers/unsloth gating.
 
 Validates that:
 1. SFTTrainerWrapper._setup_audio_transformers calls _apply_quantization_aware(tcfg)
@@ -235,8 +235,9 @@ class TestStreamLayersPrecisionConflicts:
                 },
             )
 
-    def test_stream_layers_rejects_quantization_aware_bool(self) -> None:
-        pattern = r"stream_layers is mutually exclusive with quantization_aware"
+    def test_stream_layers_with_quantization_aware_true_is_refused_by_1222(self) -> None:
+        """`true` never reaches the streaming guard: #1222 refuses it at the field."""
+        pattern = r"quantization_aware: true is refused \(#1222\)"
         with pytest.raises(ValueError, match=pattern):
             SoupConfig(
                 base="test/model",
@@ -389,28 +390,45 @@ class TestBackendSupportRegistryUnsloth:
         modules = TRAINER_MODULES[("sft", "unsloth", "text")]
         assert "soup_cli/utils/unsloth.py" in modules
 
-    def test_check_config_reports_unsloth_gaps(self) -> None:
-        cfg_text = SoupConfig(
-            base="test/model",
-            task="sft",
-            backend="unsloth",
-            modality="text",
-            data={"train": "tests/fixtures/sample_train.jsonl"},
-            training={"quantization_aware": True},
-        )
-        gaps_text = check_config(cfg_text)
-        assert any(g.field == "training.quantization_aware" for g in gaps_text)
+    @pytest.mark.parametrize(
+        ("value", "reason"),
+        [
+            (True, r"quantization_aware: true is refused \(#1222\)"),
+            ("fp8", r"not supported on the unsloth backend"),
+            ("quest", r"quantization_aware='quest' requires backend='transformers'"),
+        ],
+    )
+    @pytest.mark.parametrize("modality", ["text", "vision"])
+    def test_no_loadable_unsloth_config_sets_quantization_aware(
+        self, value, reason, modality
+    ) -> None:
+        """Every value of the field is refused at load on unsloth, so the REJECTED
+        row documents the gap rather than reporting it (as the MLX row for #961)."""
+        data = {"train": "tests/fixtures/sample_train.jsonl"}
+        if modality == "vision":
+            data["format"] = "multimodal"
+        with pytest.raises(ValueError, match=reason):
+            SoupConfig(
+                base="test/model",
+                task="sft",
+                backend="unsloth",
+                modality=modality,
+                data=data,
+                training={"quantization_aware": value},
+            )
 
-        cfg_vision = SoupConfig(
-            base="test/model",
-            task="sft",
-            backend="unsloth",
-            modality="vision",
-            data={"train": "tests/fixtures/sample_train.jsonl", "format": "multimodal"},
-            training={"quantization_aware": True},
+    @pytest.mark.parametrize("modality", ["text", "vision"])
+    def test_check_config_on_a_loadable_unsloth_config_reports_no_precision_gap(
+        self, modality
+    ) -> None:
+        data = {"train": "tests/fixtures/sample_train.jsonl"}
+        if modality == "vision":
+            data["format"] = "multimodal"
+        cfg = SoupConfig(
+            base="test/model", task="sft", backend="unsloth", modality=modality, data=data
         )
-        gaps_vision = check_config(cfg_vision)
-        assert any(g.field == "training.quantization_aware" for g in gaps_vision)
+        assert unsupported_for("sft", "unsloth", modality), "fallback must cover the modality"
+        assert check_config(cfg) == []
 
     def test_setup_unsloth_does_not_wire_fp8_silently(self) -> None:
         """AST guard: SFTTrainerWrapper._setup_unsloth must not wire precision knobs
