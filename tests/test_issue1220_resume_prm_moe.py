@@ -41,6 +41,19 @@ def _collapse_whitespace(text: str) -> str:
 TRAINER_DIR = Path(__file__).resolve().parent.parent / "src" / "soup_cli" / "trainer"
 
 
+def _is_self_call(func: ast.expr) -> bool:
+    """self.x(...), self.a.b(...) or super().x(...), never str(...) or Path(...)."""
+    while isinstance(func, ast.Attribute):
+        func = func.value
+    if isinstance(func, ast.Name):
+        return func.id == "self"
+    return (
+        isinstance(func, ast.Call)
+        and isinstance(func.func, ast.Name)
+        and func.func.id == "super"
+    )
+
+
 def _forwards_resume(func: ast.FunctionDef) -> bool:
     """Some call in the BODY passes the checkpoint on; the signature proves nothing."""
     kwarg = func.args.kwarg.arg if func.args.kwarg else None
@@ -53,8 +66,10 @@ def _forwards_resume(func: ast.FunctionDef) -> bool:
                     return True
                 if kw.arg is None and isinstance(kw.value, ast.Name) and kw.value.id == kwarg:
                     return True
-            if any(isinstance(a, ast.Name) and a.id == "resume_from_checkpoint" for a in node.args):
-                return True  # ppo.py passes it on positionally
+            if _is_self_call(node.func) and any(
+                isinstance(a, ast.Name) and a.id == "resume_from_checkpoint" for a in node.args
+            ):
+                return True  # ppo.py's self._train_builtin(...), mlx_sft's weight loader
     return False
 
 

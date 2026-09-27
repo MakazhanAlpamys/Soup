@@ -33,6 +33,17 @@ logger = logging.getLogger(__name__)
 console = Console()
 
 
+def _save_mole_gate(gate: Any, path: Path | str) -> None:
+    """Save the MoLE gate module with all floating point tensors in fp32."""
+    import torch
+
+    gate_state = {
+        name: tensor.to(torch.float32) if tensor.is_floating_point() else tensor
+        for name, tensor in gate.state_dict().items()
+    }
+    torch.save(gate_state, str(path))
+
+
 @lru_cache(maxsize=4)
 def make_mole_trainer_class(base_cls: type) -> type:
     """Factory: build a ``_MoleTrainer`` subclass of HF ``Trainer``.
@@ -64,7 +75,7 @@ def make_mole_trainer_class(base_cls: type) -> type:
                 ckpt_dir = Path(self.args.output_dir) / f"checkpoint-{step}"
                 gate = getattr(model, "mole_gate", None)
                 if ckpt_dir.is_dir() and gate is not None:
-                    torch.save(gate.state_dict(), str(ckpt_dir / "mole_gate.pt"))
+                    _save_mole_gate(gate, ckpt_dir / "mole_gate.pt")
 
         def _load_from_checkpoint(self, resume_from_checkpoint: str, model=None):
             super()._load_from_checkpoint(resume_from_checkpoint, model=model)
@@ -428,9 +439,6 @@ class MoleRoutingTrainerWrapper:
 
             attach_empty_param_group_guard(self.trainer)
 
-        if resume_from_checkpoint:
-            resume_from_checkpoint = str(resume_from_checkpoint)
-
         console.print("[green]Starting MoLE gate training...[/]")
         align_trainable_dtype_for_fp16(
             self.trainer.model,
@@ -439,10 +447,8 @@ class MoleRoutingTrainerWrapper:
         )
         result = self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)
         # Persist the trained gate (the base + adapters are unchanged on disk).
-        import torch
-
         gate_path = output_dir / "mole_gate.pt"
-        torch.save(self.model.mole_gate.state_dict(), str(gate_path))
+        _save_mole_gate(self.model.mole_gate, gate_path)
         # v0.71.17 #259 — write a self-describing manifest next to the gate so
         # `soup serve --mole <dir>` can reconstruct the decode-time blend
         # (base + N frozen task LoRAs + gate geometry).

@@ -371,9 +371,6 @@ class PRMTrainerWrapper:
 
             attach_empty_param_group_guard(self.trainer)
 
-        if resume_from_checkpoint:
-            resume_from_checkpoint = str(resume_from_checkpoint)
-
         console.print("[green]Starting PRM training...[/]")
         start = time.time()
         align_trainable_dtype_for_fp16(
