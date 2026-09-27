@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from rich.console import Console
@@ -154,7 +154,7 @@ def _load_txt(path: Path) -> list[dict]:
     return [{"text": line} for line in lines]
 
 
-@dataclass
+@dataclass(frozen=True)
 class LoadOutcome:
     """What the most recent :func:`load_dataset` call converted (#1217).
 
@@ -162,6 +162,9 @@ class LoadOutcome:
     ``"auto"``); ``first_drop`` is ``(format, row index, reason, source)`` for
     the first row a converter dropped. ``soup train`` reads it to say why a
     load ended with zero training rows instead of printing "Ready to train".
+
+    Frozen, and replaced (never mutated) as a load progresses, so a caller
+    holding one keeps a snapshot that no later load can change.
     """
 
     fmt: str | None = None
@@ -207,12 +210,15 @@ def _format_rows(
         if preserve_source_columns:
             normalized = {**raw_row, **normalized}
         formatted.append(normalized)
+    global _last_load
     if dropped and first_drop is not None:
         _report_dropped_rows(dropped, len(raw_data), fmt, first_drop, source)
         if _last_load.first_drop is None:
-            _last_load.first_drop = (fmt, first_drop[0], first_drop[1], source)
+            _last_load = replace(
+                _last_load, first_drop=(fmt, first_drop[0], first_drop[1], source)
+            )
     if _last_load.fmt is None:
-        _last_load.fmt = fmt
+        _last_load = replace(_last_load, fmt=fmt)
     return formatted
 
 

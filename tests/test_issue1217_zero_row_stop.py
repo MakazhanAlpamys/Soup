@@ -9,6 +9,7 @@ with the format and the first drop reason.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import re
 from pathlib import Path
@@ -135,6 +136,46 @@ def test_a_pre_tokenized_run_counts_its_cache_not_the_loaders_view(tmp_path):
     (cache / "metadata.json").unlink()
     with pytest.raises(typer.Exit):
         _refuse_empty_train(dcfg, {"train": []})
+
+
+def test_a_pre_tokenized_dry_run_reports_the_caches_row_count(tmp_path, monkeypatch):
+    # The loader sees the original file and keeps nothing; the run trains on
+    # the cache's rows, so that is the count the dry run must print.
+    monkeypatch.chdir(tmp_path)
+    Path("cache").mkdir()
+    Path("cache/metadata.json").write_text(json.dumps({"row_count": 6}), encoding="utf-8")
+    _write_jsonl(Path("data.jsonl"), [{"messages": _CHAT}])
+    Path("soup.yaml").write_text(
+        f"base: {_BASE}\ntask: sft\ndata:\n  train: data.jsonl\n"
+        "  format: pre_tokenized\n  tokenized_path: ./cache\n  val_split: 0.0\n"
+        "output: ./out\n",
+        encoding="utf-8",
+    )
+
+    result = CliRunner().invoke(app, ["train", "--config", "soup.yaml", "--dry-run"])
+
+    output = _plain(result.output)
+    assert result.exit_code == 0, output
+    assert "Data OK: 6 train samples" in output
+    assert "Config valid. Ready to train!" in output
+
+
+def test_the_outcome_is_a_snapshot_no_caller_or_later_load_can_change(
+    tmp_path, monkeypatch
+):
+    monkeypatch.chdir(tmp_path)
+    _write_jsonl(Path("bad.jsonl"), [{"instruction": "q", "output": "a"}])
+    _write_jsonl(Path("good.jsonl"), [{"messages": _CHAT}])
+
+    _loaded_rows("bad.jsonl", "chatml")
+    held = last_load_outcome()
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        held.first_drop = None
+
+    _loaded_rows("good.jsonl", "chatml")
+
+    assert held.first_drop == ("chatml", 0, "'messages'", "bad.jsonl")
+    assert last_load_outcome().first_drop is None
 
 
 def test_the_outcome_names_the_resolved_format_not_auto(tmp_path, monkeypatch):
