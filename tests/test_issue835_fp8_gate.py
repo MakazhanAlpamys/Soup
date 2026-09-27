@@ -612,7 +612,12 @@ class TestSoupTrainReachesTheStop:
             yaml.safe_dump({
                 "base": "nobody/not-a-real-model",
                 "task": "sft",
-                "data": {"train": "train.jsonl", "format": "chatml", "max_length": 64},
+                # val_split 0: at the default 0.1 the one row goes to validation
+                # and `soup train` stops on an empty train split (#1217).
+                "data": {
+                    "train": "train.jsonl", "format": "chatml", "max_length": 64,
+                    "val_split": 0.0,
+                },
                 **({"backend": backend} if backend else {}),
                 "training": {
                     "epochs": 1,
