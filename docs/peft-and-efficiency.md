@@ -80,16 +80,23 @@ verdict uses, not directly comparable to `soup eval` absolute numbers.
 
 ## LongLoRA Forward Override
 
-When `use_longlora: true` is set on an SFT config with a Llama / CodeLlama /
-Mistral / Mixtral / Qwen / Phi base, the trainer wraps the model in a
-`LongLoRAForwardOverride` context that monkey-patches every attention forward
-to apply the S² shifted-sparse shift (paper §3.2) — half the heads are rolled
-by `group_size // 2` along the sequence dim. Mixtral joined the allowlist in
-v0.71.16 (a bare `mistral` token never matched the MoE variant); its attention
-is the standard separate-QKV shell — the MoE lives in the MLP — so the same
-Q/K projection-shift path is reused. Restoration on context exit is idempotent
-and best-effort safe; FlashAttention v3 builds are rejected at the schema gate
-(the custom-mask kernels conflict).
+`training.use_longlora: true` is **refused at config load**
+([#1240](https://github.com/MakazhanAlpamys/Soup/issues/1240)). The override it
+installed was not S² shifted sparse attention. It rolled the query/key
+projection outputs of half the heads along the sequence with `torch.roll`,
+which wraps the last `group_size // 2` tokens around to the front, while
+attention stayed full causal. Earlier positions could attend to keys computed
+from the last tokens of the sequence, so future tokens leaked into the training
+loss, and no grouped attention ran, so it saved no memory or compute either. A
+config that set it never trained correctly.
+
+It stays refused until real S² attention exists: RoPE first, then shift q, k
+and v of half the heads, attend causally within each group, and roll the
+output back. Every spelling read as true (`yes`, `on`, `1` ...) is refused;
+remove the key or set it to `false`. To extend the context, set
+`training.rope_scaling_type` (see
+[Long Context](#long-context--yarn-llama-31-ntk-longlora)) and train plain
+LoRA.
 
 
 ## Multipack — FFD Bin-Packing Sampler
@@ -119,7 +126,7 @@ The `JinjaTemplateAnalyzer` (also v0.37.0) walks chat-template ASTs to discover 
 
 ## Long Context — YaRN, Llama 3.1 NTK, LongLoRA
 
-Soup ships five RoPE-scaling strategies plus a LongLoRA schema gate:
+Soup ships five RoPE-scaling strategies (LongLoRA is refused, see below):
 
 ```yaml
 # soup.yaml
@@ -143,7 +150,7 @@ training:
 
 RoPE scaling is applied before model construction for the Transformers text paths of `task: sft` and `task: pretrain`. Vision, audio, layer-streaming and Unsloth setup paths do not consume these fields, nor do other training tasks. Existing type-independent model parameters such as `rope_theta` are preserved; tunables belonging to a previous RoPE algorithm are removed when the type changes. Models such as Gemma 3 that use nested per-layer RoPE sections are refused rather than partially modified. `longrope` additionally requires a checkpoint that already ships its learned `short_factor` and `long_factor` vectors; Soup refuses to invent those model-specific values.
 
-**LongLoRA S².** `training.use_longlora: true` requires `task=sft`, `backend=transformers`, a base in the architecture allowlist (Llama / CodeLlama / Mistral / Mixtral / Qwen / Phi), and `use_ring_attention=false`. The schema also rejects the combo with FlashAttention v3 installed (the S² custom-mask kernel conflicts with FA-v3 native custom-mask). During SFT setup, Soup installs the shifted-sparse attention forward override on matching attention modules.
+**LongLoRA S².** `training.use_longlora: true` is refused at config load ([#1240](https://github.com/MakazhanAlpamys/Soup/issues/1240)): the override it installed leaked future tokens into earlier positions and applied no S² grouping (see [LongLoRA Forward Override](#longlora-forward-override)). Use one of the RoPE-scaling strategies above with plain LoRA instead.
 
 ```yaml
 # Llama 3.1 with NTK-aware scaling out to 128k
@@ -376,6 +383,8 @@ training:
     alpha: 16
 ```
 
+- **Compatibility:** Wired on every Trainer-based task that trains a LoRA adapter, including the preference and RL tasks (`dpo`, `kto`, `orpo`, `simpo`, `ipo`, `bco`, `grpo`, `online_dpo`, `ppo`, `reward_model`, `distill`). Most attach the LoRA+ optimizer once the trainer is built; `ppo` passes it to the trainer's constructor instead, because trl's PPO trainer builds its optimizer and LR scheduler eagerly, and adds the value model to it at the base learning rate, as trl's default optimizer does. `classifier`, `reranker`, `cross_encoder` and `asr` full fine-tune by default, so LoRA+ applies there only with `classifier_lora: true` / `asr_lora: true` and `lora.r > 0`. Refused at config parse on tasks with no trainable LoRA $B$ matrix: `prm` (full fine-tune), `moe_lora_routing` (only the routing gate trains), and `classifier` / `reranker` / `cross_encoder` / `asr` without their LoRA flag. Also refused on `unlearn`, which runs its own optimizer loop rather than a Trainer. Refused with `lora.use_vera` (VeRA trains scaling vectors, not $A$/$B$ matrices, so every trainable tensor would run at `lr * ratio`). Mutually exclusive with `use_lorafa`.
+
 
 ## LoRA-FA (Frozen-A LoRA)
 
@@ -460,7 +469,7 @@ training:
   packing: true  # Pack short samples together (faster training)
 ```
 
-Works with SFT and Pretrain tasks. Warning emitted if `max_length < 256`.
+Works with SFT and Pretrain tasks. Packed SFT keeps the assistant-only loss mask (`train_on_responses_only`, `train_on_messages_with_train_field`, `mask_history`, or a pre-tokenised `labels` column). Warning emitted if `max_length < 256`.
 
 
 ## Curriculum Learning
@@ -615,6 +624,8 @@ soup train --config soup.yaml \
 
 The report contains the geometric `lrs[]`, raw + EMA-smoothed `losses[]`, the recommended LR (steepest negative gradient before divergence), the LR with min loss, and the divergence point if any.
 
+The sweep takes one training row per step. With fewer rows than `--find-lr-steps`, it runs one step per row over the same `--find-lr-start` → `--find-lr-end` range and prints a line saying so. The recommendation needs at least 4 points, so `--find-lr-steps` must be at least 4 and a training set with fewer than 4 rows is refused before the model loads. If the loss turns non-finite partway through, the report covers the steps before it; if that leaves fewer than 4, the command says where it diverged instead of writing a report.
+
 ### Auto Warmup Schedule
 
 ```yaml
@@ -633,6 +644,10 @@ training:
 ```
 
 Picks `bf16` on Ampere+, `fp16` on Turing or known fp16-stable models (Qwen2 / Qwen2.5 / Phi-3 / Phi-3.5), `no` on pre-Pascal. Multi-version pairs (`qwen2.5` vs `qwen2`, `phi-3.5` vs `phi-3`) match the longest substring deterministically.
+
+The experimental QuEST route (`quantization_aware: quest`) refuses this flag at
+config load because its evidence covers BF16, not FP16; see the
+[QuEST evidence boundary](performance-and-quantization.md#evidence-boundary).
 
 ### Loss Spike Auto-Recovery
 
