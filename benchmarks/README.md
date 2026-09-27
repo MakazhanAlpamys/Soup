@@ -145,7 +145,7 @@ figure, and why the fit decision refuses rather than warns.
 
 | File | Historical scope | Verdict | Requirements and limitations |
 |---|---|---|---|
-| determinism.py | STEP 2b / Measurements 1-2 | Historical reconstruction validator for exact forward, resident determinism, and streamed instability; accepts a measured JSON record and never treats replay as CUDA execution | CPU/static record replay; original CUDA protocol requires the recorded H100 stack; invalid or incomplete asymmetry fails |
+| [`determinism.py`](harness/determinism.py) | STEP 2b / Measurements 1-2 | Historical reconstruction that measures forward, repeated backward, streamed/resident gradients, and repeated loss curves in-process; optional JSON replay is explicitly separate from measurement | CUDA measurement requires the recorded H100-class stack and checkpoint; CPU tests cover verdict and invalid-measurement guards; empty overlap, non-finite values, missing measurements, or absent asymmetry fail |
 
 ## Reproducing
 
