@@ -914,6 +914,85 @@ class TestGenerateBatch:
         ]
         assert len(model.generate_calls) == 3
 
+    def test_cli_batches_keep_prompt_response_pairs_in_input_order(
+        self, tmp_path, monkeypatch
+    ):
+        import torch
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        prompts = ["say a", "say b", "say c", "say d", "say e"]
+        prompts_path = tmp_path / "prompts.jsonl"
+        prompts_path.write_text(
+            "".join(json.dumps({"prompt": prompt}) + "\n" for prompt in prompts)
+        )
+        output_path = tmp_path / "output.jsonl"
+
+        class PairingTokenizer:
+            chat_template = None
+            pad_token_id = 0
+            padding_side = "right"
+
+            def __call__(
+                self,
+                texts,
+                *,
+                add_special_tokens=True,
+                padding=False,
+                return_tensors=None,
+            ):
+                rows = [
+                    [ord(text[-1])]
+                    for text in (texts if isinstance(texts, list) else [texts])
+                ]
+                width = max(len(row) for row in rows)
+                return {
+                    "input_ids": torch.tensor(
+                        [row + [self.pad_token_id] * (width - len(row)) for row in rows]
+                    ),
+                    "attention_mask": torch.ones(
+                        (len(rows), width), dtype=torch.long
+                    ),
+                }
+
+            def decode(self, token_ids, skip_special_tokens=True):
+                return chr(int(token_ids[-1]))
+
+        class PairingModel:
+            device = torch.device("cpu")
+
+            def generate(self, input_ids, attention_mask, **kwargs):
+                responses = (input_ids[:, -1] + 32).unsqueeze(1)
+                return torch.cat([input_ids, responses], dim=1)
+
+        model = PairingModel()
+        tokenizer = PairingTokenizer()
+        monkeypatch.setattr(
+            "soup_cli.commands.infer._load_model",
+            lambda *args, **kwargs: (model, tokenizer),
+        )
+        monkeypatch.chdir(tmp_path)
+
+        result = CliRunner().invoke(
+            app,
+            [
+                "infer",
+                "--model", "fake/model",
+                "--input", str(prompts_path),
+                "--output", str(output_path),
+                "--device", "cpu",
+                "--batch-size", "2",
+                "--temperature", "0",
+            ],
+        )
+
+        assert result.exit_code == 0, result.output
+        rows = [json.loads(line) for line in output_path.read_text().splitlines()]
+        assert [(row["prompt"], row["response"]) for row in rows] == [
+            (prompt, prompt[-1].upper()) for prompt in prompts
+        ]
+
     def test_batch_size_one_and_eight_have_identical_outputs(
         self, tmp_path, monkeypatch
     ):
@@ -1091,4 +1170,3 @@ class TestInferHFRepoId:
             assert called_model_arg == repo_id
             assert "\\" not in called_model_arg
             assert "/" in called_model_arg
-
