@@ -577,7 +577,7 @@ class TestCacheKeyCoversMaskMode:
             max_length=128,
         )
         with pytest.raises(ValueError, match="cache hash mismatch") as exc:
-            _maybe_load_pretokenized(dcfg, "x/y", Console())
+            _maybe_load_pretokenized(dcfg, "x/y", Console(), task="sft")
         assert expected in str(exc.value)
         assert absent not in str(exc.value)
 
@@ -681,7 +681,7 @@ class TestCacheKeyCoversMaskMode:
             train_on_messages_with_train_field=True,
         )
         with pytest.raises(ValueError, match="cache hash mismatch"):
-            _maybe_load_pretokenized(dcfg, "x/y", Console())
+            _maybe_load_pretokenized(dcfg, "x/y", Console(), task="sft")
 
     def test_matching_mask_mode_still_loads(self, tmp_path, monkeypatch):
         """Control: the gate must not reject a cache built under the SAME config
@@ -701,7 +701,7 @@ class TestCacheKeyCoversMaskMode:
             tokenized_path=str(cache_dir.relative_to(tmp_path)),
             max_length=128,
         )
-        loaded = _maybe_load_pretokenized(dcfg, "x/y", Console())
+        loaded = _maybe_load_pretokenized(dcfg, "x/y", Console(), task="sft")
         assert loaded is not None
         train_ds, _ = loaded
         assert len(train_ds) == 1

@@ -671,9 +671,12 @@ class MLXSFTTrainerWrapper:
             _sticky_val_loss = None
             #: Last measured training values, carried into the row an
             #: evaluation creates so it reports no number that was not
-            #: measured somewhere. Initial 0.0 matches the transformers
-            #: callback's own initialisation (callback.py:61-63).
-            _last_loss = 0.0
+            #: measured somewhere. `_last_loss` starts as None, not 0.0
+            #: (#1225): an evaluation before the first training step has no
+            #: loss to carry, and a 0.0 there would become the lowest point of
+            #: the run's loss series. The transformers callback records None
+            #: at the same point.
+            _last_loss = None
             _last_lr = 0.0
             _last_speed = 0.0
 
@@ -718,7 +721,8 @@ class MLXSFTTrainerWrapper:
                     display.update(
                         step=step,
                         epoch=epoch,
-                        loss=captured.get("losses", [0.0])[-1] if captured.get("losses") else 0.0,
+                        # None before the first training loss (#1225): the panel shows "-"
+                        loss=captured["losses"][-1] if captured.get("losses") else None,
                         lr=cfg.training.lr,
                         val_loss=val_loss,
                     )
@@ -732,10 +736,10 @@ class MLXSFTTrainerWrapper:
                         # evaluation creates (callback.py:205-207); this mirrors
                         # it, so the two backends fabricate the same nothing.
                         #
-                        # An evaluation before the first training step still
-                        # carries the 0.0 initial value -- there is no measured
-                        # loss to carry yet -- which is exactly what the
-                        # transformers path does at the same point.
+                        # An evaluation before the first training step has no
+                        # measured loss to carry yet, so its row records None
+                        # (#1225), as the transformers callback does at the
+                        # same point.
                         tracker.log_metrics(
                             run_id=run_id,
                             step=step,
