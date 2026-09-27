@@ -69,7 +69,7 @@ def migrate_unsloth(notebook_path: Path) -> Dict[str, Any]:
         else:
             all_source += source + "\n"
 
-    # Parse AST — safe, no execution
+    # Parse AST - safe, no execution
     try:
         tree = ast.parse(all_source)
     except SyntaxError:
@@ -87,15 +87,22 @@ def migrate_unsloth(notebook_path: Path) -> Dict[str, Any]:
     task = "sft"
     output_dir = "./output"
 
-    # Collect variable assignments from notebook code
+    # Collect variable assignments from notebook code (module-level only, in source order)
     assignments: Dict[str, Any] = {}
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Assign):
-            val = _ast_to_value(node.value)
-            if val is not _SENTINEL:
-                for target in node.targets:
-                    if isinstance(target, ast.Name):
-                        assignments[target.id] = val
+    ambiguous: set = set()
+    for stmt in tree.body:
+        if not isinstance(stmt, ast.Assign):
+            continue
+        val = _ast_to_value(stmt.value)
+        for target in stmt.targets:
+            if not isinstance(target, ast.Name):
+                continue
+            if val is _SENTINEL or assignments.get(target.id, val) != val:
+                ambiguous.add(target.id)
+            else:
+                assignments[target.id] = val
+    for name in ambiguous:
+        assignments.pop(name, None)
 
     # Walk AST to extract function call arguments
     for node in ast.walk(tree):

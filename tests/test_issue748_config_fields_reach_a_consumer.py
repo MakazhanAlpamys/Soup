@@ -292,9 +292,17 @@ def _consumer_modules():
     return [p for p in SRC.rglob("*.py") if p.name != SCHEMA]
 
 
+# Fields whose name collides with an unrelated read elsewhere in src/, so only
+# a read through a `*.training` receiver counts as consumption.
+_RECEIVER_QUALIFIED = frozenset({
+    "training.forgetting_threshold",  # ship.py has a local of the same name
+    "training.load_in_16bit",  # migrate/unsloth.py reads an Unsloth kwarg of that name
+})
+
+
 def field_reaches_a_consumer(key: str, attr: str, consumed: set) -> bool:
     """Apply receiver-qualified checks where the global namespace collides."""
-    if key == "training.forgetting_threshold":
+    if key in _RECEIVER_QUALIFIED:
         return training_receiver_reads(_consumer_modules(), attr)
     return attr in consumed
 
@@ -369,6 +377,7 @@ KNOWN_UNCONSUMED = {
                                   "(documented as wiring Tiled MLP; no Tiled MLP exists)",
     "training.vision_grpo": "#808 -- warns at load from v0.76, refused as of v0.77 "
                             "(no vision GRPO path)",
+    "training.load_in_16bit": "no issue needed: schema rewrites quantization at validation time",
     "training.unsloth_bnb_4bit": "no issue needed: schema assertion alias",
     "training.llm_int8": "no issue needed: schema assertion alias",
     "training.quantize_ref_model": "#808 -- warns at load from v0.76, refused as of v0.77 "
@@ -676,8 +685,8 @@ def test_the_allowlist_size_is_pinned_exactly():
     half: it names WHICH entry went stale, where this one only says the count
     moved.
     """
-    assert len(KNOWN_UNCONSUMED) == 35, (
-        f"KNOWN_UNCONSUMED is {len(KNOWN_UNCONSUMED)}, pinned at 35. Going UP "
+    assert len(KNOWN_UNCONSUMED) == 36, (
+        f"KNOWN_UNCONSUMED is {len(KNOWN_UNCONSUMED)}, pinned at 36. Going UP "
         "means a field was allowlisted rather than wired; going DOWN means an "
         "entry was retired, which is the good direction -- lower this number "
         "in the same commit."

@@ -160,7 +160,7 @@ def migrate_llamafactory(config_path: Path) -> Dict[str, Any]:
                 f"Unsupported quantization_bit={quant_bit} for method '{method_name}'"
             )
     elif quant_method == "hqq":
-        if quant_bit in (1, 2, 3, 4, 8):
+        if quant_bit in (1, 2, 3, 4, 5, 6, 8):
             training["quantization"] = f"hqq:{quant_bit}bit"
         else:
             raise ValueError(

@@ -1,4 +1,4 @@
-"""soup migrate — import configs from LLaMA-Factory, Axolotl, and Unsloth."""
+"""soup migrate - import configs from LLaMA-Factory, Axolotl, and Unsloth."""
 
 import json
 from pathlib import Path
@@ -129,8 +129,8 @@ def migrate(
     try:
         loaded_cfg = load_config_from_string(yaml_str)
     except Exception as exc:
-        from rich.markup import escape
-        console.print(f"[red]Generated config failed schema validation: {escape(str(exc))}[/]")
+        from soup_cli.utils.terminal import for_terminal
+        console.print(f"[red]Generated config failed schema validation: {for_terminal(exc)}[/]")
         raise typer.Exit(1)
 
     task_val = getattr(loaded_cfg, "task", "unknown")

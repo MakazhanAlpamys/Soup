@@ -10,6 +10,7 @@ import json
 from pathlib import Path
 
 import pytest
+import yaml
 from typer.testing import CliRunner
 
 from soup_cli.cli import app
@@ -21,6 +22,11 @@ from soup_cli.migrate.unsloth import migrate_unsloth
 from tests.conftest import strip_ansi
 
 runner = CliRunner()
+
+
+def _plain(text: str) -> str:
+    """ANSI-stripped, whitespace-collapsed CLI output."""
+    return " ".join(strip_ansi(text).split())
 
 
 
@@ -317,10 +323,13 @@ class TestUnslothQuantizationAndFullFinetuning:
         assert loaded.training.quantization == "none"
         assert loaded.training.lora.r == 0
 
-    def test_unsloth_load_in_4bit_true_or_default(self, tmp_path: Path) -> None:
-        nb = self._make_notebook(
-            "model, tok = FastLanguageModel.from_pretrained('meta-llama/Llama-3.1-8B')"
-        )
+    @pytest.mark.parametrize("call_str", [
+        "model, tok = FastLanguageModel.from_pretrained('meta-llama/Llama-3.1-8B')",
+        "model, tok = FastLanguageModel.from_pretrained(\n"
+        "    'meta-llama/Llama-3.1-8B', load_in_4bit=True\n)",
+    ])
+    def test_unsloth_load_in_4bit_true_or_default(self, tmp_path: Path, call_str: str) -> None:
+        nb = self._make_notebook(call_str)
         nb_file = tmp_path / "test.ipynb"
         nb_file.write_text(json.dumps(nb), encoding="utf-8")
         res = migrate_unsloth(nb_file)
@@ -394,4 +403,135 @@ class TestMigrateCLIDryRunOutput:
         ])
         assert result.exit_code == 0
         clean = strip_ansi(result.output)
-        assert "r: 0" in clean or "lora.r=0" in clean
+        assert "lora.r=0" in clean or " r: 0" in clean
+
+    def test_cli_refuses_to_write_a_config_that_fails_schema_validation(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        src = tmp_path / "negative_rank.yaml"
+        src.write_text(
+            "model_name_or_path: meta-llama/Llama-3.1-8B-Instruct\n"
+            "stage: sft\nfinetuning_type: lora\nlora_rank: -5\ndataset: alpaca\n",
+            encoding="utf-8",
+        )
+        result = runner.invoke(
+            app, ["migrate", "--from", "llamafactory", str(src), "--output", "soup.yaml", "--yes"]
+        )
+        assert result.exit_code == 1, (result.output, repr(result.exception))
+        plain = _plain(result.output)
+        assert "failed schema validation" in plain
+        assert "lora -> r" in plain
+        assert not (tmp_path / "soup.yaml").exists()
+
+    def test_cli_subtitle_reports_the_resolved_values(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        src = tmp_path / "full_sft.yaml"
+        src.write_text(
+            "model_name_or_path: meta-llama/Llama-3.1-8B-Instruct\n"
+            "stage: sft\nfinetuning_type: full\ndataset: alpaca\n",
+            encoding="utf-8",
+        )
+        result = runner.invoke(app, ["migrate", "--from", "llamafactory", str(src), "--dry-run"])
+        assert result.exit_code == 0, (result.output, repr(result.exception))
+        assert "Resolved: task=sft, quantization=none, lora.r=0" in _plain(result.output)
+
+
+@pytest.mark.parametrize("yaml_value, expected", [("'4'", "4bit"), ('"8"', "8bit")])
+def test_llamafactory_quoted_quantization_bit_is_coerced(
+    tmp_path: Path, yaml_value: str, expected: str
+) -> None:
+    cfg = tmp_path / "cfg.yaml"
+    cfg.write_text(
+        "model_name_or_path: meta-llama/Llama-3.1-8B-Instruct\n"
+        "stage: sft\nfinetuning_type: lora\n"
+        f"quantization_bit: {yaml_value}\ndataset: alpaca\n",
+        encoding="utf-8",
+    )
+    assert isinstance(yaml.safe_load(cfg.read_text(encoding="utf-8"))["quantization_bit"], str)
+    loaded = load_config_from_string(config_to_yaml(migrate_llamafactory(cfg)))
+    assert loaded.training.quantization == expected
+
+
+def test_llamafactory_bnb_bit_width_other_than_4_or_8_is_refused(tmp_path: Path) -> None:
+    cfg = tmp_path / "cfg.yaml"
+    cfg.write_text(
+        "model_name_or_path: meta-llama/Llama-3.1-8B-Instruct\n"
+        "stage: sft\nfinetuning_type: lora\nquantization_bit: 2\ndataset: alpaca\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="quantization_bit=2"):
+        migrate_llamafactory(cfg)
+
+
+def test_unsloth_full_finetuning_on_dpo_is_refused(tmp_path: Path) -> None:
+    cells = [{"cell_type": "code", "source": [
+        "from unsloth import FastLanguageModel\n",
+        "model, tok = FastLanguageModel.from_pretrained('m', full_finetuning=True)\n",
+        "from trl import DPOTrainer\n",
+        "trainer = DPOTrainer(model=model)\n",
+    ]}]
+    nb = tmp_path / "nb.ipynb"
+    nb.write_text(json.dumps({"cells": cells}), encoding="utf-8")
+    with pytest.raises(ValueError, match="task 'dpo'"):
+        migrate_unsloth(nb)
+
+
+def test_axolotl_non_lora_adapter_warns_and_falls_back_to_lora(tmp_path: Path) -> None:
+    cfg = tmp_path / "cfg.yaml"
+    cfg.write_text(
+        "base_model: meta-llama/Llama-3.1-8B-Instruct\n"
+        "adapter: llama-adapter\n"
+        "datasets:\n"
+        "  - path: ./data/train.jsonl\n"
+        "    type: alpaca\n",
+        encoding="utf-8",
+    )
+    res = migrate_axolotl(cfg)
+    assert any("llama-adapter" in w and "Using LoRA instead" in w for w in res["_warnings"])
+    loaded = load_config_from_string(config_to_yaml(res))
+    assert loaded.training.lora.r != 0
+
+
+@pytest.mark.parametrize("bits", [5, 6])
+def test_llamafactory_hqq_5_and_6_bit(tmp_path: Path, bits: int) -> None:
+    cfg = tmp_path / "cfg.yaml"
+    cfg.write_text(
+        "model_name_or_path: meta-llama/Llama-3.1-8B-Instruct\n"
+        "stage: sft\nfinetuning_type: lora\n"
+        f"quantization_bit: {bits}\nquantization_method: hqq\ndataset: alpaca\n",
+        encoding="utf-8",
+    )
+    res = migrate_llamafactory(cfg)
+    loaded = load_config_from_string(config_to_yaml(res))
+    assert loaded.training.quantization == f"hqq:{bits}bit"
+
+
+def test_unsloth_variable_in_helper_function_ignored(tmp_path: Path) -> None:
+    cells = [{"cell_type": "code", "source": [
+        "load_in_4bit = False\n",
+        "def helper():\n",
+        "    load_in_4bit = True\n",
+        "from unsloth import FastLanguageModel\n",
+        "model, tok = FastLanguageModel.from_pretrained('m', load_in_4bit=load_in_4bit)\n",
+    ]}]
+    nb = tmp_path / "nb.ipynb"
+    nb.write_text(json.dumps({"cells": cells}), encoding="utf-8")
+    res = migrate_unsloth(nb)
+    loaded = load_config_from_string(config_to_yaml(res))
+    assert loaded.training.quantization == "none"
+
+
+def test_unsloth_conflicting_variable_assignments_warns(tmp_path: Path) -> None:
+    cells = [{"cell_type": "code", "source": [
+        "load_in_4bit = False\n",
+        "from unsloth import FastLanguageModel\n",
+        "model, tok = FastLanguageModel.from_pretrained('m', load_in_4bit=load_in_4bit)\n",
+        "load_in_4bit = True\n",
+    ]}]
+    nb = tmp_path / "nb.ipynb"
+    nb.write_text(json.dumps({"cells": cells}), encoding="utf-8")
+    res = migrate_unsloth(nb)
+    assert any("load_in_4bit" in w for w in res["_warnings"])

@@ -94,6 +94,10 @@ def migrate_axolotl(config_path: Path) -> Dict[str, Any]:
     lora_section: Dict[str, Any] = {}
     include_lora = adapter in ("lora", "qlora")
 
+    if adapter and not include_lora:
+        warnings.append(f"adapter: {adapter} has no Soup equivalent. Using LoRA instead.")
+        include_lora = True
+
     if include_lora:
         if "lora_r" in raw:
             lora_section["r"] = raw["lora_r"]
@@ -109,7 +113,7 @@ def migrate_axolotl(config_path: Path) -> Dict[str, Any]:
         # No adapter specified -> full fine-tuning requested
         if task in ("sft", "embedding"):
             warnings.append(
-                f"No adapter specified for task '{task}' — "
+                f"No adapter specified for task '{task}' - "
                 "full fine-tuning will be used (lora.r: 0)."
             )
             lora_section["r"] = 0
