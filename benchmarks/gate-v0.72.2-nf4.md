@@ -343,15 +343,24 @@ have printed ~52 B.
 ## Post-#331 re-measurement — MEASURED 2026-09-19 ([#361](https://github.com/MakazhanAlpamys/Soup/issues/361))
 
 The run date is recovered from the machine, not from the JSON (which carries no
-timestamp): `row-361.json` on the reference laptop was created **2026-09-19
-05:17:12 IST** and last written **05:19:13 IST** (UTC+05:30), i.e. 2026-09-18
-23:47–23:49 UTC. Two readings corroborate it: the harness's own output ends
-`ROW WRITTEN 05:19:16`, and the 121 s span between the two file times is
-consistent with the measured window (50 steps × 2431.5 ms = 121.6 s), the
-per-step flush opening the file at step 1. The row reached #361 at 2026-09-19
-00:24 UTC, 35 minutes after the run ended. This record was written 2026-09-20,
-when this PR opened; the heading carries the measurement date, as every other
-heading in this file does.
+timestamp): `row-361.json`, the harness's `--json` output, still sits on
+@umran666's laptop with creation time **2026-09-19 05:17:12 IST** and last
+write **05:19:13 IST** (UTC+05:30), i.e. 2026-09-18 23:47–23:49 UTC. The
+harness rewrites that file after every measured step
+(`harness/issue361_nf4_throughput.py:489-492`) and once more after the
+same-session ceiling (`:548-551`), so the 121 s between the two file times is
+measured steps 2–50 plus the ceiling: 49 × 2454.5 ms, the mean implied by
+208.6 tok/s, is 120.3 s. No printed timestamp is quoted here, because the
+harness could not have printed one — its only write-path output is
+`row written -> <path>` (`:601`) and no `print` in it emits a wall clock, which
+is why the date comes from the file and not the console. The committed JSON is
+that file: 1387 bytes on disk against the 1326-byte blob with 61 line breaks
+here, the difference being the carriage return `Path.write_text` adds per line
+break on Windows, and with the carriage returns stripped the two are identical
+character for character. The row reached #361 at 2026-09-19 00:24 UTC, 35
+minutes after the run ended. This record was written 2026-09-20, when this PR
+opened; the heading carries the measurement date, as every other heading in
+this file does.
 
 Measured post-#331 row, added — the rows above stay verbatim:
 
@@ -377,21 +386,27 @@ floor. An earlier issue comment said `main` at `2d1714b`; the numbers are
 identical, so it is one run with two SHAs attached, and this record
 governs.
 
-Invocation: `python benchmarks/harness/issue361_nf4_throughput.py
---weights C:\llama31-8b-instruct --shards <scratch dir> --json
-benchmarks/results/issue361-post-repair-8b-nf4.json`, every other flag the
-protocol default (batch 1, S=512, 10 warm-up + 50 measured,
-`PagedAdamW8bit`, double buffering, same-session ceiling). The shard dir
-was a scratch location, since deleted; it is not recorded in the JSON.
-No run was discarded: the slowest measured step (3479 ms against a
-2431.5 ms median) is retained in the JSON's `step_time_ms.max`.
+Invocation: `python benchmarks/harness/issue361_nf4_throughput.py --weights
+C:\llama31-8b-instruct --shards <scratch dir> --json row-361.json`, every other
+flag the protocol default (batch 1, S=512, 10 warm-up + 50 measured,
+`PagedAdamW8bit`, double buffering, same-session ceiling). The `--json` target
+was `row-361.json` in the laptop's home directory, not the committed path: the
+JSON records neither the shard dir nor its own output path, so this line is
+recovered from the file itself — the same file whose file times give the run
+date above — and not from a shell history, which no longer reaches the run. It
+reached `benchmarks/results/issue361-post-repair-8b-nf4.json` as a copy,
+unchanged, and the byte and content tie above is the evidence for
+"unchanged". `--weights` is not memory either: it is the JSON's own `weights`
+field. The shard dir was a scratch location, since deleted. No run was
+discarded: the slowest measured step (3479 ms against a 2431.5 ms median) is
+retained in the JSON's `step_time_ms.max`.
 
 **Read this row with its clock.** The pre-repair row ran at 952 MHz / 70 C, this
-one at 1935–1957 MHz / 59 C — the same GPU model on a different laptop, at
-roughly half its clock and running hotter. Two readings of the old 952 MHz fit
-the evidence and this comparison cannot tell them apart: a throttled or
-power-limited session (AC/power plan not recorded for the old row), or simply
-a lower power limit and weaker cooling on that laptop. The 1.74x
+one at 1935–1957 MHz / 59 C on a different laptop with the same GPU model; the
+old row is the one at roughly half the clock, running hotter. Two readings of
+the old 952 MHz fit the evidence and this comparison cannot tell them apart: a
+throttled or power-limited session (AC/power plan not recorded for the old row),
+or simply a lower power limit and weaker cooling on that laptop. The 1.74x
 raw gain (208.6 / 119.6) is therefore a clock, not a speedup: per unit clock
 the new code is ~14% slower (1.744 / 2.033 = 0.858), matching the same-session
 ceiling fraction moving 68% -> 59% to within 1% (59/68 = 0.868). Do not compare
@@ -446,9 +461,9 @@ out of the resident allocation (see `docs/performance-and-quantization.md`).
 **Outcome vs the expected direction, recorded rather than edited away.** The
 figure came in *above* 119.6 tok/s, and it has its explanation before it, as
 required: a 952 → 1935 MHz clock change accounts for the whole excess and then
-some. Per unit clock the repair direction holds (about −14%, vs −4.8% at 32B
-— different clocks, different memory patterns, so read that as same-direction,
-not same-size).
+some. Per unit clock the pre-registered direction holds (about −14%, not
+attributed — see the stack delta above), so it is not comparable in size to the
+−4.8% at 32B: different clocks, different memory patterns, same-direction only.
 
 Both run-it-from floors from #361 are satisfied: the run landed above
 `f8226214` and above the later `76c23541`.
