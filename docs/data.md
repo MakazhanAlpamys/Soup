@@ -808,6 +808,9 @@ reports them as ignored.
 
 
 **AOT preprocessing:**
+Pre-tokenized caches are text-only and cannot be combined with modality,
+vocabulary expansion, or prompt_strategy; those live transformations are
+refused at config load instead of being silently skipped.
 
 ```bash
 # Tokenize once, reuse the cache across runs.
