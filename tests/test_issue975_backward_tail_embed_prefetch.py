@@ -20,9 +20,8 @@ slot already holding what it asked for and is a same-owner no-op.
 This only matters for an UNTIED checkpoint: a tied model streams one key for
 both `embed_tokens` and `lm_head`, so `LargeLayerBufferPool.owner` never
 changes across a whole run and the ping-pong this fix targets does not exist.
-`_build_streamed_wrapper` in `test_v07204.py` never passes `tie` through to
-`_tiny_llama_dir`, so every fixture built through it is tied — this file
-builds its own untied fixture directly.
+`_build_streamed_wrapper` in `test_v07204.py` has taken `tie` since #1061; this
+file predates that and keeps its own small helper below rather than switching.
 """
 
 from __future__ import annotations
@@ -135,6 +134,32 @@ class TestBackwardTailEmbedPrefetch:
         # so every `train()` now ends with exactly one extra load.
         assert large_pool.loads == 5, large_pool.loads
         wrapper._close_stream_runtime()
+
+    def test_the_refill_fires_once_per_backward_at_layer_0(self, tmp_path, monkeypatch):
+        """Where in the backward the refill fires, not only that it fires.
+
+        On two layers the first recompute that walks downward IS layer 0, so a
+        refill moved to the start of the backward passes every other test here.
+        On a real model that would queue the whole head-sized copy in front of
+        the backward's decoder copies on the shared copy stream, and change the
+        order of `source.get()` calls, which #975 relies on being unchanged.
+        Four layers tell the two apart.
+        """
+        wrapper, _, _ = _build_untied_wrapper(tmp_path, monkeypatch, n_layers=4)
+        prefetcher = wrapper._stream_runtime.prefetcher
+        refill = prefetcher.backward_tail_prefetch
+        fired_at = []
+
+        def _recording_refill():
+            fired_at.append((prefetcher.direction, prefetcher.prev))
+            refill()
+
+        prefetcher.backward_tail_prefetch = _recording_refill
+        wrapper.trainer.args.max_steps = 2
+        wrapper.trainer.train()
+        wrapper._close_stream_runtime()
+        # (direction, layer) at each call: once per step, walking down, at layer 0.
+        assert fired_at == [(-1, 0), (-1, 0)], fired_at
 
 
 class _PinnedSource:
