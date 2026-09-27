@@ -878,6 +878,12 @@ data:
   # video_dir: ./videos
 ```
 
+`add_new_tokens` / `new_special_tokens` are added to the tokenizer, with the embeddings
+resized, on `backend: transformers` for `sft` (text, vision and audio), `dpo`, `kto`,
+`orpo`, `ipo`, `simpo`, `bco`, `grpo`, `online_dpo`, `preference` and `tts`. Any other
+task, `backend: unsloth` or `mlx`, and `training.stream_layers` never add them, so a
+config setting them there is refused at load, naming which of those applies (#1358).
+
 `mask_history: true` keeps only the **last** assistant turn in the loss: every
 earlier assistant turn is masked alongside the user and system turns the
 assistant-only path already excludes. It never adds tokens to the loss.

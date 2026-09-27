@@ -4723,6 +4723,16 @@ def remap_root_level_misplaced_keys(values):
     return new_values
 
 
+#: #1358 — the tasks whose transformers setup adds ``data.add_new_tokens`` /
+#: ``data.new_special_tokens`` to the tokenizer (``apply_vocab_expansion``):
+#: SFT's text / vision / audio paths and the DPO/GRPO family, ``preference``
+#: through the trainers it delegates to and ``tts`` through SFT's text path.
+VOCAB_EXPANSION_TASKS: frozenset[str] = frozenset({
+    "sft", "dpo", "kto", "orpo", "ipo", "simpo", "bco", "grpo", "online_dpo",
+    "preference", "tts",
+})
+
+
 # task values whose trainer wrapper subclasses SFTTrainerWrapper and so reads
 # training.use_flash_attn / training.use_liger (sft.py:_setup_transformers,
 # inherited by tts.py via super()). Every other task ignores both fields.
@@ -5069,6 +5079,42 @@ class SoupConfig(BaseModel):
             "task='prm' does not apply training.lora: the PRM trainer fine-tunes "
             "every base parameter. Remove the lora block (or set lora.r: 0)."
         )
+
+    @model_validator(mode="after")
+    def _validate_vocab_expansion_is_applied(self) -> "SoupConfig":
+        """#1358 — ``data.add_new_tokens`` / ``data.new_special_tokens`` are added
+        only by ``apply_vocab_expansion``, which only transformers setups call.
+        Anywhere else they loaded and were dropped. The task check comes first:
+        it holds on every backend, so switching backend never meets a second
+        refusal from this check."""
+        data = self.data
+        fields = [f"data.{name}" for name in ("add_new_tokens", "new_special_tokens")
+                  if getattr(data, name)]
+        if not fields:
+            return self
+        field = fields[0]
+        if self.task not in VOCAB_EXPANSION_TASKS:
+            raise ValueError(
+                f"{field} is not applied by task={self.task!r}: that trainer never adds "
+                "tokens to its tokenizer or resizes its embeddings. Remove it."
+            )
+        if self.training.stream_layers:
+            raise ValueError(
+                f"{field} is not applied with training.stream_layers: the streamed "
+                "model is built without the step that adds tokens and resizes the "
+                "embeddings. Remove it, or turn off stream_layers."
+            )
+        why = {
+            "unsloth": "its setup loads the model and attaches LoRA in one call, with "
+            "no step that adds tokens",
+            "mlx": "the MLX trainer never adds tokens to its tokenizer",
+        }.get(self.backend)
+        if why is not None:
+            raise ValueError(
+                f"{field} is not applied on backend={self.backend!r}: {why}. Use "
+                "backend: transformers, or remove it."
+            )
+        return self
 
     @model_validator(mode="after")
     def _validate_moe_lora_task(self) -> "SoupConfig":

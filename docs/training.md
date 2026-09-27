@@ -1858,7 +1858,9 @@ training:
 
 Operator-supplied `data.new_special_tokens` are registered (deduplicated, only
 tokens not already in the vocab) and the embedding matrix is resized through the
-(possibly PEFT-wrapped) model so the codec-token ids have rows. Orpheus + Oute
+(possibly PEFT-wrapped) model so the codec-token ids have rows. That happens on
+`backend: transformers` only: the unsloth setup has no step that adds tokens, so
+`backend: unsloth` with `new_special_tokens` is refused at load (#1358). Orpheus + Oute
 support emotion conditioning via `training.tts_emotion` from a per-family
 allowlist (Orpheus: neutral / happy / sad / angry / excited / calm / whisper /
 laugh; Oute: neutral / happy / sad / angry / calm / excited) — the wrapper
