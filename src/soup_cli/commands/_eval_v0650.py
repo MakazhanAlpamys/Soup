@@ -123,7 +123,9 @@ def register(app: typer.Typer, console: Console) -> None:
             None, "--evidence", "-e",
             help=(
                 "Path to a JSON file with "
-                "{pre_responses, post_responses, oracle} arrays."
+                "{pre_responses, post_responses, oracle} arrays. Here each oracle "
+                "entry is a word the matching response must contain; --base-model "
+                "scores refusal behaviour instead."
             ),
         ),
         output: Optional[str] = typer.Option(
