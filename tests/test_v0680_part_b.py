@@ -147,9 +147,7 @@ class TestValidateTracesPath:
         with pytest.raises(ValueError):
             validate_traces_path("t\x00.jsonl")
 
-    @pytest.mark.skipif(
-        not hasattr(__import__("os"), "symlink"), reason="POSIX symlink only"
-    )
+    @pytest.mark.requires_symlink
     def test_symlink_rejected(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -161,10 +159,7 @@ class TestValidateTracesPath:
         real = tmp_path / "r.jsonl"
         real.write_text("[]", encoding="utf-8")
         link = tmp_path / "link.jsonl"
-        try:
-            os.symlink(real, link)
-        except (OSError, NotImplementedError):
-            pytest.skip("symlinks not creatable")
+        os.symlink(real, link)
         with pytest.raises(ValueError, match="symlink"):
             validate_traces_path(str(link))
 

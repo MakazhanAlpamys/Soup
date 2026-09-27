@@ -66,6 +66,32 @@ def _normalise_bind(bind_host: str) -> str:
     return bind
 
 
+def _allowed_hostnames(bind: str) -> frozenset[str]:
+    """The hostnames that name an already-normalised, non-wildcard bind."""
+    return LOOPBACK_HOSTNAMES if bind in LOOPBACK_HOSTNAMES else frozenset({bind})
+
+
+def _check_origin(
+    bind: str, host_header: str | None, origin_header: str | None
+) -> tuple[int, str] | None:
+    """The ``Origin`` half of the policy, for an already-normalised bind.
+
+    A missing ``Origin`` is acceptable: only a browser is obliged to send one.
+    """
+    if origin_header is None:
+        return None
+    origin_name = hostname_from_origin(origin_header)
+    if bind in WILDCARD_HOSTS:
+        # No single name to compare against, so the page must name whatever
+        # hostname this very request was addressed to.
+        if origin_name is None or origin_name != hostname_from_host_header(host_header):
+            return _ORIGIN_NOT_ALLOWED
+        return None
+    if origin_name not in _allowed_hostnames(bind):
+        return _ORIGIN_NOT_ALLOWED
+    return None
+
+
 def check_local_request(
     bind_host: str, host_header: str | None, origin_header: str | None
 ) -> tuple[int, str] | None:
@@ -80,15 +106,28 @@ def check_local_request(
     """
     bind = _normalise_bind(bind_host)
     if bind in WILDCARD_HOSTS:
-        if origin_header is not None:
-            origin_name = hostname_from_origin(origin_header)
-            if origin_name is None or origin_name != hostname_from_host_header(host_header):
-                return _ORIGIN_NOT_ALLOWED
-        return None
-
-    allowed = LOOPBACK_HOSTNAMES if bind in LOOPBACK_HOSTNAMES else frozenset({bind})
-    if hostname_from_host_header(host_header) not in allowed:
+        return _check_origin(bind, host_header, origin_header)
+    if hostname_from_host_header(host_header) not in _allowed_hostnames(bind):
         return _HOST_NOT_ALLOWED
-    if origin_header is not None and hostname_from_origin(origin_header) not in allowed:
-        return _ORIGIN_NOT_ALLOWED
-    return None
+    return _check_origin(bind, host_header, origin_header)
+
+
+def check_browser_origin(
+    bind_host: str, host_header: str | None, origin_header: str | None
+) -> tuple[int, str] | None:
+    """Decide on ``Origin`` alone, ignoring ``Host``.
+
+    The narrower half of :func:`check_local_request`, for routes where the
+    full check would cost more than it buys. No ``Origin`` header means the
+    request is allowed — curl, an SDK and a reverse proxy all send none — and
+    an ``Origin`` that is present must name the bound server by exactly the
+    rule :func:`check_local_request` already applies.
+
+    ``Host`` is deliberately NOT checked here. An inference route is the one a
+    reverse proxy legitimately fronts under some other hostname, so refusing a
+    foreign ``Host`` would refuse every proxied deployment; a browser, by
+    contrast, always sends ``Origin`` on a cross-site request, which is the
+    case this is here to refuse. Returns 403 for a foreign ``Origin``, never
+    421.
+    """
+    return _check_origin(_normalise_bind(bind_host), host_header, origin_header)

@@ -6,7 +6,6 @@ We mock subprocess invocations so tests run without a real llama.cpp build.
 from __future__ import annotations
 
 import os
-import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -194,9 +193,8 @@ class TestExportAdvancedGguf:
                 llama_cpp_dir=str(llama),
             )
 
+    @pytest.mark.requires_symlink
     def test_calibration_symlink_rejected(self, tmp_path, monkeypatch):
-        if sys.platform == "win32":
-            pytest.skip("symlink rejection POSIX-only")
         from soup_cli.utils.gguf_quant import export_advanced_gguf
 
         monkeypatch.chdir(tmp_path)

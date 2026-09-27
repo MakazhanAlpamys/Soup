@@ -48,7 +48,7 @@ def search_recipes(
 
 
 # ---------------------------------------------------------------------------
-# Recipe catalog (175 recipes)
+# Recipe catalog (174 recipes)
 # ---------------------------------------------------------------------------
 
 RECIPES: Dict[str, RecipeMeta] = {
@@ -450,6 +450,7 @@ training:
   batch_size: auto
   gradient_accumulation_steps: 8
   lora:
+    dropout: 0.0        # peft's ParamWrapper refuses dropout on fused MoE experts (#798)
     r: 16
     alpha: 32
     target_modules: auto
@@ -1198,6 +1199,7 @@ training:
   batch_size: auto
   gradient_accumulation_steps: 8
   lora:
+    dropout: 0.0        # peft's ParamWrapper refuses dropout on fused MoE experts (#798)
     r: 16
     alpha: 32
     target_modules: auto
@@ -1478,6 +1480,7 @@ training:
   batch_size: 1
   gradient_accumulation_steps: 32
   lora:
+    dropout: 0.0        # peft's ParamWrapper refuses dropout on fused MoE experts (#798)
     r: 16
     alpha: 32
     target_modules: auto
@@ -1927,6 +1930,7 @@ training:
   batch_size: auto
   gradient_accumulation_steps: 8
   lora:
+    dropout: 0.0        # peft's ParamWrapper refuses dropout on fused MoE experts (#798)
     r: 16
     alpha: 32
     target_modules: auto
@@ -1957,6 +1961,7 @@ training:
   batch_size: 1
   gradient_accumulation_steps: 16
   lora:
+    dropout: 0.0        # peft's ParamWrapper refuses dropout on fused MoE experts (#798)
     r: 16
     alpha: 32
     target_modules: auto
@@ -2866,6 +2871,7 @@ training:
   lr: 1e-4
   batch_size: auto
   lora:
+    dropout: 0.0        # peft's ParamWrapper refuses dropout on fused MoE experts (#798)
     r: 16
     alpha: 32
     target_modules: auto
@@ -3537,38 +3543,12 @@ training:
 output: ./output
 """,
     ),
-    "sesame-csm-tts": RecipeMeta(
-        model="sesame/csm-1b",
-        task="tts",
-        size="1B",
-        tags=("tts", "sesame", "audio_out", "v0.52.0"),
-        description="Sesame CSM conversational TTS — live (v0.71.20)",
-        yaml_str="""\
-base: sesame/csm-1b
-task: tts
-modality: audio_out
-
-data:
-  train: ./data/tts_train.jsonl
-  format: audio
-  audio_dir: ./data/audio
-  max_length: 2048
-
-training:
-  epochs: 3
-  lr: 5e-5
-  batch_size: auto
-  tts_family: sesame_csm
-
-output: ./output
-""",
-    ),
     "llasa-tts": RecipeMeta(
         model="HKUSTAudio/Llasa-1B",
         task="tts",
         size="1B",
         tags=("tts", "llasa", "audio_out", "v0.52.0"),
-        description="Llasa-TTS — live (v0.71.20)",
+        description="Llasa-TTS — live XCodec2 encode-at-train-time path",
         yaml_str="""\
 base: HKUSTAudio/Llasa-1B
 task: tts
@@ -4068,6 +4048,7 @@ training:
   batch_size: auto
   gradient_accumulation_steps: 8
   lora:
+    dropout: 0.0        # peft's ParamWrapper refuses dropout on fused MoE experts (#798)
     r: 16
     alpha: 32
     target_modules: auto
@@ -4100,6 +4081,7 @@ training:
   batch_size: auto
   gradient_accumulation_steps: 8
   lora:
+    dropout: 0.0        # peft's ParamWrapper refuses dropout on fused MoE experts (#798)
     r: 16
     alpha: 32
     target_modules: auto
@@ -4140,6 +4122,7 @@ training:
   batch_size: 1
   gradient_accumulation_steps: 16
   lora:
+    dropout: 0.0        # peft's ParamWrapper refuses dropout on fused MoE experts (#798)
     r: 16
     alpha: 32
     target_modules: auto
@@ -4179,6 +4162,7 @@ training:
   batch_size: 1
   gradient_accumulation_steps: 16
   lora:
+    dropout: 0.0        # peft's ParamWrapper refuses dropout on fused MoE experts (#798)
     r: 32
     alpha: 64
     target_modules: auto
@@ -4215,6 +4199,7 @@ training:
   batch_size: 1
   gradient_accumulation_steps: 32
   lora:
+    dropout: 0.0        # peft's ParamWrapper refuses dropout on fused MoE experts (#798)
     r: 32
     alpha: 64
     target_modules: auto
@@ -4342,6 +4327,7 @@ training:
   batch_size: auto
   gradient_accumulation_steps: 8
   lora:
+    dropout: 0.0        # peft's ParamWrapper refuses dropout on fused MoE experts (#798)
     r: 16
     alpha: 32
     target_modules: auto
@@ -4374,6 +4360,7 @@ training:
   batch_size: auto
   gradient_accumulation_steps: 8
   lora:
+    dropout: 0.0        # peft's ParamWrapper refuses dropout on fused MoE experts (#798)
     r: 16
     alpha: 32
     target_modules: auto
@@ -4407,6 +4394,7 @@ training:
   batch_size: 1
   gradient_accumulation_steps: 16
   lora:
+    dropout: 0.0        # peft's ParamWrapper refuses dropout on fused MoE experts (#798)
     r: 16
     alpha: 32
     target_modules: auto
@@ -4472,6 +4460,7 @@ training:
   batch_size: auto
   gradient_accumulation_steps: 8
   lora:
+    dropout: 0.0        # peft's ParamWrapper refuses dropout on fused MoE experts (#798)
     r: 16
     alpha: 32
     target_modules: auto
@@ -4503,6 +4492,7 @@ training:
   batch_size: 1
   gradient_accumulation_steps: 16
   lora:
+    dropout: 0.0        # peft's ParamWrapper refuses dropout on fused MoE experts (#798)
     r: 16
     alpha: 32
     target_modules: auto
@@ -4545,6 +4535,7 @@ training:
   batch_size: auto
   gradient_accumulation_steps: 8
   lora:
+    dropout: 0.0        # peft's ParamWrapper refuses dropout on fused MoE experts (#798)
     r: 16
     alpha: 32
     target_modules: auto
@@ -4580,6 +4571,7 @@ training:
   batch_size: 1
   gradient_accumulation_steps: 32
   lora:
+    dropout: 0.0        # peft's ParamWrapper refuses dropout on fused MoE experts (#798)
     r: 32
     alpha: 64
     target_modules: auto
@@ -4614,6 +4606,7 @@ training:
   batch_size: 1
   gradient_accumulation_steps: 16
   lora:
+    dropout: 0.0        # peft's ParamWrapper refuses dropout on fused MoE experts (#798)
     r: 32
     alpha: 64
     target_modules: auto
@@ -4648,6 +4641,7 @@ training:
   batch_size: 1
   gradient_accumulation_steps: 16
   lora:
+    dropout: 0.0        # peft's ParamWrapper refuses dropout on fused MoE experts (#798)
     r: 32
     alpha: 64
     target_modules: auto
@@ -4684,6 +4678,7 @@ training:
   batch_size: 1
   gradient_accumulation_steps: 16
   lora:
+    dropout: 0.0        # peft's ParamWrapper refuses dropout on fused MoE experts (#798)
     r: 32
     alpha: 64
     target_modules: auto
@@ -4722,6 +4717,7 @@ training:
   batch_size: 1
   gradient_accumulation_steps: 16
   lora:
+    dropout: 0.0        # peft's ParamWrapper refuses dropout on fused MoE experts (#798)
     r: 32
     alpha: 64
     target_modules: auto
@@ -4757,6 +4753,7 @@ training:
   batch_size: 1
   gradient_accumulation_steps: 16
   lora:
+    dropout: 0.0        # peft's ParamWrapper refuses dropout on fused MoE experts (#798)
     r: 32
     alpha: 64
     target_modules: auto
@@ -4793,6 +4790,7 @@ training:
   batch_size: 1
   gradient_accumulation_steps: 16
   lora:
+    dropout: 0.0        # peft's ParamWrapper refuses dropout on fused MoE experts (#798)
     r: 16
     alpha: 32
     target_modules: auto
@@ -4830,6 +4828,7 @@ training:
   batch_size: 1
   gradient_accumulation_steps: 32
   lora:
+    dropout: 0.0        # peft's ParamWrapper refuses dropout on fused MoE experts (#798)
     r: 32
     alpha: 64
     target_modules: auto
@@ -4865,6 +4864,7 @@ training:
   batch_size: 1
   gradient_accumulation_steps: 16
   lora:
+    dropout: 0.0        # peft's ParamWrapper refuses dropout on fused MoE experts (#798)
     r: 16
     alpha: 32
     target_modules: auto
@@ -4902,6 +4902,7 @@ training:
   batch_size: 1
   gradient_accumulation_steps: 16
   lora:
+    dropout: 0.0        # peft's ParamWrapper refuses dropout on fused MoE experts (#798)
     r: 32
     alpha: 64
     target_modules: auto
@@ -4938,6 +4939,7 @@ training:
   batch_size: 1
   gradient_accumulation_steps: 16
   lora:
+    dropout: 0.0        # peft's ParamWrapper refuses dropout on fused MoE experts (#798)
     r: 32
     alpha: 64
     target_modules: auto
@@ -4973,6 +4975,7 @@ training:
   batch_size: 1
   gradient_accumulation_steps: 16
   lora:
+    dropout: 0.0        # peft's ParamWrapper refuses dropout on fused MoE experts (#798)
     r: 32
     alpha: 64
     target_modules: auto
@@ -5009,6 +5012,7 @@ training:
   batch_size: 1
   gradient_accumulation_steps: 32
   lora:
+    dropout: 0.0        # peft's ParamWrapper refuses dropout on fused MoE experts (#798)
     r: 32
     alpha: 64
     target_modules: auto
@@ -5053,6 +5057,7 @@ training:
   batch_size: 1
   gradient_accumulation_steps: 32
   lora:
+    dropout: 0.0        # peft's ParamWrapper refuses dropout on fused MoE experts (#798)
     r: 32
     alpha: 64
     target_modules: auto

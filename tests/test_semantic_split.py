@@ -7,6 +7,7 @@ import pytest
 from typer.testing import CliRunner
 
 from soup_cli.cli import app
+from tests.conftest import strip_ansi
 
 runner = CliRunner()
 
@@ -160,7 +161,7 @@ class TestSemanticSplit:
             ],
         )
         assert result.exit_code == 1
-        assert "capped at 50,000 rows" in result.output
+        assert "capped at 50,000 rows" in strip_ansi(result.output)
 
 
     def test_num_clusters_warning(self, dummy_dataset):

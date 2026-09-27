@@ -69,6 +69,7 @@ from soup_cli.commands import (  # noqa: E402
     why as why_cmd,
 )
 from soup_cli.utils.constants import GITHUB_URL  # noqa: E402
+from soup_cli.utils.exit_codes import GateCommand  # noqa: E402
 
 console = Console()
 
@@ -132,7 +133,7 @@ app.command()(sweep.sweep)
 app.command(name="diff")(diff.diff)
 app.command()(infer.infer)
 app.command()(profile.profile)
-app.command()(bench.bench)
+app.add_typer(bench.app, name="bench")
 app.command()(doctor_cmd.doctor)
 app.command()(quickstart_cmd.quickstart)
 app.command()(ui.ui)
@@ -497,6 +498,7 @@ from soup_cli.commands import expect as _expect_cmd  # noqa: E402
 
 app.command(
     name="expect",
+    cls=GateCommand,
     help="Run an expectations suite against a JSONL dataset.",
 )(_expect_cmd.expect_cmd)
 
@@ -523,7 +525,7 @@ app.add_typer(
 from soup_cli.commands import data_doctor as _data_doctor_cmd  # noqa: E402
 
 data.app.command(name="doctor")(_data_doctor_cmd.doctor)
-data.app.command(name="lint")(_data_doctor_cmd.lint)
+data.app.command(name="lint", cls=GateCommand)(_data_doctor_cmd.lint)
 
 # v0.71.36 — Data Moat II: topic map + Secret-Sharer canaries.
 from soup_cli.commands import data_topics as _data_topics_cmd  # noqa: E402

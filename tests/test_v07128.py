@@ -798,7 +798,7 @@ class TestReadGuardsExtra:
         with pytest.raises(reg.McpToolError):
             reg._read_json_under_cwd("bad.json", "evidence")
 
-    @pytest.mark.skipif(os.name == "nt", reason="POSIX symlink semantics")
+    @pytest.mark.requires_symlink
     def test_read_json_rejects_symlink(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         (tmp_path / "real.json").write_text('{"a": 1}', encoding="utf-8")

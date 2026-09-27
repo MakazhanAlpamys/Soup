@@ -33,13 +33,15 @@ def apply_v028_speed_memory(
     console: Optional["Console"] = None,
     device: str = "cpu",
     backend: str = "transformers",
+    skip_cut_ce: bool = False,
 ) -> dict[str, bool]:
     """Apply Cut-CE / FP8 features to ``model``.
 
     Returns a dict ``{feature_name: applied}`` so the caller can log the
-    decisions for the run record. Each feature degrades silently to a
-    yellow advisory if the underlying lib isn't available — never crashes
-    the training kick-off.
+    decisions for the run record. Cut-CE degrades to a yellow advisory when
+    its library is missing. An explicitly requested FP8 does not: a card that
+    cannot run it, or a missing torchao, stops the run (#835), and only a
+    conversion that fails partway still prints a yellow line (#1152).
     """
     applied: dict[str, bool] = {
         "cut_ce": False,
@@ -54,30 +56,33 @@ def apply_v028_speed_memory(
 
     # --- Cut Cross-Entropy ---------------------------------------------------
     if getattr(tcfg, "use_cut_ce", False):
-        from soup_cli.utils.cut_ce import NO_MATCHING_ARCHITECTURE_MESSAGE
-
-        try:
-            from soup_cli.utils.cut_ce import apply_cut_ce
-            ok = bool(apply_cut_ce(base_model))
-        except Exception:  # noqa: BLE001 — degrade gracefully
-            ok = False
-        applied["cut_ce"] = ok
-        if ok:
-            _say("Cut Cross-Entropy enabled (chunked CCE kernel)")
+        if skip_cut_ce:
+            applied["cut_ce"] = False
         else:
-            _say(f"Cut Cross-Entropy: {NO_MATCHING_ARCHITECTURE_MESSAGE}", style="yellow")
+            from soup_cli.utils.cut_ce import NO_MATCHING_ARCHITECTURE_MESSAGE
+
+            try:
+                from soup_cli.utils.cut_ce import apply_cut_ce
+                ok = bool(apply_cut_ce(base_model))
+            except Exception:  # noqa: BLE001 — degrade gracefully
+                ok = False
+            applied["cut_ce"] = ok
+            if ok:
+                _say("Cut Cross-Entropy enabled (chunked CCE kernel)")
+            else:
+                _say(f"Cut Cross-Entropy: {NO_MATCHING_ARCHITECTURE_MESSAGE}", style="yellow")
 
     # --- FP8 training --------------------------------------------------------
     if getattr(tcfg, "quantization_aware", None) == "fp8":
         recipe = getattr(tcfg, "fp8_recipe", "tensorwise")
-        from soup_cli.utils.fp8 import FP8HardwareUnsupportedError
+        from soup_cli.utils.fp8 import FP8DependencyMissingError, FP8HardwareUnsupportedError
         try:
             from soup_cli.utils.fp8 import apply_fp8_training
             ok = bool(apply_fp8_training(model, recipe=recipe))
-        except FP8HardwareUnsupportedError:
-            # #835 ruling: FP8 was asked for explicitly and this card cannot run
-            # it. Warning and training on without it is the silent-setting
-            # defect; the run stops here, before anything trains.
+        except (FP8HardwareUnsupportedError, FP8DependencyMissingError):
+            # #835 ruling: FP8 was asked for explicitly and cannot run here --
+            # this card, or no torchao. Warning and training on without it is the
+            # silent-setting defect; the run stops here, before anything trains.
             raise
         except Exception:  # noqa: BLE001
             ok = False
@@ -85,9 +90,12 @@ def apply_v028_speed_memory(
         if ok:
             _say(f"FP8 training enabled (Float8Linear, recipe={recipe})")
         else:
+            # A missing torchao raises above, so False now only means the
+            # conversion itself failed; the old "(torchao.float8 missing)" would
+            # name the wrong cause (#1152 row 3).
             _say(
-                "FP8 training: torchao.float8 unavailable or no "
-                "compatible linears", style="yellow",
+                "FP8 training requested but the float8 conversion failed",
+                style="yellow",
             )
 
     # --- FP8 attention (v0.71.21 #141) ---------------------------------------
@@ -95,13 +103,13 @@ def apply_v028_speed_memory(
     # contract on the no-features path (test_part_c exact-equality).
     if getattr(tcfg, "fp8_attention", False):
         recipe = getattr(tcfg, "fp8_recipe", "tensorwise")
-        from soup_cli.utils.fp8 import FP8HardwareUnsupportedError
+        from soup_cli.utils.fp8 import FP8DependencyMissingError, FP8HardwareUnsupportedError
         try:
             from soup_cli.utils.advanced_precision import apply_fp8_attention
             converted = apply_fp8_attention(model, recipe=recipe)
             applied["fp8_attention"] = True
             _say(f"FP8 attention enabled ({converted} projections)")
-        except FP8HardwareUnsupportedError:
+        except (FP8HardwareUnsupportedError, FP8DependencyMissingError):
             raise
         except (RuntimeError, ValueError, TypeError) as exc:
             applied["fp8_attention"] = False
@@ -211,6 +219,10 @@ def warn_unsupported_features(
         issues.append('quantization_aware="fp8"')
     if getattr(tcfg, "activation_offloading", None) is not None:
         issues.append("activation_offloading")
+    if getattr(tcfg, "fp8_attention", False):
+        issues.append("fp8_attention")
+    if getattr(tcfg, "nvfp4", False):
+        issues.append("nvfp4")
     if not issues:
         return None
     return (

@@ -254,17 +254,24 @@ class TestMiiAppUnchangedBehaviour:
 # The call site (#608 review) — mutation (d)
 # ============================================================
 class TestServeMiiCallSite:
-    """`soup serve --backend mii` must LOAD a tokenizer and PASS it.
+    """`soup serve --backend mii` must LOAD a tokenizer and PASS it to BOTH
+    the live pipeline and the app.
 
     Every other test in this file constructs the app directly with a
-    hand-supplied tokenizer, which leaves the one line a user actually
-    executes uncovered: deleting `tokenizer=mii_tokenizer` from the
-    `build_mii_app(...)` call in `serve.py` makes every real
-    `soup serve --backend mii` fall back to the legacy prompt while the
-    whole suite stays green.
+    hand-supplied tokenizer, which leaves the two lines a user actually
+    executes uncovered:
 
-    These drive the real command through its CLI and assert on the call
-    kwargs, so that deletion fails by name.
+    * deleting `tokenizer=mii_tokenizer` from the `build_mii_app(...)` call
+      makes every real `soup serve --backend mii` fall back to the legacy
+      prompt;
+    * deleting `tokenizer=mii_tokenizer` from the `create_mii_pipeline(...)`
+      call makes the live pipeline tokenize prompts with MII's own tokenizer,
+      re-adding the special tokens the chat template already rendered - the
+      doubled BOS #891 removes.
+
+    Both stay green under the whole suite otherwise. These drive the real
+    command through its CLI and assert on each call's kwargs, so either
+    deletion fails by name.
     """
 
     def _invoke(self, tmp_path, *, tokenizer):
@@ -279,18 +286,34 @@ class TestServeMiiCallSite:
         (model_dir / "config.json").write_text("{}", encoding="utf-8")
 
         captured: dict[str, object] = {}
+        pipeline_captured: dict[str, object] = {}
+        call_order: list[str] = []
 
         def _fake_build_mii_app(pipeline, **kwargs):
             captured.update(kwargs)
             captured["called"] = True
             return MagicMock()
 
+        def _fake_create_mii_pipeline(**kwargs):
+            pipeline_captured.update(kwargs)
+            pipeline_captured["called"] = True
+            call_order.append("pipeline")
+            return MagicMock()
+
+        def _fake_load_serve_tokenizer(*args, **kwargs):
+            call_order.append("tokenizer")
+            return tokenizer
+
         with (
             patch("soup_cli.utils.mii.is_mii_available", return_value=True),
-            patch("soup_cli.utils.mii.create_mii_pipeline", return_value=MagicMock()),
+            patch(
+                "soup_cli.utils.mii.create_mii_pipeline",
+                side_effect=_fake_create_mii_pipeline,
+            ),
             patch("soup_cli.utils.mii.build_mii_app", side_effect=_fake_build_mii_app),
             patch(
-                "soup_cli.commands.serve._load_serve_tokenizer", return_value=tokenizer
+                "soup_cli.commands.serve._load_serve_tokenizer",
+                side_effect=_fake_load_serve_tokenizer,
             ) as loader,
             patch("uvicorn.run"),
         ):
@@ -298,12 +321,12 @@ class TestServeMiiCallSite:
             result = runner.invoke(
                 app, ["serve", "--model", str(model_dir), "--backend", "mii"]
             )
-        return result, captured, loader
+        return result, captured, pipeline_captured, call_order, loader
 
     def test_serve_mii_passes_the_loaded_tokenizer_to_build_mii_app(self, tmp_path):
         """Mutation (d): dropping `tokenizer=` from the call must fail here."""
         sentinel = object()
-        result, captured, loader = self._invoke(tmp_path, tokenizer=sentinel)
+        result, captured, _, _, loader = self._invoke(tmp_path, tokenizer=sentinel)
 
         assert captured.get("called"), f"build_mii_app was never reached: {result.output}"
         assert "tokenizer" in captured, (
@@ -315,13 +338,43 @@ class TestServeMiiCallSite:
         )
         loader.assert_called_once()
 
+    def test_serve_mii_passes_the_loaded_tokenizer_to_create_mii_pipeline(self, tmp_path):
+        """Dropping `tokenizer=mii_tokenizer` from the `create_mii_pipeline(...)`
+        call must fail here.
+
+        Without that kwarg the live pipeline tokenizes prompts through MII's own
+        tokenizer, which re-adds the special tokens the chat template already
+        rendered (#785/#891) - the doubled BOS the fix removes - and no test that
+        only inspects `build_mii_app` would notice.
+        """
+        sentinel = object()
+        result, _, pipeline_captured, call_order, _ = self._invoke(
+            tmp_path, tokenizer=sentinel
+        )
+
+        assert pipeline_captured.get("called"), (
+            f"create_mii_pipeline was never reached: {result.output}"
+        )
+        assert "tokenizer" in pipeline_captured, (
+            "serve() called create_mii_pipeline without a tokenizer kwarg - the "
+            "live MII pipeline would re-add the special tokens the template "
+            "already rendered (#891 doubled BOS)"
+        )
+        assert pipeline_captured["tokenizer"] is sentinel, (
+            "serve() passed the pipeline something other than the tokenizer it loaded"
+        )
+        # The tokenizer must be loaded BEFORE the pipeline is built, because the
+        # pipeline is handed that object to tokenize prompts through.
+        assert call_order == ["tokenizer", "pipeline"], call_order
+
     def test_serve_mii_still_starts_when_no_tokenizer_can_be_loaded(self, tmp_path):
         """The documented degrade: None is passed through, not an exception.
 
         `build_chat_prompt` falls back to the legacy format for a None
         tokenizer, so the server must still come up.
         """
-        result, captured, _ = self._invoke(tmp_path, tokenizer=None)
+        result, captured, pipeline_captured, _, _ = self._invoke(tmp_path, tokenizer=None)
 
         assert captured.get("called"), f"build_mii_app was never reached: {result.output}"
         assert captured["tokenizer"] is None
+        assert pipeline_captured["tokenizer"] is None

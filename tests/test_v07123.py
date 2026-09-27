@@ -883,9 +883,7 @@ class TestSpectrumScanRobustness:
         layers = spectrum_scan.scan_weights_dir(str(tmp_path), modules=("attn",))
         assert layers == ()
 
-    @pytest.mark.skipif(
-        os.name == "nt", reason="symlink creation needs privilege on Windows"
-    )
+    @pytest.mark.requires_symlink
     def test_symlinked_shard_skipped(self, tmp_path):
         from soup_cli.utils.spectrum_scan import _discover_safetensors
 

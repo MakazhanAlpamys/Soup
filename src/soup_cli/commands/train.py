@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import json
 import os
 import re
 from pathlib import Path
@@ -43,6 +44,8 @@ _UNWIRED_TRAINING_TUNABLES = (
     "checkpoint_eval_tasks",
     "checkpoint_keep_top",
     "early_stop_patience",
+    "convergence_window",
+    "convergence_rel_tol",
 )
 
 
@@ -77,6 +80,32 @@ def _format_training_complete_loss(result: dict) -> str:
     ):
         return f"Loss: [bold]{result['final_loss']:.4f}[/]"
     return f"Loss: [bold]{result['initial_loss']:.4f} -> {result['final_loss']:.4f}[/]"
+
+
+def _train_sample_count(dcfg, dataset) -> int:
+    """Rows training will actually consume (#1054).
+
+    For ``format: pre_tokenized`` the rows come from the Arrow cache at
+    ``data.tokenized_path`` (loaded later, in the trainer), not from
+    ``load_dataset`` — which sees the ORIGINAL ``data.train`` file and drops
+    every row for want of an ``input_ids`` column, printing "0 train samples"
+    for a run that then trains on the whole cache. Read the count preprocess
+    recorded instead, falling back to the loader's view if it is unavailable or
+    not a plausible count (a negative ``row_count`` is a corrupt or hand-edited
+    metadata.json, and printing "Loaded: -3 train samples" helps nobody).
+    """
+    rows = len(dataset.get("train", []))
+    if dcfg.format != "pre_tokenized" or not dcfg.tokenized_path:
+        return rows
+    try:
+        with open(
+            os.path.join(dcfg.tokenized_path, "metadata.json"), encoding="utf-8"
+        ) as f:
+            count = json.load(f).get("row_count")
+    except (OSError, ValueError):
+        return rows
+    valid = isinstance(count, int) and not isinstance(count, bool) and count >= 0
+    return count if valid else rows
 
 
 def _build_hardware_fit_input(cfg):
@@ -626,6 +655,7 @@ def train(
     # --- LR range finder fast path ---
     if find_lr:
         from soup_cli.utils.lr_finder import (
+            SweepTooShortError,
             compute_lr_schedule,
             save_lr_finder_report,
         )
@@ -642,11 +672,17 @@ def train(
         # v0.33.0 #56: live LR-sweep training loop. Falls back to a
         # synthetic curve only when the real loop cannot run (no torch /
         # config load failure) so users still get a parseable report.
-        losses_for_report = _run_live_lr_sweep_or_synth(
-            config_path, schedule,
-        )
+        # #1189: the sweep returns the LRs it actually ran, which can be fewer than
+        # --find-lr-steps (a short dataset, or a loss that went non-finite).
         try:
-            save_lr_finder_report(schedule, losses_for_report, find_lr_output)
+            lrs, losses_for_report = _run_live_lr_sweep_or_synth(
+                config_path, schedule,
+            )
+        except SweepTooShortError as exc:
+            console.print(f"[red]{markup_escape(str(exc))}[/]")
+            raise typer.Exit(1) from exc
+        try:
+            save_lr_finder_report(lrs, losses_for_report, find_lr_output)
         except ValueError as exc:
             console.print(f"[red]Invalid --find-lr-output:[/] {exc}")
             raise typer.Exit(1) from exc
@@ -673,6 +709,17 @@ def train(
     except Exception as exc:  # noqa: BLE001 — pydantic ValidationError et al.
         console.print(f"[red]{markup_escape(str(exc))}[/]")
         raise typer.Exit(code=2) from exc
+
+    # An unregistered data.chat_template name raises KeyError in the trainer,
+    # after the model has loaded. Check it before anything is downloaded.
+    from soup_cli.data.chat_templates import resolve_chat_template
+    from soup_cli.utils.terminal import for_terminal
+
+    try:
+        resolve_chat_template(cfg.data.chat_template)
+    except KeyError as exc:
+        console.print(f"[red]Invalid data.chat_template:[/] {for_terminal(exc.args[0])}")
+        raise typer.Exit(1) from exc
 
     # v0.72.3 — --resume / --hf-resume now work with layer streaming. v0.72.0-.2
     # refused them because a streamed model's `named_parameters()` carry an
@@ -1188,7 +1235,9 @@ def train(
         backend_label = "unsloth [green](fast mode)[/]"
 
     quant_label = cfg.training.quantization
-    if cfg.training.quantization_aware:
+    if cfg.training.quantization_aware == "quest":
+        quant_label = "mixed W4/A4+A16 (QuEST fake quant)"
+    elif cfg.training.quantization_aware:
         quant_label += " + QAT"
 
     # v0.53.2 review-fix: classifier-family tasks train a sequence-classification
@@ -1253,14 +1302,34 @@ def train(
             raise typer.Exit(1)
 
     # Validate QAT configuration
-    if cfg.training.quantization_aware:
+    if (
+        cfg.training.quantization_aware is True
+        or cfg.training.quantization_aware == "fp8"
+    ):
         from soup_cli.utils.qat import validate_qat_config
 
         qat_errors = validate_qat_config(
             cfg.training.quantization, cfg.backend, cfg.modality,
+            quantization_aware=cfg.training.quantization_aware,
+            fp8_recipe=cfg.training.fp8_recipe,
+            check_card=not dry_run,
         )
         for err in qat_errors:
-            console.print(f"[red]QAT error:[/] {err}")
+            console.print(f"[red]QAT error:[/] {markup_escape(err)}")
+        if dry_run and cfg.training.quantization_aware == "fp8" and cfg.backend != "unsloth":
+            # #1154 review: a dry run validates the config, and FP8 configs are
+            # routinely written on a laptop for a remote card, so the local card
+            # is a note here -- printed before any error exit, so a dry run that
+            # also lacks torchao still shows the whole picture. The real run
+            # still stops on the card. (Unsloth: its refusal is the answer.)
+            from soup_cli.utils.fp8 import fp8_training_supported
+
+            card_ok, card_reason = fp8_training_supported(cfg.training.fp8_recipe)
+            if not card_ok:
+                console.print(
+                    "[yellow]Note:[/] this machine could not run it: "
+                    f"{markup_escape(card_reason)}"
+                )
         if qat_errors:
             raise typer.Exit(1)
 
@@ -1404,7 +1473,9 @@ def train(
         cfg.data,
         preserve_source_columns=cfg.task == "grpo",
     )
-    console.print(f"[green]Loaded:[/] {len(dataset['train'])} train samples")
+    console.print(
+        f"[green]Loaded:[/] {_train_sample_count(cfg.data, dataset)} train samples"
+    )
 
     # Capture the --tracker CLI value BEFORE the local ExperimentTracker
     # shadows it (v0.43.0 review fix — name-collision regression).
@@ -2282,9 +2353,11 @@ def _resolve_resume_or_exit(resume: str, cfg: "SoupConfig") -> str | None:
 
 def _run_live_lr_sweep_or_synth(
     config_path: str, schedule: list[float],
-) -> list[float]:
+) -> tuple[list[float], list[float]]:
     """v0.33.0 #56 — try to run an in-process LR sweep; fall back to a
     synthetic curve when prerequisites are missing.
+
+    Returns ``(lrs, losses)`` of equal length.
 
     Falls back when:
       - torch / transformers / datasets are not importable
@@ -2292,7 +2365,10 @@ def _run_live_lr_sweep_or_synth(
       - dataset cannot be tokenized into a small in-memory loader
     The fallback curve descends 60% then diverges so the recommended-LR
     extraction in :func:`find_optimal_lr` still produces sensible output.
+    A ``SweepTooShortError`` is a refusal and is never turned into a curve.
     """
+    from soup_cli.utils.lr_finder import SweepTooShortError
+
     try:
         cfg = load_config(config_path)
     except Exception as exc:  # noqa: BLE001 — fall back rather than abort
@@ -2300,16 +2376,18 @@ def _run_live_lr_sweep_or_synth(
             f"[yellow]--find-lr: config load failed ({exc}); "
             f"writing synthetic curve.[/]"
         )
-        return _synth_lr_curve(len(schedule))
+        return schedule, _synth_lr_curve(len(schedule))
 
     try:
         return _live_lr_sweep_from_config(cfg, schedule)
+    except SweepTooShortError:
+        raise
     except Exception as exc:  # noqa: BLE001 — informative fallback
         console.print(
             f"[yellow]--find-lr: live sweep unavailable ({exc}); "
             f"writing synthetic curve.[/]"
         )
-        return _synth_lr_curve(len(schedule))
+        return schedule, _synth_lr_curve(len(schedule))
 
 
 def _synth_lr_curve(n: int) -> list[float]:
@@ -2335,9 +2413,12 @@ def _lr_finder_dataset_path(train) -> str:
     return train[0] if isinstance(train, list) else train
 
 
-def _live_lr_sweep_from_config(cfg, schedule: list[float]) -> list[float]:
+def _live_lr_sweep_from_config(
+    cfg, schedule: list[float],
+) -> tuple[list[float], list[float]]:
     """Build a tiny in-process loop: load model + tokenizer + a slice of
-    the train dataset, then call :func:`run_lr_sweep`."""
+    the train dataset, then call :func:`run_lr_sweep`. Returns the
+    ``(lrs, losses)`` the sweep actually ran."""
     # v0.40.1 Part C / G12 — fix broken `load_local` import that previously
     # always fell through to the synthetic curve. The actual exported symbol
     # is ``load_raw_data`` (path-only loader) — we use that.
@@ -2347,7 +2428,31 @@ def _live_lr_sweep_from_config(cfg, schedule: list[float]) -> list[float]:
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
     from soup_cli.data.loader import load_raw_data
-    from soup_cli.utils.lr_finder import run_lr_sweep
+    from soup_cli.utils.lr_finder import (
+        MIN_NUM_STEPS,
+        SweepTooShortError,
+        compute_lr_schedule,
+        run_lr_sweep,
+    )
+
+    # #1189: one row is one sweep step, so size the sweep before the model loads.
+    lr_finder_train_path = _lr_finder_dataset_path(cfg.data.train)
+    rows = list(load_raw_data(_Path(lr_finder_train_path)))[: len(schedule)]
+    if len(rows) < MIN_NUM_STEPS:
+        row_count = f"{len(rows)} row" + ("" if len(rows) == 1 else "s")
+        raise SweepTooShortError(
+            f"--find-lr: the training set has {row_count}, but the sweep needs at "
+            f"least {MIN_NUM_STEPS} (one row per step; --find-lr-steps {len(schedule)})"
+        )
+    if len(rows) < len(schedule):
+        # Rebuilt over the same range: keeping the first rows' worth of the original
+        # schedule would never reach the high LRs where training diverges.
+        console.print(
+            f"[yellow]--find-lr: the training set has {len(rows)} rows, fewer than "
+            f"--find-lr-steps {len(schedule)}; sweeping {len(rows)} steps over the "
+            f"same {schedule[0]:.3g} to {schedule[-1]:.3g} range.[/]"
+        )
+        schedule = compute_lr_schedule(schedule[0], schedule[-1], len(rows))
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     tokenizer = AutoTokenizer.from_pretrained(
@@ -2359,12 +2464,6 @@ def _live_lr_sweep_from_config(cfg, schedule: list[float]) -> list[float]:
         cfg.base, trust_remote_code=False,
     ).to(device)
     model.train()
-
-    lr_finder_train_path = _lr_finder_dataset_path(cfg.data.train)
-    dataset = load_raw_data(_Path(lr_finder_train_path))
-    rows = list(dataset)[: max(2, len(schedule))]
-    if not rows:
-        raise RuntimeError("training dataset is empty")
 
     def _tokenize(row):
         text = row.get("text") or row.get("prompt") or ""
@@ -2383,10 +2482,32 @@ def _live_lr_sweep_from_config(cfg, schedule: list[float]) -> list[float]:
             tok = _tokenize(row)
             yield {k: v.unsqueeze(0) for k, v in tok.items()}
 
-    return run_lr_sweep(
+    losses = run_lr_sweep(
         model=model,
         dataloader=_batched_loader(),
         schedule=schedule,
         optimizer_factory=lambda params: torch.optim.AdamW(params, lr=schedule[0]),
         device=device,
     )
+    # With a row for every step, a short result means the loss went non-finite.
+    if len(losses) < len(schedule):
+        diverged_lr = schedule[len(losses)]
+        if not losses:
+            # No update has run yet, so the learning rate cannot be the cause.
+            raise SweepTooShortError(
+                f"--find-lr: the loss was non-finite on the first step (lr {diverged_lr:.3g}), "
+                "before any update; check the training data, dtype and model rather "
+                "than the LR range"
+            )
+        if len(losses) < MIN_NUM_STEPS:
+            steps_run = f"{len(losses)} step" + ("" if len(losses) == 1 else "s")
+            raise SweepTooShortError(
+                f"--find-lr: the loss became non-finite at lr {diverged_lr:.3g} after "
+                f"{steps_run}, too few for a recommendation (need "
+                f"{MIN_NUM_STEPS}); lower --find-lr-start / --find-lr-end"
+            )
+        console.print(
+            f"[yellow]--find-lr: the loss became non-finite at lr {diverged_lr:.3g}; "
+            f"the report covers the {len(losses)} steps before it.[/]"
+        )
+    return schedule[: len(losses)], losses

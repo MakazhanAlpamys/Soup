@@ -207,6 +207,8 @@ class TestQuantAwareCrossValidator:
 
     @pytest.mark.parametrize("task", ["dpo", "kto", "ppo", "embedding"])
     def test_quant_menu_with_quant_aware_rejected_non_sft(self, task: str):
+        # `fp8`, not `true`: `true` is refused on its own (#1222) before this
+        # cross-validator runs, which would leave the guard itself untested.
         extra = ""
         if task == "ppo":
             extra = ", reward_model: dummy"
@@ -215,7 +217,7 @@ class TestQuantAwareCrossValidator:
                 f"""base: m
 task: {task}
 data: {{train: d.jsonl}}
-training: {{quantization: gptq, quantization_aware: true{extra}}}
+training: {{quantization: gptq, quantization_aware: fp8{extra}}}
 """
             )
 
@@ -507,7 +509,7 @@ class TestRewardModelTaskQuantMenu:
         fake_peft.TaskType = _types.SimpleNamespace(SEQ_CLS="SEQ_CLS")
         fake_peft.get_peft_model = lambda model, _cfg: model
 
-        def _fake_kbit_prep(model):
+        def _fake_kbit_prep(model, **kwargs):
             kbit_called.append(True)
             return model
 

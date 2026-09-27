@@ -312,18 +312,29 @@ class TestQuantizationAwareFp8:
         with pytest.raises(FP8HardwareUnsupportedError, match="8.9"):
             apply_fp8_attention(_Attn())
 
-    def test_missing_torchao_still_returns_false(self, monkeypatch):
-        """The dependency answer is unchanged: False, not a refusal.
-
-        On a card that CAN run FP8 -- (8, 6) before the #1044 review, when the
-        dependency probe ran first and hid the hardware refusal. The reorder must
-        not swallow this answer: a supported card with no torchao still reports
-        the missing package rather than raising."""
-        from soup_cli.utils.fp8 import apply_fp8_training
+    def test_missing_torchao_now_stops_the_run(self, monkeypatch):
+        """INVERTED by the #835 ruling (2026-09-19); this test used to pin
+        ``False``. On a card that CAN run FP8, a missing torchao no longer lets
+        the run go on in bf16: FP8 was asked for, and whether the reason is the
+        card or a package does not change what the user asked for. The message
+        names the fix."""
+        from soup_cli.utils.fp8 import FP8DependencyMissingError, apply_fp8_training
 
         _card(monkeypatch, (9, 0))
         monkeypatch.setattr("soup_cli.utils.fp8.is_fp8_available", lambda: False)
-        assert apply_fp8_training(_Attn()) is False
+        with pytest.raises(FP8DependencyMissingError, match=r"soup-cli\[qat\]"):
+            apply_fp8_training(_Attn())
+
+    def test_transformer_engine_alone_is_still_missing_torchao(self, monkeypatch):
+        """``is_fp8_available()`` also accepts transformer-engine, but this
+        converter is torchao's, so a box with TE and no torchao stops too."""
+        from soup_cli.utils.fp8 import FP8DependencyMissingError, apply_fp8_training
+
+        _card(monkeypatch, (9, 0))
+        monkeypatch.setattr("soup_cli.utils.fp8.is_fp8_available", lambda: True)
+        monkeypatch.setitem(sys.modules, "torchao", None)
+        with pytest.raises(FP8DependencyMissingError):
+            apply_fp8_training(_Attn())
 
 
 class TestOneGate:
@@ -443,33 +454,52 @@ class TestTheRunStops:
             )
         assert converts == []
 
-    def test_missing_torchao_still_only_warns(self, monkeypatch):
-        """Control: the ruling is about what the CARD can run. On a card that can,
-        a missing optional dependency keeps its existing advisory, so the stop is
-        not a catch-everything raise.
+    def test_missing_torchao_now_stops_instead_of_warning(self, monkeypatch):
+        """INVERTED by the #835 ruling (2026-09-19); this test used to pin the
+        yellow advisory. On a Hopper card with no torchao, both explicitly
+        requested FP8 settings now end the run at setup, and neither is reported
+        as applied."""
+        from soup_cli.config.schema import TrainingConfig
+        from soup_cli.utils.fp8 import FP8DependencyMissingError
+        from soup_cli.utils.v028_features import apply_v028_speed_memory
 
-        On a Hopper card, not Ampere: since the #1044 review the gate runs before
-        the dependency probe, so an Ampere card refuses whether or not torchao is
-        installed."""
+        _card(monkeypatch, (9, 0))
+        monkeypatch.setattr("soup_cli.utils.fp8.is_fp8_available", lambda: False)
+        monkeypatch.setitem(sys.modules, "torchao", None)
+        for settings in ({"quantization_aware": "fp8"}, {"fp8_attention": True}):
+            out, console = self._console()
+            with pytest.raises(FP8DependencyMissingError, match=r"soup-cli\[qat\]"):
+                apply_v028_speed_memory(
+                    model=_Attn(),
+                    tcfg=TrainingConfig(**settings),
+                    base_model="m",
+                    console=console,
+                    device="cuda",
+                )
+            assert "unavailable" not in out.getvalue(), settings
+
+    def test_a_config_that_asked_for_no_fp8_is_untouched(self, monkeypatch):
+        """Control: the stop is scoped to an explicit request. The same box, no
+        torchao, a config without FP8 -- nothing raises, nothing is printed."""
         from soup_cli.config.schema import TrainingConfig
         from soup_cli.utils.v028_features import apply_v028_speed_memory
 
         _card(monkeypatch, (9, 0))
         monkeypatch.setattr("soup_cli.utils.fp8.is_fp8_available", lambda: False)
+        monkeypatch.setitem(sys.modules, "torchao", None)
         out, console = self._console()
         applied = apply_v028_speed_memory(
-            model=_Attn(),
-            tcfg=TrainingConfig(quantization_aware="fp8"),
-            base_model="m",
-            console=console,
-            device="cuda",
+            model=_Attn(), tcfg=TrainingConfig(), base_model="m",
+            console=console, device="cuda",
         )
-        assert applied["fp8"] is False
-        assert "unavailable" in out.getvalue()
+        assert applied["fp8"] is False and "fp8_attention" not in applied
+        assert out.getvalue() == ""
 
     def test_sft_stops_at_setup(self, monkeypatch, converts):
         """``SFTTrainerWrapper._apply_quantization_aware`` on an 8.6 card. Wrapping
         its call in ``try/except RuntimeError`` used to leave every test green."""
+        from types import SimpleNamespace
+
         from soup_cli.config.schema import TrainingConfig
         from soup_cli.trainer.sft import SFTTrainerWrapper
         from soup_cli.utils.fp8 import FP8HardwareUnsupportedError
@@ -477,6 +507,8 @@ class TestTheRunStops:
         _card(monkeypatch, (8, 6))
         wrapper = object.__new__(SFTTrainerWrapper)
         wrapper.model = _Attn()
+        wrapper.config = SimpleNamespace(base="org/model", backend="transformers")
+        wrapper.device = "cuda:0"
         with pytest.raises(FP8HardwareUnsupportedError, match="8.9"):
             wrapper._apply_quantization_aware(TrainingConfig(quantization_aware="fp8"))
         assert converts == []
@@ -529,3 +561,363 @@ class TestTheRunStops:
         else:
             wrapper._setup_transformers(cfg, cfg.training)
             assert converts == ["tensorwise"]
+
+
+class TestSoupTrainReachesTheStop:
+    """#1154 review: ``soup train`` ran the int8 QAT validator for ``quantization_aware:
+    fp8`` too, so the run stopped on "pip install torchao" before the FP8 path could
+    name ``soup-cli[qat]``. These drive the real command; the run stops in pre-flight,
+    before any model is fetched, so the base need not exist."""
+
+    def _train(
+        self, tmp_path, monkeypatch, *, quantization_aware, card_ok, torchao,
+        gate=None, recipe=None, backend=None, dry_run=False, te=False,
+    ):
+        import yaml
+        from typer.testing import CliRunner
+
+        import soup_cli.utils.fp8 as fp8
+        import soup_cli.utils.qat as qat
+        from soup_cli.cli import app
+        from tests.conftest import strip_ansi
+
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("HF_HUB_OFFLINE", "1")
+        (tmp_path / "train.jsonl").write_text(
+            '{"messages": [{"role": "user", "content": "hi"}, '
+            '{"role": "assistant", "content": "hello"}]}\n',
+            encoding="utf-8",
+        )
+        (tmp_path / "soup.yaml").write_text(
+            yaml.safe_dump({
+                "base": "nobody/not-a-real-model",
+                "task": "sft",
+                "data": {"train": "train.jsonl", "format": "chatml", "max_length": 64},
+                **({"backend": backend} if backend else {}),
+                "training": {
+                    "epochs": 1,
+                    "quantization": "none",
+                    "quantization_aware": quantization_aware,
+                    **({"fp8_recipe": recipe} if recipe else {}),
+                },
+                "output": "./out",
+            }),
+            encoding="utf-8",
+        )
+        reason = "FP8 training requires an Ada or newer GPU (compute capability >= 8.9)"
+        monkeypatch.setattr(
+            fp8, "fp8_training_supported",
+            gate or (lambda recipe="tensorwise": (True, "") if card_ok else (False, reason)),
+        )
+        # transformer-engine alone satisfies is_fp8_available(), not the torchao probe.
+        monkeypatch.setattr(fp8, "is_fp8_available", lambda: torchao or te)
+        monkeypatch.setattr(fp8, "is_torchao_float8_available", lambda: torchao)
+        monkeypatch.setattr(qat, "is_qat_available", lambda: torchao)
+        args = ["train", "--config", "soup.yaml", "--allow-oom-attempt", "--yes"]
+        result = CliRunner().invoke(app, args + (["--dry-run"] if dry_run else []))
+        # Rich wraps long lines; compare on single-spaced plain text.
+        return result, " ".join(strip_ansi(result.output).split())
+
+    def test_a_supported_card_without_torchao_names_the_extra(self, tmp_path, monkeypatch):
+        result, out = self._train(
+            tmp_path, monkeypatch, quantization_aware="fp8", card_ok=True, torchao=False
+        )
+        assert result.exit_code == 1
+        # The brackets survive: Rich would otherwise read [qat] as a markup tag.
+        assert 'pip install "soup-cli[qat]"' in out
+        assert "pip install torchao" not in out
+
+    def test_an_unsupported_card_is_named_before_torchao(self, tmp_path, monkeypatch):
+        result, out = self._train(
+            tmp_path, monkeypatch, quantization_aware="fp8", card_ok=False, torchao=False
+        )
+        assert result.exit_code == 1
+        assert "compute capability >= 8.9" in out
+        assert "soup-cli[qat]" not in out
+        assert "pip install torchao" not in out
+
+    def test_int8_qat_is_refused_before_either_torchao_hint(self, tmp_path, monkeypatch):
+        """Control: ``quantization_aware: true`` used to be the int8 path, keeping its
+        own "pip install torchao" hint beside FP8's ``soup-cli[qat]`` one. Since #1222
+        it is refused when the config loads, so it reaches neither pre-flight hint.
+        FP8's own hint stays pinned by the two tests above."""
+        result, out = self._train(
+            tmp_path, monkeypatch, quantization_aware=True, card_ok=True, torchao=False
+        )
+        assert result.exit_code == 1
+        assert "training.quantization_aware: true is refused (#1222)" in out
+        assert "pip install" not in out
+        assert "QAT error" not in out
+
+    def test_fp8_with_card_and_torchao_passes_the_preflight(self, tmp_path, monkeypatch):
+        """Control: the pre-flight is not refusing every FP8 config. A dry run, so
+        the command ends right after validation and must end there successfully --
+        an absent "QAT error" alone would also pass on a crash elsewhere."""
+        result, out = self._train(
+            tmp_path, monkeypatch, quantization_aware="fp8", card_ok=True, torchao=True,
+            dry_run=True,
+        )
+        assert result.exit_code == 0, out
+        assert "Config valid" in out
+        assert "QAT error" not in out and "Note:" not in out
+
+
+class TestARealRunGetsThroughThePreflight:
+    """#1154 review, round 4: 320e8c20 turned the only real-run pass-through control
+    into a dry run (a CodeRabbit suggestion), so a pre-flight that refused FP8 on a
+    real run with a working card and torchao -- or exited 1 silently -- stayed
+    green. The dry-run control stays; this real-run one sits next to it. The base
+    does not exist, so reaching model setup proves the pre-flight let the run go."""
+
+    def test_a_real_fp8_run_with_card_and_torchao_gets_past_the_preflight(
+        self, tmp_path, monkeypatch
+    ):
+        _result, out = TestSoupTrainReachesTheStop()._train(
+            tmp_path, monkeypatch, quantization_aware="fp8", card_ok=True, torchao=True
+        )
+        assert "QAT error" not in out
+        assert "Setting up model + trainer" in out
+
+
+class TestTheRecipeReachesTheGate:
+    """#1154 review, round 2: every stub above ignored its ``recipe`` argument, so
+    dropping ``fp8_recipe=`` at the call site left the suite green -- and then
+    ``fp8_recipe: rowwise`` on Windows told the user to install soup-cli[qat]
+    instead of printing the Windows refusal. This gate refuses only non-tensorwise
+    recipes, so it can see which recipe it was asked about."""
+
+    @staticmethod
+    def _gate(recipe="tensorwise"):
+        return (recipe == "tensorwise", "ROWWISE REFUSED")
+
+    def test_a_rowwise_refusal_is_printed_not_the_install_hint(self, tmp_path, monkeypatch):
+        result, out = TestSoupTrainReachesTheStop()._train(
+            tmp_path, monkeypatch, quantization_aware="fp8", card_ok=True, torchao=False,
+            gate=self._gate, recipe="rowwise",
+        )
+
+        assert result.exit_code == 1
+        assert "ROWWISE REFUSED" in out
+        assert "soup-cli[qat]" not in out
+
+    def test_tensorwise_passes_the_same_gate(self, tmp_path, monkeypatch):
+        """Control: the gate is not refusing everything."""
+        result, out = TestSoupTrainReachesTheStop()._train(
+            tmp_path, monkeypatch, quantization_aware="fp8", card_ok=True, torchao=False,
+            gate=self._gate, recipe="tensorwise",
+        )
+
+        assert "ROWWISE REFUSED" not in out
+        assert 'pip install "soup-cli[qat]"' in out
+
+
+class TestADryRunDoesNotFailOnTheLocalCard:
+    """#1154 review ruling: a dry run validates a config, and FP8 configs are
+    written on a laptop for a remote card. The card is a note there; the
+    dependency and schema checks stay errors; the real run still stops."""
+
+    def test_an_unsupported_card_is_a_note_and_exits_0(self, tmp_path, monkeypatch):
+        result, out = TestSoupTrainReachesTheStop()._train(
+            tmp_path, monkeypatch, quantization_aware="fp8", card_ok=False, torchao=True,
+            dry_run=True,
+        )
+
+        assert result.exit_code == 0, out
+        assert "Note: this machine could not run it:" in out
+        assert "compute capability >= 8.9" in out
+        assert "Config valid" in out
+
+    def test_a_missing_torchao_still_fails_the_dry_run(self, tmp_path, monkeypatch):
+        result, out = TestSoupTrainReachesTheStop()._train(
+            tmp_path, monkeypatch, quantization_aware="fp8", card_ok=False, torchao=False,
+            dry_run=True,
+        )
+
+        assert result.exit_code == 1
+        assert 'pip install "soup-cli[qat]"' in out
+
+    def test_the_real_run_still_stops_on_the_card(self, tmp_path, monkeypatch):
+        result, out = TestSoupTrainReachesTheStop()._train(
+            tmp_path, monkeypatch, quantization_aware="fp8", card_ok=False, torchao=True,
+        )
+
+        assert result.exit_code == 1
+        assert "compute capability >= 8.9" in out
+        assert "Note:" not in out
+
+
+class TestThePreflightAsksForTorchaoItself:
+    def test_transformer_engine_alone_stops_before_the_model_loads(self, tmp_path, monkeypatch):
+        """``is_fp8_available()`` accepts transformer-engine, but the converter is
+        torchao's: that box used to pass pre-flight, load the model, then stop."""
+        result, out = TestSoupTrainReachesTheStop()._train(
+            tmp_path, monkeypatch, quantization_aware="fp8", card_ok=True, torchao=False,
+            te=True,
+        )
+
+        assert result.exit_code == 1
+        assert 'pip install "soup-cli[qat]"' in out
+
+    def test_unsloth_gets_its_refusal_without_an_install_hint(self, tmp_path, monkeypatch):
+        """The unsloth refusal already stops the run; a torchao hint under it would
+        point at a package that cannot help."""
+        result, out = TestSoupTrainReachesTheStop()._train(
+            tmp_path, monkeypatch, quantization_aware="fp8", card_ok=True, torchao=False,
+            backend="unsloth",
+        )
+
+        assert result.exit_code == 1
+        # Either wording of the unsloth refusal: soup train's "not compatible with
+        # the unsloth backend", or #1155's parse-time "not supported on the unsloth
+        # backend". What matters is that it is the unsloth refusal and nothing else.
+        assert "unsloth backend" in out
+        # Broad on purpose (round 3): the narrow check passed while the int8
+        # "pip install torchao" was printed instead.
+        assert "pip install" not in out
+        assert "torchao" not in out.lower().replace("not compatible", "")
+
+
+class TestTheSecondAttentionRaiseSite:
+    def test_torchao_present_without_float8_raises_the_dependency_error(self, monkeypatch):
+        """``advanced_precision``'s second raise site: torchao importable, its
+        float8 module not. Unreachable through the trainers (the fp8 block stops
+        first), so it is pinned here directly."""
+        import sys
+        import types
+
+        import torch.nn as nn
+
+        import soup_cli.utils.advanced_precision as ap
+        import soup_cli.utils.fp8 as fp8
+
+        monkeypatch.setitem(sys.modules, "torchao", types.ModuleType("torchao"))
+        monkeypatch.setitem(sys.modules, "torchao.float8", None)
+        monkeypatch.setattr(fp8, "fp8_training_supported", lambda recipe="tensorwise": (True, ""))
+
+        class _Attn(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.q_proj = nn.Linear(4, 4)
+
+        with pytest.raises(fp8.FP8DependencyMissingError, match="soup-cli"):
+            ap.apply_fp8_attention(_Attn())
+
+
+class TestTheDryRunNoteRound3:
+    """#1154 review, round 3: the note's own call site dropped the recipe, its FP8
+    condition was unpinned, and a dry run lacking torchao hid the card verdict."""
+
+    def test_a_rowwise_dry_run_notes_the_recipe_refusal(self, tmp_path, monkeypatch):
+        """The note must ask about the configured recipe, not the default."""
+        result, out = TestSoupTrainReachesTheStop()._train(
+            tmp_path, monkeypatch, quantization_aware="fp8", card_ok=True, torchao=True,
+            gate=TestTheRecipeReachesTheGate._gate, recipe="rowwise", dry_run=True,
+        )
+
+        assert result.exit_code == 0, out
+        assert "Note: this machine could not run it: ROWWISE REFUSED" in out
+
+    def test_an_int8_dry_run_is_refused_at_load_with_no_fp8_note(self, tmp_path, monkeypatch):
+        """``quantization_aware: true`` no longer reaches the note: the config is
+        refused when it loads (#1222)."""
+        result, out = TestSoupTrainReachesTheStop()._train(
+            tmp_path, monkeypatch, quantization_aware=True, card_ok=False, torchao=True,
+            dry_run=True,
+        )
+
+        assert result.exit_code == 1, out
+        assert "training.quantization_aware: true is refused (#1222)" in out
+        assert "Note:" not in out
+
+    def test_a_dry_run_without_fp8_prints_no_fp8_note(self, tmp_path, monkeypatch):
+        """What the int8 case above used to pin, on a config that still loads: the
+        card note is FP8's, so a dry run that asks for no FP8 prints none, even on
+        a card that could not run FP8."""
+        result, out = TestSoupTrainReachesTheStop()._train(
+            tmp_path, monkeypatch, quantization_aware=False, card_ok=False, torchao=True,
+            dry_run=True,
+        )
+
+        assert result.exit_code == 0, out
+        assert "Config valid" in out
+        assert "Note:" not in out
+
+    def test_an_unsloth_dry_run_prints_only_the_refusal(self, tmp_path, monkeypatch):
+        result, out = TestSoupTrainReachesTheStop()._train(
+            tmp_path, monkeypatch, quantization_aware="fp8", card_ok=False, torchao=False,
+            backend="unsloth", dry_run=True,
+        )
+
+        assert result.exit_code == 1
+        # Either wording of the unsloth refusal: soup train's "not compatible with
+        # the unsloth backend", or #1155's parse-time "not supported on the unsloth
+        # backend". What matters is that it is the unsloth refusal and nothing else.
+        assert "unsloth backend" in out
+        assert "Note:" not in out and "pip install" not in out
+
+    def test_no_torchao_and_no_card_shows_both(self, tmp_path, monkeypatch):
+        """Nit taken: the card verdict is printed before the dependency error exits."""
+        result, out = TestSoupTrainReachesTheStop()._train(
+            tmp_path, monkeypatch, quantization_aware="fp8", card_ok=False, torchao=False,
+            dry_run=True,
+        )
+
+        assert result.exit_code == 1
+        assert "Note: this machine could not run it:" in out
+        assert 'pip install "soup-cli[qat]"' in out
+
+
+class TestTheTorchaoProbeItself:
+    """Every other test stubs ``is_torchao_float8_available``; these run the real one
+    against import-machinery stubs, so a probe that answered True on ImportError
+    (which would let a torchao-less run load the model, then stop) fails here."""
+
+    def test_torchao_without_float8_is_not_available(self, monkeypatch):
+        import types
+
+        from soup_cli.utils.fp8 import is_torchao_float8_available
+
+        monkeypatch.setitem(sys.modules, "torchao", types.ModuleType("torchao"))
+        monkeypatch.setitem(sys.modules, "torchao.float8", None)
+
+        assert is_torchao_float8_available() is False
+
+    def test_no_torchao_at_all_is_not_available(self, monkeypatch):
+        from soup_cli.utils.fp8 import is_torchao_float8_available
+
+        monkeypatch.setitem(sys.modules, "torchao", None)
+
+        assert is_torchao_float8_available() is False
+
+    def test_a_float8_module_with_the_converter_is_available(self, monkeypatch):
+        import types
+
+        from soup_cli.utils.fp8 import is_torchao_float8_available
+
+        pkg = types.ModuleType("torchao")
+        pkg.__path__ = []
+        float8 = types.ModuleType("torchao.float8")
+        float8.convert_to_float8_training = lambda *a, **k: None
+        pkg.float8 = float8
+        monkeypatch.setitem(sys.modules, "torchao", pkg)
+        monkeypatch.setitem(sys.modules, "torchao.float8", float8)
+
+        assert is_torchao_float8_available() is True
+
+
+class TestTheConversionFailedWording:
+    def test_a_failed_conversion_says_so(self, monkeypatch):
+        """Round 1 renamed the yellow line; nothing held it (non-blocking, taken)."""
+        from soup_cli.config.schema import TrainingConfig
+        from soup_cli.utils.v028_features import apply_v028_speed_memory
+
+        monkeypatch.setattr("soup_cli.utils.fp8.apply_fp8_training", lambda *a, **k: False)
+        out, console = TestTheRunStops()._console()
+        applied = apply_v028_speed_memory(
+            model=_Attn(), tcfg=TrainingConfig(quantization_aware="fp8"), base_model="m",
+            console=console, device="cuda",
+        )
+
+        assert applied["fp8"] is False
+        assert "the float8 conversion failed" in out.getvalue()
+        assert "torchao.float8 missing" not in out.getvalue()

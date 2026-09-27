@@ -17,6 +17,8 @@ from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
 
+from soup_cli.utils.exit_codes import EXIT_GATE_FAILED, EXIT_USAGE_ERROR
+
 console = Console()
 
 _MAX_DATA_BYTES = 1_073_741_824  # 1 GiB cap on input data
@@ -38,7 +40,7 @@ def _load_jsonl_rows(data_path: str) -> List[Mapping[str, object]]:
     enforce_under_cwd_and_no_symlink(data_path, "data path")
     real = os.path.realpath(data_path)
     if not os.path.isfile(real):
-        raise FileNotFoundError(real)
+        raise FileNotFoundError(data_path)
     if os.path.getsize(real) > _MAX_DATA_BYTES:
         raise ValueError(f"data file exceeds {_MAX_DATA_BYTES} bytes")
     rows: List[Mapping[str, object]] = []
@@ -69,7 +71,7 @@ def expect_cmd(
 ) -> None:
     """Run an expectations suite against a JSONL dataset.
 
-    Exit 0 = suite passed. Exit 2 = validation rejection. Exit 3 = suite failed.
+    Exit 0 = suite passed. Exit 2 = gate failed. Exit 3 = usage/input error.
     """
     from soup_cli.utils.expectations import load_suite_yaml, run_suite
 
@@ -77,19 +79,19 @@ def expect_cmd(
         spec = load_suite_yaml(suite)
     except (FileNotFoundError, TypeError, ValueError) as exc:
         console.print(f"[red]{escape(str(exc))}[/]")
-        raise typer.Exit(2) from exc
+        raise typer.Exit(EXIT_USAGE_ERROR) from exc
 
     try:
         rows = _load_jsonl_rows(data)
     except (FileNotFoundError, TypeError, ValueError) as exc:
         console.print(f"[red]{escape(str(exc))}[/]")
-        raise typer.Exit(2) from exc
+        raise typer.Exit(EXIT_USAGE_ERROR) from exc
 
     try:
         report = run_suite(rows, spec)
     except (TypeError, ValueError) as exc:
         console.print(f"[red]{escape(str(exc))}[/]")
-        raise typer.Exit(2) from exc
+        raise typer.Exit(EXIT_USAGE_ERROR) from exc
 
     table = Table(title=f"soup expect — {escape(data)}")
     table.add_column("Expectation")
@@ -115,4 +117,4 @@ def expect_cmd(
                         title=f"[red]Violations: {escape(result.name)}[/]",
                     )
                 )
-        raise typer.Exit(3)
+        raise typer.Exit(EXIT_GATE_FAILED)

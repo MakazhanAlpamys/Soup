@@ -75,12 +75,19 @@ default, so "run it again with a different seed" was impossible: replicates of
 one arm differed only by row permutation and GPU nondeterminism. That understates
 run-to-run spread, and spread is the yardstick a real between-arm difference has
 to beat. Three replicates at three seeds is the cheapest honest error bar you can
-put on a training change:
+put on a training change. Create one config per replicate so the seed and its
+output directory stay together in the recorded recipe:
+
+```yaml
+# soup-seed-1.yaml (repeat for seeds 2 and 3)
+training:
+  seed: 1
+output: runs/seed-1
+```
 
 ```bash
 for s in 1 2 3; do
-  soup train --config soup.yaml --output "runs/seed-$s" \
-    && echo "seed $s done"   # set training.seed: $s in the config per run
+  soup train --config "soup-seed-$s.yaml" && echo "seed $s done"
 done
 ```
 
@@ -262,7 +269,8 @@ above.
 ## Which tasks apply `training.quantization`
 
 `quantization` defaults to `4bit`, but not every trainer reads it. These eight load the base
-(and, for `distill`, the teacher) at checkpoint precision whatever the field says:
+(and, for `distill`, the teacher) unquantised whatever the field says; `prm` loads it as fp32
+master weights (see [Process Reward Model](#process-reward-model-prm)):
 
 | task | quantization | notes |
 |---|---|---|
@@ -358,7 +366,9 @@ soup train --config grpo.yaml --reward-hack-mitigation log_only     # observe on
 # tokenize identically; for a genuinely different tokenizer see
 # wasserstein_aligned below).
 # (Universal Logit Distillation, Boizard et al. 2024 arXiv:2402.12030)
-soup train --config soup.yaml --uld-strategy wasserstein
+#   training:
+#     uld_strategy: wasserstein
+soup train --config soup.yaml
 
 # Cross-tokenizer distillation for DIFFERENT tokenizers, e.g. Llama -> Mistral,
 # no shared vocab needed (v0.71.18). Aligns student/teacher token sequences
@@ -389,10 +399,11 @@ soup train --config soup.yaml
 soup train --config soup.yaml --minillm-on-policy
 
 # Mid-epoch checkpoint for PPO/GRPO — TorchTune punts this; Soup ships it
-soup train --config grpo.yaml \
-    --rl-checkpoint-save-every-steps 500 \
-    --rl-checkpoint-keep-last 3 \
-    --rl-checkpoint-include-optimizer
+#   training:
+#     rl_checkpoint_save_every_steps: 500
+#     rl_checkpoint_keep_last: 3
+#     rl_checkpoint_include_optimizer: true
+soup train --config grpo.yaml
 
 # Iterative DPO loop driver — sample -> RM-score -> re-pair -> retrain
 # (drop --plan-only to run the loop; --plan-only just renders the per-round plan)
@@ -406,14 +417,19 @@ soup iterative-dpo \
 
 # RAGEN echo-trap detector — auto-halt when trajectories collapse to self-repetition
 # (Zhu et al. 2025 arXiv:2504.14437)
-soup train --config grpo.yaml \
-    --echo-trap-enabled \
-    --echo-trap-threshold 0.6 \
-    --echo-trap-halt \
-    --echo-trap-tokenizer-aware
+#   training:
+#     echo_trap_enabled: true
+#     echo_trap_threshold: 0.6
+#     echo_trap_halt: true
+#     echo_trap_tokenizer_aware: true
+soup train --config grpo.yaml
 ```
 
-`--echo-trap-tokenizer-aware` switches echo-trap n-grams from whitespace tokens to the active tokenizer's integer ids. This catches subword repetition that punctuation-heavy decoded text can hide, but the score becomes tokenizer-specific rather than vocabulary-agnostic.
+`training.echo_trap_tokenizer_aware` (also available as the real
+`--echo-trap-tokenizer-aware` option) switches echo-trap n-grams from
+whitespace tokens to the active tokenizer's integer ids. This catches subword
+repetition that punctuation-heavy decoded text can hide, but the score becomes
+tokenizer-specific rather than vocabulary-agnostic.
 
 ### Closed-loop reward-hacking auto-mitigation (v0.71.26)
 
@@ -516,6 +532,9 @@ training:
 Loss = student CE + (T**2) × KL(teacher_logits / T  ||  student_logits / T).
 Teacher is loaded once, frozen via `requires_grad_(False)` + `.eval()`, and its
 inputs / logits are auto-bridged across CPU / CUDA devices.
+
+Distillation runs on `backend: transformers` only; `backend: mlx` and
+`backend: unsloth` are refused at config load.
 Gradient accumulation uses the number of shifted, non-masked training targets across the complete
 optimizer window. Splitting the same rows into unequal-length microbatches therefore preserves the
 full-batch token mean instead of weighting every microbatch equally.
@@ -672,6 +691,16 @@ Variants:
 - **two_sided** — symmetric clipping with operator-supplied `grpo_delta`.
 - **rft** — rejection-sampling fine-tuning (only positive-advantage tokens contribute).
 
+Every variant applies `grpo_beta` (default `0.1`) as a KL penalty against the
+reference policy, where trl's own GRPO loss puts it: trl's per-token estimator
+`exp(ref - logp) - (ref - logp) - 1`, weighted by `grpo_beta` and reduced the
+same way as that variant's policy term. `rft` applies it only to the accepted
+completions it trains on. The β that the reward-hack controller sets at runtime
+(`kl_control` / `pid_lagrangian`) reaches every variant the same way.
+`grpo_beta` must be greater than zero, so a KL-free run, the setting the DAPO
+paper uses, cannot be configured yet
+([#1247](https://github.com/MakazhanAlpamys/Soup/issues/1247)).
+
 The stability callback (EMA ref-model update, replay buffer, TIS alert counter)
 attaches automatically when any of `ref_model_ema_alpha` / `replay_buffer_size`
 / `tis_threshold` / etc. is set.
@@ -699,6 +728,19 @@ reward head, and computes MSE between predicted scalars at step-boundary tokens
 and the per-step labels. The reward head is saved inside the model checkpoint
 (`reward_head.*` in `model.safetensors`) and the tokenizer is saved alongside it,
 so the resulting directory is loadable standalone.
+
+PRM trains every base parameter along with the head, so all of them load as fp32
+master weights on every device. On CUDA, autocast runs the forward pass in bf16 (fp16 on
+pre-Ampere cards); on MPS it uses bf16 where the runtime supports it; CPU trains in fp32.
+With the default optimizer (AdamW), budget about 16 bytes per parameter before
+activations (fp32 weights, fp32 gradients and two fp32 AdamW moments), which is what the
+VRAM pre-flight predicts for `task: prm` when `batch_size` is an integer (with the
+default `batch_size: auto` the pre-flight does not run). The saved checkpoint is fp32, and
+without DeepSpeed loading the fp32 base needs about twice the host RAM of a bf16 load. Under DeepSpeed,
+each rank loads the base in fp32 on the host before the engine exists (4 bytes per
+parameter of host RAM per rank); the engine then casts it to its bf16/fp16 dtype, keeps
+its own fp32 master copy and saves a 16-bit checkpoint. A bf16 base without master
+weights would round most updates away at these learning rates (#1235).
 
 
 ## PRM-guided GRPO (process-supervised RL)
@@ -817,7 +859,7 @@ training:
   quantization: 4bit
 ```
 
-Soup auto-detects MoE architectures. Works with all training tasks.
+Soup auto-detects MoE architectures. Not every task reads `moe_lora`: the per-task table in [Performance and quantization](performance-and-quantization.md#moe-expert-quantization--router-only-training-live-in-v07120) lists the tasks that apply it and the ones that refuse it at config load.
 
 ```bash
 soup init --template moe
@@ -960,7 +1002,7 @@ good for before/after deltas, not leaderboard-comparable absolutes.
 
 ## GRPO Plus — Objective Variants, Long-Context RL, Multi-Turn Agents
 
-Soup ships seven GRPO objective variants, between-rollouts vLLM standby, four agent-rollout backends, seven stability/efficiency knobs, plus Process Reward Models and Vision-RL.
+Soup ships seven GRPO objective variants, between-rollouts vLLM standby, four agent-rollout backends, seven stability/efficiency knobs, plus Process Reward Models.
 
 ```yaml
 # soup.yaml — DAPO with replay buffer and TIS truncation masking
@@ -977,7 +1019,7 @@ training:
   # grpo_delta: 0.2                   # required when grpo_variant: two_sided (optional for gspo)
   grpo_fp16: true                     # FP16 RL (unsloth parity)
   # Long-context + memory-efficient RL
-  long_context_grpo: true             # wires Tiled MLP when available
+  # long_context_grpo: true           # staged for future Tiled MLP; refused as of v0.77 — #808
   vllm_sleep_mode: true               # between-rollouts vLLM standby — LIVE (vLLM >= 0.7)
   # Multi-turn agent rollout — openenv is LIVE: your function's rows replace the prompt dataset
   rollout_backend: openenv            # one of: art / ruler / nemo_gym / openenv
@@ -1007,7 +1049,7 @@ training:
   lr: 1e-5
 ```
 
-Vision RL on Qwen2-VL / Pixtral / InternVL:
+Vision RL on Qwen2-VL / Pixtral / InternVL (Staged):
 
 ```yaml
 # soup.yaml
@@ -1019,10 +1061,10 @@ data:
   format: llava
 training:
   reward_fn: accuracy
-  vision_grpo: true                    # VLM-RL opt-in
+  # vision_grpo: true                  # staged for VLM-RL; refused as of v0.77 — #808
 ```
 
-All flags ship as schema gates in v0.50.0; live loss kernels, vLLM sleep-mode plumbing, ART/RULER/NeMo Gym/OpenEnv launchers, and the PRM trainer wrapper land in v0.50.1 — schema accepts the values now so configs are stable.
+All flags shipped as schema gates in v0.50.0. `vllm_sleep_mode`, `openenv` rollout, and PRM training (`task: prm`) are live. Other rollout backends (`art`, `ruler`, `nemo_gym`) raise "not yet validated", while unconsumed staged flags (e.g. `long_context_grpo`, `vision_grpo`) warn in v0.76 and are refused as of v0.77 (#808).
 
 
 ## DPO Training
@@ -1572,20 +1614,24 @@ DDP / grad-accum safety: multi-rank launches must wire an `all_reduce` hook on p
 
 ## TTS Fine-Tuning (`task='tts'`, BETA, live in v0.71.20)
 
-Live as of v0.71.20 (lifted from the v0.52.0 schema stub). The five families
-(`orpheus`, `sesame_csm`, `llasa`, `spark`, `oute`) are all decoder language
-models, so a TTS fine-tune is **next-token cross-entropy over interleaved
-`[text][audio-codec-token]` chat sequences** — the same objective the SFT
-trainer already runs. `TTSTrainerWrapper` reuses the SFT model/tokenizer/LoRA/CE
-machinery and adds two TTS-specific pieces: per-family emotion-control
-templating and registration of operator-supplied codec special tokens.
+Live as of v0.71.20 (lifted from the v0.52.0 schema stub). The codec-string
+families (`orpheus`, `llasa`, `spark`, `oute`) train with **next-token
+cross-entropy over interleaved `[text][audio-codec-token]` chat sequences**,
+so `TTSTrainerWrapper` reuses the SFT model/tokenizer/LoRA/CE machinery and
+adds per-family emotion templating plus codec-token registration. `sesame_csm`
+is different: current CSM training uses text plus 32 Mimi codebooks as parallel
+multimodal frames. Soup therefore refuses CSM on this text-SFT codec-string
+path rather than silently training the wrong objective; a dedicated CSM trainer
+is still required.
 
 There are two workflows:
 
-**Pre-encoded chat (live, validated).** Run the family's audio codec **offline**
-so the assistant turn already contains the discrete codec-token string, then
-train with `data.format: chat`. This is plain cross-entropy and runs on any GPU
-(validated end-to-end on SmolLM2-135M-Instruct).
+**Pre-encoded chat (live for codec-string families).** Run the family's audio
+codec **offline** so the assistant turn already contains the discrete
+codec-token string, then train with `data.format: chatml`. This is plain
+cross-entropy and runs on any GPU (validated end-to-end on
+SmolLM2-135M-Instruct). This workflow does not turn Sesame CSM's parallel Mimi
+codebooks into a valid CSM training example.
 
 ```yaml
 base: HuggingFaceTB/SmolLM2-135M-Instruct   # or canopylabs/orpheus-3b-0.1-ft
@@ -1593,12 +1639,14 @@ task: tts
 modality: audio_out
 data:
   train: ./data/tts_pre_encoded.jsonl   # assistant turns carry codec tokens
-  format: chat
+  format: chatml
   new_special_tokens: ["<|codec_0|>", "<|codec_1|>"]   # your codec vocab
 training:
   tts_family: orpheus
   tts_emotion: neutral   # Orpheus + Oute only
-  lora: true
+  lora:
+    r: 16
+    alpha: 32
 ```
 
 Operator-supplied `data.new_special_tokens` are registered (deduplicated, only
@@ -1610,17 +1658,20 @@ laugh; Oute: neutral / happy / sad / angry / calm / excited) — the wrapper
 prepends the family's emotion control string to the first user turn.
 
 **Live-codec (hardware/dependency-gated).** Setting `data.format: audio` asks
-the trainer to encode raw audio into codec tokens **at train time**, which needs
-the family's heavyweight codec package (`snac` for Orpheus, `moshi` for
-Sesame-CSM, `xcodec2` for Llasa, `sparktts` for Spark, `outetts` for Oute). The
-**Orpheus** path is live — install `pip install snac` and a 24 kHz mono wav is
-encoded to SNAC codec tokens end-to-end (audio is duration- and byte-capped and
-read through an `O_NOFOLLOW` fd). The other four families still surface a
-friendly per-family `RuntimeError` naming the required `pip install` and are not
-yet validated on the maintainer's box — use the pre-encoded workflow above for a
-runnable fine-tune with those.
+the trainer to encode raw audio **at train time**. Orpheus and Llasa are live on
+the codec-string path: Orpheus uses `pip install snac` at 24 kHz; Llasa uses
+Soup's `[audio]` extra (torchaudio + soundfile). Torchaudio must match the
+installed Torch release — recent torchaudio metadata may not make pip enforce
+that pairing — then Soup resamples to 16 kHz and calls the
+Transformers-native `HKUSTAudio/xcodec2-hf` codec, and
+renders the resulting ids as `<|s_ID|>` between Llasa's speech-generation
+boundary tokens. Audio remains duration/byte-capped and is read through an
+`O_NOFOLLOW` fd. Spark and Oute remain dependency-gated pending their #265
+slice. Sesame CSM fails earlier with an architecture-specific message because
+its 32 parallel Mimi codebooks require a native multimodal trainer, not a
+codec-string adapter.
 
-Five ready-made recipes ship: `orpheus-tts-sft`, `sesame-csm-tts`, `llasa-tts`,
+Four ready-made codec-string recipes ship: `orpheus-tts-sft`, `llasa-tts`,
 `spark-tts`, `oute-tts` — copy with `soup recipes use <name>`. Cross-validators
 reject the `mlx` backend, `modality != audio_out`, and emotion tags outside the
 per-family allowlist.
@@ -1659,7 +1710,7 @@ training:
   distill_temperature: 2.0
 ```
 
-The cross-validator rejects `task='distill'` without `teacher_model`, and rejects `teacher_model` / `distill_*` fields when `task` is anything other than `distill`.
+The cross-validator rejects `task='distill'` without `teacher_model`, and rejects `teacher_model` / `distill_*` fields when `task` is anything other than `distill`. It also refuses `task='distill'` on `backend: mlx` and `backend: unsloth` at config load; distillation runs on `backend: transformers` only.
 
 
 ## EBFT + GDPO (BETA, v0.52.0)

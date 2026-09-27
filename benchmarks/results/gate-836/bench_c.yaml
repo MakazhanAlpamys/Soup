@@ -1,0 +1,34 @@
+# Reference config for benchmarks/gate-836-bench-train-contract.md
+# Small, fully cached, public model; LoRA; nothing here is drawn at run time.
+base: Qwen/Qwen2.5-0.5B-Instruct
+task: sft
+backend: transformers
+
+data:
+  train: bench_fixture_long.jsonl
+  format: alpaca
+  max_length: 512
+
+training:
+  epochs: 1
+  lr: 2e-4
+  batch_size: 2
+  gradient_accumulation_steps: 1
+  quantization: none
+  optimizer: adamw_torch
+  scheduler: linear
+  warmup_ratio: 0.0
+  weight_decay: 0.0
+  logging_steps: 1
+  save_steps: 1000
+  seed: 1234
+  data_seed: 1234
+  lora:
+    r: 16
+    alpha: 32
+    dropout: 0.0
+    target_modules:
+      - q_proj
+      - v_proj
+
+output: ./output_bench836_c/

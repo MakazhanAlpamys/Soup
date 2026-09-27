@@ -11,6 +11,15 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
+from soup_cli.utils.exit_codes import (
+    EXIT_GATE_FAILED,
+    EXIT_OK,
+    EXIT_RUNTIME_ERROR,
+    EXIT_USAGE_ERROR,
+    GateCommand,
+)
+from soup_cli.utils.terminal import for_terminal
+
 console = Console()
 
 app = typer.Typer(
@@ -1159,7 +1168,7 @@ def _short_model_name(path: str) -> str:
 # ─── soup eval gate (v0.26.0 Part B) ───
 
 
-@app.command(name="gate")
+@app.command(name="gate", cls=GateCommand)
 def gate_cmd(
     suite: str = typer.Option(
         ..., "--suite", "-s",
@@ -1191,11 +1200,11 @@ def gate_cmd(
         console.print(
             "[red]--regression-threshold must be between 0.0 and 1.0[/]"
         )
-        raise typer.Exit(1)
+        raise typer.Exit(EXIT_USAGE_ERROR)
 
     if write_baseline and not model:
         console.print("[red]--write-baseline requires --model[/]")
-        raise typer.Exit(1)
+        raise typer.Exit(EXIT_USAGE_ERROR)
 
     from soup_cli.eval.gate import (
         load_suite,
@@ -1208,16 +1217,16 @@ def gate_cmd(
         eval_suite = load_suite(suite)
     except (FileNotFoundError, ValueError) as exc:
         console.print(f"[red]Cannot load suite:[/] {exc}")
-        raise typer.Exit(1) from exc
+        raise typer.Exit(EXIT_USAGE_ERROR) from exc
 
     try:
         baseline_scores = resolve_baseline(
             baseline,
-            warn=lambda msg: console.print(f"[yellow]Warning:[/] {msg}"),
+            warn=lambda msg: console.print(f"[yellow]Warning:[/] {for_terminal(msg)}"),
         )
     except (FileNotFoundError, ValueError) as exc:
         console.print(f"[red]Cannot resolve baseline:[/] {exc}")
-        raise typer.Exit(1) from exc
+        raise typer.Exit(EXIT_USAGE_ERROR) from exc
 
     # When --model is provided, build a transformers-backed generator.
     # Otherwise fall back to an empty-string stub for smoke runs.
@@ -1262,16 +1271,16 @@ def gate_cmd(
             console.print(
                 f"[red]Cannot write --write-baseline:[/] {exc}"
             )
-            raise typer.Exit(1) from exc
+            raise typer.Exit(EXIT_RUNTIME_ERROR) from exc
         console.print(f"[green]Wrote stamped baseline[/] {written}")
 
-    raise typer.Exit(0 if result.passed else 1)
+    raise typer.Exit(EXIT_OK if result.passed else EXIT_GATE_FAILED)
 
 
 # ─── soup eval quant-check (v0.26.0 Part D) ───
 
 
-@app.command(name="quant-check")
+@app.command(name="quant-check", cls=GateCommand)
 def quant_check_cmd(
     before: str = typer.Option(
         ..., "--before",
@@ -1314,16 +1323,16 @@ def quant_check_cmd(
         ensure_format(fmt)
     except ValueError as exc:
         console.print(f"[red]{exc}[/]")
-        raise typer.Exit(1) from exc
+        raise typer.Exit(EXIT_USAGE_ERROR) from exc
 
     resolved_before = resolve_model_ref(before)
     resolved_after = resolve_model_ref(after)
     if resolved_before is None:
         console.print(f"[red]Cannot resolve --before: {before}[/]")
-        raise typer.Exit(1)
+        raise typer.Exit(EXIT_USAGE_ERROR)
     if resolved_after is None:
         console.print(f"[red]Cannot resolve --after: {after}[/]")
-        raise typer.Exit(1)
+        raise typer.Exit(EXIT_USAGE_ERROR)
 
     for label, path_str in (("--before", resolved_before),
                             ("--after", resolved_after),
@@ -1333,10 +1342,10 @@ def quant_check_cmd(
             console.print(
                 f"[red]{label} '{path_str}' is outside cwd - refusing[/]"
             )
-            raise typer.Exit(1)
+            raise typer.Exit(EXIT_USAGE_ERROR)
         if not path_obj.exists() and label == "--tasks":
             console.print(f"[red]{label} not found: {path_str}[/]")
-            raise typer.Exit(1)
+            raise typer.Exit(EXIT_USAGE_ERROR)
 
     for label, path_str in (("--before", resolved_before), ("--after", resolved_after)):
         path_obj = Path(path_str)
@@ -1347,16 +1356,16 @@ def quant_check_cmd(
                 "Supported: directories containing safetensors / HuggingFace "
                 "model files or registry:// refs.[/]"
             )
-            raise typer.Exit(3)
+            raise typer.Exit(EXIT_USAGE_ERROR)
 
     before_path = Path(resolved_before)
     after_path = Path(resolved_after)
     if not before_path.exists():
         console.print(f"[red]--before not found: {resolved_before}[/]")
-        raise typer.Exit(1)
+        raise typer.Exit(EXIT_USAGE_ERROR)
     if not after_path.exists():
         console.print(f"[red]--after not found: {resolved_after}[/]")
-        raise typer.Exit(1)
+        raise typer.Exit(EXIT_USAGE_ERROR)
 
     # Live model scoring: build transformers-backed generators per side.
     # Deterministic stubs are used only if --allow-stub is explicitly passed.
@@ -1372,7 +1381,7 @@ def quant_check_cmd(
                 f"[red]Failed to load --before model ({resolved_before}): {exc} "
                 "(pass --allow-stub to score with deterministic stubs instead)[/]"
             )
-            raise typer.Exit(1) from exc
+            raise typer.Exit(EXIT_RUNTIME_ERROR) from exc
         if fmt != "json":
             console.print(
                 f"[yellow]Failed to load --before model ({exc}); using deterministic stub.[/]"
@@ -1388,7 +1397,7 @@ def quant_check_cmd(
                 f"[red]Failed to load --after model ({resolved_after}): {exc} "
                 "(pass --allow-stub to score with deterministic stubs instead)[/]"
             )
-            raise typer.Exit(1) from exc
+            raise typer.Exit(EXIT_RUNTIME_ERROR) from exc
         if fmt != "json":
             console.print(
                 f"[yellow]Failed to load --after model ({exc}); using deterministic stub.[/]"
@@ -1412,7 +1421,7 @@ def quant_check_cmd(
         console.print(rendered, markup=False, highlight=False)
 
     has_major = any(r.verdict == "MAJOR" for r in result.rows)
-    raise typer.Exit(2 if has_major else 0)
+    raise typer.Exit(EXIT_GATE_FAILED if has_major else EXIT_OK)
 
 
 def _print_gate_result(result) -> None:

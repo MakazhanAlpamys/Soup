@@ -318,8 +318,7 @@ def test_merge_ties_tied_sign_defaults_positive():
     assert merged["w"][0] > 0
 
 
-@pytest.mark.skipif(__import__("os").name == "nt",
-                    reason="POSIX-only symlink semantics")
+@pytest.mark.requires_symlink
 def test_merge_adapters_rejects_symlink_at_output_safetensors(tmp_path, monkeypatch):
     """Pre-placed symlink at output safetensors path must be rejected (TOCTOU)."""
     import os

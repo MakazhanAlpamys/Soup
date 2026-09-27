@@ -84,23 +84,23 @@ def test_validate_applies_minimum_fraction(
         )
 
 
-def test_validate_keeps_input_errors_at_exit_one(tmp_path: Path) -> None:
+def test_validate_keeps_input_errors_at_exit_three(tmp_path: Path) -> None:
     missing = _invoke_validate(tmp_path / "missing.jsonl")
 
-    assert missing.exit_code == 1
+    assert missing.exit_code == 3
     assert "File not found" in strip_ansi(missing.output)
 
     unknown = tmp_path / "unknown.jsonl"
     unknown.write_text('{"unrecognized": "shape"}\n', encoding="utf-8")
     undetectable = CliRunner().invoke(app, ["data", "validate", str(unknown)])
 
-    assert undetectable.exit_code == 1
+    assert undetectable.exit_code == 3
     assert "Cannot detect format" in strip_ansi(undetectable.output)
 
 
 def test_validate_rejects_an_unknown_format(tmp_path: Path) -> None:
     """#866: --format accepted any string and reported every row valid for
-    it. An unknown format is an input error (exit 1), not the failed-gate
+    it. An unknown format is an input error (exit 3), not the failed-gate
     exit code (2) #858 settled on for '0 usable rows' -- the two must stay
     distinguishable so a CI gate can tell a typo'd flag from real bad data."""
     path = tmp_path / "two_alpaca_rows.jsonl"
@@ -117,7 +117,7 @@ def test_validate_rejects_an_unknown_format(tmp_path: Path) -> None:
     )
     output = strip_ansi(result.output)
 
-    assert result.exit_code == 1, output
+    assert result.exit_code == 3, output
     assert "bogus" in output
     assert "alpaca" in output  # names at least one accepted format
 

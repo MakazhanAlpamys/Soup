@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import dataclasses
 import os
-import sys
 from pathlib import Path
 
 import pytest
@@ -495,7 +494,7 @@ class TestLoadSuiteYaml:
         with pytest.raises(ValueError, match="cwd"):
             expectations.load_suite_yaml(str(outside / "s.yaml"))
 
-    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX symlink")
+    @pytest.mark.requires_symlink
     def test_symlink_rejected(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.chdir(tmp_path)
         target = _write(tmp_path / "real.yaml", "expectations:\n  - name: expect_no_pii\n")
@@ -532,7 +531,7 @@ class TestSoupExpectCli:
         result = runner.invoke(app, ["expect", str(data), str(suite)])
         assert result.exit_code == 0, result.output
 
-    def test_failure_exits_3(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_failure_exits_2(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.chdir(tmp_path)
         data = _write(
             tmp_path / "data.jsonl", '{"text": "email me at evil@e.com"}\n'
@@ -542,7 +541,7 @@ class TestSoupExpectCli:
         )
         runner = CliRunner()
         result = runner.invoke(app, ["expect", str(data), str(suite)])
-        assert result.exit_code == 3
+        assert result.exit_code == 2
 
     def test_outside_cwd_data(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         outside = tmp_path / "outside"
@@ -556,7 +555,7 @@ class TestSoupExpectCli:
         result = runner.invoke(
             app, ["expect", str(outside / "d.jsonl"), str(suite)]
         )
-        assert result.exit_code != 0
+        assert result.exit_code == 3
 
 
 # -----------------------------------------------------------------------------

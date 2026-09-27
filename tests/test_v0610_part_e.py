@@ -13,7 +13,6 @@ from __future__ import annotations
 import dataclasses
 import json
 import os
-import sys
 from pathlib import Path
 
 import pytest
@@ -185,7 +184,7 @@ class TestLoadProbes:
         with pytest.raises(ValueError):
             load_probes("")
 
-    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX-only symlink test")
+    @pytest.mark.requires_symlink
     def test_symlink_rejected(self, tmp_path):
         from soup_cli.utils.edit_diff import load_probes
 

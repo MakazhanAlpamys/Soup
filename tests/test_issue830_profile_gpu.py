@@ -95,7 +95,7 @@ def test_no_detected_gpu_is_not_reported_as_a_measured_fit(config_file, no_gpu, 
     assert result.exit_code == 0, result.output
     assert "Fits in 24 GB VRAM" not in result.output
     assert "No GPU detected" in result.output
-    assert "assumed 24 GB" in result.output
+    assert "assumed 24 GB" in _ANSI.sub("", result.output)
 
 
 def test_json_says_the_gpu_memory_was_assumed(config_file, no_gpu):

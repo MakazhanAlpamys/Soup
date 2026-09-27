@@ -2009,7 +2009,7 @@ class TestLintCli:
         from soup_cli.cli import app
 
         result = runner.invoke(app, ["data", "lint", str(data_path)])
-        assert result.exit_code == 2, result.output
+        assert result.exit_code == 3, result.output
         assert "dpo" in result.output.lower() or "kto" in result.output.lower()
 
     def test_missing_file_exits_nonzero(self, tmp_path, monkeypatch):
@@ -2017,7 +2017,7 @@ class TestLintCli:
         from soup_cli.cli import app
 
         result = runner.invoke(app, ["data", "lint", "nope.jsonl"])
-        assert result.exit_code == 1
+        assert result.exit_code == 3
 
     def test_empty_dataset_file_is_friendly_error(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
@@ -2026,7 +2026,7 @@ class TestLintCli:
         from soup_cli.cli import app
 
         result = runner.invoke(app, ["data", "lint", str(data_path)])
-        assert result.exit_code == 1, result.output
+        assert result.exit_code == 3, result.output
         assert "empty" in result.output.lower()
 
     def test_output_path_outside_cwd_rejected(self, tmp_path, monkeypatch):
@@ -2038,7 +2038,7 @@ class TestLintCli:
         result = runner.invoke(
             app, ["data", "lint", str(data_path), "--output", "../outside.json"]
         )
-        assert result.exit_code == 1
+        assert result.exit_code == 3
 
     def test_model_flag_uses_tokenizer_for_length_bias(self, tmp_path, monkeypatch):
         """Exercises the --model / length_fn closure end to end (previously
@@ -2186,7 +2186,7 @@ class TestDiagnoseEvidenceHardening:
         with pytest.raises(Exception, match="unreadable"):
             _load_evidence(str(tmp_path / "missing.json"))
 
-    @pytest.mark.skipif(os.name == "nt", reason="POSIX symlink semantics")
+    @pytest.mark.requires_symlink
     def test_symlink_still_rejected(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         target = tmp_path / "real.json"

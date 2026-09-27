@@ -485,7 +485,13 @@ class DistillTrainerWrapper:
             resolve_lora_target_modules,
         )
 
-        target_modules = resolve_lora_target_modules(self.model, tcfg.lora.target_modules)
+        target_modules = resolve_lora_target_modules(self.model, tcfg.lora.target_modules, console)
+        # #1151: moe_lora picks the expert-FFN targets; see sft.py.
+        from soup_cli.utils.moe import resolve_moe_lora_targets
+
+        target_modules = resolve_moe_lora_targets(
+            self.model, tcfg, target_modules, console
+        )
         lora_config = build_lora_config(
             tcfg.lora,
             target_modules=target_modules,
@@ -1016,9 +1022,12 @@ class DistillTrainerWrapper:
         # v0.40.6 #67 — ReLoRA callback.
         from soup_cli.utils.peft_wiring import (
             attach_curriculum_callback,
+            attach_loraplus_optimizer,
             attach_plugin_callback,
             attach_relora_callback,
         )
+        # LoRA+ optimizer (#724/#745) — build and attach now that the trainer exists.
+        attach_loraplus_optimizer(self.trainer, tcfg)
         attach_relora_callback(self.trainer, tcfg)
         # v0.53.5 #114/#115 — dynamic curriculum live callback.
         attach_curriculum_callback(self.trainer, tcfg, str(output_dir), console)

@@ -19,13 +19,8 @@ from __future__ import annotations
 
 import json
 import os
-import sys
 
 import pytest
-
-POSIX_ONLY = pytest.mark.skipif(
-    sys.platform == "win32", reason="symlink creation needs elevation on Windows"
-)
 
 
 def _strip_ansi(text: str) -> str:
@@ -38,7 +33,7 @@ def _strip_ansi(text: str) -> str:
     """
     import re
 
-    return re.sub(r"\x1b\[[0-9;]*m", "", text)
+    return " ".join(re.sub(r"\x1b\[[0-9;]*m", "", text).split())
 
 
 # ---------------------------------------------------------------------------
@@ -170,7 +165,7 @@ class TestSigningPrimitives:
         with pytest.raises(ValueError):
             load_private_key_file("a\x00b.pem")
 
-    @POSIX_ONLY
+    @pytest.mark.requires_symlink
     def test_load_private_key_file_symlink_rejected(self, tmp_path):
         from soup_cli.utils.signing import (
             generate_ed25519_private_pem,
@@ -347,12 +342,22 @@ class TestAdapterSignEd25519:
         # The generated key must round-trip verify.
         assert verify_adapter(str(adir)).valid is True
 
-    def test_sigstore_still_deferred(self, tmp_path, monkeypatch):
+    def test_sigstore_missing_extra_is_actionable(self, tmp_path, monkeypatch):
+        import builtins
+
         monkeypatch.chdir(tmp_path)
         from soup_cli.utils.adapter_sign import sign_adapter
 
+        real_import = builtins.__import__
+
+        def force_missing_sigstore(name, *args, **kwargs):
+            if name == "sigstore" or name.startswith("sigstore."):
+                raise ImportError("forced missing sigstore")
+            return real_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", force_missing_sigstore)
         adir = _write_fake_adapter(tmp_path)
-        with pytest.raises(NotImplementedError, match="sigstore"):
+        with pytest.raises(ValueError, match=r"soup-cli\[sigstore\]"):
             sign_adapter(str(adir), backend="sigstore")
 
     def test_unsigned_still_works(self, tmp_path, monkeypatch):
@@ -740,7 +745,7 @@ class TestLicenseExtraction:
         )
         assert extract_license_from_adapter(str(adir)) == "mit"
 
-    @POSIX_ONLY
+    @pytest.mark.requires_symlink
     def test_symlinked_config_rejected(self, tmp_path):
         from soup_cli.utils.license_matrix import extract_license_from_adapter
 
@@ -1046,17 +1051,25 @@ class TestCli:
         assert r2.exit_code == 0, r2.output
 
     def test_sigstore_backend_exits_nonzero(self, tmp_path, monkeypatch):
+        import builtins
+
         from typer.testing import CliRunner
 
         from soup_cli.commands.adapters import app
 
+        real_import = builtins.__import__
+
+        def force_missing_sigstore(name, *args, **kwargs):
+            if name == "sigstore" or name.startswith("sigstore."):
+                raise ImportError("forced missing sigstore")
+            return real_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", force_missing_sigstore)
         monkeypatch.chdir(tmp_path)
         adir = _write_fake_adapter(tmp_path)
         r = CliRunner().invoke(app, ["sign", str(adir), "--backend", "sigstore"])
-        # L5 — pin to the exact handled exit code (NotImplementedError -> 2),
-        # so a regression changing the failure mode is distinguishable.
         assert r.exit_code == 2, r.output
-        assert "infra-blocked" in r.output.lower() or "sigstore" in r.output.lower()
+        assert "soup-cli[sigstore]" in _strip_ansi(r.output)
 
 
 # ---------------------------------------------------------------------------
@@ -1310,7 +1323,7 @@ class TestReviewFollowups:
         with pytest.raises(ValueError, match="null"):
             NamespacePinStore("a\x00b.db")
 
-    @POSIX_ONLY
+    @pytest.mark.requires_symlink
     def test_pin_store_rejects_symlink_db(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         from soup_cli.utils.namespace_pin import NamespacePinStore
@@ -1417,7 +1430,7 @@ class TestReviewFollowups:
         assert "must match" in r.output.lower()
 
     # L4 — _load_signature symlink rejection
-    @POSIX_ONLY
+    @pytest.mark.requires_symlink
     def test_load_signature_symlink_rejected(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         from soup_cli.utils.adapter_sign import sign_adapter, verify_adapter
@@ -1516,7 +1529,7 @@ class TestSecurityFixes:
         with pytest.raises(ValueError, match="null"):
             read_public_key_file("a\x00b")
 
-    @POSIX_ONLY
+    @pytest.mark.requires_symlink
     def test_read_public_key_file_symlink_rejected(self, tmp_path):
         from soup_cli.utils.signing import read_public_key_file
 

@@ -54,6 +54,11 @@ def build_format_row(
 
     has_template = bool(getattr(tokenizer, "chat_template", None))
     use_responses_only = bool(data_cfg.train_on_responses_only)
+    # #761: getattr, not attribute access. Several suites hand this factory a
+    # duck-typed stand-in (SimpleNamespace, a local DataCfg) carrying only the
+    # fields that existed when they were written, and a new required attribute
+    # turns them into AttributeError at setup. The schema default is False.
+    mask_history = bool(getattr(data_cfg, "mask_history", False))
     use_train_field = bool(data_cfg.train_on_messages_with_train_field)
     max_length = int(data_cfg.max_length)
 
@@ -87,7 +92,10 @@ def build_format_row(
         inner = _build_per_message_format_row(tokenizer, max_length)
     elif use_responses_only:
         inner = _build_assistant_only_format_row(
-            tokenizer, max_length, include_eot=include_eot
+            tokenizer,
+            max_length,
+            include_eot=include_eot,
+            mask_history=mask_history,
         )
     else:
         inner = _build_full_sequence_format_row(tokenizer, max_length)
@@ -151,7 +159,10 @@ def _wrap_with_reasoning_effort(
 
 
 def _build_assistant_only_format_row(
-    tokenizer: Any, max_length: int, include_eot: bool = False
+    tokenizer: Any,
+    max_length: int,
+    include_eot: bool = False,
+    mask_history: bool = False,
 ) -> Callable[[dict], dict]:
     def format_row(example: dict) -> dict:
         return build_assistant_only_labels(
@@ -159,6 +170,7 @@ def _build_assistant_only_format_row(
             tokenizer,
             max_length=max_length,
             include_eot=include_eot,
+            mask_history=mask_history,
         )
 
     return format_row

@@ -325,9 +325,15 @@ class OnlineDPOTrainerWrapper:
         # Curriculum + plugin callbacks (relora is a no-op unless relora_steps).
         from soup_cli.utils.peft_wiring import (
             attach_curriculum_callback,
+            attach_loraplus_optimizer,
             attach_plugin_callback,
         )
 
+        # LoRA+ optimizer (#724/#745). TRL applies the adapter from peft_config
+        # inside its __init__, so trainer.model is the PEFT model by now, and
+        # OnlineDPOTrainer builds its optimizer lazily at train(), so the
+        # scheduler is still built around the one attached here.
+        attach_loraplus_optimizer(self.trainer, tcfg)
         attach_curriculum_callback(self.trainer, tcfg, str(output_dir), console)
         attach_plugin_callback(self.trainer, console)
 
@@ -386,14 +392,29 @@ class OnlineDPOTrainerWrapper:
         if tcfg.quantization in ("4bit", "8bit", "mxfp4"):
             from peft import prepare_model_for_kbit_training
 
-            self.model = prepare_model_for_kbit_training(self.model)
+            from soup_cli.utils.layer_stream import should_enable_hf_gradient_checkpointing
+
+            self.model = prepare_model_for_kbit_training(
+                self.model,
+                use_gradient_checkpointing=should_enable_hf_gradient_checkpointing(
+                    tcfg.gradient_checkpointing, stream_layers=tcfg.stream_layers
+                ),
+            )
 
         from soup_cli.utils.peft_wiring import (
             build_lora_config,
             resolve_lora_target_modules,
         )
 
-        target_modules = resolve_lora_target_modules(self.model, tcfg.lora.target_modules)
+        target_modules = resolve_lora_target_modules(self.model, tcfg.lora.target_modules, console)
+        # #1099: moe_lora picks the expert-FFN targets, as on every other
+        # build_lora_config trainer. The config is attached by TRL later, so
+        # this is where the flag has to act.
+        from soup_cli.utils.moe import resolve_moe_lora_targets
+
+        target_modules = resolve_moe_lora_targets(
+            self.model, tcfg, target_modules, console
+        )
 
         self.peft_config = build_lora_config(
             tcfg.lora,

@@ -219,11 +219,56 @@ than silently substituting ordinary LoRA. PiSSA and LoftQ additionally require
 LoftQ performs the low-bit conversion itself, so an already quantized base is
 invalid for either initializer.
 
-On the Transformers backend, `target_modules: auto` has an explicit Qwen3.5-family
-fallback because PEFT does not yet map `qwen3_5_text`. Soup targets `q_proj` and
-`v_proj` in full-attention layers plus `in_proj_qkv` and `out_proj` in the fused
-linear-attention layers. Explicit target lists still win unchanged. The MLX backend
-keeps its separate full-key default (`self_attn.q_proj`, `self_attn.v_proj`).
+On the Transformers backend, `target_modules: auto` is resolved in this order, and
+an explicit target list always wins unchanged:
+
+1. **Architectures PEFT maps itself** (`llama`, `mistral`, `qwen2`, …) are left to
+   PEFT's own default.
+2. **Architectures Soup maps** are resolved from `utils/peft_wiring.py`. The Qwen3.5
+   family targets `q_proj` and `v_proj` in full-attention layers plus `in_proj_qkv`
+   and `out_proj` in the fused linear-attention layers, because PEFT does not map
+   `qwen3_5_text`. The MoE architectures Soup ships recipes for (`qwen3_moe`,
+   `deepseek_v3`, `deepseek_v4`, `glm4_moe`, `glm_moe_dsa`, `granitemoehybrid`,
+   `kimi_k2`/`kimi_k25`, `gpt_oss`, `minimax_m2`, `minimax_m3_vl`) target their
+   attention projections; PEFT maps none of them (#1070). MiniMax-M3 uses a regex
+   scoped to its language tower, so a text fine-tune does not adapt the vision
+   encoder. `glm4_moe` is GLM-4.6 and is *not* `glm_moe_dsa` (GLM-5 / GLM-5.1):
+   the two have different attention shapes.
+3. **Anything else fails closed.** `auto` on an architecture neither PEFT nor Soup
+   maps is refused at setup, naming the `model_type`, rather than reaching PEFT's
+   `No target_modules passed`. This is not new behaviour — PEFT refused those too —
+   only a clearer message. It covers dense models as well as MoE ones: at the time of
+   writing `phi3`, `smollm3`, `lfm2` and several vision/audio architectures in the
+   catalogue land here. Give an explicit `target_modules` list, or for a MoE model set
+   `training.moe_lora: true`, which supplies expert targets and is checked *before*
+   the refusal. `training.lora.target_parameters` on its own also suffices.
+
+**`granitemoehybrid` is adapted only in part, and says so at setup.** Granite 4.0
+is a hybrid: on `ibm-granite/granite-4.0-tiny-base-preview` only 4 of the 40
+decoder layers carry a `self_attn` at all (`config.layer_types` is 36
+`linear_attention` + 4 `full_attention`), so the attention-projection entry above
+reaches a tenth of the decoder. The other 36 layers are Mamba-2 blocks
+(`mamba.in_proj`, `mamba.out_proj`), and every layer's shared-expert projections
+(`shared_mlp.input_linear`, `shared_mlp.output_linear`) and fused routed experts
+are left alone as well — consistent with every other row of that table, where the
+policy is attention projections only. Training prints a yellow
+`Partial LoRA coverage:` line naming the model type, the counted fraction and what
+was skipped, so the small adapter is not a surprise at merge time. If you want to
+reach the state-space or shared-expert projections, name them explicitly:
+
+```yaml
+training:
+  lora:
+    target_modules: [q_proj, k_proj, v_proj, o_proj, in_proj, out_proj]
+```
+
+That list is correct as module names on this architecture — it is what
+`named_modules()` reports — but Soup has not measured whether adapting a
+state-space projection trains well, and it is not the default for that reason.
+Treat it as the way to reach those layers, not as a recommendation to.
+
+The MLX backend keeps its separate full-key default (`self_attn.q_proj`,
+`self_attn.v_proj`).
 
 Qwen4-Exp routed experts are raw 3-D parameters rather than `nn.Linear` modules, so
 `target_modules: auto` / `all-linear` deliberately does not include them. Opt into
@@ -330,6 +375,28 @@ training:
     r: 64
     alpha: 16
 ```
+
+- **Compatibility:** Wired on every Trainer-based task that trains a LoRA adapter, including the preference and RL tasks (`dpo`, `kto`, `orpo`, `simpo`, `ipo`, `bco`, `grpo`, `online_dpo`, `ppo`, `reward_model`, `distill`). Most attach the LoRA+ optimizer once the trainer is built; `ppo` passes it to the trainer's constructor instead, because trl's PPO trainer builds its optimizer and LR scheduler eagerly, and adds the value model to it at the base learning rate, as trl's default optimizer does. `classifier`, `reranker`, `cross_encoder` and `asr` full fine-tune by default, so LoRA+ applies there only with `classifier_lora: true` / `asr_lora: true` and `lora.r > 0`. Refused at config parse on tasks with no trainable LoRA $B$ matrix: `prm` (full fine-tune), `moe_lora_routing` (only the routing gate trains), and `classifier` / `reranker` / `cross_encoder` / `asr` without their LoRA flag. Also refused on `unlearn`, which runs its own optimizer loop rather than a Trainer. Refused with `lora.use_vera` (VeRA trains scaling vectors, not $A$/$B$ matrices, so every trainable tensor would run at `lr * ratio`). Mutually exclusive with `use_lorafa`.
+
+
+## LoRA-FA (Frozen-A LoRA)
+
+Freeze random projection matrices in LoRA $A$ and update only LoRA $B$ matrices using PEFT's `create_lorafa_optimizer` ([arXiv:2308.03303](https://arxiv.org/abs/2308.03303)):
+
+```yaml
+training:
+  lr: 2e-4
+  use_lorafa: true
+  lora:
+    r: 64
+    alpha: 16
+```
+
+### Operating Point & Caveats
+- **Measured Adapter Operating Point:** Trains exactly 50.0% fewer parameters per adapted projection (trains $B$, freezes $A$), reducing AdamW optimizer states (`exp_avg_B`, `exp_avg_sq_B`) by half for square projections.
+- **Analytic Activation Retention:** Freezing $A$ avoids storing input activations $x \in \mathbb{R}^{B \times L \times d_{in}}$ for adapter backpropagation through $A$. Only $u = A x \in \mathbb{R}^{B \times L \times r}$ is retained, yielding an analytic adapter activation ratio of $r / d_{in}$ (~64× reduction for rank 64 on hidden dim 4096; the exact ratio scales with your rank choice).
+- **Scope & Limitations:** These values represent a micro-benchmark operating point and an analytic saved-tensor ratio for the adapter projections — **they are not total or peak LLM VRAM savings, an end-to-end throughput result, or a quality claim.** Peak training VRAM in full LLM fine-tuning is dominated by base model activations, KV caches, and weights; total end-to-end VRAM savings are substantially smaller. Downstream task quality and end-to-end throughput vs standard LoRA remain unmeasured. See [`benchmarks/gate-725-lorafa-operating-point.md`](../benchmarks/gate-725-lorafa-operating-point.md) for measured figures.
+- **Compatibility:** Supported on the `transformers` backend for `sft`, `pretrain`, and `embedding` tasks. Mutually exclusive with `loraplus_lr_ratio` (which differentiates $A$ and $B$ rates), `use_galore`, `lora.use_vera` (VeRA trains scaling vectors, so `create_lorafa_optimizer` finds no $B$ matrices), non-AdamW optimizers, and the `mlx` backend. Requires explicit `lora.r` and `lora.alpha`. LoRA-FA has not been validated under `stream_layers: true` (layer streaming); combining them is not recommended.
 
 
 ## rsLoRA (Rank-Stabilized Scaling)
@@ -529,6 +596,7 @@ training:
   loss_watchdog_patience: 5     # Consecutive steps above threshold before stopping
 ```
 
+> **Backend Note:** Setting `loss_watchdog: true` is refused on `backend: mlx` at config validation (Soup does not implement the watchdog on the MLX callback, which has no stop control).
 
 ## Training Stability & Auto-Tuning
 
@@ -549,6 +617,8 @@ soup train --config soup.yaml \
 
 The report contains the geometric `lrs[]`, raw + EMA-smoothed `losses[]`, the recommended LR (steepest negative gradient before divergence), the LR with min loss, and the divergence point if any.
 
+The sweep takes one training row per step. With fewer rows than `--find-lr-steps`, it runs one step per row over the same `--find-lr-start` → `--find-lr-end` range and prints a line saying so. The recommendation needs at least 4 points, so `--find-lr-steps` must be at least 4 and a training set with fewer than 4 rows is refused before the model loads. If the loss turns non-finite partway through, the report covers the steps before it; if that leaves fewer than 4, the command says where it diverged instead of writing a report.
+
 ### Auto Warmup Schedule
 
 ```yaml
@@ -568,6 +638,10 @@ training:
 
 Picks `bf16` on Ampere+, `fp16` on Turing or known fp16-stable models (Qwen2 / Qwen2.5 / Phi-3 / Phi-3.5), `no` on pre-Pascal. Multi-version pairs (`qwen2.5` vs `qwen2`, `phi-3.5` vs `phi-3`) match the longest substring deterministically.
 
+The experimental QuEST route (`quantization_aware: quest`) refuses this flag at
+config load because its evidence covers BF16, not FP16; see the
+[QuEST evidence boundary](performance-and-quantization.md#evidence-boundary).
+
 ### Loss Spike Auto-Recovery
 
 Extends the watchdog: instead of stopping on a spike, writes `<output>/spike_recovery.json` with decayed LR and attempt count for re-launch. Capped at 3 attempts by default.
@@ -579,6 +653,8 @@ training:
   loss_spike_recovery_max_attempts: 3
   loss_spike_recovery_lr_decay: 0.5     # halve LR each recovery
 ```
+
+> **Backend Note:** Setting `loss_spike_recovery: true` is refused on `backend: mlx` at config validation (spike recovery is driven by the watchdog and the watchdog cannot fire on MLX).
 
 ### Convergence Detector
 
@@ -603,15 +679,19 @@ training:
 
 Records peak memory each step. When pressure crosses the threshold, recommends a new `(batch, accum)` pair preserving effective batch (capped at `accum=1024`).
 
+> **Backend Note:** Setting `grad_accum_auto_tune: true` is refused on `backend: mlx` at config validation (there is no VRAM total to measure pressure against on unified memory).
+
 > **v0.33.0:** `--find-lr` now runs an in-process LR-sweep training loop (replaces the v0.32.0 stub curve), spike-recovery writes a `spike_recovery.json` hint with the decayed LR for re-launch, and the grad-accum advisory prints a recommended `(batch, accum)` pair when VRAM pressure crosses the threshold. Live optimizer-state rewind and live DataLoader rebuild remain follow-ups (HF Trainer / TRL upstream constraints).
 
 
 ## Training Intelligence (Forgetting + Checkpoint Quality)
 
-The `forgetting_*`, `checkpoint_*`, and `early_stop_on_regression` settings are
+The `forgetting_*`, `checkpoint_*`, `early_stop_on_regression`, and `convergence_*` settings are
 reserved for planned in-training callbacks. They are accepted by the schema but
-are not enforced during training in this build. `soup train` warns when one is
-set away from its default, and Autopilot does not enable or advertise them.
+are not enforced during training in this build. `soup train` prints an advisory note
+when one is set away from its default, directing users to `--gate <suite.yaml>`.
+(Other unconsumed configuration fields staged for features that have not landed emit
+a load-time warning in v0.76 and are refused as of v0.77 per #808).
 
 Use the live eval gate for regression detection and automatic stopping today:
 

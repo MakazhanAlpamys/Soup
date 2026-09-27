@@ -123,7 +123,7 @@ src/soup_cli/
   experiment/         - SQLite experiment tracking
   eval/               - Eval platform (custom tasks, LLM judge, human eval, leaderboard)
   migrate/            - Config migration (LLaMA-Factory, Axolotl, Unsloth)
-  recipes/            - Ready-made configs for popular models (175 recipes)
+  recipes/            - Ready-made configs for popular models (174 recipes)
   autopilot/          - Zero-config decision engine (v0.25.0)
   registry/           - Model Registry (hashing, store, diff, attach) (v0.26.0 + v0.33.0)
   cans/               - Shareable .can artifact format + run/publish orchestrator (v0.26.0 + v0.33.0)
@@ -286,14 +286,14 @@ Accepted runs are recorded in [`benchmarks/gpu-test-runs.md`](benchmarks/gpu-tes
 | test_multi_gpu.py | Multi-GPU Mastery: topology, --gpus, accelerate launcher, ZeRO++, FSDP2+compile, pipeline (v0.27.0) |
 | test_training_speed.py | Training Speed & Memory: CCE, FP8, grad-ckpt tiers, kernel picker, cross-doc attn, activation offload (v0.28.0) |
 | test_hf_integration.py | HF Hub Deep Integration: token/endpoint/repo_id, auto-push callback, model card v2, collections, data push, HF Spaces, private-IP SSRF (v0.29.0) |
-| test_inference_advanced.py | Inference Excellence: prefix caching, spec-decoding auto-pairing, LoRA hot-swap, structured output, dashboard + /metrics, OpenTelemetry tracing, auto-quant picker (v0.30.0) |
+| test_inference_advanced.py | Inference Excellence: prefix caching, spec-decoding auto-pairing, LoRA hot-swap, structured output, dashboard + /metrics, OpenTelemetry tracing, dormant auto-quant helpers (v0.30.0; serving refuses auto-quant since #816) |
 | test_recipes_v031.py | Model & Recipe Breadth: 34 new recipes (vision/audio/reasoning/edge/domain/multimodal); catalog-wide invariants; CI workflow validation (v0.31.0) |
 | test_auto_tuning.py | Training Stability & Auto-Tuning: LR range finder, grad-accum monitor, auto mixed-precision, auto warmup, spike recovery, convergence detector, autopilot wiring (v0.32.0) |
 | test_part_f_hardening.py | Live Wire Part F: RLVR OS-level sandbox isolation + prune_checkpoints TOCTOU (v0.33.0) |
 | test_part_a_wave1.py | Live Wire Part A: live eval-gate scoring + registry attach (v0.33.0) |
 | test_part_a_wave2.py | Live Wire Part A: soup can run / publish + DeployTarget schema (v0.33.0) |
 | test_part_e.py | Live Wire Part E: --find-lr live loop + spike recovery hint + auto mixed-precision push + grad-accum advisory (v0.33.0) |
-| test_part_d.py | Live Wire Part D: structured-output LogitsProcessor + auto-quant live picker + HF push integration smoke (v0.33.0) |
+| test_part_d.py | Historical Part D primitives: structured-output LogitsProcessor + dormant auto-quant helpers + HF push integration smoke (v0.33.0; serving refuses auto-quant since #816) |
 | test_part_c.py | Live Wire Part C: multi-trainer v0.28.0 features + selective ckpt hooks + CrossDocCollator (v0.33.0) |
 | test_part_b.py | Live Wire Part B: auto-reexec under accelerate launch + DeepSpeed-MII live serve (v0.33.0) |
 | test_log_level.py | Smart logging tiers `--log-level quiet/normal/verbose/debug` (v0.34.0 Part A) |
@@ -513,8 +513,51 @@ GitHub Actions runs on every push and PR:
   `transformers>=4.36.0,<5.0.0` in `pyproject.toml`; `transformers==4.36.0`
   cannot resolve against the declared `trl` range, so this job does not rewrite
   that pin.
+- **benchmark** (`.github/workflows/codspeed.yml`, #1065): a CodSpeed
+  regression benchmark, its own workflow and not part of the matrix above.
+  The job is **skipped** everywhere until the repository variable
+  `CODSPEED_ENABLED` is `true` (set once the CodSpeed GitHub App is installed),
+  and always on fork PRs — GitHub does not grant a `pull_request` run from a
+  fork an OIDC token, so the upload could not authenticate. Since most
+  contributions here are fork PRs, expect "skipped" on yours; it is not a
+  required check and blocks nothing.
 
 See `.github/workflows/ci.yml`.
+
+### Stale CI marks (#1017)
+
+A `pull_request` workflow run pins `refs/pull/N/merge` at **run creation**.
+`actions/checkout` fetches that SHA; later movement of `main` is not re-resolved.
+`gh run rerun` replays the frozen merge and cannot produce a different answer.
+That is why a green tick can describe a `main` that no longer exists (#763's
+`NameError` on `_for_terminal`) and why a red X can describe a test that `main`
+has already fixed. Neither is the contributor's fault, and neither clears by
+waiting.
+
+**If your PR is red for failures you do not touch:** merge or rebase onto current
+`origin/main` and push. That is the only way to rebuild the merge SHA for the
+test matrix. Maintainers will not `gh pr update-branch` onto a fork without
+asking.
+
+**If your PR is green and `main` has moved:** the `merge-freshness` check is
+re-posted on every push to `main`. It rebuilds the merge with
+`git merge-tree --write-tree` (no write to your branch) and fails on ruff F821
+or a conflict. Lag behind `main` is reported as a **neutral** check, not a
+failure — a 10-commit cap at this repo's merge rate is `strict: true` with extra
+steps. It does not re-run the 13-job test matrix.
+
+`required_status_checks.strict` stays off: flipping it would force a rebase on
+every merge. A docs-only pre-merge procedure is what maintainers already do by
+hand and is not a control — GitHub will still merge a CLEAN PR on stale marks.
+Ask a maintainer to add `merge-freshness` to the required checks on `main` so
+the GitHub merge button honours it. The `gate` job on a pull_request event runs
+the PR's own copy of `scripts/merge_freshness.py`, so it is self-graded. Only the
+`merge-freshness` check posted by the `reeval` job from `main`'s copy is
+trustworthy.
+
+Before merging anything, `gh pr checks` returning all-green is necessary and not
+sufficient. Compare the newest run's `created_at` against `main`'s commits since,
+or look at `merge-freshness`.
 
 ## Releases
 
