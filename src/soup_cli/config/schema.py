@@ -4595,6 +4595,15 @@ _QUANTIZATION_UNHONOURED_TASKS = frozenset({
 _MOE_EXPERT_KNOB_TASKS = frozenset({"sft", "tts"})
 _MOE_AUX_LOSS_TASKS = frozenset({"sft", "tts", "pretrain"})
 
+#: #1264 — the tasks whose trainer has an unsloth setup: a ``_setup_unsloth`` on
+#: the wrapper (``tts`` inherits SFT's), or on every wrapper ``preference``
+#: delegates to. The other tasks have none, so ``backend: unsloth`` is not
+#: applied there at all.
+UNSLOTH_SETUP_TASKS: frozenset[str] = frozenset({
+    "sft", "dpo", "grpo", "ppo", "kto", "orpo", "simpo", "ipo", "bco", "preference",
+    "pretrain", "embedding", "tts",
+})
+
 #: The bitsandbytes values: ``4bit`` was the default, so every config Soup dumped
 #: for these tasks carries one of them literally (#795 review).
 _BNB_QUANTIZATION_VALUES = frozenset({"4bit", "8bit"})
@@ -4818,7 +4827,12 @@ class SoupConfig(BaseModel):
         attaches ``utils/unsloth.py``'s fixed attention list, and SFT's vision and
         audio setups build their adapter without the MoE step, so neither reads it
         (found by a local CodeRabbit review of #1179). MLX stays declared-ignored in
-        ``backend_support`` instead, which ``soup doctor`` reports."""
+        ``backend_support`` instead, which ``soup doctor`` reports.
+
+        #1264: the refusals that hold on every backend run before the unsloth one,
+        so switching backend never surfaces a second refusal, and the unsloth
+        reason is split by :data:`UNSLOTH_SETUP_TASKS`: a task with no unsloth
+        setup does read the flag; there it is the backend that goes unapplied."""
         if not self.training.moe_lora:
             return self
         tcfg = self.training
@@ -4830,12 +4844,6 @@ class SoupConfig(BaseModel):
                 "training.classifier_lora is true and training.lora.r > 0: without them that "
                 "trainer full-fine-tunes and builds no adapter for the flag to select. Set "
                 "classifier_lora: true and lora.r >= 1, or remove moe_lora."
-            )
-        if self.backend == "unsloth":
-            raise ValueError(
-                "training.moe_lora is not applied on backend='unsloth': unsloth attaches "
-                "its own fixed attention targets and never reads the flag. Use backend: "
-                "transformers, or remove moe_lora."
             )
         if self.task == "sft" and self.modality in ("vision", "audio"):
             raise ValueError(
@@ -4849,11 +4857,23 @@ class SoupConfig(BaseModel):
             "and builds no LoRA adapter of its own",
             "prm": "that trainer fine-tunes every base parameter and builds no LoRA adapter",
         }.get(self.task)
-        if why is None:
+        if why is not None:
+            raise ValueError(
+                f"training.moe_lora is not applied by task={self.task!r}: {why}. "
+                "Remove moe_lora (or set it to false)."
+            )
+        if self.backend != "unsloth":
             return self
+        if self.task in UNSLOTH_SETUP_TASKS:
+            raise ValueError(
+                "training.moe_lora is not applied on backend='unsloth': unsloth attaches "
+                "its own fixed attention targets and never reads the flag. Use backend: "
+                "transformers, or remove moe_lora."
+            )
         raise ValueError(
-            f"training.moe_lora is not applied by task={self.task!r}: {why}. "
-            "Remove moe_lora (or set it to false)."
+            f"training.moe_lora is refused with backend='unsloth': task={self.task!r} has "
+            "no unsloth setup, so backend='unsloth' is not applied to it at all. Use "
+            "backend: transformers, which applies moe_lora for this task."
         )
 
     @model_validator(mode="after")
