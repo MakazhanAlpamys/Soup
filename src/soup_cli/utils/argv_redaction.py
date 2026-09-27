@@ -104,11 +104,35 @@ def resolve_command(root: click.Command, args: Sequence[str]) -> click.Command:
     return current
 
 
+def _mask_short_bundle(tok: str, short_opts: set[str]) -> tuple[str, bool] | None:
+    """Mask a bundled short-option token, or return ``None`` if it holds no secret.
+
+    Click allows short options to be bundled: ``-xtVALUE`` is ``-x`` (a flag)
+    followed by ``-t VALUE``, and ``-xt VALUE`` puts the value in the next
+    token. Matching only ``tok[:2]`` therefore missed every secret typed behind
+    another short flag.
+
+    Returns ``(masked_token, mask_next_token)``. Everything up to and including
+    the secret option letter is kept — those are flag names, not credentials,
+    and they are what makes the audit line readable.
+    """
+    for index, char in enumerate(tok[1:], start=1):
+        if f"-{char}" not in short_opts:
+            continue
+        if index == len(tok) - 1:
+            # The secret option ends the bundle: its value is the next token.
+            return tok, True
+        return f"{tok[:index + 1]}{REDACTED}", False
+    return None
+
+
 def mask_secret_args(args: Sequence[str], secret_opts: frozenset[str]) -> tuple[str, ...]:
     """Return ``args`` with the value of every option in ``secret_opts`` masked.
 
-    Handles ``--opt value``, ``--opt=value``, ``-o value`` and ``-oVALUE``.
-    An option with no following value is kept as is.
+    Handles ``--opt value``, ``--opt=value``, ``-o value``, ``-oVALUE`` and
+    bundled short options (``-xoVALUE`` / ``-xo VALUE``, where ``-x`` is a flag
+    and ``-o`` takes the value). An option with no following value is kept as
+    is.
     """
     long_opts = {o for o in secret_opts if o.startswith("--")}
     short_opts = {o for o in secret_opts if not o.startswith("--") and len(o) == 2}
@@ -129,8 +153,11 @@ def mask_secret_args(args: Sequence[str], secret_opts: frozenset[str]) -> tuple[
             if name in long_opts:
                 out.append(f"{name}={REDACTED}")
                 continue
-        elif not tok.startswith("--") and len(tok) > 2 and tok[:2] in short_opts:
-            out.append(f"{tok[:2]}{REDACTED}")
-            continue
+        elif tok.startswith("-") and not tok.startswith("--") and len(tok) > 1:
+            masked = _mask_short_bundle(tok, short_opts)
+            if masked is not None:
+                out.append(masked[0])
+                mask_next = masked[1]
+                continue
         out.append(tok)
     return tuple(out)

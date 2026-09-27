@@ -141,3 +141,57 @@ def test_bench_cpu_warning(tmp_path, monkeypatch):
         assert "Inference Benchmark Results" in result.output
         # Without CUDA, VRAM column shows N/A
         assert "N/A" in result.output
+
+
+def test_bench_passes_hf_repo_id_byte_identical_with_slashes(tmp_path, monkeypatch):
+    """soup bench with HF repo ID preserves slashes and passes is_local=False (#1097 / #1118)."""
+    monkeypatch.chdir(tmp_path)
+    from unittest.mock import patch
+
+    with patch("soup_cli.commands.infer._load_model") as mock_load, \
+         patch("soup_cli.commands.infer._generate") as mock_generate, \
+         patch("torch.cuda.is_available", return_value=False), \
+         patch("soup_cli.utils.gpu.detect_device", return_value=("cpu", None)):
+
+        mock_load.return_value = ("mock_model", "mock_tokenizer")
+        mock_generate.return_value = ("mock response", 10)
+
+        result = runner.invoke(app, [
+            "bench", "HuggingFaceTB/SmolLM2-135M-Instruct",
+            "--num-prompts", "1",
+            "--max-tokens", "2",
+        ])
+
+        assert result.exit_code == 0, (result.output, repr(result.exception))
+        mock_load.assert_called_once()
+        passed_model = mock_load.call_args[0][0]
+        assert passed_model == "HuggingFaceTB/SmolLM2-135M-Instruct"
+        assert "\\" not in passed_model
+        assert "/" in passed_model
+        assert mock_load.call_args.kwargs.get("is_local") is False
+
+
+def test_bench_passes_is_local_true_for_local_dir(tmp_path, monkeypatch):
+    """soup bench with local dir passes is_local=True (#1097 / #1118)."""
+    monkeypatch.chdir(tmp_path)
+    dummy_model = tmp_path / "dummy_model"
+    dummy_model.mkdir()
+    from unittest.mock import patch
+
+    with patch("soup_cli.commands.infer._load_model") as mock_load, \
+         patch("soup_cli.commands.infer._generate") as mock_generate, \
+         patch("torch.cuda.is_available", return_value=False), \
+         patch("soup_cli.utils.gpu.detect_device", return_value=("cpu", None)):
+
+        mock_load.return_value = ("mock_model", "mock_tokenizer")
+        mock_generate.return_value = ("mock response", 10)
+
+        result = runner.invoke(app, [
+            "bench", str(dummy_model),
+            "--num-prompts", "1",
+            "--max-tokens", "2",
+        ])
+
+        assert result.exit_code == 0, (result.output, repr(result.exception))
+        mock_load.assert_called_once()
+        assert mock_load.call_args.kwargs.get("is_local") is True

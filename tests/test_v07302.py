@@ -301,7 +301,8 @@ def _tool_gen(transform):
     lookup = {item["prompt"]: item["expected"] for item in items}
 
     def gen(prompt):
-        return transform(lookup[prompt])
+        expected = lookup[prompt]
+        return expected if expected == "NO_TOOL" else transform(expected)
 
     return gen
 
@@ -311,6 +312,8 @@ class TestIssue346ToolCallEnvelope:
         """Pins the reproduction itself: every expected call is 3 opens / 3
         closes, so dropping one produces the 3/2 the record reports."""
         for item in _tool_items():
+            if item["expected"] == "NO_TOOL":
+                continue
             assert item["expected"].count("{") == 3
             assert item["expected"].count("}") == 3
 
@@ -323,6 +326,9 @@ class TestIssue346ToolCallEnvelope:
         """The unwrapped inner object — what ``raw_decode`` actually returns
         once the outer brace is gone."""
         def gen(prompt):
+            for item in _tool_items():
+                if item["prompt"] == prompt and item["expected"] == "NO_TOOL":
+                    return "NO_TOOL"
             expected = json.loads(_tool_items()[0]["expected"])
             for item in _tool_items():
                 if item["prompt"] == prompt:
@@ -372,6 +378,11 @@ class TestIssue346PermissiveControls:
             expected = None
             for item in _tool_items():
                 if item["prompt"] == prompt:
+                    if item["expected"] == "NO_TOOL":
+                        first = tool_names_in_prompt(prompt)[0]
+                        return json.dumps(
+                            {"function": {"name": first, "arguments": {}}}
+                        )
                     expected = json.loads(item["expected"])["function"]["name"]
             assert expected in tool_names_in_prompt(prompt)
             return json.dumps({"name": expected, "description": "a tool"})

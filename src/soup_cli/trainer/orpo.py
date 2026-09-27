@@ -252,9 +252,12 @@ class ORPOTrainerWrapper(StreamingSetupMixin):
         # v0.40.6 #67 — ReLoRA callback.
         from soup_cli.utils.peft_wiring import (
             attach_curriculum_callback,
+            attach_loraplus_optimizer,
             attach_plugin_callback,
             attach_relora_callback,
         )
+        # LoRA+ optimizer (#724/#745) — build and attach now that the trainer exists.
+        attach_loraplus_optimizer(self.trainer, tcfg)
         attach_relora_callback(self.trainer, tcfg)
         # v0.53.5 #114/#115 — dynamic curriculum live callback.
         attach_curriculum_callback(self.trainer, tcfg, str(output_dir), console)
@@ -315,7 +318,7 @@ class ORPOTrainerWrapper(StreamingSetupMixin):
             resolve_lora_target_modules,
         )
 
-        target_modules = resolve_lora_target_modules(self.model, tcfg.lora.target_modules)
+        target_modules = resolve_lora_target_modules(self.model, tcfg.lora.target_modules, console)
         # #798: moe_lora picks the expert-FFN targets. Without this the flag
         # was accepted and ignored here, and on a fused-expert MoE the auto
         # resolution leaves peft with nothing to attach.
@@ -409,6 +412,7 @@ class ORPOTrainerWrapper(StreamingSetupMixin):
 
         # v0.72.4 — the shared context releases the streaming weight source even
         # if training raises (see StreamingSetupMixin._training_context).
+        self._attach_streamed_save_guard()
         with self._training_context(
             activation_offloading_context(self.config.training, self._output_dir)
         ):
@@ -421,6 +425,7 @@ class ORPOTrainerWrapper(StreamingSetupMixin):
         duration = time.time() - start
 
         self.trainer.save_model(self._output_dir)
+        self._assert_streamed_adapter_saved(self._output_dir)
         self.tokenizer.save_pretrained(self._output_dir)
 
         logs = self.trainer.state.log_history

@@ -102,8 +102,13 @@ def fingerprint_trainable(model: Any) -> str:
 class _BenchCollector_body:  # noqa: N801
     """Records one benchmark run. Attached to the trainer as a callback."""
 
-    def __init__(self) -> None:
+    def __init__(self, warmup_steps: int = 0) -> None:
         self.steps: list[StepRecord] = []
+        self.warmup_steps = warmup_steps
+        # perf_counter bounds of the counted (post-warm-up) steps, so a clock
+        # sampled alongside can be cut to them. ``None`` until reached.
+        self.counted_window_started: Optional[float] = None
+        self.counted_window_ended: Optional[float] = None
         self.meta_excluded = 0
         self.trainable_count = 0
         self._fingerprint_first: Optional[str] = None
@@ -140,6 +145,8 @@ class _BenchCollector_body:  # noqa: N801
         if self._step_started is None:
             self._sync()
             self._step_started = self._now()
+            if self.warmup_steps == 0:
+                self.counted_window_started = self._step_started
         return control
 
     def on_step_end(self, args=None, state=None, control=None, **kwargs):
@@ -158,6 +165,10 @@ class _BenchCollector_body:  # noqa: N801
         self._pending_useful = 0
         self._pending_total = 0
         self._step_started = ended
+        if len(self.steps) == self.warmup_steps:
+            self.counted_window_started = ended
+        elif len(self.steps) > self.warmup_steps:
+            self.counted_window_ended = ended
         return control
 
     def on_log(self, args=None, state=None, control=None, logs=None, **kwargs):

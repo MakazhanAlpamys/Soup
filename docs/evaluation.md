@@ -258,12 +258,30 @@ tasks:
 
 `judge_model` accepts `ollama://<model>`, `http://localhost:<port>/<model>` or `https://<host>/<model>`. An `https://` judge URL uses `OPENAI_API_KEY` only when its host is `api.openai.com`; other hosts are called as an OpenAI-compatible server without that key.
 
-Baselines may be a registry reference (`registry://<name-or-id>`), a file path, or omitted for the first run. Any structured exception (`ValueError`, `FileNotFoundError`, `OSError`) during the gate is treated as a regression under `on_regression: stop`.
+Baselines may be a registry reference (`registry://<name-or-id>`), a file path, or omitted for the first run. A registry baseline uses the newest eval row for each benchmark — re-measuring a benchmark replaces its baseline score — and warns, per benchmark, when that row's scorer stamp is missing or from a different scorer revision. Any structured exception (`ValueError`, `FileNotFoundError`, `OSError`) during the gate is treated as a regression under `on_regression: stop`.
 
 
 ## Sequential A/B Harness (`soup ab`)
 
-Proper sequential testing with early-stop guarantees on `latency` / `judge_score` / `retry_rate`. Uses Wald's classic SPRT for the point alternative — the log-likelihood ratio is a martingale under H0, so Type-I error is controlled at every stopping time per the optional stopping theorem (unlike a naive repeated t-test, which inflates Type-I if you peek at the data).
+Proper sequential testing with early-stop guarantees on `latency` / `judge_score` / `retry_rate`. The test is two-sided: the statistic averages Wald's likelihood ratios for a treatment-minus-control difference of `+effect-size` and of `-effect-size` (a symmetric two-point mixture). Under H0 each ratio has expectation 1 at every step, and so does their average. With a known variance, a simulation of peeking after every new pair keeps the false-positive rate below `--alpha`, unlike a naive repeated t-test, which inflates it.
+
+`soup ab` estimates the variance from the rows, and from a handful of rows that estimate is too noisy. Without a burn-in, re-running after every new pair, the two-sided test would reject a true H0 up to 16% of the time at `--alpha 0.05` (the one-sided test it replaces: 11%) when `--effect-size` is close to the metric's row-to-row standard deviation. So `soup ab` gives no verdict, only `continue`, until each arm has enough rows. That burn-in depends on `--alpha`, and the verdict table shows the value in use:
+
+| `--alpha` | rows per arm before a verdict | worst simulated false-positive rate, up to 1000 rows per arm |
+|---|---|---|
+| 0.05 and above | 30 | 0.051 at `--alpha 0.05` |
+| from 0.01 to below 0.05 | 40 | 0.011 at `--alpha 0.01` |
+| below 0.01 | 40, **not calibrated** | 0.0058 at `--alpha 0.005` |
+
+The values come from a simulation of that re-run-after-every-pair procedure: beta 0.20, `--effect-size` from 0.1 to 5 standard deviations, and runs followed up to 1000 rows per arm (200 checked too). Each value is the smallest that keeps the false-positive rate within Monte-Carlo error of `--alpha` at every effect size, at every alpha the simulation checked in its range (0.05 and 0.10; 0.01 and 0.025). The record, script and results are in [`benchmarks/gate-1227-ab-burn-in.md`](../benchmarks/gate-1227-ab-burn-in.md).
+
+The calibration has two limits, and `soup ab` prints a warning past either:
+
+- **At `--alpha 0.01` the rate sits slightly above the level asked for**, near 0.011 across seeds, because the variance is estimated from the rows; more rows do not lower it. A statistic without that floor is [#1265](https://github.com/MakazhanAlpamys/Soup/issues/1265).
+- **Below `--alpha 0.01` it is not calibrated.** At `--alpha 0.005`, 40 rows leave a simulated rate slightly above the level asked for.
+- **It holds up to 1000 rows per arm.** Past that, a test that keeps being re-run has not been measured.
+
+A variance-robust statistic, which would need no burn-in, is tracked in [#1265](https://github.com/MakazhanAlpamys/Soup/issues/1265).
 
 ```bash
 soup ab --input ab.jsonl --metric latency --effect-size 0.5
@@ -271,9 +289,11 @@ soup ab --input ab.jsonl --metric latency --effect-size 0.5
 soup ab --input ab.jsonl --metric judge_score --alpha 0.01 --beta 0.10 --effect-size 0.1
 ```
 
-Input rows look like `{"arm": "control", "latency": 1.23}` or `{"arm": "treatment", "judge_score": 0.91}`. Decision is one of `continue` (keep collecting samples), `reject_h0` (real difference detected), `accept_h0` (no significant difference). Composes with `soup loop canary` (v0.58) — promote or roll back as soon as the LLR clears a decision boundary.
+Input rows look like `{"arm": "control", "latency": 1.23}` or `{"arm": "treatment", "judge_score": 0.91}`. Decision is one of `continue` (keep collecting samples), `reject_h0` (real difference detected, in either direction), `accept_h0` (no significant difference). A `reject_h0` also reports a `direction`, `better` or `worse`, read through the metric's polarity: `judge_score` is higher-is-better, `latency` and `retry_rate` are lower-is-better. Composes with `soup loop canary` (v0.58): the panel recommends promoting a `better` treatment and a rollback only for a `worse` one.
 
-`soup ab` accepts `--slack-url` / `--discord-url` (v0.71.5) and pings the webhook **only when the test actually decides** (`reject_h0` / `accept_h0`) — a still-running `continue` stays quiet so you're not paged on every peek. Same SSRF-hardened validator as `soup drift-alarm`.
+`soup ab` exits `0` on every decision, including a `worse` one; to gate a pipeline on a regression, read `direction` from the output or the webhook payload.
+
+`soup ab` accepts `--slack-url` / `--discord-url` (v0.71.5) and pings the webhook **only when the test actually decides** (`reject_h0` / `accept_h0`) — a still-running `continue` stays quiet so you're not paged on every peek. The payload carries `decision` and `direction` (`null` on `accept_h0`). Same SSRF-hardened validator as `soup drift-alarm`.
 
 
 ## Drift Alarm (`soup drift-alarm`)
@@ -402,7 +422,7 @@ CPU-instant):
 | Suite | What it checks | Scorer |
 |-------|----------------|--------|
 | `mini_mmlu` / `mini_common_sense` / `mini_instruction` / `mini_arithmetic` | general knowledge / reasoning / instruction-following / numeracy | answer-extraction + exact/boundary match |
-| `mini_tool_call` | function-calling still works (right tool named) | `tool_call_name_match` |
+| `mini_tool_call` | function selection still works (right tool named, or exact `NO_TOOL` when no call is needed) | `tool_call_name_match` + exact abstention |
 | `mini_format_json` | JSON validity (a structured object, not a bare scalar) | container-only JSON check |
 | `mini_safety` | refusal-rate on harmful prompts (under-refusal = regression) | refusal heuristic |
 | `mini_over_refusal` | benign prompts are NOT refused (over-refusal = regression) | refusal heuristic (inverse) |
@@ -411,6 +431,10 @@ Each suite is >20 items so a single-item flip (1/N < 0.05) trips the default thr
 of being rounded away. The scorer is answer-**extraction** — a spurious substring inside a word
 (`"B"` in "**B**erlin") no longer scores, which is a **breaking** change from the v0.25.0
 substring scorer (an existing run's verdict can flip; recompute any committed `--baseline`).
+As of v0.76.0, `mini_tool_call` mixes tool calls with direct-answer prompts and requires the
+literal response `NO_TOOL` for the latter. This deliberately moves the suite away from its former
+1.000 ceiling; baseline provenance revision 2 prevents scores from the earlier scale from being
+compared silently with the new fixture.
 `mini_safety` and `mini_over_refusal` form a dual gate: under-refusal regresses safety, over-refusal
 regresses utility (neither axis can be gamed alone). `--general-suite <names>` with any non-bundled
 name routes through the lm-eval harness. Pairwise judge win-rate (`--task-mode pairwise`) shipped
@@ -675,6 +699,8 @@ soup eval leaderboard --format csv
 # Human A/B evaluation with Elo ratings
 soup eval human --input prompts.jsonl --model-a ./model_a --model-b ./model_b
 ```
+
+soup eval compare and soup eval leaderboard use the newest eval row for each benchmark (on the leaderboard, for each model and benchmark), so re-running a benchmark replaces its score; rows with the same created_at resolve to the later insert. soup registry diff compares eval scores the same way.
 
 ### Aider Polyglot
 

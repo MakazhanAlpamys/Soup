@@ -1,9 +1,9 @@
 """in-toto + SLSA-3 attestation builder (v0.59.0 Part B).
 
-Pure-stdlib. Sigstore + ed25519 live signing is **deferred to v0.59.1**
-(mirrors v0.27.0 MII / v0.37.0 multipack / v0.50.0 GRPO Plus stub-then-live
-pattern). The schema + atomic write surface ships now so callers can lock
-the wire format.
+The statement builder itself is pure stdlib. Optional signing is layered on top:
+ed25519 uses the shared `cryptography` helper, while Sigstore uses the lazy
+sigstore-python 4.x wrapper for keyless OIDC/Fulcio/Rekor bundles. The statement
+wire format remains independent of either signing backend.
 
 Schema shapes:
 - ``_type``: ``https://in-toto.io/Statement/v1``
@@ -32,7 +32,7 @@ _MAX_NAME = 256
 
 
 class SignatureBackend(str, enum.Enum):
-    """Signing backend selector. ``sigstore`` + ``ed25519`` deferred to v0.59.1."""
+    """Signing backend selector for unsigned, ed25519, and Sigstore."""
 
     UNSIGNED = "unsigned"
     ED25519 = "ed25519"
@@ -148,28 +148,34 @@ def sign_attestation(
     *,
     backend: SignatureBackend | str = SignatureBackend.UNSIGNED,
     key_path: str | None = None,
+    sigstore_interactive: bool = False,
 ) -> dict:
     """Sign a payload (in-toto JSON bytes) with the chosen backend.
 
     ``ed25519`` (v0.71.2 #179) produces a real detached signature over
     ``payload`` using a private key resolved from ``key_path`` or the
-    ``SOUP_SIGNING_KEY`` env var. ``sigstore`` keyless signing stays
-    infra-blocked (needs an OIDC identity provider + Fulcio/Rekor network) and
-    raises ``NotImplementedError``.
+    ``SOUP_SIGNING_KEY`` env var. ``sigstore`` produces a keyless
+    Fulcio/Rekor bundle through the shared Sigstore 4.x wrapper.
 
     Args:
         payload: in-toto Statement bytes (typically ``render_attestation(...).encode()``).
-        backend: ``"unsigned"`` / ``"ed25519"`` are live; ``"sigstore"`` raises.
+        backend: ``"unsigned"``, ``"ed25519"``, or ``"sigstore"``.
         key_path: ed25519 private-key PEM path (``ed25519`` backend only).
+        sigstore_interactive: explicitly permit browser OIDC for Sigstore.
+            False by default so headless runners fail instead of hanging.
 
     Returns:
         - ``{"signature": "", "backend": "unsigned"}`` for the unsigned path
           (the empty signature lets verifiers refuse in strict mode).
         - ``{"signature": <hex>, "backend": "ed25519", "public_key": <pem>}``
           for the ed25519 path.
+        - ``{"signature": "", "backend": "sigstore", "sigstore_bundle": <json>}``
+          for the keyless Sigstore path.
     """
     if not isinstance(payload, (bytes, bytearray)):
         raise TypeError("payload must be bytes")
+    if not isinstance(sigstore_interactive, bool):
+        raise TypeError("sigstore_interactive must be bool")
     if isinstance(backend, str):
         try:
             backend = SignatureBackend(backend.lower())
@@ -178,6 +184,8 @@ def sign_attestation(
                 f"unknown signature backend: {backend!r} "
                 f"(use one of {[b.value for b in SignatureBackend]})"
             ) from exc
+    if sigstore_interactive and backend != SignatureBackend.SIGSTORE:
+        raise ValueError("--interactive-oidc requires --sign sigstore")
     if backend == SignatureBackend.UNSIGNED:
         return {"signature": "", "backend": "unsigned"}
     if backend == SignatureBackend.ED25519:
@@ -193,10 +201,44 @@ def sign_attestation(
             "backend": "ed25519",
             "public_key": public_key_pem(private_key),
         }
-    raise NotImplementedError(
-        f"signing backend {backend.value!r} is infra-blocked "
-        "(needs OIDC + Fulcio/Rekor network)"
+    if backend == SignatureBackend.SIGSTORE:
+        if key_path is not None:
+            raise ValueError("key_path applies only to the ed25519 backend")
+        from soup_cli.utils.sigstore_signing import sign_payload_sigstore
+
+        bundle = sign_payload_sigstore(
+            bytes(payload),
+            interactive=sigstore_interactive,
+        )
+        if not isinstance(bundle, str) or not bundle.strip():
+            raise RuntimeError("Sigstore signing returned an empty bundle")
+        return {
+            "signature": "",
+            "backend": "sigstore",
+            "sigstore_bundle": bundle,
+        }
+    raise AssertionError(f"unhandled signature backend: {backend!r}")
+
+
+def verify_sigstore_attestation(
+    payload: bytes,
+    bundle_json: str,
+    *,
+    identity: str,
+    issuer: str,
+) -> bool:
+    """Verify a Sigstore attestation bundle against identity + issuer policy."""
+    if not isinstance(payload, (bytes, bytearray)):
+        raise TypeError("payload must be bytes")
+    from soup_cli.utils.sigstore_signing import verify_payload_sigstore
+
+    verify_payload_sigstore(
+        bytes(payload),
+        bundle_json,
+        identity=identity,
+        issuer=issuer,
     )
+    return True
 
 
 def verify_attestation(

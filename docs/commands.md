@@ -177,10 +177,14 @@ soup migrate --from llamafactory config.yaml  Import config from LLaMA-Factory
 soup migrate --from axolotl config.yml        Import config from Axolotl
 soup migrate --from unsloth notebook.ipynb    Import config from Unsloth notebook
 soup migrate --from llamafactory c.yaml --dry-run  Preview without writing
-soup recipes list                             List all 175 ready-made recipes
+soup recipes list                             List all 174 ready-made recipes
 soup recipes show llama3.1-8b-sft            Print recipe YAML
 soup recipes use llama3.1-8b-sft             Copy recipe to soup.yaml
 soup recipes search "reasoning"              Search by keyword/task/size
+soup recipes verify                           Attach every shipped config on the meta device; exit 2 if one cannot (#1116)
+soup recipes verify --config soup.yaml        Same check for one config, before downloading weights
+soup recipes verify --no-templates            Recipes only; skip src/soup_cli/templates and examples/
+soup recipes verify --json                    One JSON row per config on stdout; advisories go to stderr
 soup registry push --run-id <id> --name n --tag v1  Register run
 soup registry list [--name n] [--tag v1]     List registry entries
 soup registry show <ref>                      Entry details + artifacts + ancestors
@@ -261,13 +265,13 @@ soup llama cli|mtmd-cli|gguf-split|server|quantize ...  Proxy to the llama.cpp b
 soup quantize <model> --to <fmt>              Quantize a model — ergonomic alias for `soup export --format <fmt>`
 soup bom emit --name <n> --base-sha <hex> --config-sha <hex> --format cyclonedx|spdx|both  CycloneDX ML-BOM / SPDX AI bill of materials
 soup adapters scan <adapter>                  Spectral backdoor scan (rank-1 dominance + outlier detection)
-soup adapters sign <adapter> [--backend unsigned|ed25519] [--key <pem>|--generate-key <pem>]  Merkle manifest + ed25519 sign
-soup adapters verify <adapter> [--strict] [--public-key <pem>]  Verify manifest + ed25519 signature
+soup adapters sign <adapter> [--backend unsigned|ed25519|sigstore] [--key <pem>|--generate-key <pem>] [--interactive-oidc]  Merkle manifest + ed25519/Sigstore sign
+soup adapters verify <adapter> [--strict] [--public-key <pem>] [--cert-identity <san> --cert-oidc-issuer <url>]  Verify manifest + ed25519/Sigstore signature
 soup adapters check-safetensors <adapter> [--strict]  Refuse pickle / PyTorch-classic weights
 soup adapters merge ... [--license <id>] [--license-override <reason>] [--allow-unscanned]  License + backdoor-scan gates (auto-detect license; scan FAIL refused)
 soup adapters arithmetic "coder + 0.5*math - toxic" --adapter coder=<p> --adapter math=<p> --adapter toxic=<p> -o <out> [--allow-unscanned --allow-cross-base]  Task-vector algebra over LoRA adapters (add/scale/negate; same-rank; scan + same-base gated) (v0.71.34)
-soup attest emit ... [--sign ed25519 --key <pem>] [-o att.json]  in-toto/SLSA-3 attestation (+ .sig sidecar)
-soup attest verify <statement> --signature <sig> [--public-key <pem>]  Verify ed25519 attestation signature
+soup attest emit ... [--sign unsigned|ed25519|sigstore] [--key <pem>] [--interactive-oidc] [-o att.json]  in-toto/SLSA-3 attestation; Sigstore requires -o
+soup attest verify <statement> --signature <sig> [--public-key <pem>] [--cert-identity <san> --cert-oidc-issuer <url>]  Verify ed25519/Sigstore attestation signature
 soup airgap-bundle --model <m> --output <out.tar> [--repro-receipt <r.json>]  Signed tarball for data-diode transfer (embeds repro-receipt)
 soup train --config soup.yaml --annex-xi <out.md|out.pdf>  EU AI Act Annex XI/XII doc (markdown or PDF; top_domains auto-filled)
 soup train --config soup.yaml --track-energy [--energy-country USA]  codecarbon offline kWh/CO2 → annex-xi (pip install soup-cli[carbon])
@@ -294,7 +298,7 @@ soup ingest --source langfuse --pull [--since 7d --max-pages 100 --allow-private
 soup prune-prompt --input <jsonl> --output <jsonl> --min-frequency 0.95  Detect + strip shared system-prompt prefix
 soup prune-prompt ... --tokenizer <id-or-path>  Tokenizer-aware prefix detection (decodes remaining ids, boundary-safe)
 soup data active-sample --input <jsonl> --output <jsonl> --budget N  Top-N uncertain prod traces for human review
-soup ab --input <jsonl> --metric latency|judge_score|retry_rate  mSPRT sequential A/B (decision: continue / reject_h0 / accept_h0)
+soup ab --input <jsonl> --metric latency|judge_score|retry_rate  Two-sided mSPRT sequential A/B (decision: continue / reject_h0 / accept_h0; a reject_h0 reports direction better / worse; continue until 30 rows per arm, 40 when --alpha < 0.05)
 soup ingest|prune-prompt|ab|data active-sample ... --slack-url <https> | --discord-url <https>  Shared SSRF-validated webhook on completion
 soup drift-alarm --reference <jsonl> --live <jsonl> --threshold 0.2  Rolling-KL drift alarm (exit 3 on drift)
 soup drift-alarm ... --slack-url <https> | --discord-url <https>  Optional SSRF-validated webhook on drift detected
@@ -358,8 +362,9 @@ soup train --config grpo.yaml  # training.echo_trap_enabled: true [echo_trap_thr
 soup train  # task='moe_lora_routing' + mole_task_adapters  MoLE per-token gate over N frozen task LoRAs (gate-only train) — LIVE (v0.71.12)
 soup train  # task='distill' + distill_mode=token|sequence  Token logit-KL or sequence-level teacher-continuation KD — LIVE (v0.71.12)
 soup train  # task=classifier|reranker|cross_encoder + lora  LoRA-adapter classifier (frozen encoder) — LIVE (v0.71.12)
-soup train  # use_mod | expand_layers | use_longlora  Mixture-of-Depths / LLaMA Pro / LongLoRA S² (Llama/Qwen/Mistral[/Phi]) — LIVE (v0.71.12)
-soup train  # task='tts' + tts_family + modality='audio_out'  TTS fine-tune via SFT CE over pre-encoded codec tokens; emotion templating; live-codec hw-gated — LIVE (v0.71.20)
+soup train  # use_mod | expand_layers  Mixture-of-Depths / LLaMA Pro (Llama/Qwen/Mistral) — LIVE (v0.71.12)
+soup train  # use_longlora  LongLoRA S² is refused at config load: the override leaked future tokens and applied no S² grouping; use rope_scaling_type with plain LoRA (#1240)
+soup train  # task='tts' + tts_family + modality='audio_out'  TTS codec-string SFT; pre-encoded + Orpheus/SNAC + Llasa/XCodec2 live; Sesame CSM refused (native trainer required) — LIVE (v0.71.20)
 soup train  # task in {sft,tts} + moe_expert_quant=nf4|int8_rowwise [+moe_lora]  bnb per-expert quant of fused-MoE experts (CUDA); refused on other tasks, which never applied it (#798) — LIVE (v0.71.20)
 soup train  # task in {sft,tts} + train_router_only=true [+moe_lora]  Freeze MoE experts, train only the gating router; refused on other tasks (#798). moe_lora needs lora.dropout: 0.0 on fused-expert MoEs — LIVE (v0.71.20)
 soup train  # quantization='bitnet_1.58'  BitNet 1.58 training is not implemented; config load refuses it
@@ -473,7 +478,7 @@ mutating tools (`train_start`, `export`) are gated behind `--allow-mutating`
 **Execution Security & Boundaries:**
 - **Flag Safety:** `--allow-execute` is default-off and dangerous. `--allow-mutating` alone can NEVER trigger subprocess execution.
 - **One-Time Confirmation Tokens:** Authorization requires a server-issued random token. Client confirmation is UX-only; security relies entirely on the server-side token state.
-- **Subprocess Isolation:** Execution runs the Soup CLI as an isolated subprocess (`shell=False`, `stdin=DEVNULL`, `cwd` pinned to server startup directory). Child stdout/stderr is redirected to `.soup/mcp-runs/<run_id>.log` to avoid corrupting the MCP JSON-RPC stdio stream.
+- **Subprocess Isolation:** Execution runs the Soup CLI as an isolated subprocess (`shell=False`, `stdin=DEVNULL`, `cwd` pinned to server startup directory). Child stdout/stderr is redirected to `.soup/mcp-runs/<run_id>.log` to avoid corrupting the MCP JSON-RPC stdio stream. Execution is refused if `.soup` or `.soup/mcp-runs` is a symbolic link or junction, or if a hard link exists at the run log path.
 - **Concurrency & Disconnects:** Enforces 1 active execution at a time, gated on a persisted run whose process is still alive — so a **restarted** server does not launch a second training while a child from a previous server is still running, and a stale record whose process is gone never blocks execution. A `launching` record (committed before the child process exists, pid not yet written) blocks restart capacity too: it is indistinguishable from "about to spawn", so treating it as live is the safe direction after a crash in that window. If a server crash leaves that row behind, `soup mcp runs reconcile --expunge-launching` removes rows older than five minutes and prints every removed `run_id`; use `--older-than-seconds N` to choose another positive threshold. The command refuses the whole operation if any candidate records a PID that is still alive. Launches run in background (fire-and-forget). Disconnecting the MCP client does not terminate an already-running subprocess.
 - **Config Snapshotting & Input Revalidation:** At plan time (`train_start`), the validated config is snapshotted to `.soup/mcp-runs/<run_id>/config.yaml`, and execution uses this snapshot rather than the original mutable config path. External protected inputs (such as datasets and model/checkpoint directories or files) are not frozen in the snapshot; instead, their content digests (computed via SHA-256 for regular files, or deterministic recursive content hashing over sorted relative file paths for directory trees, bounded by file-count and total-byte safety limits) are recorded at plan time and revalidated immediately before spawn. Modifying an external protected input between plan and execute invalidates the token. Modifying the original config path after planning has no effect because execution strictly uses the snapshotted config. Snapshotting freezes only the configuration itself, not external filesystem assets.
 - **Every Local Input Is Pinned:** A train plan pins every local file or directory the run reads (model, datasets, reward/teacher/PRM models, reward `.py` files, unlearning sets); an input outside the working directory is refused at plan time, and an input that did not exist at plan time must still not exist at execution.
@@ -489,7 +494,7 @@ Soup gate and verdict commands follow a unified, CI-friendly exit-code contract:
 | `3` | `EXIT_USAGE_ERROR` | USAGE / INPUT / CONFIG ERROR | Bad or invalid CLI flag; missing or unparseable input file; empty series |
 | `1` | `EXIT_RUNTIME_ERROR` | RUNTIME ERROR | Unexpected crash, environment incompatibility, or live inference error |
 
-The taxonomy applies consistently across `soup ship`, `soup eval gate`, `soup eval against`, `soup eval checklist`, `soup eval behavior`, `soup eval quant-check`, `soup lock check`, `soup expect`, `soup data validate`, and `soup data lint`.
+The taxonomy applies consistently across `soup ship`, `soup eval gate`, `soup eval against`, `soup eval checklist`, `soup eval behavior`, `soup eval quant-check`, `soup lock check`, `soup expect`, `soup data validate`, `soup data lint`, and `soup recipes verify`.
 
 `soup eval checklist` requires `--evidence`. `soup eval behavior` also requires
 `--evidence` unless `--base-model` selects the live path. Omitting the required
