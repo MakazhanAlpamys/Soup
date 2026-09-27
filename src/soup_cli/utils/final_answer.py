@@ -267,22 +267,32 @@ def _marker_answer(text: str) -> tuple[int, _Explicit] | None:
 
 
 def iter_boxed_answers(text: str) -> Iterator[BoxedAnswer]:
-    """Yield every ``\\boxed{...}`` in ``text`` that closes, in the order it opens.
+    """Yield the innermost ``\\boxed{...}`` answers in ``text``, in the order they close.
 
-    One pass over the braces, so a text full of boxes costs linear time. Braces are balanced,
-    so ``\\boxed{\\text{B}}`` is read whole, and a box that never closes is skipped instead of
-    swallowing the rest of the text.
+    One pass over the braces. A box that holds another box is skipped: its content is the inner
+    box, so it is never itself an answer, and skipping it stops the normalised contents from
+    overlapping, which is what keeps the pass linear. A box that never closes is skipped too,
+    instead of swallowing the rest of the text.
     """
     opens = {match.end() - 1: match.start() for match in _BOXED_OPEN_RE.finditer(text)}
     open_braces: list[int] = []
+    open_boxes: list[int] = []  # the braces of the boxes still open, innermost last
+    holds_a_box: set[int] = set()
     for match in _BRACE_RE.finditer(text):
+        brace_at = match.start()
         if match.group() == "{":
-            open_braces.append(match.start())
+            open_braces.append(brace_at)
+            if brace_at in opens:
+                if open_boxes:
+                    holds_a_box.add(open_boxes[-1])
+                open_boxes.append(brace_at)
         elif open_braces:
             brace = open_braces.pop()
             if brace in opens:
-                answer = normalize_answer(text[brace + 1 : match.start()])
-                yield BoxedAnswer(opens[brace], match.end(), answer)
+                open_boxes.pop()
+                if brace not in holds_a_box:
+                    answer = normalize_answer(text[brace + 1 : brace_at])
+                    yield BoxedAnswer(opens[brace], match.end(), answer)
 
 
 def _boxed_answer(text: str) -> tuple[int, str] | None:

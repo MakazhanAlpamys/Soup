@@ -70,6 +70,9 @@ class TestIssue1347TheTierReadsBoxesThroughTheSharedScan:
         """The last CLOSED box is the commitment, so a half-written box is not read."""
         assert extract_mcq_letter(r"first \boxed{A}, then \boxed{B") == "A"
 
+    def test_a_stray_closing_brace_before_a_box_is_ignored(self):
+        assert extract_mcq_letter(_ECHOED_OPTIONS + r"x} so \boxed{B}") == "B"
+
     def test_a_boxed_value_is_still_not_an_option_letter(self):
         """``\\boxed{4}`` answers with a value; only A–J in a box is a choice."""
         assert extract_mcq_letter(r"\boxed{4}") is None

@@ -33,7 +33,7 @@ def _best_seconds(text: str, repeats: int = 3) -> float:
 
 
 class TestIssue1347TheScanReadsEveryClosedBox:
-    def test_every_closed_box_is_yielded_once(self):
+    def test_innermost_boxes_are_yielded_once(self):
         text = r"a \boxed{1} b \boxed{\frac{2}{3}} c \boxed{} d \boxed{4"
         assert [(box.start, box.answer) for box in iter_boxed_answers(text)] == [
             (2, "1"),
@@ -85,3 +85,20 @@ class TestIssue1347TheScanGrowsLinearly:
         large_seconds = _best_seconds(large)
         assert large_seconds < small_seconds * 20, (small_seconds, large_seconds)
         assert large_seconds < 3.0, large_seconds
+
+
+class TestIssue1347NestedBoxes:
+    def test_nested_closed_boxes_cost_linear_time(self):
+        """Every box closes and holds the next, so the boxes' contents overlap. Skipping the
+        boxes that hold a box is what keeps this linear: normalising them all would be quadratic
+        in the nesting depth."""
+        small = r"\boxed{" * 1_000 + "B" + "}" * 1_000
+        large = r"\boxed{" * 8_000 + "B" + "}" * 8_000
+
+        small_seconds = _best_seconds(small)
+        large_seconds = _best_seconds(large)
+        assert large_seconds < small_seconds * 20, (small_seconds, large_seconds)
+
+    def test_a_box_inside_a_box_reads_the_inner_answer(self):
+        parsed = parse_completion(r"\boxed{\boxed{42}}")
+        assert parsed is not None and parsed.text == "42"
