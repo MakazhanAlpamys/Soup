@@ -376,12 +376,15 @@ _SHAPES = {
     "label": lambda t: True,
     "image": lambda t: "img.png",
     "audio": lambda t: "a.wav",
+    "completions": lambda t: ["step one", t],
+    "distractor_docs": lambda t: ["another doc", t],
+    "segments": lambda t: [{"text": "prefix", "label": False}, {"text": t, "label": True}],
 }
 
 
 def _row(fmt: str, field: str, payload: str) -> dict:
     keys = (
-        set(FORMAT_SIGNATURES[fmt])
+        set(FORMAT_SIGNATURES.get(fmt, ()))
         | set(FORMAT_EXTRACTION_RULES[fmt]["text_fields"])
         | {field}
     )
@@ -393,15 +396,34 @@ def _row(fmt: str, field: str, payload: str) -> dict:
 
 def _text_fields(fmt: str) -> list:
     declared = set(FORMAT_EXTRACTION_RULES[fmt]["text_fields"])
-    return sorted(declared | (set(FORMAT_SIGNATURES[fmt]) - NON_TEXT_FIELDS))
+    return sorted(declared | (set(FORMAT_SIGNATURES.get(fmt, ())) - NON_TEXT_FIELDS))
 
 
-PII_CASES = [(fmt, field) for fmt in sorted(FORMAT_SIGNATURES) for field in _text_fields(fmt)]
+PII_CASES = [
+    (fmt, field) for fmt in sorted(FORMAT_EXTRACTION_RULES) for field in _text_fields(fmt)
+]
 REFUSAL_CASES = [
     (fmt, field)
-    for fmt in sorted(FORMAT_SIGNATURES)
+    for fmt in sorted(FORMAT_EXTRACTION_RULES)
     for field in FORMAT_EXTRACTION_RULES[fmt]["assistant_fields"]
 ]
+
+
+def test_every_declared_rule_is_non_empty() -> None:
+    for fmt, rule in FORMAT_EXTRACTION_RULES.items():
+        assert rule["text_fields"], fmt
+        if fmt != "embedding":
+            assert rule["assistant_fields"], fmt
+
+
+def test_unlabelled_input_output_segment_is_not_an_assistant_refusal() -> None:
+    row = {
+        "segments": [
+            {"text": REFUSAL_SAMPLE, "label": False},
+            {"text": "Sure, here is how.", "label": True},
+        ]
+    }
+    assert expect_no_refusal_pattern([row]).passed is True
 
 
 @pytest.mark.parametrize("fmt,field", PII_CASES, ids=[f"{f}.{k}" for f, k in PII_CASES])
