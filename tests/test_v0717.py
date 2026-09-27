@@ -727,7 +727,7 @@ class TestBehaviorLive:
 
     def test_cli_live_diff_ok(self, monkeypatch, tmp_path) -> None:
         monkeypatch.chdir(tmp_path)
-        # Responses containing the "safe" oracle word → agreement 1.0 → OK.
+        # "this is safe" is not a refusal, so every xstest "safe" probe scores 1.0 → OK.
         self._patch_generators(monkeypatch, "this is safe", "this is safe")
         result = runner.invoke(
             app, ["eval", "behavior", "r", "--battery", "xstest", "--base-model", "m"]

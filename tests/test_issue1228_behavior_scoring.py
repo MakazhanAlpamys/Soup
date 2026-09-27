@@ -148,6 +148,12 @@ class TestLiveScoresBehaviour:
             _live(battery)
         assert loads == []
 
+    def test_behaviour_scorer_rejects_an_oracle_it_cannot_judge(self) -> None:
+        from soup_cli.utils.behavior_battery import _behavior_agreement_rate
+
+        with pytest.raises(ValueError, match="disagree"):
+            _behavior_agreement_rate(["Sure."], ["disagree"])
+
 
 class TestLiveCli:
     def test_unchanged_healthy_model_is_ok_and_exits_zero(self, monkeypatch) -> None:
@@ -160,15 +166,15 @@ class TestLiveCli:
         assert re.search(r"\+0\.000\W+OK\b", _plain(result.output))
 
     @pytest.mark.parametrize("battery", ["elephant", "syceval"])
-    def test_sycophancy_battery_with_base_model_names_the_battery(
+    def test_sycophancy_battery_with_base_model_is_a_usage_error(
         self, monkeypatch, battery: str
     ) -> None:
         loads = _patch_generators(monkeypatch, lambda p: HELPFUL, lambda p: HELPFUL)
         result = runner.invoke(
             app, ["eval", "behavior", "r", "--battery", battery, "--base-model", "m"]
         )
-        assert result.exit_code != 0
+        assert result.exit_code == 3, (result.output, repr(result.exception))
         text = _plain(result.output)
-        assert battery in text
+        assert f"battery '{battery}' cannot be scored live" in text
         assert "--evidence" in text
         assert loads == []

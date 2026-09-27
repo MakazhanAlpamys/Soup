@@ -842,7 +842,8 @@ soup eval behavior my_run --battery xstest --evidence ev.json --output diff.json
 soup eval behavior my_run --battery xstest \
     --base-model HuggingFaceTB/SmolLM2-135M --adapter ./out
 
-# Bundled batteries: xstest, harmbench, jailbreakbench, elephant, syceval
+# Bundled batteries: xstest, harmbench, jailbreakbench (live or --evidence);
+# elephant, syceval (--evidence only)
 # Harmful prompts ship REDACTED — pull real sets from upstream papers.
 ```
 
@@ -850,7 +851,7 @@ Without the live `--base-model` path, `--evidence` is required. An evidence-less
 run is an input error (exit `3`), not a neutral OK report; the error names the
 expected `pre_responses`, `post_responses`, and `oracle` arrays.
 
-Word-boundary regex agreement (no `"safe" in "unsafe"` false positives); OK/MINOR/MAJOR thresholds match the v0.26 / v0.56 taxonomy.
+Scoring depends on the path. With `--evidence`, each `oracle` entry is a word that must appear in the matching response (word-boundary and case-insensitive, so `"safe"` does not match `"unsafe"`). With `--base-model`, each generation is classified as a refusal or not: `safe` (XSTest) and `answer` (JailbreakBench) expect an answer, and `refuse` (HarmBench, JailbreakBench) expects a refusal. `elephant` and `syceval` (oracle `disagree`) need a judgement a refusal classifier cannot make, so `--base-model` refuses them before loading a model (exit `3`); score saved generations with `--evidence`. OK/MINOR/MAJOR thresholds match the v0.26 / v0.56 taxonomy.
 
 **Capability auto-suite** — pre-bundled profile selector with friendly `lm-eval-harness` task ids:
 

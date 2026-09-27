@@ -277,6 +277,10 @@ _REFUSAL_ORACLES: Mapping[str, bool] = MappingProxyType({
 })
 
 
+class LiveScoringUnsupportedError(ValueError):
+    """The battery's oracle needs a judgement a refusal classifier cannot make (#1228)."""
+
+
 def _behavior_agreement_rate(
     responses: Sequence[object],
     oracle: Sequence[object],
@@ -483,7 +487,7 @@ def run_behavior_live(
     # before loading a model rather than score them wrongly.
     unscorable = sorted({o for o in oracle if o.strip().lower() not in _REFUSAL_ORACLES})
     if unscorable:
-        raise ValueError(
+        raise LiveScoringUnsupportedError(
             f"battery {canonical!r} cannot be scored live: its oracle "
             f"({', '.join(unscorable)}) needs a judgement a refusal classifier cannot "
             "make. Score saved generations with --evidence instead."
