@@ -1227,7 +1227,8 @@ class TrainingConfig(BaseModel):
     quantization_aware: Union[bool, Literal["fp8", "quest"]] = Field(
         default=False,
         description=(
-            "Quantization-Aware Training. False=off, True=int8 QAT (torchao), "
+            "Quantization-Aware Training. False=off, "
+            "True=refused at load (int8 QAT is not implemented, #1222), "
             "'fp8'=FP8 training on H100/B100 (v0.28.0), "
             "'quest'=experimental mixed W4/A4+A16 QuEST route (#674)."
         ),
@@ -1865,19 +1866,23 @@ class TrainingConfig(BaseModel):
             "(v0.71.12 #146)"
         ),
     )
-    # Part E — EBFT + GDPO
+    # Part E — EBFT + GDPO. ebft_variant is refused at config load until the
+    # intended EBFT objective is implemented (#1230); see _refuse_ebft_variant.
     ebft_variant: Optional[Literal["structured", "strided"]] = Field(
         default=None,
         description=(
-            "Energy-Based FT variant. SFT-task-only; replaces the trainer's "
-            "loss with the selected energy-based objective."
+            "Refused at config load (#1230): EBFT is not yet a distinct "
+            "objective. The added term had no causal shift, so it rewarded "
+            "copying the input token, and shifted it duplicates the "
+            "cross-entropy."
         ),
     )
     ebft_temperature: Optional[float] = Field(
         default=None,
         description=(
             "Sampling temperature for EBFT energy proxy. Bounded "
-            "[1e-4, 100.0]. (v0.52.0)"
+            "[1e-4, 100.0]. Only applies with ebft_variant, which is refused "
+            "at config load (#1230). (v0.52.0)"
         ),
     )
     gdpo_variant: Optional[Literal[
@@ -2692,6 +2697,37 @@ class TrainingConfig(BaseModel):
 
         return validate_ebft_temperature(v)
 
+    @field_validator("ebft_variant", mode="before")
+    @classmethod
+    def _refuse_ebft_variant(cls, v):
+        """#1230 — refuse every non-null ``ebft_variant`` until the intended EBFT
+        objective is implemented from its reference.
+
+        The hook added ``apply_ebft_loss(outputs.logits, inputs["labels"])`` to
+        TRL's cross-entropy, and the kernel scores ``logits[:, t]`` against
+        ``labels[:, t]`` with no causal shift: it rewarded copying the input
+        token. Shifted, the term at temperature 1 is the model's own
+        cross-entropy, so the loss would count it twice. ``mode="before"`` so
+        that every non-null value -- not only the two the ``Literal`` accepts --
+        gets this message instead of one pointing at a refused value. The
+        kernel and the hook in ``utils/ebft_gdpo.py`` stay in place,
+        unreachable; GDPO, which shares that module, is unaffected.
+        """
+        if v is not None:
+            raise ValueError(
+                "training.ebft_variant is refused (#1230): EBFT is not yet a "
+                "distinct objective. The term it adds scores each position's "
+                "logits against that position's own input token, with no "
+                "causal shift, so it rewards copying the input over predicting "
+                "the next token; shifted onto the next token it is the model's "
+                "own cross-entropy again (exactly, at ebft_temperature 1), so "
+                "the loss would count cross-entropy twice. It stays refused "
+                "until the intended EBFT objective is implemented from its "
+                "reference. Remove ebft_variant and ebft_temperature to train "
+                "plain SFT."
+            )
+        return v
+
     @field_validator("label_names")
     @classmethod
     def _validate_label_names(cls, v):
@@ -2941,16 +2977,49 @@ class TrainingConfig(BaseModel):
         le=1024,
         description="YaRN beta_slow cutoff (HF default 1).",
     )
-    # v0.49.0 Part C — LongLoRA S² shifted-sparse attention.
-    # Schema gate only; live forward override deferred to v0.49.1.
+    # v0.49.0 Part C — LongLoRA S² shifted-sparse attention. Refused at config
+    # load until real S² attention exists (#1240); see _refuse_longlora.
     use_longlora: bool = Field(
         default=False,
         description=(
-            "Enable the LongLoRA S² shifted-sparse attention override. "
-            "Requires task=sft, backend=transformers, a supported decoder "
-            "architecture, and use_ring_attention=false."
+            "Refused at config load (#1240): the LongLoRA override rolled the "
+            "Q/K projections of half the heads with wrap-around under full "
+            "causal attention, leaking future tokens, and applied no S² "
+            "grouped attention. Use rope_scaling_type with plain LoRA to "
+            "extend the context."
         ),
     )
+
+    @field_validator("use_longlora")
+    @classmethod
+    def _refuse_longlora(cls, value: bool) -> bool:
+        """#1240 — refuse ``use_longlora: true`` until real S² attention exists.
+
+        The override it installed (``utils/longlora.py``) rolls the q/k
+        projection outputs of half the heads along the sequence with
+        ``torch.roll``, which wraps the last ``group_size // 2`` positions to
+        the front, before RoPE and with ``v`` unshifted, while attention stays
+        full causal: earlier positions see keys computed from the last tokens,
+        and no grouped attention runs at all. Runs after pydantic's bool
+        coercion, so the one check refuses every spelling read as true
+        (``yes``, ``on``, ``1``, ``"t"`` ...). The override and
+        ``validate_longlora_compat`` stay in place, unreachable, for the real
+        implementation.
+        """
+        if value:
+            raise ValueError(
+                "training.use_longlora: true is refused (#1240): the current "
+                "LongLoRA implementation leaks future tokens and is not S^2 "
+                "shifted sparse attention. It rolls the query/key projections "
+                "of half the heads along the sequence with wrap-around under "
+                "full causal attention, so earlier positions see keys computed "
+                "from the last tokens of the sequence, and no grouped attention "
+                "is applied. It stays refused until real S^2 attention exists. "
+                "To extend the context, set training.rope_scaling_type (linear, "
+                "dynamic, yarn or llama3) and train plain LoRA; "
+                "remove use_longlora or set it to false."
+            )
+        return value
     gradient_checkpointing: Union[
         bool, Literal["selective", "medium", "full", "auto"]
     ] = Field(
@@ -3799,7 +3868,7 @@ class TrainingConfig(BaseModel):
     def _validate_longlora_ring_attn_exclusive(self) -> "TrainingConfig":
         """v0.49.0 Part C — LongLoRA's S² shifted-sparse attention is a custom
         forward override that conflicts with ring/FA-v3 custom-mask attention
-        paths."""
+        paths. Unreachable while ``_refuse_longlora`` refuses the field (#1240)."""
         if self.use_longlora and self.use_ring_attention:
             raise ValueError(
                 "use_longlora is incompatible with use_ring_attention "
@@ -3816,6 +3885,45 @@ class TrainingConfig(BaseModel):
                 "(spike recovery is triggered by the watchdog)"
             )
         return self
+
+    @field_validator("quantization_aware")
+    @classmethod
+    def _refuse_int8_qat(
+        cls, value: Union[bool, Literal["fp8", "quest"]]
+    ) -> Union[bool, Literal["fp8", "quest"]]:
+        """#1222 — ``true`` is refused: it never ran quantization-aware training.
+
+        Where it was applied (the transformers model setup of the sft, dpo,
+        kto, orpo, ipo, bco, simpo, grpo, ppo and pretrain trainers, which
+        ``task: tts`` and ``task: preference`` also run), it handed
+        torchao's ``Int8WeightOnlyConfig``, a post-training weight-only
+        quantizer, to ``quantize_`` after LoRA, over every ``nn.Linear``
+        including ``lora_A``/``lora_B``, and froze them all: a LoRA run had
+        nothing left to train, and every run tested through ``soup train``
+        exited 1. Elsewhere it was not applied at all: ``backend: mlx`` warned
+        and trained without it, no ``_setup_unsloth`` calls it (#1248), the
+        other tasks' trainers never read it, and neither do SFT's audio and
+        layer-streaming paths.
+
+        This runs after pydantic's own coercion, so every spelling the field
+        reads as ``True`` (``yes``, ``on``, ``1``, ``"true"`` ...) is caught by
+        one comparison. ``fp8`` and ``quest`` never reach that path: FP8 goes
+        through ``utils/fp8.py`` and QuEST through ``utils/quest.py``.
+        """
+        if value is True:
+            raise ValueError(
+                "training.quantization_aware: true is refused (#1222): int8 "
+                "quantization-aware training is not implemented. Where it was "
+                "applied, it ran torchao's post-training int8 weight-only "
+                "quantization over every Linear layer after LoRA, adapter "
+                "included, and froze them all: a LoRA run had zero trainable "
+                "parameters, and every run tested failed. Elsewhere, including "
+                "backend: mlx and backend: unsloth, it was not applied at all. "
+                "Remove the key or set it to false. quantization_aware: fp8 and "
+                "quantization_aware: quest are unaffected; they use their own "
+                "code paths."
+            )
+        return value
 
     @model_validator(mode="after")
     def _validate_prequantized_no_qat(self) -> "TrainingConfig":
@@ -4473,7 +4581,7 @@ def remap_root_level_misplaced_keys(values):
 SFT_KERNEL_AWARE_TASKS: frozenset[str] = frozenset({"sft", "tts"})
 
 
-# #795: trainers that load the base at checkpoint precision and never read
+# #795: trainers that load the base unquantised and never read
 # ``training.quantization``.
 _QUANTIZATION_UNHONOURED_TASKS = frozenset({
     "distill", "classifier", "reranker", "cross_encoder", "prm",
@@ -4565,7 +4673,7 @@ class SoupConfig(BaseModel):
 
     @model_validator(mode="after")
     def _resolve_quantization_for_unhonouring_tasks(self) -> "SoupConfig":
-        """#795 — these trainers load the base at checkpoint precision and never
+        """#795 — these trainers load the base unquantised and never
         read ``training.quantization``.
 
         The field defaults to ``4bit``, so an UNSET value resolves to ``none`` here
@@ -4605,15 +4713,15 @@ class SoupConfig(BaseModel):
 
                 warn_deprecated_value(
                     f"training.quantization: {tcfg.quantization} has no effect on "
-                    f"task={self.task!r} and is ignored: its trainer loads the base at "
-                    "checkpoint precision, so the run trains unquantised. Set "
+                    f"task={self.task!r} and is ignored: its trainer never quantises "
+                    "the base, so the run trains unquantised. Set "
                     "quantization: none."
                 )
                 tcfg.quantization = "none"
                 return self
         raise ValueError(
             f"task={self.task!r} does not apply training.quantization: its trainer "
-            "loads the base at checkpoint precision, so "
+            "never quantises the base, so "
             f"quantization={tcfg.quantization!r} would record a quantised run that "
             "never happens. Remove it or set quantization: none."
         )
@@ -4624,12 +4732,6 @@ class SoupConfig(BaseModel):
         tcfg = self.training
         if tcfg.quantization_aware != "quest":
             return self
-        if tcfg.auto_mixed_precision:
-            raise ValueError(
-                "training.quantization_aware='quest' requires "
-                "training.auto_mixed_precision=false; the QuEST route has only "
-                "been measured under BF16"
-            )
         if self.task != "sft":
             raise ValueError("quantization_aware='quest' requires task='sft'")
         if self.backend != "transformers":
@@ -4638,6 +4740,12 @@ class SoupConfig(BaseModel):
             )
         if self.modality != "text":
             raise ValueError("quantization_aware='quest' requires modality='text'")
+        if tcfg.auto_mixed_precision:
+            raise ValueError(
+                "training.quantization_aware='quest' requires "
+                "training.auto_mixed_precision=false; the QuEST route has only "
+                "been measured under BF16"
+            )
         if tcfg.quantization != "none":
             raise ValueError(
                 "quantization_aware='quest' requires training.quantization='none'"
@@ -4929,9 +5037,8 @@ class SoupConfig(BaseModel):
         """v0.49.0 Part C — LongLoRA S² shifted-sparse attention requires
         ``task=sft``, ``backend=transformers``, and a Llama-family base.
 
-        Live forward override is deferred to v0.49.1 (mirrors v0.27.0 MII /
-        v0.37.0 multipack stub-then-live pattern); the schema gate prevents
-        misconfiguration today.
+        Unreachable while ``TrainingConfig._refuse_longlora`` refuses
+        ``use_longlora: true`` (#1240); kept for the real S² implementation.
         """
         if not self.training.use_longlora:
             return self
@@ -5340,14 +5447,21 @@ class SoupConfig(BaseModel):
 
     @model_validator(mode="after")
     def _validate_ebft_compat(self) -> "SoupConfig":
-        """v0.52.0 Part E — ``ebft_variant`` requires SFT, non-MLX."""
+        """v0.52.0 Part E — ``ebft_variant`` requires SFT, non-MLX.
+
+        While ``TrainingConfig._refuse_ebft_variant`` refuses every non-null
+        ``ebft_variant`` (#1230), only the temperature-alone branch is
+        reachable; the task/backend gate is kept for the real objective.
+        """
         tcfg = self.training
         if tcfg.ebft_variant is None and tcfg.ebft_temperature is None:
             return self
         if tcfg.ebft_variant is None and tcfg.ebft_temperature is not None:
             raise ValueError(
-                "training.ebft_temperature requires training.ebft_variant "
-                "to be set"
+                "training.ebft_temperature only applies to "
+                "training.ebft_variant, which is refused at config load "
+                "(#1230): EBFT is not yet a distinct objective. Remove "
+                "ebft_temperature."
             )
         from soup_cli.utils.ebft_gdpo import validate_ebft_compat
 
@@ -6765,6 +6879,10 @@ class SoupConfig(BaseModel):
           footgun — mirrors v0.52.0 distill / classifier task-gate).
         - ``data.forget_set`` is present when ``task='unlearn'``.
         - Backend != mlx (live wiring deferred to v0.61.1).
+        - ``loraplus_lr_ratio`` is refused (#745): unlearn drives its own
+          ``torch.optim.AdamW`` loop, not a ``Trainer``, so there is nothing
+          for ``attach_loraplus_optimizer`` to attach to and LoRA+ would be
+          silently ignored. Every other PEFT-building task wires it.
         """
         tcfg = self.training
         method = tcfg.unlearn_method
@@ -6801,6 +6919,23 @@ class SoupConfig(BaseModel):
                 "dataset id pointing at rows to unlearn)."
             )
 
+        # LoRA+ is refused here rather than wired (#745). unlearn.py drives a
+        # self-contained torch.optim.AdamW loop, not a transformers Trainer, so
+        # there is no trainer.optimizer for attach_loraplus_optimizer to
+        # replace — LoRA+ would train the B matrices at the base rate the user
+        # did not ask for, silently. Every Trainer-based task wires LoRA+; this
+        # one names the incompatibility at parse (before sharding costs time)
+        # instead of ignoring it.
+        if tcfg.loraplus_lr_ratio is not None:
+            raise ValueError(
+                "Refused: training.loraplus_lr_ratio is not supported on "
+                "task='unlearn'. Unlearning runs its own optimizer loop, not a "
+                "Trainer, so the LoRA+ split learning rate (B at lr*ratio) "
+                "cannot be applied and would be silently ignored. Remove "
+                "training.loraplus_lr_ratio, or use a Trainer-based task "
+                "(sft/dpo/kto/orpo/simpo/...) to train with LoRA+."
+            )
+
         # Delegate backend gate to the pure helper so the runtime path
         # and schema-load path stay consistent.
         from soup_cli.utils.unlearning import validate_unlearn_compat
@@ -6810,6 +6945,76 @@ class SoupConfig(BaseModel):
         except ValueError as exc:
             raise ValueError(str(exc)) from exc
         return self
+
+    @model_validator(mode="after")
+    def _validate_loraplus_has_a_trainable_lora_b(self) -> "SoupConfig":
+        """#745: refuse ``loraplus_lr_ratio`` where no LoRA B matrix trains.
+
+        LoRA+ gives the LoRA B matrices ``lr * ratio``. On these tasks there is
+        no trainable B, so the ratio is either silently ignored or fails only
+        after the base model has loaded:
+
+        - ``prm`` is a full fine-tune with no adapter (``trainer/prm.py``).
+        - ``moe_lora_routing`` loads existing adapters frozen and trains only
+          the routing gate.
+        - ``classifier`` / ``reranker`` / ``cross_encoder`` without
+          ``classifier_lora``, and ``asr`` without ``asr_lora``, full fine-tune
+          by default; the adapter exists only when the flag is on and
+          ``lora.r > 0``.
+
+        - ``lora.use_vera`` on any task: VeRA's A/B projections are frozen and
+          shared, and it trains the ``vera_lambda_b`` / ``vera_lambda_d``
+          scaling vectors instead. peft's
+          ``create_loraplus_optimizer`` puts all of them in the ``lr * ratio``
+          groups and leaves group A empty, so every trainable tensor would run
+          at ``ratio`` times the learning rate.
+
+        ``unlearn`` is refused in :meth:`_validate_unlearn_compat` for a
+        different reason (it has an adapter but no ``Trainer`` optimizer).
+        """
+        tcfg = self.training
+        if tcfg.loraplus_lr_ratio is None:
+            return self
+        task = self.task
+        if getattr(tcfg.lora, "use_vera", False):
+            raise ValueError(
+                "Refused: training.loraplus_lr_ratio needs trainable LoRA A/B "
+                "matrices. lora.use_vera trains scaling vectors, not A/B "
+                "matrices, and peft's LoRA+ optimizer would put every one of "
+                "them in the lr * ratio groups, so the whole adapter would "
+                "train at ratio times the learning rate. Remove "
+                "training.loraplus_lr_ratio or set lora.use_vera: false."
+            )
+        if task == "prm":
+            reason = (
+                "task='prm' is a full fine-tune with no LoRA adapter, so there "
+                "are no LoRA B matrices to give the higher learning rate."
+            )
+        elif task == "moe_lora_routing":
+            reason = (
+                "task='moe_lora_routing' loads its adapters frozen and trains "
+                "only the routing gate, so no LoRA B matrix is trained."
+            )
+        elif task in ("classifier", "reranker", "cross_encoder") and not (
+            tcfg.classifier_lora and tcfg.lora.r > 0
+        ):
+            reason = (
+                f"task={task!r} full fine-tunes unless training.classifier_lora "
+                "is true with lora.r > 0, so there is no LoRA adapter here. Set "
+                "training.classifier_lora: true to train a LoRA adapter."
+            )
+        elif task == "asr" and not (tcfg.asr_lora and tcfg.lora.r > 0):
+            reason = (
+                "task='asr' full fine-tunes unless training.asr_lora is true "
+                "with lora.r > 0, so there is no LoRA adapter here. Set "
+                "training.asr_lora: true to train a LoRA adapter."
+            )
+        else:
+            return self
+        raise ValueError(
+            "Refused: training.loraplus_lr_ratio needs a trainable LoRA adapter. "
+            f"{reason} Remove training.loraplus_lr_ratio for this run."
+        )
 
     @model_validator(mode="after")
     def _validate_grace_codebook_compat(self) -> "SoupConfig":

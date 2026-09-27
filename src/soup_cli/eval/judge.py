@@ -530,8 +530,17 @@ def make_soup_pairwise_judge(evaluator: "PairwiseJudge") -> "BasePairwiseJudge":
 
     Factory (not a module-level subclass) so ``eval/judge.py`` stays importable
     without trl for the pure ``pairwise_*`` functions. ``judge`` returns, per
-    prompt, the index of the best completion (0/1), or ``-1`` on tie/failure —
-    the exact ``BasePairwiseJudge`` contract (TRL treats -1 as a dropped sample).
+    prompt, the index of the better completion (0 or 1), or ``-1`` when it
+    cannot name one: a tie, a failed or unparseable judge call, or a verdict
+    that changes when the two completions are swapped.
+
+    trl does NOT drop a ``-1`` (#1225). ``BasePairwiseJudge`` leaves invalid
+    ranks to the caller, and trl 0.29's ``OnlineDPOTrainer`` builds
+    ``mask = rank == 0``, so a ``-1`` trains as if the second completion had
+    won. Soup's Online DPO trainer
+    (:func:`soup_cli.trainer.online_dpo_ranking.make_ranked_pairs_trainer`)
+    leaves those pairs out of the loss; any other caller must handle ``-1``
+    itself.
     """
     base_cls = _base_pairwise_judge_cls()
 

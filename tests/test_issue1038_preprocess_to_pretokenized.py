@@ -103,7 +103,7 @@ def _gate(tmp_path, train, cache_dir, *, max_length=128, base=_BASE, interleave=
         f"  max_length: {max_length}\n  val_split: 0.0\n"
         "output: ./out\n"
     )
-    return _maybe_load_pretokenized(cfg.data, cfg.base, MagicMock())
+    return _maybe_load_pretokenized(cfg.data, cfg.base, MagicMock(), task="sft")
 
 
 class TestTheRoundTrip:

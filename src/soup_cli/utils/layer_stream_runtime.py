@@ -982,6 +982,7 @@ class StreamPrefetcher:
         n_layers: int,
         stream: Any = None,
         tail_prefetch: Any = None,
+        backward_tail_prefetch: Any = None,
     ):
         self.pool = pool
         self.source = source
@@ -992,12 +993,23 @@ class StreamPrefetcher:
         self.primes = 0
         self.tail_prefetch = tail_prefetch
         self.tail_prefetched = False
+        # #975 — the embedding's `_prime`-time load pays a full head-sized H2D
+        # copy with nothing to overlap it against, because it fires right as
+        # the next step's forward starts and is needed almost immediately.
+        # This callback lets the caller issue that SAME load earlier, once
+        # layer 0's backward recompute confirms this step's decoder walk is
+        # done, so it can overlap with whatever backward work is still ahead
+        # (the embedding's own backward, optimiser bookkeeping) instead of
+        # blocking the next step's first op.
+        self.backward_tail_prefetch = backward_tail_prefetch
+        self.backward_tail_prefetched = False
 
     def prime(self) -> None:
         """Start of a forward pass: layer 0, walking upward."""
         self.prev = None
         self.direction = 1
         self.primes += 1
+        self.backward_tail_prefetched = False
         self.tail_prefetched = False
         self.pool.load_async(0, self.source, self.stream)
 
@@ -1022,6 +1034,36 @@ class StreamPrefetcher:
         ):
             self.tail_prefetch()
             self.tail_prefetched = True
+        # #975 — layer 0 reached going backward is the last decoder recompute
+        # of this step's backward pass, so this refills the shared slot with
+        # the embedding while the backward is still running. Two separate
+        # things make that safe, and only the second protects the GPU:
+        #
+        # * CPU side: `lm_head`'s backward Node sits between the loss and every
+        #   decoder layer, so the autograd engine has already dispatched it, and
+        #   the saved-tensor version check happens at dispatch. The embedding's
+        #   own backward reads indices, never the weight values, so it never
+        #   checks this slot's version at all.
+        # * GPU side: when the CPU reaches layer 0, the head's backward GEMM can
+        #   still be queued on the compute stream, reading this slot. What
+        #   orders the refill after it is `stream.wait_stream(torch.cuda.
+        #   current_stream())` in `LargeLayerBufferPool.load_async`, which makes
+        #   the copy stream wait for everything already enqueued on the compute
+        #   stream. Without that wait the refill can overwrite bytes the head's
+        #   backward has not read yet, and the gradients come out silently
+        #   wrong. Keep it if `load_async` is touched.
+        #
+        # `_prime()` still issues this same load unconditionally at the next
+        # step's start — this only makes that call a same-owner no-op on the
+        # hot path, by getting there first with time to overlap.
+        if (
+            self.direction == -1
+            and idx == 0
+            and not self.backward_tail_prefetched
+            and self.backward_tail_prefetch is not None
+        ):
+            self.backward_tail_prefetch()
+            self.backward_tail_prefetched = True
 
 
 # ==========================================================================
@@ -2616,12 +2658,17 @@ def install_streaming(
         if large_pool is not None and output_key is not None:
             large_pool.load_async(output_key, source, stream)
 
+    def _prefetch_embed() -> None:
+        if large_pool is not None and embed_key is not None:
+            large_pool.load_async(embed_key, source, stream)
+
     prefetcher = StreamPrefetcher(
         pool,
         source,
         n_layers,
         stream,
         tail_prefetch=_prefetch_output if large_pool is not None else None,
+        backward_tail_prefetch=_prefetch_embed if large_pool is not None else None,
     )
 
     layer_cls = _streamed_layer_class()
@@ -2684,6 +2731,11 @@ def install_streaming(
                 raise RuntimeError("could not install the streamed output head")
 
     def _prime(*_args: Any, **_kwargs: Any) -> None:
+        # #975 — the backward-tail prefetch above already loads this for every
+        # step but the first, so `load_async`'s own-owner check makes this a
+        # no-op on the hot path. Kept unconditional: it is the only load for
+        # step 0, and for any forward that follows a backward that never
+        # reached layer 0.
         if large_pool is not None and embed_key is not None:
             large_pool.load_async(embed_key, source, stream)
         prefetcher.prime()
