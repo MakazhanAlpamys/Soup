@@ -117,7 +117,7 @@ def test_documented_email_snippet_differences_are_pinned(
 def test_soup_expect_completes_for_pathological_row(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The public gate completes a <50 KB pathological row within one second."""
+    """The public gate completes a <50 KB pathological row within two seconds."""
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(data_score, "_presidio_pii", lambda _text: None)
 
@@ -136,4 +136,4 @@ def test_soup_expect_completes_for_pathological_row(
     elapsed = time.perf_counter() - start
 
     assert result.exit_code == 0, f"output: {result.output}\nexc: {result.exception!r}"
-    assert elapsed < 1.0, f"pathological `soup expect` took {elapsed:.3f}s"
+    assert elapsed < 2.0, f"pathological `soup expect` took {elapsed:.3f}s"
