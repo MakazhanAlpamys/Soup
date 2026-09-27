@@ -145,7 +145,7 @@ figure, and why the fit decision refuses rather than warns.
 
 | File | Historical scope | Verdict | Requirements and limitations |
 |---|---|---|---|
-| layercount.py | STEP 6 / rejected layer-count hypothesis | Historical reconstruction validator requiring a multi-point synthetic layer-count sweep whose streamed/resident gradients stay exact; one point cannot pass | CPU/static record replay; live synthetic CUDA measurement requires the historical torch/bitsandbytes stack; exact counts and finite metadata are required |
+| [`layercount.py`](harness/layercount.py) | STEP 6 / rejected layer-count hypothesis | Historical reconstruction with a controlled NF4 synthetic layer-count sweep; depth points must keep per-layer bytes constant and streamed/resident gradients exact | CUDA synthetic measurement requires the historical torch/bitsandbytes stack; distinct depths, NF4 metadata, finite layer size, and coherent exact counts are required |
 
 ## Reproducing
 

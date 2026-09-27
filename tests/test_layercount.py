@@ -12,25 +12,25 @@ SPEC.loader.exec_module(module)
 
 def test_exact_multi_point_sweep_passes():
     assert module.layercount_verdict([
-        {"layers": 32, "exact": 128, "total": 128},
-        {"layers": 48, "exact": 192, "total": 192},
-        {"layers": 64, "exact": 256, "total": 256},
+        {"layers": 32, "quant": "nf4", "layer_mib": 150.0, "exact": 128, "total": 128},
+        {"layers": 48, "quant": "nf4", "layer_mib": 150.0, "exact": 192, "total": 192},
+        {"layers": 64, "quant": "nf4", "layer_mib": 150.0, "exact": 256, "total": 256},
     ])
 
 
 def test_wrong_relationship_fails():
     assert not module.layercount_verdict([
-        {"layers": 32, "exact": 128, "total": 128},
-        {"layers": 64, "exact": 8, "total": 128},
+        {"layers": 32, "quant": "nf4", "layer_mib": 150.0, "exact": 128, "total": 128},
+        {"layers": 64, "quant": "nf4", "layer_mib": 150.0, "exact": 8, "total": 128},
     ])
 
 
 def test_degenerate_and_nonfinite_sweeps_fail():
     assert not module.layercount_verdict([
-        {"layers": 32, "exact": 128, "total": 128},
+        {"layers": 32, "quant": "nf4", "layer_mib": 150.0, "exact": 128, "total": 128},
     ])
     with pytest.raises(module.MeasurementInvalidError):
         module.layercount_verdict([
-            {"layers": 32, "exact": 128, "total": 128, "layer_mib": float("nan")},
-            {"layers": 64, "exact": 256, "total": 256, "layer_mib": 1.0},
+            {"layers": 32, "quant": "nf4", "exact": 128, "total": 128, "layer_mib": float("nan")},
+            {"layers": 64, "quant": "nf4", "exact": 256, "total": 256, "layer_mib": 1.0},
         ])
