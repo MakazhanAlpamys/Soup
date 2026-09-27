@@ -7,7 +7,7 @@ import json
 import os
 import re
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated
+from typing import TYPE_CHECKING, Annotated, Any
 
 import typer
 from rich.console import Console
@@ -15,8 +15,13 @@ from rich.markup import escape as markup_escape
 from rich.panel import Panel
 
 from soup_cli.config.loader import load_config
-from soup_cli.data.loader import load_dataset, task_preserves_source_columns
+from soup_cli.data.loader import (
+    data_config_for_task,
+    load_dataset,
+    task_preserves_source_columns,
+)
 from soup_cli.monitoring.display import TrainingDisplay
+from soup_cli.trainer.classifier import CLASSIFICATION_TASKS
 from soup_cli.utils.gpu import detect_device, get_gpu_info, resolve_quantization
 
 if TYPE_CHECKING:  # pragma: no cover - type hints only, no runtime import
@@ -108,6 +113,22 @@ def _train_sample_count(dcfg, dataset) -> int:
     return count if valid else rows
 
 
+def _validate_classification_dataset_if_applicable(cfg: Any, dataset: dict) -> None:
+    """Validate sequence classification rows upfront if task is in CLASSIFICATION_TASKS."""
+    if cfg.task in CLASSIFICATION_TASKS:
+        from rich.markup import escape as _esc
+
+        from soup_cli.trainer.classifier import validate_classification_dataset
+
+        try:
+            validate_classification_dataset(cfg, dataset)
+        except (ValueError, TypeError) as exc:
+            console.print(
+                f"[red]Error validating {cfg.task} dataset:[/] {_esc(str(exc))}"
+            )
+            raise typer.Exit(1) from exc
+
+
 def _build_hardware_fit_input(cfg):
     """Best-effort ``HardwareFitInput`` from a ``SoupConfig``.
 
@@ -138,7 +159,7 @@ def _build_hardware_fit_input(cfg):
     if quant == "4bit":
         peft = "qlora"
     elif task == "prm" or (
-        task in ("classifier", "reranker", "cross_encoder")
+        task in CLASSIFICATION_TASKS
         and not (tcfg.classifier_lora and tcfg.lora.r > 0)
     ) or (task == "asr" and not (tcfg.asr_lora and tcfg.lora.r > 0)):
         # #795: these trainers decide full fine-tuning themselves -- PRM always,
@@ -1242,8 +1263,7 @@ def train(
 
     # v0.53.2 review-fix: classifier-family tasks train a sequence-classification
     # head, not a causal-LM LoRA — render "head" instead of LoRA r/alpha.
-    classifier_family = ("classifier", "reranker", "cross_encoder")
-    if cfg.task in classifier_family:
+    if cfg.task in CLASSIFICATION_TASKS:
         # v0.71.12 #146 — render BOTH the head line AND a LoRA line when the
         # opt-in classifier LoRA path is active.
         head_line = (
@@ -1458,21 +1478,10 @@ def train(
     if dry_run:
         console.print("[yellow]Dry run - validating data...[/]")
         dataset = load_dataset(
-            cfg.data,
+            data_config_for_task(cfg.data, cfg.task),
             preserve_source_columns=task_preserves_source_columns(cfg.task),
         )
-        if cfg.task in ("classifier", "reranker", "cross_encoder"):
-            from soup_cli.trainer.classifier import validate_classification_dataset
-
-            try:
-                validate_classification_dataset(cfg, dataset)
-            except (ValueError, TypeError) as exc:
-                from rich.markup import escape as _esc
-
-                console.print(
-                    f"[red]Error validating {cfg.task} dataset:[/] {_esc(str(exc))}"
-                )
-                raise typer.Exit(1) from exc
+        _validate_classification_dataset_if_applicable(cfg, dataset)
 
         console.print(f"[green]Data OK:[/] {len(dataset['train'])} train samples")
         if "val" in dataset:
@@ -1483,21 +1492,10 @@ def train(
     # Load data
     console.print("[dim]Loading dataset...[/]")
     dataset = load_dataset(
-        cfg.data,
+        data_config_for_task(cfg.data, cfg.task),
         preserve_source_columns=task_preserves_source_columns(cfg.task),
     )
-    if cfg.task in ("classifier", "reranker", "cross_encoder"):
-        from soup_cli.trainer.classifier import validate_classification_dataset
-
-        try:
-            validate_classification_dataset(cfg, dataset)
-        except (ValueError, TypeError) as exc:
-            from rich.markup import escape as _esc
-
-            console.print(
-                f"[red]Error validating {cfg.task} dataset:[/] {_esc(str(exc))}"
-            )
-            raise typer.Exit(1) from exc
+    _validate_classification_dataset_if_applicable(cfg, dataset)
 
     console.print(
         f"[green]Loaded:[/] {_train_sample_count(cfg.data, dataset)} train samples"
@@ -1675,7 +1673,7 @@ def train(
             from soup_cli.trainer.prm import PRMTrainerWrapper
 
             trainer_wrapper = PRMTrainerWrapper(cfg, **trainer_kwargs)
-        elif cfg.task in ("classifier", "reranker", "cross_encoder"):
+        elif cfg.task in CLASSIFICATION_TASKS:
             # v0.53.2 #132 — sequence-classification head.
             from soup_cli.trainer.classifier import ClassifierTrainerWrapper
 

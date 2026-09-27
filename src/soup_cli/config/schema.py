@@ -4727,6 +4727,16 @@ class SoupConfig(BaseModel):
         )
 
     @model_validator(mode="after")
+    def _validate_cross_encoder_format(self) -> "SoupConfig":
+        """#1219 - only the cross_encoder trainer reads pair rows."""
+        if self.data.format == "cross_encoder" and self.task != "cross_encoder":
+            raise ValueError(
+                "data.format='cross_encoder' requires task='cross_encoder'; "
+                f"got task={self.task!r}"
+            )
+        return self
+
+    @model_validator(mode="after")
     def _validate_quest_first_slice(self) -> "SoupConfig":
         """Keep #674 on the one route supported by the measured prototype."""
         tcfg = self.training

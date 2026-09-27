@@ -34,8 +34,6 @@ FORMAT_SIGNATURES = {
     "audio": {"audio", "messages"},
     # v0.71.32 — ASR (Whisper): audio path + reference transcript.
     "asr": {"audio", "text"},
-    # Issue #1219 — Cross-encoder paired text classification.
-    "cross_encoder": {"text_a", "text_b"},
     "plaintext": {"text"},
     "tool-calling": {"messages", "tools", "tool_calls"},
 }
@@ -58,13 +56,11 @@ def detect_format(data: list[dict]) -> str:
     # would otherwise win and silently drop the audio path. plaintext last.
     check_order = [
         "alpaca", "llava", "sharegpt4v", "kto", "dpo", "embedding",
-        "tool-calling", "audio", "asr", "sharegpt", "chatml", "cross_encoder", "plaintext",
+        "tool-calling", "audio", "asr", "sharegpt", "chatml", "plaintext",
     ]
     for fmt in check_order:
         required_keys = FORMAT_SIGNATURES[fmt]
         if required_keys.issubset(keys):
-            return fmt
-        if fmt == "cross_encoder" and {"question", "answer"}.issubset(keys):
             return fmt
 
     raise ValueError(
@@ -77,7 +73,6 @@ def detect_format(data: list[dict]) -> str:
         f"embedding (anchor, positive), "
         f"audio (audio, messages), "
         f"tool-calling (messages, tools, tool_calls), "
-        f"cross_encoder (text_a, text_b or question, answer), "
         f"plaintext (text)"
     )
 

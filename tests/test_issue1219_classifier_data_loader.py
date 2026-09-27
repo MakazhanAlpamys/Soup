@@ -29,6 +29,7 @@ from soup_cli.data.formats import (
 )
 from soup_cli.data.loader import (
     PRESERVE_SOURCE_TASKS,
+    data_config_for_task,
     load_dataset,
     task_preserves_source_columns,
 )
@@ -80,8 +81,9 @@ class TestTaskPreservesSourceColumns:
 
     def test_train_and_sweep_use_same_helper_ast(self) -> None:
         """Audit AST of train.py and sweep.py: both must call task_preserves_source_columns."""
-        train_py = Path("src/soup_cli/commands/train.py").read_text(encoding="utf-8")
-        sweep_py = Path("src/soup_cli/commands/sweep.py").read_text(encoding="utf-8")
+        repo_root = Path(__file__).resolve().parents[1]
+        train_py = (repo_root / "src/soup_cli/commands/train.py").read_text(encoding="utf-8")
+        sweep_py = (repo_root / "src/soup_cli/commands/sweep.py").read_text(encoding="utf-8")
 
         # Neither file should have the old hardcoded cfg.task == "grpo"
         assert 'preserve_source_columns=cfg.task == "grpo"' not in train_py
@@ -95,33 +97,38 @@ class TestTaskPreservesSourceColumns:
         train_ast = ast.parse(train_py)
         sweep_ast = ast.parse(sweep_py)
 
-        def finds_import(tree: ast.AST) -> bool:
+        def finds_import(tree: ast.AST, target_name: str) -> bool:
             for node in ast.walk(tree):
                 if isinstance(node, ast.ImportFrom) and node.module == "soup_cli.data.loader":
                     for name in node.names:
-                        if name.name == "task_preserves_source_columns":
+                        if name.name == target_name:
                             return True
             return False
 
-        assert finds_import(train_ast), "train.py must import task_preserves_source_columns"
-        assert finds_import(sweep_ast), "sweep.py must import task_preserves_source_columns"
+        assert finds_import(train_ast, "task_preserves_source_columns"), (
+            "train.py must import task_preserves_source_columns"
+        )
+        assert finds_import(sweep_ast, "task_preserves_source_columns"), (
+            "sweep.py must import task_preserves_source_columns"
+        )
 
 
 class TestCrossEncoderFormat:
     """Format detection and conversion for paired sequence classification."""
 
     def test_signatures_and_valid_formats(self) -> None:
-        assert "cross_encoder" in FORMAT_SIGNATURES
-        assert FORMAT_SIGNATURES["cross_encoder"] == {"text_a", "text_b"}
+        assert "cross_encoder" not in FORMAT_SIGNATURES
         assert "cross_encoder" in VALID_FORMATS
 
     def test_detect_format_text_a_text_b(self) -> None:
         rows = [{"text_a": "query", "text_b": "passage", "label": 1}]
-        assert detect_format(rows) == "cross_encoder"
+        with pytest.raises(ValueError, match="Cannot detect format"):
+            detect_format(rows)
 
     def test_detect_format_question_answer(self) -> None:
         rows = [{"question": "what is this?", "answer": "it is a cat", "label": 0}]
-        assert detect_format(rows) == "cross_encoder"
+        with pytest.raises(ValueError, match="Cannot detect format"):
+            detect_format(rows)
 
     def test_conversion_preserves_pairs_and_label(self) -> None:
         row_ab = {"text_a": "first", "text_b": "second", "label": "relevant", "meta": 123}
@@ -405,9 +412,9 @@ class TestDatasetVariantsLoading:
         }
         cfg = load_config_from_string(yaml.safe_dump(cfg_obj))
 
-        # 1. load_dataset with task_preserves_source_columns
+        # 1. load_dataset with task_preserves_source_columns and data_config_for_task
         dataset = load_dataset(
-            cfg.data,
+            data_config_for_task(cfg.data, cfg.task),
             preserve_source_columns=task_preserves_source_columns(cfg.task),
         )
         assert len(dataset["train"]) == len(rows)

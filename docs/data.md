@@ -599,6 +599,13 @@ Or use `.txt` files directly (one document per line).
 {"anchor": "What is Python?", "positive": "A programming language.", "negative": "A type of snake."}
 ```
 
+**Cross-Encoder (paired sequence classification - `data.format: cross_encoder`, v0.71.34):**
+```json
+{"text_a": "What is Python?", "text_b": "Python is a programming language.", "label": 1}
+{"question": "What is Python?", "answer": "Python is a programming language.", "label": 1}
+```
+Reads paired text columns (`text_a`/`text_b` or `question`/`answer`) carrying a `label` field. Gated strictly to `task: cross_encoder` (`format: auto` resolves to `cross_encoder` for this task) to preserve global format detection for other tasks.
+
 **Audio (speech + conversation):**
 ```json
 {"audio": "recording.wav", "messages": [{"role": "user", "content": "Transcribe."}, {"role": "assistant", "content": "Hello world."}]}

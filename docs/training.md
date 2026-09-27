@@ -596,7 +596,7 @@ modality: text
 backend: transformers
 
 data:
-  train: ./data/labelled.jsonl   # rows: {"text": "...", "label": "spam"} or {"text": "...", "label": [0, 1, 0]}
+  train: ./data/labelled.jsonl   # rows: {"text": "...", "label": "spam"} or {"text": "...", "label": [0, 2]}
   max_length: 256
 
 training:
@@ -607,6 +607,11 @@ training:
   lr: 2e-5
   batch_size: 32
 ```
+
+**Row shapes by task:**
+- `task: classifier`: Single-input sequences via `{"text": "sample", "label": 1}` or `{"text": "sample", "label": "spam"}` (also accepts ChatML rows carrying `label`). Multi-label datasets pass lists of active label indices or names: `{"text": "sample", "label": [0, 2]}` or `{"text": "sample", "label": ["ham", "promo"]}`.
+- `task: reranker`: Query and document text via `{"text": "query doc", "label": "relevant"}` (or numeric score).
+- `task: cross_encoder`: Paired inputs via `{"text_a": "query", "text_b": "doc", "label": 1}` or `{"question": "query", "answer": "doc", "label": 1}`.
 
 Routes `classifier` / `reranker` / `cross_encoder` through
 `AutoModelForSequenceClassification`. Multi-label heads cap at 1024 entries per

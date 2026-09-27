@@ -39,6 +39,8 @@ from soup_cli.utils.seeding import apply_training_seed, training_seed_kwargs
 
 console = Console()
 
+CLASSIFICATION_TASKS: tuple[str, ...] = ("classifier", "reranker", "cross_encoder")
+
 # Cap on multi-label list entries — defense against malformed dataset rows
 # (security review v0.53.2 H2). Matches v0.52.0 ``_MAX_LABELS=1024``.
 _MAX_MULTI_LABEL_ENTRIES: int = 1024
@@ -180,7 +182,7 @@ def validate_classification_dataset(cfg: SoupConfig, dataset: dict) -> None:
     Checked at load and on --dry-run so missing or invalid labels fail before
     model weights are initialized, reporting the exact row index.
     """
-    if cfg.task not in ("classifier", "reranker", "cross_encoder"):
+    if cfg.task not in CLASSIFICATION_TASKS:
         return
 
     is_paired = (cfg.task == "cross_encoder")
@@ -352,9 +354,6 @@ class ClassifierTrainerWrapper:
             )
 
         is_paired = (cfg.task == "cross_encoder")
-        label_names = (
-            list(tcfg.label_names) if tcfg.label_names is not None else None
-        )
 
         def encode(row: dict) -> dict:
             if is_paired:

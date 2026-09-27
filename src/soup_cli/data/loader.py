@@ -170,6 +170,17 @@ def task_preserves_source_columns(task: str) -> bool:
     return task in PRESERVE_SOURCE_TASKS
 
 
+def data_config_for_task(data_config: DataConfig, task: str) -> DataConfig:
+    """Resolve ``format: auto`` for task: cross_encoder (#1219).
+
+    ``detect_format`` cannot see the task, and ``{question, answer}`` is also
+    GSM8K's shape, so pair rows are recognised only when the task reads them.
+    """
+    if task == "cross_encoder" and data_config.format == "auto":
+        return data_config.model_copy(update={"format": "cross_encoder"})
+    return data_config
+
+
 def _format_rows(
     raw_data: list[dict],
     fmt: str,
