@@ -1413,6 +1413,8 @@ training:
 ]}
 ```
 
+Add a top-level `tools` list (OpenAI function schemas) to put the schemas in front of the model as a system turn; with `format: auto`, a row with `messages` and `tools` is detected as tool-calling. Multi-turn trajectories keep their order: each assistant turn keeps its `tool_calls` and each `tool` turn its `tool_call_id`. The older shape, with the calls in a top-level `tool_calls` list, still loads: those calls become one assistant turn after `messages`.
+
 Arguments are parsed as JSON only — never `eval()`. `soup eval custom` can score tool-call accuracy (function name + argument JSON equality).
 
 ```bash
