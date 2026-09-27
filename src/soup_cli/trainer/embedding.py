@@ -143,14 +143,7 @@ class EmbeddingTrainerWrapper:
             min_batch = 2 if loss_type == "contrastive" else 1
             batch_size = max(min_batch, batch_size // 3)
             console.print(f"[green]Auto batch size (embedding):[/] {batch_size}")
-        elif (
-            (
-                batch_size == 1
-                or str(batch_size) == "1"
-                or (isinstance(batch_size, int) and batch_size < 2)
-            )
-            and loss_type == "contrastive"
-        ):
+        elif batch_size == 1 and loss_type == "contrastive":
             raise ValueError(
                 "contrastive in-batch negatives need batch_size >= 2; "
                 "use triplet (with negatives) or cosine for batch 1"
@@ -618,10 +611,6 @@ class _EmbeddingTrainer:
         else:
             # Contrastive loss (InfoNCE / in-batch negatives)
             similarity = torch.matmul(anchor_emb, pos_emb.T) / self._temperature
-            if similarity.size(0) < 2:
-                raise ValueError(
-                    f"contrastive in-batch negatives need batch_size >= 2; got {similarity.size(0)}"
-                )
             labels = torch.arange(similarity.size(0), device=similarity.device)
             loss = nn_func.cross_entropy(similarity, labels)
 

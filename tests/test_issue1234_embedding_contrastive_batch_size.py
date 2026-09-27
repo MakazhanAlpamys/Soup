@@ -379,3 +379,75 @@ class TestModelSizeFromNameEncoder:
 
     def test_bge_small_size(self):
         assert model_size_from_name("BAAI/bge-small-en-v1.5") == 0.033
+
+    def test_encoder_without_size_defaults_to_large(self):
+        assert model_size_from_name("BAAI/bge-m3") == 0.335
+
+
+ROWS = [
+    {"anchor": "hello", "positive": "world"},
+    {"anchor": "hi", "positive": "there"},
+    {"anchor": "good", "positive": "day"},
+    {"anchor": "great", "positive": "job"},
+]
+
+
+def _wrapper(tmp_path, monkeypatch, **training):
+    from soup_cli.trainer.embedding import EmbeddingTrainerWrapper
+
+    model_path = _tiny_bert_dir(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    body = {
+        "quantization": "none",
+        "lora": {"r": 8, "alpha": 16, "target_modules": ["query", "value"]},
+        **training,
+    }
+    cfg = load_config_from_string(
+        yaml.safe_dump({
+            "base": model_path,
+            "task": "embedding",
+            # the shipped template's max_length: the estimator sizes for it
+            "data": {"train": "train.jsonl", "max_length": 512},
+            "training": body,
+            "output": str(tmp_path / "out"),
+        })
+    )
+    return EmbeddingTrainerWrapper(cfg, device="cpu")
+
+
+class TestTheIssueEstimatesHitTheFloor:
+    """The issue's table: bge-base guessed as 7B at max_length 512 estimates 1/1/2/4
+    on CPU/16/24/40 GiB, i.e. 0/0/0/1 after the embedding // 3. The tiny local BERT
+    is sized from its own weights (24k params), so without pinning the size the
+    16/24/40 GiB cases resolve to 5-10 and never reach the floor."""
+
+    @pytest.mark.parametrize("gib", [0, 16, 24, 40])
+    def test_auto_resolves_to_exactly_two(self, tmp_path, monkeypatch, gib):
+        wrapper = _wrapper(
+            tmp_path, monkeypatch, batch_size="auto", embedding_loss="contrastive"
+        )
+        with patch("soup_cli.trainer.embedding.model_size_from_name", return_value=7.0), patch(
+            "soup_cli.utils.gpu.get_gpu_info",
+            return_value={"memory_total_bytes": int(gib * 1024**3)},
+        ):
+            wrapper.setup({"train": list(ROWS)})
+        assert wrapper.args.per_device_train_batch_size == 2
+        assert wrapper.args.dataloader_drop_last is True
+
+    def test_triplet_without_negatives_is_floored_too(self, tmp_path, monkeypatch):
+        """The triplet -> contrastive fallback is contrastive for the floor as well."""
+        wrapper = _wrapper(
+            tmp_path, monkeypatch, batch_size="auto", embedding_loss="triplet"
+        )
+        with patch("soup_cli.trainer.embedding.model_size_from_name", return_value=7.0), patch(
+            "soup_cli.utils.gpu.get_gpu_info", return_value={"memory_total_bytes": 0}
+        ):
+            wrapper.setup({"train": list(ROWS)})
+        assert wrapper.args.per_device_train_batch_size == 2
+        assert wrapper.args.dataloader_drop_last is True
+
+
+def test_contrastive_refuses_a_one_row_dataset(tmp_path, monkeypatch):
+    wrapper = _wrapper(tmp_path, monkeypatch, batch_size=2, embedding_loss="contrastive")
+    with pytest.raises(ValueError, match="at least 2 training samples; got 1"):
+        wrapper.setup({"train": ROWS[:1]})

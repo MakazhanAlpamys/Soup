@@ -5786,11 +5786,7 @@ class SoupConfig(BaseModel):
             tcfg = self.training
             loss = getattr(tcfg, "embedding_loss", "contrastive")
             bs = getattr(tcfg, "batch_size", "auto")
-            if loss == "contrastive" and (
-                bs == 1
-                or str(bs) == "1"
-                or (isinstance(bs, int) and not isinstance(bs, bool) and bs < 2)
-            ):
+            if loss == "contrastive" and bs == 1:
                 raise ValueError(
                     "contrastive in-batch negatives need batch_size >= 2; "
                     "use triplet (with negatives) or cosine for batch 1"

@@ -382,7 +382,7 @@ def model_size_from_name(model_name: str) -> float:
             return 0.033
         if "mini" in name_lower or "tiny" in name_lower:
             return 0.022
-        return 0.11
+        return 0.335
 
     return 7.0  # default guess
 

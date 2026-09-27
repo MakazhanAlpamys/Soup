@@ -599,6 +599,8 @@ Or use `.txt` files directly (one document per line).
 {"anchor": "What is Python?", "positive": "A programming language.", "negative": "A type of snake."}
 ```
 
+With `embedding_loss: contrastive` (the default), each row's negatives are the other rows' positives in the same batch, so a batch needs at least two rows: `batch_size: 1` is refused at config load, `batch_size: auto` resolves to at least 2, and the last partial batch of each epoch is dropped. This also applies when `triplet` falls back to contrastive because the rows have no `negative`. Use `triplet` with a `negative` on every row, or `cosine`, to train at batch size 1.
+
 **Audio (speech + conversation):**
 ```json
 {"audio": "recording.wav", "messages": [{"role": "user", "content": "Transcribe."}, {"role": "assistant", "content": "Hello world."}]}
