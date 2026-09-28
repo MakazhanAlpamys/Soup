@@ -279,3 +279,69 @@ class TestNoSecondChain:
             f"{filename} grew a task chain again; route it through "
             "soup_cli/trainer/dispatch.py instead"
         )
+
+
+class TestTheKwargsReachTheWrapper:
+    """`build_trainer` forwards each command's kwargs unchanged (#1213).
+
+    The parity tests above compare which *class* gets built. Without this class,
+    `build_trainer` could stop forwarding `trust_remote_code`,
+    `deepspeed_config`, `fsdp_config` or `report_to` and nothing would fail:
+    `soup train` would silently ignore `--trust-remote-code`, `--deepspeed`,
+    FSDP and trackers, and a sweep arm could lose `device=` and fall back to the
+    wrapper's own `"cuda"` default. Both mutations survive the recorder fixtures
+    because the recorder accepts `**kwargs` and never looks at them.
+    """
+
+    #: What `soup train` passes (commands/train.py builds exactly these five).
+    TRAIN_KWARGS = {
+        "device": "cpu",
+        "report_to": "none",
+        "deepspeed_config": "ds_config.json",
+        "fsdp_config": {"fsdp": "full_shard"},
+        "trust_remote_code": True,
+    }
+
+    @pytest.fixture
+    def seen(self, monkeypatch: pytest.MonkeyPatch) -> dict:
+        received: dict = {}
+
+        def recorder(name: str):
+            class _Recorder:
+                def __init__(self, cfg, **kwargs):
+                    received[name] = kwargs
+
+                def setup(self, dataset):
+                    pass
+
+                def train(self, **kwargs):
+                    return {"initial_loss": 1.0, "final_loss": 0.5, "total_steps": 1,
+                            "duration_secs": 1.0, "output_dir": "out", "duration": "1s"}
+
+            return _Recorder
+
+        modules = {path: importlib.import_module(path) for path in _WRAPPER_SITES}
+        for path, cls_name in _WRAPPER_SITES.items():
+            monkeypatch.setattr(modules[path], cls_name, recorder(cls_name))
+        from soup_cli.trainer import mlx_routing
+
+        monkeypatch.setattr(
+            mlx_routing, "get_mlx_trainer", lambda task: recorder(_MLX_EXPECTED[task])
+        )
+        return received
+
+    def test_build_trainer_forwards_every_kwarg_unchanged(self, seen: dict) -> None:
+        from soup_cli.trainer.dispatch import build_trainer
+
+        rows = [(task, "transformers", name) for task, name in _EXPECTED.items()]
+        rows += [(task, "mlx", name) for task, name in _MLX_EXPECTED.items()]
+        for task, backend, name in rows:
+            seen.clear()
+            build_trainer(SimpleNamespace(task=task, backend=backend), **self.TRAIN_KWARGS)
+            assert seen == {name: self.TRAIN_KWARGS}, f"{backend}/{task}: {seen}"
+
+    def test_sweep_passes_the_detected_device(self, seen: dict) -> None:
+        for task, name in _EXPECTED.items():
+            seen.clear()
+            _run_sweep_arm(_sweep_config(task))
+            assert seen == {name: {"device": "cpu"}}, f"sweep {task}: {seen}"

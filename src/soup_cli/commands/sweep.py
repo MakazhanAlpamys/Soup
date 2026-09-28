@@ -12,6 +12,7 @@ from rich.panel import Panel
 from rich.table import Table
 
 from soup_cli.config.loader import load_config
+from soup_cli.utils.terminal import for_terminal
 
 console = Console()
 
@@ -212,7 +213,12 @@ def sweep(
                         f"({best_loss:.4f} x {early_stop} = {best_loss * early_stop:.4f})[/]"
                     )
         except Exception as exc:
-            console.print(f"[red]Run {run_name} failed: {exc}[/]")
+            # #1213 — a `backend: mlx` arm now reaches the MLX wrapper, whose
+            # install hint reads `pip install "soup-cli[mlx]"`. Interpolated
+            # straight into the markup string, Rich reads `[mlx]` as a style tag
+            # and drops it, so the hint that tells the user what to install is
+            # the part that disappears. `for_terminal` escapes it.
+            console.print(f"[red]Run {run_name} failed:[/] {for_terminal(exc)}")
             results.append({
                 "name": run_name,
                 "params": combo,
