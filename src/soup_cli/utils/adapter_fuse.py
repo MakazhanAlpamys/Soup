@@ -50,8 +50,11 @@ def merge_adapter_to_dense(
     rather than deleted, and only removed once the staged model has taken
     its place; if the final swap itself then fails (disk full, a lock held
     on the staging dir), the renamed-aside copy is put back before the error
-    propagates, so a failure here can never leave neither the old nor the
-    new model on disk.
+    propagates. If that restore also fails, neither artifact is deleted:
+    both the previous model (at the renamed-aside path) and the newly merged
+    model (at the staging path) are left on disk and named in the raised
+    error, so a failure here can never destroy the last complete copy —
+    worst case it leaves two, at paths the caller can recover by hand.
 
     ``out_dir`` is re-validated immediately before the swap: the training
     subprocess that produced ``adapter_dir`` may have run for hours, so the
@@ -95,6 +98,7 @@ def merge_adapter_to_dense(
     os.makedirs(parent, exist_ok=True)
     staging = tempfile.mkdtemp(prefix=".fuse_", dir=parent)
     backup: str | None = None
+    keep_staging = False
     try:
         try:
             merged.save_pretrained(staging)
@@ -122,12 +126,27 @@ def merge_adapter_to_dense(
             os.replace(out_dir, backup)
         try:
             os.replace(staging, out_dir)
-        except BaseException:
+        except BaseException as swap_exc:
             # The swap itself failed: put the previous model straight back
             # before anything else runs, so this failure never leaves
             # neither copy in place.
             if backup is not None:
-                os.replace(backup, out_dir)
+                try:
+                    os.replace(backup, out_dir)
+                except BaseException as restore_exc:
+                    # The restore ALSO failed: out_dir now holds neither
+                    # copy. Do not guess which of staging/backup to keep —
+                    # keep both on disk and name them in the error, so the
+                    # outer handler below must not rmtree(staging) either.
+                    keep_staging = True
+                    raise RuntimeError(
+                        f"failed to swap the merged model into {out_dir!r} "
+                        f"({swap_exc!r}), and restoring the previous model "
+                        f"from {backup!r} also failed ({restore_exc!r}); "
+                        f"the previous model is intact at {backup!r} and the "
+                        f"newly merged model is intact at {staging!r} — move "
+                        f"one of them into place manually"
+                    ) from restore_exc
                 backup = None
             raise
         if backup is not None:
@@ -135,8 +154,12 @@ def merge_adapter_to_dense(
     except BaseException:
         # A half-written staging dir (disk full, interrupted save) must not be
         # orphaned next to the model — it would silently accumulate a full
-        # model's worth of bytes per failed run.
-        shutil.rmtree(staging, ignore_errors=True)
+        # model's worth of bytes per failed run. But if the swap AND the
+        # restore both failed above, staging is the only copy of the new
+        # model left anywhere: keep it, and let the RuntimeError above name
+        # it instead of deleting it here.
+        if not keep_staging:
+            shutil.rmtree(staging, ignore_errors=True)
         raise
 
 

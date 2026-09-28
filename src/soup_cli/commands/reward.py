@@ -199,8 +199,17 @@ def synth(
         os.replace(output, backup_output)
 
     # Write, then LOAD it back through the real reward-loader path (round-trip
-    # validation) and calibrate the loaded callable.
-    atomic_write_text(result.source, output)
+    # validation) and calibrate the loaded callable. The write itself must be
+    # guarded too: a candidate write can fail after ``output`` was already
+    # moved aside (disk full mid-write, a permission error on the parent
+    # dir), and with nothing at ``output`` and the backup left sitting under
+    # its ``.tmp`` name, that failure would silently destroy the previous
+    # verifier and orphan the backup file.
+    try:
+        atomic_write_text(result.source, output)
+    except OSError as exc:
+        _restore_or_cleanup(output, backup_output)
+        _fail(f"could not write candidate verifier: {exc}")
     try:
         from soup_cli.trainer.rewards import load_reward_fn
         reward_fn = load_reward_fn(output)
