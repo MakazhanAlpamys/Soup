@@ -102,6 +102,8 @@ class TestOneRefusalWithMoeLora:
         message = _refusal(_yaml("reward_model", "unsloth", moe_lora=True))
 
         assert message.count("no unsloth setup") == 1, message
+        # #1323's wording, not this check's: only then is the order pinned here too.
+        assert "training.moe_lora is refused with backend='unsloth'" in message, message
         load_config_from_string(_yaml("reward_model", "transformers", moe_lora=True))
 
 
@@ -122,3 +124,24 @@ class TestSoupDoctorReportsIt:
         assert result.exit_code == 2, result.output
         out = " ".join(strip_ansi(result.output).split())
         assert "backend='unsloth' is not applied by task='reward_model'" in out
+
+
+class TestUnslothBnb4bitNamesTheTask:
+    """``unsloth_bnb_4bit`` was checked before this refusal, and on six of the seven
+    tasks the #795 resolver has already turned ``quantization: 4bit`` into ``none``,
+    so that check blamed a value the user never wrote."""
+
+    @pytest.mark.parametrize("task", _NEWLY_REFUSED)
+    def test_one_refusal_names_the_task_and_the_whole_way_out(self, task):
+        message = _refusal(_yaml(task, "unsloth", quantization="4bit", unsloth_bnb_4bit=True))
+
+        assert f"backend='unsloth' is not applied by task={task!r}" in message, message
+        assert "Use backend: transformers" in message
+        # the flag has to go too, or backend: transformers meets a second refusal
+        assert "unsloth_bnb_4bit" in message
+
+    @pytest.mark.parametrize("task", _NEWLY_REFUSED)
+    def test_following_that_advice_loads(self, task):
+        cfg = load_config_from_string(_yaml(task, "transformers", quantization="4bit"))
+
+        assert cfg.backend == "transformers"

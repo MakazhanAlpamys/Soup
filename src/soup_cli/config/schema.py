@@ -6687,6 +6687,11 @@ class SoupConfig(BaseModel):
         tcfg = self.training
         if not tcfg.unsloth_bnb_4bit:
             return self
+        if self.backend == "unsloth" and self.task not in UNSLOTH_SETUP_TASKS:
+            # #1357 refuses the backend itself, last, and names this flag. The
+            # #795 resolver has already turned an explicit 4bit into none on most
+            # of these tasks, so the check below would blame a value never written.
+            return self
         from soup_cli.utils.advanced_precision import (
             validate_unsloth_bnb_4bit_compat,
         )
@@ -7668,10 +7673,15 @@ class SoupConfig(BaseModel):
         own, earlier refusals."""
         if self.backend != "unsloth" or self.task in UNSLOTH_SETUP_TASKS:
             return self
+        also = (
+            " and remove training.unsloth_bnb_4bit, which only unsloth reads"
+            if self.training.unsloth_bnb_4bit
+            else ""
+        )
         raise ValueError(
             f"backend='unsloth' is not applied by task={self.task!r}: that trainer has "
             "no unsloth setup and would train on plain transformers. Use backend: "
-            "transformers."
+            f"transformers{also}."
         )
 
 
