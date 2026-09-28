@@ -178,8 +178,16 @@ def test_trajectory_rejects_missing_positions_and_undeclared_truncation():
 
 @pytest.mark.parametrize("bad_id", [4, -1])
 def test_capture_token_refuses_ids_outside_the_vocabulary(bad_id):
-    """#1341: the vocabulary guard in ``_validate_token_ids`` was never exercised."""
-    with pytest.raises(ValueError, match="outside the vocabulary"):
+    """#1341: the vocabulary guard in ``_validate_token_ids`` was never exercised.
+
+    The match is anchored on purpose: ``CaptureToken``'s own validator raises
+    the same phrase, but inside a pydantic ``ValidationError`` whose text starts
+    with "1 validation error". Anchoring is what makes these cases fail when the
+    capture guard is disabled, for -1 as well as for ``vocab_size``.
+    """
+    with pytest.raises(
+        ValueError, match=r"^target_token_id contains an id outside the vocabulary$"
+    ):
         build_teacher_expert_capture_token(
             example_id="example-1",
             position=0,
@@ -189,7 +197,9 @@ def test_capture_token_refuses_ids_outside_the_vocabulary(bad_id):
             vocab_size=4,
             probability_policy=_policy(top_k=2),
         )
-    with pytest.raises(ValueError, match="outside the vocabulary"):
+    with pytest.raises(
+        ValueError, match=r"^context_token_ids contains an id outside the vocabulary$"
+    ):
         build_teacher_expert_capture_token(
             example_id="example-1",
             position=0,
@@ -204,8 +214,13 @@ def test_capture_token_refuses_ids_outside_the_vocabulary(bad_id):
 @pytest.mark.parametrize("bad_id", [4, -1])
 def test_trajectory_capture_refuses_ids_outside_the_vocabulary(bad_id):
     logits = ((4.0, 3.0, 2.0, -4.0),)
-    for prompt, targets in (((bad_id,), (1,)), ((1,), (bad_id,))):
-        with pytest.raises(ValueError, match="outside the vocabulary"):
+    for field, prompt, targets in (
+        ("prompt_token_ids", (bad_id,), (1,)),
+        ("target_token_ids", (1,), (bad_id,)),
+    ):
+        with pytest.raises(
+            ValueError, match=rf"^{field} contains an id outside the vocabulary$"
+        ):
             capture_teacher_expert_trajectory(
                 example=TeacherExpertExample(
                     example_id="example-1",
@@ -218,4 +233,3 @@ def test_trajectory_capture_refuses_ids_outside_the_vocabulary(bad_id):
                 max_sequence_length=16,
                 truncation="none",
             )
-
