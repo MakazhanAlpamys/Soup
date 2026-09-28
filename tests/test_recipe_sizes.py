@@ -21,17 +21,18 @@ MiniMax M3 at 428B, DeepSeek V3 at 671B, GLM-5.1 at 754B, and Qwen3.5-397B at 39
 
 This suite asserts that every recipe with an anonymously resolvable base model
 has a declared ``size`` that matches the parameter count recorded in
-``tests/fixtures/recipe_base_architectures.json`` within a 30% tolerance.
-Bases that cannot be resolved anonymously (gated, missing config.json, or
-requiring authentication) are explicitly excluded with documented reasons.
+``tests/fixtures/recipe_base_architectures.json`` within a tolerance band
+[0.70x .. 1.15x].
 """
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import re
 from pathlib import Path
 
+import pytest
 import yaml
 
 from soup_cli.recipes.catalog import RECIPES
@@ -40,106 +41,14 @@ _FIXTURE_PATH = (
     Path(__file__).resolve().parent / "fixtures" / "recipe_base_architectures.json"
 )
 
-#: Bases that cannot be resolved anonymously on the Hugging Face Hub (gated,
-#: missing config.json/safetensors, or unresolvable anonymously), each with an
-#: explicit reason. Pinned by count so exclusions cannot be silently added.
+#: Bases that have no safetensors metadata on the Hugging Face Hub.
 EXCLUDED_SIZE_BASES = {
-    "BioMistral/BioMistral-7B": (
-        "weights distributed as PyTorch bin only without safetensors metadata"
-    ),
-    "OpenGVLab/InternVL3-5": (
-        "repo not found or not publicly readable (see #677)"
-    ),
-    "Qwen/Qwen-Image": (
-        "repo has no config.json metadata"
-    ),
-    "SparkAudio/Spark-TTS-0.5B": (
-        "repo has no config.json metadata"
-    ),
-    "baichuan-inc/Baichuan2-13B-Chat": (
-        "weights distributed as PyTorch bin only without safetensors metadata"
-    ),
-    "canopylabs/orpheus-3b-0.1-ft": (
-        "gated repository requiring authentication"
-    ),
-    "deepcogito/cogito-v2-preview": (
-        "repo not found or not publicly readable (see #677)"
-    ),
-    "deepseek-ai/DeepSeek-OCR": (
-        "deepseek_vl_v2 architecture requires trust_remote_code to load"
-    ),
-    "epfl-llm/meditron-7b": (
-        "gated repository requiring authentication"
-    ),
-    "google/embeddinggemma-300m": (
-        "gated repository requiring authentication"
-    ),
-    "google/gemma-2-2b-it": (
-        "gated repository requiring authentication"
-    ),
-    "google/gemma-3-12b-it": (
-        "gated repository requiring authentication"
-    ),
-    "google/gemma-3-27b-it": (
-        "gated repository requiring authentication"
-    ),
-    "google/gemma-3-9b-it": (
-        "repo not found or not publicly readable (see #677)"
-    ),
-    "google/medgemma-4b-it": (
-        "gated repository requiring authentication"
-    ),
-    "ibm-granite/granite-4.0-tiny-base": (
-        "repo not found or not publicly readable (see #677)"
-    ),
-    "meta-llama/Llama-2-13b-hf": (
-        "gated repository requiring authentication"
-    ),
-    "meta-llama/Llama-3.1-70B-Instruct": (
-        "gated repository requiring authentication"
-    ),
-    "meta-llama/Llama-3.1-8B": (
-        "gated repository requiring authentication"
-    ),
-    "meta-llama/Llama-3.1-8B-Instruct": (
-        "gated repository requiring authentication"
-    ),
-    "meta-llama/Llama-3.2-11B-Vision-Instruct": (
-        "gated repository requiring authentication"
-    ),
-    "meta-llama/Llama-3.2-1B-Instruct": (
-        "gated repository requiring authentication"
-    ),
-    "meta-llama/Llama-3.2-3B-Instruct": (
-        "gated repository requiring authentication"
-    ),
-    "meta-llama/Llama-3.2-90B-Vision-Instruct": (
-        "gated repository requiring authentication"
-    ),
-    "meta-llama/Llama-4-Scout-17B-16E-Instruct": (
-        "gated repository requiring authentication"
-    ),
-    "mistralai/Devstral-Small": (
-        "repo not found or not publicly readable (see #677)"
-    ),
-    "mistralai/Mistral-Large-3-675B-Instruct-2512": (
-        "repo has no config.json metadata"
-    ),
-    "mistralai/Mistral-Medium-3.5": (
-        "repo not found or not publicly readable (see #677)"
-    ),
-    "mistralai/Pixtral-12B-2409": (
-        "repo has no config.json metadata"
-    ),
-    "moonshotai/Kimi-K2": (
-        "repo not found or not publicly readable (see #677)"
-    ),
-    "nvidia/Nemotron-4-340B-Instruct": (
-        "repo has no config.json metadata"
-    ),
-    "openbmb/MiniCPM-V-2_6": (
-        "gated repository requiring authentication"
-    ),
+    "BioMistral/BioMistral-7B",
+    "SparkAudio/Spark-TTS-0.5B",
+    "baichuan-inc/Baichuan2-13B-Chat",
+    "mistralai/Mistral-Large-3-675B-Instruct-2512",
+    "mistralai/Pixtral-12B-2409",
+    "nvidia/Nemotron-4-340B-Instruct",
 }
 
 #: Recipes whose size is explicitly declared as "N/A" (e.g. reasoning wrappers
@@ -150,18 +59,19 @@ KNOWN_NA_SIZE_RECIPES = {
     "deepseek-v4-flash-dpo",
     "deepseek-v4-flash-grpo",
     "deepseek-v4-flash-sft",
+    "deepseek-v4-pro-dpo",
+    "deepseek-v4-pro-grpo",
     "deepseek-v4-pro-sft",
     "kimi-k2-sft",
     "kimi-k2-thinking-grpo",
-    "mistral-medium-3-5-sft",
     "paddle-ocr-sft",
     "qwen-image-sft",
     "ra-dit-retriever",
 }
 
-#: Tolerance band for declared parameter ratio: 0.70x to 1.40x.
+#: Tolerance band for declared parameter ratio: 0.70x to 1.15x.
 _MIN_SIZE_RATIO = 0.70
-_MAX_SIZE_RATIO = 1.40
+_MAX_SIZE_RATIO = 1.15
 
 
 def parse_size(size_str: str) -> float | None:
@@ -180,90 +90,84 @@ def _load_base_architectures() -> dict[str, dict]:
     return json.loads(_FIXTURE_PATH.read_text(encoding="utf-8"))
 
 
-class TestRecipeSizeRatchet:
-    """Validates that recipe size labels accurately reflect model parameters."""
-
-    def test_every_resolvable_recipe_matches_recorded_parameters(self) -> None:
-        """Every recipe using an un-excluded base must match within tolerance."""
-        arch = _load_base_architectures()
-        discrepancies: list[str] = []
-        checked_count = 0
-
-        for name, meta in RECIPES.items():
-            parsed_yaml = yaml.safe_load(meta.yaml_str) or {}
-            base = parsed_yaml.get("base")
-            assert base, f"Recipe {name} has no base in YAML"
-
-            if base in EXCLUDED_SIZE_BASES:
-                continue
-
-            if meta.size == "N/A":
-                assert name in KNOWN_NA_SIZE_RECIPES, (
-                    f"Recipe {name} has size='N/A' but is not in KNOWN_NA_SIZE_RECIPES"
-                )
-                continue
-
-            declared_params = parse_size(meta.size)
-            assert declared_params is not None, (
-                f"Recipe {name} has unparseable size: {meta.size!r}"
+def size_problems(recipes, arch):
+    """Every recipe whose label disagrees with its base, and how many were compared."""
+    problems, checked = [], 0
+    for name, meta in recipes.items():
+        base = (yaml.safe_load(meta.yaml_str) or {}).get("base")
+        if base in EXCLUDED_SIZE_BASES:
+            continue
+        if meta.size == "N/A":
+            if name not in KNOWN_NA_SIZE_RECIPES:
+                problems.append(f"{name}: size 'N/A' is not declared in KNOWN_NA_SIZE_RECIPES")
+            continue
+        declared = parse_size(meta.size)
+        if declared is None:
+            problems.append(f"{name}: size {meta.size!r} is not a total parameter count like '35B'")
+            continue
+        actual = arch.get(base, {}).get("parameters")
+        if actual is None:
+            problems.append(
+                f"{name}: base {base} has no recorded parameter count and is not excluded"
             )
+            continue
+        checked += 1
+        ratio = declared / actual
+        if not _MIN_SIZE_RATIO <= ratio <= _MAX_SIZE_RATIO:
+            problems.append(f"{name}: declared {meta.size} vs {actual:,} on {base} ({ratio:.3f}x)")
+    return problems, checked
 
-            base_info = arch.get(base)
-            assert base_info is not None, (
-                f"Recipe {name}'s base {base!r} is missing from recipe_base_architectures.json"
-            )
 
-            actual_params = base_info.get("parameters")
-            if actual_params is None:
-                continue
+def test_every_recipe_label_matches_its_base():
+    problems, checked = size_problems(RECIPES, _load_base_architectures())
+    assert problems == [], "\n".join(problems)
+    assert checked >= 150, checked
 
-            checked_count += 1
-            ratio = declared_params / actual_params
-            if not (_MIN_SIZE_RATIO <= ratio <= _MAX_SIZE_RATIO):
-                discrepancies.append(
-                    f"{name}: declared {meta.size} ({declared_params:.2e}) vs "
-                    f"actual {actual_params:.2e} on base {base} (ratio {ratio:.3f})"
-                )
 
-        assert discrepancies == [], (
-            "Recipe sizes disagree with recorded base parameter count beyond tolerance "
-            f"[{_MIN_SIZE_RATIO}..{_MAX_SIZE_RATIO}]:\n  " + "\n  ".join(discrepancies)
-        )
-        assert checked_count >= 110, f"Expected at least 110 checked recipes, got {checked_count}"
+@pytest.mark.parametrize(("name", "old_label"), [
+    ("glm-4.6-sft", "9B"), ("glm-5-sft", "9B"), ("minimax-m2-sft", "9B"),
+    ("deepseek-v3-7b-sft", "7B"), ("voxtral-sft", "3B"), ("llama4-scout-17b-sft", "17B"),
+    ("qwen2.5-7b-sft", "10B"),  # overstated: the upper bound has to bite too
+])
+def test_the_real_check_rejects_the_old_label(name, old_label):
+    mutated = {**RECIPES, name: dataclasses.replace(RECIPES[name], size=old_label)}
+    problems, _ = size_problems(mutated, _load_base_architectures())
+    assert any(p.startswith(f"{name}:") for p in problems), problems
 
-    def test_ratchet_kills_understated_size_mutations(self) -> None:
-        """Assert that understated size labels are caught by the ratchet."""
-        arch = _load_base_architectures()
 
-        test_cases = [
-            ("glm-4.6-sft", "9B", 356785898816),  # 356.8B params on Hub
-            ("glm-5-sft", "9B", arch["zai-org/GLM-5"]["parameters"]),
-            ("minimax-m2-sft", "9B", arch["MiniMaxAI/MiniMax-M2"]["parameters"]),
-            ("deepseek-v3-7b-sft", "7B", arch["deepseek-ai/DeepSeek-V3-0324"]["parameters"]),
-        ]
+def test_a_missing_count_fails_naming_the_recipe():
+    arch = _load_base_architectures()
+    arch["zai-org/GLM-4.6"].pop("parameters")
+    problems, _ = size_problems(RECIPES, arch)
+    assert any(
+        p.startswith("glm-4.6-sft:") and "no recorded parameter count" in p for p in problems
+    ), problems
 
-        for recipe_name, bad_size, actual_params in test_cases:
-            mutated_params = parse_size(bad_size)
-            assert mutated_params is not None
-            ratio = mutated_params / actual_params
-            assert not (_MIN_SIZE_RATIO <= ratio <= _MAX_SIZE_RATIO), (
-                f"Mutation {bad_size} for {recipe_name} was expected to fail ratchet"
-            )
 
-    def test_excluded_bases_are_pinned(self) -> None:
-        """Ensure the exclusion list count and reasons are pinned to prevent silent additions."""
-        assert len(EXCLUDED_SIZE_BASES) == 32
-        for base, reason in EXCLUDED_SIZE_BASES.items():
-            assert reason, f"Base {base} has empty exclusion reason"
+def test_every_exclusion_is_live_and_has_no_count():
+    arch = _load_base_architectures()
+    used = {(yaml.safe_load(m.yaml_str) or {}).get("base") for m in RECIPES.values()}
+    assert sorted(set(EXCLUDED_SIZE_BASES) - used) == []
+    assert sorted(b for b in EXCLUDED_SIZE_BASES if "parameters" in arch.get(b, {})) == []
 
-    def test_parse_size_valid_and_invalid(self) -> None:
-        """Coverage for size parsing helper across supported units and invalid values."""
-        assert parse_size("357B") == 357e9
-        assert parse_size("754B") == 754e9
-        assert parse_size("1.5B") == 1.5e9
-        assert parse_size("300M") == 300e6
-        assert parse_size("1T") == 1e12
-        assert parse_size("N/A") is None
-        assert parse_size("") is None
-        assert parse_size("invalid") is None
-        assert parse_size("12KB") is None
+
+def test_every_known_na_entry_is_live():
+    stale = [n for n in KNOWN_NA_SIZE_RECIPES if n not in RECIPES or RECIPES[n].size != "N/A"]
+    assert sorted(stale) == []
+
+
+def test_the_band_is_pinned():
+    assert (_MIN_SIZE_RATIO, _MAX_SIZE_RATIO) == (0.70, 1.15)
+
+
+def test_parse_size_valid_and_invalid():
+    """Coverage for size parsing helper across supported units and invalid values."""
+    assert parse_size("357B") == 357e9
+    assert parse_size("754B") == 754e9
+    assert parse_size("1.5B") == 1.5e9
+    assert parse_size("300M") == 300e6
+    assert parse_size("1T") == 1e12
+    assert parse_size("N/A") is None
+    assert parse_size("") is None
+    assert parse_size("invalid") is None
+    assert parse_size("12KB") is None

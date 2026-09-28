@@ -1,6 +1,7 @@
 {
  "BioMistral/BioMistral-7B": {
   "model_type": "mistral",
+  "parameters_unavailable": "no safetensors metadata on the Hub",
   "routed_experts": 0
  },
  "HKUSTAudio/Llasa-1B": {
@@ -79,6 +80,7 @@
   "routed_experts": 0
  },
  "Qwen/Qwen-Image": {
+  "parameters": 20430401088,
   "unresolvable": "the repo has no config.json"
  },
  "Qwen/Qwen2-Audio-7B-Instruct": {
@@ -242,13 +244,16 @@
   "routed_experts": 0
  },
  "SparkAudio/Spark-TTS-0.5B": {
+  "parameters_unavailable": "no safetensors metadata on the Hub",
   "unresolvable": "the repo has no config.json"
  },
  "baichuan-inc/Baichuan2-13B-Chat": {
   "model_type": "baichuan",
+  "parameters_unavailable": "no safetensors metadata on the Hub",
   "routed_experts": 0
  },
  "canopylabs/orpheus-3b-0.1-ft": {
+  "parameters": 3782986752,
   "unresolvable": "gated; set HF_TOKEN to classify"
  },
  "codellama/CodeLlama-13b-Instruct-hf": {
@@ -317,6 +322,7 @@
   "routed_experts": 384
  },
  "epfl-llm/meditron-7b": {
+  "parameters": 6738554880,
   "unresolvable": "gated; set HF_TOKEN to classify"
  },
  "facebook/seamless-m4t-v2-large": {
@@ -325,18 +331,23 @@
   "routed_experts": 0
  },
  "google/embeddinggemma-300m": {
+  "parameters": 302863104,
   "unresolvable": "gated; set HF_TOKEN to classify"
  },
  "google/gemma-2-2b-it": {
+  "parameters": 2614341888,
   "unresolvable": "gated; set HF_TOKEN to classify"
  },
  "google/gemma-3-12b-it": {
+  "parameters": 12187325040,
   "unresolvable": "gated; set HF_TOKEN to classify"
  },
  "google/gemma-3-27b-it": {
+  "parameters": 27432406640,
   "unresolvable": "gated; set HF_TOKEN to classify"
  },
  "google/medgemma-4b-it": {
+  "parameters": 4300079472,
   "unresolvable": "gated; set HF_TOKEN to classify"
  },
  "ibm-granite/granite-4.0-h-tiny-base": {
@@ -355,30 +366,39 @@
   "routed_experts": 0
  },
  "meta-llama/Llama-2-13b-hf": {
+  "parameters": 13015866880,
   "unresolvable": "gated; set HF_TOKEN to classify"
  },
  "meta-llama/Llama-3.1-70B-Instruct": {
+  "parameters": 70553706496,
   "unresolvable": "gated; set HF_TOKEN to classify"
  },
  "meta-llama/Llama-3.1-8B": {
+  "parameters": 8030261248,
   "unresolvable": "gated; set HF_TOKEN to classify"
  },
  "meta-llama/Llama-3.1-8B-Instruct": {
+  "parameters": 8030261248,
   "unresolvable": "gated; set HF_TOKEN to classify"
  },
  "meta-llama/Llama-3.2-11B-Vision-Instruct": {
+  "parameters": 10670220835,
   "unresolvable": "gated; set HF_TOKEN to classify"
  },
  "meta-llama/Llama-3.2-1B-Instruct": {
+  "parameters": 1235814400,
   "unresolvable": "gated; set HF_TOKEN to classify"
  },
  "meta-llama/Llama-3.2-3B-Instruct": {
+  "parameters": 3212749824,
   "unresolvable": "gated; set HF_TOKEN to classify"
  },
  "meta-llama/Llama-3.2-90B-Vision-Instruct": {
+  "parameters": 88593355323,
   "unresolvable": "gated; set HF_TOKEN to classify"
  },
  "meta-llama/Llama-4-Scout-17B-16E-Instruct": {
+  "parameters": 108641793536,
   "unresolvable": "gated; set HF_TOKEN to classify"
  },
  "microsoft/Phi-3.5-mini-instruct": {
@@ -417,6 +437,7 @@
   "routed_experts": 0
  },
  "mistralai/Mistral-Large-3-675B-Instruct-2512": {
+  "parameters_unavailable": "no safetensors metadata on the Hub",
   "unresolvable": "the repo has no config.json"
  },
  "mistralai/Mistral-Medium-3.5-128B": {
@@ -430,6 +451,7 @@
   "routed_experts": 0
  },
  "mistralai/Pixtral-12B-2409": {
+  "parameters_unavailable": "no safetensors metadata on the Hub",
   "unresolvable": "the repo has no config.json"
  },
  "mistralai/Voxtral-Mini-3B-2507": {
@@ -473,6 +495,7 @@
   "routed_experts": 384
  },
  "nvidia/Nemotron-4-340B-Instruct": {
+  "parameters_unavailable": "no safetensors metadata on the Hub",
   "unresolvable": "the repo has no config.json"
  },
  "openai/gpt-oss-120b": {
@@ -501,6 +524,7 @@
   "routed_experts": 0
  },
  "openbmb/MiniCPM-V-2_6": {
+  "parameters": 8099175152,
   "unresolvable": "gated; set HF_TOKEN to classify"
  },
  "sentence-transformers/all-mpnet-base-v2": {

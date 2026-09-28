@@ -70,17 +70,21 @@ def classify(base: str) -> dict:
     except EntryNotFoundError:
         return {"unresolvable": "the repo has no config.json"}
     config = json.loads(Path(path).read_text(encoding="utf-8"))
-    entry = {"model_type": config.get("model_type"), "routed_experts": routed_experts(config)}
-    try:
-        from huggingface_hub import HfApi
+    return {"model_type": config.get("model_type"), "routed_experts": routed_experts(config)}
 
+
+def parameter_count(base: str) -> dict:
+    """The Hub's safetensors total, read with no token; the reason when there is none."""
+    from huggingface_hub import HfApi
+
+    try:
         info = HfApi(token=False).model_info(base)
-        st = getattr(info, "safetensors", None)
-        if st and getattr(st, "total", None):
-            entry["parameters"] = st.total
-    except Exception:
-        pass
-    return entry
+    except Exception as exc:  # recorded in the fixture, not swallowed
+        return {"parameters_unavailable": f"{type(exc).__name__}: {exc}".splitlines()[0][:160]}
+    total = getattr(getattr(info, "safetensors", None), "total", None)
+    if not total:
+        return {"parameters_unavailable": "no safetensors metadata on the Hub"}
+    return {"parameters": total}
 
 
 def main() -> int:
@@ -92,12 +96,17 @@ def main() -> int:
     bases = sorted({yaml.safe_load(r.yaml_str).get("base") for r in list_recipes()})
     record = {}
     for base in bases:
-        record[base] = classify(base)
+        record[base] = {**classify(base), **parameter_count(base)}
         print(f"{base:55} {record[base]}", file=sys.stderr)
     _FIXTURE.write_text(json.dumps(record, indent=1, sort_keys=True) + "\n", encoding="utf-8")
     moe = sum(1 for v in record.values() if v.get("routed_experts", 0) > 1)
     unresolvable = sum(1 for v in record.values() if "unresolvable" in v)
-    print(f"{len(record)} bases, {moe} MoE, {unresolvable} unresolvable", file=sys.stderr)
+    with_params = sum(1 for v in record.values() if "parameters" in v)
+    summary = (
+        f"{len(record)} bases, {moe} MoE, {unresolvable} unresolvable, "
+        f"{with_params} with parameters"
+    )
+    print(summary, file=sys.stderr)
     return 0
 
 

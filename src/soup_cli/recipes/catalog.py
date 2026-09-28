@@ -919,7 +919,7 @@ output: ./output
         task="sft",
         size="109B",
         tags=("llama", "llama4", "sft", "chat", "instruction"),
-        description="Llama 4 Scout 17B SFT with LoRA (4bit)",
+        description="Llama 4 Scout 17B active SFT with LoRA (4bit)",
         yaml_str="""\
 base: meta-llama/Llama-4-Scout-17B-16E-Instruct
 task: sft
@@ -947,7 +947,7 @@ output: ./output
         task="dpo",
         size="109B",
         tags=("llama", "llama4", "dpo", "alignment", "preference"),
-        description="Llama 4 Scout 17B DPO alignment",
+        description="Llama 4 Scout 17B active DPO alignment",
         yaml_str="""\
 base: meta-llama/Llama-4-Scout-17B-16E-Instruct
 task: dpo
@@ -976,7 +976,7 @@ output: ./output
         task="grpo",
         size="109B",
         tags=("llama", "llama4", "grpo", "reasoning"),
-        description="Llama 4 Scout 17B GRPO reasoning training",
+        description="Llama 4 Scout 17B active GRPO reasoning training",
         yaml_str="""\
 base: meta-llama/Llama-4-Scout-17B-16E-Instruct
 task: grpo
@@ -1304,7 +1304,7 @@ output: ./output
         task="sft",
         size="109B",
         tags=("llama", "llama4", "sft", "tool-calling", "agentic", "function-calling"),
-        description="Llama 4 Scout 17B tool-calling / function-calling SFT",
+        description="Llama 4 Scout 17B active tool-calling / function-calling SFT",
         yaml_str="""\
 base: meta-llama/Llama-4-Scout-17B-16E-Instruct
 task: sft

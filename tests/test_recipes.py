@@ -58,7 +58,7 @@ class TestRecipeCatalog:
         assert len(results) > 0
 
     def test_search_by_size(self):
-        """search_recipes filters by model size."""
+        """search_recipes filters by matching size token against recipe name or model id (#1161)."""
         from soup_cli.recipes.catalog import RECIPES, search_recipes
 
         results = search_recipes(size="7b")
@@ -66,11 +66,7 @@ class TestRecipeCatalog:
         names_by_recipe = {id(r): n for n, r in RECIPES.items()}
         for recipe in results:
             name = names_by_recipe.get(id(recipe), "")
-            assert (
-                "7b" in recipe.size.lower()
-                or "7b" in recipe.model.lower()
-                or "7b" in name.lower()
-            )
+            assert "7b" in name.lower() or "7b" in recipe.model.lower()
 
     def test_search_no_results(self):
         """search_recipes returns empty list for no matches."""
