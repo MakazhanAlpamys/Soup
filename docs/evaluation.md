@@ -804,10 +804,23 @@ canary search. Ordinary patterns, including single-character alternation,
 remain valid.
 
 ```jsonl
-{"prompt": "What is 2+2?", "expected": "4", "category": "math", "scoring": "exact"}
+{"prompt": "What is 2+2?", "expected": "4", "category": "math", "scoring": "answer"}
 {"prompt": "Explain gravity", "expected": "force.*attraction", "scoring": "regex"}
 {"prompt": "Capital of France?", "expected": "Paris", "scoring": "contains"}
 ```
+
+How the string scorers read an output:
+
+| `scoring` | Scores | `expected: "4"` vs `The answer is 4.` | vs `14` |
+|---|---|---|---|
+| `answer` | The final answer each side states, read with the parser GRPO's `accuracy` reward uses (`#### 4`, `\boxed{4}`, `The answer is 4.`); numbers compare by value | match | no match |
+| `contains` | `expected` as a whole alphanumeric-bounded token, case-insensitive | match | no match |
+| `exact` | The whole stripped output, case-insensitive | no match | no match |
+
+`answer` refuses, at load time, an `expected` that states no single answer (a multi-line
+worked solution with no `####`, an empty `\boxed{}`, a hedge between values), naming the line.
+`contains` cannot read negation: `It is not 4, so 5.` still contains `4`, so prefer `answer`
+for math and short-answer tasks. The eval gate's `scorer:` override accepts `answer` too.
 
 ### Auto-Eval Config (soup.yaml)
 

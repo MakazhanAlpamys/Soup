@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
+from soup_cli.utils.final_answer import answers_match, parse_completion, parse_reference
 from soup_cli.utils.safe_regex import check_config_regex
 
 MAX_EVAL_TASKS = 10_000
@@ -16,7 +17,7 @@ MAX_REGEX_INPUT_LEN = 50_000
 TASK_NAME = "custom"
 
 VALID_SCORING = {
-    "exact", "contains", "regex", "semantic",
+    "exact", "contains", "answer", "regex", "semantic",
     "tool_call_match", "tool_call_name_match", "tool_call_args_subset",
 }
 
@@ -124,10 +125,13 @@ def load_eval_tasks(path: "Path | str") -> list[EvalTask]:
                     f"Line {line_num}: invalid scoring '{scoring}', "
                     f"must be one of: {', '.join(sorted(VALID_SCORING))}"
                 )
+            expected = str(row.get("expected", ""))
+            if scoring == "answer":
+                require_single_answer(expected, f"Line {line_num}")
 
             tasks.append(EvalTask(
                 prompt=str(row["prompt"]),
-                expected=str(row.get("expected", "")),
+                expected=expected,
                 category=str(row.get("category", "default")),
                 scoring=scoring,
                 metadata={
@@ -142,14 +146,38 @@ def load_eval_tasks(path: "Path | str") -> list[EvalTask]:
     return tasks
 
 
+def require_single_answer(expected: str, where: str) -> None:
+    """Refuse an ``expected`` that states no single answer for ``scoring: "answer"``."""
+    if parse_reference(expected) is None:
+        raise ValueError(
+            f"{where}: 'expected' {expected!r} states no single answer for scoring 'answer'; "
+            "give a bare answer, or end it with '#### <answer>' or \\boxed{<answer>}"
+        )
+
+
 def score_exact(output: str, expected: str) -> bool:
-    """Exact string match (case-insensitive, stripped)."""
+    """Whole-output match (case-insensitive, stripped); ``The answer is 4.`` is not ``4``."""
     return output.strip().lower() == expected.strip().lower()
 
 
 def score_contains(output: str, expected: str) -> bool:
-    """Check if expected string is contained in output (case-insensitive)."""
-    return expected.strip().lower() in output.strip().lower()
+    """True when ``expected`` appears in ``output`` as a whole alnum-bounded token.
+
+    Case-insensitive. ``14`` does not contain ``4``, and ``#### 420`` does not contain
+    ``42``. A token match cannot read negation (``not 42, so 41`` still contains ``42``);
+    use ``scoring: "answer"`` to compare the answer a model states.
+    """
+    needle = expected.strip()
+    if not needle:
+        return True
+    pattern = r"(?<![A-Za-z0-9])" + re.escape(needle) + r"(?![A-Za-z0-9])"
+    return re.search(pattern, output[:MAX_REGEX_INPUT_LEN], re.IGNORECASE) is not None
+
+
+def score_answer(output: str, expected: str) -> bool:
+    """Compare the final answers both sides state, with GRPO's ``accuracy`` parser."""
+    reference = parse_reference(expected)
+    return reference is not None and answers_match(parse_completion(output), reference)
 
 
 def score_regex(output: str, expected: str) -> bool:
@@ -289,6 +317,7 @@ def tool_call_args_subset(output: str, expected: str) -> float:
 SCORING_FUNCTIONS = {
     "exact": score_exact,
     "contains": score_contains,
+    "answer": score_answer,
     "regex": score_regex,
     "tool_call_match": tool_call_match,
     "tool_call_name_match": tool_call_name_match,
