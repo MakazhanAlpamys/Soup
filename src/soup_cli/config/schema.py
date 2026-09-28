@@ -7659,6 +7659,21 @@ class SoupConfig(BaseModel):
             )
         return self
 
+    @model_validator(mode="after")
+    def _validate_unsloth_has_a_setup(self) -> "SoupConfig":
+        """#1357 — ``backend: unsloth`` on a task outside
+        :data:`UNSLOTH_SETUP_TASKS` was accepted and never applied: that trainer
+        picks its load path by task alone and trains on plain transformers.
+        Last in the class, so ``distill``, ``asr`` and ``online_dpo`` keep their
+        own, earlier refusals."""
+        if self.backend != "unsloth" or self.task in UNSLOTH_SETUP_TASKS:
+            return self
+        raise ValueError(
+            f"backend='unsloth' is not applied by task={self.task!r}: that trainer has "
+            "no unsloth setup and would train on plain transformers. Use backend: "
+            "transformers."
+        )
+
 
 # --- Built-in templates ---
 
