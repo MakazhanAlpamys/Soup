@@ -1242,9 +1242,12 @@ class TrainingConfig(BaseModel):
     optimizer: str = Field(
         default="adamw_torch",
         description=(
-            "Optimizer name. v0.41.0 expands the allowlist to cover BAdam, "
-            "APOLLO, Adam-mini, lomo/adalomo, grokadamw, schedule_free, "
-            "muon/dion/came_pytorch, and TorchAO ao_adamw_{fp8,4bit,8bit}. "
+            "Optimizer name (v0.41.0 expanded the allowlist: HF-native, "
+            "bnb-8bit, lomo/adalomo, apollo_adamw, grokadamw, "
+            "schedule_free). Note: ten names transformers 5.x rejects in "
+            "TrainingArguments (e.g. badam, adam_mini, muon, dion, "
+            "came_pytorch, ao_adamw_{fp8,4bit,8bit}) are refused at config "
+            "load (#1269); adamw_hf and muon still work on backend: mlx. "
             "See soup_cli.utils.optimizer_zoo.SUPPORTED_OPTIMIZERS for the "
             "full list."
         ),
@@ -4865,6 +4868,32 @@ class SoupConfig(BaseModel):
         not be one the detector refuses (#879).
         """
         return remap_root_level_misplaced_keys(values)
+
+    @model_validator(mode="after")
+    def _validate_mlx_only_optimizers(self) -> "SoupConfig":
+        """#1283 — `adamw_hf` and `muon` only build on ``backend: mlx``.
+
+        transformers 5.x rejects both names in TrainingArguments
+        (OptimizerNames), so a transformers/unsloth run would pass config
+        load and crash inside the trainer after the model had loaded
+        (#1269). The MLX backend never builds TrainingArguments — it has
+        its own optimizer map (trainer/mlx_optim.py) with entries for both
+        — so MLX keeps them and every other backend refuses them here.
+        """
+        from soup_cli.utils.optimizer_zoo import MLX_ONLY_OPTIMIZERS
+
+        if self.backend == "mlx":
+            return self
+        opt = getattr(self.training, "optimizer", None)
+        if opt is not None and opt in MLX_ONLY_OPTIMIZERS:
+            raise ValueError(
+                f"training.optimizer={opt!r} only works on backend: mlx "
+                "(the MLX backend builds it itself); transformers 5.x "
+                "rejects it in TrainingArguments on every other backend "
+                "(#1269). Switch backend to 'mlx' or use one of "
+                "adamw_torch, adamw_torch_fused, adamw_bnb_8bit, adafactor."
+            )
+        return self
 
     @model_validator(mode="after")
     def _validate_v028_speed_memory_supported_tasks(self) -> "SoupConfig":
