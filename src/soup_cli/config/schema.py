@@ -7661,8 +7661,8 @@ class SoupConfig(BaseModel):
 # DEPRECATED (v0.39.0 Part E) — these inline templates are kept for back-compat.
 # The canonical source is `soup_cli/templates/*.yaml` with `manifest.json`.
 # Both sources are asserted equal in tests/test_templates_yaml.py — when editing
-# a template, update both. Planned removal: v0.41.0+ once external consumers
-# have migrated to the YAML registry.
+# a template, update both. It is kept until external consumers have migrated
+# to the YAML registry.
 TEMPLATES: dict[str, str] = {
     "chat": """# Soup template: Chat Assistant
 # Fine-tune a model for conversational chat

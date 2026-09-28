@@ -17,8 +17,8 @@ unconditionally at the next step's start as a fallback for step 0 and for any
 backward that never reaches layer 0; on the hot path that call now finds the
 slot already holding what it asked for and is a same-owner no-op.
 
-This only matters for an UNTIED checkpoint: a tied model streams one key for
-both `embed_tokens` and `lm_head`, so `LargeLayerBufferPool.owner` never
+This only matters for an UNTIED checkpoint: a tied model streams no large key
+for `embed_tokens` / `lm_head`, so `LargeLayerBufferPool.owner` never
 changes across a whole run and the ping-pong this fix targets does not exist.
 `_build_streamed_wrapper` in `test_v07204.py` has taken `tie` since #1061; this
 file predates that and keeps its own small helper below rather than switching.
