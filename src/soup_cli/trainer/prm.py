@@ -335,6 +335,7 @@ class PRMTrainerWrapper:
             report_to=self.report_to,
             remove_unused_columns=False,
             deepspeed=self.deepspeed_config,
+            **(self.fsdp_config or {}),  # #1204: --fsdp was stored and dropped
             **training_seed_kwargs(tcfg),
             **training_eval_kwargs(cfg, eval_rows, batch_size=bs),
         )
