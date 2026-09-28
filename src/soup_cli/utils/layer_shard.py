@@ -31,7 +31,18 @@ import re
 import tempfile
 from collections import OrderedDict
 from dataclasses import asdict, dataclass, field
-from typing import Any, Callable, Dict, Iterable, Iterator, List, Mapping, Optional, Tuple
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    Iterable,
+    Iterator,
+    List,
+    Mapping,
+    Optional,
+    Sequence,
+    Tuple,
+)
 
 from soup_cli import __version__
 
@@ -242,6 +253,12 @@ class ShardIndex:
     #: Cache-policy marker. It distinguishes a Qwen4 cache that intentionally
     #: found no PLE table from an older cache that silently put one in a layer.
     external_mode: str = ""
+    #: R4: realpaths of the EXTRA cache roots this cache's decoder layers are spread over, in
+    #: order; root 0 is the directory holding this index. Empty == one root.
+    stripe_roots: Tuple[str, ...] = ()
+    #: Per decoder layer, the root holding its file (0 = this directory, k = stripe_roots[k-1]).
+    #: Empty == every layer here.
+    layer_roots: Tuple[int, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -490,6 +507,64 @@ def large_shard_path(out_dir: str, key: str) -> str:
     return os.path.join(out_dir, f"large_{role}.safetensors")
 
 
+#: Written into every stripe root's per-model folder; the cache check compares it to the index.
+STRIPE_MARKER_NAME = "stripe.json"
+
+
+def stripe_dirs(shard_dir: str, stripe_roots: Sequence[str]) -> List[str]:
+    """Root 0 is ``shard_dir``; stripe root k holds a folder named like ``shard_dir``."""
+    slug = os.path.basename(os.path.normpath(shard_dir))
+    return [shard_dir] + [os.path.join(root, slug) for root in stripe_roots]
+
+
+def layer_paths(shard_dir: str, index: "ShardIndex") -> List[str]:
+    """Where each decoder layer's file lives. Every caller that used to build a layer path
+    from ``shard_dir`` alone goes through this, so a striped cache is never half-understood."""
+    placement = tuple(getattr(index, "layer_roots", ()) or ())
+    if not placement:
+        return [layer_shard_path(shard_dir, idx) for idx in range(index.n_layers)]
+    dirs = stripe_dirs(shard_dir, tuple(index.stripe_roots))
+    return [layer_shard_path(dirs[root], idx) for idx, root in enumerate(placement)]
+
+
+def _same_roots(first: Sequence[str], second: Sequence[str]) -> bool:
+    """Equal as folders, not as strings: case and a trailing separator differ on Windows."""
+
+    def canon(roots: Sequence[str]) -> List[str]:
+        return [os.path.normcase(os.path.normpath(root)) for root in roots]
+
+    return canon(first) == canon(second)
+
+
+def _write_stripe_marker(directory: str, *, fingerprint: str, position: int, n_roots: int) -> None:
+    payload = {"source_fingerprint": fingerprint, "position": position, "n_roots": n_roots}
+    fd, tmp = tempfile.mkstemp(prefix=".soup.", suffix=".tmp", dir=directory)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle)
+        os.replace(tmp, os.path.join(directory, STRIPE_MARKER_NAME))
+    except BaseException:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+        raise
+
+
+def _stripe_marker_problem(
+    directory: str, *, fingerprint: str, position: int, n_roots: int
+) -> Optional[str]:
+    """Why ``directory``'s marker does not describe this cache, or ``None`` when it does."""
+    path = os.path.join(directory, STRIPE_MARKER_NAME)
+    try:
+        with open(path, encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except (OSError, ValueError):
+        return f"stripe marker {path} is missing or unreadable"
+    expected = {"source_fingerprint": fingerprint, "position": position, "n_roots": n_roots}
+    if payload != expected:
+        return f"stripe marker {path} belongs to another cache ({payload} != {expected})"
+    return None
+
+
 def read_shard_index(out_dir: str) -> ShardIndex:
     """Read ``index.json``. Raises on a missing or malformed index."""
     path = os.path.join(out_dir, _INDEX_NAME)
@@ -501,8 +576,17 @@ def read_shard_index(out_dir: str) -> ShardIndex:
     external = payload.get("external_tensors") or {}
     if not isinstance(external, dict):
         raise ValueError("external_tensors must be an object")
+    n_layers = int(payload["n_layers"])
+    stripe_roots = tuple(str(root) for root in (payload.get("stripe_roots") or ()))
+    layer_roots = tuple(int(root) for root in (payload.get("layer_roots") or ()))
+    if layer_roots and len(layer_roots) != n_layers:
+        raise ValueError(f"layer_roots names {len(layer_roots)} layers; the index has {n_layers}")
+    if stripe_roots and not layer_roots:
+        raise ValueError("stripe_roots are set but layer_roots is empty")
+    if any(not 0 <= root <= len(stripe_roots) for root in layer_roots):
+        raise ValueError("layer_roots names a root the index does not have")
     return ShardIndex(
-        n_layers=int(payload["n_layers"]),
+        n_layers=n_layers,
         layer_keys=tuple(payload["layer_keys"]),
         extra_keys=tuple(payload["extra_keys"]),
         dtype=str(payload["dtype"]),
@@ -527,6 +611,8 @@ def read_shard_index(out_dir: str) -> ShardIndex:
             for key, value in external.items()
         },
         external_mode=str(payload.get("external_mode", "")),
+        stripe_roots=stripe_roots,
+        layer_roots=layer_roots,
     )
 
 
@@ -786,6 +872,8 @@ def _atomic_write_index(index: ShardIndex, out_dir: str) -> None:
     payload["layer_keys"] = list(index.layer_keys)
     payload["extra_keys"] = list(index.extra_keys)
     payload["large_keys"] = list(index.large_keys)
+    payload["stripe_roots"] = list(index.stripe_roots)
+    payload["layer_roots"] = list(index.layer_roots)
     payload["quant_specs"] = {
         key: spec.to_json() for key, spec in index.quant_specs.items()
     }
@@ -847,6 +935,7 @@ def inspect_shard_cache(
     double_quant: bool,
     quant_device: str,
     external_mode: str = "",
+    stripe_roots: Sequence[str] = (),
 ) -> Tuple[Optional[ShardIndex], str]:
     """Return a reusable index or the precise reason it must be rewritten.
 
@@ -886,16 +975,32 @@ def inspect_shard_cache(
             f"shard format changed "
             f"({index.format_version!r} -> {_SHARD_FORMAT_VERSION!r})"
         )
+    if not _same_roots(index.stripe_roots, stripe_roots):
+        return None, (
+            f"stripe roots changed ({list(index.stripe_roots) or 'none'} -> "
+            f"{list(stripe_roots) or 'none'})"
+        )
+    dirs = stripe_dirs(out_dir, index.stripe_roots)
+    for position, directory in enumerate(dirs[1:], start=1):
+        problem = _stripe_marker_problem(
+            directory,
+            fingerprint=index.source_fingerprint,
+            position=position,
+            n_roots=len(dirs),
+        )
+        if problem is not None:
+            return None, problem
     if not os.path.exists(extras_shard_path(out_dir)):
         return None, f"cached shard {_EXTRAS_NAME!r} is missing"
     for key in index.large_keys:
         path = large_shard_path(out_dir, key)
         if not os.path.exists(path):
             return None, f"cached shard {os.path.basename(path)!r} is missing"
-    for idx in range(index.n_layers):
-        if not os.path.exists(layer_shard_path(out_dir, idx)):
-            name = os.path.basename(layer_shard_path(out_dir, idx))
-            return None, f"cached shard {name!r} is missing"
+    for path in layer_paths(out_dir, index):
+        if not os.path.exists(path):
+            if os.path.dirname(path) == out_dir:
+                return None, f"cached shard {os.path.basename(path)!r} is missing"
+            return None, f"cached shard {path} is missing"
     return index, "cache is reusable"
 
 
