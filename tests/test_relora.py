@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
@@ -754,7 +755,7 @@ class TestReLoRARealPeft:
             import torch.nn as nn
             from peft import LoraConfig, get_peft_model
             from transformers import LlamaConfig, LlamaForCausalLM
-        except (ImportError, OSError) as exc:
+        except ImportError as exc:
             pytest.skip(f"torch / transformers / peft not available: {exc}")
         from soup_cli.utils.relora import (
             _iter_lora_modules,
@@ -904,11 +905,14 @@ class TestReLoRAWrapperSaves:
             import torch
             from peft import LoraConfig, get_peft_model
             from transformers import LlamaConfig, LlamaModel, TrainingArguments
-        except (ImportError, OSError) as exc:
+        except ImportError as exc:
             pytest.skip(f"torch / transformers / peft not available: {exc}")
 
         from soup_cli.trainer.embedding import _EmbeddingTrainer
-        from soup_cli.utils.peft_wiring import save_model_with_relora
+        from soup_cli.utils.peft_wiring import (
+            attach_relora_callback,
+            save_model_with_relora,
+        )
 
         config = LlamaConfig(
             vocab_size=32,
@@ -951,6 +955,9 @@ class TestReLoRAWrapperSaves:
             temperature=0.05,
             max_length=8,
         )
+        assert attach_relora_callback(
+            wrapper, TrainingConfig(relora_steps=1, quantization="none")
+        )
         save_model_with_relora(wrapper, str(tmp_path / "output"), relora_steps=1)
 
         reloaded = LlamaModel.from_pretrained(tmp_path / "output").eval()
@@ -964,10 +971,10 @@ class TestReLoRAWrapperSaves:
             from peft import LoraConfig, get_peft_model
             from transformers import LlamaConfig, LlamaForCausalLM
             from trl.experimental.ppo.ppo_trainer import PolicyAndValueWrapper
-        except (ImportError, OSError) as exc:
+        except ImportError as exc:
             pytest.skip(f"torch / transformers / peft / trl not available: {exc}")
 
-        from soup_cli.utils.peft_wiring import save_model_with_relora
+        from soup_cli.utils.peft_wiring import attach_relora_callback, save_model_with_relora
 
         config = LlamaConfig(
             vocab_size=32,
@@ -1000,11 +1007,20 @@ class TestReLoRAWrapperSaves:
         class _Trainer:
             def __init__(self, model):
                 self.model = model
+                self.args = SimpleNamespace(world_size=1)
+                self.callbacks = []
+
+            def add_callback(self, callback):
+                self.callbacks.append(callback)
 
             def save_model(self, output_dir):
                 self.model.policy.save_pretrained(output_dir)
 
-        save_model_with_relora(_Trainer(holder), str(tmp_path / "output"), relora_steps=1)
+        trainer = _Trainer(holder)
+        assert attach_relora_callback(
+            trainer, TrainingConfig(relora_steps=1, quantization="none")
+        )
+        save_model_with_relora(trainer, str(tmp_path / "output"), relora_steps=1)
 
         reloaded = LlamaForCausalLM.from_pretrained(tmp_path / "output").eval()
         with torch.no_grad():
