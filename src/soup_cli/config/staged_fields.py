@@ -41,9 +41,10 @@ class StagedField:
 #: DIFFERS from its schema default.
 #:
 #: Note: Training intelligence tunables already reported by ``soup train``
-#: (e.g. ``forgetting_*``, ``checkpoint_*``, ``early_stop_patience``,
-#: ``convergence_*``) are excluded here to avoid conflicting diagnostics
-#: and adhere to their respective issue ownership (#808).
+#: (e.g. ``forgetting_*``, ``checkpoint_*``, ``convergence_*``) are excluded here
+#: to avoid conflicting diagnostics and adhere to their respective issue ownership
+#: (#808). ``early_stop_patience`` moved here from that report (#761), so it is
+#: reported once, with the refusal date.
 STAGED_FIELDS: dict[tuple[str, str], Any] = {
     ("training", "long_context_grpo"): False,
     ("training", "vision_grpo"): False,
@@ -51,6 +52,10 @@ STAGED_FIELDS: dict[tuple[str, str], Any] = {
     ("training", "grace_codebook"): False,
     ("training", "grace_codebook_size"): None,
     ("training", "grace_codebook_dim"): None,
+    # #761: documented, validated, and read by nothing.
+    ("training", "lr_groups"): None,
+    ("training", "early_stop_patience"): 2,
+    ("training", "citation_recall_threshold"): None,
     ("data", "video_dir"): None,
     ("data", "video_fps"): None,
     ("data", "video_maxlen"): None,

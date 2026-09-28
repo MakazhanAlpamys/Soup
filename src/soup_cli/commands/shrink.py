@@ -318,11 +318,12 @@ def _shrink_impl(
     # Fail fast on arch + drop-count from the CONFIG before loading weights.
     from transformers import AutoConfig
 
-    from soup_cli.utils.shrink import arch_family_of_config
+    from soup_cli.utils.shrink import arch_family_of_config, check_layer_index_config
 
     pre_config = AutoConfig.from_pretrained(model, trust_remote_code=trc)
     arch_family_of_config(pre_config)
     n_layers = int(pre_config.num_hidden_layers)
+    check_layer_index_config(pre_config, n_layers)
     count = resolve_drop_count(n_layers, drop_ratio=drop_ratio, drop_layers=drop_layers)
 
     console.print(f"[dim]Loading {escape(model)} ...[/]")

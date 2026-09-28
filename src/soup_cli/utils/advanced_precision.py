@@ -20,9 +20,9 @@ v0.71.21 #141 lifts the two ``apply_*`` stubs to live, BETA hw-gated code:
   SM 12.0 consumer RTX 50-series).
 
 Both raise friendly ``RuntimeError`` on missing hardware / torchao instead
-of silently no-opping; the trainer-side wiring in
-``utils/v028_features.apply_v028_speed_memory`` degrades those to yellow
-advisories so a training kick-off never crashes on instrumentation.
+of silently no-opping. ``utils/v028_features.apply_v028_speed_memory`` lets
+every ``apply_fp8_attention`` error stop the run (#835, #1152); only
+``apply_nvfp4``'s are still degraded to yellow advisories.
 """
 
 from __future__ import annotations
