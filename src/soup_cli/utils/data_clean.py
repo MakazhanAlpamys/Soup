@@ -169,6 +169,92 @@ def is_echo_turn(prompt: str, response: str) -> bool:
     return clean_p == clean_r
 
 
+def _clean_arguments(
+    args: str, applied_rules: List[str], repair_json: bool, drop_invalid_json: bool
+) -> Optional[str]:
+    """Sanitize (and optionally repair) one call's JSON-string arguments.
+
+    Returns None when ``drop_invalid_json`` is set and the result does not parse.
+    """
+    san_args, was_san = sanitize_text(args)
+    if was_san:
+        applied_rules.append("Invisible & Control Chars")
+    if repair_json:
+        repaired_args, was_repaired = repair_json_string(san_args)
+        if was_repaired:
+            applied_rules.append("Malformed JSON in Tools")
+            return repaired_args
+    if drop_invalid_json:
+        try:
+            json.loads(san_args)
+        except (json.JSONDecodeError, ValueError):
+            return None
+    return san_args
+
+
+def _clean_tool_calls(
+    tool_calls: Any, applied_rules: List[str], repair_json: bool, drop_invalid_json: bool
+) -> Any:
+    """Clean the ``arguments`` of every call in a ``tool_calls`` list.
+
+    A call carries its arguments either in the documented ``function`` shape
+    (``{"function": {"name": ..., "arguments": ...}}``, what the tool-calling
+    loader reads) or flat (``{"name": ..., "arguments": ...}``). Arguments given
+    as a dict are already parsed and left alone, and a ``function`` call with no
+    ``arguments`` is left alone too, since the loader reads it as ``{}``.
+
+    Returns None when ``drop_invalid_json`` is set and a call does not parse.
+    Anything that is not a list, or a call that is not a dict, is passed through.
+    """
+    if not isinstance(tool_calls, list):
+        return tool_calls
+    cleaned_calls: List[Any] = []
+    for call in tool_calls:
+        if not isinstance(call, dict):
+            cleaned_calls.append(call)
+            continue
+        c = dict(call)
+        func = c.get("function")
+        if isinstance(func, dict):
+            args = func.get("arguments")
+            if isinstance(args, str):
+                cleaned_args = _clean_arguments(
+                    args, applied_rules, repair_json, drop_invalid_json
+                )
+                if cleaned_args is None:
+                    return None
+                c["function"] = {**func, "arguments": cleaned_args}
+        else:
+            args = c.get("arguments", "")
+            if isinstance(args, str):
+                cleaned_args = _clean_arguments(
+                    args, applied_rules, repair_json, drop_invalid_json
+                )
+                if cleaned_args is None:
+                    return None
+                c["arguments"] = cleaned_args
+        cleaned_calls.append(c)
+    return cleaned_calls
+
+
+def _clean_turn_tool_calls(
+    msg: Dict[str, Any], applied_rules: List[str], repair_json: bool, drop_invalid_json: bool
+) -> bool:
+    """Clean the calls an assistant turn carries, in place on ``msg`` (a copy).
+
+    Returns False when ``drop_invalid_json`` is set and a call does not parse.
+    """
+    if msg.get("role") != "assistant" or msg.get("tool_calls") is None:
+        return True
+    cleaned_calls = _clean_tool_calls(
+        msg["tool_calls"], applied_rules, repair_json, drop_invalid_json
+    )
+    if cleaned_calls is None:
+        return False
+    msg["tool_calls"] = cleaned_calls
+    return True
+
+
 def clean_row(
     row: Dict[str, Any],
     fmt: str,
@@ -190,39 +276,12 @@ def clean_row(
 
     if fmt == "tool-calling" or "tool_calls" in row:
         cleaned_row = dict(row)
-        tool_calls = row.get("tool_calls", [])
-        if isinstance(tool_calls, list):
-            cleaned_calls: List[Dict[str, Any]] = []
-            for call in tool_calls:
-                if not isinstance(call, dict):
-                    cleaned_calls.append(call)
-                    continue
-                c = dict(call)
-                args = c.get("arguments", "")
-                if isinstance(args, str):
-                    san_args, was_san = sanitize_text(args)
-                    if was_san:
-                        applied_rules.append("Invisible & Control Chars")
-                    if repair_json:
-                        repaired_args, was_repaired = repair_json_string(san_args)
-                        if was_repaired:
-                            applied_rules.append("Malformed JSON in Tools")
-                            c["arguments"] = repaired_args
-                        else:
-                            c["arguments"] = san_args
-                            if drop_invalid_json:
-                                try:
-                                    json.loads(san_args)
-                                except (json.JSONDecodeError, ValueError):
-                                    return None, ["Invalid JSON in Tool Calls"]
-                    else:
-                        c["arguments"] = san_args
-                        if drop_invalid_json:
-                            try:
-                                json.loads(san_args)
-                            except (json.JSONDecodeError, ValueError):
-                                return None, ["Invalid JSON in Tool Calls"]
-                cleaned_calls.append(c)
+        if "tool_calls" in row:
+            cleaned_calls = _clean_tool_calls(
+                row["tool_calls"], applied_rules, repair_json, drop_invalid_json
+            )
+            if cleaned_calls is None:
+                return None, ["Invalid JSON in Tool Calls"]
             cleaned_row["tool_calls"] = cleaned_calls
 
         if "messages" in row and isinstance(row["messages"], list):
@@ -238,6 +297,8 @@ def clean_row(
                     if was_san:
                         applied_rules.append("Invisible & Control Chars")
                     m["content"] = san_c
+                if not _clean_turn_tool_calls(m, applied_rules, repair_json, drop_invalid_json):
+                    return None, ["Invalid JSON in Tool Calls"]
                 cleaned_messages.append(m)
             cleaned_row["messages"] = cleaned_messages
 
@@ -288,6 +349,8 @@ def clean_row(
                     msg["content"] = sanitized_content
                 else:
                     msg["content"] = sanitized_content
+            if not _clean_turn_tool_calls(msg, applied_rules, repair_json, drop_invalid_json):
+                return None, ["Invalid JSON in Tool Calls"]
             cleaned_messages.append(msg)
 
         if not any(isinstance(m, dict) and m.get("role") == "assistant" for m in cleaned_messages):
