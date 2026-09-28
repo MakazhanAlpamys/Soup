@@ -144,22 +144,22 @@ class MsprtConfig:
         object.__setattr__(self, "metric", validate_metric_name(self.metric))
         object.__setattr__(self, "alpha", _require_unit_open(self.alpha, field="alpha"))
         object.__setattr__(self, "beta", _require_unit_open(self.beta, field="beta"))
-        # #1339 - each rate is in (0, 1) on its own, but the reject boundary
-        # log((1 - beta) / alpha) stays above the accept boundary
-        # log(beta / (1 - alpha)) only while alpha + beta < 1. At or past 1
-        # there is no continue band, and because reject is tested first every
-        # verdict in the gap rejects: alpha 0.6 / beta 0.5 rejects on two
-        # identical arms, and alpha 0.05 / beta 0.95 (a power typed as beta)
-        # rejects a true H0 in a quarter of single looks.
+        # #1339 - each rate is in (0, 1) on its own, but the accept boundary
+        # log(beta / (1 - alpha)) is below 0, a Bayes factor of 1, only while
+        # alpha + beta < 1. At or past 1 it accepts H0 on no evidence either
+        # way, and on evidence for a difference: with alpha 0.05 / beta 0.95
+        # (a power typed as beta) a true difference of effect_size ends in
+        # accept_h0 in 0.96 of runs at 0.3 standard deviations and still 0.36
+        # at 2 (1000-2000 runs each, a look after every pair). Under #1227's
+        # statistic the same pairs crossed the boundaries instead, and rejected.
         if self.alpha + self.beta >= 1.0:
             raise ValueError(
                 f"alpha + beta must be < 1.0, got alpha={self.alpha} + "
                 f"beta={self.beta} = {self.alpha + self.beta}. At or above 1.0 "
-                "the reject boundary log((1 - beta) / alpha) is no longer above "
-                "the accept boundary log(beta / (1 - alpha)), so there is no "
-                "continue band left and any verdict between them rejects. "
-                "beta is the Type-II error rate, not the power: a power of "
-                "0.95 is beta 0.05."
+                "the accept boundary log(beta / (1 - alpha)) is at or above 0, "
+                "so the test accepts H0 when the rows show no evidence either "
+                "way, or even evidence of a difference. beta is the Type-II "
+                "error rate, not the power: a power of 0.95 is beta 0.05."
             )
         object.__setattr__(
             self,
