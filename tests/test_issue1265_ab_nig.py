@@ -237,6 +237,45 @@ class TestBoundaries:
             monkeypatch.setattr(ab_test, "_nig_log_bayes_factor", lambda **_: llr)
             assert _step(_CONTROL, _TREATMENT).decision == decision, llr
 
+    @pytest.mark.parametrize(
+        ("alpha", "beta"), [(0.05, 0.2), (0.01, 0.1), (0.5, 0.49), (0.05, 0.9499)]
+    )
+    def test_an_allowed_pair_accepts_only_on_evidence_for_h0(self, alpha, beta):
+        """#1339's alpha + beta < 1 is what keeps the accept boundary below BF 1.
+
+        Under #1227's statistic the same bound kept the two boundaries from
+        crossing; here the reject boundary 1 / alpha is always above 1, and the
+        bound matters because the accept boundary must stay under it.
+        """
+        from soup_cli.utils.ab_test import MsprtConfig
+
+        config = MsprtConfig(metric="judge_score", alpha=alpha, beta=beta)
+        assert math.log(config.beta / (1.0 - config.alpha)) < 0.0
+
+    def test_a_near_constant_held_out_column_is_refused_not_accepted(self):
+        """#1339 in the NIG path: the scale comes from the held-out rows only.
+
+        Rows 0 and 1e-160 put ``effect_size / s0`` past the float range while the
+        tested rows vary normally. Without the guard, squaring that ratio raises a
+        bare OverflowError; and ``effect_size**2 / s0**2``, the form before the
+        guard, does not raise at all: the prior variance is inf, the Bayes factor
+        -inf, and the verdict a silent ``accept_h0``.
+        """
+        held_out = [0.0, 1e-160, 0.0, 1e-160, 0.0]
+        with pytest.raises(ValueError) as exc:
+            _step(held_out + _CONTROL[5:], held_out + _TREATMENT[5:])
+        message = str(exc.value)
+        assert "--effect-size" in message
+        assert "judge_score" in message
+
+    def test_an_overflowing_effect_is_refused_before_the_prior_scale_is_complete(self):
+        """Three rows per arm: the scale is checked on the rows so far."""
+        with pytest.raises(ValueError, match="--effect-size"):
+            _step(_CONTROL[:3], _TREATMENT[:3], effect_size=1e200)
+
+    def test_too_few_rows_for_any_scale_still_continue(self):
+        assert _step(_CONTROL[:1], _TREATMENT[:1], effect_size=1e200).decision == "continue"
+
     @pytest.mark.parametrize(("shift", "direction"), [(-0.1, "worse"), (0.1, "better")])
     def test_direction_comes_from_the_tested_rows(self, shift, direction):
         """Held-out rows pulling the whole-arm means the other way do not flip it."""
