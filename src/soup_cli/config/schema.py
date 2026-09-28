@@ -4616,6 +4616,30 @@ class SoupConfig(BaseModel):
         )
 
     @model_validator(mode="after")
+    def _validate_expand_layers_scope(self) -> "SoupConfig":
+        """#1325 — ``training.expand_layers`` (LLaMA Pro) is wired only in the
+        transformers text SFT/pretrain ``_setup_transformers`` paths. Every
+        other task/backend/modality accepts the fields and then silently
+        trains the unexpanded model, so refuse at load with the actual
+        task/backend/modality in the message."""
+        tcfg = self.training
+        if tcfg.expand_layers is None:
+            return self
+        if not (
+            self.task in {"sft", "pretrain"}
+            and self.backend == "transformers"
+            and self.modality == "text"
+        ):
+            raise ValueError(
+                "training.expand_layers (LLaMA Pro) is only wired for task "
+                "sft/pretrain on backend transformers with modality text; got "
+                f"task={self.task!r}, backend={self.backend!r}, "
+                f"modality={self.modality!r}. Remove expand_layers and "
+                "freeze_trainable_layers."
+            )
+        return self
+
+    @model_validator(mode="after")
     def _validate_quest_first_slice(self) -> "SoupConfig":
         """Keep #674 on the one route supported by the measured prototype."""
         tcfg = self.training
