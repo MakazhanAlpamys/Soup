@@ -295,6 +295,57 @@ class TestMergeAdapterToDenseSurvivesAFailedSwap:
         leftover = list(tmp_path.glob(".fuse_*")) + list(tmp_path.glob(".out.old-*"))
         assert not leftover, f"orphaned staging/backup dir(s) left behind: {leftover}"
 
+    def test_both_swap_and_restore_fail_keeps_both_copies_and_names_both_paths(
+        self, tmp_path, monkeypatch
+    ):
+        """The double-failure path the issue calls out explicitly: the swap
+        AND the rename-back both fail. Neither ``backup`` nor ``staging`` may
+        be deleted then — the code must not guess which one holds the good
+        copy — and the raised error must name both paths so a human can
+        recover by hand.
+
+        Mutation check: this is what catches ``if not keep_staging:`` being
+        replaced by ``if True:`` at the bottom of the function — that
+        mutation makes the ``except BaseException`` handler always
+        ``rmtree(staging)``, which would delete the *only* surviving copy in
+        this exact scenario. Without this test, that mutation still leaves
+        the other tests in this file green.
+        """
+        from soup_cli.utils import adapter_fuse
+
+        monkeypatch.chdir(tmp_path)
+        _fake_train_stack(monkeypatch)
+        adapter, out = _fresh_adapter_and_out(tmp_path)
+
+        real_replace = adapter_fuse.os.replace
+
+        def _replace_fails_both(src, dst, *a, **kw):
+            name = os.path.basename(src)
+            if name.startswith(".fuse_") or ".old-" in name:
+                raise PermissionError(5, "Access is denied")
+            return real_replace(src, dst, *a, **kw)
+
+        monkeypatch.setattr(adapter_fuse.os, "replace", _replace_fails_both)
+
+        with pytest.raises(RuntimeError) as excinfo:
+            adapter_fuse.merge_adapter_to_dense(
+                base_model="base", adapter_dir=str(adapter), out_dir="out"
+            )
+
+        message = str(excinfo.value)
+        staging_dirs = list(tmp_path.glob(".fuse_*"))
+        backup_dirs = list(tmp_path.glob(".out.old-*"))
+        assert len(staging_dirs) == 1, f"staging dir missing or duplicated: {staging_dirs}"
+        assert len(backup_dirs) == 1, f"backup dir missing or duplicated: {backup_dirs}"
+        assert str(backup_dirs[0]) in message, "error does not name the backup path"
+        assert str(staging_dirs[0]) in message, "error does not name the staging path"
+
+        # Both copies must be complete, not partially written or removed.
+        assert (backup_dirs[0] / "config.json").read_bytes() == b"OLD"
+        assert (backup_dirs[0] / "model.safetensors").read_bytes() == b"OLD"
+        assert (staging_dirs[0] / "model.safetensors").read_bytes() == b"NEW"
+        assert not out.exists(), "out_dir should be absent — neither replace landed there"
+
     @pytest.mark.skipif(sys.platform != "win32", reason="Windows-only file-lock semantics")
     def test_out_dir_survives_an_open_handle_on_model_safetensors(self, tmp_path, monkeypatch):
         """Windows-only: another process (a viewer, a server, an antivirus
