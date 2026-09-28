@@ -42,7 +42,7 @@ def ab(
         help=(
             "Type-II error (false negative) rate (0, 1). Not the power: a power "
             "of 0.95 is --beta 0.05. alpha + beta must stay below 1, or the "
-            "reject and accept boundaries cross and every verdict rejects."
+            "test accepts H0 on no evidence either way."
         ),
     ),
     effect_size: float = typer.Option(
