@@ -55,8 +55,6 @@ EXCEPTIONS: dict[str, str] = {
     "qwen2-audio-7b-sft": _NO_PEFT_DEFAULT,
     "templates/audio.yaml": _NO_PEFT_DEFAULT,
     "voxtral-sft": _NO_PEFT_DEFAULT,
-    "minimax-m3-sft": _VL_WRAPPER + " (#1145)",
-    "minimax-m3-dpo": _VL_WRAPPER + " (#1145)",
     "mistral-medium-3-5-sft": _VL_WRAPPER + " (mistral3)",
 }
 

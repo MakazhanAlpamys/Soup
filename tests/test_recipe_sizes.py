@@ -45,7 +45,6 @@ _FIXTURE_PATH = (
 EXCLUDED_SIZE_BASES = {
     "BioMistral/BioMistral-7B",
     "baichuan-inc/Baichuan2-13B-Chat",
-    "mistralai/Mistral-Large-3-675B-Instruct-2512",
     "mistralai/Pixtral-12B-2409",
     "nvidia/Nemotron-4-340B-Instruct",
 }

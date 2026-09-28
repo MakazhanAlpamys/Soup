@@ -26,13 +26,15 @@ Soup works with **any** of the **340,000+** text-generation models on [HuggingFa
 | **Kimi** | Kimi-K2, Kimi-K2.5, Kimi-K2.6 | ~1T (MoE) | Long-context agentic, MoE |
 | **MiniMax** | MiniMax-M2, MiniMax-M3 | 230B–428B | Agentic, MoE (community license) |
 | **Phi-4** | Phi-4-14B, Phi-4-mini-reasoning | 3.8B–14B | Compact reasoning |
-| **Mistral** | Mistral-7B-Instruct-v0.3, Mistral-Small-24B, Mistral-Large-3 | 7B–675B | Fast, efficient, MoE |
+| **Mistral** | Mistral-7B-Instruct-v0.3, Mistral-Small-24B | 7B–24B | Fast, efficient |
 | **Mixtral** | Mixtral-8x7B-Instruct-v0.1, Mixtral-8x22B | 47B–141B | MoE architecture |
 | **CodeLlama** | CodeLlama-7b-Instruct-hf, CodeLlama-34b-Instruct | 7B–34B | Code generation |
 | **StarCoder 2** | StarCoder2-15B, StarCoder2-7B | 3B–15B | Code completion |
 | **Yi** | Yi-1.5-34B-Chat, Yi-1.5-9B-Chat | 6B–34B | Multilingual chat |
 | **InternLM 3** | InternLM3-8B-Instruct | 8B | Chinese + English |
 | **Falcon** | Falcon-11B, Falcon-40B-Instruct | 7B–180B | Open-weight |
+
+**Mistral-Large-3 is not shipped as a recipe.** `mistralai` publishes it in Mistral's native layout (`params.json` + `consolidated-*.safetensors`), with no `config.json`, which `AutoConfig` cannot read, and no flag changes that. A Hugging Face-format conversion exists on the Hub as `FriendliAI/Mistral-Large-3-675B-Instruct-2512-BF16`; it is a third party's re-upload, so Soup does not point a recipe at it (#1145).
 
 Qwen3.5, Qwen3.6, and Qwen3.8 checkpoints advertise a multimodal conditional-generation
 architecture on the Hub, but Soup's catalog recipes are deliberately text-only.

@@ -48,7 +48,7 @@ def search_recipes(
 
 
 # ---------------------------------------------------------------------------
-# Recipe catalog (173 recipes)
+# Recipe catalog (170 recipes)
 # ---------------------------------------------------------------------------
 
 RECIPES: Dict[str, RecipeMeta] = {
@@ -4924,11 +4924,18 @@ output: ./output
         tags=("minimax", "sft", "moe", "large", "multi-gpu"),
         description=(
             "MiniMax M3 MoE SFT (428B / 23B active). MiniMax Community License "
-            "- commercial use requires a separate agreement. Multi-GPU recommended."
+            "- commercial use requires a separate agreement. Multi-GPU recommended. "
+            "Loads through the vision path, whose processor is custom code: run "
+            "soup train --trust-remote-code."
         ),
         yaml_str="""\
 base: MiniMaxAI/MiniMax-M3
 task: sft
+# A vision-language checkpoint (minimax_m3_vl): only the image-text class builds
+# it. target_modules: auto attaches to the language tower alone (#1102), so the
+# fine-tune stays textual (#1145). The vision collator supervises every token,
+# prompt included: train_on_responses_only is not applied on this path (#1156).
+modality: vision
 
 data:
   train: ./data/train.jsonl
@@ -4941,132 +4948,11 @@ training:
   batch_size: 1
   gradient_accumulation_steps: 16
   lora:
-    dropout: 0.0        # peft's ParamWrapper refuses dropout on fused MoE experts (#798)
+    dropout: 0.0        # kept from the moe_lora version; this recipe now targets no experts (#1145)
     r: 32
     alpha: 64
     target_modules: auto
   quantization: 4bit
-  moe_lora: true
-  moe_aux_loss_coeff: 0.01
-  gradient_checkpointing: true
-
-output: ./output
-""",
-    ),
-    "minimax-m3-dpo": RecipeMeta(
-        model="MiniMaxAI/MiniMax-M3",
-        task="dpo",
-        size="428B",
-        tags=("minimax", "dpo", "alignment", "preference", "moe", "large", "multi-gpu"),
-        description=(
-            "MiniMax M3 MoE DPO alignment (428B / 23B active). MiniMax Community License "
-            "- commercial use requires a separate agreement. Multi-GPU recommended."
-        ),
-        yaml_str="""\
-base: MiniMaxAI/MiniMax-M3
-task: dpo
-
-data:
-  train: ./data/preference_train.jsonl
-  format: dpo
-  max_length: 4096
-
-training:
-  epochs: 1
-  lr: 5e-6
-  batch_size: 1
-  gradient_accumulation_steps: 16
-  lora:
-    dropout: 0.0        # peft's ParamWrapper refuses dropout on fused MoE experts (#798)
-    r: 32
-    alpha: 64
-    target_modules: auto
-  quantization: 4bit
-  dpo_beta: 0.1
-  moe_lora: true
-  moe_aux_loss_coeff: 0.01
-  gradient_checkpointing: true
-
-output: ./output
-""",
-    ),
-    "mistral-large-3-sft": RecipeMeta(
-        model="mistralai/Mistral-Large-3-675B-Instruct-2512",
-        task="sft",
-        size="675B",
-        tags=("mistral", "mistral-large", "sft", "moe", "large", "multi-gpu"),
-        description=(
-            "Mistral Large 3 MoE SFT (Apache-2.0, 675B / 41B active, multimodal). "
-            "Requires multi-node DeepSpeed."
-        ),
-        yaml_str="""\
-base: mistralai/Mistral-Large-3-675B-Instruct-2512
-task: sft
-
-data:
-  train: ./data/train.jsonl
-  format: auto
-  max_length: 4096
-
-training:
-  epochs: 1
-  lr: 5e-6
-  batch_size: 1
-  gradient_accumulation_steps: 32
-  lora:
-    dropout: 0.0        # peft's ParamWrapper refuses dropout on fused MoE experts (#798)
-    r: 32
-    alpha: 64
-    target_modules: auto
-  quantization: 4bit
-  moe_lora: true
-  moe_aux_loss_coeff: 0.01
-  gradient_checkpointing: true
-
-output: ./output
-""",
-    ),
-    "mistral-large-3-dpo": RecipeMeta(
-        model="mistralai/Mistral-Large-3-675B-Instruct-2512",
-        task="dpo",
-        size="675B",
-        tags=(
-            "mistral",
-            "mistral-large",
-            "dpo",
-            "alignment",
-            "preference",
-            "moe",
-            "large",
-            "multi-gpu",
-        ),
-        description=(
-            "Mistral Large 3 MoE DPO alignment "
-            "(Apache-2.0, 675B / 41B active, multimodal). Requires multi-node DeepSpeed."
-        ),
-        yaml_str="""\
-base: mistralai/Mistral-Large-3-675B-Instruct-2512
-task: dpo
-
-data:
-  train: ./data/preference_train.jsonl
-  format: dpo
-  max_length: 4096
-
-training:
-  epochs: 1
-  lr: 5e-6
-  batch_size: 1
-  gradient_accumulation_steps: 32
-  lora:
-    dropout: 0.0        # peft's ParamWrapper refuses dropout on fused MoE experts (#798)
-    r: 32
-    alpha: 64
-    target_modules: auto
-  quantization: 4bit
-  dpo_beta: 0.1
-  moe_lora: true
-  moe_aux_loss_coeff: 0.01
   gradient_checkpointing: true
 
 output: ./output

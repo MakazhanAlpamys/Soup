@@ -432,10 +432,6 @@
   "parameters": 7248023552,
   "routed_experts": 0
  },
- "mistralai/Mistral-Large-3-675B-Instruct-2512": {
-  "parameters_unavailable": "no safetensors metadata on the Hub",
-  "unresolvable": "the repo has no config.json"
- },
  "mistralai/Mistral-Medium-3.5-128B": {
   "model_type": "mistral3",
   "parameters": 127704210176,
