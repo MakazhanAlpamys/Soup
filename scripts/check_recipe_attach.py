@@ -69,10 +69,11 @@ class Ratchet:
     pinned: list[str] = field(default_factory=list)
     new_failures: list[tuple[str, str]] = field(default_factory=list)
     now_attach: list[str] = field(default_factory=list)
+    not_reported: list[str] = field(default_factory=list)
 
     @property
     def ok(self) -> bool:
-        return not self.new_failures and not self.now_attach
+        return not self.new_failures and not self.now_attach and not self.not_reported
 
 
 def compare(rows: list[dict], exceptions: dict[str, str]) -> Ratchet:
@@ -94,6 +95,9 @@ def compare(rows: list[dict], exceptions: dict[str, str]) -> Ratchet:
                 result.now_attach.append(name)
         else:
             raise ValueError(f"unknown verdict {verdict!r} for {name}")
+    # verify leaves out a config that does not parse; a pinned one must not vanish.
+    seen = {row["name"] for row in rows}
+    result.not_reported = sorted(set(exceptions) - seen)
     return result
 
 
@@ -112,6 +116,8 @@ def report(result: Ratchet) -> list[str]:
         lines.append(f"NEW cannot attach: {name}: {detail[:200]}")
     for name in result.now_attach:
         lines.append(f"now attaches, remove from EXCEPTIONS: {name}")
+    for name in result.not_reported:
+        lines.append(f"pinned but not reported by verify: {name}")
     return lines
 
 

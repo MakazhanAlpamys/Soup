@@ -50,6 +50,14 @@ class TestCompare:
         assert result.skipped == [("g", "gated")]
         assert result.verified == [] and result.pinned == [] and result.now_attach == []
 
+    def test_a_pinned_config_missing_from_the_run_is_flagged(self):
+        """verify skips a config that does not parse, so a pinned one that stopped
+        parsing (or was removed) would otherwise vanish while the run stays green."""
+        result = compare([_row("a", "attaches")], {"gone": "why"})
+
+        assert not result.ok and result.not_reported == ["gone"]
+        assert "pinned but not reported by verify: gone" in report(result)
+
     def test_no_adapter_counts_as_verified(self):
         result = compare([_row("c", "no_adapter")], {})
 
