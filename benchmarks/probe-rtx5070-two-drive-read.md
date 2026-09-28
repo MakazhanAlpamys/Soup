@@ -123,7 +123,62 @@ what catches a session contaminated by someone else's I/O.
 
 ## 5. Results
 
-*Pending.*
+### Run 1 — 2026-09-28 10:28, NO VERDICT: the validity row fired
+
+JSON `benchmarks/results/probe-rtx5070/two-drive/r1_k4.json`; `soup_cli`
+stamped from this worktree (`Soup-read\src`); every byte check OK. GB/s:
+
+| round (order) | A = C: alone | B = D: alone | both: A | both: B | both: aggregate | window (s) | r_sum | r_alt |
+|---|---|---|---|---|---|---|---|---|
+| 0 (a, b, ab) | 3.62 | 4.27 | 3.64 | 4.95 | 7.65 | 2.03 | 2.014 | 1.707 |
+| 1 (b, ab, a) | 3.94 | 3.94 | 4.04 | 5.27 | 7.90 | 1.91 | 2.362 | 2.049 |
+| 2 (ab, a, b) | 3.85 | 5.83 | 4.46 | 5.75 | 8.69 | 1.75 | 1.751 | 1.529 |
+| **median** | **3.855** | 4.266 | 4.035 | 5.270 | — | — | 2.014 | 1.707 |
+
+**Verdict under §2: none.** `alone_A` = 3.855 GB/s is outside 4.5-6.2. The
+r medians would sit in the "independent drives" row, and they are **not read as
+a verdict**: the rule says a comparison made on a session that does not
+reproduce the known drive is not evidence, and it was written before this run
+for exactly this case.
+
+**What the run's own stamps show about why.** At the start the box had
+**3.03 GB of available physical memory and commit 56.65 GB against a limit of
+56.69** — at the limit, with the pagefile expanded (the rounds then read
+3.18 / 3.89 / 4.89 GB available, commit 56.6 / 53.8 / 51.0). The pagefile is
+`C:\pagefile.sys` (peak use since boot 9.7 GB). gate-974's unbuffered rows were
+measured at 19.34 GB free and commit 21.6 of 47.35 GB. **This run logged no disk
+counters, so paging I/O on C: during the arms is a hypothesis, not a
+measurement.** Two patterns fit it and neither proves it: C: was the slower
+drive in two of the three alone pairs and tied in the third, while D: — which
+nothing else touches — reached 6.5 GB/s on single spans and a 6.05 GB/s median
+per span in round 2, above anything gate-974 recorded on C:; and **each drive
+read faster in the both-at-once arm than alone in five of six comparisons**,
+which a shared bottleneck cannot produce and which points at the host (CPU
+power state, background load) rather than at the drives. That last pattern is
+not explained here.
+
+**A defect in the rule's validity row, found while diagnosing — disclosed, NOT
+corrected.** The 4.5-6.2 GB/s bound was derived from a summary of gate-974
+("5.1-5.65 GB/s at K = 2-4") that had kept its best readings. gate-974 §4's own
+K = 4, one-request-per-range readings are **5.12 GB/s (run A, layers 12-17) and
+4.18 (run B, layers 54-59)**, its K = 2-8 one-request readings span 4.02-5.30,
+and it calls the difference a 20-30% drive/position effect. The committed bound
+is therefore tighter than the reference it names: a quiet-box C: reading of
+~4.2 GB/s would fail it while matching gate-974's own run B. The row stays as
+committed — changing a validity bound after seeing the numbers it rules on is
+what pre-registration exists to prevent. If a later run lands between 4.0 and
+4.5 GB/s on a quiet box, the record says so and the call goes to the owner.
+
+**Instrument change before run 2** (the rule is unchanged): the harness now
+samples Windows performance counters through PDH every 0.25 s on a background
+thread — `LogicalDisk` read and write bytes per volume, `Memory\Pages/sec` and
+`Committed Bytes`, `Processor\% Processor Time` and `Processor Information\%
+Processor Performance` (the actual clock as a share of nominal). The harness
+only reads, so **a write on either volume during an arm is someone else's
+I/O**; the read counter cross-checks the harness's own rate. Also fixed: the
+box stamp's Python-process count was lost to a decoding error (`tasklist`
+prints in the OEM code page, and the no-break space in its memory column is
+0xFF in cp866), so run 1's `python_processes` is `null`.
 
 ## 6. Verdict
 

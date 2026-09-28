@@ -80,11 +80,110 @@ class _MemoryStatusEx(ctypes.Structure):
 
 
 def _run_quiet(cmd: Sequence[str]) -> Optional[str]:
+    # Console tools print in the OEM code page (cp866 on this box, whose NBSP is 0xFF in
+    # tasklist's memory column), so decoding them as UTF-8 raises on the reader thread.
     try:
-        done = subprocess.run(cmd, capture_output=True, text=True, timeout=20, check=False)
+        done = subprocess.run(
+            cmd, capture_output=True, encoding="oem", errors="replace", timeout=20, check=False
+        )
     except (OSError, subprocess.SubprocessError):
         return None
     return done.stdout if done.returncode == 0 else None
+
+
+class _PdhValue(ctypes.Structure):
+    _fields_ = [("CStatus", wt.DWORD), ("doubleValue", ctypes.c_double)]
+
+
+_PDH_FMT_DOUBLE = 0x00000200
+_PDH_FMT_NOCAP100 = 0x00008000
+
+
+class CounterSampler:
+    """Windows performance counters sampled on a background thread (PDH, English names).
+
+    The harness only READS, so any write a drive's counter shows during an arm is someone
+    else's I/O — the pagefile, a peer's test suite — and that is the contamination the
+    validity row in the record exists to catch. Rate counters report the interval between
+    two collections; a sample is attributed to the arm its interval ENDS in.
+    """
+
+    def __init__(self, paths: Dict[str, str], interval: float = 0.25) -> None:
+        self.samples: List[Tuple[float, Dict[str, float]]] = []
+        self.errors: List[str] = []
+        self._interval = interval
+        self._stop = threading.Event()
+        self._thread: Optional[threading.Thread] = None
+        self._counters: Dict[str, ctypes.c_void_p] = {}
+        self._query = ctypes.c_void_p()
+        pdh = ctypes.windll.pdh
+        pdh.PdhOpenQueryW.restype = ctypes.c_long
+        pdh.PdhOpenQueryW.argtypes = [ctypes.c_wchar_p, ctypes.c_size_t, ctypes.c_void_p]
+        pdh.PdhAddEnglishCounterW.restype = ctypes.c_long
+        pdh.PdhAddEnglishCounterW.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_wchar_p,
+            ctypes.c_size_t,
+            ctypes.c_void_p,
+        ]
+        pdh.PdhCollectQueryData.restype = ctypes.c_long
+        pdh.PdhCollectQueryData.argtypes = [ctypes.c_void_p]
+        pdh.PdhGetFormattedCounterValue.restype = ctypes.c_long
+        pdh.PdhGetFormattedCounterValue.argtypes = [
+            ctypes.c_void_p,
+            wt.DWORD,
+            ctypes.c_void_p,
+            ctypes.c_void_p,
+        ]
+        pdh.PdhCloseQuery.restype = ctypes.c_long
+        pdh.PdhCloseQuery.argtypes = [ctypes.c_void_p]
+        self._pdh = pdh
+        if pdh.PdhOpenQueryW(None, 0, ctypes.byref(self._query)) != 0:
+            self.errors.append("PdhOpenQueryW failed")
+            return
+        for key, path in paths.items():
+            handle = ctypes.c_void_p()
+            status = pdh.PdhAddEnglishCounterW(self._query, path, 0, ctypes.byref(handle))
+            if status != 0:
+                self.errors.append(f"{path}: PDH status {status & 0xFFFFFFFF:#010x}")
+                continue
+            self._counters[key] = handle
+
+    def start(self) -> None:
+        if not self._counters:
+            return
+        self._pdh.PdhCollectQueryData(self._query)  # a rate counter needs a first sample
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def _run(self) -> None:
+        while not self._stop.wait(self._interval):
+            if self._pdh.PdhCollectQueryData(self._query) != 0:
+                continue
+            now = time.time()
+            row: Dict[str, float] = {}
+            for key, handle in self._counters.items():
+                value = _PdhValue()
+                status = self._pdh.PdhGetFormattedCounterValue(
+                    handle, _PDH_FMT_DOUBLE | _PDH_FMT_NOCAP100, None, ctypes.byref(value)
+                )
+                if status == 0:
+                    row[key] = value.doubleValue
+            self.samples.append((now, row))
+
+    def stop(self) -> None:
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join()
+        if self._query:
+            self._pdh.PdhCloseQuery(self._query)
+
+    def mean_over(self, start: float, end: float) -> Dict[str, float]:
+        rows = [row for stamp, row in self.samples if start < stamp <= end]
+        out: Dict[str, float] = {"samples": float(len(rows))}
+        for key in sorted({k for row in rows for k in row}):
+            out[key] = statistics.fmean(row[key] for row in rows if key in row)
+        return out
 
 
 def box_state() -> Dict[str, object]:
@@ -252,6 +351,28 @@ def main() -> int:
             raise SystemExit(f"arena {drive} is not sector-aligned: {arena.data_ptr()}")
     executors = {drive: ThreadPoolExecutor(max_workers=args.threads) for drive in ("a", "b")}
 
+    letters = {
+        "a": os.path.splitdrive(os.path.abspath(args.drive_a[0]))[0].upper(),
+        "b": os.path.splitdrive(os.path.abspath(args.drive_b[0]))[0].upper(),
+    }
+    if letters["a"] == letters["b"]:
+        raise SystemExit(f"both drives resolve to volume {letters['a']}; nothing to compare")
+    counter_paths = {
+        f"{kind}_{drive}": rf"\LogicalDisk({letter})\Disk {label} Bytes/sec"
+        for drive, letter in letters.items()
+        for kind, label in (("read", "Read"), ("write", "Write"))
+    }
+    counter_paths.update(
+        {
+            "pages_s": r"\Memory\Pages/sec",
+            "committed_bytes": r"\Memory\Committed Bytes",
+            "cpu_pct": r"\Processor(_Total)\% Processor Time",
+            "cpu_perf_pct": r"\Processor Information(_Total)\% Processor Performance",
+        }
+    )
+    sampler = CounterSampler(counter_paths)
+    sampler.start()
+
     try:
         import soup_cli
 
@@ -267,6 +388,9 @@ def main() -> int:
         "python": sys.version,
         "torch": torch.__version__,
         "soup_cli_file": soup_cli_file,
+        "volumes": letters,
+        "counter_paths": counter_paths,
+        "counter_errors": sampler.errors,
         "box_start": box_state(),
         "rounds": [],
     }
@@ -274,6 +398,7 @@ def main() -> int:
     def write() -> None:
         with open(args.out, "w", encoding="utf-8") as handle:
             json.dump(record, handle, indent=1)
+            handle.write("\n")
 
     # Warm-up: one span per drive, untimed, so no arm pays for spinning up its pool.
     for drive in ("a", "b"):
@@ -287,10 +412,14 @@ def main() -> int:
         for round_index in range(args.rounds):
             order = ARM_ORDERS[round_index % len(ARM_ORDERS)]
             entry: Dict[str, object] = {"round": round_index, "order": order, "box": box_state()}
+            walls: Dict[str, List[float]] = {}
+            entry["wall"] = walls
             for arm in order:
                 if arm in ("a", "b"):
                     spans = take(arm, args.spans_per_arm)
+                    wall_start = time.time()
                     log = read_spans(spans, arenas[arm].data_ptr(), args.threads, executors[arm])
+                    walls[arm] = [wall_start, time.time()]
                     entry[f"alone_{arm}_gb_s"] = alone_rate(log)
                     entry[f"alone_{arm}_span_s"] = [round(e - s, 4) for s, e, _n in log]
                     entry[f"check_alone_{arm}"] = check_bytes(spans[-1], arenas[arm])
@@ -317,10 +446,12 @@ def main() -> int:
                         barrier.abort()
 
                 workers = [threading.Thread(target=run, args=(d,)) for d in ("a", "b")]
+                wall_start = time.time()
                 for worker in workers:
                     worker.start()
                 for worker in workers:
                     worker.join()
+                walls["ab"] = [wall_start, time.time()]
                 if errors:
                     raise errors[0]
                 rate_a, rate_b, window = windowed_rates(logs["a"], logs["b"])
@@ -354,8 +485,26 @@ def main() -> int:
     finally:
         for executor in executors.values():
             executor.shutdown(wait=True)
+        time.sleep(0.6)  # let the last arm's closing counter interval land
+        sampler.stop()
 
     rounds = record["rounds"]
+    for entry in rounds:
+        entry["counters"] = {arm: sampler.mean_over(*wall) for arm, wall in entry["wall"].items()}
+        for arm, means in entry["counters"].items():
+            print(
+                f"round {entry['round']}  {arm:<5} counters: "
+                + "  ".join(
+                    f"{key} {means[key] / 1e6:.1f} MB/s"
+                    for key in sorted(means)
+                    if key.startswith(("read_", "write_"))
+                )
+                + f"  pages/s {means.get('pages_s', float('nan')):.0f}"
+                + f"  cpu {means.get('cpu_pct', float('nan')):.0f}%"
+                + f"  perf {means.get('cpu_perf_pct', float('nan')):.0f}%"
+                + f"  ({means['samples']:.0f} samples)"
+            )
+    record["counter_samples"] = sampler.samples
     record["median"] = {
         key: statistics.median(entry[key] for entry in rounds)
         for key in ("alone_a_gb_s", "alone_b_gb_s", "both_a_gb_s", "both_b_gb_s", "r_sum", "r_alt")
