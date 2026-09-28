@@ -19,14 +19,14 @@ from soup_cli.utils.layer_stream_runtime import DiskSource, RamSource  # noqa: E
 N = 8
 
 
-def _striped_shards(tmp_path: Path):
+def _striped_shards(tmp_path: Path, n: int = N):
     """Layer i under folder root{i % 2}: two folders standing in for two drives."""
     roots = [tmp_path / "root0", tmp_path / "root1"]
     for root in roots:
         root.mkdir()
     torch.manual_seed(928)
     paths = []
-    for idx in range(N):
+    for idx in range(n):
         path = layer_shard_path(str(roots[idx % 2]), idx)
         save_file(
             {
@@ -37,7 +37,7 @@ def _striped_shards(tmp_path: Path):
             path,
         )
         paths.append(path)
-    return str(roots[0]), paths, [idx % 2 for idx in range(N)]
+    return str(roots[0]), paths, [idx % 2 for idx in range(n)]
 
 
 def _raw(tensor):
@@ -98,12 +98,35 @@ def _walk(source, spec, order, compute=0.0):
             time.sleep(compute)
 
 
-def _source(tmp_path, *, striped=True, **kwargs):
-    shard_dir, paths, roots = _striped_shards(tmp_path)
+def _source(tmp_path, *, striped=True, n=N, **kwargs):
+    shard_dir, paths, roots = _striped_shards(tmp_path, n)
     spec = RamSource.layer_specs_from_paths(paths)
     extra = {"layer_roots": roots} if striped else {}
-    source = AsyncDiskSource(shard_dir, N, spec, pin=False, shard_paths=paths, **extra, **kwargs)
+    source = AsyncDiskSource(shard_dir, n, spec, pin=False, shard_paths=paths, **extra, **kwargs)
     return source, spec, shard_dir, paths
+
+
+#: The steady-state walk: layers, one read (R), consumer compute per layer (C), and the
+#: boundaries (k, k+1) it counts — 3..14, i.e. everything after the cold start.
+STEADY_LAYERS = 16
+STEADY_READ_S = 0.1
+STEADY_COMPUTE_S = 0.05
+STEADY_COUNTED = range(3, STEADY_LAYERS - 1)
+STEADY_THRESHOLD = 6
+
+
+def _steady_state_overlaps(tmp_path, monkeypatch):
+    """Walk the striped layers forward once; return the counted boundaries k whose reads of
+    k and k+1 overlapped in time, and the spans. The test's whole measurement, kept apart so
+    the numbers in its docstring can be re-measured exactly (against mutants too)."""
+    log = _timed_reads(monkeypatch, delay=STEADY_READ_S)
+    source, spec, _, _ = _source(tmp_path, n=STEADY_LAYERS, read_ahead=3, read_ranges=1)
+    try:
+        _walk(source, spec, range(STEADY_LAYERS), compute=STEADY_COMPUTE_S)
+    finally:
+        source.close()
+    spans = _per_layer(log)
+    return [k for k in STEADY_COUNTED if _overlap(spans[k], spans[k + 1])], spans
 
 
 def test_every_drive_stays_busy_in_steady_state(tmp_path, monkeypatch):
@@ -111,23 +134,30 @@ def test_every_drive_stays_busy_in_steady_state(tmp_path, monkeypatch):
     so in steady state layer k+1 must already be reading while layer k still is — not only
     in the first batch after a cold start.
 
-    The consumer COMPUTES between layers (25 ms, half of one 50 ms read). A consumer that
-    computes nothing phase-locks the drives: layers k and k+1 start together, land together,
-    and the next pair starts only after both — so k+1 overlaps k for every other k, and this
-    count passed the non-blocking reader 0 times in 10 and a batch reader 0 times in 10. With
-    the pause every drive restarts the moment its read lands and the drives run half a read
-    apart: 10 of 10 against 0 of 10. The one boundary that still misses is k = 2, right after
-    the cold start's in-phase pair; the margin on every other boundary is ~half a read.
+    Shape: 16 layers over two drives, read_ahead 3, one 100 ms read per layer (R) and 50 ms
+    of consumer compute per layer (C). The consumer MUST compute: with C = 0 the drives run
+    in phase (k and k+1 start and land together), so k+1 overlaps k only for every other k
+    and no threshold tells this reader from a batch reader. Counted: the 12 boundaries
+    k = 3..14. Boundaries 1 and 2 are left out because both readers agree there. The cold
+    start claims layers 1 and 2 together, which is a free overlap for any reader, and
+    boundary 2 then never overlaps.
+
+    Expected, this reader: 12 of 12. Consecutive reads start either C apart or R - C + wake
+    latency apart, because each drive restarts once its read lands and the consumer has
+    asked for the layer before it. A boundary overlaps while that gap is under R, so its
+    margin is min(R - C, C - latency), about 50 ms. Python 3.10 on Windows sleeps at the
+    15.6 ms system-timer tick (high-resolution sleep arrived in 3.11). R and C can then each
+    overrun by a tick, and the margin is still about 32 ms. A stall has to be that long AND
+    land on a boundary to flip it.
+
+    Expected, a batch reader (claims nothing while any read is pending): 0 of 12. After the
+    cold start it reads one layer at a time, and reads from different batches never overlap.
+
+    Threshold 6 of 12: this reader has to lose 7 boundaries to fail, and the batch reader
+    would have to gain 6 that its structure does not have.
     """
-    log = _timed_reads(monkeypatch)
-    source, spec, _, _ = _source(tmp_path, read_ahead=3, read_ranges=1)
-    try:
-        _walk(source, spec, range(N), compute=0.025)
-    finally:
-        source.close()
-    spans = _per_layer(log)
-    overlapping = [k for k in range(1, N - 1) if _overlap(spans[k], spans[k + 1])]
-    assert len(overlapping) >= N - 3, (overlapping, spans)
+    overlapping, spans = _steady_state_overlaps(tmp_path, monkeypatch)
+    assert len(overlapping) >= STEADY_THRESHOLD, (overlapping, spans)
 
 
 def test_one_drive_never_has_two_layers_in_flight(tmp_path, monkeypatch):
