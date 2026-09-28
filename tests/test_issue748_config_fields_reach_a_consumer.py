@@ -292,9 +292,17 @@ def _consumer_modules():
     return [p for p in SRC.rglob("*.py") if p.name != SCHEMA]
 
 
+# Fields whose name collides with an unrelated read elsewhere in src/, so only
+# a read through a `*.training` receiver counts as consumption.
+_RECEIVER_QUALIFIED = frozenset({
+    "training.forgetting_threshold",  # ship.py has a local of the same name
+    "training.load_in_16bit",  # migrate/unsloth.py reads an Unsloth kwarg of that name
+})
+
+
 def field_reaches_a_consumer(key: str, attr: str, consumed: set) -> bool:
     """Apply receiver-qualified checks where the global namespace collides."""
-    if key == "training.forgetting_threshold":
+    if key in _RECEIVER_QUALIFIED:
         return training_receiver_reads(_consumer_modules(), attr)
     return attr in consumed
 

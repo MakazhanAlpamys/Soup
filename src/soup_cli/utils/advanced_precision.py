@@ -47,6 +47,9 @@ _ATTENTION_PROJ_NAMES: frozenset[str] = frozenset({
 # Blackwell-family; Hopper is SM 9.x.
 _BLACKWELL_MIN_CC_MAJOR = 10
 
+#: Shared diagnostic explanation for precision feature incompatibility with Unsloth (#1124).
+UNSLOTH_PRECISION_INCOMPATIBLE_REASON: str = "unsloth uses its own fused kernels"
+
 
 def is_attention_projection(fqn: object) -> bool:
     """Return True when ``fqn``'s last component names an attention projection.
@@ -136,6 +139,11 @@ def validate_fp8_attention_compat(
         raise ValueError(
             "fp8_attention=true is not supported on backend=mlx"
         )
+    if backend == "unsloth":
+        raise ValueError(
+            "fp8_attention=true is not supported on backend=unsloth "
+            f"({UNSLOTH_PRECISION_INCOMPATIBLE_REASON})"
+        )
 
 
 def validate_nvfp4_compat(
@@ -163,6 +171,11 @@ def validate_nvfp4_compat(
         raise ValueError(
             "nvfp4=true is not supported on backend=mlx "
             "(NVFP4 is CUDA-only — requires Blackwell)"
+        )
+    if backend == "unsloth":
+        raise ValueError(
+            "nvfp4=true is not supported on backend=unsloth "
+            f"({UNSLOTH_PRECISION_INCOMPATIBLE_REASON})"
         )
     if modality != "text":
         raise ValueError(

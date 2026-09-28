@@ -28,15 +28,16 @@ reference states no answer.
 
 The two delimited forms are authoritative: what they enclose IS the answer, number or not, so a
 list or a tuple there is one answer. A phrase has no closing delimiter, so its values are read
-from its clause: the stand-alone numbers outside brackets (the digits of ``(3, 4)``,
-``\\frac{14}{3}``, ``2^{10}`` or ``2x``, and of a time or a ratio such as ``3:45`` or
-``1:1,000``, belong to one expression, not to several values) and every stand-alone number in
-its aside. A clause with MORE THAN ONE distinct value is a hedge
-(``The answer is either 41 or 42.``): it states no answer, so a completion that hedges scores
-0.0 and a gold that hedges is refused. Every number in the clause counts, a justification's
-too (``42 because 6*7=42`` is a hedge), and a comma or a period before a justification ends the
-clause (``42, because 6*7=42`` is 42). One value, even repeated (``42 or 42.0``), is the
-clause's number; a clause with no digits at all falls back to a completion's last number.
+from its clause: the stand-alone numbers outside brackets and LaTeX environments (the digits of
+``(3, 4)``, of a ``\\begin{pmatrix} 3 \\\\ 4 \\end{pmatrix}`` matrix, of ``\\frac{14}{3}``,
+``2^{10}`` or ``2x``, and of a time or a ratio such as ``3:45`` or ``1:1,000``, belong to one
+expression, not to several values) and every stand-alone number in its aside. A clause with
+MORE THAN ONE distinct value is a hedge (``The answer is either 41 or 42.``): it states no
+answer, so a completion that hedges scores 0.0 and a gold that hedges is refused. Every number
+in the clause counts, a justification's too (``42 because 6*7=42`` is a hedge), and a comma or
+a period before a justification ends the clause (``42, because 6*7=42`` is 42). One value, even
+repeated (``42 or 42.0``), is the clause's number; a clause with no digits at all falls back to
+a completion's last number.
 
 A text that states no explicit answer is free text. A reference is then its whole value, which
 must fit on one line (a bare answer such as ``"42"`` or ``"Paris"``). A completion reads as its
@@ -45,12 +46,12 @@ last non-empty line, and its number is the last number anywhere in it, which is 
 
 Both sides are normalised the same way: surrounding whitespace; every ``$``, ``\\$``, ``\\(``,
 ``\\)``, ``\\[`` and ``\\]``; ``\\left`` / ``\\right``; ``\\dfrac`` / ``\\tfrac`` read as
-``\\frac``; LaTeX spacing (``\\,``, ``\\!``, ``\\;``, ``\\:``, ``\\ ``) and ``{,}`` thousands
-separators; markdown ``*`` at either end; trailing ``. , ; : !``; and the Unicode minus sign. A
-number is then exactly one literal: an optional sign, digits with optional ``,`` groups of three,
-an optional fraction and an optional exponent (``-1,000.5``, ``.5``, ``1e5``). Anything else,
-such as ``42 apples``, ``\\frac{14}{3}`` or ``p - q``, is compared as text, ignoring case and
-whitespace.
+``\\frac``; LaTeX spacing (``\\,``, ``\\!``, ``\\;``, ``\\:``, ``\\ ``, but never the second
+backslash of a ``\\\\`` line break) and ``{,}`` thousands separators; markdown ``*`` at either
+end; trailing ``. , ; : !``; and the Unicode minus sign. A number is then exactly one literal: an
+optional sign, digits with optional ``,`` groups of three, an optional fraction and an optional
+exponent (``-1,000.5``, ``.5``, ``1e5``). Anything else, such as ``42 apples``,
+``\\frac{14}{3}`` or ``p - q``, is compared as text, ignoring case and whitespace.
 
 Every scan is linear in its input, because a completion is untrusted model output.
 """
@@ -58,14 +59,17 @@ Every scan is linear in its input, because a completion is untrusted model outpu
 from __future__ import annotations
 
 import re
+from collections.abc import Iterator
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from typing import NamedTuple
 
 __all__ = [
+    "BoxedAnswer",
     "FinalAnswer",
     "answers_match",
     "extract_final_answer",
+    "iter_boxed_answers",
     "normalize_answer",
     "parse_completion",
     "parse_number",
@@ -87,7 +91,9 @@ _ANSWER_LABEL_RE = re.compile(r"[*_\s]*(?:final\s+)?answer[*_\s]*(?::[*_\s]*)?",
 _NON_SPACE_RE = re.compile(r"\S")
 # The characters that can end a phrase's clause, or open or close a bracket inside it.
 _CLAUSE_CHAR_RE = re.compile(r"[()\[\]{}.,;]")
-_LATEX_SPACING_RE = re.compile(r"\\[,!;: ]")
+# A LaTeX line break '\\' is consumed whole, so its second backslash is never read as the
+# control space '\ ' ('\\ -14' must stay '\\ -14', not become '\-14').
+_LATEX_SPACING_RE = re.compile(r"\\\\|\\[,!;: ]")
 _MATH_DELIMITER_RE = re.compile(r"\\[()\[\]]")
 # Not followed by a letter, so ``\leftarrow`` and ``\rightarrow`` stay whole.
 _SIZING_RE = re.compile(r"\\(?:left|right)(?![A-Za-z])")
@@ -97,11 +103,12 @@ _NUMBER_PATTERN = r"[-+]?" + _UNSIGNED_PATTERN + r"(?:[eE][-+]?\d+)?"
 _NUMBER_RE = re.compile(_NUMBER_PATTERN)
 # Not glued to a word ("2x", "3rd") or to a LaTeX expression ("\frac{14}{3}", "2^{10}", "4/5").
 _STANDS_ALONE = r"(?<![\w\\{}^/.])"
-# A bracket, which lets a scan track depth; a time or a ratio ("3:45", "1:1,000"), which is ONE
-# answer and is matched whole so that none of its numbers reads as a value; or, as group 1, a
-# number that stands alone.
+# A bracket, or a LaTeX environment's "\begin{...}" / "\end{...}", which lets a scan track depth
+# (a matrix is one answer, not one value per entry); a time or a ratio ("3:45", "1:1,000"), which
+# is ONE answer and is matched whole so that none of its numbers reads as a value; or, as group
+# 1, a number that stands alone.
 _VALUE_TOKEN_RE = re.compile(
-    r"[()\[\]{}]"
+    r"\\(?:begin|end)\{[A-Za-z*]*\}|[()\[\]{}]"
     + "|" + _STANDS_ALONE + "[-+]?" + _UNSIGNED_PATTERN + "(?::" + _UNSIGNED_PATTERN + ")+"
     + "|" + _STANDS_ALONE + r"(?<!\d:)(" + _NUMBER_PATTERN + r")(?![\w{}^/]|:\d)"
 )
@@ -127,10 +134,23 @@ class FinalAnswer:
     number: Decimal | None = None
 
 
+@dataclass(frozen=True)
+class BoxedAnswer:
+    """One closed ``\\boxed{...}``: the braces' positions and the normalised content.
+
+    ``end`` is the index just past the closing brace, so a caller can rank a box against other
+    matches by position and read the last committed one.
+    """
+
+    start: int
+    end: int
+    answer: str
+
+
 def _canonical_symbols(text: str) -> str:
     """Rewrite spellings that change no value: the Unicode minus, LaTeX thousands separators."""
     text = text.replace("\u2212", "-").replace("{,}", ",")
-    return _LATEX_SPACING_RE.sub("", text)
+    return _LATEX_SPACING_RE.sub(lambda match: "\\\\" if match.group() == "\\\\" else "", text)
 
 
 def normalize_answer(text: str) -> str:
@@ -193,8 +213,8 @@ def _split_clause(line: str) -> tuple[str, str]:
 
 
 def _clause_values(answer: str, aside: str) -> frozenset[Decimal]:
-    """The distinct values a clause names: the answer's stand-alone numbers outside brackets,
-    and every stand-alone number in its aside. Both texts are normalised."""
+    """The distinct values a clause names: the answer's stand-alone numbers outside brackets and
+    LaTeX environments, and every stand-alone number in its aside. Both texts are normalised."""
     values: set[Decimal | None] = set()
     depth = 0
     for match in _VALUE_TOKEN_RE.finditer(answer):
@@ -202,9 +222,9 @@ def _clause_values(answer: str, aside: str) -> frozenset[Decimal]:
         if match.group(1) is not None:
             if depth == 0:
                 values.add(_to_decimal(match.group(1)))
-        elif token in _OPENERS:
+        elif token in _OPENERS or token.startswith("\\begin"):
             depth += 1
-        elif token in _CLOSERS:
+        elif token in _CLOSERS or token.startswith("\\end"):
             depth = max(0, depth - 1)
         # Any other token is a time or a ratio: one answer, not a value.
     values.update(_to_decimal(m.group(1)) for m in _VALUE_TOKEN_RE.finditer(aside) if m.group(1))
@@ -250,29 +270,43 @@ def _marker_answer(text: str) -> tuple[int, _Explicit] | None:
     return start, _Explicit(answer, True, frozenset(), text_follows)
 
 
-def _closing_brace(text: str, start: int, limit: int) -> int | None:
-    depth = 1
-    for match in _BRACE_RE.finditer(text, start, limit):
-        depth += 1 if match.group() == "{" else -1
-        if depth == 0:
-            return match.start()
-    return None
+def iter_boxed_answers(text: str) -> Iterator[BoxedAnswer]:
+    """Yield the innermost ``\\boxed{...}`` answers in ``text``, in the order they close.
+
+    One pass over the braces. A box that holds another box is skipped: its content is the inner
+    box, so it is never itself an answer, and skipping it stops the normalised contents from
+    overlapping, which is what keeps the pass linear. A box that never closes is skipped too,
+    instead of swallowing the rest of the text.
+    """
+    opens = {match.end() - 1: match.start() for match in _BOXED_OPEN_RE.finditer(text)}
+    open_braces: list[int] = []
+    open_boxes: list[int] = []  # the braces of the boxes still open, innermost last
+    holds_a_box: set[int] = set()
+    for match in _BRACE_RE.finditer(text):
+        brace_at = match.start()
+        if match.group() == "{":
+            open_braces.append(brace_at)
+            if brace_at in opens:
+                if open_boxes:
+                    holds_a_box.add(open_boxes[-1])
+                open_boxes.append(brace_at)
+        elif open_braces:
+            brace = open_braces.pop()
+            if brace in opens:
+                open_boxes.pop()
+                if brace not in holds_a_box:
+                    answer = normalize_answer(text[brace + 1 : brace_at])
+                    yield BoxedAnswer(opens[brace], match.end(), answer)
 
 
 def _boxed_answer(text: str) -> tuple[int, str] | None:
     """Return ``(position, answer)`` for the last ``\\boxed{...}`` that closes, if any."""
-    # Walk the boxes from the last one back. When a box never closes, an earlier box can only
-    # close BEFORE that box's brace (it would have to close the later box first), so each scan
-    # stops at the next box's brace and the whole walk is linear.
-    matches = list(_BOXED_OPEN_RE.finditer(text))
-    limit = len(text)
-    for match in reversed(matches):
-        close = _closing_brace(text, match.end(), limit)
-        if close is not None:
-            answer = normalize_answer(text[match.end() : close])
-            return (match.start(), answer) if answer else None
-        limit = match.end() - 1
-    return None
+    last = None
+    for last in iter_boxed_answers(text):
+        pass
+    if last is None or not last.answer:
+        return None
+    return last.start, last.answer
 
 
 def _phrase_answer(text: str) -> tuple[int, _Explicit] | None:

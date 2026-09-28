@@ -10,6 +10,7 @@ from rich.console import Console
 from soup_cli.config.schema import SoupConfig
 from soup_cli.data.chat_templates import apply_chat_template_override
 from soup_cli.trainer.loss_summary import summarize_training_loss
+from soup_cli.utils.eval_schedule import training_eval_kwargs
 from soup_cli.utils.gpu import (
     bf16_fp16_flags,
     estimate_batch_size,
@@ -162,6 +163,7 @@ class IPOTrainerWrapper:
             remove_unused_columns=False,
             deepspeed=self.deepspeed_config,
             **training_seed_kwargs(tcfg),
+            **training_eval_kwargs(cfg, eval_ds, batch_size=batch_size),
             **(self.fsdp_config or {}),
             loss_type="ipo",
             beta=tcfg.ipo_tau,

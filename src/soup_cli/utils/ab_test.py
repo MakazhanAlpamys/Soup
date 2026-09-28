@@ -41,6 +41,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import sys
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Mapping, Sequence
@@ -87,6 +88,12 @@ _BURN_IN_ROWS_UNCALIBRATED = 40
 # The sweep followed runs up to this many rows per arm; past it the Type-I
 # figures above are not established, and `soup ab` says so.
 CALIBRATED_HORIZON_ROWS = 1000
+
+# #1339 - the largest standardised effect whose square is still a float. The
+# drift term in _verdict_from_summary squares mu_h1, and ** raises
+# OverflowError where * would have returned inf, so the bound is checked
+# rather than the result.
+MAX_STANDARDISED_EFFECT = math.sqrt(sys.float_info.max)
 _MAX_METRIC_NAME_LEN = 32
 _MAX_SAMPLES_PER_ARM = 1_000_000
 _VALID_DECISIONS: frozenset[str] = frozenset(
@@ -177,6 +184,23 @@ class MsprtConfig:
         object.__setattr__(self, "metric", validate_metric_name(self.metric))
         object.__setattr__(self, "alpha", _require_unit_open(self.alpha, field="alpha"))
         object.__setattr__(self, "beta", _require_unit_open(self.beta, field="beta"))
+        # #1339 - each rate is in (0, 1) on its own, but the reject boundary
+        # log((1 - beta) / alpha) stays above the accept boundary
+        # log(beta / (1 - alpha)) only while alpha + beta < 1. At or past 1
+        # there is no continue band, and because reject is tested first every
+        # verdict in the gap rejects: alpha 0.6 / beta 0.5 rejects on two
+        # identical arms, and alpha 0.05 / beta 0.95 (a power typed as beta)
+        # rejects a true H0 in a quarter of single looks.
+        if self.alpha + self.beta >= 1.0:
+            raise ValueError(
+                f"alpha + beta must be < 1.0, got alpha={self.alpha} + "
+                f"beta={self.beta} = {self.alpha + self.beta}. At or above 1.0 "
+                "the reject boundary log((1 - beta) / alpha) is no longer above "
+                "the accept boundary log(beta / (1 - alpha)), so there is no "
+                "continue band left and any verdict between them rejects. "
+                "beta is the Type-II error rate, not the power: a power of "
+                "0.95 is beta 0.05."
+            )
         object.__setattr__(
             self,
             "effect_size",
@@ -303,6 +327,19 @@ def _verdict_from_summary(
     # the LLR positive under H0 as n grew → unbounded Type-I error.)
     n_eff = (n_control * n_treatment) / (n_control + n_treatment)
     mu_h1 = config.effect_size / pooled_se  # in standardised units
+    # #1339 - drift squares mu_h1 below, and ** raises OverflowError instead
+    # of returning inf, which left `soup ab` exiting on a bare
+    # "OverflowError: (34, 'Result too large')" that names no flag. It is the
+    # RATIO that overflows, so a near-constant metric column reaches it at the
+    # default --effect-size too; the message therefore names both sides.
+    if mu_h1 > MAX_STANDARDISED_EFFECT:
+        raise ValueError(
+            f"--effect-size {config.effect_size!r} is {mu_h1:.3g} standard "
+            f"errors at a pooled standard error of {pooled_se:.3g}, and the "
+            f"test statistic overflows above {MAX_STANDARDISED_EFFECT:.3g}. "
+            f"Lower --effect-size, or check the {config.metric!r} column: a "
+            "near-constant column reaches this at any --effect-size."
+        )
     n_ratio = n_eff / (n_eff + 1.0)
     shift = z * mu_h1 * math.sqrt(n_ratio)
     drift = 0.5 * mu_h1**2 * n_ratio
@@ -451,6 +488,7 @@ __all__ = [
     "BURN_IN_ROWS_BY_ALPHA",
     "CALIBRATED_HORIZON_ROWS",
     "HIGHER_IS_BETTER",
+    "MAX_STANDARDISED_EFFECT",
     "MsprtConfig",
     "MsprtVerdict",
     "SUPPORTED_METRICS",

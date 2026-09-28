@@ -10,6 +10,8 @@ import re
 from dataclasses import dataclass
 from typing import Callable, Literal, Optional, Tuple
 
+from soup_cli.utils.final_answer import iter_boxed_answers
+
 MiniBenchmark = list[dict[str, str]]
 
 
@@ -42,15 +44,15 @@ _CUE_RE = re.compile(
 # Parenthesised choice marker: "(B)" or "B)".
 _PAREN_RE = re.compile(r"(?<![A-Za-z0-9])\(?([A-Ja-j])\)(?![A-Za-z0-9])")
 # LaTeX ``\boxed{C}`` — how a reasoning-tuned model states its final answer.
-# Mirrors ``trainer/rewards._extract_answer``'s boxed regex, but this is an
-# OPTION-LETTER tier and deliberately narrower: it fires only when the box holds
-# a single A–J letter. ``\boxed{4}`` is the model answering with a VALUE, and
+# Read through ``utils.final_answer``'s shared scan instead of a local regex: the
+# box counts as an OPTION LETTER when the scan's normalised content is a single
+# A–J letter, which keeps this tier and the reward parser on one reading of the
+# same box (they diverged once: ``\boxed{B.}`` and ``\boxed{**B**}`` read C here
+# and B there, #1347). The scan also allows whitespace between the command and
+# its brace, so the spaced spelling ``\boxed {A}`` scores — the same #357 defect,
+# one space to the left. ``\boxed{4}`` is the model answering with a VALUE, and
 # reading that as "option 4" would be a wrong credit rather than a repair — the
 # prompt is what has to change there (see ``_MCQ_ANSWER_CUE``). #357.
-# The ``\s*`` after ``\boxed`` matters: LaTeX permits whitespace between the
-# command and its brace and models emit it (``\boxed {A}``), so without it the
-# spaced spelling scores zero — the same #357 defect, one space to the left.
-_BOXED_LETTER_RE = re.compile(r"\\boxed\s*\{\s*([A-Ja-j])\s*\}")
 # Bare standalone UPPERCASE letter that TERMINATES a clause — i.e. followed by
 # end-of-string or sentence punctuation, not by more words. Requiring upper-case
 # skips the lower-case article "a"/"an", and the terminating look-ahead skips a
@@ -121,7 +123,11 @@ def extract_mcq_letter(output: str) -> Optional[str]:
         return None
     output = output[:_MAX_SCORE_OUTPUT]
     latest: Optional[Tuple[int, str]] = None
-    for regex in (_BOXED_LETTER_RE, _CUE_RE, _PAREN_RE):
+    for box in iter_boxed_answers(output):
+        letter = box.answer.upper()
+        if len(letter) == 1 and letter in _MCQ_OPTIONS and (latest is None or box.end > latest[0]):
+            latest = (box.end, letter)
+    for regex in (_CUE_RE, _PAREN_RE):
         for match in regex.finditer(output):
             if latest is None or match.end() > latest[0]:
                 latest = (match.end(), match.group(1))

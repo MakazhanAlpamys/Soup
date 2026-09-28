@@ -360,9 +360,10 @@ def _installed_version_str(import_name: str, pkg_name: str) -> str | None:
 def _check_config_support(config_path: str) -> None:
     """#755 — report the settings this config sets that its backend never reads.
 
-    Only fields the user actually wrote are listed. A wall of 275 rows is not a
-    pre-flight check, and the fields sitting at their schema default are not
-    what anyone came here to ask about.
+    Only fields the user wrote and switched on are listed (a ``false`` or unset
+    value is not; ``seed: 0`` is). A wall of 275 rows is not a pre-flight check,
+    and the fields sitting at their schema default or written in their off
+    position are not what anyone came here to ask about.
     """
     from soup_cli.config.backend_support import (
         DEFAULT_BACKEND,
@@ -407,7 +408,7 @@ def _check_config_support(config_path: str) -> None:
         modality_msg = f" modality={modality}" if modality != DEFAULT_MODALITY else ""
         console.print(
             f"  [green]None of the {len(known)} setting(s) known to be unread "
-            f"on task={cfg.task} backend={backend}{modality_msg} is set in this config.[/]"
+            f"on task={cfg.task} backend={backend}{modality_msg} is switched on in this config.[/]"
         )
         return
 
@@ -424,7 +425,7 @@ def _check_config_support(config_path: str) -> None:
     console.print(table)
     modality_summary = f" (modality={modality})" if modality != DEFAULT_MODALITY else ""
     console.print(
-        f"  [yellow]{len(gaps)} setting(s) written here are not read on "
+        f"  [yellow]{len(gaps)} setting(s) switched on here are not read on "
         f"backend={backend}{modality_summary}.[/]"
     )
 
