@@ -275,6 +275,18 @@ def _verdict_from_summary(
     ``continue``.
     """
     pooled_se = math.sqrt(pooled_variance * (1.0 / n_control + 1.0 / n_treatment))
+    # #1384 - a positive but subnormal pooled variance can still underflow to
+    # 0.0 once scaled by 1/n (values 0 and 1e-161 at 40 rows per arm), and the
+    # z below then divides by zero. The square root of the smallest positive
+    # float is about 2.2e-162, so an underflow shows here as exactly 0.0.
+    if pooled_se == 0.0:
+        raise ValueError(
+            f"The {config.metric!r} column's spread is below what the test "
+            f"statistic can represent: its pooled variance {pooled_variance:.3g} "
+            f"over {n_control} + {n_treatment} rows gives a standard error that "
+            "underflows to 0. Rescale the metric (multiply its values by a large "
+            "constant) and re-run."
+        )
 
     # Standardised effect size (z-statistic of the difference of means).
     diff = mean_treatment - mean_control
@@ -366,10 +378,21 @@ def msprt_step(
             mean_treatment=mean_t,
         )
 
-    # Pooled variance with Bessel correction.
-    var_c = sum((x - mean_c) ** 2 for x in ctrl) / (n_c - 1)
-    var_t = sum((x - mean_t) ** 2 for x in treat) / (n_t - 1)
+    # Pooled variance with Bessel correction. Squared as d * d, not d ** 2:
+    # ** raises OverflowError where * returns inf, and inf is refused below.
+    var_c = sum((x - mean_c) * (x - mean_c) for x in ctrl) / (n_c - 1)
+    var_t = sum((x - mean_t) * (x - mean_t) for x in treat) / (n_t - 1)
     raw_pooled_var = ((n_c - 1) * var_c + (n_t - 1) * var_t) / (n_c + n_t - 2)
+    # #1384 - deviations past about 1.3e154 square past the largest float, and
+    # an arm whose sum overflows has an infinite mean, so every deviation is.
+    if not math.isfinite(raw_pooled_var):
+        values = ctrl + treat
+        raise ValueError(
+            f"The {config.metric!r} column's spread is above what the test "
+            f"statistic can represent: its values run from {min(values):.3g} to "
+            f"{max(values):.3g}, and their variance overflows a float. Rescale "
+            "the metric (divide its values by a large constant) and re-run."
+        )
     # Degenerate (zero variance) — both arms are constant. If the means
     # are also identical, defer to ``continue`` (no information). If the
     # means differ, fall back to ``continue`` as well: with zero observed
