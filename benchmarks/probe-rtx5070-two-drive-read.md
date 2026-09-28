@@ -319,6 +319,77 @@ differs. Order rotated over three rounds, 24 spans per arm, on AC only.
 | **0.95-1.05 in all three rounds** | the barrier costs nothing measurable | the reader already reads at the drive's rate; R3 closes with no single-drive reader lever, and striping still needs >= 2 layers in flight for its own reason |
 | **anything else** | ambiguous | reported as measured; no conclusion |
 
+### D2 result — 2026-09-28 13:35, AMBIGUOUS by its own rule; ASPM restored
+
+The laptop was back on AC from 13:26:53 (a background watcher waited for it to
+stay plugged in for 60 s; battery 17% and charging). Box at the start: 9.10 GB
+available, commit 46.95 of 56.62 GB, 18 Python processes, GPU idle. JSON
+`d2_aspm.json`; every byte check OK; **the AC ASPM index read 2 before and 2
+after** (restored by the harness's `finally`, then read back independently with
+`powercfg`).
+
+| round (order) | C: ASPM on (2) | C: ASPM Off (0) | off / on | foreign writes on C:, MB/s (on / off) |
+|---|---|---|---|---|
+| 0 (on, off) | 3.52 | 3.61 | 1.027 | 9.0 / 7.4 |
+| 1 (off, on) | 3.59 | 3.57 | 0.996 | 6.4 / 12.1 |
+| 2 (on, off) | 3.93 | 3.58 | 0.910 | 2.7 / 4.2 |
+| **median** | 3.588 | 3.582 | **0.996** | |
+
+No row decides it (0.910 is outside 0.95-1.05, no round reaches 1.10), so no
+conclusion is drawn — but **no round shows ASPM costing anything like the 10%
+the rule asked about**, and the median is 1.00. ASPM is not why C: reads ~4 GB/s.
+
+### R1 run 3, ASPM Off — NO VERDICT for the third time
+
+JSON `r1_k4_run3_aspm_off.json`, run by D2's harness with ASPM Off; every byte
+check OK; foreign writes on C: 2.3-3.9 MB/s in the C: arms.
+
+| round (order) | A = C: alone | B = D: alone | both: A | both: B | both: aggregate | window (s) | r_sum | r_alt |
+|---|---|---|---|---|---|---|---|---|
+| 0 (a, b, ab) | 3.90 | 4.45 | 3.88 | 4.69 | 7.94 | 2.14 | 1.929 | 1.747 |
+| 1 (b, ab, a) | 3.84 | 4.35 | 3.91 | 5.32 | 7.80 | 1.89 | 2.123 | 1.798 |
+| 2 (ab, a, b) | 3.73 | 5.73 | 4.27 | 5.82 | 8.45 | 1.73 | 1.761 | 1.491 |
+| **median** | **3.837** | 4.446 | 3.908 | 5.325 | — | — | 1.929 | 1.747 |
+
+`alone_A` = 3.837 is outside 4.5-6.2: **the validity row fired for the third
+time, so by the rule committed before run 1, R1 has no verdict from this box.**
+The decision to build on the aggregate evidence is the owner's, and it was made
+the same day on this record: the striping design went ahead, with its own gate
+on the real training step (not this primitive) as the shipping criterion.
+
+### R3' result — 2026-09-28 13:36, AMBIGUOUS by its own rule
+
+Box at the start: 5.41 GB available, commit **54.48 of 57.71 GB** (at the limit
+again; the contributor loop's suites were running), 18 Python processes. JSON
+`r3p_depth.json`; every byte check OK.
+
+| round (order) | C: depth 1 (the reader today) | C: depth 2 | d2 / d1 | foreign writes on C:, MB/s (d1 / d2) |
+|---|---|---|---|---|
+| 0 (d1, d2) | 3.63 | 4.02 | 1.106 | 11.4 / 16.3 |
+| 1 (d2, d1) | 3.84 | 4.23 | 1.101 | 8.8 / 8.0 |
+| 2 (d1, d2) | 4.52 | 4.36 | 0.963 | 5.9 / 8.0 |
+| **median** | 3.837 | 4.226 | **1.101** | |
+
+Two rounds of three clear 1.10 and the third reverses because depth 1 happened
+to read 4.52 there — the drive's own spread again. No conclusion is drawn; the
+reading worth keeping is that removing the per-layer barrier did not cost
+anything in any round, and gained ~10% in two.
+
+### What the day's record adds up to
+
+- **C: alone read 3.52-4.68 GB/s across seventeen arms** (runs 1-3, D1, D2,
+  R3' depth 1), a spread of the same size as every effect the diagnostics were
+  built to find. Foreign I/O (counters), CPU idle (D1) and ASPM (D2) are each
+  ruled out or reduced to noise as the cause of C: reading below gate-974's
+  run A; what remains is unexplained and is stated as such. D: — the emptier
+  drive, behind the chipset — read up to 6.02 GB/s alone.
+- **Together the two drives read 7.65-9.15 GB/s in nine of nine
+  both-at-once arms**, r_sum 1.76-2.36 and r_alt 1.49-2.05 per round, medians
+  2.01 / 2.03 / 1.93 and 1.71 / 1.80 / 1.75 over the three runs.
+- **For three rounds to resolve a 10% effect, this drive needs a quieter box or
+  more rounds.** Every rule in this record was written for three; that choice,
+  not the drives, is why three of its tables end "ambiguous".
+
 ## 6. Verdict
 
 *Pending.*
