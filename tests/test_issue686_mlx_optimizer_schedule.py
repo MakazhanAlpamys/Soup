@@ -193,6 +193,10 @@ class TestUnsupportedNamesAreRefusedNotSilentlyAdamW:
 
         A name the schema already rejects would prove nothing about this layer.
         """
+        from soup_cli.utils.optimizer_zoo import validate_optimizer_name
+
+        assert validate_optimizer_name("grokadamw") == "grokadamw"  # the premise above
+
         with pytest.raises(MlxOptimizerError, match="grokadamw"):
             resolve_optimizer_name("grokadamw")
 
