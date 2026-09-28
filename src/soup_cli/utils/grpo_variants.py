@@ -415,7 +415,7 @@ def _per_token_kl(variant: str, beta: float, logp_new, reference_logp):
 
     if reference_logp is None:
         # Inside the trainer this text reaches the user through the #159
-        # fallback warning, where beta=0 is no remedy (grpo_beta must be > 0),
+        # fallback warning (for a KL-free run, set grpo_beta: 0; #1247),
         # so it names the batch key trl should have filled instead.
         raise ValueError(
             f"grpo_variant={variant!r} with beta={beta} needs reference_logp, the "
@@ -436,6 +436,38 @@ def _with_kl(token_loss, per_token_kl, beta: float):
     if per_token_kl is None:
         return token_loss
     return token_loss + beta * per_token_kl
+
+
+def variant_kl_metric(
+    name: str,
+    *,
+    logp_new,
+    advantages,
+    beta: float,
+    completion_mask=None,
+    reference_logp=None,
+):
+    """Batch-mean per-token KL for the ``kl`` metric of a variant run (#1263).
+
+    trl 0.29's stock loss logs ``(kl_t * mask).sum() / mask.sum().clamp(min=1)``.
+    This is the same quantity over the tokens the variant applies its KL term
+    to: the completion tokens, or the accepted ones for ``rft``. Returns
+    ``None`` when ``beta == 0`` (no KL term, so trl logs nothing either) and
+    for ``standard``, whose loss and ``kl`` metric are trl's own.
+    """
+    normalised = validate_grpo_variant(name)
+    if normalised == "standard" or float(beta) == 0.0:
+        return None
+    per_token_kl = _per_token_kl(normalised, float(beta), logp_new, reference_logp).detach()
+    mask = completion_mask
+    if normalised == "rft":
+        advantages_2d = advantages.unsqueeze(-1) if advantages.dim() == 1 else advantages
+        mask = (advantages_2d > 0).to(per_token_kl.dtype).expand_as(per_token_kl)
+        if completion_mask is not None:
+            mask = mask * completion_mask
+    if mask is None:
+        return per_token_kl.mean()
+    return (per_token_kl * mask).sum() / mask.sum().clamp(min=1.0)
 
 
 def _masked_mean(

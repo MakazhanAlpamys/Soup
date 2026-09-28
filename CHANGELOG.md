@@ -36,7 +36,7 @@ reproducing 70+ versions of notes.
 
 - **Added a ready-made `deepseek-v4-flash-dpo` recipe for deepseek-ai/DeepSeek-V4-Flash
   (#275 by @Srinivasan8888 in #662).** The base already shipped SFT (v0.71.24) and
-  GRPO (#279 by @Faisal01011); this completes the trio with the preference shape
+  GRPO (#279 by @Faisal-Fayaz); this completes the trio with the preference shape
   (`task: dpo`, `format: dpo`, `preference_train.jsonl`, `dpo_beta: 0.1`,
   `lr: 5e-6`) over the MoE geometry its SFT sibling already uses (LoRA r16/a32,
   `batch_size: auto`, `gradient_accumulation_steps: 8`, 4-bit, `moe_lora`,
@@ -210,7 +210,7 @@ reproducing 70+ versions of notes.
 
 - Direct AWQ exports now require an explicit, usable calibration JSONL before
   AutoAWQ is imported or the model is loaded, preventing its large default
-  calibration dataset from being downloaded silently (#338 by @Faisal01011 in #592).
+  calibration dataset from being downloaded silently (#338 by @Faisal-Fayaz in #592).
 
 - **GEMM throughput forecasts now use the card's resolved stream dtype (#617 by @Samearth17 in #648).**
   The pre-flight measurement no longer hard-codes bf16, so pre-Ampere cards are
@@ -522,7 +522,7 @@ reproducing 70+ versions of notes.
   already requires starlette, uvicorn, sse-starlette and httpx-sse.
 
 - **`soup data best-of-n` can sample candidates from Ollama or vLLM providers
-  (#299 by @Faisal01011 in #466).** The existing local Transformers `--base` path stays
+  (#299 by @Faisal-Fayaz in #466).** The existing local Transformers `--base` path stays
   the default, while `--provider ollama|vllm --model <m> [--base-url <url>]`
   draws each prompt's N candidates through the existing SSRF-validated raw-
   completion seam. Provider and model are recorded in `_best_of_n` provenance;
@@ -1334,7 +1334,7 @@ other advisory training-intelligence flags (#583).
   4-bit training resolve quantized storage and trainable adapter
   parameters to the same floating compute dtype, preventing the integer-storage
   and mixed-dtype flattening failures that made the `llama3-70b-fsdp2` recipe
-  unrunnable. The recipe now pins bf16 storage for its A100/H100 target hardware (#588 by @Faisal01011).
+  unrunnable. The recipe now pins bf16 storage for its A100/H100 target hardware (#588 by @Faisal-Fayaz).
 
 - Raised the `accelerate` floor to 0.27.0, the first release whose FSDP
   checkpoint save/load path can be restricted to the trainable adapter. This
@@ -1601,11 +1601,11 @@ other advisory training-intelligence flags (#583).
   recipe `config_sha`, so setting a floor never invalidates evidence.
 
 - **A ready-made `qwen3.5-4b-pretrain` recipe for continued pre-training of
-  `Qwen/Qwen3.5-4B-Base` (#278 by @Faisal01011 in #422).** The recipe uses plaintext data, one epoch,
+  `Qwen/Qwen3.5-4B-Base` (#278 by @Faisal-Fayaz in #422).** The recipe uses plaintext data, one epoch,
   QLoRA 4-bit quantization, and the established continued-pretraining defaults.
 
 - **A ready-made `deepseek-v4-flash-grpo` recipe for GRPO reasoning training
-  with `deepseek-ai/DeepSeek-V4-Flash` (#279 by @Faisal01011 in #432).** The recipe combines the
+  with `deepseek-ai/DeepSeek-V4-Flash` (#279 by @Faisal-Fayaz in #432).** The recipe combines the
   established GRPO defaults with MoE LoRA and gradient checkpointing.
 
 - **`soup mcp serve --allow-execute` can now actually execute, behind a single-use
@@ -1665,7 +1665,7 @@ other advisory training-intelligence flags (#583).
   is not yet consumed by training.
 
 - **Layer streaming now verifies that every trainable LoRA parameter has real
-  storage after PEFT attaches the adapter (#433 reported by @lesterppo, fixed by @Faisal01011 in #435 and #437).** PEFT 0.18 creates streamed
+  storage after PEFT attaches the adapter (#433 reported by @lesterppo, fixed by @Faisal-Fayaz in #435 and #437).** PEFT 0.18 creates streamed
   adapters on `meta` for Soup to materialise, while PEFT 0.19 may create them as
   real tensors immediately, so `materialize_meta_adapters()` returning `0`
   cannot distinguish a healthy no-op from a missed adapter. The streamed build

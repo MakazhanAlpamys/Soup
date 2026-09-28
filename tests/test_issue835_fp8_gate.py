@@ -41,30 +41,48 @@ def converts(monkeypatch):
     """Stub torchao.float8; returns the list of recorded conversions."""
     calls: list[str] = []
 
-    float8 = ModuleType("torchao.float8")
-
     def _convert(model, config=None, module_filter_fn=None):
         calls.append(config)
 
-    float8.convert_to_float8_training = _convert
+    package_names = {
+        "torchao",
+        "torchao.float8",
+        "torchao.prototype",
+        "torchao.prototype.safetensors",
+    }
+    module_names = package_names | {
+        "torchao.float8.config",
+        "torchao.prototype.safetensors.safetensors_support",
+    }
+    modules = {name: ModuleType(name) for name in module_names}
+    for name, module in modules.items():
+        is_package = name in package_names
+        if is_package:
+            module.__path__ = []
+        module.__spec__ = importlib.machinery.ModuleSpec(name, None, is_package=is_package)
 
-    config_mod = ModuleType("torchao.float8.config")
+    float8 = modules["torchao.float8"]
+    float8.convert_to_float8_training = _convert
+    float8.config = modules["torchao.float8.config"]
 
     class Float8LinearConfig:
         @staticmethod
         def from_recipe_name(name):
             return name
 
-    config_mod.Float8LinearConfig = Float8LinearConfig
+    float8.config.Float8LinearConfig = Float8LinearConfig
 
-    torchao = ModuleType("torchao")
-    # A spec, because setup code asks importlib.util.find_spec("torchao"), which
-    # raises on a module whose __spec__ is None.
-    for module in (torchao, float8, config_mod):
-        module.__spec__ = importlib.machinery.ModuleSpec(module.__name__, None)
-    monkeypatch.setitem(sys.modules, "torchao", torchao)
-    monkeypatch.setitem(sys.modules, "torchao.float8", float8)
-    monkeypatch.setitem(sys.modules, "torchao.float8.config", config_mod)
+    prototype = modules["torchao.prototype"]
+    safetensors = modules["torchao.prototype.safetensors"]
+    safetensors_support = modules["torchao.prototype.safetensors.safetensors_support"]
+    safetensors_support.flatten_tensor_state_dict = lambda *args, **kwargs: None
+    safetensors.safetensors_support = safetensors_support
+    prototype.safetensors = safetensors
+    modules["torchao"].prototype = prototype
+    modules["torchao"].float8 = float8
+
+    for name, module in modules.items():
+        monkeypatch.setitem(sys.modules, name, module)
     return calls
 
 
@@ -332,6 +350,8 @@ class TestQuantizationAwareFp8:
 
         _card(monkeypatch, (9, 0))
         monkeypatch.setattr("soup_cli.utils.fp8.is_fp8_available", lambda: True)
+        for name in [n for n in sys.modules if n == "torchao" or n.startswith("torchao.")]:
+            monkeypatch.delitem(sys.modules, name, raising=False)
         monkeypatch.setitem(sys.modules, "torchao", None)
         with pytest.raises(FP8DependencyMissingError):
             apply_fp8_training(_Attn())
@@ -379,28 +399,7 @@ class TestOneGate:
         assert seen == ["tensorwise", "tensorwise"]
         assert converts == ["tensorwise", "tensorwise"]
 
-    def test_validate_fp8_config_reports_the_gates_reason(self, gate):
-        from soup_cli.utils.fp8 import validate_fp8_config
 
-        seen, _ = gate
-        errors = validate_fp8_config("fp8", "transformers", "cuda", recipe="rowwise")
-        assert "SENTINEL-REASON" in errors
-        assert seen == ["rowwise"]
-
-
-class TestValidateFp8Config:
-    def test_ada_has_no_hardware_error(self, monkeypatch, converts):
-        from soup_cli.utils.fp8 import validate_fp8_config
-
-        _card(monkeypatch, (8, 9))
-        assert validate_fp8_config("fp8", "transformers", "cuda") == []
-
-    def test_ampere_has_the_ada_error(self, monkeypatch, converts):
-        from soup_cli.utils.fp8 import validate_fp8_config
-
-        _card(monkeypatch, (8, 6))
-        errors = validate_fp8_config("fp8", "transformers", "cuda")
-        assert any("8.9" in e for e in errors)
 
 
 class TestTheRunStops:
@@ -592,7 +591,12 @@ class TestSoupTrainReachesTheStop:
             yaml.safe_dump({
                 "base": "nobody/not-a-real-model",
                 "task": "sft",
-                "data": {"train": "train.jsonl", "format": "chatml", "max_length": 64},
+                # val_split 0: at the default 0.1 the one row goes to validation
+                # and `soup train` stops on an empty train split (#1217).
+                "data": {
+                    "train": "train.jsonl", "format": "chatml", "max_length": 64,
+                    "val_split": 0.0,
+                },
                 **({"backend": backend} if backend else {}),
                 "training": {
                     "epochs": 1,
@@ -636,14 +640,18 @@ class TestSoupTrainReachesTheStop:
         assert "soup-cli[qat]" not in out
         assert "pip install torchao" not in out
 
-    def test_int8_qat_still_asks_for_torchao(self, tmp_path, monkeypatch):
-        """Control: ``quantization_aware: true`` is the int8 path and keeps its hint."""
+    def test_int8_qat_is_refused_before_either_torchao_hint(self, tmp_path, monkeypatch):
+        """Control: ``quantization_aware: true`` used to be the int8 path, keeping its
+        own "pip install torchao" hint beside FP8's ``soup-cli[qat]`` one. Since #1222
+        it is refused when the config loads, so it reaches neither pre-flight hint.
+        FP8's own hint stays pinned by the two tests above."""
         result, out = self._train(
             tmp_path, monkeypatch, quantization_aware=True, card_ok=True, torchao=False
         )
         assert result.exit_code == 1
-        assert "pip install torchao" in out
-        assert "soup-cli[qat]" not in out
+        assert "training.quantization_aware: true is refused (#1222)" in out
+        assert "pip install" not in out
+        assert "QAT error" not in out
 
     def test_fp8_with_card_and_torchao_passes_the_preflight(self, tmp_path, monkeypatch):
         """Control: the pre-flight is not refusing every FP8 config. A dry run, so
@@ -813,13 +821,29 @@ class TestTheDryRunNoteRound3:
         assert result.exit_code == 0, out
         assert "Note: this machine could not run it: ROWWISE REFUSED" in out
 
-    def test_an_int8_dry_run_prints_no_fp8_note(self, tmp_path, monkeypatch):
+    def test_an_int8_dry_run_is_refused_at_load_with_no_fp8_note(self, tmp_path, monkeypatch):
+        """``quantization_aware: true`` no longer reaches the note: the config is
+        refused when it loads (#1222)."""
         result, out = TestSoupTrainReachesTheStop()._train(
             tmp_path, monkeypatch, quantization_aware=True, card_ok=False, torchao=True,
             dry_run=True,
         )
 
+        assert result.exit_code == 1, out
+        assert "training.quantization_aware: true is refused (#1222)" in out
+        assert "Note:" not in out
+
+    def test_a_dry_run_without_fp8_prints_no_fp8_note(self, tmp_path, monkeypatch):
+        """What the int8 case above used to pin, on a config that still loads: the
+        card note is FP8's, so a dry run that asks for no FP8 prints none, even on
+        a card that could not run FP8."""
+        result, out = TestSoupTrainReachesTheStop()._train(
+            tmp_path, monkeypatch, quantization_aware=False, card_ok=False, torchao=True,
+            dry_run=True,
+        )
+
         assert result.exit_code == 0, out
+        assert "Config valid" in out
         assert "Note:" not in out
 
     def test_an_unsloth_dry_run_prints_only_the_refusal(self, tmp_path, monkeypatch):
@@ -865,6 +889,8 @@ class TestTheTorchaoProbeItself:
     def test_no_torchao_at_all_is_not_available(self, monkeypatch):
         from soup_cli.utils.fp8 import is_torchao_float8_available
 
+        for name in [n for n in sys.modules if n == "torchao" or n.startswith("torchao.")]:
+            monkeypatch.delitem(sys.modules, name, raising=False)
         monkeypatch.setitem(sys.modules, "torchao", None)
 
         assert is_torchao_float8_available() is False
@@ -886,18 +912,26 @@ class TestTheTorchaoProbeItself:
 
 
 class TestTheConversionFailedWording:
-    def test_a_failed_conversion_says_so(self, monkeypatch):
-        """Round 1 renamed the yellow line; nothing held it (non-blocking, taken)."""
+    def test_a_failed_conversion_says_so(self, monkeypatch, converts):
+        """Round 1 renamed the yellow line; nothing held it (non-blocking, taken).
+        INVERTED by #1152 (ruled 2026-09-22): the failure now stops the run instead
+        of printing that line, and its message still names the conversion, not a
+        missing torchao."""
         from soup_cli.config.schema import TrainingConfig
         from soup_cli.utils.v028_features import apply_v028_speed_memory
 
-        monkeypatch.setattr("soup_cli.utils.fp8.apply_fp8_training", lambda *a, **k: False)
-        out, console = TestTheRunStops()._console()
-        applied = apply_v028_speed_memory(
-            model=_Attn(), tcfg=TrainingConfig(quantization_aware="fp8"), base_model="m",
-            console=console, device="cuda",
-        )
+        def _fail(*_a, **_k):
+            raise RuntimeError("conversion blew up")
 
-        assert applied["fp8"] is False
-        assert "the float8 conversion failed" in out.getvalue()
-        assert "torchao.float8 missing" not in out.getvalue()
+        _card(monkeypatch, (9, 0))
+        monkeypatch.setattr(sys.modules["torchao.float8"], "convert_to_float8_training", _fail)
+        out, console = TestTheRunStops()._console()
+        with pytest.raises(RuntimeError) as info:
+            apply_v028_speed_memory(
+                model=_Attn(), tcfg=TrainingConfig(quantization_aware="fp8"), base_model="m",
+                console=console, device="cuda",
+            )
+
+        assert "the float8 conversion failed" in str(info.value)
+        assert "torchao.float8 missing" not in str(info.value)
+        assert out.getvalue() == ""

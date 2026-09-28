@@ -153,7 +153,7 @@ def test_pretrain_constructs_the_model_with_scaled_rope(tiny_llama) -> None:
     assert _rotary_embedding(wrapper.model).rope_type == "linear"
 
 
-def test_longrope_refuses_to_invent_model_specific_factor_vectors() -> None:
+def test_longrope_is_refused_on_a_checkpoint_without_factor_vectors() -> None:
     from transformers import LlamaConfig
 
     from soup_cli.utils.long_context import apply_long_context_config
@@ -165,7 +165,9 @@ def test_longrope_refuses_to_invent_model_specific_factor_vectors() -> None:
         num_attention_heads=4,
         max_position_embeddings=64,
     )
-    with pytest.raises(ValueError, match="requires model-native short_factor, long_factor"):
+    # #1239: the vectors exist only on already-LongRoPE-scaled checkpoints, which
+    # may not be extended either, so the refusal no longer suggests finding one.
+    with pytest.raises(ValueError, match="exist only on checkpoints already scaled with LongRoPE"):
         apply_long_context_config(config, 256, "longrope")
 
 
@@ -199,10 +201,13 @@ def test_switching_rope_type_drops_foreign_algorithm_tunables() -> None:
 
     from soup_cli.utils.long_context import apply_long_context_config
 
+    # #1239: a native llama3 block is no longer replaced (linear on top of it is
+    # refused, see test_issue1239_llama3_rope_compose.py), so a type switch now
+    # starts from an unscaled block. It must still shed another algorithm's keys.
     config = SimpleNamespace(
         max_position_embeddings=64,
         rope_parameters={
-            "rope_type": "llama3",
+            "rope_type": "default",
             "factor": 8.0,
             "low_freq_factor": 1.0,
             "high_freq_factor": 4.0,
