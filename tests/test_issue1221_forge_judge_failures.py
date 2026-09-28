@@ -307,10 +307,14 @@ def test_anthropic_failure_names_the_real_endpoint_not_the_given_base_url(
     actually goes to https://api.anthropic.com, not the given base_url."""
     import httpx
 
+    posted: list[str] = []
+
+    def _record(url, *_args, **_kwargs):
+        posted.append(url)
+        return _AnthropicResponse(500)
+
     monkeypatch.setenv("ANTHROPIC_API_KEY", "synthetic-test-value")
-    monkeypatch.setattr(
-        httpx, "post", lambda *_a, **_k: _AnthropicResponse(500)
-    )
+    monkeypatch.setattr(httpx, "post", _record)
     given_base_url = "http://127.0.0.1:9"
     result = _run_forge(
         tmp_path, monkeypatch,
@@ -319,7 +323,8 @@ def test_anthropic_failure_names_the_real_endpoint_not_the_given_base_url(
     output = _terminal_text(result)
 
     assert result.exit_code == 1, output
-    assert "https://api.anthropic.com" in output
+    assert set(posted) == {"https://api.anthropic.com/v1/messages"}
+    assert "--judge-provider anthropic (https://api.anthropic.com)" in output
     assert given_base_url not in output
 
 

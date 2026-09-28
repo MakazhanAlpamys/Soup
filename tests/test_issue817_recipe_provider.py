@@ -570,9 +570,9 @@ def test_provider_failure_endpoint_label_ignores_anthropic_base_url(
     )
 
 
-def test_provider_failure_endpoint_label_anthropic_without_base_url_is_unchanged() -> None:
-    """Control: the no-base-url case already named the right thing before
-    #1340; the fix must not regress it to something else."""
+def test_provider_failure_endpoint_label_anthropic_without_base_url_names_origin() -> None:
+    """Before #1340 this label read 'anthropic default endpoint'; it now names
+    the origin every Anthropic call goes to, with or without a base URL."""
     from soup_cli.utils.recipe_run import _provider_endpoint_label
 
     assert _provider_endpoint_label("anthropic", None) == "https://api.anthropic.com"
@@ -613,7 +613,13 @@ def test_recipe_cli_anthropic_failure_names_the_real_endpoint_not_base_url(
         def json(self) -> dict:
             return {"error": "stub"}
 
-    monkeypatch.setattr(httpx, "post", lambda *_a, **_k: _FailingResponse())
+    posted: list[str] = []
+
+    def _record(url, *_args, **_kwargs):
+        posted.append(url)
+        return _FailingResponse()
+
+    monkeypatch.setattr(httpx, "post", _record)
     recipe_path = _write_single_provider_recipe(tmp_path, kind="llm_text")
     given_base_url = "http://127.0.0.1:9"
 
@@ -629,8 +635,8 @@ def test_recipe_cli_anthropic_failure_names_the_real_endpoint_not_base_url(
 
     output = _terminal_text(result)
     assert result.exit_code == 1, (output, repr(result.exception))
-    assert "all 2 provider calls failed" in output
-    assert "https://api.anthropic.com" in output
+    assert set(posted) == {"https://api.anthropic.com/v1/messages"}
+    assert "all 2 provider calls failed for https://api.anthropic.com" in output
     assert given_base_url not in output
     checkpoint = json.loads((tmp_path / "out" / ".checkpoint.json").read_text())
     assert checkpoint["status"] == "failed"
