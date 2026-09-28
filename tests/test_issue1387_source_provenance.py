@@ -8,9 +8,12 @@ package, so the resolution is exercised end to end rather than through a fake
 from __future__ import annotations
 
 import importlib.util
+import io
+import shutil
 import subprocess
 import sys
 import types
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -44,7 +47,7 @@ def _git(cwd: Path, *args: str) -> str:
 
 @pytest.fixture
 def checkout(tmp_path: Path) -> Path:
-    if subprocess.run(["git", "--version"], capture_output=True).returncode != 0:
+    if shutil.which("git") is None:
         pytest.skip("git is not installed")
     root = tmp_path / "checkout"
     (root / "src" / "soup_cli").mkdir(parents=True)
@@ -52,7 +55,11 @@ def checkout(tmp_path: Path) -> Path:
     (root / ".gitignore").write_text(".venv/\n", encoding="utf-8")
     _git(root, "init", "-q")
     _git(root, "add", ".")
-    _git(root, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "init")
+    _git(
+        root,
+        "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false",
+        "commit", "-q", "-m", "init",
+    )
     return root
 
 
@@ -96,9 +103,9 @@ def test_git_archive_tree_is_unknown(monkeypatch, checkout, tmp_path):
     extracted = tmp_path / "extracted"
     extracted.mkdir()
     archive = subprocess.run(
-        ["git", "archive", "HEAD"], cwd=checkout, check=True, capture_output=True
+        ["git", "archive", "--format=zip", "HEAD"], cwd=checkout, check=True, capture_output=True
     ).stdout
-    subprocess.run(["tar", "-x", "-C", str(extracted)], input=archive, check=True)
+    zipfile.ZipFile(io.BytesIO(archive)).extractall(extracted)
     _import_soup_cli_from(monkeypatch, extracted / "src" / "soup_cli" / "__init__.py")
     assert provenance.source_sha() == "unknown"
 
