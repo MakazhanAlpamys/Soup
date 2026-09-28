@@ -237,6 +237,33 @@ processes running `while True: pass`; 24 spans per arm, K = 4, three rounds.
 | **0.95-1.05 in all three rounds** | package idle is not it | the remaining host suspect is per-link ASPM, which only a power-plan change tests — owner decision, because it changes a system setting on a shared box |
 | **anything else** | ambiguous | reported as measured; no conclusion drawn |
 
+**D1 result — 2026-09-28 10:47, AMBIGUOUS by its own rule.** JSON
+`d1_host_spin.json`; every byte check OK; no counter errors.
+
+| round (order) | C: alone | C: alone + 2 spinners | spin / alone | CPU busy (alone / spin) | clock, % of nominal (alone / spin) |
+|---|---|---|---|---|---|
+| 0 (alone, spin) | 3.91 | 4.14 | 1.059 | 13% / 16% | 142 / 150 |
+| 1 (spin, alone) | 3.99 | 4.11 | 1.029 | 7% / 18% | 141 / 149 |
+| 2 (alone, spin) | **4.68** | 4.03 | **0.860** | 6% / 18% | 139 / 150 |
+| **median** | 3.993 | 4.108 | 1.029 | | |
+
+Neither decisive row holds (1.059 and 0.860 fall outside 0.95-1.05, and no
+round reaches 1.10), so no conclusion is drawn from D1. What it does show,
+without being a verdict: keeping two cores busy moved the median by +3% and
+reversed in one round, so **the CPU package's idle state is not the ~20% effect
+the both-at-once arm shows** — and C: alone ranged 3.91-4.68 GB/s within ninety
+seconds with foreign writes at 1.2-1.7 MB/s, i.e. the drive's own spread is as
+large as the effect being chased. Across all nine C:-alone arms of the day (runs
+1, 2, D1) C: read 3.62-4.68 GB/s, median 3.94.
+
+**Where R1 stands, stated plainly.** The committed rule has given no verdict,
+twice, and it will not be edited to give one. The one host suspect left is
+per-link ASPM ("Maximum power savings" on AC), and testing it means changing a
+power setting on a box other sessions are using, so it waits for the owner.
+What the record does establish is below any verdict: **the two drives read
+7.65-9.15 GB/s together in six of six both-at-once arms**, each drive at its
+alone rate or faster, which no shared bottleneck produces.
+
 ## 6. Verdict
 
 *Pending.*
