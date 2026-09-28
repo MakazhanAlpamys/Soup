@@ -3076,6 +3076,7 @@ output: ./output
         yaml_str="""\
 base: mistralai/Mistral-Medium-3.5-128B
 task: sft
+modality: vision
 
 data:
   train: ./data/train.jsonl

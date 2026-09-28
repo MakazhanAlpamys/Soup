@@ -55,7 +55,6 @@ EXCEPTIONS: dict[str, str] = {
     "qwen2-audio-7b-sft": _NO_PEFT_DEFAULT,
     "templates/audio.yaml": _NO_PEFT_DEFAULT,
     "voxtral-sft": _NO_PEFT_DEFAULT,
-    "mistral-medium-3-5-sft": _VL_WRAPPER + " (mistral3)",
 }
 
 _VERIFIED = frozenset({"attaches", "no_adapter"})

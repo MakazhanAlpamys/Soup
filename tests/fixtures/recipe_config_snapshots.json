@@ -1282,6 +1282,7 @@
       "data.format": "auto",
       "data.max_length": 4096,
       "data.train": "./data/train.jsonl",
+      "modality": "vision",
       "training.epochs": 2,
       "training.gradient_checkpointing": true,
       "training.lora.alpha": 32,
