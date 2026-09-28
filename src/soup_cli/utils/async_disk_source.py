@@ -319,6 +319,7 @@ class AsyncDiskSource:
         read_ahead: int = DEFAULT_STREAM_READ_AHEAD,
         pin: bool = True,
         read_ranges: int = DEFAULT_STREAM_READ_RANGES,
+        layer_roots: Optional[Sequence[int]] = None,
     ):
         from soup_cli.utils.layer_stream_runtime import RamSource
 
@@ -343,6 +344,7 @@ class AsyncDiskSource:
 
         self._layer_specs = RamSource._normalize_layer_specs(spec, n_layers)
         self._paths = RamSource._normalize_shard_paths(shard_dir, n_layers, shard_paths)
+        self._root_of = self._normalize_layer_roots(layer_roots, int(n_layers))
         self.n_layers = int(n_layers)
         self.read_ahead = read_ahead
         self.read_ranges = read_ranges
@@ -578,6 +580,19 @@ class AsyncDiskSource:
         self._reader_entered = threading.Event()
         self._reader_starts = 0
         self._start_reader()
+
+    @staticmethod
+    def _normalize_layer_roots(layer_roots: Optional[Sequence[int]], n_layers: int) -> List[int]:
+        """Which drive each layer lives on (R4). ``None`` == every layer on one drive."""
+        if layer_roots is None:
+            return [0] * n_layers
+        roots = list(layer_roots)
+        if len(roots) != n_layers:
+            raise ValueError(f"expected {n_layers} layer roots, but got {len(roots)}")
+        for root in roots:
+            if isinstance(root, bool) or not isinstance(root, int) or root < 0:
+                raise ValueError(f"a layer root must be a non-negative int; got {root!r}")
+        return roots
 
     def _start_reader(self) -> None:
         """Start a reader thread. Lock held, or no other thread exists yet."""

@@ -517,21 +517,18 @@ class RamSource:
             )
 
     @staticmethod
-    def spec_from_shard(shard_dir: str, idx: int = 0) -> Dict[str, Tuple[Tuple[int, ...], str]]:
-        """Shape AND dtype for ONE decoder layer, read from the shard header.
+    def spec_from_path(path: str) -> Dict[str, Tuple[Tuple[int, ...], str]]:
+        """Shape AND dtype for the decoder-layer shard at ``path``, read from its header.
 
-        The dtype is read per tensor rather than taken from ``index.dtype``: an
-        NF4 shard is deliberately mixed — packed nibbles and (under double
-        quant) absmax are ``uint8`` while the nested absmax, the offset and the
-        layernorms are floats. Allocating one dtype across the pool would
-        reinterpret packed bytes as floats.
+        The dtype is read per tensor rather than taken from ``index.dtype``: an NF4 shard is
+        deliberately mixed — packed nibbles and (under double quant) absmax are ``uint8``
+        while the nested absmax, the offset and the layernorms are floats. Allocating one
+        dtype across the pool would reinterpret packed bytes as floats.
         """
         from safetensors import safe_open
 
-        from soup_cli.utils.layer_shard import layer_shard_path
-
         spec: Dict[str, Tuple[Tuple[int, ...], str]] = {}
-        with safe_open(layer_shard_path(shard_dir, idx), framework="pt") as handle:
+        with safe_open(path, framework="pt") as handle:
             for name in handle.keys():
                 sliced = handle.get_slice(name)
                 shape = tuple(int(d) for d in sliced.get_shape())
@@ -543,6 +540,19 @@ class RamSource:
                     )
                 spec[name] = (shape, _SAFETENSORS_DTYPES[raw])
         return spec
+
+    @staticmethod
+    def spec_from_shard(shard_dir: str, idx: int = 0) -> Dict[str, Tuple[Tuple[int, ...], str]]:
+        """``spec_from_path`` for layer ``idx`` of a ONE-root cache."""
+        from soup_cli.utils.layer_shard import layer_shard_path
+
+        return RamSource.spec_from_path(layer_shard_path(shard_dir, idx))
+
+    @classmethod
+    def layer_specs_from_paths(
+        cls, paths: Sequence[str]
+    ) -> list[Dict[str, Tuple[Tuple[int, ...], str]]]:
+        return [cls.spec_from_path(path) for path in paths]
 
     @classmethod
     def layer_specs_from_shards(
@@ -2568,7 +2578,7 @@ def install_streaming(
         QUANT_NF4,
         large_shard_path,
         large_weight_role,
-        layer_shard_path,
+        layer_paths,
     )
 
     # PyTorch 2.7+ on Apple Silicon can turn
@@ -2617,7 +2627,9 @@ def install_streaming(
             "no meta decoder weights found — the base was materialised, which "
             "defeats layer streaming entirely"
         )
-    layer_specs = RamSource.layer_specs_from_shards(shard_dir, n_layers)
+    _require_stripe_folders(index)
+    decoder_paths = layer_paths(shard_dir, index)
+    layer_specs = RamSource.layer_specs_from_paths(decoder_paths)
     large_specs = large_layer_specs(shard_dir, index)
     large_keys = tuple(large_specs)
     role_keys = {large_weight_role(key): key for key in large_keys}
@@ -2661,9 +2673,9 @@ def install_streaming(
 
     large_source_indices = {key: n_layers + offset for offset, key in enumerate(large_keys)}
     source_specs = needed_specs_by_layer + [{key: large_specs[key]} for key in large_keys]
-    source_paths = [layer_shard_path(shard_dir, idx) for idx in range(n_layers)] + [
-        large_shard_path(shard_dir, key) for key in large_keys
-    ]
+    source_paths = list(decoder_paths) + [large_shard_path(shard_dir, key) for key in large_keys]
+    placement = tuple(getattr(index, "layer_roots", ()) or ())
+    source_roots = placement + (0,) * len(large_keys) if placement else None
     source, pinned = _build_source(
         shard_dir,
         len(source_specs),
@@ -2674,6 +2686,7 @@ def install_streaming(
         require_pin=require_pin,
         shard_paths=source_paths,
         read_ahead=read_ahead,
+        layer_roots=source_roots,
     )
     pool = LayerBufferPool(
         spec,
@@ -2922,6 +2935,24 @@ def _recover_before_refusing(console: Any) -> None:
         logger.warning("page-lock recovery failed before the refusal: %r", exc)
 
 
+def _require_stripe_folders(index: Any) -> None:
+    """A striped cache whose stripe folder is gone: refuse by name, not FileNotFoundError."""
+    from soup_cli.utils.stripe_roots import STRIPE_DIRS_ENV
+
+    placement = tuple(getattr(index, "layer_roots", ()) or ())
+    for position, root in enumerate(tuple(getattr(index, "stripe_roots", ()) or ()), start=1):
+        if os.path.isdir(root):
+            continue
+        layers = [idx for idx, owner in enumerate(placement) if owner == position]
+        shown = f"{layers[:8]}{' ...' if len(layers) > 8 else ''}"
+        raise RuntimeError(
+            f"layer streaming's cache keeps decoder layers {shown} on the stripe root {root} "
+            f"(from {STRIPE_DIRS_ENV}), and that folder is not there — a drive that is not "
+            f"mounted, or a drive letter that changed. Reconnect it, or unset "
+            f"{STRIPE_DIRS_ENV} and let Soup re-shard to one root."
+        )
+
+
 def _build_source(
     shard_dir,
     n_layers,
@@ -2932,6 +2963,7 @@ def _build_source(
     require_pin=False,
     shard_paths=None,
     read_ahead=DEFAULT_STREAM_READ_AHEAD,
+    layer_roots=None,
 ):
     """Build the weight source for the chosen tier.
 
@@ -2967,6 +2999,10 @@ def _build_source(
         from soup_cli.utils.async_disk_source import AsyncDiskSource
 
         open_kwargs = dict(read_ahead=read_ahead, **source_kwargs)
+        if layer_roots is not None:
+            # R4: which drive each source index lives on. Only the async reader uses it; the
+            # RAM tier reads every file once whatever drive it is on.
+            open_kwargs["layer_roots"] = layer_roots
         if pin:
             try:
                 source = AsyncDiskSource(shard_dir, n_layers, spec, pin=True, **open_kwargs)

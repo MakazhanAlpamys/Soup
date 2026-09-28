@@ -520,6 +520,7 @@ class StreamingSetupMixin:
             estimate_oq_stream_cache_bytes,
             fingerprint_source_files,
             inspect_shard_cache,
+            layer_paths,
             resolve_shard_dir,
             shard_checkpoint,
             source_weight_bytes,
@@ -720,7 +721,7 @@ class StreamingSetupMixin:
             notify=console.print,
         )
 
-        layer_specs = RamSource.layer_specs_from_shards(shard_dir, index.n_layers)
+        layer_specs = RamSource.layer_specs_from_paths(layer_paths(shard_dir, index))
         # Measured from the shard headers, not derived from `total_params`:
         # under NF4 a layer holds packed uint8 alongside float32 statistics, so
         # element counts no longer convert to bytes at a single rate.
