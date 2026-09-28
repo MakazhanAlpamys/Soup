@@ -145,3 +145,44 @@ class TestUnslothBnb4bitNamesTheTask:
         cfg = load_config_from_string(_yaml(task, "transformers", quantization="4bit"))
 
         assert cfg.backend == "transformers"
+
+
+class TestTheStepAsideStaysNarrow:
+    """The ``unsloth_bnb_4bit`` step-aside is for ``backend: unsloth`` only, the flag is
+    named only when it is set, and refusals that hold on every backend still come first."""
+
+    @pytest.mark.parametrize("task", _NEWLY_REFUSED)
+    def test_transformers_still_refuses_unsloth_bnb_4bit(self, task):
+        message = _refusal(_yaml(task, "transformers", unsloth_bnb_4bit=True))
+
+        assert "unsloth_bnb_4bit=true requires backend='unsloth'" in message, message
+
+    @pytest.mark.parametrize("task", _NEWLY_REFUSED)
+    def test_the_plain_refusal_does_not_name_the_flag(self, task):
+        message = _refusal(_yaml(task, "unsloth"))
+
+        assert "unsloth_bnb_4bit" not in message, message
+
+    @pytest.mark.parametrize(
+        ("task", "section", "key"),
+        [("unlearn", "data", "forget_set"), ("moe_lora_routing", "training", "mole_task_adapters")],
+    )
+    def test_a_refusal_on_every_backend_comes_first(self, task, section, key):
+        def refusal(backend):
+            raw = yaml.safe_load(_yaml(task, backend))
+            del raw[section][key]
+            return _refusal(yaml.safe_dump(raw))
+
+        on_unsloth = refusal("unsloth")
+
+        assert "no unsloth setup" not in on_unsloth, on_unsloth
+        assert on_unsloth == refusal("transformers")
+
+    def test_the_backend_refusal_is_the_last_after_validator(self):
+        """Structural, for validators not yet written (#1313's ``eval_steps`` check is
+        one): anything that refuses on every backend must run before this one.
+        ``model_validators`` is in definition order."""
+        validators = SoupConfig.__pydantic_decorators__.model_validators
+        after = [name for name, dec in validators.items() if dec.info.mode == "after"]
+
+        assert after[-1] == "_validate_unsloth_has_a_setup", after[-3:]
