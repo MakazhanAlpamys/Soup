@@ -46,12 +46,17 @@ last non-empty line, and its number is the last number anywhere in it, which is 
 
 Both sides are normalised the same way: surrounding whitespace; every ``$``, ``\\$``, ``\\(``,
 ``\\)``, ``\\[`` and ``\\]``; ``\\left`` / ``\\right``; ``\\dfrac`` / ``\\tfrac`` read as
-``\\frac``; LaTeX spacing (``\\,``, ``\\!``, ``\\;``, ``\\:``, ``\\ ``, but never the second
-backslash of a ``\\\\`` line break) and ``{,}`` thousands separators; markdown ``*`` at either
-end; trailing ``. , ; : !``; and the Unicode minus sign. A number is then exactly one literal: an
-optional sign, digits with optional ``,`` groups of three, an optional fraction and an optional
-exponent (``-1,000.5``, ``.5``, ``1e5``). Anything else, such as ``42 apples``,
-``\\frac{14}{3}`` or ``p - q``, is compared as text, ignoring case and whitespace.
+``\\frac``; one ``\\text{}`` / ``\\textbf{}`` / ``\\mathrm{}`` / ``\\mbox{}`` wrapper, unwrapped to
+its contents; ``^\\circ``, ``^{\\circ}`` and ``\N{DEGREE SIGN}``, dropped; a one-character
+``\\frac`` argument, braced to match (``\\frac12``, ``\\frac1{2}``, ``\\frac{1}2`` all read
+``\\frac{1}{2}``); a single-letter variable prefix (``x = 7`` reads ``7``); LaTeX spacing
+(``\\,``, ``\\!``, ``\\;``, ``\\:``, ``\\ ``, but never the second backslash of a ``\\\\`` line
+break) and ``{,}`` thousands separators; markdown ``*`` at either end; trailing ``. , ; : !``; and
+the Unicode minus sign. A number is then exactly one literal: an optional sign, digits with
+optional ``,`` groups of three, an optional fraction and an optional exponent (``-1,000.5``,
+``.5``, ``1e5``). Anything else, such as ``42 apples``, ``\\frac{14}{3}`` or ``p - q``, is
+compared as text, ignoring case and whitespace. Units are not stripped (``42 apples`` against
+``42``), and nothing is evaluated (``\\frac{1}{2}`` against ``0.5``).
 
 Every scan is linear in its input, because a completion is untrusted model output.
 """
@@ -98,6 +103,15 @@ _MATH_DELIMITER_RE = re.compile(r"\\[()\[\]]")
 # Not followed by a letter, so ``\leftarrow`` and ``\rightarrow`` stay whole.
 _SIZING_RE = re.compile(r"\\(?:left|right)(?![A-Za-z])")
 _FRAC_VARIANT_RE = re.compile(r"\\[dt]frac(?![A-Za-z])")
+# One \text{}/\textbf{}/\mathrm{}/\mbox{} wrapper: what it encloses IS the answer (#1346).
+_TEXT_WRAP_OPEN_RE = re.compile(r"\\(?:text|textbf|mathrm|mbox)\s*\{")
+# "^\circ", "^{\circ}" or the degree sign; no unit beyond that is stripped (#1346).
+_DEGREE_RE = re.compile(r"\^\{?\\circ\}?|\N{DEGREE SIGN}")
+# A \frac argument that is a single character, braced or bare: \frac12, \frac1{2}, \frac{1}2 all
+# read \frac{1}{2}, since a bare LaTeX macro argument is exactly one token wide (#1346).
+_FRAC_COMPACT_RE = re.compile(r"\\frac(\{[^{}]\}|[^\s{}])(\{[^{}]\}|[^\s{}])")
+# A single-letter variable prefix at the start of an answer: "x = 7" reads "7" (#1346).
+_VAR_PREFIX_RE = re.compile(r"^[A-Za-z]\s*=\s*")
 _UNSIGNED_PATTERN = r"(?:(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?|\.\d+)"
 _NUMBER_PATTERN = r"[-+]?" + _UNSIGNED_PATTERN + r"(?:[eE][-+]?\d+)?"
 _NUMBER_RE = re.compile(_NUMBER_PATTERN)
@@ -153,12 +167,38 @@ def _canonical_symbols(text: str) -> str:
     return _LATEX_SPACING_RE.sub(lambda match: "\\\\" if match.group() == "\\\\" else "", text)
 
 
+def _unwrap_text_command(text: str) -> str:
+    """Unwrap one ``\\text{}``/``\\textbf{}``/``\\mathrm{}``/``\\mbox{}``: what it encloses IS
+    the answer, so ``\\text{Paris}`` reads ``Paris``."""
+    match = _TEXT_WRAP_OPEN_RE.search(text)
+    if match is None:
+        return text
+    depth = 1
+    for brace in _BRACE_RE.finditer(text, match.end()):
+        depth += 1 if brace.group() == "{" else -1
+        if depth == 0:
+            close = brace.start()
+            return text[: match.start()] + text[match.end() : close] + text[close + 1 :]
+    return text
+
+
+def _frac_compact_repl(match: re.Match[str]) -> str:
+    numerator, denominator = match.group(1), match.group(2)
+    numerator = numerator[1:-1] if numerator.startswith("{") else numerator
+    denominator = denominator[1:-1] if denominator.startswith("{") else denominator
+    return f"\\frac{{{numerator}}}{{{denominator}}}"
+
+
 def normalize_answer(text: str) -> str:
     """Normalise an answer for comparison; see the module docstring for the rules."""
     text = _MATH_DELIMITER_RE.sub("", _canonical_symbols(text))
     text = text.replace("\\$", "").replace("$", "")
     text = _FRAC_VARIANT_RE.sub(r"\\frac", _SIZING_RE.sub("", text))
+    text = _unwrap_text_command(text)
+    text = _DEGREE_RE.sub("", text)
+    text = _FRAC_COMPACT_RE.sub(_frac_compact_repl, text)
     text = text.lstrip(_EDGE_CHARS).rstrip(_TRAILING_CHARS)
+    text = _VAR_PREFIX_RE.sub("", text, count=1)
     return " ".join(text.split())
 
 
