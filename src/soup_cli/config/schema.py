@@ -7049,25 +7049,13 @@ class SoupConfig(BaseModel):
         ``unlearn`` is refused in :meth:`_validate_unlearn_compat` for a
         different reason (it has an adapter but no ``Trainer`` optimizer).
 
-        #1324: the ``mlx`` backend is refused too. MLX builds its LoRA
-        adapter with ``mlx_lm``'s ``linear_to_lora_layers`` and its optimizer
-        from a single scalar (``plan_optimizer`` in ``trainer/mlx_optim.py``
-        takes no parameter groups), so ``loraplus_lr_ratio`` would validate,
-        print nothing in ``soup doctor --config``, and train A and B at one
-        learning rate. ``unsloth`` reaches the transformers wrappers'
-        ``attach_loraplus_optimizer`` call, so it stays allowed (#1080).
+        The ``mlx`` backend is refused separately, in
+        :meth:`_validate_loraplus_backend` (#1324), after the MLX task gate.
         """
         tcfg = self.training
         if tcfg.loraplus_lr_ratio is None:
             return self
         task = self.task
-        if self.backend not in ("transformers", "unsloth"):
-            raise ValueError(
-                "Refused: training.loraplus_lr_ratio is not implemented on "
-                f"backend={self.backend!r} (the MLX optimizer uses one "
-                "learning rate for every LoRA tensor). Remove "
-                "training.loraplus_lr_ratio, or use backend: transformers."
-            )
         if getattr(tcfg.lora, "use_vera", False):
             raise ValueError(
                 "Refused: training.loraplus_lr_ratio needs trainable LoRA A/B "
@@ -7294,6 +7282,26 @@ class SoupConfig(BaseModel):
             "is not yet implemented (upstream mlx-lm does not expose a "
             f"training helper). Use backend=transformers for task={self.task}."
         )
+
+    @model_validator(mode="after")
+    def _validate_loraplus_backend(self) -> "SoupConfig":
+        """#1324: ``loraplus_lr_ratio`` is not implemented on ``backend: mlx``.
+
+        MLX builds its LoRA adapter with ``mlx_lm``'s ``linear_to_lora_layers``
+        and its optimizer from a single learning rate (``plan_optimizer`` in
+        ``trainer/mlx_optim.py`` takes no parameter groups), so the ratio would
+        validate, print nothing in ``soup doctor --config``, and train A and B
+        at one learning rate. ``unsloth`` reaches the transformers wrappers'
+        ``attach_loraplus_optimizer`` call, so it stays allowed (#1080).
+        """
+        if self.backend == "mlx" and self.training.loraplus_lr_ratio is not None:
+            raise ValueError(
+                "Refused: training.loraplus_lr_ratio is not implemented on "
+                "backend='mlx' (the MLX optimizer uses one "
+                "learning rate for every LoRA tensor). Remove "
+                "training.loraplus_lr_ratio, or use backend: transformers."
+            )
+        return self
 
     @model_validator(mode="after")
     def _validate_uld_compat(self) -> "SoupConfig":
