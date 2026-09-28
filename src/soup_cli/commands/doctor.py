@@ -550,7 +550,9 @@ def _get_precision_capabilities(torch) -> dict[str, tuple[bool, bool | None]]:
     from soup_cli.utils.fp8 import is_fp8_gpu_supported
 
     try:
-        bf16_supported = bool(torch.cuda.is_bf16_supported())
+        from soup_cli.utils.gpu import cuda_supports_bf16
+
+        bf16_supported = bool(cuda_supports_bf16())
     except (AttributeError, RuntimeError, AssertionError):
         bf16_supported = False
 

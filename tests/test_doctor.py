@@ -258,7 +258,7 @@ def test_doctor_gpu_panel_shows_compute_capability_and_precision(monkeypatch):
         ),
         get_device_capability=lambda idx: (12, 0),
         get_arch_list=lambda: ["sm_75", "sm_80", "sm_90", "sm_120"],
-        is_bf16_supported=lambda: True,
+        is_bf16_supported=lambda including_emulation=True: True,
     )
 
     fake_torch = types.SimpleNamespace(
@@ -329,7 +329,7 @@ def test_get_precision_capabilities_reports_negative_nvfp4_software(
 
     fake_torch = types.SimpleNamespace(
         cuda=types.SimpleNamespace(
-            is_bf16_supported=lambda: True,
+            is_bf16_supported=lambda including_emulation=True: True,
         )
     )
 
@@ -400,7 +400,7 @@ def test_get_precision_capabilities_requires_torchao_for_fp8_attention(
 
     fake_torch = types.SimpleNamespace(
         cuda=types.SimpleNamespace(
-            is_bf16_supported=lambda: True,
+            is_bf16_supported=lambda including_emulation=True: True,
         )
     )
 
@@ -430,12 +430,17 @@ def test_get_precision_capabilities_requires_torchao_for_fp8_attention(
 
 def test_get_precision_capabilities_reports_negative_bf16(monkeypatch):
     """BF16 hardware support must reflect the real Torch probe."""
+    import importlib.machinery
     import types
 
     fake_cuda = types.SimpleNamespace(
-        is_bf16_supported=lambda: False,
+        is_bf16_supported=lambda including_emulation=True: False,
     )
-    fake_torch = types.SimpleNamespace(cuda=fake_cuda)
+    fake_torch = types.SimpleNamespace(
+        __spec__=importlib.machinery.ModuleSpec("torch", None),
+        cuda=fake_cuda,
+    )
+    monkeypatch.setitem(sys.modules, "torch", fake_torch)
 
     monkeypatch.setattr(
         "soup_cli.utils.fp8.is_fp8_gpu_supported",
@@ -457,6 +462,45 @@ def test_get_precision_capabilities_reports_negative_bf16(monkeypatch):
     assert result["BF16"] == (False, None)
 
 
+def test_get_precision_capabilities_bf16_matches_trainer_gate_on_pre_ampere(
+    monkeypatch,
+):
+    """Doctor must match the trainer's non-emulated BF16 hardware gate."""
+    import importlib.machinery
+    import types
+
+    def is_bf16_supported(including_emulation=True):
+        return including_emulation
+
+    fake_torch = types.SimpleNamespace(
+        __spec__=importlib.machinery.ModuleSpec("torch", None),
+        cuda=types.SimpleNamespace(
+            is_available=lambda: True,
+            get_device_capability=lambda idx=0: (7, 5),
+            is_bf16_supported=is_bf16_supported,
+        ),
+    )
+    monkeypatch.setitem(sys.modules, "torch", fake_torch)
+    monkeypatch.setattr(
+        "soup_cli.utils.fp8.is_fp8_gpu_supported",
+        lambda: False,
+    )
+    monkeypatch.setattr(
+        "soup_cli.utils.advanced_precision.is_blackwell_gpu",
+        lambda: False,
+    )
+    monkeypatch.setattr(
+        "soup_cli.utils.advanced_precision._torchao_available",
+        lambda: False,
+    )
+
+    from soup_cli.commands.doctor import _get_precision_capabilities
+    from soup_cli.utils.gpu import cuda_supports_bf16
+
+    assert cuda_supports_bf16() is False
+    assert _get_precision_capabilities(fake_torch)["BF16"] == (False, None)
+
+
 def test_doctor_gpu_panel_warns_when_torch_lacks_gpu_arch(monkeypatch):
     """GPU panel warns when Torch does not include the detected GPU architecture."""
     import importlib.machinery
@@ -471,7 +515,7 @@ def test_doctor_gpu_panel_warns_when_torch_lacks_gpu_arch(monkeypatch):
         ),
         get_device_capability=lambda idx: (12, 0),
         get_arch_list=lambda: ["sm_75", "sm_80", "sm_90"],
-        is_bf16_supported=lambda: True,
+        is_bf16_supported=lambda including_emulation=True: True,
     )
 
     fake_torch = types.SimpleNamespace(
