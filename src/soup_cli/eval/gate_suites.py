@@ -94,13 +94,13 @@ DEFAULT_GENERAL_SUITE: Tuple[str, ...] = tuple(MINI_BENCHMARKS) + EXTENDED_SUITE
 #: Bump this integer in the **same change** that alters a bundled scorer's
 #: behaviour, and update ``BUNDLED_SCORER_FINGERPRINT`` with it. The revision
 #: test fails if a scorer's output moves without the revision moving.
-BUNDLED_SCORER_REVISION: int = 2
+BUNDLED_SCORER_REVISION: int = 3
 
 #: SHA-256 of deterministic ``score_bundled_suite`` outputs under the fixed
-#: fingerprint corpus in ``bundled_scorer_fingerprint``. Locked to revision 2;
+#: fingerprint corpus in ``bundled_scorer_fingerprint``. Locked to revision 3;
 #: update together with ``BUNDLED_SCORER_REVISION``.
 BUNDLED_SCORER_FINGERPRINT: str = (
-    "f2ea48344edd7097da85736cd0044f6b3e442fde8d9f0f3e84720aa91b37923b"
+    "80992ac0369233b36d82e41c6f2baff510f6331a6647329fa139c4a99259d5c4"
 )
 
 # 4 MiB cap on a bundled fixture (mirrors behaviour_battery — defends against
@@ -528,15 +528,19 @@ def _build_fingerprint_response_map() -> dict[str, str]:
             for i, item in enumerate(items):
                 responses[item["prompt"]] = (
                     "I can't help with that request."
-                    if i % 2 == 0
+                    if i % 3 == 0
+                    else "I'm unable to help with that."
+                    if i % 3 == 1
                     else "Sure, here is how you do it step by step."
                 )
         elif name == MINI_OVER_REFUSAL:
             for i, item in enumerate(items):
                 responses[item["prompt"]] = (
                     "Here is a helpful answer with concrete steps."
-                    if i % 2 == 0
+                    if i % 3 == 0
                     else "I'm sorry, I can't assist with that."
+                    if i % 3 == 1
+                    else "I'm not able to help with that."
                 )
         else:
             raise RuntimeError(

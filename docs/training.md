@@ -506,7 +506,7 @@ soup train
 
 ## Knowledge Distillation
 
-Train a small student model to match a larger teacher's output distribution.
+Train a small student model to match a larger teacher's output distribution. Every train/val row must keep at least one causal-loss target after truncation at `data.max_length`, and a row without one is refused at setup by split and row number, as SFT does.
 
 ```yaml
 base: HuggingFaceTB/SmolLM2-135M
@@ -702,9 +702,13 @@ reference policy, where trl's own GRPO loss puts it: trl's per-token estimator
 same way as that variant's policy term. `rft` applies it only to the accepted
 completions it trains on. The β that the reward-hack controller sets at runtime
 (`kl_control` / `pid_lagrangian`) reaches every variant the same way.
-`grpo_beta` must be greater than zero, so a KL-free run, the setting the DAPO
-paper uses, cannot be configured yet
-([#1247](https://github.com/MakazhanAlpamys/Soup/issues/1247)).
+Set `grpo_beta: 0` for a KL-free run (no KL penalty against the reference policy,
+skipping the reference forward pass entirely), as used by the published DAPO and
+Dr. GRPO recipes ([#1247](https://github.com/MakazhanAlpamys/Soup/issues/1247)).
+
+With a non-zero `grpo_beta`, a variant run logs the same `kl` metric as trl's stock
+loss: the batch mean of that per-token estimate over the completion tokens (over the
+accepted tokens only, for `rft`), as `kl` in training and `eval_kl` in evaluation.
 
 The stability callback (EMA ref-model update, replay buffer, TIS alert counter)
 attaches automatically when any of `ref_model_ema_alpha` / `replay_buffer_size`
@@ -1190,7 +1194,7 @@ data:
 training:
   epochs: 3
   lr: 1e-5
-  grpo_beta: 0.1
+  grpo_beta: 0.1  # KL penalty; 0 = KL-free (DAPO / Dr. GRPO)
   num_generations: 4
   reward_fn: accuracy   # or 'format', or path to custom .py
   lora:
@@ -1410,6 +1414,8 @@ training:
 ]}
 ```
 
+Add a top-level `tools` list (OpenAI function schemas) to put the schemas in front of the model as a system turn; with `format: auto`, a row with `messages` and `tools` is detected as tool-calling. Multi-turn trajectories keep their order: each assistant turn keeps its `tool_calls` and each `tool` turn its `tool_call_id`. The older shape, with the calls in a top-level `tool_calls` list, still loads: those calls become one assistant turn after `messages`.
+
 Arguments are parsed as JSON only — never `eval()`. `soup eval custom` can score tool-call accuracy (function name + argument JSON equality).
 
 ```bash
@@ -1584,8 +1590,9 @@ data:
 training:
   citation_faithful: true        # enable citation precision/recall scoring
   citation_style: bracket        # cite as [doc-1] inline
-  citation_recall_threshold: 0.8 # gate final save on recall >= 80%
 ```
+
+`training.citation_recall_threshold` is validated but nothing gates a save or a run on it. Setting it warns in v0.76 and is refused as of v0.77 (#761).
 
 ```jsonl
 # RAFT JSONL row shape
@@ -1815,9 +1822,15 @@ training:
 ```
 
 The gate is the only trainable parameter; it is saved as `mole_gate.pt` alongside the run.
+It trains as an fp32 master weight on every device, so its gradient and AdamW moments are
+fp32 too, even where the frozen base loads in bf16 (on CUDA), and `mole_gate.pt` is saved in
+fp32: a `Linear(hidden, N)` of `4 x hidden x N` bytes, about 7 KB for the example above and
+2 MiB at hidden 8192 with 64 adapters. A bf16 gate with no fp32 copy would round most AdamW
+steps away at the default `lr` (#1266).
 `compute_loss` runs N+1 forwards per step (base + each adapter under `torch.no_grad()`, blended
-by the per-token gate weights) so step time scales with the number of task adapters. Training
-only — there is no serve-time MoLE path yet. (v0.71.12)
+by the per-token gate weights) so step time scales with the number of task adapters. To serve
+the trained router, see `soup serve --mole` in [Serving and Export](serving-and-export.md).
+(v0.71.12)
 
 
 ## Architecture Knobs — Mixture-of-Depths, LLaMA Pro, LongLoRA

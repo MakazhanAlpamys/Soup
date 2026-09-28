@@ -155,6 +155,15 @@ soup data canary insert train.jsonl -o canaried.jsonl --count 16 --manifest secr
 soup data canary check --manifest secrets.json --base ./my-model --adapter ./lora
 ```
 
+`insert` writes the canaries in the dataset's own format, so the loader keeps them:
+`--format auto` (the default) detects it from the first row, as `data.format: auto`
+does. Alpaca, sharegpt and chatml are supported, each with the carrier as the prompt
+and the secret as the trained response. Every other format is refused: dpo, kto and
+embedding have no single supervised response, plaintext trains on raw text rather
+than the chat turn `check` scores, tool-calling puts a tool-schema system turn
+before the prompt, which `check` does not render, and the multimodal formats need a
+real image or audio file per row. `-o` takes `.jsonl`, or `.json` for a JSON array.
+
 `check` measures the model's loss on each inserted secret and ranks it against
 never-inserted **controls** drawn from the same secret space and sharing the same
 carrier prompt — so a low loss means the *secret* is unusually likely, not the
@@ -208,6 +217,8 @@ expectations:
   - {name: expect_no_refusal_pattern}
 EOF
 soup expect data.jsonl suite.yaml   # exit 2 on suite failure
+# Inspects ChatML, ShareGPT, DPO (chosen/rejected), KTO (completion), Alpaca,
+# and sentence embedding formats. Fails closed if any row yields zero extractable text.
 
 # Magpie synthetic data — chat-template-prefix harvest (live, v0.71.6)
 soup data gen-magpie --base meta-llama/Llama-3.1-8B-Instruct \
@@ -547,6 +558,8 @@ soup migrate --from llamafactory config.yaml --dry-run
 
 Automatically maps model, LoRA, training params, quantization, and task type. Warns about unsupported features.
 
+An axolotl `rl:` value with no Soup task (for example `rl: ebft`) stops the migration: `soup migrate` exits 1 and names the value instead of writing a `task: sft` config.
+
 
 ## Data Formats
 
@@ -598,6 +611,8 @@ Or use `.txt` files directly (one document per line).
 {"anchor": "What is Python?", "positive": "Python is a programming language."}
 {"anchor": "What is Python?", "positive": "A programming language.", "negative": "A type of snake."}
 ```
+
+With `embedding_loss: contrastive` (the default), each row's negatives are the other rows' positives in the same batch, so a batch needs at least two rows: `batch_size: 1` is refused at config load, `batch_size: auto` resolves to at least 2, and the last partial batch of each epoch is dropped. This also applies when `triplet` falls back to contrastive because the rows have no `negative`. Use `triplet` with a `negative` on every row, or `cosine`, to train at batch size 1.
 
 **Audio (speech + conversation):**
 ```json
@@ -883,7 +898,9 @@ prints `Warning: N of M rows dropped` with the first row's index and the
 converter's reason. For a local file it also prints the `soup data validate`
 command that lists them all. The
 count agrees with `soup data validate` for the same file. Before #1181 the rows
-were dropped without a word.
+were dropped without a word. If a load ends with zero training rows, `soup train`
+stops with exit 1 before loading the model, `--dry-run` included, naming the format
+the rows were read as and the first row's drop reason (#1217).
 
 
 ## Demo Datasets (`soup data demo`)
@@ -1164,6 +1181,11 @@ turn), `unknown_roles`, and `truncation_risk` (p95 rendered length vs
 `data.max_length`). `--train-on-responses-only` / `--train-on-messages-with-train-field`
 select the same masking strategy `soup train` would use, so the report and
 `--show-mask` preview can never disagree about what's actually trained.
+`--mask-history` (default off, matching `data.mask_history`) narrows the
+assistant-only mask to the **last** assistant turn, exactly like the
+soup.yaml flag of the same name; it is refused with
+`--no-train-on-responses-only` or `--train-on-messages-with-train-field`,
+the same combinations `soup.yaml` refuses.
 
 
 ## Preference-Data Linter (`soup data lint`)

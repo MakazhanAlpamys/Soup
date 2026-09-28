@@ -28,6 +28,7 @@ soup train --config soup.yaml --push-as user/repo --hf-resume  Resume from lates
 soup train --config soup.yaml --find-lr        LR range finder: write recommended LR JSON
 soup train --config soup.yaml --cloud modal|lambda --gpu a100  Render a cloud GPU controller (plan-only; --cloud-submit submits live)
 soup infer --model ./output --input p.jsonl   Batch inference
+soup infer --model ./output --input p.jsonl --cuda-graphs   Experimental CUDA graph decode (Qwen2/Llama, one GPU, PyTorch >= 2.14)
 soup infer --task asr --model <whisper|adapter> --input a.jsonl --output o.jsonl [--audio-dir d --asr-language en --asr-task transcribe|translate]  Whisper transcription + WER/CER
 soup chat --model ./output                    Interactive chat
 soup push --model ./output --repo user/name   Upload to HuggingFace
@@ -177,7 +178,7 @@ soup migrate --from llamafactory config.yaml  Import config from LLaMA-Factory
 soup migrate --from axolotl config.yml        Import config from Axolotl
 soup migrate --from unsloth notebook.ipynb    Import config from Unsloth notebook
 soup migrate --from llamafactory c.yaml --dry-run  Preview without writing
-soup recipes list                             List all 174 ready-made recipes
+soup recipes list                             List all 172 ready-made recipes
 soup recipes show llama3.1-8b-sft            Print recipe YAML
 soup recipes use llama3.1-8b-sft             Copy recipe to soup.yaml
 soup recipes search "reasoning"              Search by keyword/task/size
@@ -253,6 +254,7 @@ soup ui --public [--auth-token T]             Phone-scannable Web UI (v0.53.9); 
 soup tokenizer train --input c.jsonl --vocab-size N  Train BPE tokenizer (v0.53.9)
 soup bench <model>                            Inference speed + memory (same as `soup bench infer <model>`)
 soup bench infer <model> --p50 --p95          Bench with tail-latency percentiles (v0.53.9)
+soup bench infer <model> --cuda-graphs         Bench with experimental CUDA graph decode
 soup bench train --config soup.yaml --steps 20 --warmup 3 -o bench-train.json  Timed SFT steps; exits 1 when the model was not training (#836)
 soup bench <model> --backend auto             Auto-detect transformers/mlx backend (v0.53.9)
 soup serve --reasoning-parser deepseek-r1     Strip <think> blocks from responses (v0.53.9)
@@ -497,7 +499,8 @@ Soup gate and verdict commands follow a unified, CI-friendly exit-code contract:
 The taxonomy applies consistently across `soup ship`, `soup eval gate`, `soup eval against`, `soup eval checklist`, `soup eval behavior`, `soup eval quant-check`, `soup lock check`, `soup expect`, `soup data validate`, `soup data lint`, and `soup recipes verify`.
 
 `soup eval checklist` requires `--evidence`. `soup eval behavior` also requires
-`--evidence` unless `--base-model` selects the live path. Omitting the required
+`--evidence` unless `--base-model` selects the live path; the `elephant` and
+`syceval` batteries cannot be scored live and exit `3` with `--base-model`. Omitting the required
 evidence exits `3` and names the JSON input to provide; it never reports a neutral
 pass for a gate that measured nothing.
 

@@ -1,0 +1,18 @@
+{
+  "a_identical_ids_and_matched_conditions": true,
+  "b_slowest_graph_over_fastest_baseline": 2.762730133293879,
+  "b_pass": true,
+  "c_extra_reserved_bytes": 41943040,
+  "c_pass": true,
+  "baseline_rates": [
+    17.803391028976346,
+    15.170494200132275,
+    8.103636898582106
+  ],
+  "graph_rates": [
+    49.18596487056687,
+    60.29672949275598,
+    51.095848558047685
+  ],
+  "pass": true
+}

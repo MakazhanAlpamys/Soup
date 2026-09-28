@@ -125,11 +125,13 @@ class TestTheDeadline:
 
 
 class TestStagedFieldsInventory:
-    """Validate inventory size and default handling across all 17 staged fields."""
+    """Validate inventory size and default handling across all 20 staged fields."""
 
-    def test_exactly_17_staged_fields_registered(self) -> None:
-        assert len(STAGED_FIELDS) == 17, (
-            f"Expected exactly 17 staged fields, got {len(STAGED_FIELDS)}"
+    def test_exactly_20_staged_fields_registered(self) -> None:
+        # 17 from #808, plus lr_groups / early_stop_patience /
+        # citation_recall_threshold from #761.
+        assert len(STAGED_FIELDS) == 20, (
+            f"Expected exactly 20 staged fields, got {len(STAGED_FIELDS)}"
         )
 
     @pytest.mark.parametrize(
@@ -141,6 +143,9 @@ class TestStagedFieldsInventory:
             ("training", "grace_codebook", True),
             ("training", "grace_codebook_size", 1024),
             ("training", "grace_codebook_dim", 64),
+            ("training", "lr_groups", [{"pattern": "lm_head", "lr": 1e-5}]),
+            ("training", "early_stop_patience", 5),
+            ("training", "citation_recall_threshold", 0.8),
             ("data", "video_dir", "./videos"),
             ("data", "video_fps", 2.0),
             ("data", "video_maxlen", 64),

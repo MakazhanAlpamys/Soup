@@ -377,6 +377,41 @@ class DistillNonfiniteTracker:
                 pass
 
 
+def _map_distill_rows(
+    rows: Any,
+    *,
+    format_row: Any,
+    split: str,
+    max_length: int,
+) -> Any:
+    """Tokenize distill rows and attach human-facing row number to causal-loss
+    target failures (#1242).
+    """
+    from datasets import Dataset
+
+    from soup_cli.data.loss_mask import (
+        NoCausalLossTargetError,
+        ensure_causal_loss_target,
+    )
+
+    def checked_format_row(example: dict, row_index: int) -> dict:
+        try:
+            formatted = format_row(example)
+            labels = formatted.get("labels")
+            if labels is not None:
+                ensure_causal_loss_target(labels, max_length=max_length)
+            return formatted
+        except NoCausalLossTargetError as exc:
+            raise ValueError(f"{split} row {row_index + 1}: {exc}") from exc
+
+    raw_ds = Dataset.from_list(rows) if isinstance(rows, list) else rows
+    return raw_ds.map(
+        checked_format_row,
+        with_indices=True,
+        remove_columns=raw_ds.column_names,
+    )
+
+
 class DistillTrainerWrapper:
     """High-level wrapper for student/teacher distillation.
 
@@ -427,7 +462,6 @@ class DistillTrainerWrapper:
 
     def setup(self, dataset: dict) -> None:
         """Load student + teacher, build distillation Trainer."""
-        from datasets import Dataset
         from peft import TaskType, get_peft_model
         from transformers import (
             AutoModelForCausalLM,
@@ -683,15 +717,20 @@ class DistillTrainerWrapper:
             console=console,
             training_cfg=tcfg,
         )
-        raw_train = Dataset.from_list(dataset["train"])
-        train_ds = raw_train.map(
-            format_row, remove_columns=raw_train.column_names
+        raw_train = dataset["train"]
+        train_ds = _map_distill_rows(
+            raw_train,
+            format_row=format_row,
+            split="train",
+            max_length=int(cfg.data.max_length),
         )
         eval_ds = None
         if "val" in dataset and dataset["val"]:
-            raw_val = Dataset.from_list(dataset["val"])
-            eval_ds = raw_val.map(
-                format_row, remove_columns=raw_val.column_names
+            eval_ds = _map_distill_rows(
+                dataset["val"],
+                format_row=format_row,
+                split="val",
+                max_length=int(cfg.data.max_length),
             )
 
         output_dir = Path(cfg.output)
@@ -814,11 +853,16 @@ class DistillTrainerWrapper:
                 if labels is not None:
                     shift_logits = student_logits[:, :-1, :].contiguous()
                     shift_labels = labels[:, 1:].contiguous()
-                    ce_loss = torch.nn.functional.cross_entropy(
-                        shift_logits.view(-1, shift_logits.size(-1)),
-                        shift_labels.view(-1),
-                        ignore_index=-100,
-                    )
+                    if shift_labels.ne(-100).any():
+                        ce_loss = torch.nn.functional.cross_entropy(
+                            shift_logits.view(-1, shift_logits.size(-1)),
+                            shift_labels.view(-1),
+                            ignore_index=-100,
+                        )
+                    else:
+                        ce_loss = (student_logits.sum() * 0.0).to(
+                            dtype=student_logits.dtype
+                        )
 
                 # v0.71.12 #145 — sequence-level KD trains the student with
                 # plain CE on teacher-generated text. The teacher has already
