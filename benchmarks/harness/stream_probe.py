@@ -73,6 +73,16 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="shard cache dir (default: the same ~/.soup/layer-stream/<slug> soup train uses)",
     )
+    # The sharder validates each root's own syntax/existence/symlink/overlap rules; it does
+    # NOT re-run the distinct-volume or NVMe-kind checks resolve_stripe_roots does at setup
+    # time (that ~9 s probe is deliberately not repeated here). Pointing two --stripe-dir
+    # entries at the same physical drive is on the operator running this harness.
+    parser.add_argument(
+        "--stripe-dir",
+        action="append",
+        default=[],
+        help="extra cache root on another NVMe drive (repeatable); the cache is striped over it",
+    )
     parser.add_argument("--quant", choices=("none", "nf4"), default="nf4")
     parser.add_argument("--tier", choices=("ram", "disk"), default="ram")
     parser.add_argument(
@@ -403,6 +413,12 @@ def build(args: argparse.Namespace, device: str, dtype: str) -> Tuple[Any, ...]:
             double_quant=True,
             quant_device=device if args.quant == "nf4" else None,
             notify=print,
+            # getattr, not args.stripe_dir: head_prefetch_ab.py, issue901_stream_step_probe.py,
+            # issue974_warm_stages.py and layer0_wait.py each hand-build their own bare
+            # argparse.Namespace and call this build() directly, none of them spelling a
+            # stripe_dir field, and build() reading it unconditionally would raise
+            # AttributeError in all four the next time they run.
+            stripe_roots=tuple(getattr(args, "stripe_dir", [])),
         )
     shard_seconds = time.perf_counter() - started
 
@@ -955,6 +971,19 @@ def main() -> int:
         f"{'pinned' if stats['pinned'] else 'pageable'}"
         + ("  [CONTROL: the pre-#971 synchronous read path]" if is_control else "")
     )
+    # direct_io and _open_of exist only on the disk-tier source; getattr reads as None/{} on
+    # the RAM tier. A pinned staging region that is not sector-aligned silently turns direct
+    # I/O off for every drive (see async_disk_source.py), so this line is what lets the
+    # operator catch that live instead of inferring it from throughput after the fact.
+    stripe_roots_seen = list(getattr(index, "stripe_roots", ()) or ())
+    layer_roots_seen = list(getattr(index, "layer_roots", ()) or ())
+    layer_roots_text = ",".join(str(root) for root in layer_roots_seen[:12])
+    if len(layer_roots_seen) > 12:
+        layer_roots_text += ",..."
+    print(
+        f"{'stripe':<16}direct_io {getattr(runtime.source, 'direct_io', None)}  "
+        f"stripe roots {stripe_roots_seen}  layer roots {layer_roots_text}"
+    )
     per_buffer_mb = stats["buffer_bytes"] / stats["buffers"] / 1e6
     print(f"{'buffers':<16}{stats['buffers']} x {per_buffer_mb:.1f} MB")
 
@@ -979,6 +1008,14 @@ def main() -> int:
         "source_class": source_class,
         "control_sync_source": bool(args.control_sync_source),
         "read_ahead": stats["read_ahead"],
+        "stripe_dirs": list(args.stripe_dir),
+        "stripe_roots": list(getattr(index, "stripe_roots", ()) or ()),
+        "layer_roots": list(getattr(index, "layer_roots", ()) or ()),
+        "direct_io": getattr(runtime.source, "direct_io", None),
+        "open_per_root": {
+            str(root): getattr(opener, "__name__", repr(opener))
+            for root, opener in getattr(runtime.source, "_open_of", {}).items()
+        },
         "store_gb": stats["store_bytes"] / 1e9,
         "disk_gb": stats["disk_bytes"] / 1e9,
         "buffers": stats["buffers"],
