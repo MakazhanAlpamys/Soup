@@ -264,6 +264,30 @@ What the record does establish is below any verdict: **the two drives read
 7.65-9.15 GB/s together in six of six both-at-once arms**, each drive at its
 alone rate or faster, which no shared bottleneck produces.
 
+### D2 — does PCIe ASPM slow one drive? (owner's consent 2026-09-28; rule written before D2 ran)
+
+The owner agreed to a short, reversible change of the power setting. Harness
+`two_drive_aspm_probe.py` reads the active scheme's AC ASPM index (2, "Maximum
+power savings"), then reads C: alone with the index at 2 ("on") and at 0
+("Off"), **switching the policy between arms** (`powercfg /setacvalueindex` +
+`/setactive`, read back after every change, 1 s settle), order rotated over
+three rounds, 24 spans per arm, K = 4. It refuses to run on battery. The
+original index is restored in a `finally` block and read back; the run exits
+non-zero if it disagrees. Then, with ASPM Off, it runs R1 once more (run 3)
+through the unchanged `two_drive_read.py`, and restores again. A write of the
+same value (2 -> 2) confirmed beforehand that no elevation is needed.
+
+| measured: off / on, per round | reading | next |
+|---|---|---|
+| **>= 1.10 in all three rounds** | ASPM costs >= 10% of one drive's read on this box | a host setting the disk tier's docs (and `soup doctor`) should name |
+| **0.95-1.05 in all three rounds** | ASPM is not it | what remains is the drive's own spread |
+| **anything else** | ambiguous | reported as measured; no conclusion |
+
+**R1 run 3 is judged by the R1 rule in §2, unchanged** — whatever D2 says. If
+its validity row passes, its verdict row is R1's verdict, stated as holding
+**with ASPM Off**; if the row fires again, R1 has no verdict from this box and
+the decision to build on the aggregate evidence stays the owner's.
+
 ## 6. Verdict
 
 *Pending.*
