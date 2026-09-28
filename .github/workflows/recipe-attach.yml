@@ -25,6 +25,18 @@ name: recipe attach
 on:
   push:
     branches: [main]
+    paths:
+      - 'src/soup_cli/recipes/**'
+      - 'src/soup_cli/config/**'
+      - 'src/soup_cli/templates/**'
+      - 'src/soup_cli/utils/attach_preflight.py'
+      - 'src/soup_cli/utils/peft_wiring.py'
+      - 'src/soup_cli/utils/moe.py'
+      - 'src/soup_cli/commands/recipes.py'
+      - 'scripts/check_recipe_attach.py'
+      - 'examples/**'
+      - 'pyproject.toml'
+      - '.github/workflows/recipe-attach.yml'
   pull_request:
     branches: [main]
     paths:
@@ -44,10 +56,11 @@ on:
 permissions:
   contents: read
 
-# Same rule as recipe-validation.yml: a pull request supersedes its own earlier
-# run, a push to main is keyed on the commit and never cancelled.
+# Same rule as recipe-validation.yml (#1374): a pull request supersedes its own
+# earlier run; pushes to main share one group, so a running main run finishes
+# and a newer push replaces only the pending one.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || (github.ref == 'refs/heads/main' && 'main-push' || github.sha) }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
@@ -58,10 +71,6 @@ jobs:
     env:
       PYTHONUTF8: "1"
       PYTHONIOENCODING: "utf-8"
-      # Empty on anything but a push: huggingface_hub reads an empty HF_TOKEN as
-      # "no token", so the PR run is anonymous even when the secret would
-      # technically be in scope.
-      HF_TOKEN: ${{ github.event_name == 'push' && secrets.HF_TOKEN || '' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -75,4 +84,9 @@ jobs:
         # Exit 2 is a new cannot-attach, or a pinned config that now attaches;
         # exit 1 is the command itself failing. Skipped (gated, no token) exits 0
         # and is counted on the line this prints.
+        env:
+          # This step only: the install above runs third-party build code and
+          # never needs the token. Empty on anything but a push to main, and
+          # huggingface_hub reads an empty HF_TOKEN as "no token".
+          HF_TOKEN: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && secrets.HF_TOKEN || '' }}
         run: python scripts/check_recipe_attach.py

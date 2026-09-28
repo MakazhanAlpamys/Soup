@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+from collections import Counter
 from dataclasses import dataclass, field
 
 _NO_AUTO = (
@@ -112,8 +113,15 @@ def count_line(result: Ratchet) -> str:
 
 def report(result: Ratchet) -> list[str]:
     lines = [count_line(result)]
+    # The ruling asks for SKIPPED *with the reason*: a token only fixes the gated ones.
+    by_reason = Counter(detail[:120] for _name, detail in result.skipped)
+    for reason, count in by_reason.most_common():
+        lines.append(f"  skipped {count}: {reason}")
     for name, detail in result.new_failures:
-        lines.append(f"NEW cannot attach: {name}: {detail[:200]}")
+        lines.append(
+            f"NEW cannot attach: {name}: {detail[:200]} -- fix it, or pin it in "
+            "EXCEPTIONS in scripts/check_recipe_attach.py with a reason"
+        )
     for name in result.now_attach:
         lines.append(f"now attaches, remove from EXCEPTIONS: {name}")
     for name in result.not_reported:
@@ -128,8 +136,11 @@ def main() -> int:
     )
     # 0: everything checkable attaches; 2: something cannot. Anything else is the
     # command itself failing (a missing library is 1), not a verdict.
+    # Always forwarded: verify's advisories (a partial-coverage note, a config that
+    # does not parse) belong in the CI log whatever the verdict.
+    if run.stderr:
+        print(run.stderr, file=sys.stderr, end="" if run.stderr.endswith("\n") else "\n")
     if run.returncode not in (0, 2):
-        print(run.stderr, file=sys.stderr)
         print(f"soup recipes verify exited {run.returncode}", file=sys.stderr)
         return 1
     result = compare(json.loads(run.stdout), EXCEPTIONS)

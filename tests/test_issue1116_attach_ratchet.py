@@ -27,11 +27,16 @@ class TestCompare:
         assert result.ok and result.pinned == ["a"]
 
     def test_a_new_failure_turns_it_red_and_is_named(self):
-        result = compare([_row("b", "cannot_attach", "no mapping")], {"a": "why"})
+        result = compare(
+            [_row("a", "cannot_attach"), _row("b", "cannot_attach", "no mapping")],
+            {"a": "why"},
+        )
 
+        # Red because of "b" alone: "a" is reported, so nothing is missing.
+        assert result.not_reported == [] and result.pinned == ["a"]
         assert not result.ok
         assert result.new_failures == [("b", "no mapping")]
-        assert "NEW cannot attach: b: no mapping" in report(result)
+        assert any(line.startswith("NEW cannot attach: b: no mapping") for line in report(result))
 
     def test_a_pinned_config_that_now_attaches_must_leave_the_list(self):
         result = compare([_row("a", "attaches")], {"a": "why"})
@@ -79,12 +84,41 @@ class TestCompare:
         )
 
 
+def test_skipped_rows_are_reported_by_reason():
+    gated = "gated repo; set HF_TOKEN to check it"
+    remote = "needs trust_remote_code, which this check never enables"
+    result = compare(
+        [_row("g1", "unverified", gated), _row("g2", "unverified", gated),
+         _row("r", "unverified", remote), _row("a", "attaches")],
+        {},
+    )
+
+    lines = report(result)
+
+    assert f"  skipped 2: {gated}" in lines
+    assert f"  skipped 1: {remote}" in lines
+
+
+def test_a_new_failure_says_how_to_pin_it():
+    result = compare([_row("b", "cannot_attach", "no mapping")], {})
+
+    assert any("pin it in EXCEPTIONS in scripts/check_recipe_attach.py" in line
+               for line in report(result))
+
+
 class TestMain:
     @pytest.fixture
     def verify(self, monkeypatch):
         def install(rows, returncode=2, stderr=""):
             out = SimpleNamespace(returncode=returncode, stdout=json.dumps(rows), stderr=stderr)
-            monkeypatch.setattr(subprocess, "run", lambda *_a, **_k: out)
+
+            def run(argv, *_a, **_k):
+                # The whole catalogue, templates included: `--no-templates` would
+                # drop templates/audio.yaml from the rows (#1388 review).
+                assert list(argv[-3:]) == ["recipes", "verify", "--json"], argv
+                return out
+
+            monkeypatch.setattr(subprocess, "run", run)
 
         return install
 
@@ -95,14 +129,22 @@ class TestMain:
         assert f"{len(EXCEPTIONS)} pinned cannot-attach" in strip_ansi(capsys.readouterr().out)
 
     def test_a_new_failure_exits_2(self, verify):
-        verify([_row("brand-new-sft", "cannot_attach", "boom")])
+        pinned = [_row(name, "cannot_attach") for name in EXCEPTIONS]
+        verify(pinned + [_row("brand-new-sft", "cannot_attach", "boom")])
 
         assert main() == 2
 
     def test_a_pinned_config_that_attaches_exits_2(self, verify):
-        verify([_row(next(iter(EXCEPTIONS)), "attaches")])
+        first, *rest = EXCEPTIONS
+        verify([_row(first, "attaches")] + [_row(name, "cannot_attach") for name in rest])
 
         assert main() == 2
+
+    def test_verify_warnings_reach_the_log_whatever_the_verdict(self, verify, capsys):
+        verify([_row(name, "cannot_attach") for name in EXCEPTIONS], stderr="Partial LoRA coverage")
+
+        assert main() == 0
+        assert "Partial LoRA coverage" in strip_ansi(capsys.readouterr().err)
 
     def test_the_command_failing_is_not_a_verdict(self, verify, capsys):
         """Exit 1 from verify is a missing library, not a ratchet result."""
