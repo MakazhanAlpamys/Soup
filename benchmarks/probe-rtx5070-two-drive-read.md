@@ -288,6 +288,37 @@ its validity row passes, its verdict row is R1's verdict, stated as holding
 **with ASPM Off**; if the row fires again, R1 has no verdict from this box and
 the decision to build on the aggregate evidence stays the owner's.
 
+**First D2 attempt, 2026-09-28 ~10:55: refused, nothing changed.** The laptop
+had been unplugged (`GetSystemPowerStatus` ACLineStatus 0, battery 97% and
+discharging), and the harness refuses to run on battery because the AC index
+is then not the one in force and nothing would be comparable with runs 1-2.
+It stopped before reading or writing any power setting. D2 waits for AC.
+
+### R3' — does the reader's per-layer barrier cost one drive throughput? (rule written before R3' ran)
+
+Found while reading the reader for R4: `AsyncDiskSource._read_layer`
+(`src/soup_cli/utils/async_disk_source.py:688`) hands a layer's K ranges to K
+workers through `_RangeReaders.run`, which blocks until every range has landed
+before the next layer is dispatched. **Exactly one layer is ever in flight**, and
+workers that finish early idle on the slowest range's tail. Two consequences:
+striping the files alone could not speed anything up (layer i on C: and layer
+i+1 on D: would still be read one after the other), and the "reader gap" the
+roadmap attributed to the pipeline may instead be this barrier — or nothing,
+since the same primitive with the same barrier read C: at 3.62-4.68 GB/s today
+(median 3.94), which is where the step-level 4.1 GB/s of §21 already sits.
+
+Harness `two_drive_depth_probe.py`: one drive (C:), K = 4 workers, the same
+ranges read through ONE function at depth 1 (the reader today) and depth 2 (the
+next span's ranges queued behind the current one's, so a freed worker starts on
+it at once). At most K requests are outstanding in either arm; only the barrier
+differs. Order rotated over three rounds, 24 spans per arm, on AC only.
+
+| measured: depth 2 / depth 1, per round | reading | next |
+|---|---|---|
+| **>= 1.10 in all three rounds** | the barrier costs >= 10% of one drive | two layers in flight is a single-drive lever of its own, and it is the same reader change striping needs — build them together |
+| **0.95-1.05 in all three rounds** | the barrier costs nothing measurable | the reader already reads at the drive's rate; R3 closes with no single-drive reader lever, and striping still needs >= 2 layers in flight for its own reason |
+| **anything else** | ambiguous | reported as measured; no conclusion |
+
 ## 6. Verdict
 
 *Pending.*
