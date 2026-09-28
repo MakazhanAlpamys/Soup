@@ -174,3 +174,48 @@ def test_trajectory_rejects_missing_positions_and_undeclared_truncation():
             max_sequence_length=1,
             truncation="none",
         )
+
+
+@pytest.mark.parametrize("bad_id", [4, -1])
+def test_capture_token_refuses_ids_outside_the_vocabulary(bad_id):
+    """#1341: the vocabulary guard in ``_validate_token_ids`` was never exercised."""
+    with pytest.raises(ValueError, match="outside the vocabulary"):
+        build_teacher_expert_capture_token(
+            example_id="example-1",
+            position=0,
+            context_token_ids=(1,),
+            target_token_id=bad_id,
+            teacher_logits=(4.0, 3.0, 2.0, -4.0),
+            vocab_size=4,
+            probability_policy=_policy(top_k=2),
+        )
+    with pytest.raises(ValueError, match="outside the vocabulary"):
+        build_teacher_expert_capture_token(
+            example_id="example-1",
+            position=0,
+            context_token_ids=(1, bad_id),
+            target_token_id=2,
+            teacher_logits=(4.0, 3.0, 2.0, -4.0),
+            vocab_size=4,
+            probability_policy=_policy(top_k=2),
+        )
+
+
+@pytest.mark.parametrize("bad_id", [4, -1])
+def test_trajectory_capture_refuses_ids_outside_the_vocabulary(bad_id):
+    logits = ((4.0, 3.0, 2.0, -4.0),)
+    for prompt, targets in (((bad_id,), (1,)), ((1,), (bad_id,))):
+        with pytest.raises(ValueError, match="outside the vocabulary"):
+            capture_teacher_expert_trajectory(
+                example=TeacherExpertExample(
+                    example_id="example-1",
+                    prompt_token_ids=prompt,
+                    target_token_ids=targets,
+                ),
+                teacher_logits_by_position=logits,
+                vocab_size=4,
+                probability_policy=_policy(top_k=2),
+                max_sequence_length=16,
+                truncation="none",
+            )
+
