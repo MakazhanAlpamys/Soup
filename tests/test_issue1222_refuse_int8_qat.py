@@ -14,8 +14,8 @@ The ruling is "refuse until real QAT exists". This file pins:
   backend that accepted it (unsloth included, which supersedes #1248), and on
   every entry point that builds a config (the string loader the Web UI uses,
   direct construction, ``soup train`` and ``soup doctor --config``);
-* the message: it names the setting, says why, says what still works and
-  points at the issue;
+* the message: it names the setting, says why, says what to do instead,
+  says what still works and points at the issue;
 * that no other message recommends the refused value (``soup train``'s
   unsloth refusal used to);
 * the values that must NOT change -- ``fp8``, ``quest`` and every false
@@ -110,6 +110,8 @@ def test_the_message_names_the_setting_the_reason_what_still_works_and_the_issue
         in message
     )
     assert "no run completed" not in message
+    # What to do instead.
+    assert "Remove the key or set it to false." in message
     # What still works, and why it is unaffected.
     assert "quantization_aware: fp8" in message
     assert "quantization_aware: quest" in message

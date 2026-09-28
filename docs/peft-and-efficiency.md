@@ -248,7 +248,7 @@ an explicit target list always wins unchanged:
    the refusal. `training.lora.target_parameters` on its own also suffices.
 
 **`granitemoehybrid` is adapted only in part, and says so at setup.** Granite 4.0
-is a hybrid: on `ibm-granite/granite-4.0-tiny-base-preview` only 4 of the 40
+is a hybrid: on `ibm-granite/granite-4.0-h-tiny-base` only 4 of the 40
 decoder layers carry a `self_attn` at all (`config.layer_types` is 36
 `linear_attention` + 4 `full_attention`), so the attention-projection entry above
 reaches a tenth of the decoder. The other 36 layers are Mamba-2 blocks

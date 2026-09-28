@@ -277,11 +277,10 @@ The values come from a simulation of that re-run-after-every-pair procedure: bet
 
 The calibration has two limits, and `soup ab` prints a warning past either:
 
-- **At `--alpha 0.01` the rate sits slightly above the level asked for**, near 0.011 across seeds, because the variance is estimated from the rows; more rows do not lower it. A statistic without that floor is [#1265](https://github.com/MakazhanAlpamys/Soup/issues/1265).
 - **Below `--alpha 0.01` it is not calibrated.** At `--alpha 0.005`, 40 rows leave a simulated rate slightly above the level asked for.
 - **It holds up to 1000 rows per arm.** Past that, a test that keeps being re-run has not been measured.
 
-A variance-robust statistic, which would need no burn-in, is tracked in [#1265](https://github.com/MakazhanAlpamys/Soup/issues/1265).
+**At `--alpha 0.01` itself the rate sits slightly above the level asked for**, near 0.011 across seeds, because the variance is estimated from the rows; more rows do not lower it, and `soup ab` prints no warning for it. A variance-robust statistic, which would remove that floor and need no burn-in, is tracked in [#1265](https://github.com/MakazhanAlpamys/Soup/issues/1265).
 
 ```bash
 soup ab --input ab.jsonl --metric latency --effect-size 0.5
