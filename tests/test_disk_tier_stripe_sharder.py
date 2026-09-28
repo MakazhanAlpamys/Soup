@@ -138,3 +138,33 @@ def test_an_interrupted_reshard_leaves_the_old_index_consistent(layout, monkeypa
 
     shard_checkpoint(src, out, dtype="float32", stripe_roots=(stripe,))
     assert not os.path.exists(layer_shard_path(out, 1))
+
+
+def test_a_stale_copy_that_will_not_delete_still_returns_the_committed_index(layout, monkeypatch):
+    """Fix round 2, Important finding: the deferred delete runs AFTER the index is already
+    committed, so a failure to delete (a leftover handle holding the file open, most plausibly
+    on Windows) must not turn a genuinely successful, correctly-committed shard into a
+    caller-visible exception. It should warn and move on instead."""
+    import soup_cli.utils.layer_shard as layer_shard_mod
+    from soup_cli.utils.layer_shard import read_shard_index
+
+    src, out, stripe = layout
+    shard_checkpoint(src, out, dtype="float32")
+    stale_path = layer_shard_path(out, 1)
+    real_remove = layer_shard_mod.os.remove
+
+    def _flaky_remove(path, *args, **kwargs):
+        if os.path.normcase(os.path.normpath(str(path))) == os.path.normcase(
+            os.path.normpath(stale_path)
+        ):
+            raise PermissionError("in use")
+        return real_remove(path, *args, **kwargs)
+
+    monkeypatch.setattr(layer_shard_mod.os, "remove", _flaky_remove)
+
+    said = []
+    index = shard_checkpoint(src, out, dtype="float32", stripe_roots=(stripe,), notify=said.append)
+
+    assert index.layer_roots == (0, 1, 0)
+    assert any(stale_path in line and "Could not delete" in line for line in said), said
+    assert read_shard_index(out).layer_roots == (0, 1, 0)

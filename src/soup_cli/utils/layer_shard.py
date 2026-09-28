@@ -1633,12 +1633,21 @@ def shard_checkpoint(
     )
     _atomic_write_index(index, resolved_out)
     # Only now: the new index above no longer names these paths, so removing them cannot
-    # leave any on-disk index (old or new) describing a file that does not exist.
+    # leave any on-disk index (old or new) describing a file that does not exist. Best-effort
+    # from here on: the shard is already correct and fully committed, so a failed delete (a
+    # leftover handle holding the file open, most plausibly on Windows) must warn and move on
+    # rather than turn a genuinely successful shard into a caller-visible exception.
     for stale in stale_root0_copies:
         try:
             os.remove(stale)
         except FileNotFoundError:
             pass
+        except OSError as exc:
+            if notify is not None:
+                notify(
+                    f"[yellow]Could not delete the stale layer copy {stale} ({exc}); "
+                    f"the cache is complete without it — delete it to reclaim the space.[/]"
+                )
     return index
 
 
