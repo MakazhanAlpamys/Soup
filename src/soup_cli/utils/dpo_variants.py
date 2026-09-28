@@ -7,10 +7,10 @@ Two opt-in controls for DPO-family preference training:
    Three shapes: linear, cosine (1/2 (1 + cos(pi t)) ramp), exponential
    (geometric decay between ``beta_start`` and ``beta_end``).
 
-2. **Reference-model regeneration** — every ``every_n_epochs``, replace
-   the frozen ref-model weights with a deep-copy of the current student.
-   Useful for self-improving loops where the policy quickly outpaces
-   the original reference.
+2. **Reference-model regeneration** — refused at config load: with LoRA
+   there is no separate reference model to copy into, and the DPO-family
+   trainers cannot run with ``lora.r: 0``. The wiring is tracked in
+   [#1345](https://github.com/MakazhanAlpamys/Soup/issues/1345).
 
 Both helpers are lazily-subclassed TrainerCallbacks (no ``transformers`` import at
 module scope) so they cost nothing on a torch-less interpreter and stay

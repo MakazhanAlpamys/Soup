@@ -44,7 +44,6 @@ class TestDPOVariantsConfig:
                 training={"dpo_ref_regen_epochs": 2, "lora": {"r": lora_r}},
             )
 
-
     @pytest.mark.parametrize("sched", ["linear", "cosine", "exponential"])
     def test_beta_schedule_accepted(self, sched):
         cfg = self._base(dpo_beta_schedule=sched, dpo_beta_end=0.01)
@@ -152,15 +151,42 @@ class TestDPOVariantsConfig:
 # ─── β schedule math ────────────────────────────────────────────────────────
 
 
+@pytest.mark.parametrize(
+    ("task", "extra"),
+    [
+        ("dpo", {}),
+        ("ipo", {}),
+        ("preference", {"preference_loss": "dpo"}),
+        ("preference", {"preference_loss": "ipo"}),
+    ],
+)
+def test_ref_regen_epochs_refused_on_every_dpo_family_task(task, extra):
+    with pytest.raises(ValidationError, match="dpo_ref_regen_epochs is not wired yet"):
+        SoupConfig(
+            base="some-model",
+            task=task,
+            data={"train": "./data.jsonl", "format": "dpo"},
+            training={"dpo_ref_regen_epochs": 2, **extra},
+        )
+
+
 class TestBetaSchedule:
     def test_linear_endpoints(self):
         from soup_cli.utils.dpo_variants import compute_beta_at_step
 
         assert compute_beta_at_step(
-            beta_start=0.1, beta_end=0.01, step=0, total_steps=100, schedule="linear",
+            beta_start=0.1,
+            beta_end=0.01,
+            step=0,
+            total_steps=100,
+            schedule="linear",
         ) == pytest.approx(0.1)
         assert compute_beta_at_step(
-            beta_start=0.1, beta_end=0.01, step=100, total_steps=100, schedule="linear",
+            beta_start=0.1,
+            beta_end=0.01,
+            step=100,
+            total_steps=100,
+            schedule="linear",
         ) == pytest.approx(0.01)
 
     def test_linear_midpoint(self):
@@ -168,7 +194,11 @@ class TestBetaSchedule:
 
         # Schema requires beta_end > 0; mid of (0.1, 0.02) = 0.06.
         mid = compute_beta_at_step(
-            beta_start=0.1, beta_end=0.02, step=50, total_steps=100, schedule="linear",
+            beta_start=0.1,
+            beta_end=0.02,
+            step=50,
+            total_steps=100,
+            schedule="linear",
         )
         assert mid == pytest.approx(0.06)
 
@@ -176,10 +206,18 @@ class TestBetaSchedule:
         from soup_cli.utils.dpo_variants import compute_beta_at_step
 
         assert compute_beta_at_step(
-            beta_start=0.1, beta_end=0.01, step=0, total_steps=100, schedule="cosine",
+            beta_start=0.1,
+            beta_end=0.01,
+            step=0,
+            total_steps=100,
+            schedule="cosine",
         ) == pytest.approx(0.1)
         assert compute_beta_at_step(
-            beta_start=0.1, beta_end=0.01, step=100, total_steps=100, schedule="cosine",
+            beta_start=0.1,
+            beta_end=0.01,
+            step=100,
+            total_steps=100,
+            schedule="cosine",
         ) == pytest.approx(0.01)
 
     def test_cosine_midpoint(self):
@@ -187,7 +225,11 @@ class TestBetaSchedule:
 
         # Cosine: at midpoint we expect (start+end)/2.
         mid = compute_beta_at_step(
-            beta_start=0.2, beta_end=0.02, step=50, total_steps=100, schedule="cosine",
+            beta_start=0.2,
+            beta_end=0.02,
+            step=50,
+            total_steps=100,
+            schedule="cosine",
         )
         assert mid == pytest.approx(0.11, abs=1e-6)
 
@@ -195,11 +237,17 @@ class TestBetaSchedule:
         from soup_cli.utils.dpo_variants import compute_beta_at_step
 
         assert compute_beta_at_step(
-            beta_start=0.1, beta_end=0.01, step=0, total_steps=100,
+            beta_start=0.1,
+            beta_end=0.01,
+            step=0,
+            total_steps=100,
             schedule="exponential",
         ) == pytest.approx(0.1)
         end = compute_beta_at_step(
-            beta_start=0.1, beta_end=0.01, step=100, total_steps=100,
+            beta_start=0.1,
+            beta_end=0.01,
+            step=100,
+            total_steps=100,
             schedule="exponential",
         )
         assert end == pytest.approx(0.01, rel=1e-4)
@@ -209,14 +257,22 @@ class TestBetaSchedule:
         from soup_cli.utils.dpo_variants import compute_beta_at_step
 
         assert compute_beta_at_step(
-            beta_start=0.1, beta_end=0.01, step=200, total_steps=100, schedule="linear",
+            beta_start=0.1,
+            beta_end=0.01,
+            step=200,
+            total_steps=100,
+            schedule="linear",
         ) == pytest.approx(0.01)
 
     def test_negative_step_clamps_to_start(self):
         from soup_cli.utils.dpo_variants import compute_beta_at_step
 
         assert compute_beta_at_step(
-            beta_start=0.1, beta_end=0.01, step=-5, total_steps=100, schedule="linear",
+            beta_start=0.1,
+            beta_end=0.01,
+            step=-5,
+            total_steps=100,
+            schedule="linear",
         ) == pytest.approx(0.1)
 
     def test_invalid_schedule_raises(self):
@@ -224,7 +280,10 @@ class TestBetaSchedule:
 
         with pytest.raises(ValueError, match="schedule"):
             compute_beta_at_step(
-                beta_start=0.1, beta_end=0.01, step=0, total_steps=100,
+                beta_start=0.1,
+                beta_end=0.01,
+                step=0,
+                total_steps=100,
                 schedule="garbage",
             )
 
@@ -232,7 +291,11 @@ class TestBetaSchedule:
         from soup_cli.utils.dpo_variants import compute_beta_at_step
 
         assert compute_beta_at_step(
-            beta_start=0.1, beta_end=0.01, step=0, total_steps=0, schedule="linear",
+            beta_start=0.1,
+            beta_end=0.01,
+            step=0,
+            total_steps=0,
+            schedule="linear",
         ) == pytest.approx(0.01)
 
     def test_negative_total_steps_rejected(self):
@@ -240,7 +303,10 @@ class TestBetaSchedule:
 
         with pytest.raises(ValueError, match="total_steps"):
             compute_beta_at_step(
-                beta_start=0.1, beta_end=0.01, step=0, total_steps=-1,
+                beta_start=0.1,
+                beta_end=0.01,
+                step=0,
+                total_steps=-1,
                 schedule="linear",
             )
 
@@ -250,7 +316,10 @@ class TestBetaSchedule:
         for bad in (float("nan"), float("inf"), -1.0):
             with pytest.raises(ValueError, match="finite|> 0"):
                 compute_beta_at_step(
-                    beta_start=bad, beta_end=0.01, step=0, total_steps=100,
+                    beta_start=bad,
+                    beta_end=0.01,
+                    step=0,
+                    total_steps=100,
                     schedule="linear",
                 )
 
@@ -259,7 +328,10 @@ class TestBetaSchedule:
 
         with pytest.raises(ValueError, match="step"):
             compute_beta_at_step(
-                beta_start=0.1, beta_end=0.01, step=True, total_steps=100,
+                beta_start=0.1,
+                beta_end=0.01,
+                step=True,
+                total_steps=100,
                 schedule="linear",
             )
 
@@ -272,7 +344,10 @@ class TestBetaScheduleCallback:
         from soup_cli.utils.dpo_variants import BetaScheduleCallback
 
         cb = BetaScheduleCallback(
-            beta_start=0.1, beta_end=0.01, total_steps=100, schedule="linear",
+            beta_start=0.1,
+            beta_end=0.01,
+            total_steps=100,
+            schedule="linear",
         )
         trainer = MagicMock()
         trainer.beta = 0.1
@@ -288,7 +363,10 @@ class TestBetaScheduleCallback:
         from soup_cli.utils.dpo_variants import BetaScheduleCallback
 
         cb = BetaScheduleCallback(
-            beta_start=0.1, beta_end=0.01, total_steps=100, schedule="linear",
+            beta_start=0.1,
+            beta_end=0.01,
+            total_steps=100,
+            schedule="linear",
         )
         state = MagicMock(global_step=50)
         # Should not raise.
@@ -361,8 +439,11 @@ class TestBuildDPOVariantCallbacks:
         from soup_cli.utils.dpo_variants import build_dpo_variant_callbacks
 
         cbs = build_dpo_variant_callbacks(
-            beta_start=0.1, beta_end=None, schedule=None,
-            total_steps=0, ref_regen_epochs=None,
+            beta_start=0.1,
+            beta_end=None,
+            schedule=None,
+            total_steps=0,
+            ref_regen_epochs=None,
         )
         assert cbs == []
 
@@ -373,8 +454,11 @@ class TestBuildDPOVariantCallbacks:
         )
 
         cbs = build_dpo_variant_callbacks(
-            beta_start=0.1, beta_end=0.01, schedule="linear",
-            total_steps=0, ref_regen_epochs=None,
+            beta_start=0.1,
+            beta_end=0.01,
+            schedule="linear",
+            total_steps=0,
+            ref_regen_epochs=None,
         )
         assert len(cbs) == 1
         assert isinstance(cbs[0], BetaScheduleCallback)
@@ -386,8 +470,11 @@ class TestBuildDPOVariantCallbacks:
         )
 
         cbs = build_dpo_variant_callbacks(
-            beta_start=0.1, beta_end=None, schedule=None,
-            total_steps=0, ref_regen_epochs=2,
+            beta_start=0.1,
+            beta_end=None,
+            schedule=None,
+            total_steps=0,
+            ref_regen_epochs=2,
         )
         assert len(cbs) == 1
         assert isinstance(cbs[0], RefModelRegenCallback)
@@ -400,8 +487,11 @@ class TestBuildDPOVariantCallbacks:
         )
 
         cbs = build_dpo_variant_callbacks(
-            beta_start=0.1, beta_end=0.01, schedule="linear",
-            total_steps=0, ref_regen_epochs=2,
+            beta_start=0.1,
+            beta_end=0.01,
+            schedule="linear",
+            total_steps=0,
+            ref_regen_epochs=2,
         )
         assert len(cbs) == 2
         kinds = {type(cb) for cb in cbs}
@@ -413,7 +503,10 @@ class TestBetaScheduleLazyTotalSteps:
         from soup_cli.utils.dpo_variants import BetaScheduleCallback
 
         cb = BetaScheduleCallback(
-            beta_start=0.1, beta_end=0.01, total_steps=0, schedule="linear",
+            beta_start=0.1,
+            beta_end=0.01,
+            total_steps=0,
+            schedule="linear",
         )
         # Initially 0 — sentinel.
         assert cb.total_steps == 0
@@ -426,7 +519,10 @@ class TestBetaScheduleLazyTotalSteps:
         from soup_cli.utils.dpo_variants import BetaScheduleCallback
 
         cb = BetaScheduleCallback(
-            beta_start=0.1, beta_end=0.01, total_steps=0, schedule="linear",
+            beta_start=0.1,
+            beta_end=0.01,
+            total_steps=0,
+            schedule="linear",
         )
         trainer = MagicMock()
         trainer.beta = 0.1
@@ -442,7 +538,10 @@ class TestBetaScheduleLazyTotalSteps:
 
         # Cosine at progress=0 should equal beta_start exactly (cos(0)=1).
         result = compute_beta_at_step(
-            beta_start=0.1, beta_end=0.01, step=1, total_steps=10**9,
+            beta_start=0.1,
+            beta_end=0.01,
+            step=1,
+            total_steps=10**9,
             schedule="cosine",
         )
         # Very near beta_start since progress ~ 1e-9.
@@ -541,12 +640,12 @@ output: {out_dir}
         )
         assert wrapper.trainer.beta == pytest.approx(expected_beta, abs=1e-5)
 
+
 def _run_schedule(tmp_path, task, training):
     from soup_cli.config.loader import load_config_from_string
 
     rows = [
-        {"prompt": f"Q{i}?", "chosen": f"A{i} good.", "rejected": f"A{i} bad."}
-        for i in range(4)
+        {"prompt": f"Q{i}?", "chosen": f"A{i} good.", "rejected": f"A{i} bad."} for i in range(4)
     ]
     cfg = load_config_from_string(
         "base: sshleifer/tiny-gpt2\n"
@@ -573,8 +672,11 @@ def test_ipo_schedule_anneals_from_ipo_tau(tmp_path):
     )
     assert result.get("total_steps", 0) >= 2
     expected = compute_beta_at_step(
-        beta_start=0.2, beta_end=0.05, step=1,
-        total_steps=wrapper.trainer.state.max_steps, schedule="linear",
+        beta_start=0.2,
+        beta_end=0.05,
+        step=1,
+        total_steps=wrapper.trainer.state.max_steps,
+        schedule="linear",
     )
     assert wrapper.trainer.beta == pytest.approx(expected, abs=1e-6)
 
@@ -592,8 +694,11 @@ def test_preference_dispatcher_schedule_acts(tmp_path, loss):
     )
     assert result.get("total_steps", 0) >= 2
     expected = compute_beta_at_step(
-        beta_start=start, beta_end=0.05, step=1,
-        total_steps=wrapper.trainer.state.max_steps, schedule="cosine",
+        beta_start=start,
+        beta_end=0.05,
+        step=1,
+        total_steps=wrapper.trainer.state.max_steps,
+        schedule="cosine",
     )
     assert wrapper.trainer.beta == pytest.approx(expected, abs=1e-6)
 
@@ -646,4 +751,3 @@ def test_every_lazy_callback_builds_a_trainer_callback():
         for name in module._LAZY_CALLBACKS:
             cls = getattr(module, name)
             assert issubclass(cls, TrainerCallback), f"{dotted}.{name}"
-
