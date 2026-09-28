@@ -162,7 +162,7 @@ class TestPartANewFormats:
         ],
     )
     def test_pre_tokenized_rejects_live_text_transform(self, field, value):
-        with pytest.raises(Exception, match=field):
+        with pytest.raises(Exception, match=fr"pre_tokenized.*{field}"):
             DataConfig(
                 train="data.jsonl",
                 format="pre_tokenized",
@@ -172,7 +172,10 @@ class TestPartANewFormats:
 
     @pytest.mark.parametrize("modality", ["vision", "audio", "audio_out"])
     def test_pre_tokenized_rejects_non_text_modality(self, modality):
-        with pytest.raises(Exception, match="modality"):
+        with pytest.raises(
+            Exception,
+            match=fr"pre_tokenized.*modality='{modality}'",
+        ):
             load_config_from_string(
                 f"""
 base: x/y

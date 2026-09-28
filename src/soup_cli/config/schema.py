@@ -4684,16 +4684,6 @@ class SoupConfig(BaseModel):
         return value
 
     @model_validator(mode="after")
-    def _validate_v042_pre_tokenized_modality(self) -> "SoupConfig":
-        if self.data.format == "pre_tokenized" and self.modality != "text":
-            raise ValueError(
-                "data.format='pre_tokenized' cannot be combined with "
-                f"modality={self.modality!r}; pre-tokenized data supports "
-                "modality='text' only"
-            )
-        return self
-
-    @model_validator(mode="after")
     def _resolve_quantization_for_unhonouring_tasks(self) -> "SoupConfig":
         """#795 — these trainers load the base unquantised and never
         read ``training.quantization``.
@@ -4747,6 +4737,16 @@ class SoupConfig(BaseModel):
             f"quantization={tcfg.quantization!r} would record a quantised run that "
             "never happens. Remove it or set quantization: none."
         )
+
+    @model_validator(mode="after")
+    def _validate_v042_pre_tokenized_modality(self) -> "SoupConfig":
+        if self.data.format == "pre_tokenized" and self.modality != "text":
+            raise ValueError(
+                "data.format='pre_tokenized' cannot be combined with "
+                f"modality={self.modality!r}; soup data preprocessing does not "
+                "apply modality transforms to cached ids"
+            )
+        return self
 
     @model_validator(mode="after")
     def _validate_quest_first_slice(self) -> "SoupConfig":
