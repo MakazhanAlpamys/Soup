@@ -110,6 +110,9 @@ soup data clean raw_data.jsonl --strip-boilerplate --repair-code --repair-json -
   2. `--repair-code`: Auto-closes unclosed triple backtick (```` ``` ````) code fences in assistant completions.
   3. `--repair-json`: Unwraps markdown code blocks from JSON arguments and repairs trailing commas in tool calls.
   4. `--prune-echo`: Drops rows where the assistant merely repeats the user prompt verbatim.
+  5. `--drop-invalid-json`: Drops rows with a tool call whose arguments still do not parse as JSON (after `--repair-json`, when both are set).
+
+  `--repair-json` and `--drop-invalid-json` read every call the tool-calling loader reads: the row's top-level `tool_calls` and each assistant turn's `tool_calls`, in the documented `{"function": {"name": ..., "arguments": ...}}` shape or flat. Arguments given as a JSON object are left as they are.
 
 Supports all standard formats: `chatml`, `alpaca`, `sharegpt`, `dpo`, `kto`, and `tool-calling`.
 
