@@ -36,7 +36,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install the latest resolvable stack
-        run: pip install -e ".[dev]"
+        run: pip install -e ".[dev,audio]"
 
       - name: Report resolved versions against the declared bounds
         run: |
@@ -51,7 +51,7 @@ jobs:
           # The stack whose drift has actually cost releases (#323).
           WATCHED = {
               "torch", "transformers", "peft", "trl", "datasets",
-              "bitsandbytes", "accelerate",
+              "bitsandbytes", "accelerate", "torchaudio",
           }
 
           rows, floor_only = [], []

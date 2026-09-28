@@ -68,10 +68,6 @@ EXCLUDED_SIZE_BASES = {
     "deepseek-ai/DeepSeek-OCR": (
         "deepseek_vl_v2 architecture requires trust_remote_code to load"
     ),
-    "deepseek-ai/DeepSeek-V3-0324": (
-        "historical v0.25 recipe deepseek-v3-7b-sft carries legacy 7B "
-        "size label pinned by test_search_by_size"
-    ),
     "epfl-llm/meditron-7b": (
         "gated repository requiring authentication"
     ),
@@ -135,9 +131,6 @@ EXCLUDED_SIZE_BASES = {
     "mistralai/Pixtral-12B-2409": (
         "repo has no config.json metadata"
     ),
-    "mistralai/Voxtral-Mini-3B": (
-        "repo not found or not publicly readable (see #677)"
-    ),
     "moonshotai/Kimi-K2": (
         "repo not found or not publicly readable (see #677)"
     ),
@@ -145,9 +138,6 @@ EXCLUDED_SIZE_BASES = {
         "repo has no config.json metadata"
     ),
     "openbmb/MiniCPM-V-2_6": (
-        "gated repository requiring authentication"
-    ),
-    "sesame/csm-1b": (
         "gated repository requiring authentication"
     ),
 }
@@ -262,7 +252,7 @@ class TestRecipeSizeRatchet:
 
     def test_excluded_bases_are_pinned(self) -> None:
         """Ensure the exclusion list count and reasons are pinned to prevent silent additions."""
-        assert len(EXCLUDED_SIZE_BASES) == 35
+        assert len(EXCLUDED_SIZE_BASES) == 32
         for base, reason in EXCLUDED_SIZE_BASES.items():
             assert reason, f"Base {base} has empty exclusion reason"
 

@@ -419,7 +419,9 @@ class TestV028PrecisionWiring:
             "cut_ce": False, "fp8": False, "kernel_auto_compose": False,
         }
 
-    def test_fp8_attention_gate_failure_degrades(self, monkeypatch):
+    def test_fp8_attention_gate_failure_stops(self, monkeypatch):
+        """INVERTED by #1152 (ruled 2026-09-24): this pinned the failure degrading
+        to ``fp8_attention: False`` while training went on. It now stops the run."""
         from soup_cli.utils.v028_features import apply_v028_speed_memory
 
         def _gate(model, **kwargs):
@@ -430,12 +432,15 @@ class TestV028PrecisionWiring:
         monkeypatch.setattr(
             "soup_cli.utils.advanced_precision.apply_fp8_attention", _gate
         )
-        result = apply_v028_speed_memory(
-            model=object(),
-            tcfg=self._tcfg(quantization_aware="fp8", fp8_attention=True),
-            base_model="x/y",
-        )
-        assert result["fp8_attention"] is False
+        # quantization_aware: fp8 is set too, and a missing torchao now stops the
+        # run (#835 ruling); this test is about fp8_attention, so stub that half.
+        monkeypatch.setattr("soup_cli.utils.fp8.apply_fp8_training", lambda *_a, **_k: True)
+        with pytest.raises(RuntimeError, match="no Hopper"):
+            apply_v028_speed_memory(
+                model=object(),
+                tcfg=self._tcfg(quantization_aware="fp8", fp8_attention=True),
+                base_model="x/y",
+            )
 
     def test_fp8_attention_applied(self, monkeypatch):
         from soup_cli.utils.v028_features import apply_v028_speed_memory
@@ -444,6 +449,9 @@ class TestV028PrecisionWiring:
             "soup_cli.utils.advanced_precision.apply_fp8_attention",
             lambda model, recipe="tensorwise": 4,
         )
+        # quantization_aware: fp8 is set too, and a missing torchao now stops the
+        # run (#835 ruling); this test is about fp8_attention, so stub that half.
+        monkeypatch.setattr("soup_cli.utils.fp8.apply_fp8_training", lambda *_a, **_k: True)
         result = apply_v028_speed_memory(
             model=object(),
             tcfg=self._tcfg(quantization_aware="fp8", fp8_attention=True),
@@ -1759,7 +1767,8 @@ class TestReviewFollowupsPrecision:
     def test_v028_degrade_is_hermetic(self, monkeypatch):
         """Force the degrade path by patching the converters directly —
         environment-independent (review fix: the original test relied on
-        the host lacking torchao/Hopper)."""
+        the host lacking torchao/Hopper). #1152: ``fp8_attention`` no longer
+        degrades, it stops the run, so NVFP4's degrade is checked without it."""
         from soup_cli.config.loader import load_config_from_string
         from soup_cli.utils import advanced_precision, v028_features
 
@@ -1770,23 +1779,32 @@ class TestReviewFollowupsPrecision:
         # patch targets the defining module.
         monkeypatch.setattr(advanced_precision, "apply_fp8_attention", _gate)
         monkeypatch.setattr(advanced_precision, "apply_nvfp4", _gate)
-        cfg = load_config_from_string(
-            "base: test-llama\n"
-            "task: sft\n"
-            "training:\n"
-            "  quantization_aware: fp8\n"
-            "  fp8_attention: true\n"
-            "  nvfp4: true\n"
-            "data:\n"
-            "  train: data.jsonl\n"
-            "output: ./out\n"
-        )
-        applied = v028_features.apply_v028_speed_memory(
-            model=object(), tcfg=cfg.training, base_model=cfg.base,
-            console=None, device="cpu", backend="transformers",
-        )
-        assert applied.get("fp8_attention") is False
+        # quantization_aware: fp8 is set too, and a missing torchao now stops the
+        # run (#835 ruling); this test is about fp8_attention, so stub that half.
+        monkeypatch.setattr("soup_cli.utils.fp8.apply_fp8_training", lambda *_a, **_k: True)
+        def _cfg(fp8_attention):
+            return load_config_from_string(
+                "base: test-llama\n"
+                "task: sft\n"
+                "training:\n"
+                "  quantization_aware: fp8\n"
+                f"  fp8_attention: {str(fp8_attention).lower()}\n"
+                "  nvfp4: true\n"
+                "data:\n"
+                "  train: data.jsonl\n"
+                "output: ./out\n"
+            )
+
+        def _apply(cfg):
+            return v028_features.apply_v028_speed_memory(
+                model=object(), tcfg=cfg.training, base_model=cfg.base,
+                console=None, device="cpu", backend="transformers",
+            )
+
+        applied = _apply(_cfg(False))
         assert applied.get("nvfp4") is False
+        with pytest.raises(RuntimeError, match="gate fired"):
+            _apply(_cfg(True))
 
 
 class TestReviewFollowupsSleepMode:

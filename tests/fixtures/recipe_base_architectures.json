@@ -53,8 +53,10 @@
   "parameters": 8075365376,
   "routed_experts": 0
  },
- "OpenGVLab/InternVL3-5": {
-  "unresolvable": "repo not found or not publicly readable (see #677)"
+ "OpenGVLab/InternVL3_5-8B": {
+  "model_type": "internvl_chat",
+  "parameters": 8528318464,
+  "routed_experts": 0
  },
  "OuteAI/OuteTTS-0.3-500M": {
   "model_type": "qwen2",
@@ -242,9 +244,6 @@
  "SparkAudio/Spark-TTS-0.5B": {
   "unresolvable": "the repo has no config.json"
  },
- "THUDM/glm-4.6": {
-  "unresolvable": "repo not found or not publicly readable (see #677)"
- },
  "baichuan-inc/Baichuan2-13B-Chat": {
   "model_type": "baichuan",
   "routed_experts": 0
@@ -261,9 +260,6 @@
   "model_type": "llama",
   "parameters": 68976910336,
   "routed_experts": 0
- },
- "deepcogito/cogito-v2-preview": {
-  "unresolvable": "repo not found or not publicly readable (see #677)"
  },
  "deepseek-ai/DeepSeek-OCR": {
   "model_type": "deepseek_vl_v2",
@@ -340,14 +336,13 @@
  "google/gemma-3-27b-it": {
   "unresolvable": "gated; set HF_TOKEN to classify"
  },
- "google/gemma-3-9b-it": {
-  "unresolvable": "repo not found or not publicly readable (see #677)"
- },
  "google/medgemma-4b-it": {
   "unresolvable": "gated; set HF_TOKEN to classify"
  },
- "ibm-granite/granite-4.0-tiny-base": {
-  "unresolvable": "repo not found or not publicly readable (see #677)"
+ "ibm-granite/granite-4.0-h-tiny-base": {
+  "model_type": "granitemoehybrid",
+  "parameters": 6939037248,
+  "routed_experts": 64
  },
  "ise-uiuc/Magicoder-S-DS-6.7B": {
   "model_type": "llama",
@@ -396,8 +391,10 @@
   "parameters": 14659507200,
   "routed_experts": 0
  },
- "mistralai/Devstral-Small": {
-  "unresolvable": "repo not found or not publicly readable (see #677)"
+ "mistralai/Devstral-Small-2507": {
+  "model_type": "mistral",
+  "parameters": 23572403200,
+  "routed_experts": 0
  },
  "mistralai/Magistral-Small": {
   "model_type": "mistral",
@@ -422,8 +419,10 @@
  "mistralai/Mistral-Large-3-675B-Instruct-2512": {
   "unresolvable": "the repo has no config.json"
  },
- "mistralai/Mistral-Medium-3.5": {
-  "unresolvable": "repo not found or not publicly readable (see #677)"
+ "mistralai/Mistral-Medium-3.5-128B": {
+  "model_type": "mistral3",
+  "parameters": 127704210176,
+  "routed_experts": 0
  },
  "mistralai/Mistral-Small-24B-Instruct-2501": {
   "model_type": "mistral",
@@ -433,8 +432,10 @@
  "mistralai/Pixtral-12B-2409": {
   "unresolvable": "the repo has no config.json"
  },
- "mistralai/Voxtral-Mini-3B": {
-  "unresolvable": "repo not found or not publicly readable (see #677)"
+ "mistralai/Voxtral-Mini-3B-2507": {
+  "model_type": "voxtral",
+  "parameters": 4676271104,
+  "routed_experts": 0
  },
  "mlx-community/Llama-3.1-8B-Instruct-4bit": {
   "model_type": "llama",
@@ -451,8 +452,10 @@
   "parameters": 4971331952,
   "routed_experts": 0
  },
- "moonshotai/Kimi-K2": {
-  "unresolvable": "repo not found or not publicly readable (see #677)"
+ "moonshotai/Kimi-K2-Base": {
+  "model_type": "kimi_k2",
+  "parameters": 1026470731056,
+  "routed_experts": 384
  },
  "moonshotai/Kimi-K2-Thinking": {
   "model_type": "kimi_k2",
@@ -505,8 +508,10 @@
   "parameters": 109486978,
   "routed_experts": 0
  },
- "sesame/csm-1b": {
-  "unresolvable": "gated; set HF_TOKEN to classify"
+ "zai-org/GLM-4.6": {
+  "model_type": "glm4_moe",
+  "parameters": 356785898816,
+  "routed_experts": 160
  },
  "zai-org/GLM-5": {
   "model_type": "glm_moe_dsa",

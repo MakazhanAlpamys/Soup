@@ -1240,7 +1240,7 @@ def sign(
     adapter: str = typer.Argument(..., help="Path to adapter directory"),
     backend: str = typer.Option(
         "unsigned", "--backend",
-        help="Signing backend: unsigned | ed25519 (sigstore is infra-blocked)",
+        help="Signing backend: unsigned | ed25519 | sigstore (keyless OIDC)",
     ),
     key: Optional[str] = typer.Option(
         None, "--key",
@@ -1251,30 +1251,41 @@ def sign(
         help="Generate a fresh ed25519 keypair, persist the private key here "
              "(PEM, 0600), and sign with it.",
     ),
+    interactive_oidc: bool = typer.Option(
+        False, "--interactive-oidc",
+        help="Allow Sigstore browser OIDC when no ambient credential exists. "
+             "Off by default so headless runners fail instead of hanging.",
+    ),
 ):
     """Compute manifest + write ``.soup-signature.json`` (v0.60.0, ed25519 v0.71.2).
 
     ``unsigned`` (default) gives offline tamper detection via a Merkle-root
     hash. ``ed25519`` (v0.71.2 #185) adds a real detached signature over that
     root — pass ``--key <priv.pem>``, set ``SOUP_SIGNING_KEY``, or use
-    ``--generate-key <out.pem>``. ``sigstore`` keyless signing is infra-blocked
-    (needs an OIDC identity provider + Fulcio/Rekor network).
+    ``--generate-key <out.pem>``. ``sigstore`` uses keyless OIDC plus the
+    Sigstore public-good Fulcio/Rekor service; install ``soup-cli[sigstore]`` and
+    run in an ambient-OIDC environment (for example GitHub Actions). Browser
+    OIDC is opt-in with --interactive-oidc.
     """
     from soup_cli.utils.adapter_sign import sign_adapter
 
     try:
         record = sign_adapter(
-            adapter, backend=backend, key_path=key, generate_key_path=generate_key
+            adapter,
+            backend=backend,
+            key_path=key,
+            generate_key_path=generate_key,
+            sigstore_interactive=interactive_oidc,
         )
     except FileNotFoundError as exc:
-        console.print(f"[red]{escape(str(exc))}[/]")
+        console.print(f"[red]{for_terminal(exc)}[/]")
         raise typer.Exit(1) from exc
-    except NotImplementedError as exc:
-        console.print(f"[yellow]{escape(str(exc))}[/]")
-        raise typer.Exit(2) from exc
     except (ValueError, TypeError) as exc:
-        console.print(f"[red]{escape(str(exc))}[/]")
+        console.print(f"[red]{for_terminal(exc)}[/]")
         raise typer.Exit(2) from exc
+    except RuntimeError as exc:
+        console.print(f"[red]{for_terminal(exc)}[/]")
+        raise typer.Exit(1) from exc
 
     if generate_key and record.backend == "ed25519":
         console.print(
@@ -1307,13 +1318,23 @@ def verify(
              "key must match it and requires an ed25519 signature "
              "(genuine authentication, not just consistency).",
     ),
+    cert_identity: Optional[str] = typer.Option(
+        None, "--cert-identity",
+        help="Trusted Sigstore certificate identity (SAN). Requires "
+             "--cert-oidc-issuer and is required for sigstore-signed adapters.",
+    ),
+    cert_oidc_issuer: Optional[str] = typer.Option(
+        None, "--cert-oidc-issuer",
+        help="Trusted OIDC issuer. Required together with --cert-identity.",
+    ),
 ):
     """Verify ``.soup-signature.json`` against current files (v0.60.0, ed25519 v0.71.2).
 
     For ``ed25519``-signed adapters the detached signature is verified against
     the embedded public key (self-consistency); pass ``--public-key
     <trusted.pem>`` to additionally require the signer's key match a key you
-    trust out of band.
+    trust out of band. Sigstore-signed adapters require both ``--cert-identity``
+    and ``--cert-oidc-issuer`` as an out-of-band trust policy.
 
     Exit codes:
       0  signature present and matches
@@ -1324,31 +1345,35 @@ def verify(
 
     try:
         report = verify_adapter(
-            adapter, strict=strict, trusted_public_key=public_key
+            adapter,
+            strict=strict,
+            trusted_public_key=public_key,
+            sigstore_identity=cert_identity,
+            sigstore_oidc_issuer=cert_oidc_issuer,
         )
     except FileNotFoundError as exc:
-        console.print(f"[red]{escape(str(exc))}[/]")
+        console.print(f"[red]{for_terminal(exc)}[/]")
         raise typer.Exit(1) from exc
     except ValueError as exc:
         # Strict mode raises; non-strict gives a report.
-        console.print(f"[red]{escape(str(exc))}[/]")
+        console.print(f"[red]{for_terminal(exc)}[/]")
         raise typer.Exit(3) from exc
     except TypeError as exc:
-        console.print(f"[red]{escape(str(exc))}[/]")
+        console.print(f"[red]{for_terminal(exc)}[/]")
         raise typer.Exit(2) from exc
 
     status_color = "green" if report.valid else "yellow"
     panel = Panel(
-        f"Adapter:    [bold]{escape(report.adapter)}[/]\n"
+        f"Adapter:    [bold]{for_terminal(report.adapter)}[/]\n"
         f"Valid:      [{status_color}]{report.valid}[/]\n"
-        f"Backend:    [bold]{escape(report.backend or '—')}[/]\n"
-        f"Reason:     {escape(report.reason)}",
+        f"Backend:    [bold]{for_terminal(report.backend or '—')}[/]\n"
+        f"Reason:     {for_terminal(report.reason)}",
         title="Adapter verify",
     )
     console.print(panel)
     if report.findings:
         for finding in report.findings:
-            console.print(f"  [yellow]- {escape(finding)}[/]")
+            console.print(f"  [yellow]- {for_terminal(finding)}[/]")
 
     if not report.valid:
         raise typer.Exit(1)

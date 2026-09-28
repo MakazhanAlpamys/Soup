@@ -78,6 +78,11 @@ def bench(
             "v0.53.9 #28."
         ),
     ),
+    cuda_graphs: bool = typer.Option(
+        False,
+        "--cuda-graphs",
+        help="Experimental CUDA graph decode for resident, unquantized Qwen2/Llama models.",
+    ),
 ) -> None:
     """Run an inference benchmark (speed and memory) on a loaded model."""
     import torch
@@ -95,11 +100,11 @@ def bench(
             "'owner/repo-name' (no leading './').[/]"
         )
         raise typer.Exit(1) from exc
-    model_path = Path(model_ref)
     if model_kind == "hf":
         console.print(
             f"[dim]Local path not found; treating {model_ref!r} as a HF repo id.[/]"
         )
+    model_target = model_ref
 
     device, _ = detect_device()
 
@@ -108,7 +113,7 @@ def bench(
 
     backend_lower = (backend or "auto").strip().lower()
     if backend_lower == "auto":
-        backend_resolved = detect_backend(str(model_path))
+        backend_resolved = detect_backend(model_target)
         console.print(
             f"[dim]Backend auto-detected:[/] [bold]{backend_resolved}[/]"
         )
@@ -120,6 +125,12 @@ def bench(
             )
             raise typer.Exit(2)
         backend_resolved = backend_lower
+
+    if cuda_graphs is True and backend_resolved != "transformers":
+        raise typer.BadParameter(
+            "--cuda-graphs requires --backend transformers. Omit --cuda-graphs to bench this "
+            "backend"
+        )
 
     if device == "cpu":
         console.print(
@@ -197,7 +208,7 @@ def bench(
 
     console.print(
         Panel(
-            f"Model:    [bold]{model_path}[/]\n"
+            f"Model:    [bold]{model_target}[/]\n"
             f"Device:   [bold]{device}[/]\n"
             f"Prompts:  [bold]{actual_num_prompts}[/]\n"
             f"Tokens/P: [bold]{max_tokens}[/]",
@@ -214,7 +225,9 @@ def bench(
 
     start_load = time.time()
     try:
-        model_obj, tokenizer = _load_model(str(model_path), base, device)
+        model_obj, tokenizer = _load_model(
+            model_target, base, device, is_local=(model_kind == "local")
+        )
     except typer.Exit:
         # typer.Exit subclasses RuntimeError, so the broad except below would
         # swallow an already-reported CLI exit and mis-print "Failed to load
@@ -224,6 +237,18 @@ def bench(
         console.print(f"[red]Failed to load model:[/] {exc}")
         raise typer.Exit(1) from exc
 
+    if cuda_graphs is True:
+        from soup_cli.utils.cuda_graphs import cuda_graph_generation_kwargs
+
+        try:
+            cuda_graph_generation_kwargs(model_obj)
+        except RuntimeError as exc:
+            from soup_cli.commands.infer import _with_omit_hint
+            from soup_cli.utils.terminal import for_terminal
+
+            console.print(f"[red]{for_terminal(_with_omit_hint(str(exc)))}[/]")
+            raise typer.Exit(1) from exc
+
     load_time = time.time() - start_load
     console.print(f"[green]Model loaded in {load_time:.2f}s.[/]\n")
 
@@ -232,11 +257,18 @@ def bench(
     # Warmup run: first inference includes CUDA kernel JIT compilation,
     # which would skew the average. Discarded from timing.
     console.print("[dim]Warmup run (discarded from timing)...[/]")
-    warmup_messages = [{"role": "user", "content": test_prompts[0]}]
-    _generate(
-        model_obj, tokenizer, warmup_messages,
-        max_tokens=min(max_tokens, 32), temperature=0.0,
-    )
+    if cuda_graphs is True:
+        from soup_cli.commands.infer import _warm_cuda_graphs
+
+        # Capture on the longest prompt at the timed length, so no timed request
+        # changes the static cache's shape and recompiles inside the measurement.
+        _warm_cuda_graphs(model_obj, tokenizer, list(dict.fromkeys(test_prompts)), max_tokens)
+    else:
+        warmup_messages = [{"role": "user", "content": test_prompts[0]}]
+        _generate(
+            model_obj, tokenizer, warmup_messages,
+            max_tokens=min(max_tokens, 32), temperature=0.0,
+        )
 
     total_tokens = 0
     total_latency = 0.0
@@ -248,10 +280,18 @@ def bench(
         messages = [{"role": "user", "content": prompt_text}]
         start_time = time.time()
 
-        _, token_count = _generate(
-            model_obj, tokenizer, messages,
-            max_tokens=max_tokens, temperature=0.0,
-        )
+        try:
+            _, token_count = _generate(
+                model_obj, tokenizer, messages,
+                max_tokens=max_tokens, temperature=0.0,
+                **({"cuda_graphs": True} if cuda_graphs is True else {}),
+            )
+        except Exception as exc:
+            if cuda_graphs is not True:
+                raise
+            from soup_cli.commands.infer import _cuda_graph_failure
+
+            raise _cuda_graph_failure(exc) from exc
 
         latency = time.time() - start_time
         total_tokens += token_count

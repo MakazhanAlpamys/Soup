@@ -18,6 +18,7 @@ from soup_cli.utils.exit_codes import (
     EXIT_USAGE_ERROR,
     GateCommand,
 )
+from soup_cli.utils.terminal import for_terminal
 
 console = Console()
 
@@ -1221,7 +1222,7 @@ def gate_cmd(
     try:
         baseline_scores = resolve_baseline(
             baseline,
-            warn=lambda msg: console.print(f"[yellow]Warning:[/] {msg}"),
+            warn=lambda msg: console.print(f"[yellow]Warning:[/] {for_terminal(msg)}"),
         )
     except (FileNotFoundError, ValueError) as exc:
         console.print(f"[red]Cannot resolve baseline:[/] {exc}")

@@ -59,12 +59,18 @@ class TestRecipeCatalog:
 
     def test_search_by_size(self):
         """search_recipes filters by model size."""
-        from soup_cli.recipes.catalog import search_recipes
+        from soup_cli.recipes.catalog import RECIPES, search_recipes
 
         results = search_recipes(size="7b")
         assert len(results) > 0
+        names_by_recipe = {id(r): n for n, r in RECIPES.items()}
         for recipe in results:
-            assert "7b" in recipe.size.lower() or "7b" in recipe.model.lower()
+            name = names_by_recipe.get(id(recipe), "")
+            assert (
+                "7b" in recipe.size.lower()
+                or "7b" in recipe.model.lower()
+                or "7b" in name.lower()
+            )
 
     def test_search_no_results(self):
         """search_recipes returns empty list for no matches."""
@@ -108,6 +114,19 @@ class TestRecipeCatalog:
                 f"Recipe '{name}' task mismatch: meta={recipe.task}, yaml={yaml_task}"
             )
 
+    def test_recipe_models_match_yaml_base(self):
+        """Recipe.model matches the base model in the YAML content."""
+        import yaml
+
+        from soup_cli.recipes.catalog import RECIPES
+
+        for name, recipe in RECIPES.items():
+            parsed = yaml.safe_load(recipe.yaml_str)
+            yaml_base = parsed.get("base")
+            assert recipe.model == yaml_base, (
+                f"Recipe '{name}' model mismatch: "
+                f"meta={recipe.model}, yaml={yaml_base}"
+            )
 
 # ---------------------------------------------------------------------------
 # CLI tests

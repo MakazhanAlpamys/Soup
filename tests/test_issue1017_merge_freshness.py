@@ -616,10 +616,17 @@ class TestContributingDocumentsTheTrap:
         assert src.count(f"MAX_BEHIND = {MAX_BEHIND}") == 1
 
     def test_the_changelog_fragment_is_named_for_the_pr(self):
-        fragment = ROOT / "changelog.d" / "0.75.0" / "1071.fixed.md"
+        # The baseline directory is named for the newest release, so it MOVES at
+        # every release (v0.75.1 renamed 0.75.0/ to 0.75.1/). Hardcoding it made
+        # this test fail for a reason that has nothing to do with the naming rule
+        # it exists to pin, so the directory is discovered instead.
+        baseline = next(
+            d for d in (ROOT / "changelog.d").iterdir() if d.is_dir()
+        )
+        fragment = baseline / "1071.fixed.md"
         text = fragment.read_text(encoding="utf-8")
         assert "#1017 by @jagadeepmamidi in #1071" in text
-        assert not (ROOT / "changelog.d" / "0.75.0" / "1017.fixed.md").exists()
+        assert not (baseline / "1017.fixed.md").exists()
 
 
 def _clean_ruff(argv, *, cwd):

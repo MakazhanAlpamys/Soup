@@ -171,15 +171,17 @@ class TestTheCommand:
         cfg["data"]["format"] = "dpo"
         (workdir / "soup.yaml").write_text(yaml.safe_dump(cfg), encoding="utf-8")
         result = runner.invoke(app, ["bench", "train", "--config", "soup.yaml"])
-        assert result.exit_code == 1
+        assert result.exit_code == 1, result.output
         assert "task: dpo" in strip_ansi(result.output)
 
     def test_warmup_that_eats_every_step_is_refused(self, workdir):
         result = runner.invoke(
             app, ["bench", "train", "--config", "soup.yaml", "--steps", "2", "--warmup", "2"],
         )
-        assert result.exit_code == 1
-        assert "--warmup" in strip_ansi(result.output)
+        assert result.exit_code == 1, result.output
+        # The pre-flight guard's own text, not the post-run summary's, which
+        # would also fire if the guard were gone.
+        assert "leaves nothing after --warmup" in strip_ansi(result.output)
 
 
 class TestTheConfigHash:
@@ -274,18 +276,19 @@ class TestInferStillAnswersToTheOldForm:
 
 
 class TestDriverAndClockProvenance:
-    """Driver and SM clock come from one nvidia-smi query. No GPU in CI reaches
-    it, so it is driven here with a fake tool."""
+    """Driver and SM clock come from nvidia-smi. No GPU in CI reaches it, so it
+    is driven here with a fake tool."""
 
     @staticmethod
-    def _fake_tool(tmp_path, monkeypatch, stdout):
+    def _fake_tool(tmp_path, monkeypatch, stdout, returncode=0):
         import sys
 
         script = tmp_path / "fake_nvidia_smi.py"
         script.write_text(
             "import sys\n"
             "open(sys.argv[0] + '.args', 'w').write(' '.join(sys.argv[1:]))\n"
-            f"sys.stdout.write({stdout!r})\n",
+            f"sys.stdout.write({stdout!r})\n"
+            f"sys.exit({returncode})\n",
             encoding="utf-8",
         )
         windows = sys.platform == "win32"
@@ -300,23 +303,37 @@ class TestDriverAndClockProvenance:
         )
         return script
 
-    def test_it_reads_the_driver_and_the_sm_clock(self, tmp_path, monkeypatch):
-        from soup_cli.bench.train_run import _driver_and_sm_clock
+    def test_it_reads_the_driver(self, tmp_path, monkeypatch):
+        from soup_cli.bench.train_run import _driver_version
 
-        script = self._fake_tool(tmp_path, monkeypatch, "580.95.05, 1890\n")
-        assert _driver_and_sm_clock() == ("580.95.05", 1890)
+        script = self._fake_tool(tmp_path, monkeypatch, "580.95.05\n")
+        assert _driver_version() == "580.95.05"
         asked = (tmp_path / (script.name + ".args")).read_text(encoding="utf-8")
-        assert "driver_version" in asked and "clocks.sm" in asked
+        assert "driver_version" in asked
         assert "memory" not in asked  # memory is torch's allocator counters, never this
 
-    def test_unreadable_output_is_none_not_a_guess(self, tmp_path, monkeypatch):
-        from soup_cli.bench.train_run import _driver_and_sm_clock
+    @pytest.mark.parametrize(
+        "stdout, returncode",
+        [
+            ("[N/A]\n", 0),
+            (
+                "NVIDIA-SMI has failed because it couldn't communicate with the "
+                "NVIDIA driver. Make sure that the latest NVIDIA driver is installed "
+                "and running.\n",
+                9,
+            ),
+        ],
+    )
+    def test_unreadable_output_is_none_not_a_guess(
+        self, tmp_path, monkeypatch, stdout, returncode
+    ):
+        from soup_cli.bench.train_run import _driver_version
 
-        self._fake_tool(tmp_path, monkeypatch, "[N/A]\n")
-        assert _driver_and_sm_clock() == (None, None)
+        self._fake_tool(tmp_path, monkeypatch, stdout, returncode)
+        assert _driver_version() is None
 
     def test_no_tool_is_none(self, monkeypatch):
-        from soup_cli.bench.train_run import _driver_and_sm_clock
+        from soup_cli.bench.train_run import _driver_version
 
         monkeypatch.setattr("soup_cli.utils.layer_stream._resolve_tool", lambda *_a: None)
-        assert _driver_and_sm_clock() == (None, None)
+        assert _driver_version() is None

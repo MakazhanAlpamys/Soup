@@ -210,6 +210,7 @@ def validate_distill_compat(
     Rejects:
     - non-distill task.
     - ``backend == 'mlx'`` (no MLX teacher-load path yet).
+    - ``backend == 'unsloth'`` (the trainer never reads the backend).
     - missing teacher_model — distillation is meaningless without one.
     """
     for name, value in (("task", task), ("backend", backend)):
@@ -225,6 +226,12 @@ def validate_distill_compat(
     if backend == "mlx":
         raise ValueError(
             "task='distill' is not supported on backend=mlx in v0.52.0"
+        )
+    if backend == "unsloth":
+        raise ValueError(
+            "task='distill' is not supported on backend=unsloth: the distill "
+            "trainer only loads student and teacher through transformers. "
+            "Use backend=transformers."
         )
     if teacher_model is None:
         raise ValueError(
@@ -318,18 +325,43 @@ def build_sequence_distill_rows(
         prompt_msgs = extract_prompt_messages(messages)
         if not prompt_msgs:
             continue
-        input_ids = teacher_tokenizer.apply_chat_template(
+        enc = teacher_tokenizer.apply_chat_template(
             prompt_msgs,
             add_generation_prompt=True,
             return_tensors="pt",
             tokenize=True,
+            return_dict=True,
         )
-        if hasattr(input_ids, "to"):
-            input_ids = input_ids.to(teacher_device)
+        if hasattr(enc, "to"):
+            enc = enc.to(teacher_device)
+
+        if isinstance(enc, Mapping):
+            input_ids = enc["input_ids"]
+            attention_mask = enc.get("attention_mask")
+        else:
+            # Keep compatibility with tokenizer implementations that ignore
+            # return_dict and return a tensor/list directly.
+            input_ids = enc
+            attention_mask = None
+
+        if not torch.is_tensor(input_ids):
+            input_ids = torch.as_tensor(input_ids)
+        if input_ids.ndim == 1:
+            input_ids = input_ids.unsqueeze(0)
+        if attention_mask is None:
+            attention_mask = torch.ones_like(input_ids)
+        elif not torch.is_tensor(attention_mask):
+            attention_mask = torch.as_tensor(attention_mask)
+        if attention_mask.ndim == 1:
+            attention_mask = attention_mask.unsqueeze(0)
+        input_ids = input_ids.to(teacher_device)
+        attention_mask = attention_mask.to(teacher_device)
+
         prompt_len = int(input_ids.shape[-1])
         with torch.no_grad():
             generated = teacher.generate(
                 input_ids=input_ids,
+                attention_mask=attention_mask,
                 max_new_tokens=budget,
                 do_sample=False,
                 pad_token_id=pad_id,

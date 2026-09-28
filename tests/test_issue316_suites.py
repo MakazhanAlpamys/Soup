@@ -37,8 +37,10 @@ import pytest
 # ---------------------------------------------------------------------------
 
 
-def _expected_name(item: dict) -> str:
+def _expected_name(item: dict) -> str | None:
     """The function name the scorer will require for this item."""
+    if item["expected"] == "NO_TOOL":
+        return None
     return json.loads(item["expected"])["function"]["name"]
 
 
@@ -56,6 +58,9 @@ class TestToolCallSuiteShowsATooolSchema:
         assert items, "fixture empty"
         for item in items:
             name = _expected_name(item)
+            if name is None:
+                assert "reply exactly NO_TOOL" in item["prompt"]
+                continue
             assert name in item["prompt"], (
                 f"tool {name!r} is required by the scorer but never shown to the "
                 f"model; prompt={item['prompt'][:120]!r}"
@@ -90,7 +95,9 @@ class TestToolCallSuiteShowsATooolSchema:
                 f"only {len(names)} candidate tools shown — the suite measures "
                 f"transcription, not selection: {sorted(names)}"
             )
-            assert _expected_name(item) in names
+            expected_name = _expected_name(item)
+            if expected_name is not None:
+                assert expected_name in names
 
     def test_a_model_that_always_picks_one_tool_cannot_score_well(self):
         """The behavioural half of the control above.
@@ -103,6 +110,7 @@ class TestToolCallSuiteShowsATooolSchema:
 
         items = load_suite_items("mini_tool_call")
         fixed = _expected_name(items[0])
+        assert fixed is not None
         score = score_bundled_suite(
             "mini_tool_call",
             lambda p: json.dumps({"function": {"name": fixed, "arguments": {}}}),
@@ -144,6 +152,10 @@ class TestToolCallSuiteShowsATooolSchema:
         items = load_suite_items("mini_tool_call")
         assert len(items) == 40
         for item in items:
+            if item["expected"] == "NO_TOOL":
+                assert "reply exactly NO_TOOL" in item["prompt"]
+                assert isinstance(item.get("source"), str) and item["source"]
+                continue
             parsed = json.loads(item["expected"])
             assert isinstance(parsed["function"]["name"], str)
             assert isinstance(parsed["function"]["arguments"], dict)
@@ -281,10 +293,12 @@ class TestToolCallScoringToleratesTheSameEnvelope:
     def test_fenced_tool_call_scores(self):
         from soup_cli.eval.gate_suites import load_suite_items, score_bundled_suite
 
-        by_prompt = {
-            it["prompt"]: f"```json\n{it['expected']}\n```"
-            for it in load_suite_items("mini_tool_call")
-        }
+        by_prompt = {}
+        for item in load_suite_items("mini_tool_call"):
+            expected = item["expected"]
+            by_prompt[item["prompt"]] = (
+                expected if expected == "NO_TOOL" else f"```json\n{expected}\n```"
+            )
         assert score_bundled_suite(
             "mini_tool_call", lambda p: by_prompt[p]
         ) == pytest.approx(1.0)
