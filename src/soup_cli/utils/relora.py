@@ -166,25 +166,14 @@ def _resolve_base_weight(module: Any) -> Any:
     )
 
 
-def _lora_scaling(module: Any, adapter: str) -> float:
-    scaling = getattr(module, "lora_scaling", None)
-    if isinstance(scaling, dict):
-        return float(scaling.get(adapter, 1.0))
-    if scaling is not None:
-        return float(scaling)
-    alpha = getattr(module, "lora_alpha", None)
-    r = getattr(module, "r", None)
-    if alpha is not None and r:
-        return float(alpha) / float(r)
-    return 1.0
-
-
-def _compute_delta(module: Any, adapter: str, weight_a: Any, weight_b: Any) -> Any:
-    if hasattr(module, "get_delta_weight"):
-        return module.get_delta_weight(adapter)
-    scaling = _lora_scaling(module, adapter)
-    delta = weight_b @ weight_a
-    return delta * scaling
+def _compute_delta(module: Any, adapter: str) -> Any:
+    get_delta_weight = getattr(module, "get_delta_weight", None)
+    if get_delta_weight is None:
+        raise RuntimeError(
+            f"ReLoRA module {type(module).__name__} does not expose PEFT "
+            "`get_delta_weight`"
+        )
+    return get_delta_weight(adapter)
 
 
 def _iter_lora_modules(model: Any) -> Iterator[Tuple[Any, str]]:
@@ -228,7 +217,7 @@ def merge_reinit_lora_module(
     base_weight = _require_writable_base(_resolve_base_weight(module))
 
     if merge:
-        delta = _compute_delta(module, adapter, weight_a, weight_b)
+        delta = _compute_delta(module, adapter)
         if delta.shape != base_weight.shape:
             raise RuntimeError(
                 f"ReLoRA delta shape {tuple(delta.shape)} does not match base "
@@ -236,7 +225,6 @@ def merge_reinit_lora_module(
             )
         with torch.no_grad():
             base_weight.add_(delta.to(device=base_weight.device, dtype=base_weight.dtype))
-
     _reinit_lora_weights(weight_a, weight_b)
     return weight_a, weight_b
 
@@ -364,11 +352,13 @@ class _ReLoRACallback_body:  # type: ignore[misc]  # noqa: N801
     def _start_lr_warmup(self, optimizer: Any) -> None:
         if optimizer is None or self.policy is None:
             return
-        self._warmup_steps_total = self.policy.lr_warmup_steps()
-        self._warmup_steps_done = 0
+        warmup_steps = self.policy.lr_warmup_steps()
+        self._warmup_steps_total = warmup_steps + 1
+        self._warmup_steps_done = 1
         self._warmup_target_lrs = [float(pg["lr"]) for pg in optimizer.param_groups]
-        for pg in optimizer.param_groups:
-            pg["lr"] = 0.0
+        frac = 1 / self._warmup_steps_total
+        for pg, target in zip(optimizer.param_groups, self._warmup_target_lrs):
+            pg["lr"] = target * frac
 
     def _maybe_advance_lr_warmup(self, optimizer: Any) -> None:
         if (

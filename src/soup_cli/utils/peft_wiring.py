@@ -565,17 +565,20 @@ def attach_relora_callback(trainer: Any, tcfg: Any) -> bool:
     if world_size > 1:
         raise ValueError(
             "ReLoRA is not supported with world_size > 1 "
-            f"(got world_size={world_size}): restarts are single-process only."
+            f"(got world_size={world_size}): restarts are single-process only. "
+            "Run with one process or remove training.relora_steps."
         )
     if getattr(trainer, "is_deepspeed_enabled", False) is True:
         raise ValueError(
             "ReLoRA is not supported with DeepSpeed "
-            "(is_deepspeed_enabled=True): restarts cannot merge sharded bases."
+            "(is_deepspeed_enabled=True): restarts cannot merge sharded bases. "
+            "Run without DeepSpeed or remove training.relora_steps."
         )
     if getattr(trainer, "is_fsdp_enabled", False) is True:
         raise ValueError(
             "ReLoRA is not supported with FSDP "
-            "(is_fsdp_enabled=True): restarts cannot merge sharded bases."
+            "(is_fsdp_enabled=True): restarts cannot merge sharded bases. "
+            "Run without FSDP or remove training.relora_steps."
         )
 
     # Pydantic schema guarantees these fields exist on `TrainingConfig`. Read
@@ -607,6 +610,30 @@ def attach_relora_callback(trainer: Any, tcfg: Any) -> bool:
         )
     trainer.add_callback(ReLoRACallback(policy=policy))
     return True
+
+
+def save_model_with_relora(
+    trainer: Any,
+    output_dir: str,
+    relora_steps: int | None,
+) -> None:
+    """Save a dense final model when ReLoRA has been configured."""
+    if relora_steps is None:
+        trainer.save_model(output_dir)
+        return
+
+    model = getattr(trainer, "model", None)
+    merge_and_unload = getattr(model, "merge_and_unload", None)
+    if merge_and_unload is None:
+        raise RuntimeError(
+            "ReLoRA final save requires a PEFT model with merge_and_unload()."
+        )
+
+    merged_model = merge_and_unload()
+    trainer.model = merged_model
+    if getattr(trainer, "model_wrapped", None) is not None:
+        trainer.model_wrapped = merged_model
+    trainer.save_model(output_dir)
 
 
 def build_loraplus_optimizer(model: Any, args: Any, tcfg: Any) -> Any:

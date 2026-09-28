@@ -6765,7 +6765,7 @@ class SoupConfig(BaseModel):
     def _validate_relora_supported_tasks(self) -> "SoupConfig":
         """v0.40.6 (#67) — ReLoRA callback wired in every transformer-backend
         trainer (sft / dpo / grpo / kto / orpo / simpo / ipo / ppo /
-        reward_model / pretrain / embedding / bco).
+        reward_model / pretrain / embedding / bco / distill).
 
         #693 — paper-faithful restart merges into the base weight, so reject
         combos where the base is not a writable float tensor or where the

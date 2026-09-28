@@ -226,12 +226,12 @@ class TestReLoRACallback:
         cb = ReLoRACallback(policy=ReLoRAPolicy(steps=20))
         opt = _Opt(0.01)
         cb._start_lr_warmup(opt)
-        assert opt.param_groups[0]["lr"] == 0.0
+        assert opt.param_groups[0]["lr"] == pytest.approx(0.01 / 3)
         assert cb._warmup_target_lrs == [0.01]
         cb._maybe_advance_lr_warmup(opt)
-        assert opt.param_groups[0]["lr"] == 0.005
+        assert opt.param_groups[0]["lr"] == pytest.approx(0.02 / 3)
         cb._maybe_advance_lr_warmup(opt)
-        assert opt.param_groups[0]["lr"] == 0.01
+        assert opt.param_groups[0]["lr"] == pytest.approx(0.01)
 
     def test_lr_warmup_advances_on_next_step_after_fire(self):
         from soup_cli.utils.relora import ReLoRACallback, ReLoRAPolicy
@@ -247,11 +247,40 @@ class TestReLoRACallback:
         state = MagicMock(global_step=10, max_steps=1000)
         cb.on_step_end(MagicMock(), state, MagicMock(), model=model, optimizer=opt)
         assert cb.fire_count == 1
-        assert opt.param_groups[0]["lr"] == 0.0
+        assert opt.param_groups[0]["lr"] == pytest.approx(5e-4)
         state = MagicMock(global_step=11, max_steps=1000)
         cb.on_step_end(MagicMock(), state, MagicMock(), model=model, optimizer=opt)
         assert cb.fire_count == 1
-        assert opt.param_groups[0]["lr"] == 1e-3
+        assert opt.param_groups[0]["lr"] == pytest.approx(1e-3)
+
+    def test_relora_step_one_never_uses_zero_lr(self):
+        from soup_cli.utils.relora import ReLoRACallback, ReLoRAPolicy
+
+        class _Opt:
+            def __init__(self, lr):
+                self.param_groups = [{"lr": lr}]
+                self.state = {}
+
+        cb = ReLoRACallback(policy=ReLoRAPolicy(steps=1, warmup_ratio=0.0))
+        model = _make_fake_lora_module()
+        opt = _Opt(1e-3)
+        cb.on_step_end(
+            MagicMock(),
+            MagicMock(global_step=1, max_steps=100),
+            MagicMock(),
+            model=model,
+            optimizer=opt,
+        )
+        assert opt.param_groups[0]["lr"] == pytest.approx(5e-4)
+        cb.on_step_end(
+            MagicMock(),
+            MagicMock(global_step=2, max_steps=100),
+            MagicMock(),
+            model=model,
+            optimizer=opt,
+        )
+        assert 0 < opt.param_groups[0]["lr"] <= 1e-3
+
 
 
 def _make_fake_lora_module():
@@ -269,6 +298,9 @@ def _make_fake_lora_module():
 
         def forward(self, x):
             return self.base(x) + self.lora_B(self.lora_A(x))
+
+        def get_delta_weight(self, adapter):
+            return self.lora_B.weight @ self.lora_A.weight
 
     return _Fake()
 
@@ -681,7 +713,7 @@ def test_attach_relora_preflight_rejects_quantized_base():
 
 
 class TestReLoRARealPeft:
-    def test_restart_merges_real_peft_linear_skips_embedding(self):
+    def test_restart_merges_real_peft_linear_skips_embedding(self, tmp_path):
         try:
             import torch
             import torch.nn as nn
@@ -719,7 +751,7 @@ class TestReLoRARealPeft:
             )
             model = get_peft_model(model, peft_cfg)
             model.eval()
-        except (ImportError, OSError) as exc:
+        except ImportError as exc:
             pytest.skip(f"torch / transformers / peft not available: {exc}")
 
         yielded = list(_iter_lora_modules(model))
@@ -798,6 +830,39 @@ class TestReLoRARealPeft:
                 assert torch.equal(param, embed_before[(name, "A", key)])
             for key, param in getattr(module, "lora_embedding_B", {}).items():
                 assert torch.equal(param, embed_before[(name, "B", key)])
+
+        for module, adapter in yielded:
+            weight_a = _resolve_lora_weight(module, "lora_A", adapter)
+            weight_b = _resolve_lora_weight(module, "lora_B", adapter)
+            with torch.no_grad():
+                weight_a.fill_(0.125)
+                weight_b.fill_(0.25)
+
+        with torch.no_grad():
+            live_logits = model(input_ids=input_ids).logits
+
+        from soup_cli.utils.peft_wiring import save_model_with_relora
+
+        class _Trainer:
+            def __init__(self, model):
+                self.model = model
+                self.model_wrapped = model
+
+            def save_model(self, output_dir):
+                self.model.save_pretrained(output_dir)
+
+        trainer = _Trainer(model)
+        save_model_with_relora(trainer, str(tmp_path), relora_steps=1)
+        assert (tmp_path / "config.json").exists()
+        assert any(
+            (tmp_path / filename).exists()
+            for filename in ("model.safetensors", "pytorch_model.bin")
+        )
+
+        reloaded = LlamaForCausalLM.from_pretrained(tmp_path).eval()
+        with torch.no_grad():
+            reloaded_logits = reloaded(input_ids=input_ids).logits
+        assert torch.allclose(live_logits, reloaded_logits, atol=1e-5, rtol=1e-5)
 
 
 class TestReLoRATaskGate:

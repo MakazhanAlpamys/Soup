@@ -15,6 +15,7 @@ soup advise compare                           Show prior verdicts from advise hi
 soup advise explain                           Rubric + evidence trail of the last verdict
 soup fetch <name>                             Fetch a ready-to-edit example config from the bundled catalog
 soup train --config soup.yaml                 Start training
+soup train --config soup.yaml --resume ./output/checkpoint-100  Resume from local checkpoint (not with training.relora_steps)
 soup train --config soup.yaml --tensorboard   Train with TensorBoard logging
 soup train --config soup.yaml --replay old.jsonl --replay-ratio 0.1  Continual-learning rehearsal: interleave old data so the new task doesn't erase it (sft/pretrain)
 soup train --config soup.yaml --fsdp full_shard  Train with FSDP2
@@ -24,7 +25,7 @@ soup train --config soup.yaml --gpus 8 --nodes 2 --node-rank 0 --master-addr 10.
 soup train --config soup.yaml --gpus 4 --no-reexec  Print the launch command without running it
 soup train --config soup.yaml --gate evals/gate.yaml  Eval-gated training
 soup train --config soup.yaml --push-as user/repo  Auto-push each checkpoint to HF as branch
-soup train --config soup.yaml --push-as user/repo --hf-resume  Resume from latest HF checkpoint branch
+soup train --config soup.yaml --push-as user/repo --hf-resume  Resume from latest HF checkpoint branch (not with training.relora_steps)
 soup train --config soup.yaml --find-lr        LR range finder: write recommended LR JSON
 soup train --config soup.yaml --cloud modal|lambda --gpu a100  Render a cloud GPU controller (plan-only; --cloud-submit submits live)
 soup infer --model ./output --input p.jsonl   Batch inference

@@ -418,7 +418,11 @@ class BCOTrainerWrapper:
             self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)
         duration = time.time() - start
 
-        self.trainer.save_model(self._output_dir)
+        from soup_cli.utils.peft_wiring import save_model_with_relora
+
+        save_model_with_relora(
+            self.trainer, self._output_dir, self.config.training.relora_steps
+        )
         self.tokenizer.save_pretrained(self._output_dir)
 
         logs = self.trainer.state.log_history

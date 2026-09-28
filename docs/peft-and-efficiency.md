@@ -337,14 +337,21 @@ sets `relora_steps`.
 ReLoRA fires every N global steps, merges the LoRA update (B @ A, with PEFT
 scaling) into the frozen base weight, reinitializes `lora_A` (Kaiming) and
 `lora_B` (zeros), optionally clears optimizer state for those adapter parameters,
-and runs a short learning-rate re-warmup. Restarts accumulate faithfully only
-on an fp32 base; bf16/fp16 bases lose merge delta to rounding. Embedding
-adapters (empty `lora_A`, typically `embed_tokens`) are skipped; Linear LoRA is
-merged even though peft puts empty `lora_embedding_A`/`lora_embedding_B` dicts
-on every `LoraLayer`. Useful for very long training runs where adapter capacity
-saturates. `relora_prune_ratio` is retained for backward-compatible YAML but no
-longer prunes adapter weights. Merged base deltas are in-memory only; run
-`soup merge` to export a dense checkpoint.
+and runs a short learning-rate re-warmup. The first post-restart step uses
+`1/(W+1)` of the target LR, then advances by that same increment to full LR.
+Restarts accumulate faithfully only on an fp32 base; bf16/fp16 bases lose merge
+delta to rounding. Embedding adapters (empty `lora_A`, typically `embed_tokens`)
+are skipped; Linear LoRA is merged even though peft puts empty
+`lora_embedding_A`/`lora_embedding_B` dicts on every `LoraLayer`. Useful for very
+long training runs where adapter capacity saturates. `relora_prune_ratio` is
+retained for backward-compatible YAML but no longer prunes adapter weights.
+
+After training, Soup merges the active adapter into the already-accumulated
+in-memory base and saves the final output as a standalone dense model. Load or
+export that output directly; do not run `soup merge` on it. Intermediate
+checkpoint directories remain trainer artifacts, and `--resume` / `--hf-resume`
+are refused when `relora_steps` is configured because those checkpoints do not
+encode the accumulated restart state.
 
 **Per-pattern rank/alpha** map module name patterns to integer ranks. Useful in MoE
 configs where expert FFNs need lower rank than attention. Caps: 256 keys × value 1024.

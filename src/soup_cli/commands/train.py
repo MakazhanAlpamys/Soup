@@ -364,7 +364,8 @@ def train(
         "--resume",
         "-r",
         help="Resume from checkpoint: path to checkpoint dir ('auto' for latest); "
-        "on the MLX backend, a path to a .safetensors adapter file instead",
+        "on the MLX backend, a path to a .safetensors adapter file instead. "
+        "Not supported when training.relora_steps is configured",
     ),
     wandb: bool = typer.Option(
         False,
@@ -444,7 +445,8 @@ def train(
         "--hf-resume",
         help=(
             "Download the latest checkpoint branch from the --push-as repo "
-            "and resume from it. Requires --push-as."
+            "and resume from it. Requires --push-as; not supported when "
+            "training.relora_steps is configured."
         ),
     ),
     find_lr: bool = typer.Option(
@@ -749,6 +751,13 @@ def train(
     except Exception as exc:  # noqa: BLE001 — pydantic ValidationError et al.
         console.print(f"[red]{markup_escape(str(exc))}[/]")
         raise typer.Exit(code=2) from exc
+
+    if cfg.training.relora_steps is not None and (resume is not None or hf_resume):
+        console.print(
+            "[red]ReLoRA runs cannot resume from checkpoints.[/] "
+            "Remove training.relora_steps or start a fresh run."
+        )
+        raise typer.Exit(1)
 
     # An unregistered data.chat_template name raises KeyError in the trainer,
     # after the model has loaded. Check it before anything is downloaded.
@@ -1852,6 +1861,12 @@ def train(
         raise
 
     # Report
+    merge_hint = (
+        "ReLoRA output is already dense; no soup merge is needed"
+        if cfg.training.relora_steps is not None
+        else f"Merge LoRA:  soup merge --adapter {result['output_dir']}"
+    )
+
     console.print(
         Panel(
             f"{_format_training_complete_loss(result)}\n"
@@ -1860,7 +1875,7 @@ def train(
             f"Run ID: [bold]{run_id}[/]\n\n"
             f"Quick test:  [bold]soup chat --model {result['output_dir']}[/]\n"
             f"Push to HF:  [bold]soup push --model {result['output_dir']}[/]\n"
-            f"Merge LoRA:  [bold]soup merge --adapter {result['output_dir']}[/]\n"
+            f"{merge_hint}\n"
             f"Export GGUF: [bold]soup export --model {result['output_dir']}[/]\n"
             f"Run details: [bold]soup runs show {run_id}[/]",
             title="[bold green]Training Complete![/]",

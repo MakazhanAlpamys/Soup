@@ -449,7 +449,7 @@ class PPOTrainerWrapper:
             task="ppo",
         )
 
-        # v0.40.6 #67 — ReLoRA callback (magnitude-prune LoRA every N steps).
+        # v0.40.6 #67 — ReLoRA merge-and-reinitialize restart callback.
         # LoRA+ (#724/#745) is wired ABOVE via constructor injection, not here:
         # PPO's trainer builds its scheduler eagerly, so the optimizer has to be
         # passed to the constructor rather than attached after it.
@@ -773,8 +773,11 @@ class PPOTrainerWrapper:
                 self.trainer.train()
         duration = time.time() - start
 
-        # Save final model (LoRA adapter)
-        self.trainer.save_model(self._output_dir)
+        from soup_cli.utils.peft_wiring import save_model_with_relora
+
+        save_model_with_relora(
+            self.trainer, self._output_dir, self.config.training.relora_steps
+        )
         self.tokenizer.save_pretrained(self._output_dir)
 
         # Extract metrics
@@ -869,9 +872,11 @@ class PPOTrainerWrapper:
 
         duration = time.time() - start
 
-        # Save final model (LoRA adapter)
-        self.model.save_pretrained(self._output_dir)
-        self.tokenizer.save_pretrained(self._output_dir)
+        from soup_cli.utils.peft_wiring import save_model_with_relora
+
+        save_model_with_relora(
+            self.trainer, self._output_dir, self.config.training.relora_steps
+        )
 
         # Extract metrics
         loss_summary = summarize_training_loss(log_history)
