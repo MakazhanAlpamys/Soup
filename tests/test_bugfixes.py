@@ -570,7 +570,8 @@ class TestPPOExperimentalSetup:
         )
         wrapper = PPOTrainerWrapper(cfg, device="cpu")
 
-        dataset = {"train": [{"prompt": "What is 2+2?", "answer": "4"}]}
+        # #1391: one rollout batch is batch_size (1 here) x gradient_accumulation_steps (4)
+        dataset = {"train": [{"prompt": "What is 2+2?", "answer": "4"}] * 4}
 
         # Track what args PPOTrainer receives
         captured_kwargs = {}
@@ -945,7 +946,8 @@ class TestPPOResumeCheckpoint:
             def __init__(self, **kwargs):
                 pass
 
-        dataset = {"train": [{"prompt": "Q?", "answer": "A"}]}
+        # #1391: one rollout batch is batch_size (1 here) x gradient_accumulation_steps (4)
+        dataset = {"train": [{"prompt": "Q?", "answer": "A"}] * 4}
 
         with mock_patch("soup_cli.trainer.ppo.PPOTrainerWrapper._setup_reward"), \
              mock_patch("soup_cli.trainer.ppo.PPOTrainerWrapper._setup_transformers"), \

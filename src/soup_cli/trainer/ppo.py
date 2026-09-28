@@ -7,6 +7,7 @@ clipped surrogate objectives with a KL penalty against a frozen reference model.
 Full RLHF pipeline:  SFT → Reward Model → PPO
 """
 
+import os
 import time
 from pathlib import Path
 from typing import Any, Mapping, Optional
@@ -191,6 +192,12 @@ class PPOTrainerWrapper:
             )
 
         train_ds = train_ds.map(_tokenize_ppo, batched=True)
+        # #1391: trl's PPOTrainer pads every column with DataCollatorWithPadding and
+        # never drops unused ones, so the prompt_text strings crash the collator.
+        # The manual (trl<0.28) loop below still reads prompt_text from _train_ds.
+        trl_train_ds = train_ds.select_columns(["input_ids", "attention_mask"])
+        if is_experimental:
+            _check_one_rollout_batch(len(train_ds), batch_size, tcfg.gradient_accumulation_steps)
 
         # --- Output dir ---
         output_dir = Path(cfg.output)
@@ -360,7 +367,7 @@ class PPOTrainerWrapper:
                 "model": self.model,
                 "ref_model": None,
                 "reward_model": reward_model_obj,
-                "train_dataset": train_ds,
+                "train_dataset": trl_train_ds,
                 "value_model": value_model_obj,
             }
             # LoRA+ (#724/#745): inject so the eagerly-built scheduler binds to it.
@@ -380,9 +387,9 @@ class PPOTrainerWrapper:
                 "processing_class": self.tokenizer,
             }
             if "train_dataset" in ppo_trainer_params:
-                trainer_kwargs["train_dataset"] = train_ds
+                trainer_kwargs["train_dataset"] = trl_train_ds
             elif "dataset" in ppo_trainer_params:
-                trainer_kwargs["dataset"] = train_ds
+                trainer_kwargs["dataset"] = trl_train_ds
             if reward_funcs and "reward_funcs" in ppo_trainer_params:
                 trainer_kwargs["reward_funcs"] = reward_funcs
             # Pass ref/reward/value models if required positionally
@@ -466,6 +473,7 @@ class PPOTrainerWrapper:
 
         self._output_dir = str(output_dir)
         self._train_ds = train_ds
+        self._trl_train_ds = trl_train_ds
         self._batch_size = batch_size
         self._num_epochs = tcfg.epochs
         self._max_length = cfg.data.max_length
@@ -718,9 +726,9 @@ class PPOTrainerWrapper:
         # If dataset wasn't accepted by constructor, set it on the trainer
         if not self._dataset_in_constructor:
             if hasattr(self.trainer, "train_dataset"):
-                self.trainer.train_dataset = self._train_ds
+                self.trainer.train_dataset = self._trl_train_ds
             elif hasattr(self.trainer, "dataset"):
-                self.trainer.dataset = self._train_ds
+                self.trainer.dataset = self._trl_train_ds
 
         if display:
             from soup_cli.monitoring.callback import (
@@ -924,6 +932,29 @@ class PPOTrainerWrapper:
             rewards = [torch.tensor(0.0) for _ in range(num_samples)]
 
         return rewards
+
+
+def _world_size() -> int:
+    try:
+        return max(1, int(os.environ.get("WORLD_SIZE", "1") or "1"))
+    except (TypeError, ValueError):
+        return 1
+
+
+def _check_one_rollout_batch(rows: int, batch_size: int, grad_accum: int) -> None:
+    """#1391: trl's PPO DataLoader uses ``drop_last=True`` with one rollout batch
+    (``batch_size * gradient_accumulation_steps`` rows per process) and repeats it
+    with ``while True``, so a smaller train set spins forever without a step."""
+    processes = _world_size()
+    needed = batch_size * grad_accum * processes
+    if rows < needed:
+        per_process = f" x {processes} processes" if processes > 1 else ""
+        raise ValueError(
+            f"PPO needs at least one rollout batch of training prompts: the train set "
+            f"has {rows} rows, but batch_size={batch_size} x "
+            f"gradient_accumulation_steps={grad_accum}{per_process} = {needed}. "
+            f"Add prompts, or lower batch_size / gradient_accumulation_steps."
+        )
 
 
 def _import_ppo_classes():

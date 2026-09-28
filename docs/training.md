@@ -1550,6 +1550,11 @@ controls optimization passes within each PPO update. Soup forwards both values,
 plus `ppo_kl_penalty`, to the active TRL `PPOConfig` names and prints the
 effective schedule during setup.
 
+One PPO rollout batch is `batch_size` x `gradient_accumulation_steps` prompts per
+process, and TRL drops a partial batch. A train set smaller than one rollout batch
+would never reach a step, so `soup train` refuses it during setup and names the
+row count and both settings.
+
 PPO supports two reward sources:
 - **Reward model** (`reward_model`): pre-trained reward model (from step 2)
 - **Reward function** (`reward_fn`): callable function (same as GRPO — `accuracy`, `format`, or custom `.py`)
