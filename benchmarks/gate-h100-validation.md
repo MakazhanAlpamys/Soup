@@ -4985,29 +4985,34 @@ that does not, given that #331 and this record are both public.
 
 ## Reproducing
 
-Published harnesses are indexed in [`benchmarks/README.md`](README.md#harnesses)
-and linked below where available. Each is a small reconstruction of the
-recorded protocol, not a verbatim copy of the unpublished session scripts:
+**Updated 2026-09-29:** when this record was written, every script below lived
+only in the session scratchpad, not in the repo. Five have since been published
+in [`harness/`](harness/) and are linked in the table; the
+[`## Harnesses`](README.md#harnesses) index in `benchmarks/README.md` is the
+current list. The unlinked scripts are still unpublished, and their
+reconstruction is tracked in [#379](https://github.com/MakazhanAlpamys/Soup/issues/379).
+`mechanism_cost.py` and `fixture_window_cpu.py` are reconstructions, not the
+scripts as run; their own docstrings say so.
 
 | script | what it does |
 |---|---|
-| `bitexact.py` | shard -> stream -> compare logits/gradients/loss curve against a resident reference of matching numerics |
+| [`bitexact.py`](harness/bitexact.py) | shard -> stream -> compare logits/gradients/loss curve against a resident reference of matching numerics |
 | [`graddiff.py`](harness/graddiff.py) | gradients after one backward + each model's own curve twice |
 | [`determinism.py`](harness/determinism.py) | forward, backward and curve reproducibility of one model |
 | [`repeat_backward.py`](harness/repeat_backward.py) | N streamed backwards against one deterministic resident reference; `--pin`, `--buffers`, `--order` |
 | [`layercount.py`](harness/layercount.py) / [`depth_vs_bytes.py`](harness/depth_vs_bytes.py) | synthetic Llamas sweeping depth, per-layer bytes and quantisation |
 | `ckpt_hypothesis.py` | flips `StreamedDecoderLayer.use_checkpoint` at runtime, both arms |
-| [`mechanism.py`](harness/mechanism.py) / [`mechanism_cost.py`](harness/mechanism_cost.py) | reconstruction of `sync` vs `clone` vs control, and what each costs |
+| `mechanism.py` / [`mechanism_cost.py`](harness/mechanism_cost.py) (reconstruction) | reconstruction of `sync` vs `clone` vs control, and what each costs |
 | [`pincost.py`](harness/pincost.py) | pinned vs pageable throughput, correctness asserted in the same process |
 | `prep_convergence.py` | the emotion-classification subsets and held-out set |
 | `runbench.sh` / `variance.sh` / `runbench8.sh` | one `soup train` with VRAM and SM-clock sampling; n repeats; 8-GPU variant under torchrun |
 | `numerics.py` | STEP 13, first attempt — kept because it is VACUOUS: it measured at M=2048, above `_gemm_4bit_custom_max_m`, so both arms ran the same fallback |
 | `numerics2.py` | STEP 13 — per-M dispatch sweep plus the fused kernel forced on, forward and gradient reported separately |
 | `forcecheck.py` | STEP 13 — counts `_dequant_linear_fallback` directly, so a forcing that silently failed is distinguishable from a kernel that genuinely agreed |
-| `fixtureshape.py` / `fixture_window.py` / `fixture_window_cpu.py` | where the CI fixture sits relative to the fused-kernel window, on CUDA and on CPU |
+| `fixtureshape.py` / `fixture_window.py` / [`fixture_window_cpu.py`](harness/fixture_window_cpu.py) (reconstruction) | where the CI fixture sits relative to the fused-kernel window, on CUDA and on CPU |
 | `cpu_mode_probe.py` | whether the CPU divergence is an inference-path artefact (`_convert_weight_packed_for_cpu`) rather than a size effect |
-| `variant2_gate.py` | STEP 14 — the repair gate: control and repaired arms in ONE process against one resident reference, correctness printed next to VRAM and tok/s, empty gradient intersection is a hard failure |
-| `bnb_repro.py` | the standalone upstream reproducer for the bitsandbytes report — no downloads, ~1 minute, recycled buffer against a private-buffer reference plus a bf16 control |
+| [`variant2_gate.py`](harness/variant2_gate.py) | STEP 14 — the repair gate: control and repaired arms in ONE process against one resident reference, correctness printed next to VRAM and tok/s, empty gradient intersection is a hard failure |
+| [`bnb_repro.py`](harness/bnb_repro.py) | the standalone upstream reproducer for the bitsandbytes report — no downloads, ~1 minute, recycled buffer against a private-buffer reference plus a bf16 control |
 | `issue328_min.py` / `issue328_probe.py` / `issue328_control.py` | STEP 15 — six arms in one process, RMSNorm device instrumentation, and the 2x2 gradient-checkpointing control |
 | `issue327/measure327.py` | STEP 16 — the 72-run predicted-vs-measured VRAM grid, with the observed tensor shape recorded per run |
 
