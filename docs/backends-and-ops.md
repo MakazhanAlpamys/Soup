@@ -1121,7 +1121,7 @@ Given (params, seq_len, batch_size, optimizer, quant, peft, gradient_checkpointi
 For `soup train`, `params_b` is derived by `model_size_from_name`:
 - A local checkpoint path is measured directly from safetensors metadata headers.
 - A Hub id is parsed: e.g. `72B`, `8x7B` → `46.7` total, `17B-16E` → `109` total, with active-parameter markers (`-A22B`) ignored.
-- An id with no size token (e.g. `DeepSeek-V3`, `Kimi-K2`, `GLM-5`, `MiniMax-M2`) safely falls back to `7B`.
+- An id with no size token (e.g. `DeepSeek-V3`, `Kimi-K2`, `GLM-5`, `MiniMax-M2`) still falls back to `7B`, which under-predicts these models (they have 229B to 1T parameters). Point `base:` at a local download to have the checkpoint measured instead.
 
 ```python
 from soup_cli.utils.hardware_fit import HardwareFitInput, decide_hardware_fit

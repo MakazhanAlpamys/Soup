@@ -22,29 +22,25 @@ from soup_cli.utils.gpu import model_size_from_name
 _UNRESOLVABLE_CATALOG_REASONS = {
     "MiniMaxAI/MiniMax-M2": "Version 'M2' carries no param count in ID (real: 228.7B).",
     "MiniMaxAI/MiniMax-M3": "Model ID specifies version 'M3', carrying no parameter count (428B).",
-    "OpenGVLab/InternVL3-5": "Model ID specifies series '3-5' without parameter count (8B).",
     "PaddlePaddle/PaddleOCR-VL": "Specialized OCR VL model with no parameter count (size N/A).",
     "Qwen/Qwen-Image": "Qwen image foundation model with no parameter count (size N/A).",
-    "THUDM/glm-4.6": "Model ID specifies release '4.6' without param count (real: 356.8B).",
-    "deepcogito/cogito-v2-preview": "Preview release with no parameter count in ID (14B).",
     "deepseek-ai/DeepSeek-OCR": "Domain OCR model with no parameter count (size N/A).",
     "deepseek-ai/DeepSeek-V3": "DeepSeek V3 671B MoE carrying no parameter count in repo ID.",
     "deepseek-ai/DeepSeek-V3-0324": "DeepSeek V3 carrying no parameter count in ID (real: 684.5B).",
     "deepseek-ai/DeepSeek-V4-Flash": "DeepSeek V4 Flash architecture with no parameter count.",
     "deepseek-ai/DeepSeek-V4-Pro": "DeepSeek V4 Pro architecture with no parameter count.",
     "facebook/seamless-m4t-v2-large": "Uses 'v2-large' designation rather than param count (2.3B).",
-    "ibm-granite/granite-4.0-tiny-base": "Descriptor 'tiny-base' has no param count (real: ~6.7B).",
     "microsoft/Phi-3.5-mini-instruct": "Uses 'mini' descriptor rather than param count (3.8B).",
     "microsoft/phi-4": "Model ID specifies release 'phi-4' without parameter count (14B).",
-    "mistralai/Devstral-Small": "Uses 'Small' descriptor rather than param count (24B).",
+    "mistralai/Devstral-Small-2507": "Uses 'Small-2507' descriptor rather than param count (24B).",
     "mistralai/Magistral-Small": "Uses 'Small' descriptor rather than param count (24B).",
-    "mistralai/Mistral-Medium-3.5": "Uses 'Medium-3.5' descriptor without param count (size N/A).",
-    "moonshotai/Kimi-K2": "Model ID specifies version 'K2' without parameter count (size N/A).",
+    "moonshotai/Kimi-K2-Base": "Version 'K2-Base' carries no parameter count (size N/A).",
     "moonshotai/Kimi-K2-Thinking": "Reasoning variant of K2 with no parameter count (size N/A).",
     "moonshotai/Kimi-K2.5": "Model ID specifies version 'K2.5' without parameter count (1T).",
     "moonshotai/Kimi-K2.6": "Model ID specifies version 'K2.6' without parameter count (1T).",
     "openbmb/MiniCPM-V-2_6": "Model ID specifies version '2_6' without parameter count (8B).",
     "sentence-transformers/all-mpnet-base-v2": "Embedding model with no parameter count.",
+    "zai-org/GLM-4.6": "Model ID specifies release '4.6' without param count (real: 356.8B).",
     "zai-org/GLM-5": "Model ID specifies release '5' without parameter count (real: 753.9B).",
     "zai-org/GLM-5.1": "Model ID specifies release '5.1' without parameter count (754B).",
 }
@@ -56,8 +52,9 @@ _KNOWN_TOTAL_B = {
     "deepseek-ai/DeepSeek-V3-0324": 684.5,  # deepseek-v3-7b-sft, label 7B
     "zai-org/GLM-5": 753.9,  # label 9B
     "MiniMaxAI/MiniMax-M2": 228.7,  # label 9B
-    "THUDM/glm-4.6": 356.8,  # label 9B
+    "zai-org/GLM-4.6": 356.8,  # label 9B
 }
+
 
 
 class TestIssue1198HubModelSizeParsing:
@@ -140,17 +137,31 @@ class TestIssue1198HubModelSizeParsing:
         assert model_size_from_name("Qwen/Qwen3.5-397B-A17B") == 397.0
 
     @pytest.mark.parametrize(
+        "model_id", ["allenai/OLMoE-1B-7B-0924", "allenai/OLMoE-1B-7B-0125-Instruct"]
+    )
+    def test_olmoe_active_count_comes_first(self, model_id: str) -> None:
+        """'OLMoE-1B-7B' is 1B active / 6.9B total; the first token is not the total."""
+        assert model_size_from_name(model_id) == pytest.approx(6.9)
+
+    @pytest.mark.parametrize(
         ("model_id", "expected"),
         [
             ("org/model-4bit-70b", 70.0),  # "4bit" is not a size: the lookahead
             ("org/model-x0.8b-3b", 3.0),  # "8b" inside "x0.8b": the "." in the lookbehind
             ("org/model-v2x7b-13b", 13.0),  # "2x7b" inside "v2x7b": the MoE lookbehind
             ("org/model-v3b-13b", 13.0),  # a non-default answer, unlike v3b-7b == 7.0
+            ("org/moe-30b-a3b-8e", 30.0),  # "3b-8e" inside "a3b-8e": the Llama 4 lookbehind
+            ("org/model-13b-2ep", 13.0),  # "2e" inside "2ep": the Llama 4 lookahead
         ],
     )
     def test_each_boundary_is_load_bearing(self, model_id: str, expected: float) -> None:
         """Pin regex boundaries to prevent regressions from lookahead/lookbehind mutations."""
         assert model_size_from_name(model_id) == expected
+
+    def test_learning_rate_not_parsed_as_expert_count(self) -> None:
+        """Exponents like '5e-6' or '2e-5' after size must not be read as expert count."""
+        assert model_size_from_name("Minbyul/biomistral-7b-5e-6-foobar") == 7.0
+        assert model_size_from_name("org/model-7b-2e-5") == 7.0
 
     def test_generic_moe_fallback(self) -> None:
         """Generic NxMb pattern computes expert product as upper bound for hardware fit."""
@@ -167,9 +178,9 @@ class TestIssue1198HubModelSizeParsing:
         assert model_size_from_name("ise-uiuc/Magicoder-S-DS-6.7B") == 6.7
 
     def test_every_allowlisted_base_is_still_used(self) -> None:
-        """Ensure every base in _UNRESOLVABLE_CATALOG_REASONS is actually used in RECIPES."""
+        """Ensure every base in allowlist and _KNOWN_TOTAL_B is actually used in RECIPES."""
         used = {recipe.model for recipe in RECIPES.values()}
-        stale = sorted(set(_UNRESOLVABLE_CATALOG_REASONS) - used)
+        stale = sorted((set(_UNRESOLVABLE_CATALOG_REASONS) | set(_KNOWN_TOTAL_B)) - used)
         assert not stale, f"allowlist names bases no recipe uses: {stale}"
 
     def test_recipe_catalog_resolution_or_allowlist(self) -> None:

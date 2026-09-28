@@ -345,6 +345,11 @@ def model_size_from_name(model_name: str) -> float:
         if marker in name_lower:
             return size
 
+    # OLMoE names the ACTIVE count before the total ("OLMoE-1B-7B": 1B active,
+    # 6.9B total), so its first size token is not the total (#1198).
+    if "olmoe-1b-7b" in name_lower:
+        return 6.9
+
     # MoE models specify expert count and expert size (e.g. Mixtral 8x7B, 8x22B,
     # or generic NxMb). Handle explicitly before standard billion tokens:
     # 8x7B has ~46.7B total parameters, 8x22B has ~141.0B total parameters (#1198).
@@ -363,7 +368,7 @@ def model_size_from_name(model_name: str) -> float:
     # experts, an over-estimate, which is the safe direction for this gate.
     llama4_totals = {(17.0, 16): 109.0, (17.0, 128): 400.0}
     active_experts = re.search(
-        r"(?<![a-z0-9.])(\d+(?:\.\d+)?)b-(\d+)e(?![a-z0-9])", name_lower
+        r"(?<![a-z0-9.])(\d+(?:\.\d+)?)b-(\d+)e(?![a-z0-9]|[-+]\d)", name_lower
     )
     if active_experts:
         active, experts = float(active_experts.group(1)), int(active_experts.group(2))
@@ -371,7 +376,7 @@ def model_size_from_name(model_name: str) -> float:
 
     # Strip active-parameter tokens with separator spellings (e.g. "-a-22b",
     # "_act_22b") so total parameters are parsed rather than active parameters
-    # if the active count appears earlier or uses hyphenated separators (#1198).
+    # if the active count appears earlier and uses hyphenated separators (#1198).
     cleaned = re.sub(r"[-_]a(?:ct(?:ive)?)?[-_]?\d+(?:\.\d+)?b(?![a-z0-9])", "", name_lower)
 
     # Parse total parameter size token in billions (e.g. 72b, 32b, 14b, 405b, 4b, 1.7b).
