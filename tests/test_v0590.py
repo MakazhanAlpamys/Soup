@@ -241,7 +241,7 @@ class TestBomSpec:
         with pytest.raises(ValueError):
             write_bom(entry, "cyclonedx", "/tmp/evil/bom.json")
 
-    @pytest.mark.skipif(os.name == "nt", reason="POSIX symlink rejection")
+    @pytest.mark.requires_symlink
     def test_write_bom_rejects_symlink_target(self, tmp_path, monkeypatch):
         from soup_cli.utils.bom import BomEntry, write_bom
 
@@ -1208,7 +1208,7 @@ class TestReviewFollowups:
         assert len(red.args) == len(ev.args)
 
     # --- Security HIGH H1: rotation symlink rejection at backup path ---
-    @pytest.mark.skipif(os.name == "nt", reason="POSIX symlink rejection")
+    @pytest.mark.requires_symlink
     def test_rotate_refuses_symlink_backup(self, tmp_path):
         from soup_cli.utils.audit_log import rotate_if_needed
 
@@ -1351,7 +1351,7 @@ class TestReviewFollowups:
         assert callable(audit_log.default_log_path)
 
     # --- TDD #1 / TOCTOU: symlink rejection on each write helper ---
-    @pytest.mark.skipif(os.name == "nt", reason="POSIX symlink rejection")
+    @pytest.mark.requires_symlink
     def test_write_attestation_rejects_symlink_target(self, tmp_path, monkeypatch):
         from soup_cli.utils.attest import AttestationStatement, write_attestation
 
@@ -1366,7 +1366,7 @@ class TestReviewFollowups:
         with pytest.raises(ValueError):
             write_attestation(s, str(target))
 
-    @pytest.mark.skipif(os.name == "nt", reason="POSIX symlink rejection")
+    @pytest.mark.requires_symlink
     def test_write_annex_doc_rejects_symlink_target(self, tmp_path, monkeypatch):
         from soup_cli.utils.annex_xi import AnnexXIData, write_annex_doc
 
@@ -1384,7 +1384,7 @@ class TestReviewFollowups:
         with pytest.raises(ValueError):
             write_annex_doc(d, "xi", str(target))
 
-    @pytest.mark.skipif(os.name == "nt", reason="POSIX symlink rejection")
+    @pytest.mark.requires_symlink
     def test_write_repro_receipt_rejects_symlink_target(self, tmp_path, monkeypatch):
         from soup_cli.utils.repro_receipt import build_repro_receipt, write_repro_receipt
 
@@ -1691,7 +1691,7 @@ class TestBomEnergyCli:
         )
         assert result.exit_code == 2
 
-    @pytest.mark.skipif(os.name == "nt", reason="POSIX symlink rejection")
+    @pytest.mark.requires_symlink
     def test_emit_energy_rejects_symlink(self, tmp_path, monkeypatch):
         """Symlink passed to --energy is rejected with exit code 2."""
         monkeypatch.chdir(tmp_path)

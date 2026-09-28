@@ -309,7 +309,7 @@ class TestStateIO:
         s = read_state()
         assert s.served_model == "m"
 
-    @pytest.mark.skipif(os.name == "nt", reason="POSIX symlink test")
+    @pytest.mark.requires_symlink
     def test_write_state_rejects_symlink(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         sd = tmp_path / ".soup"

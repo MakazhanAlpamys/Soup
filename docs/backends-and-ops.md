@@ -72,6 +72,8 @@ soup autopilot --model <id> --data d.jsonl --goal chat --dry-run
 
 Autopilot writes a ready-to-run `soup.yaml`. Edit it by hand if needed, then `soup train`.
 
+For the goals that train with SFT, Autopilot turns on FlashAttention and Liger only when the GPU has compute capability 8.0 or higher and the package is installed. When the card qualifies but a package is missing, the Autopilot Decisions panel names the package and the command that installs it.
+
 
 ## Apple Silicon (MLX Backend)
 
@@ -383,7 +385,7 @@ soup runs clean run_202611...
 soup runs clean --all --dry-run
 ```
 
-By default, the `clean` command operates in "surgical mode" (`--keep-weights`), deleting huge optimizer state files (`optimizer.pt`) from lesser checkpoints to save gigabytes, but keeping their lightweight evaluation weights just in case you want to load them later. Pass `--no-keep-weights` to delete whole non-best checkpoints instead (the checkpoint with the lowest loss is always kept); combine it with `--dry-run` to see what would go first.
+By default, the `clean` command operates in "surgical mode" (`--keep-weights`), deleting huge optimizer state files (`optimizer.pt`) from lesser checkpoints to save gigabytes, but keeping their lightweight evaluation weights just in case you want to load them later. Pass `--no-keep-weights` to delete whole non-best checkpoints instead (the checkpoint with the lowest loss is always kept); combine it with `--dry-run` to see what would go first. The checkpoint kept whole is the one with the lowest loss recorded at its step. When no checkpoint has a recorded loss, for example in a run shorter than `logging_steps`, which logs none, it is the latest checkpoint, and `clean` says so.
 
 
 ## Alternative Model Hubs
@@ -459,6 +461,11 @@ soup recipes search "reasoning"
 soup recipes search --size 7b
 soup recipes search "medical"
 soup recipes search "vision"
+
+# Check every shipped config can attach its LoRA adapter (no weights downloaded)
+soup recipes verify
+soup recipes verify --config soup.yaml
+soup recipes verify --json    # one row per config on stdout, for CI
 ```
 
 **What's covered:**

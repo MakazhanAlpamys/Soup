@@ -123,7 +123,7 @@ def test_delete_branch_traversal_rejected():
         delete_branch("../etc/passwd")
 
 
-@pytest.mark.skipif(os.name == "nt", reason="POSIX-only symlink semantics")
+@pytest.mark.requires_symlink
 def test_load_branch_rejects_symlink(tmp_path, monkeypatch):
     branches = tmp_path / "br"
     branches.mkdir()
@@ -136,7 +136,7 @@ def test_load_branch_rejects_symlink(tmp_path, monkeypatch):
         load_branch("evil")
 
 
-@pytest.mark.skipif(os.name == "nt", reason="POSIX-only symlink semantics")
+@pytest.mark.requires_symlink
 def test_delete_branch_rejects_symlink(tmp_path, monkeypatch):
     branches = tmp_path / "br"
     branches.mkdir()

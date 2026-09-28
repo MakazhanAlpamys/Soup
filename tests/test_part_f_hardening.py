@@ -21,6 +21,7 @@ import pytest
 
 
 class TestPruneCheckpointsTOCTOU:
+    @pytest.mark.requires_symlink
     def test_prune_skips_top_level_symlink_via_lstat(self, tmp_path):
         """Top-level symlink masquerading as a checkpoint dir must be skipped
         without following the link target."""
@@ -35,10 +36,7 @@ class TestPruneCheckpointsTOCTOU:
         (outside / "sentinel.txt").write_text("must-not-delete", encoding="utf-8")
 
         link = tmp_path / "checkpoint-200"
-        try:
-            os.symlink(str(outside), str(link), target_is_directory=True)
-        except (OSError, NotImplementedError):
-            pytest.skip("symlink creation not permitted (Windows non-admin)")
+        os.symlink(str(outside), str(link), target_is_directory=True)
 
         tracker = CheckpointTracker(metric="composite", keep_top=1)
         tracker.record(step=100, score=0.9)
@@ -51,6 +49,7 @@ class TestPruneCheckpointsTOCTOU:
         # Symlink itself was skipped (not in removed list)
         assert 200 not in removed
 
+    @pytest.mark.requires_symlink
     def test_prune_aborts_on_symlink_inside_checkpoint(self, tmp_path):
         """If rmtree encounters a symlink mid-walk inside a doomed checkpoint,
         it must abort instead of following it (defence-in-depth)."""
@@ -68,10 +67,7 @@ class TestPruneCheckpointsTOCTOU:
         (outside / "secret.txt").write_text("keep-me", encoding="utf-8")
 
         nested_link = ckpt_doomed / "linked"
-        try:
-            os.symlink(str(outside), str(nested_link), target_is_directory=True)
-        except (OSError, NotImplementedError):
-            pytest.skip("symlink creation not permitted (Windows non-admin)")
+        os.symlink(str(outside), str(nested_link), target_is_directory=True)
 
         tracker = CheckpointTracker(metric="composite", keep_top=1)
         tracker.record(step=100, score=0.9)
@@ -82,6 +78,7 @@ class TestPruneCheckpointsTOCTOU:
 
         assert (outside / "secret.txt").exists(), "rmtree followed a symlink"
 
+    @pytest.mark.requires_symlink
     def test_prune_uses_lstat_for_symlink_check(self, tmp_path, monkeypatch):
         """Verify prune uses os.lstat-based check, not Path.is_symlink, so a
         broken symlink (target removed mid-walk) is still rejected."""
@@ -89,10 +86,7 @@ class TestPruneCheckpointsTOCTOU:
 
         # Create a broken symlink as 'checkpoint-300'
         broken = tmp_path / "checkpoint-300"
-        try:
-            os.symlink(str(tmp_path / "_nonexistent_"), str(broken))
-        except (OSError, NotImplementedError):
-            pytest.skip("symlink creation not permitted")
+        os.symlink(str(tmp_path / "_nonexistent_"), str(broken))
 
         tracker = ci.CheckpointTracker(metric="composite", keep_top=1)
         tracker.record(step=100, score=0.9)
@@ -220,13 +214,11 @@ class TestCodeExecRewardSmoke:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.requires_symlink
 def test_lstat_islnk_detects_symlink(tmp_path):
     target = tmp_path / "real"
     target.mkdir()
     link = tmp_path / "link"
-    try:
-        os.symlink(str(target), str(link))
-    except (OSError, NotImplementedError):
-        pytest.skip("symlinks not supported")
+    os.symlink(str(target), str(link))
     assert stat.S_ISLNK(os.lstat(str(link)).st_mode)
     assert not stat.S_ISLNK(os.lstat(str(target)).st_mode)

@@ -1058,10 +1058,7 @@ class TestLoadAudioMono:
         with pytest.raises(ValueError):
             load_audio_mono("")
 
-    @pytest.mark.skipif(
-        not hasattr(__import__("os"), "symlink"),
-        reason="symlink rejection needs os.symlink",
-    )
+    @pytest.mark.requires_symlink
     def test_symlink_rejected(self, tmp_path):
         import os
 
@@ -1071,10 +1068,7 @@ class TestLoadAudioMono:
         real = tmp_path / "real.wav"
         _write_wav(real, sr=24_000, seconds=0.05)
         link = tmp_path / "link.wav"
-        try:
-            os.symlink(real, link)
-        except (OSError, NotImplementedError):
-            pytest.skip("symlink creation unavailable (needs privilege)")
+        os.symlink(real, link)
         with pytest.raises(ValueError, match="symlink"):
             load_audio_mono(str(link))
 
@@ -1151,7 +1145,7 @@ class TestTtsEncoderDispatch:
         enc = tts_encoder_for_family("orpheus")
         assert callable(enc)
 
-    @pytest.mark.parametrize("family", ["sesame_csm", "llasa", "spark", "oute"])
+    @pytest.mark.parametrize("family", ["spark", "oute"])
     def test_other_families_tracked_in_265(self, family):
         from soup_cli.utils.tts_codec import tts_encoder_for_family
 
@@ -1167,7 +1161,7 @@ class TestTtsEncoderDispatch:
     def test_live_codec_families_constant(self):
         from soup_cli.utils.tts_codec import LIVE_CODEC_FAMILIES
 
-        assert LIVE_CODEC_FAMILIES == frozenset({"orpheus"})
+        assert LIVE_CODEC_FAMILIES == frozenset({"orpheus", "llasa"})
 
 
 class TestEncodeTtsRow:
@@ -1314,7 +1308,7 @@ class TestTtsTrainerLiveCodecWiring:
         assert "_require_tts_codec" in src
 
     def test_no_top_level_heavy_imports_in_tts_codec(self):
-        for mod in ("torch", "transformers", "snac", "soundfile", "numpy"):
+        for mod in ("torch", "transformers", "snac", "xcodec2", "soundfile", "numpy"):
             _assert_no_top_level_import("utils/tts_codec.py", mod)
 
 

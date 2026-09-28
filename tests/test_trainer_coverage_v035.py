@@ -95,7 +95,8 @@ def test_apply_v028_speed_memory_no_exception(task: str, feature: str, monkeypat
     # A card that CAN run FP8 (#835/#1044): since the hardware gate moved ahead
     # of the dependency probe, an explicit FP8 request on a machine without CUDA
     # -- every CI runner here -- is refused rather than degraded, which is the
-    # ruling. This row is about the OTHER half: a missing torchao still degrades.
+    # ruling. The fp8 row is the OTHER half, INVERTED by the 2026-09-19 ruling:
+    # a missing torchao used to degrade here and now stops the run, per trainer.
     import sys
 
     import torch
@@ -108,6 +109,17 @@ def test_apply_v028_speed_memory_no_exception(task: str, feature: str, monkeypat
     monkeypatch.setattr(torch.version, "cuda", "12.4")
 
     tcfg = _make_tcfg(feature)
+    if feature == "fp8":
+        from soup_cli.utils.fp8 import FP8DependencyMissingError
+
+        # Missing whether or not this CI job installs torchao.
+        monkeypatch.setattr("soup_cli.utils.fp8.is_fp8_available", lambda: False)
+        with pytest.raises(FP8DependencyMissingError):
+            vf.apply_v028_speed_memory(
+                model=MagicMock(), tcfg=tcfg, base_model="meta-llama/Llama-3.2-1B",
+                console=None,
+            )
+        return
     result = vf.apply_v028_speed_memory(
         model=MagicMock(),
         tcfg=tcfg,
@@ -213,10 +225,11 @@ def test_activation_offloading_context_missing_attr_safe(tmp_path) -> None:
 
 def _build_yaml_config(task: str, **training_extra) -> dict:
     """Helper: build a minimal config dict accepted by load_config_from_string."""
+    default_bs = 2 if task == "embedding" else 1
     body = {
         "base": "meta-llama/Llama-3.2-1B",
         "task": task,
-        "training": {"epochs": 1, "lr": 1e-4, "batch_size": 1, **training_extra},
+        "training": {"epochs": 1, "lr": 1e-4, "batch_size": default_bs, **training_extra},
     }
     if task == "pretrain":
         body["data"] = {"train": "data.jsonl", "format": "plaintext"}

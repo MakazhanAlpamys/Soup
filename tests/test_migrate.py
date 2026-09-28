@@ -1,6 +1,7 @@
 """Tests for soup migrate — config import from LLaMA-Factory, Axolotl, Unsloth."""
 
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -9,6 +10,13 @@ from typer.testing import CliRunner
 from soup_cli.cli import app
 
 runner = CliRunner()
+
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _plain(text: str) -> str:
+    """ANSI-stripped, whitespace-collapsed CLI output, safe to substring-match."""
+    return " ".join(_ANSI_RE.sub("", text).split())
 
 # ---------------------------------------------------------------------------
 # Fixtures — sample configs
@@ -1090,6 +1098,37 @@ class TestMigrateCLI:
         out_path = tmp_path / "soup.yaml"
         assert out_path.exists()
 
+    def test_axolotl_unmapped_rl_exits_nonzero(self, tmp_path, monkeypatch):
+        """Full CLI: rl: ebft exits 1 and names the value, instead of
+        writing a silent task: sft file."""
+        monkeypatch.chdir(tmp_path)
+        cfg_file = tmp_path / "config.yaml"
+        cfg_file.write_text(
+            "base_model: meta-llama/Llama-3.1-8B\n"
+            "datasets:\n"
+            "  - path: ./data/train.jsonl\n"
+            "    type: sharegpt\n"
+            "sequence_len: 2048\n"
+            "adapter: lora\n"
+            "lora_r: 16\n"
+            "micro_batch_size: 2\n"
+            "num_epochs: 3\n"
+            "learning_rate: 1e-5\n"
+            "output_dir: ./output\n"
+            "rl: ebft\n",
+            encoding="utf-8",
+        )
+        result = runner.invoke(app, [
+            "migrate",
+            "--from", "axolotl",
+            str(cfg_file),
+            "--output", "soup.yaml",
+            "--yes",
+        ])
+        assert result.exit_code == 1, (result.output, repr(result.exception))
+        assert "ebft" in _plain(result.output)
+        assert not (tmp_path / "soup.yaml").exists()
+
     def test_unsloth_notebook(self, tmp_path, monkeypatch):
         """Full CLI: soup migrate --from unsloth finetune.ipynb."""
         monkeypatch.chdir(tmp_path)
@@ -1348,6 +1387,101 @@ class TestMigrateTDDGaps:
         result = migrate_axolotl(cfg_file)
         assert result["task"] == "grpo"
 
+    @pytest.mark.parametrize("rl_value,soup_task", [
+        ("orpo", "orpo"),
+        ("ipo", "ipo"),
+        ("simpo", "simpo"),
+    ])
+    def test_axolotl_preference_rl_maps_to_soup_task(
+        self, tmp_path, rl_value, soup_task
+    ):
+        """rl: orpo/ipo/simpo → matching Soup task, not a silent sft fallback."""
+        from soup_cli.migrate.axolotl import migrate_axolotl
+
+        cfg_file = tmp_path / "config.yaml"
+        cfg_file.write_text(
+            "base_model: meta-llama/Llama-3.1-8B\n"
+            "datasets:\n"
+            "  - path: ./data/train.jsonl\n"
+            "    type: chat_template\n"
+            "sequence_len: 2048\n"
+            "adapter: lora\n"
+            "lora_r: 16\n"
+            "micro_batch_size: 2\n"
+            "num_epochs: 3\n"
+            "learning_rate: 1e-5\n"
+            "output_dir: ./output\n"
+            f"rl: {rl_value}\n",
+            encoding="utf-8",
+        )
+        result = migrate_axolotl(cfg_file)
+        assert result["task"] == soup_task
+        assert result["data"]["format"] == "dpo"
+        assert not any(
+            "No Soup task matches" in w for w in result.get("_warnings", [])
+        )
+
+    @pytest.mark.parametrize("rl_value,soup_task", [
+        ("orpo", "orpo"),
+        ("ipo", "ipo"),
+        ("simpo", "simpo"),
+    ])
+    def test_axolotl_preference_rl_migration_loads(
+        self, tmp_path, rl_value, soup_task
+    ):
+        """The migrated orpo/ipo/simpo config must load as a valid
+        SoupConfig, not just build without raising (same shape as #806 for
+        grpo). Uses chat_template.argilla, the issue's second acceptance
+        box, where the load itself catches a wrong data.format."""
+        from soup_cli.config.loader import load_config_from_string
+        from soup_cli.migrate.axolotl import migrate_axolotl
+        from soup_cli.migrate.common import config_to_yaml
+
+        cfg_file = tmp_path / "config.yaml"
+        cfg_file.write_text(
+            "base_model: meta-llama/Llama-3.1-8B\n"
+            "datasets:\n"
+            "  - path: ./data/train.jsonl\n"
+            "    type: chat_template.argilla\n"
+            "sequence_len: 2048\n"
+            "adapter: lora\n"
+            "lora_r: 16\n"
+            "micro_batch_size: 2\n"
+            "num_epochs: 3\n"
+            "learning_rate: 1e-5\n"
+            "output_dir: ./output\n"
+            f"rl: {rl_value}\n",
+            encoding="utf-8",
+        )
+        result = migrate_axolotl(cfg_file)
+        yaml_str = config_to_yaml(result)
+        soup_config = load_config_from_string(yaml_str)
+        assert soup_config.task == soup_task
+
+    def test_axolotl_unmapped_rl_refuses(self, tmp_path):
+        """rl: ebft has no Soup task: refuse with the unknown value and the
+        supported list, instead of a silent sft fallback."""
+        from soup_cli.migrate.axolotl import migrate_axolotl
+
+        cfg_file = tmp_path / "config.yaml"
+        cfg_file.write_text(
+            "base_model: meta-llama/Llama-3.1-8B\n"
+            "datasets:\n"
+            "  - path: ./data/train.jsonl\n"
+            "    type: sharegpt\n"
+            "sequence_len: 2048\n"
+            "adapter: lora\n"
+            "lora_r: 16\n"
+            "micro_batch_size: 2\n"
+            "num_epochs: 3\n"
+            "learning_rate: 1e-5\n"
+            "output_dir: ./output\n"
+            "rl: ebft\n",
+            encoding="utf-8",
+        )
+        with pytest.raises(ValueError, match="ebft"):
+            migrate_axolotl(cfg_file)
+
     def test_unsloth_markdown_only_notebook(self, tmp_path):
         """Notebook with only markdown cells (no code) raises ValueError."""
         from soup_cli.migrate.unsloth import migrate_unsloth
@@ -1392,3 +1526,37 @@ class TestMigrateTDDGaps:
         assert any(
             "neftune" in w.lower() for w in result.get("_warnings", [])
         )
+
+
+def test_axolotl_refused_rl_is_printed_as_text(tmp_path, monkeypatch):
+    """The refused rl value comes from the user's YAML: Rich markup and control
+    bytes in it must reach the terminal as text, not as styling or escapes."""
+    monkeypatch.chdir(tmp_path)
+    cfg_file = tmp_path / "config.yaml"
+    cfg_file.write_text(
+        'base_model: m\nrl: "[bold]x[/bold]\\e]0;t\\a"\n', encoding="utf-8"
+    )
+    result = runner.invoke(
+        app, ["migrate", "--from", "axolotl", str(cfg_file), "--dry-run"]
+    )
+    assert result.exit_code == 1, (result.output, repr(result.exception))
+    assert "rl: [bold]x[/bold]" in _plain(result.output)
+    assert "\x1b]" not in result.output
+    assert "\x07" not in result.output
+
+
+@pytest.mark.parametrize("rl_value", ["ebft", "kto_pair"])
+def test_axolotl_unmapped_rl_names_value_and_supported_list(tmp_path, rl_value):
+    """Every rl value without a Soup task is refused, not only ebft, and the
+    message lists what is supported. It does not point at
+    training.ebft_variant, which is refused at config load (#1230)."""
+    from soup_cli.migrate.axolotl import migrate_axolotl
+
+    cfg_file = tmp_path / "config.yaml"
+    cfg_file.write_text(f"base_model: m\nrl: {rl_value}\n", encoding="utf-8")
+    with pytest.raises(ValueError) as excinfo:
+        migrate_axolotl(cfg_file)
+    message = str(excinfo.value)
+    assert f"rl: {rl_value}." in message
+    assert "dpo, gdpo, grpo, ipo, kto, orpo, simpo" in message
+    assert "ebft_variant" not in message

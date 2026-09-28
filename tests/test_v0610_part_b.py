@@ -14,7 +14,6 @@ from __future__ import annotations
 import dataclasses
 import json
 import os
-import sys
 from pathlib import Path
 
 import pytest
@@ -569,9 +568,7 @@ class TestLoadEvidenceFile:
         with pytest.raises(ValueError, match="JSON object"):
             load_evidence_file("arr.json")
 
-    @pytest.mark.skipif(
-        sys.platform == "win32", reason="symlink creation needs admin on Windows"
-    )
+    @pytest.mark.requires_symlink
     def test_symlink_rejected(self, tmp_path, monkeypatch):
         from soup_cli.utils.unlearning_eval import load_evidence_file
 

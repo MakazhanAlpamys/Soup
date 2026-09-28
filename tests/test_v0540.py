@@ -160,9 +160,8 @@ class TestLoadAdviseDataset:
         with pytest.raises(ValueError, match="cwd"):
             load_advise_dataset(str(outside))
 
+    @pytest.mark.requires_symlink
     def test_rejects_symlink(self, tmp_path):
-        if os.name == "nt":
-            pytest.skip("symlink behaviour differs on Windows")
         target = tmp_path / "real.jsonl"
         target.write_text("{}\n", encoding="utf-8")
         link = tmp_path / "linked.jsonl"
@@ -553,9 +552,8 @@ class TestRecordVerdict:
         with pytest.raises(ValueError):
             record_verdict(v, accepted=True, path=history_file)
 
+    @pytest.mark.requires_symlink
     def test_rejects_symlink_path(self, tmp_path):
-        if os.name == "nt":
-            pytest.skip("symlink semantics differ on Windows")
         target = tmp_path / "real.jsonl"
         target.write_text("", encoding="utf-8")
         link = tmp_path / "link.jsonl"
@@ -932,9 +930,8 @@ class TestDefensive:
 
 
 class TestTDDFollowups:
+    @pytest.mark.requires_symlink
     def test_read_last_verdict_rejects_symlink(self, tmp_path, monkeypatch):
-        if os.name == "nt":
-            pytest.skip("symlink semantics differ on Windows")
         target = tmp_path / "real.json"
         target.write_text('{"choice":"SFT"}', encoding="utf-8")
         link = tmp_path / "advise_last.json"
@@ -1020,9 +1017,8 @@ class TestTDDFollowups:
         with pytest.raises(ValueError, match="4096"):
             record_verdict(_make_verdict(), accepted=True, notes="a" * 4097, path=p)
 
+    @pytest.mark.requires_symlink
     def test_symlink_history_path_rejected_on_load(self, tmp_path):
-        if os.name == "nt":
-            pytest.skip("symlink semantics differ on Windows")
         target = tmp_path / "real.jsonl"
         target.write_text("", encoding="utf-8")
         link = tmp_path / "linked.jsonl"

@@ -700,10 +700,7 @@ class TestRunMagpie:
                 generate_fn=_varied_generate_fn(),
             )
 
-    @pytest.mark.skipif(
-        __import__("sys").platform == "win32",
-        reason="POSIX symlink semantics",
-    )
+    @pytest.mark.requires_symlink
     def test_output_symlink_rejected(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -1299,9 +1296,7 @@ class TestValidateBuildSource:
         with pytest.raises((TypeError, ValueError)):
             build_dag.validate_build_source(123)  # type: ignore[arg-type]
 
-    @pytest.mark.skipif(
-        __import__("sys").platform == "win32", reason="POSIX symlink semantics"
-    )
+    @pytest.mark.requires_symlink
     def test_symlink_rejected(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

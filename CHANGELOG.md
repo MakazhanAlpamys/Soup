@@ -12,6 +12,22 @@ reproducing 70+ versions of notes.
 
 ## [Unreleased]
 
+## [0.75.1] - 2026-09-21
+
+### Fixed
+
+- **A layer-streamed LoRA adapter saved as ZERO tensors under peft 0.21.0 (#1005 in #1010).** peft 0.21 selects an adapter's tensors by the prefixes it reads off `model.named_modules()` and keeps the matching `state_dict()` entries, where 0.20 filtered by the `lora_` substring; the streaming wrapper's module and parameter names carried `.inner.` while its `state_dict()` keys were canonical, so `trainer.save_model()`, every `save_steps` checkpoint and `get_peft_model_state_dict()` returned nothing, and nothing raised. The wrapper now enumerates the inner layer's tree at its own prefix (`named_modules()` / `named_children()`, with `train()` / `apply()` / `_apply()` reaching the inner layer explicitly), so names and keys are one spelling — which also keeps transformers' weight-decay grouping, built from `named_children()`, from silently dropping every LoRA parameter into the no-decay group. **Any adapter saved with `stream_layers: true` on peft>=0.21 before this fix holds zero tensors (a 40-byte `adapter_model.safetensors`, no error at save time) and cannot be recovered — re-train it on a Soup with this fix, or with `peft<0.21`.** Naming only; nothing on the streamed forward path changes. Ten peft-version-independent tests pin names == keys against a resident LoRA model; the four tests that documented the old asymmetry are inverted rather than deleted. No `peft<0.21` pin.
+
+- **A Ctrl+C arriving immediately after the Lambda controller started could still leave the instance running (#1073 in #1078).** `submit_lambda_run` spawned the controller outside the `try` that absorbs interrupts, so a SIGINT delivered between `Popen` returning and the waiting loop being entered — or one landing on the "still waiting" notice, which is written from the interrupt handler — unwound the parent while the controller was still terminating the paid instance in its `finally` block. The spawn and the notice now sit inside the guarded region: once the child exists, every path leads back to `proc.wait()` and the controller's exit code remains what the function returns. An interrupt raised before the child exists still propagates unchanged, and a `wait()` failure that is not an interrupt still surfaces rather than being retried.
+
+- `soup runs clean` now accepts `--no-keep-weights` to delete whole non-best checkpoints; `--keep-weights` (the default) keeps weights on every supported Click version — on Click 8.1 it previously deleted whole checkpoints (#1057)
+
+- **Cloud runs keep their outputs and their cleanup (#1058).** `soup train --cloud modal` now writes run outputs to the `soup-outputs` Modal volume and downloads them to the local output directory when the run ends (also after a failed run); previously checkpoints were lost with the container. `soup train --cloud lambda --cloud-submit`: pressing Ctrl+C now waits for the controller to terminate the Lambda instance; previously the controller was killed 0.25 s later and the instance could keep running (Linux/macOS).
+
+### Security
+
+- **Hardening across the CLI, the inference server, the Web UI, MCP execution, config parsing and `.can` handling — [GHSA-63h4-gvp4-r26g](https://github.com/MakazhanAlpamys/Soup/security/advisories/GHSA-63h4-gvp4-r26g).** Eight issues: Hugging Face credentials presented to a non-HF hub and `OPENAI_API_KEY` presented to any https judge host; `soup adapters verify --public-key` accepting a record whose backend is not ed25519; the Web UI rendering dataset and run content as HTML with no Content-Security-Policy; `soup serve` tool and adapter routes checking neither `Host` nor `Origin`; `soup mcp serve --allow-execute` not pinning every approved input; config regexes able to hang loading or training (the old guard ran the untrusted pattern against a probe); credential option values written to the audit log; and unbounded reads and YAML alias expansion when reading an untrusted `.can`. The advisory carries the affected range of each issue and says which credentials to rotate.
+
 ## [0.75.0] - 2026-09-12
 
 ### Added
@@ -20,7 +36,7 @@ reproducing 70+ versions of notes.
 
 - **Added a ready-made `deepseek-v4-flash-dpo` recipe for deepseek-ai/DeepSeek-V4-Flash
   (#275 by @Srinivasan8888 in #662).** The base already shipped SFT (v0.71.24) and
-  GRPO (#279 by @Faisal01011); this completes the trio with the preference shape
+  GRPO (#279 by @Faisal-Fayaz); this completes the trio with the preference shape
   (`task: dpo`, `format: dpo`, `preference_train.jsonl`, `dpo_beta: 0.1`,
   `lr: 5e-6`) over the MoE geometry its SFT sibling already uses (LoRA r16/a32,
   `batch_size: auto`, `gradient_accumulation_steps: 8`, 4-bit, `moe_lora`,
@@ -194,7 +210,7 @@ reproducing 70+ versions of notes.
 
 - Direct AWQ exports now require an explicit, usable calibration JSONL before
   AutoAWQ is imported or the model is loaded, preventing its large default
-  calibration dataset from being downloaded silently (#338 by @Faisal01011 in #592).
+  calibration dataset from being downloaded silently (#338 by @Faisal-Fayaz in #592).
 
 - **GEMM throughput forecasts now use the card's resolved stream dtype (#617 by @Samearth17 in #648).**
   The pre-flight measurement no longer hard-codes bf16, so pre-Ampere cards are
@@ -506,7 +522,7 @@ reproducing 70+ versions of notes.
   already requires starlette, uvicorn, sse-starlette and httpx-sse.
 
 - **`soup data best-of-n` can sample candidates from Ollama or vLLM providers
-  (#299 by @Faisal01011 in #466).** The existing local Transformers `--base` path stays
+  (#299 by @Faisal-Fayaz in #466).** The existing local Transformers `--base` path stays
   the default, while `--provider ollama|vllm --model <m> [--base-url <url>]`
   draws each prompt's N candidates through the existing SSRF-validated raw-
   completion seam. Provider and model are recorded in `_best_of_n` provenance;
@@ -1318,7 +1334,7 @@ other advisory training-intelligence flags (#583).
   4-bit training resolve quantized storage and trainable adapter
   parameters to the same floating compute dtype, preventing the integer-storage
   and mixed-dtype flattening failures that made the `llama3-70b-fsdp2` recipe
-  unrunnable. The recipe now pins bf16 storage for its A100/H100 target hardware (#588 by @Faisal01011).
+  unrunnable. The recipe now pins bf16 storage for its A100/H100 target hardware (#588 by @Faisal-Fayaz).
 
 - Raised the `accelerate` floor to 0.27.0, the first release whose FSDP
   checkpoint save/load path can be restricted to the trainable adapter. This
@@ -1585,11 +1601,11 @@ other advisory training-intelligence flags (#583).
   recipe `config_sha`, so setting a floor never invalidates evidence.
 
 - **A ready-made `qwen3.5-4b-pretrain` recipe for continued pre-training of
-  `Qwen/Qwen3.5-4B-Base` (#278 by @Faisal01011 in #422).** The recipe uses plaintext data, one epoch,
+  `Qwen/Qwen3.5-4B-Base` (#278 by @Faisal-Fayaz in #422).** The recipe uses plaintext data, one epoch,
   QLoRA 4-bit quantization, and the established continued-pretraining defaults.
 
 - **A ready-made `deepseek-v4-flash-grpo` recipe for GRPO reasoning training
-  with `deepseek-ai/DeepSeek-V4-Flash` (#279 by @Faisal01011 in #432).** The recipe combines the
+  with `deepseek-ai/DeepSeek-V4-Flash` (#279 by @Faisal-Fayaz in #432).** The recipe combines the
   established GRPO defaults with MoE LoRA and gradient checkpointing.
 
 - **`soup mcp serve --allow-execute` can now actually execute, behind a single-use
@@ -1649,7 +1665,7 @@ other advisory training-intelligence flags (#583).
   is not yet consumed by training.
 
 - **Layer streaming now verifies that every trainable LoRA parameter has real
-  storage after PEFT attaches the adapter (#433 reported by @lesterppo, fixed by @Faisal01011 in #435 and #437).** PEFT 0.18 creates streamed
+  storage after PEFT attaches the adapter (#433 reported by @lesterppo, fixed by @Faisal-Fayaz in #435 and #437).** PEFT 0.18 creates streamed
   adapters on `meta` for Soup to materialise, while PEFT 0.19 may create them as
   real tensors immediately, so `materialize_meta_adapters()` returning `0`
   cannot distinguish a healthy no-op from a missed adapter. The streamed build

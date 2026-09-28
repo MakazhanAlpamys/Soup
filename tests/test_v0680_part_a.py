@@ -212,9 +212,7 @@ class TestValidateProgramPath:
         with pytest.raises(ValueError):
             validate_program_path("a\x00b.py")
 
-    @pytest.mark.skipif(
-        not hasattr(__import__("os"), "symlink"), reason="POSIX symlink only"
-    )
+    @pytest.mark.requires_symlink
     def test_symlink_rejected(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -226,10 +224,7 @@ class TestValidateProgramPath:
         target = tmp_path / "real.py"
         target.write_text("# real\n", encoding="utf-8")
         link = tmp_path / "link.py"
-        try:
-            os.symlink(target, link)
-        except (OSError, NotImplementedError):
-            pytest.skip("symlinks not creatable")
+        os.symlink(target, link)
         with pytest.raises(ValueError, match="symlink"):
             validate_program_path(str(link))
 

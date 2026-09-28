@@ -7,6 +7,9 @@ import os
 import re
 from typing import Any, Literal, Mapping, Optional
 
+from soup_cli.utils.flash_attn import check_flash_attn_available
+from soup_cli.utils.liger import check_liger_available
+
 GOAL_TO_TASK: dict[str, str] = {
     "chat": "sft",
     "code": "sft",
@@ -332,20 +335,53 @@ def decide_performance_flags(
 ) -> dict:
     """Return perf flags for FlashAttention / Liger / gradient_checkpointing.
 
-    - ``use_flash_attn`` and ``use_liger`` only enabled on Ampere or newer.
+    - ``use_flash_attn`` and ``use_liger`` only enabled on Ampere or newer,
+      and — since #1212 — only when the package is actually importable.
+      Neither ships with a standard install (``liger-kernel`` is the separate
+      ``[liger]`` extra, no extra installs ``flash-attn``), so enabling them
+      blind wrote configs that ``soup train`` then refused. The probes are
+      the same ones ``soup train`` validates with, so the two cannot disagree.
     - ``gradient_checkpointing`` enabled when the sequence is long (>8k tokens)
       or VRAM headroom is tight (<4GB), to avoid OOM. Otherwise left off so we
       don't pay the recompute cost when there's plenty of headroom.
     """
     del gpu_name  # reserved for future GPU-specific overrides
     is_ampere_or_newer = compute_capability >= 8.0
+    # Short-circuit the probes: below 8.0 neither flag can be enabled, so
+    # there is no reason to pay the import probe on a CPU box or old card.
+    liger_available = is_ampere_or_newer and check_liger_available()
+    flash_attn_available = is_ampere_or_newer and check_flash_attn_available() is not None
     long_sequence = max_length > 8192
     tight_vram = 0.0 < vram_headroom_gb < 4.0
     return {
-        "use_flash_attn": bool(is_ampere_or_newer),
-        "use_liger": bool(is_ampere_or_newer),
+        "use_flash_attn": bool(is_ampere_or_newer and flash_attn_available),
+        "use_liger": bool(is_ampere_or_newer and liger_available),
         "gradient_checkpointing": bool(long_sequence or tight_vram),
     }
+
+
+def kernel_flag_notes(compute_capability: float) -> dict:
+    """Explain why a kernel flag may be off although the GPU qualifies.
+
+    #1212 — when ``compute_capability`` qualifies but the package is missing,
+    return a human-readable note per flag (``{"flash_attn": ..., "liger": ...}``);
+    ``None`` when there is nothing to explain. Autopilot shows these in the
+    Autopilot Decisions panel so the flag reads as a decision, not a bug.
+    """
+    notes: dict = {"flash_attn": None, "liger": None}
+    if compute_capability < 8.0:
+        return notes
+    if check_flash_attn_available() is None:
+        notes["flash_attn"] = (
+            "flash-attn not installed; "
+            "pip install flash-attn --no-build-isolation to enable"
+        )
+    if not check_liger_available():
+        notes["liger"] = (
+            'liger-kernel not installed; '
+            'pip install "soup-cli[liger]" to enable'
+        )
+    return notes
 
 
 def decide_warmup(

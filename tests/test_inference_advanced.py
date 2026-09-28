@@ -841,36 +841,6 @@ class TestStructuredOutputExtra:
         assert "json-schema" in _strip_ansi(result.output)
 
 
-class TestAutoQuantCLIWarning:
-    def test_auto_quant_logs_picker_choice(self, tmp_path):
-        """v0.33.0 #54: --auto-quant runs the live picker and logs the
-        chosen candidate (not a deferral warning anymore)."""
-        pytest.importorskip("fastapi")  # CLI exits early w/o FastAPI
-        from typer.testing import CliRunner
-
-        from soup_cli.cli import app
-
-        runner = CliRunner()
-        model_dir = tmp_path / "model"
-        model_dir.mkdir()
-
-        result = runner.invoke(
-            app,
-            [
-                "serve",
-                "--model",
-                str(model_dir),
-                "--device",
-                "cpu",
-                "--auto-quant",
-            ],
-        )
-        # Command will fail later (no real model); just check the picker
-        # ran (either picked a candidate or surfaced a controlled error).
-        output = _strip_ansi(result.output).lower()
-        assert "auto-quant" in output
-
-
 class TestJsonSchemaContainment:
     def test_json_schema_outside_cwd_rejected(self, tmp_path, monkeypatch):
         """JSON schema path must stay under cwd."""

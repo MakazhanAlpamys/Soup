@@ -14,7 +14,6 @@ from __future__ import annotations
 import json
 import os
 import subprocess
-import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -215,7 +214,7 @@ def test_callback_history_atomic_append(tmp_path, monkeypatch, policy):
     assert steps == [5, 10]
 
 
-@pytest.mark.skipif(sys.platform.startswith("win"), reason="POSIX symlink test")
+@pytest.mark.requires_symlink
 def test_callback_history_rejects_symlink(tmp_path, monkeypatch, policy):
     output_dir = _under_cwd(tmp_path, monkeypatch)
     history_path = Path(output_dir) / "curriculum_history.jsonl"

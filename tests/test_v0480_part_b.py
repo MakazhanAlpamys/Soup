@@ -141,7 +141,7 @@ def test_validate_datasets_rejects_empty_string(tmp_path, monkeypatch):
         validate_datasets(["", "b.jsonl"])
 
 
-@pytest.mark.skipif(os.name == "nt", reason="POSIX symlink semantics")
+@pytest.mark.requires_symlink
 def test_validate_datasets_rejects_symlink(tmp_path, monkeypatch):
     real = tmp_path / "real.jsonl"
     real.write_text("{}")
@@ -604,7 +604,7 @@ def test_write_recipe_overwrite_ok(tmp_path, monkeypatch):
     assert "data:" in text
 
 
-@pytest.mark.skipif(os.name == "nt", reason="POSIX symlinks")
+@pytest.mark.requires_symlink
 def test_write_recipe_symlink_rejected(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     real = tmp_path / "real.yaml"
@@ -823,7 +823,7 @@ def test_parse_budget_rejects_below_min_with_suffix(raw):
         parse_budget(raw)
 
 
-@pytest.mark.skipif(os.name == "nt", reason="POSIX symlinks")
+@pytest.mark.requires_symlink
 def test_load_mix_recipe_rejects_symlink(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     real = tmp_path / "real.yaml"
