@@ -289,6 +289,10 @@ soup ab --input ab.jsonl --metric latency --effect-size 0.5
 soup ab --input ab.jsonl --metric judge_score --alpha 0.01 --beta 0.10 --effect-size 0.1
 ```
 
+`--alpha` and `--beta` are each in (0, 1), and their sum must stay below 1. At or above 1 the reject boundary `log((1 - beta) / alpha)` is no longer above the accept boundary `log(beta / (1 - alpha))`, so there is no `continue` band left and any verdict between them rejects — two identical arms included. `soup ab` exits `2` naming both values. `--beta` is the Type-II error rate, not the power: a power of 0.95 is `--beta 0.05`, not `--beta 0.95`.
+
+A `--effect-size` that is more than about 1.3e154 pooled standard errors overflows the test statistic; `soup ab` exits `1` naming the flag and the standard error it measured. Because it is the ratio that overflows, a near-constant metric column reaches it at the default `--effect-size` too.
+
 Input rows look like `{"arm": "control", "latency": 1.23}` or `{"arm": "treatment", "judge_score": 0.91}`. Decision is one of `continue` (keep collecting samples), `reject_h0` (real difference detected, in either direction), `accept_h0` (no significant difference). A `reject_h0` also reports a `direction`, `better` or `worse`, read through the metric's polarity: `judge_score` is higher-is-better, `latency` and `retry_rate` are lower-is-better. Composes with `soup loop canary` (v0.58): the panel recommends promoting a `better` treatment and a rollback only for a `worse` one.
 
 `soup ab` exits `0` on every decision, including a `worse` one; to gate a pipeline on a regression, read `direction` from the output or the webhook payload.
