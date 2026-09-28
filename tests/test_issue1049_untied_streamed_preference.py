@@ -8,7 +8,7 @@ loss refilled those bytes in place and the policy backward died with
 inplace operation``.
 
 The streaming preference tests all used TIED fixtures, and a tied checkpoint
-streams one key, so nothing here was covered. Llama-3-8B-class checkpoints are
+streams no large key, so nothing here was covered. Llama-3-8B-class checkpoints are
 untied, which is the common real-world shape.
 """
 
@@ -174,7 +174,7 @@ def test_the_private_copy_is_taken_only_when_it_is_needed():
     )
     assert torch.equal(projection, untied.buffer), "the copy must be the same bytes"
     assert projection_tied.data_ptr() == tied.buffer.data_ptr(), (
-        "a tied checkpoint streams one key, so its slot is never refilled: no copy"
+        "a tied checkpoint streams no large key, so its slot is never refilled: no copy"
     )
     assert projection_nograd.data_ptr() == untied.buffer.data_ptr(), (
         "no backward can follow under no_grad, so no copy"

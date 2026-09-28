@@ -1591,7 +1591,7 @@ def _build_streamed_large_layer_class():
             loss. SFT, ORPO and SimPO run one forward per step, and nothing
             refills the slot between it and its backward, so they never need the
             copy (``refill_before_backward``, set by the trainer). The slot must
-            be SHARED: a tied checkpoint streams one key, so its buffer is never
+            be SHARED: a tied checkpoint streams no large key, so its buffer is never
             refilled within a step. And the weight must be one autograd can save,
             which an embedding's is not -- ``embedding_backward`` works from the
             indices and the vocabulary size, never from the weight values, so
