@@ -31,6 +31,7 @@ from tests.conftest import accelerator_device, mps_is_the_accelerator
 pytestmark = pytest.mark.filterwarnings("ignore::UserWarning")
 
 
+# Not one of the #1355 "untested" skips: bitsandbytes has no 4-bit MPS kernels.
 skip_on_mps = pytest.mark.skipif(
     mps_is_the_accelerator(),
     reason="MPS is untested for NF4 streaming (measured on CUDA + CPU only)",

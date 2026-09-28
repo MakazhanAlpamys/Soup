@@ -235,7 +235,8 @@ def _loss_of(trainer, model, batch):
 def _match_streamed_dtype(resident, streamed):
     """Put the resident reference on the streamed model's device AND dtype.
 
-    Streaming picks bf16 on CUDA and float32 on CPU. Comparing a float32
+    Streaming picks bf16 on CUDA, bf16 on MPS when the runtime accepts it
+    (float32 otherwise), and float32 on CPU. Comparing a float32
     resident model against a bf16 streamed one measures the dtype gap, not the
     streaming path — that mistake produced a 9.96e-04 "failure" that was
     entirely the test's own.
@@ -349,8 +350,9 @@ def _build_streamed_wrapper(
     ``device`` defaults to the real accelerator, because `TrainingArguments`
     picks CUDA or MPS when one is available and forcing CPU there would only
     produce a device mismatch no user would ever hit. Numerical-equality tests pass
-    ``device='cpu'`` deliberately: the streaming path uses float32 on CPU and
-    bf16 on CUDA, and "bit-exact" is only a meaningful assertion in the former
+    ``device='cpu'`` deliberately: the streaming path uses float32 on CPU, bf16
+    on CUDA, and bf16 on MPS when the runtime accepts it (float32 otherwise),
+    and "bit-exact" is only a meaningful assertion in float32
     (a bf16 logp of -12.75 cannot represent a change smaller than ~0.05).
     """
     weights, resident, _ = _tiny_llama_dir(

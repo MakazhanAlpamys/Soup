@@ -60,7 +60,6 @@ class TestBackwardTailEmbedPrefetch:
     slot, and the fix moves the embedding's reload from the next step's
     `_prime()` to this step's backward tail."""
 
-
     def test_untied_fixture_actually_shares_one_slot(self, tmp_path, monkeypatch):
         """Guard: if the fixture ever stopped being untied, the rest of this
         file would pass vacuously (a tied model never re-copies at all)."""
