@@ -18,7 +18,7 @@ from soup_cli.utils.layer_stream_runtime import DiskSource, RamSource  # noqa: E
 from soup_cli.utils.stripe_roots import STRIPE_DIRS_ENV  # noqa: E402
 
 
-def _tiny_llama(tmp_path, n_layers=3):
+def _tiny_llama(tmp_path, n_layers=3, tie=True):
     from transformers import AutoModelForCausalLM, LlamaConfig
 
     weights = tmp_path / "model"
@@ -26,13 +26,16 @@ def _tiny_llama(tmp_path, n_layers=3):
     # hidden 64: see tests/test_v07203.py::_tiny_stream — at 32 the bnb CPU NF4 path breaks.
     config = LlamaConfig(
         vocab_size=64, hidden_size=64, intermediate_size=64, num_hidden_layers=n_layers,
-        num_attention_heads=4, num_key_value_heads=2, tie_word_embeddings=True,
+        num_attention_heads=4, num_key_value_heads=2, tie_word_embeddings=tie,
         max_position_embeddings=128,
     )
     model = AutoModelForCausalLM.from_config(config).to(torch.float32).eval()
     weights.mkdir()
     state = {k: v.contiguous() for k, v in model.state_dict().items()}
-    state.pop("lm_head.weight", None)
+    if tie:
+        # Untied (tie=False) keeps lm_head.weight so the sharder sees both large-layer
+        # roles and actually splits them — the tied path pops it, as before.
+        state.pop("lm_head.weight", None)
     save_file(state, str(weights / "model.safetensors"))
     config.save_pretrained(str(weights))
     return str(weights)
@@ -150,3 +153,36 @@ def test_a_missing_stripe_folder_is_refused_by_name(caches):
     with pytest.raises(RuntimeError, match=STRIPE_DIRS_ENV) as caught:
         _stream(weights, striped_dir, striped, read_ahead=3)
     assert os.path.realpath(stripe) in str(caught.value) and "[1]" in str(caught.value)
+
+
+def test_an_untied_striped_training_step_is_bit_identical_to_one_root(tmp_path):
+    """R4 review finding: the ``caches`` fixture always ties embeddings, so ``large_keys``
+    is always ``()`` in every other test in this file and the root-0 padding term in
+    ``install_streaming`` (``source_roots = placement + (0,) * len(large_keys) ...``) has no
+    witness under striping. An untied checkpoint gives the sharder both the
+    ``model.embed_tokens.weight`` and ``lm_head.weight`` large-layer roles, so this is the
+    first striped run where that padding actually matters."""
+    weights = _tiny_llama(tmp_path, tie=False)
+    stripe = tmp_path / "stripe"
+    stripe.mkdir()
+    single_dir = str(tmp_path / "c1" / "tiny")
+    striped_dir = str(tmp_path / "c2" / "tiny")
+    single = shard_checkpoint(weights, single_dir, dtype="float32", arch="llama")
+    striped = shard_checkpoint(
+        weights, striped_dir, dtype="float32", arch="llama", stripe_roots=(str(stripe),)
+    )
+    assert single.large_keys and striped.large_keys
+    assert striped.layer_roots == (0, 1, 0)
+
+    one, runtime_one = _stream(weights, single_dir, single, read_ahead=2)
+    two, runtime_two = _stream(weights, striped_dir, striped, read_ahead=3)
+    try:
+        want, got = _grads_after_one_step(one), _grads_after_one_step(two)
+        assert want.keys() == got.keys() and want
+        for name in want:
+            assert torch.equal(got[name], want[name]), name
+    finally:
+        for runtime in (runtime_one, runtime_two):
+            close = getattr(runtime, "close", None)
+            if close is not None:
+                close()
