@@ -34,12 +34,18 @@ _HARNESS = _REPO_ROOT / "benchmarks" / "harness" / "issue361_nf4_throughput.py"
 
 
 def _load_harness():
-    spec = importlib.util.spec_from_file_location("issue361_nf4_throughput", _HARNESS)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
+    # The harness imports its sibling ``source_provenance`` (#1387), as it does
+    # when run as a script from benchmarks/harness.
+    sys.path.insert(0, str(_HARNESS.parent))
+    try:
+        spec = importlib.util.spec_from_file_location("issue361_nf4_throughput", _HARNESS)
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+        return module
+    finally:
+        sys.path.remove(str(_HARNESS.parent))
 
 
 _harness = _load_harness()
@@ -211,6 +217,7 @@ class TestTheRowNamesItsTree:
         assert _harness._source_sha() == expected_sha + ("-dirty" if status else "")
         assert calls == [
             (["git", "rev-parse", "--show-toplevel"], package_dir),
+            (["git", "ls-files", "--error-unmatch", str(Path(package_file).resolve())], tmp_path),
             (["git", "rev-parse", "HEAD"], tmp_path),
             (["git", "status", "--porcelain", "--untracked-files=normal"], tmp_path),
         ]
