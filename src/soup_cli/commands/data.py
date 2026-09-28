@@ -1225,6 +1225,16 @@ def _hf_dataset_info(dataset_id: str) -> dict:
     }
 
 
+def _datasets_major_version() -> int | None:
+    """Return the installed ``datasets`` package's major version, or None if unreadable."""
+    import re
+
+    import datasets
+
+    match = re.match(r"(\d+)", str(getattr(datasets, "__version__", "")))
+    return int(match.group(1)) if match else None
+
+
 def _hf_download_dataset(
     dataset_id: str,
     split: str = "train",
@@ -1524,6 +1534,18 @@ def download_dataset(
             raise typer.Exit(1)
 
     if trust_remote_code:
+        datasets_major = _datasets_major_version()
+        if datasets_major is not None and datasets_major >= 4:
+            console.print(
+                "[red]--trust-remote-code is refused: the installed "
+                f"datasets package (v{datasets_major}.x) dropped "
+                "trust_remote_code support upstream, so it would be silently "
+                "ignored rather than doing what you asked. Install "
+                "datasets<4 if this dataset needs its remote loading "
+                "script, or drop --trust-remote-code if it doesn't.[/]"
+            )
+            raise typer.Exit(1)
+
         from rich.panel import Panel
 
         console.print(Panel(
