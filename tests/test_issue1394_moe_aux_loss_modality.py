@@ -30,15 +30,17 @@ def test_non_default_coeff_refused_on_vision_and_audio(modality):
     assert "modality: text" in str(exc.value)
 
 
-@pytest.mark.parametrize("modality", [None, "text", "vision", "audio"])
+@pytest.mark.parametrize("modality", [None, "text", "vision", "audio", "audio_out"])
 @pytest.mark.parametrize("coeff", [None, "0.01"])
 def test_default_coeff_still_loads_everywhere(modality, coeff):
     cfg = load_config_from_string(_yaml("sft", modality, coeff))
     assert cfg.training.moe_aux_loss_coeff == 0.01
 
 
-@pytest.mark.parametrize("modality", [None, "text"])
+@pytest.mark.parametrize("modality", [None, "text", "audio_out"])
 def test_text_sft_keeps_a_non_default_coeff(modality):
+    # audio_out is neither "vision" nor "audio", so SFTTrainerWrapper.setup()
+    # dispatches it to the text setup, which applies the coefficient.
     cfg = load_config_from_string(_yaml("sft", modality, "0.05"))
     assert cfg.training.moe_aux_loss_coeff == 0.05
 

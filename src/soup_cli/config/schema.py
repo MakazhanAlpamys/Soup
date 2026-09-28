@@ -5688,7 +5688,7 @@ class SoupConfig(BaseModel):
 
         ``moe_aux_loss_coeff``'s default is ``0.01``, and a dumped config writes
         it out, so only a NON-DEFAULT value is refused: refusing the default
-        would break every stored config and the eleven shipped recipes that
+        would break every stored config and the shipped MoE recipes that
         write it explicitly.
         """
         tcfg = self.training
