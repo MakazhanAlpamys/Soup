@@ -225,10 +225,11 @@ def test_activation_offloading_context_missing_attr_safe(tmp_path) -> None:
 
 def _build_yaml_config(task: str, **training_extra) -> dict:
     """Helper: build a minimal config dict accepted by load_config_from_string."""
+    default_bs = 2 if task == "embedding" else 1
     body = {
         "base": "meta-llama/Llama-3.2-1B",
         "task": task,
-        "training": {"epochs": 1, "lr": 1e-4, "batch_size": 1, **training_extra},
+        "training": {"epochs": 1, "lr": 1e-4, "batch_size": default_bs, **training_extra},
     }
     if task == "pretrain":
         body["data"] = {"train": "data.jsonl", "format": "plaintext"}
