@@ -621,7 +621,6 @@ With `embedding_loss: contrastive` (the default), each row's negatives are the o
 ```
 Reads paired text columns (`text_a`/`text_b` or `question`/`answer`) carrying a `label` field. Gated strictly to `task: cross_encoder` (`format: auto` resolves to `cross_encoder` for this task) to preserve global format detection for other tasks.
 
-
 **Audio (speech + conversation):**
 ```json
 {"audio": "recording.wav", "messages": [{"role": "user", "content": "Transcribe."}, {"role": "assistant", "content": "Hello world."}]}

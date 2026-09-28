@@ -173,7 +173,7 @@ def test_doctor_config_prints_gaps_for_vision_with_mask_history(
     assert "data.train_on_responses_only" in out
     assert "multimodal vision collator" in out
     assert (
-        "2 setting(s) written here are not read on backend=transformers (modality=vision)"
+        "2 setting(s) switched on here are not read on backend=transformers (modality=vision)"
         in out
     )
 
@@ -201,7 +201,7 @@ def test_doctor_config_prints_all_clear_when_no_unread_flags_set(
     n = len(unsupported_for("sft", "transformers", "vision"))
     expected_msg = (
         f"None of the {n} setting(s) known to be unread on task=sft "
-        f"backend=transformers modality=vision is set"
+        f"backend=transformers modality=vision is switched on"
     )
     assert expected_msg in out
 
@@ -232,6 +232,6 @@ def test_mlx_reports_unread_flags_regardless_of_modality(
     assert "Config check - task=sft backend=mlx modality=vision" in out
     assert "training.seed" in out
     assert (
-        "1 setting(s) written here are not read on backend=mlx (modality=vision)"
+        "1 setting(s) switched on here are not read on backend=mlx (modality=vision)"
         in out
     )

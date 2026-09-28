@@ -97,7 +97,9 @@ MOE_TEXT_LORA_TARGETS: dict[str, Any] = {
     # names are different. Previously invisible to the ratchet because the
     # recipe named ``THUDM/glm-4.6``, which 404s (#1132 repoints it).
     "glm4_moe": ("q_proj", "k_proj", "v_proj", "o_proj"),
-    # Granite 4.0 (``ibm-granite/granite-4.0-tiny-base-preview``) is a HYBRID:
+    # Granite 4.0 (``ibm-granite/granite-4.0-h-tiny-base``, the base the
+    # ``granite-4-sft`` recipe names since #1132, laid out exactly like its
+    # ``-tiny-base-preview``) is a HYBRID:
     # ``config.layer_types`` is 36 ``linear_attention`` blocks and only 4
     # ``full_attention`` ones, and only those 4 of the 40 decoder layers define a
     # ``self_attn`` at all (measured: layers 5, 15, 25, 35). So this entry adapts
@@ -1235,6 +1237,14 @@ def attach_rl_callbacks(
             attached += 1
         except (TypeError, ValueError) as exc:
             logger.debug("attach echo-trap callback rejected: %s", exc)
+
+    # #1223: the detectors above read ``buffer`` at every step end. An
+    # evaluation pass calls the same wrapped reward functions on held-out
+    # prompts, so keep it out of the buffer they read.
+    if buffer is not None:
+        from soup_cli.utils.rl_signal_buffer import exclude_evaluation
+
+        exclude_evaluation(trainer, buffer)
 
     return attached
 

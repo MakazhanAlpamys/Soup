@@ -222,7 +222,6 @@ def data_config_for_task(data_config: DataConfig, task: str) -> DataConfig:
     return data_config
 
 
-
 def _format_rows(
     raw_data: list[dict],
     fmt: str,
@@ -405,7 +404,7 @@ def _classify_train_entry(value: str) -> str:
     """Classify one data.train list entry for interleave dispatch (#459).
 
     Returns ``'remote'`` / ``'hub'`` / ``'local'``. Mirrors the identical
-    classification inline in SoupConfig._validate_interleave_compat — kept
+    classification in schema._classify_data_train_entry — kept
     as two copies of the same three-line rule (suffix-in-SUPPORTED_EXTENSIONS
     check + "://"-in-entry check) rather than one shared function, since
     schema.py must stay import-light (no torch-adjacent deps) and loader.py

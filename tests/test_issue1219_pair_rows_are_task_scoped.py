@@ -83,6 +83,7 @@ def test_cross_encoder_auto_reads_both_pair_shapes_through_soup_train(
     assert result.exit_code == 0, (output, repr(result.exception))
     assert "Data OK: 4 train samples" in output
 
+
 @pytest.mark.parametrize("pair", [("text_a", "text_b"), ("question", "answer")])
 def test_real_run_reads_pair_rows_the_way_the_dry_run_does(tmp_path, monkeypatch, pair):
     """The real-run load resolves ``format: auto`` for cross_encoder too, so it
@@ -101,4 +102,3 @@ def test_real_run_reads_pair_rows_the_way_the_dry_run_does(tmp_path, monkeypatch
     output = _plain(result.output)
     assert result.exit_code == 1, (output, repr(result.exception))
     assert "train row 3: missing required 'label' field" in output
-

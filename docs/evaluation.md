@@ -277,17 +277,20 @@ The values come from a simulation of that re-run-after-every-pair procedure: bet
 
 The calibration has two limits, and `soup ab` prints a warning past either:
 
-- **At `--alpha 0.01` the rate sits slightly above the level asked for**, near 0.011 across seeds, because the variance is estimated from the rows; more rows do not lower it. A statistic without that floor is [#1265](https://github.com/MakazhanAlpamys/Soup/issues/1265).
 - **Below `--alpha 0.01` it is not calibrated.** At `--alpha 0.005`, 40 rows leave a simulated rate slightly above the level asked for.
 - **It holds up to 1000 rows per arm.** Past that, a test that keeps being re-run has not been measured.
 
-A variance-robust statistic, which would need no burn-in, is tracked in [#1265](https://github.com/MakazhanAlpamys/Soup/issues/1265).
+**At `--alpha 0.01` itself the rate sits slightly above the level asked for**, near 0.011 across seeds, because the variance is estimated from the rows; more rows do not lower it, and `soup ab` prints no warning for it. A variance-robust statistic, which would remove that floor and need no burn-in, is tracked in [#1265](https://github.com/MakazhanAlpamys/Soup/issues/1265).
 
 ```bash
 soup ab --input ab.jsonl --metric latency --effect-size 0.5
 # Or with custom alpha / beta
 soup ab --input ab.jsonl --metric judge_score --alpha 0.01 --beta 0.10 --effect-size 0.1
 ```
+
+`--alpha` and `--beta` are each in (0, 1), and their sum must stay below 1. At or above 1 the reject boundary `log((1 - beta) / alpha)` is no longer above the accept boundary `log(beta / (1 - alpha))`, so there is no `continue` band left and any verdict between them rejects — two identical arms included. `soup ab` exits `2` naming both values. `--beta` is the Type-II error rate, not the power: a power of 0.95 is `--beta 0.05`, not `--beta 0.95`.
+
+A `--effect-size` that is more than about 1.3e154 pooled standard errors overflows the test statistic; `soup ab` exits `1` naming the flag and the standard error it measured. Because it is the ratio that overflows, a near-constant metric column reaches it at the default `--effect-size` too.
 
 Input rows look like `{"arm": "control", "latency": 1.23}` or `{"arm": "treatment", "judge_score": 0.91}`. Decision is one of `continue` (keep collecting samples), `reject_h0` (real difference detected, in either direction), `accept_h0` (no significant difference). A `reject_h0` also reports a `direction`, `better` or `worse`, read through the metric's polarity: `judge_score` is higher-is-better, `latency` and `retry_rate` are lower-is-better. Composes with `soup loop canary` (v0.58): the panel recommends promoting a `better` treatment and a rollback only for a `worse` one.
 
