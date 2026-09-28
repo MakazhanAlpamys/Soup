@@ -277,7 +277,7 @@ def test_rows_recorded_with_dataloader_workers(tmp_path, monkeypatch, aten_half_
 
 
 def test_factory_is_cached_and_unattached_trainer_records_nothing(
-        tmp_path, monkeypatch, aten_half_matmuls
+    tmp_path, monkeypatch, aten_half_matmuls
     ):
     from trl import SFTTrainer
 

@@ -1,9 +1,10 @@
 """THE ``windows-latest`` illegal-instruction guard (#382). One definition.
 
-Imported by every test file that reaches a real ``trainer.train()``. It lives
-here rather than in one of those files because the guard has now been needed in
-four of them, and this repo has been bitten three times by a predicate that was
-copied instead of shared (#372, #392, #424). ``test_windows_ci_guard_is_not_
+Imported by the test files whose real ``trainer.train()`` still crashes that
+fleet: today only the two NF4 tests in ``test_v07202.py``. It lives here rather
+than in that file because the guard has been needed in four files over time, and
+this repo has been bitten three times by a predicate that was copied instead of
+shared (#372, #392, #424). ``test_windows_ci_guard_is_not_
 duplicated`` fails if a second copy appears.
 
 Before reaching for the skip, look at the crash frame. When it is a CPU bf16 or

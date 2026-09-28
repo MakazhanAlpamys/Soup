@@ -194,7 +194,10 @@ class TestTheHalfPrecisionTestsRequestTheFixture:
             f"{filename}::{target} runs a CPU bf16/fp16 step and must request "
             f"aten_half_matmuls (#1314)"
         )
-
+        assert "skip_on_windows_ci" not in _decorator_names(node), (
+            f"{filename}::{target} requests aten_half_matmuls and must not also skip; "
+            f"if it needs the #382 skip back, move it to GUARDED_TESTS and link the log"
+        )
 
 @pytest.mark.skipif(
     os.environ.get("CI") == "true" and sys.platform == "win32",
