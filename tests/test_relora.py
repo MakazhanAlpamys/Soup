@@ -736,7 +736,7 @@ def test_attach_relora_preflight_rejects_quantized_base():
     trainer.model = _make_mixed_writable_quantized_parent()
     with pytest.raises(RuntimeError, match="quantized or sharded"):
         attach_relora_callback(trainer, TrainingConfig(relora_steps=100))
-
+    trainer.add_callback.assert_not_called()
 
 def test_attach_relora_rejects_model_without_dense_merge():
     from soup_cli.utils.peft_wiring import attach_relora_callback
@@ -969,7 +969,11 @@ class TestReLoRAWrapperSaves:
         try:
             import torch
             from peft import LoraConfig, get_peft_model
-            from transformers import LlamaConfig, LlamaForCausalLM
+            from transformers import (
+                LlamaConfig,
+                LlamaForCausalLM,
+                LlamaForSequenceClassification,
+            )
             from trl.experimental.ppo.ppo_trainer import PolicyAndValueWrapper
         except ImportError as exc:
             pytest.skip(f"torch / transformers / peft / trl not available: {exc}")
@@ -1002,7 +1006,11 @@ class TestReLoRAWrapperSaves:
                     param.fill_(0.2)
             live_logits = policy(input_ids=input_ids).logits
 
-        holder = PolicyAndValueWrapper(policy, torch.nn.Linear(config.hidden_size, 1))
+        value_config = LlamaConfig.from_dict(config.to_dict())
+        value_config.num_labels = 1
+        value_config.output_hidden_states = True
+        value_model = LlamaForSequenceClassification(value_config).eval()
+        holder = PolicyAndValueWrapper(policy, value_model)
 
         class _Trainer:
             def __init__(self, model):
