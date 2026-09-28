@@ -131,7 +131,6 @@ def migrate(
     try:
         loaded_cfg = load_config_from_string(yaml_str)
     except Exception as exc:
-        from soup_cli.utils.terminal import for_terminal
         console.print(f"[red]Generated config failed schema validation: {for_terminal(exc)}[/]")
         raise typer.Exit(1)
 
