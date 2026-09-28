@@ -154,7 +154,7 @@ def insert(
         help="Where to write the canary manifest (CONTAINS THE SECRETS)",
     ),
     count: int = typer.Option(16, "--count", "-k", help="Number of canaries"),
-    seed: int = typer.Option(0, "--seed", help="Canary generation seed"),
+    seed: int = typer.Option(0, "--seed", help="Seed for the canaries and the rows they go to"),
     data_format: str = typer.Option(
         "auto", "--format",
         help="Dataset format to write the canaries in: auto (detect), "

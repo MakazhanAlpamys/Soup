@@ -166,9 +166,10 @@ real image or audio file per row. `-o` takes `.jsonl`, or `.json` for a JSON arr
 
 `insert` spreads the canaries through the file rather than appending them: the file is
 cut into one equal stretch per canary, and each canary goes to a random row of its own
-stretch (`--seed` fixes the rows). The loader holds out the file's last rows as
-validation (`data.val_split`, 0.1 by default), and a canary there is never trained on,
-so appending put every canary out of reach from 135 rows on. Spread, a held-out tail of
+stretch (`--seed` fixes the rows). The dataset's own rows keep their order. The
+loader holds out the file's last rows as validation (`data.val_split`, 0.1 by default),
+and a canary there is never trained on, so appending put every canary out of reach
+from 135 rows on. Spread, a held-out tail of
 `data.val_split` holds about that share of them: `insert` prints how many of them the
 default split trains on, and the manifest records each canary's row in the written file
 (`"row"`, counted from 0) and the file's row count (`"rows"`). Set `data.val_split: 0`
