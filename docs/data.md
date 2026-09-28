@@ -476,7 +476,9 @@ soup data generate --prompt "..." --template qa --context document.txt
 # Preference data (DPO/KTO/ORPO)
 soup data generate --prompt "..." --template preference --pref-task dpo
 
-# Chain-of-thought reasoning (GRPO)
+# Chain-of-thought reasoning (GRPO). `math` rows end with `#### <number>`, so the
+# `accuracy` / `verifiable` math rewards can read the gold; `logic` / `code` rows
+# end with an `Answer: <answer>` line.
 soup data generate --prompt "..." --template reasoning --domain math
 ```
 
