@@ -272,6 +272,7 @@ STRING_GOLD_CASES = [
     (r"y = -\frac{47}{8}", r"\boxed{x = -\frac{47}{8}}", 0.0),  # a directrix names its axis
     ("7", r"\boxed{2x + 1 = 7}", 0.0),  # an equation is not its solution
     ("7", r"\boxed{ab = 7}", 0.0),  # only a one-letter left-hand side is a prefix
+    ("x = 5", r"\boxed{X = 5}", 0.0),  # a variable's case is part of its name
     # review: a compact \frac argument may be preceded by a space, or already be a braced
     # group longer than one character; both spellings still read \frac{N}{D}.
     (r"\frac 34", r"\boxed{\frac34}", 1.0),  # MATH-500; 1.0 on main, 0.0 before this fix
@@ -490,7 +491,7 @@ class TestIssue1346:
         assert parse_reference(text).number == Decimal(7)
 
     def test_a_unit_is_still_not_stripped(self):
-        # Units need a ruling first (#1346's own acceptance criteria excludes them).
+        # Units stay unstripped; the ruling is recorded on #1346.
         assert accuracy_reward(_msg("#### 42 apples"), answer=["42"]) == [0.0]
         assert accuracy_reward(_msg(r"\boxed{42 \text{ apples}}"), answer=["42"]) == [0.0]
         assert math_verify_reward(_msg("#### 42 apples"), answer=["42"]) == [0.0]
@@ -503,6 +504,20 @@ class TestIssue1346:
         assert (gold.text, gold.number) == ("42 apples", None)
         completion = parse_completion("The answer is 42 apples.")
         assert (completion.text, completion.number) == ("42 apples", Decimal(42))
+
+    @pytest.mark.parametrize("gold", [r"\boxed{x =}", "Answer: x =", "#### x =", "x ="])
+    def test_a_variable_with_nothing_after_it_is_not_a_reference(self, gold):
+        from soup_cli.utils.final_answer import parse_reference
+
+        assert parse_reference(gold) is None
+        tcfg = TrainingConfig(reward_fn="accuracy")
+        with pytest.raises(ValueError, match="states no single final answer"):
+            _validate_grpo_reward_metadata([{"prompt": "p", "answer": gold}], tcfg, split="train")
+
+    def test_a_control_sequence_is_not_split_as_a_frac_argument(self):
+        from soup_cli.utils.final_answer import normalize_answer
+
+        assert normalize_answer(r"\frac\pi2") == r"\frac\pi2"
 
 
 # ===========================================================================

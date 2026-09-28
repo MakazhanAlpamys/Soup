@@ -48,17 +48,16 @@ Both sides are normalised the same way: surrounding whitespace; every ``$``, ``\
 ``\\)``, ``\\[`` and ``\\]``; ``\\left`` / ``\\right``; ``\\dfrac`` / ``\\tfrac`` read as
 ``\\frac``; one ``\\text{}`` / ``\\textbf{}`` / ``\\mathrm{}`` / ``\\mbox{}`` wrapper, unwrapped to
 its contents; ``^\\circ``, ``^{\\circ}`` and ``\N{DEGREE SIGN}``, dropped; a compact ``\\frac``
-argument, braced to match, whether it is a single bare character or an already-braced group of
-any length, and whether or not a space separates it from ``\\frac`` (``\\frac12``, ``\\frac1{2}``,
-``\\frac{1}2``, ``\\frac 34`` and ``\\frac9{19}`` all read ``\\frac{N}{D}``); a single-letter
-variable prefix (``x = 7`` reads ``7``); LaTeX spacing (``\\,``, ``\\!``, ``\\;``, ``\\:``,
-``\\ ``, but never the second backslash of a ``\\\\`` line break) and ``{,}`` thousands
-separators; markdown ``*`` at either end; trailing ``. , ; : !``; and the Unicode minus sign. A
-number is then exactly one literal: an optional sign, digits with optional ``,`` groups of three,
-an optional fraction and an optional exponent (``-1,000.5``, ``.5``, ``1e5``). Anything else,
-such as ``42 apples``, ``\\frac{14}{3}`` or ``p - q``, is compared as text, ignoring case and
-whitespace. Units are not stripped (``42 apples`` against ``42``), and nothing is evaluated
-(``\\frac{1}{2}`` against ``0.5``).
+argument, braced to match, whether it is a single bare character or an already-braced group
+without nested braces, and whether or not a space separates it from ``\\frac`` (``\\frac12``,
+``\\frac1{2}``, ``\\frac{1}2``, ``\\frac 34`` and ``\\frac9{19}`` all read ``\\frac{N}{D}``);
+LaTeX spacing (``\\,``, ``\\!``, ``\\;``, ``\\:``, ``\\ ``, but never the second backslash of a
+``\\\\`` line break) and ``{,}`` thousands separators; markdown ``*`` at either end; trailing
+``. , ; : !``; and the Unicode minus sign. A number is then exactly one literal: an optional
+sign, digits with optional ``,`` groups of three, an optional fraction and an optional exponent
+(``-1,000.5``, ``.5``, ``1e5``). Anything else, such as ``42 apples``, ``\\frac{14}{3}`` or
+``p - q``, is compared as text, ignoring case and whitespace. Units are not stripped
+(``42 apples`` against ``42``), and nothing is evaluated (``\\frac{1}{2}`` against ``0.5``).
 
 A single-letter variable prefix (``x = 7``) reads its right-hand side as the answer, on either
 side, but the letter itself is kept: when BOTH sides name one and the names differ (``x = 3``
@@ -119,7 +118,7 @@ _TEXT_WRAP_OPEN_RE = re.compile(r"\\(?:text|textbf|mathrm|mbox)\s*\{")
 # braces are matched as one alternative each, never independently optional, so this cannot
 # eat the closing brace of an enclosing group (`\frac{180^\circ}{3}`'s outer `}`).
 _DEGREE_RE = re.compile(r"\^(?:\{\\circ\}|\\circ)|\N{DEGREE SIGN}")
-# A \frac argument: a braced group of any length, or a single bare character (TeX skips
+# A \frac argument: a braced group without nested braces, or a single bare character (TeX skips
 # whitespace before an undelimited macro argument, so a space before it is allowed too).
 # \frac12, \frac1{2}, \frac{1}2, \frac 34 and \frac9{19} all read \frac{N}{D} (#1346).
 _FRAC_COMPACT_RE = re.compile(r"\\frac\s*(\{[^{}]*\}|[^\s{}\\])\s*(\{[^{}]*\}|[^\s{}\\])")
@@ -231,7 +230,9 @@ def variables_conflict(completion: FinalAnswer, reference: FinalAnswer) -> bool:
     """Both sides name a variable (``x = 3`` against ``y = 3``) and they are not the same one.
 
     A side that names no variable never conflicts, so a gold of ``7`` still accepts
-    ``\\boxed{x = 7}`` and a gold of ``x = 7`` still accepts ``\\boxed{7}`` (#1346)."""
+    ``\\boxed{x = 7}`` and a gold of ``x = 7`` still accepts ``\\boxed{7}`` (#1346). The
+    comparison is case-sensitive: a variable's case is part of its name, so ``x = 5``
+    conflicts with ``\\boxed{X = 5}``."""
     named = reference.variable is not None and completion.variable is not None
     return named and completion.variable != reference.variable
 
@@ -456,7 +457,7 @@ def parse_reference(text: str) -> FinalAnswer | None:
     if found is not None:
         variable, answer = _split_variable(found.answer)
         number = parse_number(answer)
-        if _is_hedge(found) or (found.text_follows and number is None):
+        if not answer or _is_hedge(found) or (found.text_follows and number is None):
             return None
         return FinalAnswer(answer, number, variable)
     bare = text.strip()

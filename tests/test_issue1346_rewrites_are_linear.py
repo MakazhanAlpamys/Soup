@@ -26,6 +26,8 @@ REWRITE_INPUTS = {
     "degree-signs": lambda k: "#### " + "\N{DEGREE SIGN}" * k,
     "compact-fracs": lambda k: "#### " + "\\frac12" * k,
     "bare-fracs": lambda k: "#### " + "\\frac" * k,
+    "spaced-fracs": lambda k: "#### \\frac" + " " * k + "1",
+    "open-frac-group": lambda k: "#### \\frac{" + "a" * k,
     "variable-then-spaces": lambda k: "#### x" + " " * k,
     "variable-spaces-equals-spaces": lambda k: "#### x" + " " * k + "=" + " " * k,
 }
