@@ -138,6 +138,32 @@ class PPOTrainerWrapper:
 
         use_unsloth = cfg.backend == "unsloth"
 
+        # --- Batch size ---
+        batch_size = tcfg.batch_size
+        if batch_size == "auto":
+            from soup_cli.utils.gpu import get_gpu_info
+
+            gpu_info = get_gpu_info()
+            model_size = model_size_from_name(cfg.base)
+            batch_size = estimate_batch_size(
+                model_params_b=model_size,
+                seq_length=cfg.data.max_length,
+                gpu_memory_bytes=gpu_info["memory_total_bytes"],
+                quantization=tcfg.quantization,
+                lora_r=tcfg.lora.r,
+            )
+            # PPO needs memory for policy + ref model + reward model → conservative
+            batch_size = max(1, batch_size // 4)
+            console.print(f"[green]Auto batch size (PPO):[/] {batch_size}")
+
+        # #1391: a train set smaller than one rollout batch never reaches a
+        # step. _prepare_ppo_dataset turns every row into exactly one prompt,
+        # so the count is known before any model is loaded.
+        if is_experimental:
+            _check_one_rollout_batch(
+                len(dataset["train"]), batch_size, tcfg.gradient_accumulation_steps
+            )
+
         # --- Load reward source ---
         self._setup_reward(cfg, tcfg)
 
@@ -156,24 +182,6 @@ class PPOTrainerWrapper:
             f"[green]LoRA applied:[/] {trainable:,} trainable"
             f" / {total:,} total ({pct:.2f}%)"
         )
-
-        # --- Batch size ---
-        batch_size = tcfg.batch_size
-        if batch_size == "auto":
-            from soup_cli.utils.gpu import get_gpu_info
-
-            gpu_info = get_gpu_info()
-            model_size = model_size_from_name(cfg.base)
-            batch_size = estimate_batch_size(
-                model_params_b=model_size,
-                seq_length=cfg.data.max_length,
-                gpu_memory_bytes=gpu_info["memory_total_bytes"],
-                quantization=tcfg.quantization,
-                lora_r=tcfg.lora.r,
-            )
-            # PPO needs memory for policy + ref model + reward model → conservative
-            batch_size = max(1, batch_size // 4)
-            console.print(f"[green]Auto batch size (PPO):[/] {batch_size}")
 
         # --- Dataset ---
         train_data = _prepare_ppo_dataset(dataset["train"], tokenizer=self.tokenizer)
@@ -196,8 +204,6 @@ class PPOTrainerWrapper:
         # never drops unused ones, so the prompt_text strings crash the collator.
         # The manual (trl<0.28) loop below still reads prompt_text from _train_ds.
         trl_train_ds = train_ds.select_columns(["input_ids", "attention_mask"])
-        if is_experimental:
-            _check_one_rollout_batch(len(train_ds), batch_size, tcfg.gradient_accumulation_steps)
 
         # --- Output dir ---
         output_dir = Path(cfg.output)

@@ -111,3 +111,27 @@ def test_the_rollout_batch_counts_every_process(monkeypatch):
         _check_one_rollout_batch(7, 2, 2)
     monkeypatch.setenv("WORLD_SIZE", "nonsense")
     _check_one_rollout_batch(4, 2, 2)
+
+
+def test_the_refusal_comes_before_any_model_is_loaded(tmp_path, monkeypatch):
+    """The refusal needs only the row count and two settings, so it must not
+    wait for the reward model and the policy to load."""
+    from soup_cli.trainer import ppo
+
+    loaded = []
+    real_reward = ppo.PPOTrainerWrapper._setup_reward
+    real_policy = ppo.PPOTrainerWrapper._setup_transformers
+
+    def reward(self, *args):
+        loaded.append("reward model")
+        return real_reward(self, *args)
+
+    def policy(self, *args):
+        loaded.append("policy")
+        return real_policy(self, *args)
+
+    monkeypatch.setattr(ppo.PPOTrainerWrapper, "_setup_reward", reward)
+    monkeypatch.setattr(ppo.PPOTrainerWrapper, "_setup_transformers", policy)
+    with pytest.raises(ValueError, match="4 rows"):
+        _wrapper(tmp_path, monkeypatch, grad_accum=4)
+    assert loaded == [], f"refused only after loading: {loaded}"
