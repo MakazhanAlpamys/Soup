@@ -672,7 +672,7 @@ class TestBuildModelCardEdges:
         assert "mmlu" in md
         assert "gsm8k" not in md
 
-    def test_scorecard_duplicate_benchmark_last_wins(self):
+    def test_scorecard_duplicate_benchmark_newest_row_wins(self):
         from soup_cli.commands.card import build_model_card
 
         entry = {
@@ -680,7 +680,28 @@ class TestBuildModelCardEdges:
             "created_at": "t", "notes": None, "config_hash": "", "data_hash": "",
             "run_id": "run1", "tags": [], "config_json": "{}",
         }
-        evals = [{"benchmark": "mmlu", "score": 0.1}, {"benchmark": "mmlu", "score": 0.9}]
+        # ExperimentTracker returns rows newest first; card must not let the
+        # older row overwrite the newest score.
+        evals = [
+            {"benchmark": "mmlu", "score": 0.9, "created_at": "2026-01-02", "id": 2},
+            {"benchmark": "mmlu", "score": 0.1, "created_at": "2026-01-01", "id": 1},
+        ]
+        md = build_model_card(entry, [], evals, [])
+        assert "0.900" in md
+        assert "0.100" not in md
+
+    def test_scorecard_duplicate_benchmark_tie_uses_later_insert(self):
+        from soup_cli.commands.card import build_model_card
+
+        entry = {
+            "id": "r", "name": "m", "base_model": "b", "task": "sft",
+            "created_at": "t", "notes": None, "config_hash": "", "data_hash": "",
+            "run_id": "run1", "tags": [], "config_json": "{}",
+        }
+        evals = [
+            {"benchmark": "mmlu", "score": 0.9, "created_at": "2026-01-01", "id": 2},
+            {"benchmark": "mmlu", "score": 0.1, "created_at": "2026-01-01", "id": 1},
+        ]
         md = build_model_card(entry, [], evals, [])
         assert "0.900" in md
         assert "0.100" not in md
