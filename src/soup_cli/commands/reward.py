@@ -100,6 +100,8 @@ def _render_report_panel(report: rs.CalibrationReport, kind: str, out_path: str)
     table.add_column()
     table.add_row("verifier kind", escape(kind))
     table.add_row("references (accepted)", f"{report.positives} ({report.pos_accept:.0%})")
+    for ref in report.rejected_references:
+        table.add_row("rejected reference", escape(repr(ref)))
     table.add_row("negatives (accepted)", f"{report.negatives} ({report.neg_accept:.0%})")
     table.add_row("discrimination", f"{report.discrimination:.2f}")
     table.add_row("precision", f"{report.precision:.2f}")
@@ -233,8 +235,11 @@ def synth(
 
     if report.refused:
         _cleanup(candidate_path)
+        rejected = "".join(
+            f"\nrejected reference: {escape(repr(ref))}" for ref in report.rejected_references
+        )
         console.print(Panel(
-            escape(report.reason),
+            escape(report.reason) + rejected,
             title="[bold red]verifier refused (not emitted)[/]", border_style="red"))
         raise typer.Exit(2)
 
