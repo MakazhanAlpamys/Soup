@@ -378,13 +378,23 @@ def msprt_step(
             mean_treatment=mean_t,
         )
 
+    # #1384 - an arm whose values sum past the largest float has an infinite
+    # mean however little they spread: name their size, not their spread.
+    if not (math.isfinite(mean_c) and math.isfinite(mean_t)):
+        values = ctrl + treat
+        raise ValueError(
+            f"The {config.metric!r} column's values are too large for the test "
+            f"statistic: they run from {min(values):.3g} to {max(values):.3g}, "
+            "and an arm's sum overflows a float. Rescale the metric (divide its "
+            "values by a large constant) and re-run."
+        )
+
     # Pooled variance with Bessel correction. Squared as d * d, not d ** 2:
     # ** raises OverflowError where * returns inf, and inf is refused below.
     var_c = sum((x - mean_c) * (x - mean_c) for x in ctrl) / (n_c - 1)
     var_t = sum((x - mean_t) * (x - mean_t) for x in treat) / (n_t - 1)
     raw_pooled_var = ((n_c - 1) * var_c + (n_t - 1) * var_t) / (n_c + n_t - 2)
-    # #1384 - deviations past about 1.3e154 square past the largest float, and
-    # an arm whose sum overflows has an infinite mean, so every deviation is.
+    # #1384 - deviations past about 1.3e154 square past the largest float.
     if not math.isfinite(raw_pooled_var):
         values = ctrl + treat
         raise ValueError(

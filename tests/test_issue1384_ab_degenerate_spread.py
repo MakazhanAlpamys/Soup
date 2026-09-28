@@ -14,7 +14,8 @@ about ``2.2e-162``, so an underflow shows as a standard error of exactly ``0.0``
 infinite mean, and ``soup ab`` quietly reported ``continue`` with a ``nan``
 log-likelihood ratio.
 
-Both are now refused with a ``ValueError`` naming the column, which
+All three are now refused with a ``ValueError`` naming the column (the
+overflowing sum with its own message, since its spread may be 0), which
 ``commands/ab.py`` turns into exit 1 and a message, not a traceback.
 """
 
@@ -78,6 +79,7 @@ class TestSpreadBelowAFloat:
     def test_cli_exits_1_with_a_message_not_a_traceback(self, tmp_path, monkeypatch):
         result = _run_cli(tmp_path, monkeypatch, [0.0] * 40, _TINY)
         assert result.exit_code == 1, (result.output, repr(result.exception))
+        assert isinstance(result.exception, SystemExit), repr(result.exception)
         out = _plain(result.output)
         assert "'latency' column's spread is below" in out
         assert "ZeroDivisionError" not in out
@@ -101,9 +103,8 @@ class TestSpreadAboveAFloat:
         [
             (_HUGE, _HUGE),  # the issue's input: (x - mean) ** 2 overflowed
             ([1.0, 2.0] * 20, _HUGE),  # the treatment arm alone
-            ([1e308] * 40, [1.0, 2.0] * 20),  # the arm's sum overflows: mean inf
         ],
-        ids=["deviation-overflows", "treatment-only", "arm-sum-overflows"],
+        ids=["deviation-overflows", "treatment-only"],
     )
     def test_step_refuses_naming_the_column(self, control, treatment):
         with pytest.raises(ValueError) as exc:
@@ -120,6 +121,7 @@ class TestSpreadAboveAFloat:
     def test_cli_exits_1_with_a_message_not_a_traceback(self, tmp_path, monkeypatch):
         result = _run_cli(tmp_path, monkeypatch, _HUGE, _HUGE)
         assert result.exit_code == 1, (result.output, repr(result.exception))
+        assert isinstance(result.exception, SystemExit), repr(result.exception)
         out = _plain(result.output)
         assert "'latency' column's spread is above" in out
         assert "1e+200" in out
@@ -136,3 +138,26 @@ class TestSpreadAboveAFloat:
         )
         assert verdict.decision in {"continue", "accept_h0"}
         assert math.isfinite(verdict.log_likelihood_ratio)
+
+
+class TestValuesTooLargeToSum:
+    @pytest.mark.parametrize(
+        ("control", "treatment"),
+        [
+            ([1e308] * 40, [1.0, 2.0] * 20),  # one arm's sum overflows: mean inf
+            ([1e308] * 40, [1e308] * 40),  # no spread at all, yet the sums overflow
+        ],
+        ids=["arm-sum-overflows", "constant-column"],
+    )
+    def test_step_names_the_size_not_the_spread(self, control, treatment):
+        with pytest.raises(ValueError) as exc:
+            msprt_step(
+                MsprtConfig(metric="latency", alpha=0.1),
+                control=control,
+                treatment=treatment,
+            )
+        message = str(exc.value)
+        assert "'latency'" in message
+        assert "sum overflows a float" in message
+        assert "spread" not in message
+        assert "Rescale" in message
