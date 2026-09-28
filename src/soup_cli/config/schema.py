@@ -7048,10 +7048,22 @@ class SoupConfig(BaseModel):
 
         ``unlearn`` is refused in :meth:`_validate_unlearn_compat` for a
         different reason (it has an adapter but no ``Trainer`` optimizer).
+
+        #1324: ``backend: mlx`` is refused too. The MLX trainer builds its
+        optimizer from one learning rate (``plan_optimizer`` in
+        ``trainer/mlx_optim.py``), so the ratio would be read by nothing.
         """
         tcfg = self.training
         if tcfg.loraplus_lr_ratio is None:
             return self
+        if self.backend not in ("transformers", "unsloth"):
+            raise ValueError(
+                "Refused: training.loraplus_lr_ratio is not implemented on "
+                f"backend={self.backend!r}. The MLX optimizer trains every LoRA "
+                "tensor at one learning rate, so the ratio would be silently "
+                "ignored. Remove training.loraplus_lr_ratio, or use "
+                "backend: transformers."
+            )
         task = self.task
         if getattr(tcfg.lora, "use_vera", False):
             raise ValueError(

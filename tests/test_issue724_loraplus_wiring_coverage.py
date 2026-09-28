@@ -43,6 +43,9 @@ A wrapper counts as building a LoRA adapter when it calls ``get_peft_model``
 itself OR hands a ``peft_config=`` to a TRL trainer that applies the adapter in
 its own ``__init__`` (``online_dpo.py``). Until #745's second round the scan
 only knew the first shape, so online_dpo ignored ``loraplus_lr_ratio`` unseen.
+The MLX trainer builds its adapter with mlx-lm's ``linear_to_lora_layers``
+instead; until #1324 the scan did not count it, so ``backend: mlx`` ignored
+``loraplus_lr_ratio`` unseen too.
 
 Coverage is derived by SCANNING ``soup_cli/trainer/`` (following
 ``tests/test_issue359_deepspeed_guard_coverage.py``) rather than a hand-written
@@ -67,7 +70,7 @@ _TRAINER_SOURCES = sorted(_TRAINER_DIR.glob("*.py"))
 #: that applies the adapter inside its own ``__init__`` (``online_dpo.py``). The
 #: second shape is detected on the AST (see :func:`_hands_peft_config_to_trl`),
 #: since ``self.peft_config = ...`` assignments share the spelling.
-_BUILDS_PEFT = re.compile(r"get_peft_model\s*\(")
+_BUILDS_PEFT = re.compile(r"(?:get_peft_model|linear_to_lora_layers)\s*\(")
 #: The two wiring shapes (see the module docstring): attach after construction,
 #: or build before it and inject via ``optimizers=``. A wrapper counts as wiring
 #: LoRA+ if it does either.
@@ -87,6 +90,12 @@ _LORAPLUS_EXEMPT = {
         "so there is no trainer.optimizer to attach LoRA+ to. loraplus_lr_ratio "
         "is refused at config parse for task='unlearn' instead of being silently "
         "ignored (see test_unlearn_loraplus_is_refused_at_config_parse)."
+    ),
+    "mlx_sft.py": (
+        "builds its adapter with mlx-lm's linear_to_lora_layers and its optimizer "
+        "from one learning rate (plan_optimizer), so there is no LoRA B group to "
+        "give lr * ratio. loraplus_lr_ratio is refused at config parse for "
+        "backend='mlx' instead (#1324, tests/test_issue1324_mlx_loraplus.py)."
     ),
 }
 
@@ -301,6 +310,14 @@ class TestLoraPlusWiringCoverage:
         """The live instance of the delegated shape: until #745's second round
         the scan could not see it, so it silently ignored loraplus_lr_ratio."""
         assert _builds_peft(_TRAINER_DIR / "online_dpo.py")
+
+    def test_the_mlx_trainer_counts_as_a_peft_builder(self):
+        """#1324: mlx-lm applies LoRA through linear_to_lora_layers, not peft.
+        Before the scan knew that call, mlx_sft.py was neither wired nor exempt
+        and backend: mlx ignored loraplus_lr_ratio without a test noticing."""
+        assert _BUILDS_PEFT.search("        linear_to_lora_layers(model, n, cfg)")
+        assert not _source_builds_peft("        # linear_to_lora_layers(model) runs later")
+        assert _builds_peft(_TRAINER_DIR / "mlx_sft.py")
 
     def test_a_comment_mentioning_the_call_does_not_satisfy_it(self):
         """The positive check reads code, not prose — otherwise the note that
