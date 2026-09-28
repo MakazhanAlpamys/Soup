@@ -13,6 +13,7 @@ from types import SimpleNamespace
 import pytest
 
 from scripts.check_recipe_attach import EXCEPTIONS, compare, count_line, main, report
+from tests.conftest import strip_ansi
 
 
 def _row(name, verdict, detail=""):
@@ -83,7 +84,7 @@ class TestMain:
         verify([_row(name, "cannot_attach") for name in EXCEPTIONS])
 
         assert main() == 0
-        assert f"{len(EXCEPTIONS)} pinned cannot-attach" in capsys.readouterr().out
+        assert f"{len(EXCEPTIONS)} pinned cannot-attach" in strip_ansi(capsys.readouterr().out)
 
     def test_a_new_failure_exits_2(self, verify):
         verify([_row("brand-new-sft", "cannot_attach", "boom")])
@@ -100,7 +101,7 @@ class TestMain:
         verify([], returncode=1, stderr="soup recipes verify needs torch")
 
         assert main() == 1
-        assert "exited 1" in capsys.readouterr().err
+        assert "exited 1" in strip_ansi(capsys.readouterr().err)
 
 
 class TestTheExceptions:
