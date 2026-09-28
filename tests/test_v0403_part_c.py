@@ -430,6 +430,7 @@ class TestTraceLogWriter:
         assert "<redacted>" in rec["prompt"]
         assert "sk-abcdefghijklmnopqrstuvwxyz" not in rec["prompt"]
 
+    @pytest.mark.requires_symlink
     def test_rotation_refuses_symlink_backup(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         path = tmp_path / "log.jsonl"
@@ -437,10 +438,7 @@ class TestTraceLogWriter:
         outside = tmp_path / "decoy.txt"
         outside.write_text("decoy", encoding="utf-8")
         backup = path.with_suffix(path.suffix + ".1")
-        try:
-            backup.symlink_to(outside)
-        except (NotImplementedError, OSError):
-            pytest.skip("symlink creation not supported on this platform/user")
+        backup.symlink_to(outside)
 
         writer = TraceLogWriter(str(path), cap_mb=1)
         big = "x" * (1024 * 1024)

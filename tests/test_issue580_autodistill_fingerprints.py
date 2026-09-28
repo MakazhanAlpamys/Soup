@@ -173,6 +173,7 @@ def test_dataset_verifies_source_bytes_normalized_hash_and_rows(tmp_path):
         verify_dataset_fingerprint(plan, dataset_root=dataset_root)
 
 
+@pytest.mark.requires_symlink
 def test_fingerprint_verifier_rejects_symlinked_files(tmp_path):
     plan, teacher_root, _, _, _ = _local_plan(tmp_path)
     weights = teacher_root / "model.safetensors"

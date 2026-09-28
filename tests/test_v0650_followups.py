@@ -313,10 +313,13 @@ class TestDeduplicatedWriteHelper:
             "tests": [{"name": "t1", "kind": "mft",
                        "prompts": ["p"], "expected": ["a"]}]
         }))
+        evidence = tmp_path / "evidence.json"
+        evidence.write_text(json.dumps({"t1": ["a"]}))
         out = tmp_path / "report.json"
         runner = CliRunner()
         result = runner.invoke(app, [
-            "checklist", str(p), "--output", str(out),
+            "checklist", str(p), "--evidence", str(evidence),
+            "--output", str(out),
         ])
         assert result.exit_code == 0
         data = json.loads(out.read_text())

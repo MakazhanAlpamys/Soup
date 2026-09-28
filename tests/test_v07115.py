@@ -16,7 +16,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import sys
 from pathlib import Path
 
 import pytest
@@ -419,9 +418,7 @@ class TestEnergyOutHandoff:
         with pytest.raises(ValueError):
             _write_energy_json("../escape.json", self._measurement())
 
-    @pytest.mark.skipif(
-        sys.platform == "win32", reason="symlink needs elevation on Windows"
-    )
+    @pytest.mark.requires_symlink
     def test_write_energy_json_rejects_symlink(self, tmp_path, monkeypatch):
         from soup_cli.commands.train import _write_energy_json
 

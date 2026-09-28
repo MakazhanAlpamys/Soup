@@ -9,6 +9,7 @@ from rich.console import Console
 
 from soup_cli.config.schema import SoupConfig
 from soup_cli.trainer.loss_summary import summarize_training_loss
+from soup_cli.utils.eval_schedule import training_eval_kwargs
 from soup_cli.utils.gpu import (
     bf16_fp16_flags,
     estimate_batch_size,
@@ -130,7 +131,15 @@ class PretrainTrainerWrapper:
         # via `soup data preprocess`. Skips the raw-text load entirely.
         from soup_cli.trainer.sft import _maybe_load_pretokenized
 
-        pretok = _maybe_load_pretokenized(cfg.data, cfg.base, console)
+        # #1054: pass ``tcfg`` -- ``preprocess_mask_mode`` reads
+        # ``training.train_on_eot`` from it, and ``task: pretrain`` is in the
+        # sft-family set the schema allows that flag on. Omitting it dropped the
+        # ``+eot`` suffix here but not in ``soup data preprocess``, so the cache
+        # was refused by a hash the re-run advised in the error reproduces.
+        pretok = _maybe_load_pretokenized(
+            cfg.data, cfg.base, console, getattr(cfg, "training", None),
+            task=cfg.task,
+        )
         if pretok is not None:
             train_ds, eval_ds = pretok
         else:
@@ -175,6 +184,7 @@ class PretrainTrainerWrapper:
             "remove_unused_columns": False,
             "deepspeed": self.deepspeed_config,
             **training_seed_kwargs(tcfg),
+            **training_eval_kwargs(cfg, eval_ds, batch_size=batch_size),
         }
 
         # FSDP2 — alternative to DeepSpeed
@@ -185,6 +195,11 @@ class PretrainTrainerWrapper:
         # TrainingArguments field: the optimizer is built and attached after the
         # trainer exists (attach_loraplus_optimizer), so it must NOT be forwarded
         # here (#724).
+
+        # LoRA-FA — freezes LoRA A matrices and trains B matrices. Not a
+        # TrainingArguments field: the optimizer is built and attached after the
+        # trainer exists (attach_lorafa_optimizer), so it must NOT be forwarded
+        # here (#725).
 
         # GaLore — memory-efficient full-parameter training
         if tcfg.use_galore:
@@ -270,12 +285,15 @@ class PretrainTrainerWrapper:
         from soup_cli.utils.peft_wiring import (
             attach_curriculum_callback,
             attach_lisa_callback,
+            attach_lorafa_optimizer,
             attach_loraplus_optimizer,
             attach_plugin_callback,
             attach_relora_callback,
         )
         # LoRA+ optimizer (#724) — build and attach now that the trainer exists.
         attach_loraplus_optimizer(self.trainer, tcfg)
+        # LoRA-FA optimizer (#725) — build and attach now that the trainer exists.
+        attach_lorafa_optimizer(self.trainer, tcfg)
         attach_relora_callback(self.trainer, tcfg)
         # #307 — LISA layerwise importance sampling (v0.71.34 #267 for sft).
         attach_lisa_callback(self.trainer, tcfg)
@@ -292,7 +310,7 @@ class PretrainTrainerWrapper:
         from peft import TaskType, get_peft_model, prepare_model_for_kbit_training
         from transformers import AutoModelForCausalLM, AutoTokenizer
 
-        from soup_cli.utils.moe import detect_moe_model, get_moe_target_modules
+        from soup_cli.utils.moe import detect_moe_model
 
         console.print(f"[dim]Loading tokenizer: {cfg.base}[/]")
         self.tokenizer = AutoTokenizer.from_pretrained(
@@ -361,7 +379,14 @@ class PretrainTrainerWrapper:
             )
 
         if tcfg.quantization in ("4bit", "8bit", "mxfp4"):
-            self.model = prepare_model_for_kbit_training(self.model)
+            from soup_cli.utils.layer_stream import should_enable_hf_gradient_checkpointing
+
+            self.model = prepare_model_for_kbit_training(
+                self.model,
+                use_gradient_checkpointing=should_enable_hf_gradient_checkpointing(
+                    tcfg.gradient_checkpointing, stream_layers=tcfg.stream_layers
+                ),
+            )
 
         # v0.53.4 #83 — LLaMA Pro block expansion (centralised — see SFT).
         from soup_cli.utils.block_expansion import (
@@ -383,18 +408,19 @@ class PretrainTrainerWrapper:
 
         if not apply_lisa_setup(self.model, tcfg, console):
             # LoRA — with MoE-aware target modules if moe_lora is enabled
-            target_modules = resolve_lora_target_modules(self.model, tcfg.lora.target_modules)
+            target_modules = resolve_lora_target_modules(
+                self.model, tcfg.lora.target_modules, console
+            )
             target_parameters = resolve_lora_target_parameters(
                 self.model, tcfg.lora.target_parameters
             )
 
-            if tcfg.moe_lora and is_moe:
-                moe_targets = get_moe_target_modules(self.model)
-                if moe_targets:
-                    target_modules = moe_targets
-                    console.print(
-                        f"[green]ScatterMoE LoRA:[/] targeting {len(moe_targets)} module patterns"
-                    )
+            # #798: the same helper every other trainer uses (see sft.py).
+            from soup_cli.utils.moe import resolve_moe_lora_targets
+
+            target_modules = resolve_moe_lora_targets(
+                self.model, tcfg, target_modules, console
+            )
 
             lora_config = build_lora_config(
                 tcfg.lora,

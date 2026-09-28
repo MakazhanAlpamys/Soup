@@ -384,9 +384,8 @@ def test_llama_env_allowlist_immutable():
 
 # --- write_trigger symlink rejection (security review M2) -------------------
 
+@pytest.mark.requires_symlink
 def test_write_trigger_rejects_pre_existing_symlink(tmp_path, monkeypatch):
-    if os.name == "nt":
-        pytest.skip("Symlink test requires POSIX permissions.")
     monkeypatch.chdir(tmp_path)
     out = tmp_path / "out"
     out.mkdir()

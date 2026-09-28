@@ -1215,7 +1215,9 @@ def estimate_stream_peak_vram(
     ``extras_bytes`` contains only the genuinely resident non-decoder weights.
     ``large_layer_bytes`` is one reusable slot sized to the larger of
     ``embed_tokens`` and an untied ``lm_head``; the two matrices no longer add
-    together at peak (#324).
+    together at peak (#324). A loss with a second forward per step on an untied
+    checkpoint also holds a private copy of the head (#1049); the caller charges
+    that as a second slot, so pass the sum.
 
     Returns allocator-visible bytes only. The CUDA context and driver reservation
     sit outside the caching allocator (0.85 GB on the dev box, which also drives

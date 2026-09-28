@@ -16,6 +16,7 @@ from pathlib import Path
 import pytest
 
 from soup_cli.utils import reward_synth as rs
+from tests.conftest import strip_ansi
 
 
 # ---------------------------------------------------------------------------
@@ -428,8 +429,9 @@ class TestRewardSynthCli:
         assert res.exit_code == 0, (res.output, repr(res.exception))
         assert not Path("reward.py").exists()
         # Spec-specific fields, not just the kind name in the panel title.
-        assert "numeric" in res.output.lower() and "tolerance" in res.output.lower()
-        assert "float=false" in res.output.lower().replace(" ", "")
+        out = strip_ansi(res.output)
+        assert "numeric" in out.lower() and "tolerance" in out.lower()
+        assert "float=false" in out.lower().replace(" ", "")
 
     def test_output_must_be_py(self, tmp_path, monkeypatch):
         from soup_cli.commands.reward import app

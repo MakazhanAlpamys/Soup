@@ -123,7 +123,7 @@ class TestVectorBankForwardCompat:
         assert loaded.name == "fc"
         assert loaded.vector_dim == 2
 
-    @pytest.mark.skipif(os.name == "nt", reason="POSIX-only symlink test")
+    @pytest.mark.requires_symlink
     def test_write_bank_symlink_rejected(self, tmp_path, monkeypatch) -> None:
         """`write_bank` must reject a pre-placed symlink at the target path
         (TOCTOU defence — mirrors v0.55.0 / v0.56.0 policy)."""

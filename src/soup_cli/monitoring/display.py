@@ -63,9 +63,10 @@ class TrainingDisplay:
         self.current_step = 0
         self.total_steps = 0
         self.current_epoch = 0
-        self.loss = 0.0
+        #: None until a loss is measured (#1225); the panel shows "-"
+        self.loss: Optional[float] = None
         self.lr = 0.0
-        self.grad_norm = 0.0
+        self.grad_norm: Optional[float] = None
         self.gpu_mem = ""
         self.speed = 0.0
         #: None until an evaluation actually runs. Its own series --
@@ -79,13 +80,13 @@ class TrainingDisplay:
         self._live = Live(self._render(), console=console, refresh_per_second=2)
         self._live.start()
 
-    def update(self, step: int, epoch: float, loss: float, lr: float, **kwargs):
+    def update(self, step: int, epoch: float, loss: Optional[float], lr: float, **kwargs):
         """Update display with new metrics."""
         self.current_step = step
         self.current_epoch = epoch
         self.loss = loss
         self.lr = lr
-        self.grad_norm = kwargs.get("grad_norm", 0.0)
+        self.grad_norm = kwargs.get("grad_norm")
         self.speed = kwargs.get("speed", 0.0)
         self.gpu_mem = kwargs.get("gpu_mem", "")
         # Sticky: an evaluation happens every N steps, so the last
@@ -118,7 +119,9 @@ class TrainingDisplay:
         lines = []
         lines.append(f"{epoch_str}  [{bar}] {progress_pct:.0f}%")
         lines.append(f"Step:  {self.current_step}/{self.total_steps}")
-        lines.append(f"Loss:  {self.loss:.4f}    LR: {self.lr:.2e}")
+        # None until a loss is measured (#1225): shown as "-", not as 0.0000
+        loss_text = "-" if self.loss is None else f"{self.loss:.4f}"
+        lines.append(f"Loss:  {loss_text}    LR: {self.lr:.2e}")
 
         if self.val_loss is not None:
             lines.append(f"Val loss: {self.val_loss:.4f}")
@@ -126,7 +129,7 @@ class TrainingDisplay:
             lines.append(f"Speed: {self.speed:.2f} it/s")
         if self.gpu_mem:
             lines.append(f"GPU peak: {self.gpu_mem}")
-        if self.grad_norm > 0:
+        if self.grad_norm is not None:
             lines.append(f"Grad:  {self.grad_norm:.4f}")
 
         content = "\n".join(lines)

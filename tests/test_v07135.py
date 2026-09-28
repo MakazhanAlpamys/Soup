@@ -746,7 +746,7 @@ class TestCiWorkflowEdges:
                 data_path="d.jsonl", suite_path="s.yaml", evidence_path="e.json",
             )
 
-    @pytest.mark.skipif(os.name != "posix", reason="POSIX symlink semantics")
+    @pytest.mark.requires_symlink
     def test_write_rejects_symlink_output(self, tmp_path, monkeypatch):
         """L1 — live symlink coverage at ci_workflow's own call site."""
         from soup_cli.utils.ci_workflow import write_soup_gate_workflow

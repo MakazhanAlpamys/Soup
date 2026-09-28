@@ -55,6 +55,7 @@ from soup_cli.utils.loop_state import (
     read_state,
     write_state,
 )
+from tests.conftest import strip_ansi
 
 runner = CliRunner()
 
@@ -308,7 +309,7 @@ class TestStateIO:
         s = read_state()
         assert s.served_model == "m"
 
-    @pytest.mark.skipif(os.name == "nt", reason="POSIX symlink test")
+    @pytest.mark.requires_symlink
     def test_write_state_rejects_symlink(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         sd = tmp_path / ".soup"
@@ -1078,7 +1079,7 @@ class TestCLI:
             ],
         )
         assert r.exit_code == 0, r.output
-        assert "iterations=2" in r.output
+        assert "iterations=2" in strip_ansi(r.output)
 
     def test_watch_detach_and_foreground_mutex(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)

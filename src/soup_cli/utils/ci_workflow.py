@@ -67,11 +67,44 @@ jobs:
         # `ship --evidence` are all no-torch paths.
         run: pip install soup-cli
       - name: Validate training data
-        run: soup data validate {data}
+        run: |
+          set +e
+          soup data validate {data}
+          rc=$?
+          set -e
+          if [ "$rc" -eq 2 ]; then
+            echo "[soup] data validation failed: unusable data" >&2
+            exit 2
+          elif [ "$rc" -ne 0 ]; then
+            echo "[soup] data validation error: usage or configuration error (exit $rc)" >&2
+            exit "$rc"
+          fi
       - name: Run expectations suite
-        run: soup expect {data} {suite}
+        run: |
+          set +e
+          soup expect {data} {suite}
+          rc=$?
+          set -e
+          if [ "$rc" -eq 2 ]; then
+            echo "[soup] expectations suite failed: quality regression" >&2
+            exit 2
+          elif [ "$rc" -ne 0 ]; then
+            echo "[soup] expectations suite error: usage or configuration error (exit $rc)" >&2
+            exit "$rc"
+          fi
       - name: SHIP / DON'T-SHIP gate
-        run: soup ship --evidence {evidence}{ship_config_arg}
+        run: |
+          set +e
+          soup ship --evidence {evidence}{ship_config_arg}
+          rc=$?
+          set -e
+          if [ "$rc" -eq 2 ]; then
+            echo "[soup] gate rejected: model failed ship checks" >&2
+            exit 2
+          elif [ "$rc" -ne 0 ]; then
+            echo "[soup] gate error: usage or configuration error (exit $rc)" >&2
+            exit "$rc"
+          fi
 """
 
 # Extra comment injected into the header when the gate is bound to a config —

@@ -276,10 +276,9 @@ class TestWriteVscodeLaunch:
         with pytest.raises(ValueError):
             write_vscode_launch(force="yes")  # type: ignore[arg-type]
 
+    @pytest.mark.requires_symlink
     def test_symlink_target_rejected(self, tmp_path, monkeypatch):
         # Skip on Windows without dev-mode where symlinks need privilege.
-        if os.name == "nt":
-            pytest.skip("symlink creation needs admin/dev mode on Windows")
         monkeypatch.chdir(tmp_path)
         vscode_dir = tmp_path / ".vscode"
         vscode_dir.mkdir()

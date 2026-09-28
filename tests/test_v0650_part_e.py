@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import json
 import os
-import platform
 
 import pytest
 from typer.testing import CliRunner
@@ -307,7 +306,7 @@ class TestLoadResponseRows:
         with pytest.raises(ValueError, match="cap"):
             load_response_rows(str(p))
 
-    @pytest.mark.skipif(platform.system() == "Windows", reason="POSIX symlink")
+    @pytest.mark.requires_symlink
     def test_symlink_rejected(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         target = tmp_path / "real.jsonl"

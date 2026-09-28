@@ -40,14 +40,24 @@ class TestGRPOConfig:
         )
         assert cfg.training.grpo_beta == pytest.approx(0.04)
 
-    def test_grpo_beta_must_be_positive(self):
-        """grpo_beta must be > 0."""
+    def test_grpo_beta_zero_allowed(self):
+        """grpo_beta: 0 is allowed for KL-free recipes (#1247)."""
+        cfg = SoupConfig(
+            base="some-model",
+            task="grpo",
+            data={"train": "./data.jsonl"},
+            training={"grpo_beta": 0},
+        )
+        assert cfg.training.grpo_beta == 0.0
+
+    def test_grpo_beta_negative_rejected(self):
+        """grpo_beta must be >= 0."""
         with pytest.raises(Exception):
             SoupConfig(
                 base="some-model",
                 task="grpo",
                 data={"train": "./data.jsonl"},
-                training={"grpo_beta": 0},
+                training={"grpo_beta": -0.01},
             )
 
     def test_num_generations_default(self):
@@ -140,12 +150,15 @@ class TestAccuracyReward:
         rewards = accuracy_reward(completions, answer=["42"])
         assert rewards == [1.0]
 
-    def test_partial_match(self):
+    def test_answer_phrase_followed_by_a_unit_scores_full_credit(self):
+        # #1226: there is no 0.5 substring credit any more. After an answer phrase, "42 degrees"
+        # is not a bare number, so its number is read from that clause: 42. (After '####' or
+        # inside \boxed{} the answer must BE the number: '#### 42 apples' scores 0.0.)
         from soup_cli.trainer.rewards import accuracy_reward
 
         completions = [[{"role": "assistant", "content": "The answer is 42 degrees"}]]
         rewards = accuracy_reward(completions, answer=["42"])
-        assert rewards == [0.5]
+        assert rewards == [1.0]
 
     def test_no_match(self):
         from soup_cli.trainer.rewards import accuracy_reward
@@ -163,7 +176,8 @@ class TestAccuracyReward:
             [{"role": "assistant", "content": "The answer is 42"}],
         ]
         rewards = accuracy_reward(completions, answer=["42", "42", "42"])
-        assert rewards == [1.0, 0.0, 0.5]
+        # #1226: "The answer is 42" is an explicit answer now, not a 0.5 substring hit.
+        assert rewards == [1.0, 0.0, 1.0]
 
     def test_empty_completion(self):
         from soup_cli.trainer.rewards import accuracy_reward

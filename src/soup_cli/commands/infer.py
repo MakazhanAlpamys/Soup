@@ -150,6 +150,11 @@ def infer(
             "modelers. Non-HF hubs require the matching SDK (v0.53.10 #152)."
         ),
     ),
+    cuda_graphs: bool = typer.Option(
+        False,
+        "--cuda-graphs",
+        help="Experimental CUDA graph decode for resident, unquantized Qwen2/Llama models.",
+    ),
 ):
     """Run batch inference on a JSONL file of prompts."""
     # v0.53.10 #152 — pre-fetch base from a non-HF hub before any resolution.
@@ -176,6 +181,10 @@ def infer(
     # v0.71.32 — ASR (Whisper) transcription branch. Diverts before the chat
     # model-resolution path; _infer_asr owns its own Whisper load + output.
     if task == "asr":
+        if cuda_graphs is True:
+            raise typer.BadParameter(
+                "--cuda-graphs supports text generation only. Omit --cuda-graphs for --task asr"
+            )
         # Validate --asr-task up front: a typo would otherwise be passed to
         # whisper.generate(task=...) and fail INSIDE every row (100k confusing
         # per-row skips instead of one upfront rejection).
@@ -198,6 +207,12 @@ def infer(
             audio_dir=audio_dir,
         )
         return
+    if cuda_graphs is True and batch_size > 1:
+        raise typer.BadParameter(
+            "--cuda-graphs records a batch of 1 and cannot be combined with "
+            "--batch-size above 1. Omit --cuda-graphs, or use --batch-size 1"
+        )
+
     if task != "text":
         console.print(f"[red]Unknown --task {task!r}; expected 'text' or 'asr'.[/]")
         raise typer.Exit(2)
@@ -212,7 +227,6 @@ def infer(
             "'owner/repo-name' (no leading './').[/]"
         )
         raise typer.Exit(1) from exc
-    model_path = Path(model_ref)
     if model_kind == "hf":
         console.print(
             f"[dim]Local path not found; treating {model_ref!r} as a HF repo id.[/]"
@@ -233,7 +247,7 @@ def infer(
 
     console.print(
         Panel(
-            f"Model:    [bold]{model_path}[/]\n"
+            f"Model:    [bold]{model_ref}[/]\n"
             f"Input:    [bold]{input_path}[/] ({len(prompts)} prompts)\n"
             f"Output:   [bold]{output_file}[/]\n"
             f"Device:   [bold]{device}[/]\n"
@@ -246,8 +260,20 @@ def infer(
     # Load model — gate trust_remote_code via the v0.36.0 helper.
     console.print("[dim]Loading model...[/]")
     model_obj, tokenizer = _load_model(
-        str(model_path), base, device, trust_remote_code,
+        model_ref,
+        base,
+        device,
+        trust_remote_code,
+        is_local=(model_kind == "local"),
     )
+    if cuda_graphs is True:
+        from soup_cli.utils.cuda_graphs import cuda_graph_generation_kwargs
+
+        try:
+            cuda_graph_generation_kwargs(model_obj)
+        except RuntimeError as exc:
+            console.print(f"[red]{for_terminal(_with_omit_hint(str(exc)))}[/]")
+            raise typer.Exit(1) from exc
     console.print("[green]Model loaded.[/]\n")
 
     # Output path containment — defence-in-depth (project policy v0.20.0+).
@@ -259,6 +285,9 @@ def infer(
             "[red]--output must stay under the current working directory.[/]"
         )
         raise typer.Exit(1)
+
+    if cuda_graphs is True:
+        _warm_cuda_graphs(model_obj, tokenizer, prompts, max_tokens)
 
     # Run inference — stream results to disk as they are generated
     output_path = Path(output_file)
@@ -290,15 +319,21 @@ def infer(
         for prompt_batch in prompt_batches:
             if batch_size == 1:
                 messages = [{"role": "user", "content": prompt_batch[0]}]
-                generated = [
-                    _generate(
-                        model_obj,
-                        tokenizer,
-                        messages,
-                        max_tokens=max_tokens,
-                        temperature=temperature,
-                    )
-                ]
+                try:
+                    generated = [
+                        _generate(
+                            model_obj,
+                            tokenizer,
+                            messages,
+                            max_tokens=max_tokens,
+                            temperature=temperature,
+                            **({"cuda_graphs": True} if cuda_graphs is True else {}),
+                        )
+                    ]
+                except Exception as exc:
+                    if cuda_graphs is not True:
+                        raise
+                    raise _cuda_graph_failure(exc) from exc
             else:
                 generated = _generate_batch(
                     model_obj,
@@ -670,6 +705,7 @@ def _load_model(
     base_model: Optional[str],
     device: str,
     trust_remote_code: bool = False,
+    is_local: Optional[bool] = None,
 ) -> tuple:
     """Load a model and tokenizer (reuses diff.py pattern)."""
     import torch
@@ -680,23 +716,31 @@ def _load_model(
         resolve_trust_remote_code,
     )
 
-    path = Path(model_path)
-    adapter_config_path = path / "adapter_config.json"
-    is_adapter = adapter_config_path.exists()
-
-    if is_adapter and not base_model:
+    if is_local is None:
         try:
-            with open(adapter_config_path, encoding="utf-8") as f:
-                config = json.load(f)
-            base_model = config.get("base_model_name_or_path")
-        except (json.JSONDecodeError, OSError):
-            pass
+            is_local = Path(model_path).exists()
+        except OSError:
+            is_local = False
 
-    if is_adapter and not base_model:
-        console.print(
-            f"[red]Cannot detect base model for {path}. Use --base.[/]"
-        )
-        raise typer.Exit(1)
+    is_adapter = False
+    if is_local:
+        path = Path(model_path)
+        adapter_config_path = path / "adapter_config.json"
+        is_adapter = adapter_config_path.exists()
+
+        if is_adapter and not base_model:
+            try:
+                with open(adapter_config_path, encoding="utf-8") as f:
+                    config = json.load(f)
+                base_model = config.get("base_model_name_or_path")
+            except (json.JSONDecodeError, OSError):
+                pass
+
+        if is_adapter and not base_model:
+            console.print(
+                f"[red]Cannot detect base model for {path}. Use --base.[/]"
+            )
+            raise typer.Exit(1)
 
     probe_target = base_model or model_path
     requires = model_requires_trust_remote_code(model_path) or False
@@ -735,6 +779,7 @@ def _load_model(
 
 def _generate(
     model, tokenizer, messages, max_tokens=256, temperature=0.7,
+    cuda_graphs: bool = False, min_tokens: int | None = None,
 ) -> tuple[str, int]:
     """Generate a response from the model. Returns (text, token_count)."""
     import torch
@@ -758,6 +803,12 @@ def _generate(
         if temperature > 0:
             gen_kwargs["temperature"] = temperature
             gen_kwargs["top_p"] = 0.9
+        if min_tokens:
+            gen_kwargs["min_new_tokens"] = min_tokens
+        if cuda_graphs:
+            from soup_cli.utils.cuda_graphs import cuda_graph_generation_kwargs
+
+            gen_kwargs.update(cuda_graph_generation_kwargs(model))
         outputs = model.generate(**gen_kwargs)
 
     new_tokens = outputs[0][input_ids.shape[1]:]
@@ -850,3 +901,62 @@ def _generate_batch(
         return results
     finally:
         tokenizer.padding_side = original_padding_side
+
+
+def _count_prompt_tokens(tokenizer, prompt_text: str) -> int:
+    """Tokens in the chat-templated prompt: the length the static cache must hold."""
+    from soup_cli.utils.vllm import encode_chat_prompt
+
+    inputs = encode_chat_prompt(
+        [{"role": "user", "content": prompt_text}], tokenizer,
+        fallback_on_error=False, return_tensors="pt",
+    )
+    return int(inputs["input_ids"].shape[1])
+
+
+def _longest_prompt(tokenizer, prompts: list[str]) -> str:
+    return max(prompts, key=lambda text: _count_prompt_tokens(tokenizer, text))
+
+
+def _with_omit_hint(message: str) -> str:
+    """Every --cuda-graphs refusal ends by naming the way out."""
+    if "omit --cuda-graphs" in message.lower():
+        return message
+    return f"{message.rstrip('. ')}. Omit --cuda-graphs."
+
+
+def _cuda_graph_failure(exc: BaseException) -> typer.Exit:
+    console.print(
+        f"[red]Generation failed with --cuda-graphs: {for_terminal(str(exc))}. "
+        "Omit --cuda-graphs to use normal generation.[/]"
+    )
+    return typer.Exit(1)
+
+
+# Graph trees warm up on a compiled function's first call, record on the second and
+# replay from the third; decode forwards are new tokens minus one (prefill is eager).
+_CUDA_GRAPH_WARMUP_TOKENS = 4
+
+
+def _warm_cuda_graphs(model, tokenizer, prompts: list[str], max_tokens: int) -> None:
+    """Capture once, on the longest prompt, before any output is written.
+
+    Transformers sizes a static cache as max(this request, every earlier one), so
+    warming on the longest prompt means no later request changes the cache shape and
+    recompiles. Greedy, so it consumes none of the sampling RNG the real rows use, and
+    held to a few tokens past EOS so the graph is recorded even on a short answer.
+    """
+    console.print("[dim]Compiling CUDA graph decode (a one-time warm-up)...[/]")
+    messages = [{"role": "user", "content": _longest_prompt(tokenizer, prompts)}]
+    try:
+        _generate(
+            model,
+            tokenizer,
+            messages,
+            max_tokens=max_tokens,
+            temperature=0.0,
+            cuda_graphs=True,
+            min_tokens=min(max_tokens, _CUDA_GRAPH_WARMUP_TOKENS),
+        )
+    except Exception as exc:
+        raise _cuda_graph_failure(exc) from exc

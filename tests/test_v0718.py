@@ -19,7 +19,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import sys
 import types
 
 import numpy as np
@@ -400,7 +399,7 @@ class TestSleeperRealWeights:
         with pytest.raises(ValueError, match="finite"):
             load_probe_weights("probe.npy")
 
-    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX symlink")
+    @pytest.mark.requires_symlink
     def test_load_symlink_rejected(self, tmp_path, monkeypatch) -> None:
         import os
 

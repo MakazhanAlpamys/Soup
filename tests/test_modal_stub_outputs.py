@@ -231,7 +231,7 @@ def test_generated_app_downloads_outputs(tmp_path, monkeypatch, capsys, leading_
     assert len(calls) == 1
     assert volume.commits == 1
     out = " ".join(capsys.readouterr().out.split())
-    assert "Downloaded 2 file(s)" in out
+    assert "Downloaded 2 file(s)" in out  # ansi-ok: mock modal subprocess stdout is uncoloured
     assert f"modal volume get soup-outputs /{_RUN}" in out
 
 

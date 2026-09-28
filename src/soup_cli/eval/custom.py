@@ -8,6 +8,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
+from soup_cli.utils.safe_regex import check_config_regex
+
 MAX_EVAL_TASKS = 10_000
 MAX_REGEX_PATTERN_LEN = 1_000
 MAX_REGEX_INPUT_LEN = 50_000
@@ -153,12 +155,14 @@ def score_contains(output: str, expected: str) -> bool:
 def score_regex(output: str, expected: str) -> bool:
     """Check if output matches expected regex pattern.
 
-    Guards against ReDoS: caps pattern and input length.
+    Guards against ReDoS: caps pattern and input length and rejects
+    structurally unsafe patterns before matching.
     """
     if len(expected) > MAX_REGEX_PATTERN_LEN:
         return False
     truncated_output = output[:MAX_REGEX_INPUT_LEN]
     try:
+        check_config_regex(expected, "eval.custom.expected")
         return bool(re.search(expected, truncated_output, re.IGNORECASE))
     except re.error:
         return False

@@ -523,13 +523,13 @@ class TestShipCliEvidence:
             ),
         ],
     )
-    def test_malformed_evidence_exit_1(self, payload, keyword):
+    def test_malformed_evidence_exit_3(self, payload, keyword):
         from soup_cli.commands import ship as ship_cmd
 
         with runner.isolated_filesystem():
             _write_evidence(Path("ev.json"), payload)
             res = runner.invoke(ship_cmd.app, ["--evidence", "ev.json"])
-            assert res.exit_code == 1, (res.output, repr(res.exception))
+            assert res.exit_code == 3, (res.output, repr(res.exception))
             assert keyword in res.output.lower()
 
     def test_evidence_writes_output_json(self):
@@ -596,8 +596,8 @@ class TestShipCliEvidence:
         from soup_cli.commands import ship as ship_cmd
 
         res = runner.invoke(ship_cmd.app, ["--evidence", "../escape.json"])
-        # Evidence read/parse problems are coded exit 1 (mirrors `soup diagnose`).
-        assert res.exit_code == 1, (res.output, repr(res.exception))
+        # Evidence read/parse problems are coded exit 3 under the unified taxonomy.
+        assert res.exit_code == 3, (res.output, repr(res.exception))
         assert "cwd" in res.output.lower() or "outside" in res.output.lower()
 
     def test_evidence_not_a_dict_rejected(self):
@@ -606,7 +606,7 @@ class TestShipCliEvidence:
         with runner.isolated_filesystem():
             Path("ev.json").write_text("[1, 2, 3]", encoding="utf-8")
             res = runner.invoke(ship_cmd.app, ["--evidence", "ev.json"])
-            assert res.exit_code == 1, (res.output, repr(res.exception))
+            assert res.exit_code == 3, (res.output, repr(res.exception))
             assert "json object" in res.output.lower() or "evidence" in res.output.lower()
 
     def test_no_args_errors(self):

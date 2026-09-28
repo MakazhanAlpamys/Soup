@@ -292,9 +292,17 @@ def _consumer_modules():
     return [p for p in SRC.rglob("*.py") if p.name != SCHEMA]
 
 
+# Fields whose name collides with an unrelated read elsewhere in src/, so only
+# a read through a `*.training` receiver counts as consumption.
+_RECEIVER_QUALIFIED = frozenset({
+    "training.forgetting_threshold",  # ship.py has a local of the same name
+    "training.load_in_16bit",  # migrate/unsloth.py reads an Unsloth kwarg of that name
+})
+
+
 def field_reaches_a_consumer(key: str, attr: str, consumed: set) -> bool:
     """Apply receiver-qualified checks where the global namespace collides."""
-    if key == "training.forgetting_threshold":
+    if key in _RECEIVER_QUALIFIED:
         return training_receiver_reads(_consumer_modules(), attr)
     return attr in consumed
 
@@ -326,21 +334,21 @@ def _consumed_in_src() -> set:
 # --------------------------------------------------------------------------
 KNOWN_UNCONSUMED = {
     # -- documented with a worked example, applied nowhere. Verified by hand.
-    "training.lr_groups": "no issue yet -- utils/lr_groups.py exports parse_lr_groups() and "
-                          "nothing outside schema.py imports it; documented at "
-                          "docs/peft-and-efficiency.md:190",
-    "data.mask_history": "no issue yet -- schema promises 'mask all but the last assistant turn "
-                         "during loss computation'; documented at docs/data.md:692",
-    "training.early_stop_patience": "#761 -- schema promises 'consecutive regressions "
-                                    "before early stopping'; documented at "
-                                    "docs/peft-and-efficiency.md:622",
-    "training.citation_recall_threshold": "no issue yet -- validated by utils/citation_faithful.py "
-                                          "and named in its error strings; never applied",
+    "training.lr_groups": "#761 -- warns at load from v0.76, refused as of v0.77; "
+                          "utils/lr_groups.py exports parse_lr_groups() and nothing "
+                          "outside schema.py imports it",
+    # data.mask_history was here until #761 wired it into data/loss_mask.py.
+    "training.early_stop_patience": "#761 -- warns at load from v0.76, refused as of "
+                                    "v0.77; no early-stop callback reads it",
+    "training.citation_recall_threshold": "#761 -- warns at load from v0.76, refused as "
+                                          "of v0.77; validated by utils/citation_faithful.py, "
+                                          "never applied",
     # -- found by the read/write fix, and the reason that fix exists. A user
     #    setting that is OVERRIDDEN rather than merely unread, so the strongest
     #    kind of member this list has.
-    "training.grace_codebook": "no issue yet -- the string appears as an artifact-kind name in "
-                               "store.py:52 / edit.py:312, unrelated to this field",
+    "training.grace_codebook": "#808 -- warns at load from v0.76, refused as of v0.77 "
+                               "(the string appears as an artifact-kind name in "
+                               "store.py:52 / edit.py:312, unrelated to this field)",
     # -- #807: read ONLY inside a function nothing in src/ references, so the
     #    read is not consumption. Surfaced by the dead-function gate, which
     #    the guard previously applied to @property resolvers only.
@@ -365,15 +373,19 @@ KNOWN_UNCONSUMED = {
                                             "quantization.md:153",
     # -- staged for features that have not landed; grouped so they can be
     #    retired together rather than one at a time.
-    "training.long_context_grpo": "no issue yet -- documented as wiring "
-                                  "Tiled MLP; no Tiled MLP exists",
-    "training.vision_grpo": "no issue yet -- no vision GRPO path",
+    "training.long_context_grpo": "#808 -- warns at load from v0.76, refused as of v0.77 "
+                                  "(documented as wiring Tiled MLP; no Tiled MLP exists)",
+    "training.vision_grpo": "#808 -- warns at load from v0.76, refused as of v0.77 "
+                            "(no vision GRPO path)",
     "training.load_in_16bit": "no issue needed: schema rewrites quantization at validation time",
-    "training.unsloth_bnb_4bit": "no issue yet -- unsloth quantisation staging",
-    "training.llm_int8": "no issue yet -- bitsandbytes int8 staging",
-    "training.quantize_ref_model": "no issue yet -- reference-model quantisation staging",
-    "training.convergence_window": "no issue yet -- convergence-detector staging",
-    "training.convergence_rel_tol": "no issue yet -- convergence-detector staging",
+    "training.unsloth_bnb_4bit": "no issue needed: schema assertion alias",
+    "training.llm_int8": "no issue needed: schema assertion alias",
+    "training.quantize_ref_model": "#808 -- warns at load from v0.76, refused as of v0.77 "
+                                   "(reference-model quantisation staging)",
+    "training.convergence_window": "#808 group B -- soup train reports it as not enforced "
+                                   "(convergence-detector staging)",
+    "training.convergence_rel_tol": "#808 group B -- soup train reports it as not enforced "
+                                    "(convergence-detector staging)",
     "training.forgetting_eval_steps": "#799 -- catastrophic-forgetting probe staging",
     "training.forgetting_threshold": "#799 -- staged catastrophic-forgetting threshold; "
                                      "the same name in ship.py is unrelated",
@@ -383,19 +395,32 @@ KNOWN_UNCONSUMED = {
     "training.checkpoint_eval_metric": "#799 -- checkpoint-eval staging",
     "training.checkpoint_eval_tasks": "#799 -- checkpoint-eval staging",
     "training.checkpoint_keep_top": "#799 -- checkpoint-eval staging",
-    "training.grace_codebook_size": "no issue yet -- GRACE codebook staging",
-    "training.grace_codebook_dim": "no issue yet -- GRACE codebook staging",
-    "data.video_dir": "no issue yet -- video pipeline staging",
-    "data.eval_on_each_dataset": "no issue yet -- per-dataset eval staging",
-    "data.split_thinking": "no issue yet -- thinking-block masking staging",
-    "data.image_min_pixels": "no issue yet -- image preprocessing staging",
-    "data.image_max_pixels": "no issue yet -- image preprocessing staging",
-    "data.image_resize_algorithm": "no issue yet -- image preprocessing staging",
-    "data.video_fps": "no issue yet -- video pipeline staging",
-    "data.video_maxlen": "no issue yet -- video pipeline staging",
-    "data.resize_vocab": "no issue yet -- vocab-resize staging",
-    "data.extend_conversation": "no issue yet -- conversation-extension staging",
-    "data.skip_prepare_dataset": "no issue yet -- dataset-prep bypass staging",
+    "training.grace_codebook_size": "#808 -- warns at load from v0.76, refused as of v0.77 "
+                                    "(GRACE codebook staging)",
+    "training.grace_codebook_dim": "#808 -- warns at load from v0.76, refused as of v0.77 "
+                                   "(GRACE codebook staging)",
+    "data.video_dir": "#808 -- warns at load from v0.76, refused as of v0.77 "
+                      "(video pipeline staging)",
+    "data.eval_on_each_dataset": "#808 -- warns at load from v0.76, refused as of v0.77 "
+                                 "(per-dataset eval staging)",
+    "data.split_thinking": "#808 -- warns at load from v0.76, refused as of v0.77 "
+                           "(thinking-block masking staging)",
+    "data.image_min_pixels": "#808 -- warns at load from v0.76, refused as of v0.77 "
+                             "(image preprocessing staging)",
+    "data.image_max_pixels": "#808 -- warns at load from v0.76, refused as of v0.77 "
+                             "(image preprocessing staging)",
+    "data.image_resize_algorithm": "#808 -- warns at load from v0.76, refused as of v0.77 "
+                                   "(image preprocessing staging)",
+    "data.video_fps": "#808 -- warns at load from v0.76, refused as of v0.77 "
+                      "(video pipeline staging)",
+    "data.video_maxlen": "#808 -- warns at load from v0.76, refused as of v0.77 "
+                         "(video pipeline staging)",
+    "data.resize_vocab": "#808 -- warns at load from v0.76, refused as of v0.77 "
+                         "(vocab-resize staging)",
+    "data.extend_conversation": "#808 -- warns at load from v0.76, refused as of v0.77 "
+                                "(conversation-extension staging)",
+    "data.skip_prepare_dataset": "#808 -- warns at load from v0.76, refused as of v0.77 "
+                                 "(dataset-prep bypass staging)",
 }
 
 
@@ -660,8 +685,8 @@ def test_the_allowlist_size_is_pinned_exactly():
     half: it names WHICH entry went stale, where this one only says the count
     moved.
     """
-    assert len(KNOWN_UNCONSUMED) == 37, (
-        f"KNOWN_UNCONSUMED is {len(KNOWN_UNCONSUMED)}, pinned at 37. Going UP "
+    assert len(KNOWN_UNCONSUMED) == 36, (
+        f"KNOWN_UNCONSUMED is {len(KNOWN_UNCONSUMED)}, pinned at 36. Going UP "
         "means a field was allowlisted rather than wired; going DOWN means an "
         "entry was retired, which is the good direction -- lower this number "
         "in the same commit."
@@ -1048,6 +1073,7 @@ class TestTheTreeMismatchCheck:
     between implementations is exactly what a test should be doing instead.
     """
 
+    @pytest.mark.requires_symlink
     def test_the_same_directory_reached_by_a_different_spelling_is_not_a_mismatch(
         self, tmp_path
     ):

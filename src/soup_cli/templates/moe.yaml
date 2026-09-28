@@ -22,6 +22,10 @@ training:
     r: 64
     alpha: 16
     target_modules: auto
+    # peft adapts fused expert parameters through a ParamWrapper, which refuses a
+    # non-zero dropout, so moe_lora: true and the 0.05 default cannot both hold
+    # (#798). Every shipped MoE recipe pins this line for the same reason.
+    dropout: 0.0
   quantization: 4bit
   moe_lora: true
   moe_aux_loss_coeff: 0.01

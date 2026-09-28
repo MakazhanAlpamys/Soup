@@ -129,7 +129,7 @@ def test_unknown_metric_is_usage_error_before_tracker_initialization(monkeypatch
     )
 
     output = strip_ansi(result.output)
-    assert result.exit_code == 1, (output, repr(result.exception))
+    assert result.exit_code == 3, (output, repr(result.exception))
     assert touched_database is False
     assert "unknown metric 'accuracy'" in output
     assert "allowed:" in output
@@ -147,7 +147,7 @@ def test_empty_series_has_honest_unavailable_message():
     )
 
     output = strip_ansi(result.output)
-    assert result.exit_code == 1, (output, repr(result.exception))
+    assert result.exit_code == 3, (output, repr(result.exception))
     assert "comparison unavailable" in output.lower()
     assert "no eval results" in output.lower()
     assert "run-base" in output
@@ -175,7 +175,7 @@ def test_benchmark_namespace_rejects_reserved_training_metrics(metric, monkeypat
     )
 
     output = strip_ansi(result.output)
-    assert result.exit_code == 1, (output, repr(result.exception))
+    assert result.exit_code == 3, (output, repr(result.exception))
     assert "reserved training metric" in output
 
 
@@ -196,7 +196,7 @@ def test_oversized_unknown_metric_is_bounded_before_database_access(monkeypatch)
     )
 
     output = strip_ansi(result.output)
-    assert result.exit_code == 1, (output, repr(result.exception))
+    assert result.exit_code == 3, (output, repr(result.exception))
     assert "exceeds 256 characters" in output
     assert len(output) < 1_000
 
@@ -237,7 +237,7 @@ def test_rendered_hook_does_not_call_empty_series_a_regression(tmp_path, monkeyp
     )
 
     output = strip_ansi(completed.stdout + completed.stderr)
-    assert completed.returncode == 1
+    assert completed.returncode == 3
     assert "comparison unavailable" in output.lower()
     assert "run-base" in output
     assert "run-candidate" in output

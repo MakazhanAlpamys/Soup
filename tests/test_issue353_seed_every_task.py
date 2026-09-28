@@ -121,7 +121,7 @@ def _prompt_rows(n=8):
 #: KTO refuses `per_device_train_batch_size == 1` (its KL term is degenerate
 #: there), so the floor is per task rather than global. GRPO needs the batch to
 #: be divisible by `num_generations`.
-_MIN_BATCH = {"kto": 2, "grpo": 2}
+_MIN_BATCH = {"kto": 2, "grpo": 2, "embedding": 2}
 
 #: task -> (module, wrapper class, rows, extra `training:` keys)
 #: Every entry here is driven through a real `setup()`.

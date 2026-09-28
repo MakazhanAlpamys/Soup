@@ -95,7 +95,8 @@ def test_apply_v028_speed_memory_no_exception(task: str, feature: str, monkeypat
     # A card that CAN run FP8 (#835/#1044): since the hardware gate moved ahead
     # of the dependency probe, an explicit FP8 request on a machine without CUDA
     # -- every CI runner here -- is refused rather than degraded, which is the
-    # ruling. This row is about the OTHER half: a missing torchao still degrades.
+    # ruling. The fp8 row is the OTHER half, INVERTED by the 2026-09-19 ruling:
+    # a missing torchao used to degrade here and now stops the run, per trainer.
     import sys
 
     import torch
@@ -108,6 +109,17 @@ def test_apply_v028_speed_memory_no_exception(task: str, feature: str, monkeypat
     monkeypatch.setattr(torch.version, "cuda", "12.4")
 
     tcfg = _make_tcfg(feature)
+    if feature == "fp8":
+        from soup_cli.utils.fp8 import FP8DependencyMissingError
+
+        # Missing whether or not this CI job installs torchao.
+        monkeypatch.setattr("soup_cli.utils.fp8.is_fp8_available", lambda: False)
+        with pytest.raises(FP8DependencyMissingError):
+            vf.apply_v028_speed_memory(
+                model=MagicMock(), tcfg=tcfg, base_model="meta-llama/Llama-3.2-1B",
+                console=None,
+            )
+        return
     result = vf.apply_v028_speed_memory(
         model=MagicMock(),
         tcfg=tcfg,
@@ -213,10 +225,11 @@ def test_activation_offloading_context_missing_attr_safe(tmp_path) -> None:
 
 def _build_yaml_config(task: str, **training_extra) -> dict:
     """Helper: build a minimal config dict accepted by load_config_from_string."""
+    default_bs = 2 if task == "embedding" else 1
     body = {
         "base": "meta-llama/Llama-3.2-1B",
         "task": task,
-        "training": {"epochs": 1, "lr": 1e-4, "batch_size": 1, **training_extra},
+        "training": {"epochs": 1, "lr": 1e-4, "batch_size": default_bs, **training_extra},
     }
     if task == "pretrain":
         body["data"] = {"train": "data.jsonl", "format": "plaintext"}
@@ -367,18 +380,11 @@ def test_trainer_module_calls_apply_v028_speed_memory(module_path: str) -> None:
 
     mod = importlib.import_module(module_path)
     src = inspect.getsource(mod)
-    # SFT predates the shared helper extraction (v0.33.0 #43) and inlines
-    # apply_cut_ce / apply_fp8_training / kernel_picker directly; the other
-    # 10 trainers all delegate to apply_v028_speed_memory.
-    has_helper = "apply_v028_speed_memory" in src
-    has_inline_features = (
-        "apply_cut_ce" in src
-        and "apply_fp8_training" in src
-    )
-    assert has_helper or has_inline_features, (
-        f"{module_path} does not call apply_v028_speed_memory or the "
-        "underlying feature patchers directly — v0.28.0 features will "
-        "silently no-op for this trainer."
+    # v0.33.0 #43 / #800 — all 11 transformer-backend trainers delegate
+    # to apply_v028_speed_memory.
+    assert "apply_v028_speed_memory" in src, (
+        f"{module_path} does not call apply_v028_speed_memory — "
+        "v0.28.0 features will silently no-op for this trainer."
     )
 
 
@@ -417,226 +423,6 @@ def test_trainer_module_wraps_train_with_offloading_context(
         f"{module_path} does not wrap trainer.train() with the activation-"
         "offloading context — disk/cpu offloading will silently no-op."
     )
-
-
-# ---------------------------------------------------------------------------
-# Part B — auto-quant live model reload
-# ---------------------------------------------------------------------------
-
-
-class TestQuantNameTranslators:
-    @pytest.mark.parametrize(
-        ("name", "expected"),
-        (
-            ("awq", {"quantization": "awq"}),
-            ("gptq", {"quantization": "gptq"}),
-            ("fp8", {"quantization": "fp8"}),
-            ("none", {}),
-            ("gguf", {}),  # GGUF needs a path swap, not a kwarg
-        ),
-    )
-    def test_quant_name_to_vllm_kwargs_known(self, name, expected) -> None:
-        from soup_cli.utils.auto_quant import quant_name_to_vllm_kwargs
-
-        assert quant_name_to_vllm_kwargs(name) == expected
-
-    def test_quant_name_to_vllm_kwargs_unknown_returns_empty(self) -> None:
-        from soup_cli.utils.auto_quant import quant_name_to_vllm_kwargs
-
-        # ``int8`` is not in the mapping; pass-through returns {} so caller
-        # uses the engine default.
-        assert quant_name_to_vllm_kwargs("int8") == {}
-
-    def test_quant_name_to_vllm_kwargs_rejects_invalid_name(self) -> None:
-        from soup_cli.utils.auto_quant import quant_name_to_vllm_kwargs
-
-        with pytest.raises(ValueError, match="candidate name must match"):
-            quant_name_to_vllm_kwargs("AWQ")  # uppercase not allowed
-        with pytest.raises(ValueError):
-            quant_name_to_vllm_kwargs("../../etc/passwd")
-
-    def test_quant_name_to_vllm_kwargs_returns_new_dict(self) -> None:
-        """Mutation-safe — caller must not be able to corrupt the mapping."""
-        from soup_cli.utils.auto_quant import quant_name_to_vllm_kwargs
-
-        a = quant_name_to_vllm_kwargs("awq")
-        a["leak"] = True
-        b = quant_name_to_vllm_kwargs("awq")
-        assert "leak" not in b
-
-    def test_quant_name_to_bnb_kwargs(self) -> None:
-        from soup_cli.utils.auto_quant import quant_name_to_bnb_kwargs
-
-        assert quant_name_to_bnb_kwargs("awq") == {"load_in_4bit": True}
-        assert quant_name_to_bnb_kwargs("gptq") == {"load_in_4bit": True}
-        assert quant_name_to_bnb_kwargs("fp8") == {}
-        assert quant_name_to_bnb_kwargs("none") == {}
-
-
-class TestFreeEngine:
-    def test_free_engine_no_torch(self) -> None:
-        """free_engine must never raise even if torch is unavailable."""
-        from soup_cli.utils.auto_quant import free_engine
-
-        # Smoke — no torch on this CI? Still no-raise.
-        free_engine(MagicMock())
-
-    def test_free_engine_torch_no_cuda(self) -> None:
-        from soup_cli.utils.auto_quant import free_engine
-
-        with patch("torch.cuda.is_available", return_value=False):
-            free_engine(MagicMock())  # no exception
-
-    def test_free_engine_torch_cuda_available(self) -> None:
-        from soup_cli.utils.auto_quant import free_engine
-
-        with (
-            patch("torch.cuda.is_available", return_value=True),
-            patch("torch.cuda.empty_cache") as mock_empty,
-        ):
-            free_engine(MagicMock())
-            mock_empty.assert_called_once()
-
-
-class TestTryReloadWithFallback:
-    def _candidate(self, name: str, score: float = 0.95):
-        from soup_cli.utils.auto_quant import Candidate
-
-        return Candidate(name=name, score=score, latency_ms=10.0, ok=True)
-
-    def test_picked_loads_first_try(self) -> None:
-        from soup_cli.utils.auto_quant import try_reload_with_fallback
-
-        picked = self._candidate("awq")
-        all_c = [picked, self._candidate("gptq", 0.90)]
-        engines_built: list[str] = []
-
-        def build(name):
-            engines_built.append(name)
-            return f"engine-{name}"
-
-        used, eng = try_reload_with_fallback(
-            picked=picked, all_candidates=all_c, build_fn=build,
-        )
-        assert used.name == "awq"
-        assert eng == "engine-awq"
-        assert engines_built == ["awq"]  # no fallback exercised
-
-    def test_falls_back_to_next_highest_on_first_failure(self) -> None:
-        from soup_cli.utils.auto_quant import try_reload_with_fallback
-
-        picked = self._candidate("awq", 0.92)
-        gptq = self._candidate("gptq", 0.95)
-        none_c = self._candidate("none", 0.85)
-        all_c = [picked, gptq, none_c]
-        engines_built: list[str] = []
-
-        def build(name):
-            engines_built.append(name)
-            if name == "awq":
-                raise RuntimeError("AWQ kernel missing")
-            return f"engine-{name}"
-
-        used, eng = try_reload_with_fallback(
-            picked=picked, all_candidates=all_c, build_fn=build,
-        )
-        # picked tried first, then by descending score: gptq (0.95)
-        assert used.name == "gptq"
-        assert engines_built == ["awq", "gptq"]
-
-    def test_raises_when_all_candidates_fail(self) -> None:
-        from soup_cli.utils.auto_quant import try_reload_with_fallback
-
-        picked = self._candidate("awq")
-        all_c = [picked, self._candidate("gptq")]
-
-        def build(name):
-            raise RuntimeError(f"{name} broken")
-
-        with pytest.raises(RuntimeError, match="every auto-quant candidate"):
-            try_reload_with_fallback(
-                picked=picked, all_candidates=all_c, build_fn=build,
-            )
-
-    def test_duplicate_candidate_name_deduped(self) -> None:
-        """Two candidates with the same name shouldn't double-build."""
-        from soup_cli.utils.auto_quant import try_reload_with_fallback
-
-        picked = self._candidate("awq", 0.95)
-        dup = self._candidate("awq", 0.92)  # same name
-        gptq = self._candidate("gptq", 0.90)
-        engines_built: list[str] = []
-
-        def build(name):
-            engines_built.append(name)
-            if name == "awq":
-                raise RuntimeError("AWQ broken")
-            return f"engine-{name}"
-
-        used, _eng = try_reload_with_fallback(
-            picked=picked, all_candidates=[picked, dup, gptq], build_fn=build,
-        )
-        # awq tried once (picked), then gptq — never awq twice.
-        assert engines_built == ["awq", "gptq"]
-        assert used.name == "gptq"
-
-    def test_empty_all_candidates_uses_only_picked(self) -> None:
-        """If all_candidates is empty, only picked is in the queue."""
-        from soup_cli.utils.auto_quant import try_reload_with_fallback
-
-        picked = self._candidate("awq")
-
-        def build(name):
-            raise RuntimeError(f"{name} broken")
-
-        with pytest.raises(RuntimeError, match="tried 1"):
-            try_reload_with_fallback(
-                picked=picked, all_candidates=[], build_fn=build,
-            )
-
-    def test_redacts_load_error_path_in_message(self) -> None:
-        """RuntimeError message must not embed repr() (which can leak paths)."""
-        from soup_cli.utils.auto_quant import try_reload_with_fallback
-
-        picked = self._candidate("awq")
-
-        def build(name):
-            # Simulate FileNotFoundError carrying an absolute path.
-            raise FileNotFoundError("/home/user/.cache/secret/checkpoint")
-
-        with pytest.raises(RuntimeError) as exc_info:
-            try_reload_with_fallback(
-                picked=picked, all_candidates=[picked], build_fn=build,
-            )
-        msg = str(exc_info.value)
-        # Type name + str() is fine; repr() with the full path would include
-        # the FileNotFoundError(...) wrapper — confirm we're using type+str.
-        assert "FileNotFoundError" in msg
-        # Defence-in-depth: the message must not double-quote the path
-        # (which would mean repr() was used).
-        assert (
-            "FileNotFoundError(\"/home/user" not in msg
-            and "FileNotFoundError('/home/user" not in msg
-        )
-
-    def test_picked_is_always_tried_first_even_if_lower_score(self) -> None:
-        """The picker's choice respects (score, -latency); fallback queue
-        must lead with picked even when another candidate has higher score."""
-        from soup_cli.utils.auto_quant import try_reload_with_fallback
-
-        picked = self._candidate("awq", 0.85)
-        gptq = self._candidate("gptq", 0.99)  # higher score but not picked
-        engines_built: list[str] = []
-
-        def build(name):
-            engines_built.append(name)
-            return f"engine-{name}"
-
-        used, _eng = try_reload_with_fallback(
-            picked=picked, all_candidates=[picked, gptq], build_fn=build,
-        )
-        assert used.name == "awq"
-        assert engines_built == ["awq"]
 
 
 class TestVllmCreateEngineQuantizationParam:

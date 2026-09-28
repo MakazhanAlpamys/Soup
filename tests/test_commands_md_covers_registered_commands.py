@@ -10,8 +10,10 @@ accepting the page's existing `a|b|c` / `a / b` shorthand and the
 Matching rules (mutation-tested):
 - Only lines that *start* with ``soup `` count as documentation (prose mentions
   do not).
-- A command needle must end on a token boundary ``(?![\\w-])`` so
-  ``soup eval gate-install`` cannot cover ``soup eval gate``.
+- Only the command column (pre-description separator) counts for coverage;
+  prose descriptions mentioning other commands cannot satisfy their requirement (#1046).
+- A command needle must end on a token boundary ``(?![\\w.-])`` so
+  ``soup eval gate-install`` or ``soup eval gate.v2`` cannot cover ``soup eval gate``.
 - Shorthand alternatives are one ``|``/``/``-connected group after the path
   prefix (not adjacent bare tokens), so ``soup llama …|quantize`` cannot cover
   top-level ``soup quantize``.
@@ -59,6 +61,12 @@ def _entry_rows(doc: str) -> list[str]:
     return [line for line in doc.splitlines() if line.startswith("soup ")]
 
 
+def _command_column(line: str) -> str:
+    """Return the command portion of an entry row (before the description)."""
+    parts = re.split(r"\s{2,}", line, maxsplit=1)
+    return parts[0].strip()
+
+
 def _shorthand_alts(line: str, prefix: tuple[str, ...]) -> list[str]:
     """Return alternate leaf names from one shorthand group after ``prefix``.
 
@@ -67,58 +75,53 @@ def _shorthand_alts(line: str, prefix: tuple[str, ...]) -> list[str]:
     without a separator — e.g. ``llama`` then ``cli|…|quantize`` — are *not*
     one group, so top-level ``soup quantize`` cannot ride a ``soup llama`` row.
     """
-    alts: list[str] = []
-    idx = 0
-    while True:
-        j = line.find("soup ", idx)
-        if j < 0:
-            break
-        toks = line[j + len("soup ") :].split()
-        if list(toks[: len(prefix)]) != list(prefix):
-            idx = j + 1
-            continue
-        rest = toks[len(prefix) :]
-        region: list[str] = []
-        expecting_name = True
-        for t in rest:
-            if expecting_name:
-                if t.startswith(("-", "<", "[", "./", '"', "'")):
-                    break
-                if _ARGISH.fullmatch(t):
-                    break
-                if any(
-                    t.endswith(suf)
-                    for suf in (
-                        ".jsonl",
-                        ".yaml",
-                        ".can",
-                        ".gguf",
-                        ".json",
-                        ".md",
-                        ".py",
-                    )
-                ):
-                    break
-                if t in ("|", "/"):
-                    break
-                cleaned = t.rstrip(".")
-                if not _CMDISH.fullmatch(cleaned):
-                    break
-                region.append(cleaned)
-                expecting_name = False
-            else:
-                if t in ("|", "/"):
-                    region.append(t)
-                    expecting_name = True
-                    continue
+    if not line.startswith("soup "):
+        return []
+    toks = line[len("soup ") :].split()
+    if list(toks[: len(prefix)]) != list(prefix):
+        return []
+    rest = toks[len(prefix) :]
+    region: list[str] = []
+    expecting_name = True
+    for t in rest:
+        if expecting_name:
+            if t.startswith(("-", "<", "[", "./", '"', "'")):
                 break
-        blob = " ".join(region).replace("...", "")
-        for piece in re.split(r"\s*[|/]\s*", blob):
-            piece = piece.strip()
-            if not piece or piece == "soup":
+            if _ARGISH.fullmatch(t):
+                break
+            if any(
+                t.endswith(suf)
+                for suf in (
+                    ".jsonl",
+                    ".yaml",
+                    ".can",
+                    ".gguf",
+                    ".json",
+                    ".md",
+                    ".py",
+                )
+            ):
+                break
+            if t in ("|", "/"):
+                break
+            cleaned = t.rstrip(".")
+            if not _CMDISH.fullmatch(cleaned):
+                break
+            region.append(cleaned)
+            expecting_name = False
+        else:
+            if t in ("|", "/"):
+                region.append(t)
+                expecting_name = True
                 continue
-            alts.append(piece.split()[0])
-        idx = j + 1
+            break
+    blob = " ".join(region).replace("...", "")
+    alts: list[str] = []
+    for piece in re.split(r"\s*[|/]\s*", blob):
+        piece = piece.strip()
+        if not piece or piece == "soup":
+            continue
+        alts.append(piece.split()[0])
     return alts
 
 
@@ -128,15 +131,19 @@ def is_documented(path: tuple[str, ...], doc: str) -> bool:
         # cli._rewrite_advise_argv turns documented `soup advise <data>` into
         # `soup advise run <data>`. Anchor on `<` so compare/explain rows cannot
         # satisfy the special case.
-        return any(line.startswith("soup advise <") for line in _entry_rows(doc))
+        return any(
+            _command_column(line).startswith("soup advise <")
+            for line in _entry_rows(doc)
+        )
     needle = "soup " + " ".join(path)
-    boundary = re.compile(re.escape(needle) + r"(?![\w-])")
+    boundary = re.compile(r"^" + re.escape(needle) + r"(?![\w.-])")
     leaf = path[-1]
     prefix = path[:-1]
     for line in _entry_rows(doc):
-        if boundary.search(line):
+        cmd = _command_column(line)
+        if boundary.search(cmd):
             return True
-        if leaf in _shorthand_alts(line, prefix):
+        if leaf in _shorthand_alts(cmd, prefix):
             return True
     return False
 
@@ -177,6 +184,23 @@ class TestCommandsMdCoversRegisteredCommands:
             "with the command"
         )
 
+    def test_every_entry_row_has_two_or_more_space_separator(self) -> None:
+        """Entry rows must cleanly separate the command column from description."""
+        doc = COMMANDS_MD.read_text(encoding="utf-8")
+        allowlist = {
+            'soup mcp serve --transport sse --host 127.0.0.1 --port 8765 --auth-token "$TOKEN"',
+        }
+        violations = [
+            line
+            for line in _entry_rows(doc)
+            if len(re.split(r"\s{2,}", line, maxsplit=1)) == 1
+            and line not in allowlist
+        ]
+        assert not violations, (
+            "Entry rows must separate command column from description with 2+ spaces:\n  - "
+            + "\n  - ".join(violations)
+        )
+
 
 @pytest.mark.unit
 class TestCommandsMdCoverageGuardHasTeeth:
@@ -213,6 +237,25 @@ class TestCommandsMdCoverageGuardHasTeeth:
         missing = undocumented_commands(scrubbed, leaves=[("advise", "run")])
         assert missing == ["soup advise run"]
 
+    @pytest.mark.parametrize(
+        ("target", "cmd_path"),
+        [
+            ("soup serve", ("serve",)),
+            ("soup export", ("export",)),
+            ("soup train", ("train",)),
+            ("soup bom emit", ("bom", "emit")),
+        ],
+    )
+    def test_stripped_command_whose_name_appears_in_other_descriptions_is_reported(
+        self, target: str, cmd_path: tuple[str, ...]
+    ) -> None:
+        doc = COMMANDS_MD.read_text(encoding="utf-8")
+        scrubbed = "\n".join(
+            line for line in doc.splitlines() if not line.startswith(target)
+        )
+        missing = undocumented_commands(scrubbed, leaves=[cmd_path])
+        assert missing == [target]
+
 
 @pytest.mark.unit
 class TestCoverageRequiresARealEntry:
@@ -237,3 +280,44 @@ class TestCoverageRequiresARealEntry:
             "soup quantize"
         ]
         assert undocumented_commands(stub, leaves=[("llama", "quantize")]) == []
+
+    def test_mention_in_another_entry_row_description_does_not_credit_command(
+        self,
+    ) -> None:
+        stub = (
+            "soup draft list                               "
+            "List local drafts that soup serve --auto-spec will pick up\n"
+        )
+        assert undocumented_commands(stub, leaves=[("serve",)]) == ["soup serve"]
+        assert undocumented_commands(stub, leaves=[("draft", "list")]) == []
+
+    def test_shorthand_in_description_does_not_credit_command(self) -> None:
+        stub = (
+            "soup steer apply --name <id> --strength <s>  "
+            "Preview a stored steering vector; soup steer list lists them\n"
+        )
+        assert undocumented_commands(stub, leaves=[("steer", "list")]) == [
+            "soup steer list"
+        ]
+        assert undocumented_commands(stub, leaves=[("steer", "apply")]) == []
+
+    def test_dot_lookahead_prevents_prefix_credit(self) -> None:
+        stub = "soup eval gate.v2 --baseline X  Install gate v2\n"
+        assert undocumented_commands(stub, leaves=[("eval", "gate")]) == [
+            "soup eval gate"
+        ]
+
+    def test_single_space_row_does_not_credit_contained_command(self) -> None:
+        stub = "soup draft list List drafts that soup serve --auto-spec picks up\n"
+        assert undocumented_commands(stub, leaves=[("serve",)]) == ["soup serve"]
+        assert undocumented_commands(stub, leaves=[("draft", "list")]) == []
+
+    def test_column_isolation_stops_a_description_continuing_the_shorthand_group(
+        self,
+    ) -> None:
+        # The description's first token is `/`, so without _command_column the shorthand
+        # scanner reads `show / check` as one group and credits `soup lock check` to a row
+        # documenting only `soup lock show`.
+        stub = "soup lock show  / check the lock file\n"
+        assert undocumented_commands(stub, leaves=[("lock", "check")]) == ["soup lock check"]
+        assert undocumented_commands(stub, leaves=[("lock", "show")]) == []

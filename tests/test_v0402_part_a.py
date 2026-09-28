@@ -235,13 +235,10 @@ class TestHfSpaceCustomTemplate:
         with pytest.raises(ValueError, match="256"):
             render_custom_template_dir(str(tdir), model_repo="user/my-model")
 
+    @pytest.mark.requires_symlink
     def test_render_custom_template_rejects_symlink(self, tmp_path, monkeypatch):
         """Symlinked app.py must be rejected — TOCTOU defence."""
         import os
-        import sys
-
-        if sys.platform == "win32":
-            pytest.skip("symlinks require admin on Windows")
 
         from soup_cli.utils.hf_space import render_custom_template_dir
 

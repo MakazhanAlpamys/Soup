@@ -2,10 +2,11 @@
 
 Thin Typer/Rich CLI layer over the pure engines in
 ``utils/data_doctor.py`` (chat-template compat report + loss-mask X-ray)
-and ``utils/data_lint.py`` (preference-data linter). Mirrors
-``commands/diagnose.py``'s render/exit-code conventions: exit 0 = OK/MINOR,
-exit 2 = MAJOR (or a routing usage error — wrong format for this command),
-exit 1 = runtime error (bad path, bad tokenizer, bad --output).
+and ``utils/data_lint.py`` (preference-data linter). ``soup data lint``
+follows the project-wide 0/2/3 gate taxonomy (#813): exit 0 = OK/MINOR,
+exit 2 = MAJOR defects, exit 3 = usage/format error.
+``soup data doctor`` exits 0 on OK/MINOR, 1 if file is not found or empty,
+and 2 on MAJOR defects or routing failure.
 """
 
 from __future__ import annotations
@@ -25,6 +26,10 @@ from soup_cli.data.formats import detect_format
 from soup_cli.data.loader import load_raw_data
 from soup_cli.utils import data_doctor as engine
 from soup_cli.utils import data_lint as lint_engine
+from soup_cli.utils.exit_codes import (
+    EXIT_GATE_FAILED,
+    EXIT_USAGE_ERROR,
+)
 from soup_cli.utils.paths import atomic_write_text
 from soup_cli.utils.terminal import for_terminal, strip_control
 from soup_cli.utils.trust_remote import model_requires_trust_remote_code, resolve_trust_remote_code
@@ -146,6 +151,10 @@ def doctor(
         False, "--train-on-messages-with-train-field",
         help="Per-message train:bool field masking (mirrors the same soup.yaml flag).",
     ),
+    mask_history: bool = typer.Option(
+        False, "--mask-history/--no-mask-history",
+        help="Train only the LAST assistant turn (mirrors data.mask_history).",
+    ),
     train_on_eot: bool = typer.Option(
         False, "--train-on-eot",
         help="Extend the trained span through the trailing EOS/EOT token.",
@@ -171,6 +180,30 @@ def doctor(
     if not file_path.exists():
         console.print(f"[red]File not found: {file_path}[/]")
         raise typer.Exit(code=1)
+
+    # Mirrors the soup.yaml schema rules (#1251): "data.mask_history
+    # requires data.train_on_responses_only: true", and mask_history is
+    # mutually exclusive with train_on_messages_with_train_field — refuse
+    # the flag combos up front, before any tokenizer load or dataset work.
+    if mask_history and (
+        train_on_messages_with_train_field or not train_on_responses_only
+    ):
+        conflict = (
+            "--train-on-messages-with-train-field"
+            if train_on_messages_with_train_field
+            else "--no-train-on-responses-only"
+        )
+        console.print(
+            f"[red]Error:[/] [bold]--mask-history[/] narrows the assistant-only "
+            f"loss mask to the last assistant turn, but [bold]{conflict}[/] "
+            "takes a different path: with --no-train-on-responses-only every "
+            "token trains (the legacy full-sequence path), and with "
+            "--train-on-messages-with-train-field the per-message train:bool "
+            "field decides. soup.yaml refuses both combinations. Re-run with "
+            "--train-on-responses-only and without "
+            "--train-on-messages-with-train-field, or drop --mask-history."
+        )
+        raise typer.Exit(code=EXIT_USAGE_ERROR)
 
     data = load_raw_data(file_path)
     if not data:
@@ -203,6 +236,7 @@ def doctor(
                 sample_size=sample, include_eot=train_on_eot,
                 train_on_responses_only=train_on_responses_only,
                 train_on_messages_with_train_field=train_on_messages_with_train_field,
+                mask_history=mask_history,
             )
         except ValueError as exc:
             console.print(f"[red]Error:[/] {escape(str(exc))}")
@@ -225,6 +259,7 @@ def doctor(
                 train_on_responses_only=train_on_responses_only,
                 train_on_messages_with_train_field=train_on_messages_with_train_field,
                 include_eot=train_on_eot,
+                mask_history=mask_history,
             )
         except ValueError as exc:
             console.print(f"[red]Error:[/] {escape(str(exc))}")
@@ -263,12 +298,12 @@ def lint(
     file_path = Path(path)
     if not file_path.exists():
         console.print(f"[red]File not found: {file_path}[/]")
-        raise typer.Exit(code=1)
+        raise typer.Exit(code=EXIT_USAGE_ERROR)
 
     data = load_raw_data(file_path)
     if not data:
         console.print("[red]Dataset is empty.[/]")
-        raise typer.Exit(code=1)
+        raise typer.Exit(code=EXIT_USAGE_ERROR)
 
     resolved_fmt = _resolve_format(data, fmt)
 
@@ -278,7 +313,7 @@ def lint(
             "soup data lint only supports dpo/orpo/simpo/ipo/bco (chosen/rejected) and kto. "
             "Use [bold]soup data doctor[/] instead for chat/SFT data."
         )
-        raise typer.Exit(code=2)
+        raise typer.Exit(code=EXIT_USAGE_ERROR)
 
     # Only dpo's length_bias check consults length_fn — skip the tokenizer
     # load entirely for kto so `--model` isn't a wasted download/load.
@@ -303,7 +338,7 @@ def lint(
         report = lint_engine.run_lint(data, resolved_fmt, sample_size=sample, length_fn=length_fn)
     except ValueError as exc:
         console.print(f"[red]Error:[/] {escape(str(exc))}")
-        raise typer.Exit(code=1) from exc
+        raise typer.Exit(code=EXIT_USAGE_ERROR) from exc
 
     _render_lint_report(report)
 
@@ -313,10 +348,10 @@ def lint(
             console.print(f"[green]Wrote[/] {escape(output)}")
         except (OSError, ValueError) as exc:
             console.print(f"[red]Error:[/] cannot write --output: {escape(str(exc))}")
-            raise typer.Exit(code=1) from exc
+            raise typer.Exit(code=EXIT_USAGE_ERROR) from exc
 
     if report.overall == "MAJOR":
-        raise typer.Exit(code=2)
+        raise typer.Exit(code=EXIT_GATE_FAILED)
 
 
 __all__ = ["doctor", "lint"]

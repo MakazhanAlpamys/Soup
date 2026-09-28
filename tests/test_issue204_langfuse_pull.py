@@ -1072,7 +1072,7 @@ class TestAtomicWriteLines:
         with pytest.raises(ValueError):
             atomic_write_lines(iter(["x\n"]), str(tmp_path.parent / "escape.jsonl"))
 
-    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX symlink")
+    @pytest.mark.requires_symlink
     def test_refuses_a_symlinked_target(self, tmp_path, monkeypatch):
         from soup_cli.utils.paths import atomic_write_lines
 

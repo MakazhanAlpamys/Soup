@@ -10,6 +10,7 @@ import pytest
 
 from soup_cli.trainer._trl_compat import kl_penalty_kwargs
 from soup_cli.trainer.ppo import _effective_ppo_setting, _set_ppo_training_kwargs
+from tests.conftest import strip_ansi
 
 
 def _config_accepting(*fields: str) -> type:
@@ -204,7 +205,7 @@ def test_setup_passes_current_schedule_to_trainer(tmp_path, capsys) -> None:
     assert wrapper.trainer.args.num_train_epochs == 7
     assert wrapper.trainer.args.num_ppo_epochs == 2
     assert wrapper.trainer.args.kl_coef == 0.7
-    schedule = capsys.readouterr().out
+    schedule = strip_ansi(capsys.readouterr().out)
     assert "train epochs=7" in schedule
     assert "PPO epochs=2" in schedule
     assert "KL coefficient=0.7" in schedule

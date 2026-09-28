@@ -98,9 +98,8 @@ class TestCopyBundleTo:
         with pytest.raises(ValueError, match="unknown bundle"):
             copy_bundle_to("garbage", "./out.jsonl")
 
+    @pytest.mark.requires_symlink
     def test_symlink_at_tmp_path_rejected(self, tmp_path, monkeypatch):
-        if os.name == "nt":
-            pytest.skip("symlink creation needs admin/dev mode on Windows")
         monkeypatch.chdir(tmp_path)
         target = tmp_path / "out.jsonl"
         # Pre-place a symlink at <target>.tmp pointing to a sentinel file.

@@ -346,8 +346,7 @@ class TestSecurityReviewFixes:
         with pytest.raises(ValueError):
             NamespacePinStore(bogus)
 
-    @pytest.mark.skipif(__import__("sys").platform == "win32",
-                        reason="POSIX symlink semantics")
+    @pytest.mark.requires_symlink
     def test_store_rejects_symlink_at_db_path(self, tmp_path):
         import os as _os
 

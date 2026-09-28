@@ -293,7 +293,7 @@ class TestWriteBaselineCli:
                 "--write-baseline", "baseline.json",
             ],
         )
-        assert result.exit_code == 1, (result.output, repr(result.exception))
+        assert result.exit_code == 3, (result.output, repr(result.exception))
         assert "--write-baseline requires --model" in result.output
         assert not (tmp_path / "baseline.json").exists()
 

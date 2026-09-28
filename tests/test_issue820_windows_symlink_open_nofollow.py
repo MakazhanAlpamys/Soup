@@ -13,7 +13,6 @@ import ast
 import errno
 import os
 import stat
-import tempfile
 from pathlib import Path
 from typing import List, Tuple
 
@@ -24,26 +23,6 @@ from soup_cli.utils.draft import _registry_lock, list_drafts
 from soup_cli.utils.paths import open_no_follow
 
 SRC = Path(__file__).resolve().parents[1] / "src" / "soup_cli"
-
-
-def _can_create_symlinks() -> bool:
-    try:
-        with tempfile.TemporaryDirectory() as td:
-            src = os.path.join(td, "src.txt")
-            dst = os.path.join(td, "dst.txt")
-            with open(src, "w") as f:
-                f.write("a")
-            os.symlink(src, dst)
-            return True
-    except OSError:
-        return False
-
-
-CAN_SYMLINK = _can_create_symlinks()
-require_symlink = pytest.mark.skipif(
-    not CAN_SYMLINK,
-    reason="Symlink creation is not permitted on this host / environment",
-)
 
 
 # ===========================================================================
@@ -84,7 +63,7 @@ class TestOpenNoFollow:
         with pytest.raises(ValueError, match="null bytes"):
             open_no_follow("file\x00.txt", os.O_RDONLY)
 
-    @require_symlink
+    @pytest.mark.requires_symlink
     def test_symlink_to_existing_file_rejected(self, tmp_path: Path) -> None:
         target = tmp_path / "real.txt"
         target.write_text("secret", encoding="utf-8")
@@ -95,7 +74,7 @@ class TestOpenNoFollow:
             open_no_follow(link, os.O_RDONLY)
         assert exc_info.value.errno in (errno.ELOOP, errno.EEXIST)
 
-    @require_symlink
+    @pytest.mark.requires_symlink
     def test_dangling_symlink_rejected_and_not_created(self, tmp_path: Path) -> None:
         nonexistent = tmp_path / "does_not_exist.txt"
         link = tmp_path / "dangling_link.txt"
@@ -187,7 +166,7 @@ class TestOpenNoFollow:
 
 
 class TestDraftRegistrySymlinkDefences:
-    @require_symlink
+    @pytest.mark.requires_symlink
     def test_draft_registry_symlink_read_returns_empty(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -202,7 +181,7 @@ class TestDraftRegistrySymlinkDefences:
         monkeypatch.setenv("SOUP_DRAFT_REGISTRY_PATH", str(registry_link))
         assert list_drafts() == []
 
-    @require_symlink
+    @pytest.mark.requires_symlink
     def test_draft_lock_symlink_does_not_create_target(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -232,7 +211,7 @@ class TestDraftRegistrySymlinkDefences:
 
 
 class TestAuditLogSymlinkDefences:
-    @require_symlink
+    @pytest.mark.requires_symlink
     def test_append_audit_event_refuses_symlink_and_leaves_target_untouched(
         self, tmp_path: Path
     ) -> None:
@@ -258,7 +237,7 @@ class TestAuditLogSymlinkDefences:
         # Ensure victim file content was not appended or modified
         assert victim.read_text(encoding="utf-8") == "PRISTINE_AUDIT_DATA\n"
 
-    @require_symlink
+    @pytest.mark.requires_symlink
     def test_append_audit_event_dangling_symlink_does_not_create_target(
         self, tmp_path: Path
     ) -> None:

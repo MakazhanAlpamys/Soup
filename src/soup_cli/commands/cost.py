@@ -38,6 +38,11 @@ def _get_dataset_size(cfg) -> tuple[int, bool]:
     Returns (size, is_estimated). `is_estimated=True` means we fell back to
     the default because the dataset could not be read; callers should warn.
     """
+    from soup_cli.utils.eval_schedule import effective_val_split
+
+    # #1223: the share `soup train` actually withholds, which is 0 for a task
+    # that does not evaluate its split.
+    split = 1.0 - effective_val_split(cfg)
     train_path = cfg.data.train
 
     # #443 — data.interleave: sum row counts across every local dataset
@@ -57,7 +62,6 @@ def _get_dataset_size(cfg) -> tuple[int, bool]:
                     pass
             any_estimated = True
             total += _DEFAULT_DATASET_SIZE
-        split = 1.0 - cfg.data.val_split
         return int(total * split), any_estimated
 
     path = Path(train_path)
@@ -67,7 +71,6 @@ def _get_dataset_size(cfg) -> tuple[int, bool]:
         from soup_cli.data.loader import load_raw_data
         try:
             data = load_raw_data(path)
-            split = 1.0 - cfg.data.val_split
             return int(len(data) * split), False
         except (OSError, ValueError, KeyError):
             pass
@@ -78,7 +81,6 @@ def _get_dataset_size(cfg) -> tuple[int, bool]:
             from datasets import load_dataset_builder
             builder = load_dataset_builder(train_path)
             size = builder.info.splits["train"].num_examples
-            split = 1.0 - cfg.data.val_split
             return int(size * split), False
         except (OSError, ValueError, KeyError, ImportError):
             pass

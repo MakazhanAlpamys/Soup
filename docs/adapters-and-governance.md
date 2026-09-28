@@ -74,7 +74,7 @@ soup lock write \
   --dataset-sha $DATA_SHA \
   --env-hash $(jq -r .closure soup-env.lock) \
   -o soup.lock
-# Teammates re-check the lock; exit 3 on drift.
+# Teammates re-check the lock; exit 2 on drift.
 soup lock check soup.lock \
   --base-model meta-llama/Llama-3.1-8B \
   --base-sha $BASE_SHA --dataset-sha $DATA_SHA --env-hash $ENV_HASH
@@ -205,14 +205,14 @@ soup edit set --base ./model --method grace \
 ```
 
 ```yaml
-# Or via soup.yaml when training a model with GRACE-aware lookups
-training:
-  grace_codebook: true
-  grace_codebook_size: 1024    # codebook entries (max 100k)
-  grace_codebook_dim: 768      # residual-stream width
+# Planned for soup.yaml when training with GRACE-aware lookups (staged; refused as of v0.77 — #808):
+# training:
+#   grace_codebook: true
+#   grace_codebook_size: 1024    # codebook entries (max 100k)
+#   grace_codebook_dim: 768      # residual-stream width
 ```
 
-`grace` joins the existing `rome` / `memit` / `alphaedit` allowlist on `soup edit set`; the sequential edit governor still gates the call when the per-base-model edit count or norm-blowup verdict trips. GRACE is live: `soup edit set --method grace --output ./ckpt` captures the residual key at the subject's last token, optimises a replacement value, and appends a `(key, value)` triple to a `grace_codebook.json` sidecar (atomic, cwd-contained). At inference the codebook is applied via a forward hook that substitutes the residual whenever it falls within an epsilon ball of a stored key — so the base weights are never modified and thousands of edits survive without norm blowup.
+`grace` joins the existing `rome` / `memit` / `alphaedit` allowlist on `soup edit set`; the sequential edit governor still gates the call when the per-base-model edit count or norm-blowup verdict trips. GRACE is live for editing: `soup edit set --method grace --output ./ckpt` captures the residual key at the subject's last token, optimises a replacement value, and appends a `(key, value)` triple to a `grace_codebook.json` sidecar (atomic, cwd-contained). At inference the codebook is applied via a forward hook that substitutes the residual whenever it falls within an epsilon ball of a stored key — so the base weights are never modified and thousands of edits survive without norm blowup. Training-time lookup integration remains staged.
 
 
 ## Model Registry & Lineage
@@ -413,21 +413,38 @@ soup attest emit \
 ```
 
 Stages are a closed allowlist: `extract` / `train` / `eval` / `export` / `publish`.
-Subject SHA must be 64-hex (sha256). The default `--sign unsigned` backend ships now;
-the **`ed25519` backend is live** (`pip install soup-cli[sign]`):
+Subject SHA must be 64-hex (sha256). The default `--sign unsigned` backend
+remains offline-only tamper metadata. The **`ed25519` backend is live** with
+`pip install soup-cli[sign]`; **Sigstore is live** with
+`pip install soup-cli[sigstore]`:
 
 ```bash
+# offline key signing
 soup attest emit --stage train --subject adapter-v1 --sha aaaa...64hex \
-  --sign ed25519 --key signing.pem --output att.json   # writes att.json.sig
-soup attest verify att.json --signature att.json.sig                 # exit 0 valid
+  --sign ed25519 --key signing.pem --output att.json
 soup attest verify att.json --signature att.json.sig --public-key trusted.pub
+
+# keyless OIDC / Fulcio / Rekor
+soup attest emit --stage train --subject adapter-v1 --sha aaaa...64hex \
+  --sign sigstore --output att.json  # add --interactive-oidc only for browser auth
+soup attest verify att.json --signature att.json.sig \
+  --cert-identity 'https://github.com/acme/repo/.github/workflows/release.yml@refs/heads/main' \
+  --cert-oidc-issuer 'https://token.actions.githubusercontent.com'
 ```
 
-`verify` re-canonicalises the statement JSON (so it's platform/newline-independent)
-and checks the ed25519 signature — exit 3 on tamper, key mismatch, or a sidecar with
-no public key. A valid signature proves the signer *asserted* the statement; it does
-not re-verify the subject digest against an artifact. Sigstore keyless signing remains
-infra-blocked (needs an OIDC identity provider + Fulcio/Rekor network).
+Both signing backends use the same `<output>.sig` JSON sidecar. For Sigstore it
+contains the complete modern Bundle (certificate, signature, and transparency
+proof). `verify` re-canonicalises the statement JSON and requires both the
+Sigstore certificate identity and OIDC issuer out of band; either value without
+the other is refused. Sigstore emission requires `--output` so the public Rekor
+entry can never outlive a discarded local bundle; browser OIDC is explicit opt-in.
+Verification exits 3 on tamper or policy mismatch, and exits 1 when Sigstore
+verification itself is unavailable (for example TUF/network failure) so an
+operational outage is not reported as tampering. Usage/input errors exit 2.
+An explicit Sigstore signing request fails closed if OIDC/Fulcio/Rekor is
+unavailable; it is never silently downgraded to unsigned. A valid signature proves the signer
+*asserted* the statement; it does not re-verify the subject digest against an
+artifact.
 
 
 ## EU AI Act Annex XI/XII Auto-Doc (`soup train --annex-xi`)
@@ -511,6 +528,7 @@ soup adapters audit ./output --config soup.yaml --json   # machine-readable
 ```
 Audit: output
 │ optimizer                    │ adamw_torch │ AdamW  │ ok      │
+│ learning_rate                │ 0.0001      │ 0.0001 │ ok      │
 │ warmup_ratio                 │ 0.03        │ —      │ unknown │
 │ weight_decay                 │ 0.01        │ 0.01   │ ok      │
 │ lora.r                       │ 8           │ 8      │ ok      │
@@ -525,6 +543,20 @@ user's fault.
 The config is read through the schema, so a setting you omitted is audited
 against the default Soup would actually have used, not against a second copy
 of the defaults kept by the audit.
+
+**The MLX learning-rate comparand is `peak_lr`.** `training.lr` is the target
+peak/base value passed to the resolved optimizer schedule. Warmup starts below
+it and controls when the schedule reaches it; cosine or linear decay controls
+what follows. Comparing `training.lr` with an early schedule sample would
+therefore flag a correct warmup run. The audit instead compares it with the
+optimizer plan's recorded `peak_lr`. It deliberately does not use the record's
+`learning_rate`, because that field is only the config value echoed when the
+file is written, not evidence of what reached the optimizer.
+
+PEFT's `adapter_config.json` on the transformers backend does not record the
+effective optimizer learning rate. That row is therefore `unknown`, and the
+output says explicitly that the effective learning rate was **not checked**;
+it never presents a transformers adapter with a false clean bill.
 
 **Masking is audited by effect, not by request.** The record's
 `train_on_responses_only` is the config's own request echoed back; the effect
@@ -596,10 +628,28 @@ signature from an untrusted key marks the adapter invalid. With `--public-key`,
 an adapter whose signature record is not `ed25519` is also invalid. Signing keys and
 trusted public keys are symlink-rejected and size-capped but **not**
 cwd-contained (keys are secrets that live outside the project). Signature
-persists as `.soup-signature.json` (atomic write). `sigstore` keyless signing
-stays infra-blocked (needs an OIDC identity provider + Fulcio/Rekor network —
-it can't be honestly validated offline). `--strict` mode exits 3 on any verify
-failure (CI gate code distinct from generic errors).
+persists as `.soup-signature.json` (atomic write).
+
+The **`sigstore` backend is also live** with `pip install soup-cli[sigstore]`.
+It uses an ambient OIDC identity when one is available (for example GitHub
+Actions), requests a Fulcio certificate, submits to Rekor, and stores the
+complete Sigstore bundle with the adapter signature record. Browser OIDC is
+**not** opened implicitly on headless/default runs; opt in explicitly with
+`--interactive-oidc`. Verification is deliberately fail-closed and requires
+both certificate identity and OIDC issuer supplied out of band:
+
+```bash
+soup adapters sign ./adapter --backend sigstore
+soup adapters verify ./adapter \
+  --cert-identity 'https://github.com/acme/repo/.github/workflows/release.yml@refs/heads/main' \
+  --cert-oidc-issuer 'https://token.actions.githubusercontent.com'
+```
+
+The identity embedded in the bundle is **not** trusted automatically; doing so
+would reduce authentication to self-consistency. Identity and issuer are one
+certificate policy: either value without the other is refused. `--strict` mode
+exits 3 on any verify failure
+(CI gate code distinct from generic errors).
 
 
 ## Strict Safetensors Mode (`soup adapters check-safetensors`)
