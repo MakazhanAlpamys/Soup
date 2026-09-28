@@ -23,7 +23,6 @@ from tests.test_v07204 import (
     _build_streamed_wrapper,
     _loss_of,
     _match_streamed_dtype,
-    _mps_is_the_accelerator,
     _randomise_lora_b,
     _sync_adapters,
 )
@@ -31,9 +30,6 @@ from tests.test_v07204 import (
 pytestmark = pytest.mark.filterwarnings("ignore::DeprecationWarning")
 
 
-@pytest.mark.skipif(
-    _mps_is_the_accelerator(), reason="MPS is untested for layer streaming (CUDA + CPU only)"
-)
 @pytest.mark.parametrize("task", [*_ALL_PREFERENCE, "sft"])
 def test_an_untied_streamed_train_step_completes(tmp_path, monkeypatch, task):
     """dpo and kto raise on main; orpo, simpo and sft pass there and must keep passing.
@@ -274,9 +270,6 @@ def test_a_real_lora_wrapped_embedding_is_still_exempt_from_the_private_copy():
     assert layer._needs_a_private_weight() is False
 
 
-@pytest.mark.skipif(
-    _mps_is_the_accelerator(), reason="MPS is untested for layer streaming (CUDA + CPU only)"
-)
 @pytest.mark.parametrize("task", [*_ALL_PREFERENCE, "sft"])
 def test_only_a_loss_with_a_reference_pass_takes_the_private_copy(tmp_path, monkeypatch, task):
     """The copy is a head-sized allocation held for the whole graph (~1.05 GiB for an

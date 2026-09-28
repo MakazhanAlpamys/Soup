@@ -28,10 +28,9 @@ from __future__ import annotations
 
 import pytest
 
-from tests.conftest import cuda_available
+from tests.conftest import accelerator_device
 from tests.test_v07204 import (
     _TASK_ROWS,
-    _mps_is_the_accelerator,
     _stream_cfg,
     _tiny_llama_dir,
     _wrapper_for,
@@ -46,11 +45,11 @@ def _build_untied_wrapper(tmp_path, monkeypatch, task="sft", n_layers=2, **train
     monkeypatch.chdir(tmp_path)
     cfg = _stream_cfg(weights, tmp_path / "out", task=task, **training)
     # The real accelerator when there is one, like `_build_streamed_wrapper`:
-    # `TrainingArguments` picks CUDA on its own, so pinning the model to the CPU
-    # there sends the batches to `cuda:0` and the embedding lookup fails on a
-    # device mismatch. None of these tests compares floats, so nothing needs
-    # the exact CPU arithmetic that pinning would buy.
-    device = "cuda" if cuda_available() else "cpu"
+    # `TrainingArguments` picks CUDA or MPS on its own, so pinning the model to
+    # the CPU there sends the batches to the accelerator and the embedding lookup
+    # fails on a device mismatch. None of these tests compares floats, so nothing
+    # needs the exact CPU arithmetic that pinning would buy.
+    device = accelerator_device()
     wrapper = _wrapper_for(task)(cfg, device=device)
     wrapper.setup({"train": _TASK_ROWS[task](8)})
     return wrapper, resident, weights
@@ -61,13 +60,6 @@ class TestBackwardTailEmbedPrefetch:
     slot, and the fix moves the embedding's reload from the next step's
     `_prime()` to this step's backward tail."""
 
-    # With no CUDA, `_build_untied_wrapper` falls back to the CPU, and on a box
-    # where MPS is the accelerator that is a device mismatch no user would ever
-    # hit, not something this fix is responsible for.
-    pytestmark = pytest.mark.skipif(
-        _mps_is_the_accelerator(),
-        reason="MPS is untested for layer streaming (CUDA + CPU only)",
-    )
 
     def test_untied_fixture_actually_shares_one_slot(self, tmp_path, monkeypatch):
         """Guard: if the fixture ever stopped being untied, the rest of this

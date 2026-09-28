@@ -26,35 +26,13 @@ import sys
 
 import pytest
 
-from tests.conftest import cuda_available
+from tests.conftest import accelerator_device, mps_is_the_accelerator
 
 pytestmark = pytest.mark.filterwarnings("ignore::UserWarning")
 
 
-def _mps_is_the_accelerator() -> bool:
-    """True on an Apple-Silicon runner with no CUDA.
-
-    ``TrainingArguments`` picks ``mps`` as its device there, while this suite
-    builds the streamed model on ``cpu``; a real training step then moves the
-    batch to MPS and hits "Placeholder storage has not been allocated on MPS
-    device". NF4 streaming is measured on CUDA and CPU only — bitsandbytes'
-    4-bit kernels are not supported on MPS at all — so the step is skipped
-    rather than making an unverified claim about it. Mirrors the identical
-    guard in tests/test_v07200.py.
-    """
-    try:
-        import torch
-
-        if cuda_available():
-            return False
-        backend = getattr(torch.backends, "mps", None)
-        return bool(backend is not None and backend.is_available())
-    except Exception:
-        return False
-
-
 skip_on_mps = pytest.mark.skipif(
-    _mps_is_the_accelerator(),
+    mps_is_the_accelerator(),
     reason="MPS is untested for NF4 streaming (measured on CUDA + CPU only)",
 )
 
@@ -1829,7 +1807,7 @@ class TestNF4EndToEndSetup:
                 for _ in range(4)
             ]
         }
-        device = "cuda" if cuda_available() else "cpu"
+        device = accelerator_device()
         return SFTTrainerWrapper(cfg, device=device), dataset
 
     def test_setup_builds_a_real_trl_trainer_under_nf4(self, tmp_path, monkeypatch):
