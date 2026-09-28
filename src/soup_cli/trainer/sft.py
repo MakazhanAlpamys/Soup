@@ -2304,11 +2304,14 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             self.trainer.state.log_history, model=self.trainer.model
         )
 
-        from soup_cli.utils.peft_wiring import save_model_with_relora
+        if self.config.training.relora_steps is None:
+            self.trainer.save_model(self._output_dir)
+        else:
+            from soup_cli.utils.peft_wiring import save_model_with_relora
 
-        save_model_with_relora(
-            self.trainer, self._output_dir, self.config.training.relora_steps
-        )
+            save_model_with_relora(
+                self.trainer, self._output_dir, self.config.training.relora_steps
+            )
         if self._quest_metadata is not None:
             from soup_cli.utils.quest import write_metadata
 

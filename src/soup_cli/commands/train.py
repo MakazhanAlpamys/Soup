@@ -1864,7 +1864,7 @@ def train(
     merge_hint = (
         "ReLoRA output is already dense; no soup merge is needed"
         if cfg.training.relora_steps is not None
-        else f"Merge LoRA:  soup merge --adapter {result['output_dir']}"
+        else f"[bold]Merge LoRA:[/]  soup merge --adapter {result['output_dir']}"
     )
 
     console.print(

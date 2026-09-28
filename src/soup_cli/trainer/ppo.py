@@ -773,11 +773,14 @@ class PPOTrainerWrapper:
                 self.trainer.train()
         duration = time.time() - start
 
-        from soup_cli.utils.peft_wiring import save_model_with_relora
+        if self.config.training.relora_steps is None:
+            self.trainer.save_model(self._output_dir)
+        else:
+            from soup_cli.utils.peft_wiring import save_model_with_relora
 
-        save_model_with_relora(
-            self.trainer, self._output_dir, self.config.training.relora_steps
-        )
+            save_model_with_relora(
+                self.trainer, self._output_dir, self.config.training.relora_steps
+            )
         self.tokenizer.save_pretrained(self._output_dir)
 
         # Extract metrics
@@ -872,11 +875,15 @@ class PPOTrainerWrapper:
 
         duration = time.time() - start
 
-        from soup_cli.utils.peft_wiring import save_model_with_relora
+        if self.config.training.relora_steps is None:
+            self.trainer.save_model(self._output_dir)
+        else:
+            from soup_cli.utils.peft_wiring import save_model_with_relora
 
-        save_model_with_relora(
-            self.trainer, self._output_dir, self.config.training.relora_steps
-        )
+            save_model_with_relora(
+                self.trainer, self._output_dir, self.config.training.relora_steps
+            )
+        self.tokenizer.save_pretrained(self._output_dir)
 
         # Extract metrics
         loss_summary = summarize_training_loss(log_history)

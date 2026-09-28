@@ -278,6 +278,7 @@ def _merge_reinit_and_reset(
 
 
 def _try_import_callback_base():
+    """Return ``TrainerCallback`` without importing Transformers at module load."""
     try:
         from transformers import TrainerCallback  # noqa: PLC0415
 

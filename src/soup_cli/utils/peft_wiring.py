@@ -542,6 +542,32 @@ def apply_post_lora_patches(model: Any) -> None:
         logger.debug("strip_lora_dropout_for_3d_experts skipped: %s", exc)
 
 
+def _relora_merge_target(trainer: Any) -> tuple[Any, Any, str | None, Any]:
+    """Return the save owner, model holder, optional policy attr, and PEFT model."""
+    owner = getattr(trainer, "__dict__", {}).get("_trainer", trainer)
+    holder = getattr(owner, "model", None)
+    policy = getattr(holder, "policy", None)
+    if policy is not None and callable(getattr(policy, "merge_and_unload", None)):
+        return owner, holder, "policy", policy
+    return owner, holder, None, holder
+
+
+def _validate_relora_save_capability(trainer: Any) -> None:
+    """Reject ReLoRA trainers whose final model cannot be merged into a dense model."""
+    try:
+        import torch.nn as nn
+    except ImportError:
+        return
+
+    _owner, _holder, _policy_attr, model = _relora_merge_target(trainer)
+    if isinstance(model, nn.Module) and not callable(
+        getattr(model, "merge_and_unload", None)
+    ):
+        raise RuntimeError(
+            "ReLoRA requires a PEFT model with merge_and_unload() for dense final saving."
+        )
+
+
 def attach_relora_callback(trainer: Any, tcfg: Any) -> bool:
     """Attach :class:`ReLoRACallback` when ``training.relora_steps`` is set.
 
@@ -568,6 +594,8 @@ def attach_relora_callback(trainer: Any, tcfg: Any) -> bool:
             f"(got world_size={world_size}): restarts are single-process only. "
             "Run with one process or remove training.relora_steps."
         )
+    # `is True` is intentional: MagicMock trainers expose unset flags as
+    # truthy mocks, but only an actual Trainer flag should refuse the run.
     if getattr(trainer, "is_deepspeed_enabled", False) is True:
         raise ValueError(
             "ReLoRA is not supported with DeepSpeed "
@@ -596,6 +624,7 @@ def attach_relora_callback(trainer: Any, tcfg: Any) -> bool:
         nn = None
     if nn is not None and isinstance(model, nn.Module):
         _preflight_writable_bases(model)
+    _validate_relora_save_capability(trainer)
 
     policy = ReLoRAPolicy(
         steps=int(relora_steps),
@@ -622,7 +651,7 @@ def save_model_with_relora(
         trainer.save_model(output_dir)
         return
 
-    model = getattr(trainer, "model", None)
+    owner, holder, policy_attr, model = _relora_merge_target(trainer)
     merge_and_unload = getattr(model, "merge_and_unload", None)
     if merge_and_unload is None:
         raise RuntimeError(
@@ -630,9 +659,12 @@ def save_model_with_relora(
         )
 
     merged_model = merge_and_unload()
-    trainer.model = merged_model
-    if getattr(trainer, "model_wrapped", None) is not None:
-        trainer.model_wrapped = merged_model
+    if policy_attr is not None:
+        setattr(holder, policy_attr, merged_model)
+    else:
+        owner.model = merged_model
+        if getattr(owner, "model_wrapped", None) is not None:
+            owner.model_wrapped = merged_model
     trainer.save_model(output_dir)
 
 

@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
+import ast
+from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
 from pydantic import ValidationError
 
 from soup_cli.config.schema import TrainingConfig
+
+TRAINER_DIR = Path(__file__).resolve().parents[1] / "src" / "soup_cli" / "trainer"
+
 
 
 class TestReLoRASchema:
@@ -349,6 +354,27 @@ def _single_process_trainer():
     trainer.is_deepspeed_enabled = False
     trainer.is_fsdp_enabled = False
     return trainer
+
+
+def _called_names(path: Path) -> set[str | None]:
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    names: set[str | None] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            func = node.func
+            names.add(func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", None))
+    return names
+
+
+def test_every_relora_trainer_saves_through_dense_helper():
+    relora_trainers = sorted(
+        path.stem
+        for path in TRAINER_DIR.glob("*.py")
+        if "attach_relora_callback(" in path.read_text(encoding="utf-8")
+    )
+    assert len(relora_trainers) >= 13, relora_trainers
+    for module in relora_trainers:
+        assert "save_model_with_relora" in _called_names(TRAINER_DIR / f"{module}.py")
 
 
 class TestReLoRARestart:
@@ -709,6 +735,15 @@ def test_attach_relora_preflight_rejects_quantized_base():
     trainer.model = _make_mixed_writable_quantized_parent()
     with pytest.raises(RuntimeError, match="quantized or sharded"):
         attach_relora_callback(trainer, TrainingConfig(relora_steps=100))
+
+
+def test_attach_relora_rejects_model_without_dense_merge():
+    from soup_cli.utils.peft_wiring import attach_relora_callback
+
+    trainer = _single_process_trainer()
+    trainer.model = _make_fake_lora_module()
+    with pytest.raises(RuntimeError, match="merge_and_unload"):
+        attach_relora_callback(trainer, TrainingConfig(relora_steps=100))
     trainer.add_callback.assert_not_called()
 
 
@@ -739,20 +774,17 @@ class TestReLoRARealPeft:
             max_position_embeddings=32,
             tie_word_embeddings=False,
         )
-        try:
-            model = LlamaForCausalLM(config).to(torch.float32).eval()
-            peft_cfg = LoraConfig(
-                r=4,
-                lora_alpha=8,
-                lora_dropout=0.0,
-                bias="none",
-                task_type="CAUSAL_LM",
-                target_modules=["q_proj", "v_proj", "embed_tokens"],
-            )
-            model = get_peft_model(model, peft_cfg)
-            model.eval()
-        except ImportError as exc:
-            pytest.skip(f"torch / transformers / peft not available: {exc}")
+        model = LlamaForCausalLM(config).to(torch.float32).eval()
+        peft_cfg = LoraConfig(
+            r=4,
+            lora_alpha=8,
+            lora_dropout=0.0,
+            bias="none",
+            task_type="CAUSAL_LM",
+            target_modules=["q_proj", "v_proj", "embed_tokens"],
+        )
+        model = get_peft_model(model, peft_cfg)
+        model.eval()
 
         yielded = list(_iter_lora_modules(model))
         assert len(yielded) == 2
@@ -864,6 +896,120 @@ class TestReLoRARealPeft:
             reloaded_logits = reloaded(input_ids=input_ids).logits
         assert torch.allclose(live_logits, reloaded_logits, atol=1e-5, rtol=1e-5)
 
+
+
+class TestReLoRAWrapperSaves:
+    def test_embedding_wrapper_saves_dense_reloadable_model(self, tmp_path):
+        try:
+            import torch
+            from peft import LoraConfig, get_peft_model
+            from transformers import LlamaConfig, LlamaModel, TrainingArguments
+        except (ImportError, OSError) as exc:
+            pytest.skip(f"torch / transformers / peft not available: {exc}")
+
+        from soup_cli.trainer.embedding import _EmbeddingTrainer
+        from soup_cli.utils.peft_wiring import save_model_with_relora
+
+        config = LlamaConfig(
+            vocab_size=32,
+            hidden_size=32,
+            intermediate_size=64,
+            num_hidden_layers=1,
+            num_attention_heads=4,
+            num_key_value_heads=4,
+            max_position_embeddings=32,
+        )
+        model = get_peft_model(
+            LlamaModel(config),
+            LoraConfig(
+                r=4,
+                lora_alpha=8,
+                lora_dropout=0.0,
+                task_type="FEATURE_EXTRACTION",
+                target_modules=["q_proj"],
+            ),
+        ).eval()
+        input_ids = torch.randint(0, config.vocab_size, (1, 8))
+        with torch.no_grad():
+            for name, param in model.named_parameters():
+                if "lora_A" in name or "lora_B" in name:
+                    param.fill_(0.2)
+            live_hidden = model(input_ids=input_ids).last_hidden_state
+
+        wrapper = _EmbeddingTrainer(
+            model=model,
+            args=TrainingArguments(
+                output_dir=str(tmp_path / "trainer"),
+                report_to=[],
+            ),
+            train_dataset=[],
+            eval_dataset=None,
+            processing_class=None,
+            loss_type="cosine",
+            margin=0.2,
+            pooling="mean",
+            temperature=0.05,
+            max_length=8,
+        )
+        save_model_with_relora(wrapper, str(tmp_path / "output"), relora_steps=1)
+
+        reloaded = LlamaModel.from_pretrained(tmp_path / "output").eval()
+        with torch.no_grad():
+            reloaded_hidden = reloaded(input_ids=input_ids).last_hidden_state
+        assert torch.allclose(live_hidden, reloaded_hidden, atol=1e-5, rtol=1e-5)
+
+    def test_ppo_policy_wrapper_saves_dense_reloadable_model(self, tmp_path):
+        try:
+            import torch
+            from peft import LoraConfig, get_peft_model
+            from transformers import LlamaConfig, LlamaForCausalLM
+            from trl.experimental.ppo.ppo_trainer import PolicyAndValueWrapper
+        except (ImportError, OSError) as exc:
+            pytest.skip(f"torch / transformers / peft / trl not available: {exc}")
+
+        from soup_cli.utils.peft_wiring import save_model_with_relora
+
+        config = LlamaConfig(
+            vocab_size=32,
+            hidden_size=32,
+            intermediate_size=64,
+            num_hidden_layers=1,
+            num_attention_heads=4,
+            num_key_value_heads=4,
+            max_position_embeddings=32,
+        )
+        policy = get_peft_model(
+            LlamaForCausalLM(config),
+            LoraConfig(
+                r=4,
+                lora_alpha=8,
+                lora_dropout=0.0,
+                task_type="CAUSAL_LM",
+                target_modules=["q_proj"],
+            ),
+        ).eval()
+        input_ids = torch.randint(0, config.vocab_size, (1, 8))
+        with torch.no_grad():
+            for name, param in policy.named_parameters():
+                if "lora_A" in name or "lora_B" in name:
+                    param.fill_(0.2)
+            live_logits = policy(input_ids=input_ids).logits
+
+        holder = PolicyAndValueWrapper(policy, torch.nn.Linear(config.hidden_size, 1))
+
+        class _Trainer:
+            def __init__(self, model):
+                self.model = model
+
+            def save_model(self, output_dir):
+                self.model.policy.save_pretrained(output_dir)
+
+        save_model_with_relora(_Trainer(holder), str(tmp_path / "output"), relora_steps=1)
+
+        reloaded = LlamaForCausalLM.from_pretrained(tmp_path / "output").eval()
+        with torch.no_grad():
+            reloaded_logits = reloaded(input_ids=input_ids).logits
+        assert torch.allclose(live_logits, reloaded_logits, atol=1e-5, rtol=1e-5)
 
 class TestReLoRATaskGate:
     def _base_cfg(self, task: str = "sft", backend: str = "transformers") -> dict:
