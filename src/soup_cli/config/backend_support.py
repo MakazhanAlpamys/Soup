@@ -27,7 +27,7 @@ reviewed for them.
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -52,8 +52,8 @@ DEFAULT_MODALITY = "text"
 
 
 def _default_active(value: Any) -> bool:
-    """A setting is active when truthy and not None."""
-    return bool(value) and value is not None
+    """A setting is active when it is switched on (truthy)."""
+    return bool(value)
 
 
 def _seed_active(value: Any) -> bool:
@@ -75,7 +75,7 @@ class SupportEntry:
     #: (this is what happens to ``max_grad_norm`` when #750 lands), and a
     #: ``True`` entry the trainer stops reading means the warning was deleted.
     trainer_reads: bool = False
-    active: Callable[[Any], bool] = _default_active
+    active: Callable[[Any], bool] = field(default=_default_active, compare=False, repr=False)
 
     def describe(self) -> str:
         suffix = f" (#{self.issue})" if self.issue else ""
@@ -299,10 +299,11 @@ def unsupported_for(
 def check_config(cfg: "SoupConfig") -> list[SupportEntry]:
     """The declared gaps that apply to the fields this config actually sets.
 
-    Only fields the user wrote in an active state are reported.
-    Pydantic's ``model_fields_set`` distinguishes those from the ones
-    sitting at their schema default, and ``entry.active(value)`` filters out
-    fields explicitly set to inactive values (e.g. ``false``).
+    Only fields the user wrote and switched on are reported. Pydantic's
+    ``model_fields_set`` distinguishes the written fields from the ones sitting
+    at their schema default, which is the difference between a useful pre-flight
+    check and a wall of 275 rows. ``entry.active`` then drops a field written in
+    its off position (e.g. ``false``); ``seed: 0`` still counts as set.
     """
     backend = getattr(cfg, "backend", DEFAULT_BACKEND)
     modality = getattr(cfg, "modality", DEFAULT_MODALITY)
@@ -310,34 +311,14 @@ def check_config(cfg: "SoupConfig") -> list[SupportEntry]:
     if not entries:
         return []
 
-    results: list[SupportEntry] = []
-    for entry in entries:
-        parts = entry.field.split(".")
-        namespace = parts[0]
-        curr = getattr(cfg, namespace, None)
-        if curr is None:
+    written: dict[str, Any] = {}
+    for namespace in ("training", "data"):
+        section = getattr(cfg, namespace, None)
+        if section is None:
             continue
+        for name in getattr(section, "model_fields_set", ()):
+            written[f"{namespace}.{name}"] = getattr(section, name)
 
-        is_set = True
-        for part in parts[1:]:
-            model_fields_set = getattr(curr, "model_fields_set", None)
-            if model_fields_set is not None:
-                if part not in model_fields_set:
-                    is_set = False
-                    break
-                curr = getattr(curr, part, None)
-            elif isinstance(curr, dict):
-                if part not in curr:
-                    is_set = False
-                    break
-                curr = curr[part]
-            elif hasattr(curr, part):
-                curr = getattr(curr, part, None)
-            else:
-                is_set = False
-                break
-
-        if is_set and entry.active(curr):
-            results.append(entry)
-
-    return results
+    return [
+        entry for entry in entries if entry.field in written and entry.active(written[entry.field])
+    ]
