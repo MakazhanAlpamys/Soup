@@ -186,39 +186,40 @@ def synth(
         except (ValueError, OSError) as exc:
             _fail(str(exc))
 
-    # --force is about to overwrite an existing verifier: move it aside first
-    # rather than write over it, so a refusal or a calibration error below
-    # restores the previous, working verifier instead of destroying it.
-    backup_output: Optional[str] = None
-    if os.path.exists(output):
-        parent = os.path.dirname(os.path.abspath(output)) or "."
-        fd, backup_output = tempfile.mkstemp(
-            prefix=".soup.reward-prev.", suffix=".tmp", dir=parent
-        )
-        os.close(fd)
-        os.replace(output, backup_output)
-
-    # Write, then LOAD it back through the real reward-loader path (round-trip
-    # validation) and calibrate the loaded callable. The write itself must be
-    # guarded too: a candidate write can fail after ``output`` was already
-    # moved aside (disk full mid-write, a permission error on the parent
-    # dir), and with nothing at ``output`` and the backup left sitting under
-    # its ``.tmp`` name, that failure would silently destroy the previous
-    # verifier and orphan the backup file.
+    # Never touch ``output`` until the candidate has been loaded back and
+    # calibrated: write it to a fresh temp sibling instead, and os.replace
+    # that sibling onto ``output`` only once calibration accepts it. A
+    # refusal, a calibration error, or a crash (Ctrl-C / SIGKILL) at any
+    # point before that final os.replace leaves ``output`` byte-identical to
+    # what it was — there is nothing to restore, because nothing at
+    # ``output`` was ever moved or overwritten.
+    parent = os.path.dirname(os.path.abspath(output)) or "."
+    os.makedirs(parent, exist_ok=True)
     try:
-        atomic_write_text(result.source, output)
+        fd, candidate_path = tempfile.mkstemp(
+            prefix=".soup.reward-candidate.", suffix=".py", dir=parent
+        )
     except OSError as exc:
-        _restore_or_cleanup(output, backup_output)
+        _fail(f"could not create candidate verifier: {exc}")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(result.source)
+    except OSError as exc:
+        _cleanup(candidate_path)
         _fail(f"could not write candidate verifier: {exc}")
+
+    # LOAD the candidate back through the real reward-loader path (round-trip
+    # validation, from its own temp path — ``output`` is untouched) and
+    # calibrate the loaded callable.
     try:
         from soup_cli.trainer.rewards import load_reward_fn
-        reward_fn = load_reward_fn(output)
+        reward_fn = load_reward_fn(candidate_path)
         golds = rs.extract_golds(rows, field=field)
         negatives = rs.perturb_negatives(golds, result.kind)
         report = rs.calibrate(reward_fn, golds, negatives, kind=result.kind,
                               min_discrimination=min_discrimination)
-    except Exception as exc:  # noqa: BLE001 — clean up the partial artifact
-        _restore_or_cleanup(output, backup_output)
+    except Exception as exc:  # noqa: BLE001 — clean up the candidate only
+        _cleanup(candidate_path)
         _fail(f"calibration failed: {exc}")
 
     # Write the diagnostic report (path already validated up front) for BOTH the
@@ -231,39 +232,28 @@ def synth(
             console.print(f"[yellow]Warning: could not write report: {escape(str(exc))}[/]")
 
     if report.refused:
-        _restore_or_cleanup(output, backup_output)
+        _cleanup(candidate_path)
         console.print(Panel(
             escape(report.reason),
             title="[bold red]verifier refused (not emitted)[/]", border_style="red"))
         raise typer.Exit(2)
 
-    # Accepted: the candidate replaces the previous verifier for good.
-    if backup_output is not None:
-        try:
-            os.remove(backup_output)
-        except OSError:
-            pass
+    # Accepted: atomically swap the calibrated candidate onto ``output`` —
+    # the only moment the previous verifier, if any, is replaced.
+    os.replace(candidate_path, output)
 
     console.print(_render_report_panel(report, result.kind, output))
     raise typer.Exit(0)
 
 
-def _restore_or_cleanup(path: str, backup: Optional[str]) -> None:
-    """Undo a just-written candidate verifier.
-
-    Puts back the previous verifier it replaced, if any; otherwise removes the
-    candidate outright since there was nothing at ``path`` before it.
-    Best-effort — never masks the real error (a failed calibration / refusal)
-    that is about to be reported.
+def _cleanup(candidate_path: str) -> None:
+    """Best-effort removal of a candidate verifier that was refused or failed
+    calibration. ``output`` was never touched, so there is nothing to restore
+    — only the temp candidate needs to go. Never masks the real error (a
+    failed calibration / refusal) that is about to be reported.
     """
-    if backup is not None:
-        try:
-            os.replace(backup, path)
-            return
-        except OSError:
-            pass
     try:
-        os.remove(path)
+        os.remove(candidate_path)
     except OSError:
         pass
 

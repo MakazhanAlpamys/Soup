@@ -11,10 +11,14 @@ to be valid and in place:
   fails, and — if the restore itself also fails — keeps both the backup and
   the staged model on disk rather than guessing which one to delete.
 * ``soup reward synth -o reward.py --force`` overwrote the existing verifier
-  with the candidate BEFORE calibrating it, then ``_restore_or_cleanup``
-  deleted the file on refusal or error — destroying the user's previous,
-  working verifier. It now moves the previous verifier to a ``.tmp`` sibling
-  first and restores it on any failure, including a failed candidate write.
+  with the candidate BEFORE calibrating it, then deleted the file on refusal
+  or error — destroying the user's previous, working verifier. It now writes
+  the candidate to a ``.soup.reward-candidate.*.py`` temp sibling, loads and
+  calibrates THAT file, and ``os.replace``s it onto ``-o`` only once
+  calibration accepts it. ``-o`` is never moved, overwritten or otherwise
+  touched before that final replace, so a refusal, a calibration error, or a
+  crash at any point before it leaves the previous verifier exactly as it
+  was — there is nothing to restore.
 """
 
 from __future__ import annotations
@@ -66,6 +70,8 @@ class TestRewardSynthForceKeepsPreviousOnFailure:
         assert Path("reward.py").read_text(encoding="utf-8") == previous, (
             "the previous verifier's bytes changed on a refused --force replace"
         )
+        leftover = list(tmp_path.glob(".soup.reward-candidate.*.py"))
+        assert not leftover, f"orphaned candidate file(s) left behind: {leftover}"
 
     def test_calibration_error_leaves_previous_verifier_byte_identical(
         self, tmp_path, monkeypatch
@@ -78,7 +84,7 @@ class TestRewardSynthForceKeepsPreviousOnFailure:
 
         # Make calibrate() raise so the command takes the "calibration failed"
         # (exit 1) branch instead of the "refused" (exit 2) branch — both
-        # branches call _restore_or_cleanup(output, backup_output).
+        # branches call _cleanup(candidate_path), never touching ``output``.
         from soup_cli.utils import reward_synth as rs
 
         def _boom(*a, **kw):
@@ -96,28 +102,74 @@ class TestRewardSynthForceKeepsPreviousOnFailure:
             "the previous verifier was deleted on a calibration error"
         )
         assert Path("reward.py").read_text(encoding="utf-8") == previous
+        leftover = list(tmp_path.glob(".soup.reward-candidate.*.py"))
+        assert not leftover, f"orphaned candidate file(s) left behind: {leftover}"
 
-    def test_candidate_write_failure_leaves_previous_verifier_and_no_orphan_backup(
+    def test_crash_mid_calibration_leaves_previous_verifier_and_no_orphan_candidate(
         self, tmp_path, monkeypatch
     ):
-        """``atomic_write_text`` runs after the previous verifier is already
-        moved aside to its ``.soup.reward-prev.*.tmp`` backup. If the write
-        itself fails (disk full, a permission error), that call used to sit
-        outside any guard: ``output`` stayed missing and the backup was
-        never restored, so a write failure destroyed the previous verifier
-        AND orphaned the backup file."""
+        """Simulates a crash partway through the load-back + calibrate step
+        (an abrupt worker failure, not a clean "calibration refused" result):
+        under the old "move old file aside, write candidate in place" design
+        this left the candidate sitting at ``reward.py`` with the real
+        previous verifier hidden under its backup name until a human
+        recovered it by hand. Under the temp-sibling design ``output`` is
+        never moved or written to before the final ``os.replace``, so it
+        survives untouched, and the single ``except Exception`` around the
+        whole load+calibrate block still reaches ``_cleanup`` to remove the
+        orphaned candidate temp file."""
         from soup_cli.commands.reward import app
 
         monkeypatch.chdir(tmp_path)
         previous = "# my working verifier\ndef reward_fn(completions, **kw):\n    return [1.0]\n"
         Path("reward.py").write_text(previous, encoding="utf-8")
 
-        import soup_cli.commands.reward as reward_cmd
+        from soup_cli.utils import reward_synth as rs
 
-        def _boom(*a, **kw):
-            raise OSError(28, "No space left on device")
+        def _crash(*a, **kw):
+            raise MemoryError("worker crashed mid-calibration")
 
-        monkeypatch.setattr(reward_cmd, "atomic_write_text", _boom)
+        monkeypatch.setattr(rs, "calibrate", _crash)
+
+        _write_jsonl(Path("refs.jsonl"), [{"answer": "4"}, {"answer": "6"}])
+        res = self._runner().invoke(app, [
+            "synth", "refs.jsonl", "-o", "reward.py", "--force",
+        ])
+
+        assert res.exit_code == 1, (res.output, repr(res.exception))
+        assert Path("reward.py").exists(), (
+            "the previous verifier was deleted by a crash mid-calibration"
+        )
+        assert Path("reward.py").read_text(encoding="utf-8") == previous
+        leftover = list(tmp_path.glob(".soup.reward-candidate.*.py"))
+        assert not leftover, f"orphaned candidate file(s) left behind: {leftover}"
+
+    def test_candidate_write_failure_leaves_previous_verifier_untouched(
+        self, tmp_path, monkeypatch
+    ):
+        """The candidate is written to its own temp sibling, never to
+        ``output``. If that write fails (disk full, a permission error),
+        ``output`` was never touched in the first place — nothing to
+        restore, and no backup file to orphan."""
+        from soup_cli.commands.reward import app
+
+        monkeypatch.chdir(tmp_path)
+        previous = "# my working verifier\ndef reward_fn(completions, **kw):\n    return [1.0]\n"
+        Path("reward.py").write_text(previous, encoding="utf-8")
+
+        import os as os_module
+
+        real_fdopen = os_module.fdopen
+
+        def _boom(fd, mode="r", *a, **kw):
+            # Only the candidate write ("w") is poisoned — _read_jsonl's own
+            # os.fdopen(fd, "r", ...) of refs.jsonl must keep working.
+            if mode == "w":
+                os_module.close(fd)
+                raise OSError(28, "No space left on device")
+            return real_fdopen(fd, mode, *a, **kw)
+
+        monkeypatch.setattr(os_module, "fdopen", _boom)
 
         _write_jsonl(Path("refs.jsonl"), [{"answer": "4"}, {"answer": "6"}])
         res = self._runner().invoke(app, [
@@ -129,8 +181,8 @@ class TestRewardSynthForceKeepsPreviousOnFailure:
             "the previous verifier was deleted on a failed candidate write"
         )
         assert Path("reward.py").read_text(encoding="utf-8") == previous
-        leftover = list(tmp_path.glob(".soup.reward-prev.*.tmp"))
-        assert not leftover, f"orphaned backup file(s) left behind: {leftover}"
+        leftover = list(tmp_path.glob(".soup.reward-candidate.*.py"))
+        assert not leftover, f"orphaned candidate file(s) left behind: {leftover}"
 
     def test_accepted_replace_still_writes_the_new_verifier(self, tmp_path, monkeypatch):
         """The fix must not break the ordinary accepted path."""
@@ -148,6 +200,8 @@ class TestRewardSynthForceKeepsPreviousOnFailure:
         new_source = Path("reward.py").read_text(encoding="utf-8")
         assert "stale" not in new_source
         assert "reward_fn" in new_source
+        leftover = list(tmp_path.glob(".soup.reward-candidate.*.py"))
+        assert not leftover, f"orphaned candidate file(s) left behind: {leftover}"
 
 
 # ---------------------------------------------------------------------------
