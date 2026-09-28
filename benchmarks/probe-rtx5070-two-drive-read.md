@@ -377,9 +377,11 @@ anything in any round, and gained ~10% in two.
 
 ### What the day's record adds up to
 
-- **C: alone read 3.52-4.68 GB/s across seventeen arms** (runs 1-3, D1, D2,
-  R3' depth 1), a spread of the same size as every effect the diagnostics were
-  built to find. Foreign I/O (counters), CPU idle (D1) and ASPM (D2) are each
+- **C: alone read 3.52-4.68 GB/s across twenty-four single-drive arms** (runs
+  1-3, both arms of D1 and of D2, R3' at depth 1; median 3.90), a spread of the
+  same size as every effect the diagnostics were built to find. *(Corrected
+  before publication: the commit that introduced this line said "seventeen
+  arms"; counted from the JSON it is twenty-four.)* Foreign I/O (counters), CPU idle (D1) and ASPM (D2) are each
   ruled out or reduced to noise as the cause of C: reading below gate-974's
   run A; what remains is unexplained and is stated as such. D: — the emptier
   drive, behind the chipset — read up to 6.02 GB/s alone.
