@@ -1,0 +1,306 @@
+{
+  "schema_version": 1,
+  "created_at_utc": "2026-09-25T08:23:23.863361+00:00",
+  "ordered_runs": [
+    {
+      "path": "C:\\Users\\user\\Soup Experimental\\experiments\\cg-gate-lora-a1.json",
+      "variant": "baseline",
+      "started_at_utc": "2026-09-25T08:13:39.402322+00:00",
+      "source_checkout": "C:\\Users\\user\\Soup Experimental\\experiments\\cg-main",
+      "git_sha": {
+        "returncode": 128,
+        "stdout": "",
+        "stderr": "fatal: not a git repository (or any of the parent directories): .git"
+      },
+      "git_status": {
+        "returncode": 128,
+        "stdout": "",
+        "stderr": "fatal: not a git repository (or any of the parent directories): .git"
+      },
+      "checks": {
+        "completed": true,
+        "same_workload": true,
+        "same_token_ids": true,
+        "all_requests_identical": true,
+        "same_versions": true,
+        "same_config_fingerprints": true,
+        "same_gpu": true,
+        "same_dtype": true,
+        "same_device_map": true,
+        "same_telemetry_setting": true,
+        "same_effective_cpu_affinity": true
+      },
+      "aggregate_tokens_per_second": 17.803391028976346,
+      "request_count": 7,
+      "raw_request_tokens_per_second": [
+        12.280294969605142,
+        19.529888724798116,
+        19.95963102248072,
+        18.96590562858797,
+        18.592461750273134,
+        18.89373826535013,
+        19.604560995021078
+      ]
+    },
+    {
+      "path": "C:\\Users\\user\\Soup Experimental\\experiments\\cg-gate-lora-b1.json",
+      "variant": "production_cuda_graphs",
+      "started_at_utc": "2026-09-25T08:15:40.430576+00:00",
+      "source_checkout": "C:\\Users\\user\\Soup Experimental\\experiments\\cg-candidate",
+      "git_sha": {
+        "returncode": 128,
+        "stdout": "",
+        "stderr": "fatal: not a git repository (or any of the parent directories): .git"
+      },
+      "git_status": {
+        "returncode": 128,
+        "stdout": "",
+        "stderr": "fatal: not a git repository (or any of the parent directories): .git"
+      },
+      "checks": {
+        "completed": true,
+        "same_workload": true,
+        "same_token_ids": true,
+        "all_requests_identical": true,
+        "same_versions": true,
+        "same_config_fingerprints": true,
+        "same_gpu": true,
+        "same_dtype": true,
+        "same_device_map": true,
+        "same_telemetry_setting": true,
+        "same_effective_cpu_affinity": true
+      },
+      "aggregate_tokens_per_second": 49.18596487056687,
+      "request_count": 7,
+      "raw_request_tokens_per_second": [
+        50.06908555909143,
+        49.35808842011818,
+        51.86703706743106,
+        48.80588025436594,
+        47.36461435514088,
+        49.152525971326554,
+        47.94445634752975
+      ]
+    },
+    {
+      "path": "C:\\Users\\user\\Soup Experimental\\experiments\\cg-gate-lora-b2.json",
+      "variant": "production_cuda_graphs",
+      "started_at_utc": "2026-09-25T08:16:49.359661+00:00",
+      "source_checkout": "C:\\Users\\user\\Soup Experimental\\experiments\\cg-candidate",
+      "git_sha": {
+        "returncode": 128,
+        "stdout": "",
+        "stderr": "fatal: not a git repository (or any of the parent directories): .git"
+      },
+      "git_status": {
+        "returncode": 128,
+        "stdout": "",
+        "stderr": "fatal: not a git repository (or any of the parent directories): .git"
+      },
+      "checks": {
+        "completed": true,
+        "same_workload": true,
+        "same_token_ids": true,
+        "all_requests_identical": true,
+        "same_versions": true,
+        "same_config_fingerprints": true,
+        "same_gpu": true,
+        "same_dtype": true,
+        "same_device_map": true,
+        "same_telemetry_setting": true,
+        "same_effective_cpu_affinity": true
+      },
+      "aggregate_tokens_per_second": 60.29672949275598,
+      "request_count": 7,
+      "raw_request_tokens_per_second": [
+        59.7826145339265,
+        60.21447266202692,
+        59.83197032541793,
+        60.73645706354504,
+        60.967785479192585,
+        60.878732181482135,
+        59.69540883995575
+      ]
+    },
+    {
+      "path": "C:\\Users\\user\\Soup Experimental\\experiments\\cg-gate-lora-a2.json",
+      "variant": "baseline",
+      "started_at_utc": "2026-09-25T08:17:53.793455+00:00",
+      "source_checkout": "C:\\Users\\user\\Soup Experimental\\experiments\\cg-main",
+      "git_sha": {
+        "returncode": 128,
+        "stdout": "",
+        "stderr": "fatal: not a git repository (or any of the parent directories): .git"
+      },
+      "git_status": {
+        "returncode": 128,
+        "stdout": "",
+        "stderr": "fatal: not a git repository (or any of the parent directories): .git"
+      },
+      "checks": {
+        "completed": true,
+        "same_workload": true,
+        "same_token_ids": true,
+        "all_requests_identical": true,
+        "same_versions": true,
+        "same_config_fingerprints": true,
+        "same_gpu": true,
+        "same_dtype": true,
+        "same_device_map": true,
+        "same_telemetry_setting": true,
+        "same_effective_cpu_affinity": true
+      },
+      "aggregate_tokens_per_second": 15.170494200132275,
+      "request_count": 7,
+      "raw_request_tokens_per_second": [
+        18.75265897685897,
+        17.130662023359303,
+        17.430124028549905,
+        18.920170302794848,
+        12.116745677651974,
+        9.222517028945516,
+        20.603637649534658
+      ]
+    },
+    {
+      "path": "C:\\Users\\user\\Soup Experimental\\experiments\\cg-gate-lora-b3.json",
+      "variant": "production_cuda_graphs",
+      "started_at_utc": "2026-09-25T08:19:33.075638+00:00",
+      "source_checkout": "C:\\Users\\user\\Soup Experimental\\experiments\\cg-candidate",
+      "git_sha": {
+        "returncode": 128,
+        "stdout": "",
+        "stderr": "fatal: not a git repository (or any of the parent directories): .git"
+      },
+      "git_status": {
+        "returncode": 128,
+        "stdout": "",
+        "stderr": "fatal: not a git repository (or any of the parent directories): .git"
+      },
+      "checks": {
+        "completed": true,
+        "same_workload": true,
+        "same_token_ids": true,
+        "all_requests_identical": true,
+        "same_versions": true,
+        "same_config_fingerprints": true,
+        "same_gpu": true,
+        "same_dtype": true,
+        "same_device_map": true,
+        "same_telemetry_setting": true,
+        "same_effective_cpu_affinity": true
+      },
+      "aggregate_tokens_per_second": 51.095848558047685,
+      "request_count": 7,
+      "raw_request_tokens_per_second": [
+        47.5571613858698,
+        49.93057309830934,
+        55.60597260305968,
+        51.97309141937142,
+        47.987994602991,
+        52.89955259391467,
+        52.699277583081304
+      ]
+    },
+    {
+      "path": "C:\\Users\\user\\Soup Experimental\\experiments\\cg-gate-lora-a3.json",
+      "variant": "baseline",
+      "started_at_utc": "2026-09-25T08:20:29.470751+00:00",
+      "source_checkout": "C:\\Users\\user\\Soup Experimental\\experiments\\cg-main",
+      "git_sha": {
+        "returncode": 128,
+        "stdout": "",
+        "stderr": "fatal: not a git repository (or any of the parent directories): .git"
+      },
+      "git_status": {
+        "returncode": 128,
+        "stdout": "",
+        "stderr": "fatal: not a git repository (or any of the parent directories): .git"
+      },
+      "checks": {
+        "completed": true,
+        "same_workload": true,
+        "same_token_ids": true,
+        "all_requests_identical": true,
+        "same_versions": true,
+        "same_config_fingerprints": true,
+        "same_gpu": true,
+        "same_dtype": true,
+        "same_device_map": true,
+        "same_telemetry_setting": true,
+        "same_effective_cpu_affinity": true
+      },
+      "aggregate_tokens_per_second": 8.103636898582106,
+      "request_count": 7,
+      "raw_request_tokens_per_second": [
+        8.641757606042988,
+        8.583306488145615,
+        8.367632509585164,
+        8.030182142220548,
+        7.311140795733046,
+        7.836882443100643,
+        8.118883388648078
+      ]
+    }
+  ],
+  "baseline": {
+    "runs": 3,
+    "requests": 21,
+    "generated_tokens": 2688,
+    "request_seconds_total": 219.95714790001512,
+    "aggregate_tokens_per_second": 12.220562167053883,
+    "median_request_tokens_per_second": 17.130662023359303,
+    "latency_per_token_ms": 81.82929609375563,
+    "median_request_seconds": 7.471982100018067,
+    "request_tokens_per_second_min": 7.311140795733046,
+    "request_tokens_per_second_max": 20.603637649534658,
+    "cpu_utilization_percent": 96.04853809799081,
+    "peak_allocated_bytes_including_load_and_warmup": 3146552320,
+    "peak_reserved_bytes_including_load_and_warmup": 3166699520,
+    "peak_allocated_bytes_measured_only": 3146552320,
+    "peak_reserved_bytes_measured_only": 3166699520,
+    "phase_measurements": 0
+  },
+  "optimized": {
+    "runs": 3,
+    "requests": 21,
+    "generated_tokens": 2688,
+    "request_seconds_total": 50.61209399998188,
+    "aggregate_tokens_per_second": 53.10983576377935,
+    "median_request_tokens_per_second": 51.97309141937142,
+    "latency_per_token_ms": 18.8289040178504,
+    "median_request_seconds": 2.46281289999024,
+    "request_tokens_per_second_min": 47.36461435514088,
+    "request_tokens_per_second_max": 60.967785479192585,
+    "cpu_utilization_percent": 94.56114382466991,
+    "peak_allocated_bytes_including_load_and_warmup": 3158957568,
+    "peak_reserved_bytes_including_load_and_warmup": 3208642560,
+    "peak_allocated_bytes_measured_only": 3155894272,
+    "peak_reserved_bytes_measured_only": 3208642560,
+    "phase_measurements": 0
+  },
+  "improvement_percent": 334.59404762050326,
+  "bootstrap_improvement_percent_95_interval": {
+    "low": 261.4030877552076,
+    "high": 412.53808686337374,
+    "iterations": 10000,
+    "seed": 20260923,
+    "method": "Percentile bootstrap; independent whole-request resampling within each arm",
+    "limitation": "Conditional on observed runs. Requests within a run may be correlated; this interval does not include unobserved device-state/run-order drift."
+  },
+  "run_drift": {
+    "baseline_per_run_tokens_per_second": [
+      17.803391028976346,
+      15.170494200132275,
+      8.103636898582106
+    ],
+    "optimized_per_run_tokens_per_second": [
+      49.18596487056687,
+      60.29672949275598,
+      51.095848558047685
+    ],
+    "baseline_max_over_min": 2.1969630737146435,
+    "optimized_max_over_min": 1.225892989014796,
+    "pairing": "No paired statistical claim. Input execution order retained explicitly."
+  }
+}

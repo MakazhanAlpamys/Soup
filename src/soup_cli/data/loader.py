@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from rich.console import Console
@@ -122,11 +123,26 @@ def _load_csv(path: Path) -> list[dict]:
 
 def _load_parquet(path: Path) -> list[dict]:
     try:
-        import pandas as pd
+        import pyarrow.parquet as pq
     except ImportError:
-        raise ImportError("Install pandas to read parquet files: pip install pandas pyarrow")
-    df = pd.read_parquet(path)
-    return df.to_dict(orient="records")
+        raise ImportError("Install pyarrow to read parquet files: pip install pyarrow")
+
+    table = pq.read_table(path)
+
+    # pandas stores an unnamed, non-default index (after df.sample() or a filter)
+    # as a hidden __index_level_N__ column; pd.read_parquet restored it as the index.
+    pandas_meta = table.schema.pandas_metadata or {}
+    hidden = {
+        name
+        for name in pandas_meta.get("index_columns", [])
+        if isinstance(name, str) and name.startswith("__index_level_")
+    }
+
+    if hidden:
+        table = table.select(
+            [name for name in table.column_names if name not in hidden]
+        )
+    return table.to_pylist()
 
 
 def _load_txt(path: Path) -> list[dict]:
@@ -151,6 +167,31 @@ def _load_txt(path: Path) -> list[dict]:
         return []
 
     return [{"text": line} for line in lines]
+
+
+@dataclass(frozen=True)
+class LoadOutcome:
+    """What the most recent :func:`load_dataset` call converted (#1217).
+
+    ``fmt`` is the format the rows were converted as (resolved, never
+    ``"auto"``); ``first_drop`` is ``(format, row index, reason, source)`` for
+    the first row a converter dropped. ``soup train`` reads it to say why a
+    load ended with zero training rows instead of printing "Ready to train".
+
+    Frozen, and replaced (never mutated) as a load progresses, so a caller
+    holding one keeps a snapshot that no later load can change.
+    """
+
+    fmt: str | None = None
+    first_drop: tuple[str, int, str, str | None] | None = None
+
+
+_last_load = LoadOutcome()
+
+
+def last_load_outcome() -> LoadOutcome:
+    """The :class:`LoadOutcome` of the most recent :func:`load_dataset` call."""
+    return _last_load
 
 
 # Tasks that require source columns preserved across dataset format normalisation (#1219).
@@ -179,6 +220,7 @@ def data_config_for_task(data_config: DataConfig, task: str) -> DataConfig:
     if task == "cross_encoder" and data_config.format == "auto":
         return data_config.model_copy(update={"format": "cross_encoder"})
     return data_config
+
 
 
 def _format_rows(
@@ -212,8 +254,15 @@ def _format_rows(
         if preserve_source_columns:
             normalized = {**raw_row, **normalized}
         formatted.append(normalized)
+    global _last_load
     if dropped and first_drop is not None:
         _report_dropped_rows(dropped, len(raw_data), fmt, first_drop, source)
+        if _last_load.first_drop is None:
+            _last_load = replace(
+                _last_load, first_drop=(fmt, first_drop[0], first_drop[1], source)
+            )
+    if _last_load.fmt is None:
+        _last_load = replace(_last_load, fmt=fmt)
     return formatted
 
 
@@ -404,6 +453,9 @@ def load_dataset(
       consistently whenever data.train is a list, so this branch only has
       to pick which loader — not re-validate the shape.
     """
+    global _last_load
+    _last_load = LoadOutcome()
+
     train_path = data_config.train
 
     if isinstance(train_path, list):

@@ -82,3 +82,23 @@ def test_cross_encoder_auto_reads_both_pair_shapes_through_soup_train(
     output = _plain(result.output)
     assert result.exit_code == 0, (output, repr(result.exception))
     assert "Data OK: 4 train samples" in output
+
+@pytest.mark.parametrize("pair", [("text_a", "text_b"), ("question", "answer")])
+def test_real_run_reads_pair_rows_the_way_the_dry_run_does(tmp_path, monkeypatch, pair):
+    """The real-run load resolves ``format: auto`` for cross_encoder too, so it
+    reaches the row check instead of stopping at format detection (#1219)."""
+    monkeypatch.chdir(tmp_path)
+    left, right = pair
+    rows = [{left: f"q {i}", right: f"doc {i}", "label": i % 2} for i in range(3)]
+    rows.append({left: "q 3", right: "doc 3"})  # no label: the row check must name it
+    (tmp_path / "pairs.jsonl").write_text("\n".join(json.dumps(r) for r in rows) + "\n")
+    (tmp_path / "soup.yaml").write_text(
+        "base: invalid-model-that-would-fail-if-loaded\ntask: cross_encoder\n"
+        "data:\n  train: pairs.jsonl\n  val_split: 0.0\n"
+        "training:\n  num_labels: 2\n  quantization: none\n"
+    )
+    result = CliRunner().invoke(app, ["train", "--config", "soup.yaml", "--yes"])
+    output = _plain(result.output)
+    assert result.exit_code == 1, (output, repr(result.exception))
+    assert "train row 3: missing required 'label' field" in output
+

@@ -880,12 +880,13 @@ class TestTrainRouting:
 
     def test_classifier_family_routed(self) -> None:
         from soup_cli.commands import train as train_cmd
+        from soup_cli.trainer.classifier import CLASSIFICATION_TASKS
 
         src = __import__("inspect").getsource(train_cmd)
-        # Tuple membership in the if-branch is the load-bearing pattern.
-        assert (
-            'cfg.task in ("classifier", "reranker", "cross_encoder")' in src
-        )
+        # The branch tests membership in the shared tuple (#1219), and the tuple
+        # still names all three classifier-family tasks.
+        assert "elif cfg.task in CLASSIFICATION_TASKS:" in src
+        assert CLASSIFICATION_TASKS == ("classifier", "reranker", "cross_encoder")
         # Instantiation expression — not just the class name.
         assert "ClassifierTrainerWrapper(cfg, **trainer_kwargs)" in src
 

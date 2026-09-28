@@ -40,14 +40,24 @@ class TestGRPOConfig:
         )
         assert cfg.training.grpo_beta == pytest.approx(0.04)
 
-    def test_grpo_beta_must_be_positive(self):
-        """grpo_beta must be > 0."""
+    def test_grpo_beta_zero_allowed(self):
+        """grpo_beta: 0 is allowed for KL-free recipes (#1247)."""
+        cfg = SoupConfig(
+            base="some-model",
+            task="grpo",
+            data={"train": "./data.jsonl"},
+            training={"grpo_beta": 0},
+        )
+        assert cfg.training.grpo_beta == 0.0
+
+    def test_grpo_beta_negative_rejected(self):
+        """grpo_beta must be >= 0."""
         with pytest.raises(Exception):
             SoupConfig(
                 base="some-model",
                 task="grpo",
                 data={"train": "./data.jsonl"},
-                training={"grpo_beta": 0},
+                training={"grpo_beta": -0.01},
             )
 
     def test_num_generations_default(self):

@@ -12,6 +12,7 @@ Supported formats:
 - embedding: {"anchor": ..., "positive": ..., "negative": ...} — sentence embedding pairs/triplets
 - audio: {"audio": ..., "messages": [...]} — audio + conversation for speech models
 - tool-calling: {"messages": [...], "tools": [...], "tool_calls": [...]} — function-calling training
+  (the calls may instead sit on the assistant turns: the OpenAI fine-tuning shape)
 """
 
 import json
@@ -35,7 +36,9 @@ FORMAT_SIGNATURES = {
     # v0.71.32 — ASR (Whisper): audio path + reference transcript.
     "asr": {"audio", "text"},
     "plaintext": {"text"},
-    "tool-calling": {"messages", "tools", "tool_calls"},
+    # #1217: top-level "tool_calls" is optional; the OpenAI fine-tuning shape
+    # carries "tools" at the top level and the calls inside assistant turns.
+    "tool-calling": {"messages", "tools"},
 }
 
 
@@ -48,7 +51,7 @@ def detect_format(data: list[dict]) -> str:
     keys = set(sample.keys())
 
     # Check more specific formats first (llava/sharegpt4v before sharegpt).
-    # tool-calling (messages+tools+tool_calls) is checked BEFORE audio
+    # tool-calling (messages+tools) is checked BEFORE audio
     # (audio+messages): a row carrying both would otherwise match audio first
     # and silently drop its tools/tool_calls. tool-calling before chatml
     # (signature is a superset of chatml). asr ({audio, text}) is checked
@@ -72,7 +75,7 @@ def detect_format(data: list[dict]) -> str:
         f"llava/sharegpt4v (image, conversations), "
         f"embedding (anchor, positive), "
         f"audio (audio, messages), "
-        f"tool-calling (messages, tools, tool_calls), "
+        f"tool-calling (messages, tools), "
         f"plaintext (text)"
     )
 
@@ -412,43 +415,17 @@ def _convert_vision(row: dict) -> dict:
     return result
 
 
-def _convert_tool_calling(row: dict) -> dict:
-    """Normalize tool-calling row to unified messages format.
+def _normalize_tool_calls(tool_calls: object, field: str) -> list[dict]:
+    """Validate a ``tool_calls`` list and return it in the unified shape.
 
-    Input:
-        {
-            "messages": [{"role": "user", "content": ...}],
-            "tools": [{"type": "function", "function": {...}}, ...],
-            "tool_calls": [{"function": {"name": ..., "arguments": "json-string"}}],
-        }
-
-    Output (unified format — tool schema embedded in system message,
-    tool_calls attached to final assistant turn):
-        {
-            "messages": [
-                {"role": "system", "content": "<tool schema description>"},
-                {"role": "user", "content": "..."},
-                {"role": "assistant", "content": "", "tool_calls": [...]},
-            ]
-        }
-
-    Security: every tool_call's 'arguments' must be JSON-parseable. Tool schemas
-    must be a list of dicts. Invalid rows raise ValueError and are mapped to None
-    by the outer handler.
+    Each call keeps ``function.name`` and ``function.arguments`` (a dict is
+    serialized, a string must parse as JSON), plus its ``id`` and ``type`` when
+    the source carries them: a ``tool`` turn's ``tool_call_id`` refers to that
+    ``id``, and some chat templates render it.
     """
-    tools = row["tools"]
-    tool_calls = row["tool_calls"]
-
-    if not isinstance(tools, list):
-        raise ValueError("tool-calling 'tools' must be a list")
     if not isinstance(tool_calls, list):
-        raise ValueError("tool-calling 'tool_calls' must be a list")
-
-    for tool in tools:
-        if not isinstance(tool, dict):
-            raise ValueError("tool-calling tool entries must be dicts")
-
-    normalized_tool_calls = []
+        raise ValueError(f"tool-calling '{field}' must be a list")
+    normalized = []
     for call in tool_calls:
         if not isinstance(call, dict):
             raise ValueError("tool_calls entries must be dicts")
@@ -471,45 +448,138 @@ def _convert_tool_calling(row: dict) -> dict:
             args_str = json.dumps(args)
         else:
             raise ValueError("tool_calls 'arguments' must be str or dict")
-        normalized_tool_calls.append({
-            "function": {"name": name, "arguments": args_str},
-        })
+        entry: dict = {}
+        for key in ("id", "type"):
+            if call.get(key) is not None:
+                if not isinstance(call[key], str):
+                    raise ValueError(f"tool_calls '{key}' must be a string")
+                entry[key] = call[key]
+        entry["function"] = {"name": name, "arguments": args_str}
+        normalized.append(entry)
+    return normalized
+
+
+def _convert_tool_calling(row: dict) -> dict:
+    """Normalize tool-calling row to unified messages format.
+
+    Two input shapes are accepted (#1217):
+
+    - calls nested in the conversation (the OpenAI fine-tuning shape, and what
+      ``soup agent synth`` writes): assistant turns carry their own
+      ``tool_calls`` and ``tool`` turns their ``tool_call_id``;
+    - the legacy single-call shape: the calls sit in a top-level ``tool_calls``
+      list and become one assistant turn appended after ``messages``.
+
+        {
+            "messages": [{"role": "user", "content": ...}, ...],
+            "tools": [{"type": "function", "function": {...}}, ...],  # optional
+            "tool_calls": [{"function": {"name": ..., "arguments": "json-string"}}],
+        }
+
+    Output (unified format: the tool schema, when ``tools`` is non-empty, embedded
+    in a leading system message; messages in source order, each assistant turn
+    keeping its own tool_calls):
+        {
+            "messages": [
+                {"role": "system", "content": "<tool schema description>"},
+                {"role": "user", "content": "..."},
+                {"role": "assistant", "content": "", "tool_calls": [...]},
+                {"role": "tool", "content": "...", "tool_call_id": "..."},
+                {"role": "assistant", "content": "..."},
+            ]
+        }
+
+    The top-level ``tool_calls`` is appended only when no assistant turn
+    already carries calls, so a multi-turn trajectory is never reordered into
+    "answer first, call afterwards".
+
+    Security: every tool_call's 'arguments' must be JSON-parseable. Tool schemas
+    must be a list of dicts. Invalid rows raise ValueError and are mapped to None
+    by the outer handler.
+    """
+    tools = row.get("tools")
+    if isinstance(tools, str):
+        # Some exported datasets store the schema list as a JSON string, since
+        # per-tool parameter schemas differ from row to row.
+        try:
+            tools = json.loads(tools)
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                f"tool-calling 'tools' is a string that is not JSON: {exc}"
+            ) from exc
+    if tools is not None:
+        if not isinstance(tools, list):
+            raise ValueError("tool-calling 'tools' must be a list")
+        for tool in tools:
+            if not isinstance(tool, dict):
+                raise ValueError("tool-calling tool entries must be dicts")
+
+    top_level_calls = row.get("tool_calls")
+    legacy_tool_calls = (
+        [] if top_level_calls is None
+        else _normalize_tool_calls(top_level_calls, "tool_calls")
+    )
 
     original_messages = row["messages"]
     if not isinstance(original_messages, list) or not original_messages:
         raise ValueError("tool-calling 'messages' must be a non-empty list")
 
-    tool_schema_descriptions = []
-    for tool in tools:
-        function_def = tool.get("function", {})
-        tool_name = function_def.get("name", "unknown")
-        description = function_def.get("description", "")
-        params = function_def.get("parameters", {})
-        tool_schema_descriptions.append(
-            f"- {tool_name}: {description}\n  parameters: {json.dumps(params)}"
-        )
+    messages: list[dict] = []
+    if tools:
+        tool_schema_descriptions = []
+        for tool in tools:
+            function_def = tool.get("function", {})
+            tool_name = function_def.get("name", "unknown")
+            description = function_def.get("description", "")
+            params = function_def.get("parameters", {})
+            tool_schema_descriptions.append(
+                f"- {tool_name}: {description}\n  parameters: {json.dumps(params)}"
+            )
+        messages.append({
+            "role": "system",
+            "content": (
+                "You have access to the following tools. When a tool call is "
+                "needed, respond with a function call in JSON.\n\n"
+                + "\n".join(tool_schema_descriptions)
+            ),
+        })
 
-    system_content = (
-        "You have access to the following tools. When a tool call is needed, "
-        "respond with a function call in JSON.\n\n"
-        + "\n".join(tool_schema_descriptions)
-    )
-
-    messages: list[dict] = [{"role": "system", "content": system_content}]
+    has_nested_calls = False
     for msg in original_messages:
         if not isinstance(msg, dict) or "role" not in msg:
             raise ValueError("tool-calling messages must be dicts with 'role'")
-        if msg["role"] == "system":
+        role = msg["role"]
+        if role == "system" and tools:
             # Merge user system message into our synthesized system content
             messages[0]["content"] = msg.get("content", "") + "\n\n" + messages[0]["content"]
             continue
-        messages.append({"role": msg["role"], "content": msg.get("content", "")})
+        content = msg.get("content", "")
+        calls = []
+        if role == "assistant" and msg.get("tool_calls") is not None:
+            calls = _normalize_tool_calls(msg["tool_calls"], "messages.tool_calls")
+        if calls and content is None:
+            # The OpenAI shape writes "content": null on a call-only turn.
+            content = ""
+        # Any other null content would render as the literal text "None" in a
+        # chat template, so the row is dropped, as the other converters do.
+        out = {
+            "role": role,
+            "content": _require_str_content(content, f"tool-calling {role} content"),
+        }
+        if calls:
+            has_nested_calls = True
+            out["tool_calls"] = calls
+        elif role == "tool" and msg.get("tool_call_id") is not None:
+            if not isinstance(msg["tool_call_id"], str):
+                raise ValueError("tool-calling 'tool_call_id' must be a string")
+            out["tool_call_id"] = msg["tool_call_id"]
+        messages.append(out)
 
-    if normalized_tool_calls:
+    if legacy_tool_calls and not has_nested_calls:
         messages.append({
             "role": "assistant",
             "content": "",
-            "tool_calls": normalized_tool_calls,
+            "tool_calls": legacy_tool_calls,
         })
 
     return {"messages": messages}

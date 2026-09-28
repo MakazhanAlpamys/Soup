@@ -48,7 +48,8 @@ _UNWIRED_TRAINING_TUNABLES = (
     "checkpoint_eval_metric",
     "checkpoint_eval_tasks",
     "checkpoint_keep_top",
-    "early_stop_patience",
+    # early_stop_patience moved to config/staged_fields.py (#761): the loader
+    # warns about it with the refusal date, so it is not listed here as well.
     "convergence_window",
     "convergence_rel_tol",
 )
@@ -116,7 +117,7 @@ def _train_sample_count(dcfg, dataset) -> int:
 def _validate_classification_dataset_if_applicable(cfg: Any, dataset: dict) -> None:
     """Validate sequence classification rows upfront if task is in CLASSIFICATION_TASKS."""
     if cfg.task in CLASSIFICATION_TASKS:
-        from rich.markup import escape as _esc
+        from rich.markup import escape
 
         from soup_cli.trainer.classifier import validate_classification_dataset
 
@@ -124,9 +125,48 @@ def _validate_classification_dataset_if_applicable(cfg: Any, dataset: dict) -> N
             validate_classification_dataset(cfg, dataset)
         except (ValueError, TypeError) as exc:
             console.print(
-                f"[red]Error validating {cfg.task} dataset:[/] {_esc(str(exc))}"
+                f"[red]Error validating {cfg.task} dataset:[/] {escape(str(exc))}"
             )
             raise typer.Exit(1) from exc
+
+
+def _refuse_empty_train(dcfg, dataset) -> None:
+    """Stop a run whose data loaded zero training rows (#1217).
+
+    The loader drops rows its format cannot convert (one bad line must not
+    abort a load), so a format mismatch loads nothing and still returns
+    cleanly. Before this, ``--dry-run`` then printed "Data OK: 0 train
+    samples" and "Config valid. Ready to train!", and the real run loaded the
+    model before failing on an empty dataset. Names the format and the first
+    drop reason, which is what the user has to change.
+    """
+    from rich.markup import escape
+
+    from soup_cli.data.loader import last_load_outcome
+
+    if _train_sample_count(dcfg, dataset) > 0:
+        return
+    outcome = last_load_outcome()
+    fmt = outcome.fmt or dcfg.format
+    message = (
+        f"[red]No training rows:[/] {escape(str(dcfg.train))} loaded 0 train "
+        f"samples as format {escape(repr(fmt))}."
+    )
+    if outcome.first_drop is not None:
+        drop_fmt, index, reason, _source = outcome.first_drop
+        message += (
+            f"\nEvery row that failed to convert was dropped. First: row "
+            f"{index} (as {escape(repr(drop_fmt))}): {escape(reason)}."
+            "\nFix those rows, or set data.format to the format they are in."
+        )
+    else:
+        message += (
+            "\nNo row failed to convert: the data is empty, every row went to "
+            "validation (data.val_split), or the rows were skipped for missing "
+            "media files."
+        )
+    console.print(message)
+    raise typer.Exit(1)
 
 
 def _build_hardware_fit_input(cfg):
@@ -1481,9 +1521,11 @@ def train(
             data_config_for_task(cfg.data, cfg.task),
             preserve_source_columns=task_preserves_source_columns(cfg.task),
         )
+        _refuse_empty_train(cfg.data, dataset)
         _validate_classification_dataset_if_applicable(cfg, dataset)
-
-        console.print(f"[green]Data OK:[/] {len(dataset['train'])} train samples")
+        console.print(
+            f"[green]Data OK:[/] {_train_sample_count(cfg.data, dataset)} train samples"
+        )
         if "val" in dataset:
             console.print(f"[green]Val:[/] {len(dataset['val'])} samples")
         console.print("[green]Config valid. Ready to train![/]")
@@ -1495,8 +1537,8 @@ def train(
         data_config_for_task(cfg.data, cfg.task),
         preserve_source_columns=task_preserves_source_columns(cfg.task),
     )
+    _refuse_empty_train(cfg.data, dataset)
     _validate_classification_dataset_if_applicable(cfg, dataset)
-
     console.print(
         f"[green]Loaded:[/] {_train_sample_count(cfg.data, dataset)} train samples"
     )
