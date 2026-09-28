@@ -438,10 +438,6 @@ UNRESOLVABLE_MOE_RECIPE_BASES = {
         "the repo exists and lists consolidated-*.safetensors but has no "
         "config.json (404), so AutoConfig cannot load it at all"
     ),
-    "moonshotai/Kimi-K2": (
-        "401 unauthenticated, while moonshotai/Kimi-K2.5 and Kimi-K2.6 resolve "
-        "from the same org -- gated or gone, not decidable from here"
-    ),
 }
 
 
@@ -532,19 +528,19 @@ class TestTheRatchet:
         assert all("unresolvable" in record[b] for b in UNRESOLVABLE_MOE_RECIPE_BASES)
         assert set(UNRESOLVABLE_MOE_RECIPE_BASES) <= _flagged_bases()
         assert len(EXCLUDED_MOE_BASES) == 1
-        assert len(UNRESOLVABLE_MOE_RECIPE_BASES) == 2
+        assert len(UNRESOLVABLE_MOE_RECIPE_BASES) == 1
 
     def test_the_record_has_the_measured_shape(self):
         """If regeneration silently lost bases or experts, the tests above would
         pass while checking less. Pinned to the numbers the reviewer derived
-        independently: 117 bases, 20 MoE, 6 of them flagless, 11 model types."""
+        independently: 114 bases, 23 MoE, 8 of them flagless, 13 model types."""
         moe = _moe_bases()
         flagless = [b for b in moe if b not in _flagged_bases()]
 
-        assert len(_record()) == 116
-        assert len(moe) == 20
-        assert len(flagless) == 6, sorted(flagless)
-        assert len({info["model_type"] for info in moe.values()}) == 11
+        assert len(_record()) == 114
+        assert len(moe) == 23
+        assert len(flagless) == 8, sorted(flagless)
+        assert len({info["model_type"] for info in moe.values()}) == 13
 
 
 #: Text SFT/pretrain and the preference/RL trainers; #1148's six are driven in test_issue1099.

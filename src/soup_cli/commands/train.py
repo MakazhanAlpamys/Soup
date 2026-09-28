@@ -43,7 +43,8 @@ _UNWIRED_TRAINING_TUNABLES = (
     "checkpoint_eval_metric",
     "checkpoint_eval_tasks",
     "checkpoint_keep_top",
-    "early_stop_patience",
+    # early_stop_patience moved to config/staged_fields.py (#761): the loader
+    # warns about it with the refusal date, so it is not listed here as well.
     "convergence_window",
     "convergence_rel_tol",
 )
@@ -109,6 +110,45 @@ def _train_sample_count(dcfg, dataset) -> int:
         return rows
     valid = isinstance(count, int) and not isinstance(count, bool) and count >= 0
     return count if valid else rows
+
+
+def _refuse_empty_train(dcfg, dataset) -> None:
+    """Stop a run whose data loaded zero training rows (#1217).
+
+    The loader drops rows its format cannot convert (one bad line must not
+    abort a load), so a format mismatch loads nothing and still returns
+    cleanly. Before this, ``--dry-run`` then printed "Data OK: 0 train
+    samples" and "Config valid. Ready to train!", and the real run loaded the
+    model before failing on an empty dataset. Names the format and the first
+    drop reason, which is what the user has to change.
+    """
+    from rich.markup import escape
+
+    from soup_cli.data.loader import last_load_outcome
+
+    if _train_sample_count(dcfg, dataset) > 0:
+        return
+    outcome = last_load_outcome()
+    fmt = outcome.fmt or dcfg.format
+    message = (
+        f"[red]No training rows:[/] {escape(str(dcfg.train))} loaded 0 train "
+        f"samples as format {escape(repr(fmt))}."
+    )
+    if outcome.first_drop is not None:
+        drop_fmt, index, reason, _source = outcome.first_drop
+        message += (
+            f"\nEvery row that failed to convert was dropped. First: row "
+            f"{index} (as {escape(repr(drop_fmt))}): {escape(reason)}."
+            "\nFix those rows, or set data.format to the format they are in."
+        )
+    else:
+        message += (
+            "\nNo row failed to convert: the data is empty, every row went to "
+            "validation (data.val_split), or the rows were skipped for missing "
+            "media files."
+        )
+    console.print(message)
+    raise typer.Exit(1)
 
 
 def _build_hardware_fit_input(cfg):
@@ -1467,7 +1507,10 @@ def train(
             cfg.data,
             preserve_source_columns=cfg.task == "grpo",
         )
-        console.print(f"[green]Data OK:[/] {len(dataset['train'])} train samples")
+        _refuse_empty_train(cfg.data, dataset)
+        console.print(
+            f"[green]Data OK:[/] {_train_sample_count(cfg.data, dataset)} train samples"
+        )
         if "val" in dataset:
             console.print(f"[green]Val:[/] {len(dataset['val'])} samples")
         console.print("[green]Config valid. Ready to train![/]")
@@ -1479,6 +1522,7 @@ def train(
         cfg.data,
         preserve_source_columns=cfg.task == "grpo",
     )
+    _refuse_empty_train(cfg.data, dataset)
     console.print(
         f"[green]Loaded:[/] {_train_sample_count(cfg.data, dataset)} train samples"
     )
@@ -2335,6 +2379,7 @@ def _resolve_checkpoint(
     if checkpoint_path.exists() and checkpoint_path.is_dir():
         return str(checkpoint_path)
     return None
+
 
 def _resolve_resume_or_exit(resume: str, cfg: "SoupConfig") -> str | None:
     """Resolve ``--resume`` against ``cfg``, printing status and exiting on

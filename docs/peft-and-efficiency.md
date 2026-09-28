@@ -71,6 +71,7 @@ soup shrink --model HuggingFaceTB/SmolLM2-135M-Instruct --drop-ratio 0.25 \
   `<dir>/shrink_report.json`.
 
 **Arch support (v1):** Llama / Qwen / SmolLM. Others are a friendly reject.
+MoE configs that place their MoE layers by layer number (a non-default `mlp_only_layers` or `decoder_sparse_step` on Qwen MoE models, `moe_layers` or `interleave_moe_layer_step` on Llama4-text) are refused before the model is loaded, because a prune cannot renumber them. Per-layer lists such as `layer_types` and `no_rope_layers` are sliced along with the layers.
 The importance pass loads the model, so live-validated on ≤ 3 B; larger models
 work but are unvalidated on the reference hardware. Perplexity is an unweighted
 mean of per-example perplexities — valid for the before/after *ratio* the
@@ -126,17 +127,17 @@ The `JinjaTemplateAnalyzer` (also v0.37.0) walks chat-template ASTs to discover 
 
 ## Long Context — YaRN, Llama 3.1 NTK, LongLoRA
 
-Soup ships five RoPE-scaling strategies (LongLoRA is refused, see below):
+Soup ships four RoPE-scaling strategies (`linear`, `dynamic`, `yarn`, `llama3`); LongLoRA is refused, see below:
 
 ```yaml
 # soup.yaml
-base: meta-llama/Llama-3.1-8B
+base: meta-llama/Meta-Llama-3-8B  # 8k, no native RoPE scaling
 task: sft
 data:
   train: ./data.jsonl
   max_length: 32768  # extend from 8k → 32k
 training:
-  rope_scaling_type: yarn      # linear | dynamic | yarn | longrope | llama3
+  rope_scaling_type: yarn      # linear | dynamic | yarn | llama3
   yarn_factor: 4.0             # 4x extension
   yarn_beta_fast: 32
   yarn_beta_slow: 1
@@ -146,20 +147,20 @@ training:
 
 **YaRN.** Best quality for 4-8x extension. Tunables (`yarn_factor`, `yarn_attn_factor`, `yarn_beta_fast`, `yarn_beta_slow`) only apply when `rope_scaling_type=yarn`; the schema rejects them otherwise. Pure-Python math kernels are exposed at `soup_cli.utils.long_context.yarn_*` for reference / config-emit. The actual RoPE rotation runs inside HF Transformers.
 
-**Llama 3.1 NTK-aware.** Use `rope_scaling_type: llama3` for the canonical Llama 3.1 frequency-band scaling (`scale_factor=8`, `low_freq_factor=1`, `high_freq_factor=4`, `old_context_len=8192`). `detect_llama3_rope_in_config` can identify the block in an HF model config dict, but `soup train` changes RoPE only when `rope_scaling_type` is explicit; omitting it preserves the checkpoint's native RoPE configuration.
+**Llama 3.1 NTK-aware.** Use `rope_scaling_type: llama3` for Llama 3.1-style frequency-band scaling. On a checkpoint without RoPE scaling it emits `factor = data.max_length / max_position_embeddings` over `original_max_position_embeddings = max_position_embeddings`, with `low_freq_factor` 1 and `high_freq_factor` 4, so an 8k checkpoint extended to 64k gets Llama 3.1's own factor 8 over 8192. `detect_llama3_rope_in_config` can identify the block in an HF model config dict, but `soup train` changes RoPE only when `rope_scaling_type` is explicit; omitting it preserves the checkpoint's native RoPE configuration. On a checkpoint that already ships a `llama3` block (Llama 3.1, 3.2 and 3.3 do), `rope_scaling_type: llama3` composes with it instead of replacing it: the checkpoint's `original_max_position_embeddings`, `low_freq_factor` and `high_freq_factor` are kept, and its `factor` is multiplied by `data.max_length / max_position_embeddings`. Llama-3.1-8B extended from 131072 to 262144 tokens trains with factor 16 over 8192, so no frequency pair rotates faster than it did in pretraining.
 
-RoPE scaling is applied before model construction for the Transformers text paths of `task: sft` and `task: pretrain`. Vision, audio, layer-streaming and Unsloth setup paths do not consume these fields, nor do other training tasks. Existing type-independent model parameters such as `rope_theta` are preserved; tunables belonging to a previous RoPE algorithm are removed when the type changes. Models such as Gemma 3 that use nested per-layer RoPE sections are refused rather than partially modified. `longrope` additionally requires a checkpoint that already ships its learned `short_factor` and `long_factor` vectors; Soup refuses to invent those model-specific values.
+RoPE scaling is applied before model construction for the Transformers text paths of `task: sft` and `task: pretrain`. Vision, audio, layer-streaming and Unsloth setup paths do not consume these fields, nor do other training tasks. Existing type-independent model parameters such as `rope_theta` are preserved; tunables belonging to a previous RoPE algorithm are removed when the type changes. A checkpoint whose RoPE block is already scaled (any `rope_type` other than `default`, for example `yarn`, `longrope` or `llama3`) is never replaced: apart from `llama3` on a `llama3` block, extending it is refused before the model is built, and the error names the checkpoint's `rope_type` and `factor`. A `data.max_length` at or below the checkpoint's `max_position_embeddings` extends nothing, so none of these refusals applies to it. Models such as Gemma 3 that use nested per-layer RoPE sections are refused rather than partially modified. `rope_scaling_type: longrope` is refused at config load, whatever `data.max_length` is. Its per-dimension `short_factor` and `long_factor` vectors exist only on checkpoints already scaled with LongRoPE, and extending those is refused, so it cannot extend any checkpoint. To extend a checkpoint without RoPE scaling, use `linear`, `dynamic`, `yarn` or `llama3`. To fine-tune a LongRoPE checkpoint such as Phi-3-mini-128k at its native length, leave `rope_scaling_type` unset: the checkpoint's own RoPE block is used as shipped.
 
 **LongLoRA S².** `training.use_longlora: true` is refused at config load ([#1240](https://github.com/MakazhanAlpamys/Soup/issues/1240)): the override it installed leaked future tokens into earlier positions and applied no S² grouping (see [LongLoRA Forward Override](#longlora-forward-override)). Use one of the RoPE-scaling strategies above with plain LoRA instead.
 
 ```yaml
-# Llama 3.1 with NTK-aware scaling out to 128k
+# Llama 3.1 ships llama3 scaling to 128k; this composes with it out to 256k
 base: meta-llama/Llama-3.1-8B
 training:
   rope_scaling_type: llama3
   gradient_checkpointing: full
 data:
-  max_length: 131072
+  max_length: 262144
 ```
 
 
@@ -187,19 +188,13 @@ training:
 
 ## Optimizer & PEFT Zoo
 
-Pick from a wider catalogue of optimizers, target individual modules with their own LR, and use quantization-aware LoRA initialisation:
+Pick from a wider catalogue of optimizers and use quantization-aware LoRA initialisation:
 
 ```yaml
 training:
   # 30+ optimizers — HF-native, bnb, BAdam, APOLLO, Adam-mini, lomo,
   # grokadamw, schedule_free, muon, dion, came_pytorch, ao_adamw_{fp8,4bit,8bit}
   optimizer: badam
-
-  # Per-module LR override (first match wins; remaining params use base lr)
-  lr_groups:
-    q_proj: 1e-4
-    v_proj: 5e-5
-    mlp:    1e-5
 
   # Friendly aliases for users coming from LlamaFactory / Axolotl
   # load_in_8bit: true      # equivalent to quantization: 8bit
@@ -217,7 +212,9 @@ training:
   freeze_trainable_layers: 4
 ```
 
-Catch-all friendly errors: typos in `optimizer:` are rejected at config-load with the v0.41.0 additions listed in the message; `lr_groups` patterns are validated as compilable regexes (length-capped + benign-string ReDoS probe); `load_in_8bit` mixed with `load_in_16bit` raises rather than picking one silently.
+Catch-all friendly errors: typos in `optimizer:` are rejected at config-load with the v0.41.0 additions listed in the message; `load_in_8bit` mixed with `load_in_16bit` raises rather than picking one silently.
+
+**`lr_groups` is not applied.** The per-module learning rate it describes is parsed and validated (patterns must be compilable regexes) but no optimizer reads it, so every parameter trains at `lr`. Setting it warns in v0.76 and is refused as of v0.77 (#761).
 
 PiSSA, OLoRA, LoftQ, and VeRA are applied through the shared PEFT constructor on
 the Transformers backend. Soup refuses these variants on MLX and Unsloth rather
@@ -698,7 +695,9 @@ reserved for planned in-training callbacks. They are accepted by the schema but
 are not enforced during training in this build. `soup train` prints an advisory note
 when one is set away from its default, directing users to `--gate <suite.yaml>`.
 (Other unconsumed configuration fields staged for features that have not landed emit
-a load-time warning in v0.76 and are refused as of v0.77 per #808).
+a load-time warning in v0.76 and are refused as of v0.77 per #808. That includes
+`early_stop_patience`, which moved from the advisory note to the load-time warning
+in #761, so it is reported once, with the refusal date.)
 
 Use the live eval gate for regression detection and automatic stopping today:
 

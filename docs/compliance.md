@@ -135,6 +135,18 @@ expectations:
 Supported names: `expect_no_pii`, `expect_token_length_between`,
 `expect_no_refusal_pattern`, `expect_chosen_preferred_over_rejected_by_judge`.
 
+Scanned fields per format:
+- ChatML / tool-calling / audio: every `messages[].content` (string or text parts), tool-call arguments (per message and top-level `tool_calls`), and `tools[].function.description`.
+- ShareGPT / LLaVA / ShareGPT4V: every `conversations[].value`.
+- Alpaca: `instruction`, `input`, `output`, `system`, `response`.
+- DPO: `prompt`, `chosen`, `rejected` (string or message list). KTO: `prompt`, `completion`.
+- Embedding: `anchor`, `positive`, `negative` (string or list).
+- Plaintext / ASR: `text`. RAFT: `query`, `golden_doc`, `distractor_docs`, `answer`. PRM: `prompt`, `completions`. input_output: `segments[].text`.
+
+`expect_no_refusal_pattern` reads only the assistant side: assistant/gpt turns, DPO `chosen`, KTO `completion`, Alpaca `output`/`response`, RAFT `answer`, PRM `completions`, `segments` with `label: true`, and `text` for plaintext rows. A row with text but no assistant side passes it.
+
+Empty-text safeguard: rows containing no extractable text fail closed on all expectation gates to prevent unparseable or blank rows from passing CI.
+
 Every path is shell-quoted and validated to stay under the repo root, so the
 rendered workflow is injection-safe. Edit the paths to match your repo.
 

@@ -123,7 +123,9 @@ def register(app: typer.Typer, console: Console) -> None:
             None, "--evidence", "-e",
             help=(
                 "Path to a JSON file with "
-                "{pre_responses, post_responses, oracle} arrays."
+                "{pre_responses, post_responses, oracle} arrays. Here each oracle "
+                "entry is a word the matching response must contain; --base-model "
+                "scores refusal behaviour instead."
             ),
         ),
         output: Optional[str] = typer.Option(
@@ -176,7 +178,10 @@ def register(app: typer.Typer, console: Console) -> None:
         ))
 
         if base_model is not None:
-            from soup_cli.utils.behavior_battery import run_behavior_live
+            from soup_cli.utils.behavior_battery import (
+                LiveScoringUnsupportedError,
+                run_behavior_live,
+            )
 
             try:
                 report = run_behavior_live(
@@ -186,6 +191,9 @@ def register(app: typer.Typer, console: Console) -> None:
                     adapter=adapter,
                     device=device,
                 )
+            except LiveScoringUnsupportedError as exc:
+                console.print(f"[red]{escape(str(exc))}[/]")
+                raise typer.Exit(EXIT_USAGE_ERROR) from exc
             except (RuntimeError, ValueError, TypeError, OSError) as exc:
                 console.print(f"[red]Live behaviour diff failed:[/] {escape(str(exc))}")
                 raise typer.Exit(EXIT_RUNTIME_ERROR) from exc

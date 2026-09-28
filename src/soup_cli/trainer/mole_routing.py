@@ -110,6 +110,9 @@ def make_mole_trainer_class(base_cls: type) -> type:
                     output_hidden_states=True,
                 )
             router_hidden = base_out.hidden_states[-1]  # [B, T, H]
+            # #1266: the gate is an fp32 master weight while the frozen base may run
+            # in bf16. Feed it its own dtype here; the routing weights go back to the
+            # logits' dtype below, where the blend is computed.
             weights = gate(router_hidden.to(gate.gate.weight.dtype))  # [B, T, N]
 
             blended = None
@@ -332,10 +335,18 @@ class MoleRoutingTrainerWrapper:
         self._gate_cfg = gate_cfg
         self._adapter_paths = list(adapters)
         self._hidden_size = hidden_size
-        gate = build_gating_kernel(gate_cfg)
+        # #1266: the gate is the only tensor the optimizer steps, so it is an fp32
+        # master weight on every device string, "cuda" and "cuda:0" alike, and its
+        # gradient and AdamW moments are fp32 with it. Cast to bf16 on "cuda" (no
+        # autocast, no fp32 copy), an AdamW step of about lr rounded away for most
+        # of its initial weights. The frozen base may still load in bf16:
+        # compute_loss casts between the two. The gate is created where the base
+        # is. A base loaded to the CPU is moved by the Trainer, gate and all; a base
+        # the Trainer never moves (a pre-quantized bitsandbytes checkpoint, placed
+        # on its GPU at load) already has the gate beside it.
+        base_device = next(base_model.parameters()).device
+        gate = build_gating_kernel(gate_cfg).to(device=base_device, dtype=torch.float32)
         gate.requires_grad_(True)
-        if self.device == "cuda":
-            gate = gate.to("cuda", dtype=torch.bfloat16)
         # nn.Module.__setattr__ registers the gate as a submodule, so its
         # params appear in model.parameters() for the optimizer; the plain
         # list attribute is stored in __dict__ (not registered).
@@ -448,7 +459,11 @@ class MoleRoutingTrainerWrapper:
         result = self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)
         # Persist the trained gate (the base + adapters are unchanged on disk).
         gate_path = output_dir / "mole_gate.pt"
+        # #1266: always fp32, whatever the module holds by now (a DeepSpeed bf16/fp16
+        # engine casts it to 16-bit in place); a Linear(hidden, N) costs nothing.
+        # The serve loader builds an fp32 gate, so a bf16 file from before loads too.
         _save_mole_gate(self.model.mole_gate, gate_path)
+
         # v0.71.17 #259 — write a self-describing manifest next to the gate so
         # `soup serve --mole <dir>` can reconstruct the decode-time blend
         # (base + N frozen task LoRAs + gate geometry).

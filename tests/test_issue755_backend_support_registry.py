@@ -487,7 +487,9 @@ def _fields_read_outside(repo_root: pathlib.Path, modules) -> set[str]:
     declared = {(repo_root / "src" / m).resolve() for m in modules}
     names: set[str] = set()
     for path in src.rglob("*.py"):
-        if path.resolve() in declared or path.name == "schema.py":
+        # schema.py declares every field, and config/staged_fields.py lists the
+        # ones nothing reads (#808): naming a field there is not reading it.
+        if path.resolve() in declared or path.name in ("schema.py", "staged_fields.py"):
             continue
         names |= _fields_read_by(path)
     return names

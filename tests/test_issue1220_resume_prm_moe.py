@@ -318,6 +318,17 @@ class TestMoleRoutingResume:
         monkeypatch.setattr(transformers.Trainer, "training_step", counting_step)
         monkeypatch.setenv("WANDB_DISABLED", "true")
 
+        import soup_cli.trainer.mole_routing as mole_routing
+
+        gate_files = []
+        real_save_gate = mole_routing._save_mole_gate
+
+        def recording_save_gate(gate, path):
+            gate_files.append(Path(path))
+            real_save_gate(gate, path)
+
+        monkeypatch.setattr(mole_routing, "_save_mole_gate", recording_save_gate)
+
         # Create two tiny task LoRA adapters
         base_model = AutoModelForCausalLM.from_pretrained(TINY_MODEL)
         lora_cfg = LoraConfig(r=4, lora_alpha=8, target_modules=["q_proj", "v_proj"])
@@ -375,6 +386,14 @@ class TestMoleRoutingResume:
         assert gate2_path.is_file(), f"mole_gate.pt missing from {ckpt2}"
         assert gate4_path.is_file(), f"mole_gate.pt missing from {ckpt4}"
 
+        # Every copy goes through the one fp32 save, the checkpoint copies included.
+        written = {(p.parent.name, p.name) for p in gate_files}
+        assert {
+            ("checkpoint-2", "mole_gate.pt"),
+            ("checkpoint-4", "mole_gate.pt"),
+            (out_dir.name, "mole_gate.pt"),
+        } <= written, written
+
         gate4_saved = torch.load(gate4_path, map_location="cpu", weights_only=True)
         mtime2_before = (ckpt2 / "trainer_state.json").stat().st_mtime
         mtime4_before = (ckpt4 / "trainer_state.json").stat().st_mtime
@@ -409,3 +428,15 @@ class TestMoleRoutingResume:
         resumed = torch.load(out_dir / "mole_gate.pt", map_location="cpu", weights_only=True)
         for k in gate4_saved:
             torch.testing.assert_close(resumed[k], gate4_saved[k], rtol=0, atol=1e-6)
+
+def test_save_mole_gate_writes_fp32_from_a_16_bit_gate(tmp_path):
+    """A DeepSpeed bf16/fp16 engine casts the gate to 16-bit in place; the file is fp32."""
+    import torch
+
+    from soup_cli.trainer.mole_routing import _save_mole_gate
+
+    gate = torch.nn.Linear(8, 2, bias=False).to(torch.bfloat16)
+    _save_mole_gate(gate, tmp_path / "mole_gate.pt")
+    saved = torch.load(tmp_path / "mole_gate.pt", map_location="cpu", weights_only=True)
+    assert saved["weight"].dtype == torch.float32, saved["weight"].dtype
+    assert torch.equal(saved["weight"], gate.weight.detach().float())
