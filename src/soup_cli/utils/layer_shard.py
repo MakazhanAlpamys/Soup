@@ -1398,6 +1398,9 @@ def shard_checkpoint(
     for directory in shard_dirs[1:]:
         os.makedirs(directory, exist_ok=True)
     layer_roots = layer_roots_for(n_layers, len(shard_dirs))
+    # Collected here, deleted only after the new index commits — see the comment beside the
+    # deletion below for why.
+    stale_root0_copies: List[str] = []
     # At most _MAX_LIVE_SOURCE_HANDLES source files are mapped at once (#926);
     # a failed open, or a raise anywhere below, still releases the live ones.
     with _SourceHandles(shards, safe_open) as handles:
@@ -1553,10 +1556,16 @@ def shard_checkpoint(
             _atomic_save(blob, layer_shard_path(shard_dirs[root], idx))
             if root:
                 # A copy of this layer from an earlier one-root layout is now stale. It is
-                # Soup's own file inside the contained primary root, so it goes.
+                # Soup's own file inside the contained primary root, so it WILL go — but not
+                # yet: the index on disk right now is still the OLD one, and until the new
+                # index (which no longer names this path) is safely written, that old index
+                # is the cache's commit point and every file it names must exist at every
+                # instant. Deleting inline here would leave a window — crash before
+                # _atomic_write_index and the still-current index describes a file that is
+                # gone. Collected now, deleted only after the index write below succeeds.
                 stale = layer_shard_path(resolved_out, idx)
                 if os.path.exists(stale):
-                    os.remove(stale)
+                    stale_root0_copies.append(stale)
             del blob
 
         extras = {}
@@ -1623,6 +1632,13 @@ def shard_checkpoint(
         layer_roots=layer_roots,
     )
     _atomic_write_index(index, resolved_out)
+    # Only now: the new index above no longer names these paths, so removing them cannot
+    # leave any on-disk index (old or new) describing a file that does not exist.
+    for stale in stale_root0_copies:
+        try:
+            os.remove(stale)
+        except FileNotFoundError:
+            pass
     return index
 
 

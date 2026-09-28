@@ -111,3 +111,30 @@ def test_a_stripe_root_that_does_not_exist_is_refused_before_any_write(layout, t
     with pytest.raises(StripeRootError, match="existing directory"):
         shard_checkpoint(src, out, dtype="float32", stripe_roots=(str(tmp_path / "gone"),))
     assert not os.path.exists(layer_shard_path(out, 0))
+
+
+def test_an_interrupted_reshard_leaves_the_old_index_consistent(layout, monkeypatch):
+    """Fix round 1, Important finding: the index is the cache's commit point — every file it
+    names must exist at every instant. Deleting the stale root-0 copy of a moved layer must
+    wait until the new index (which no longer names it) is safely on disk, or a crash between
+    the delete and the index write leaves the still-current (old) index naming a file that is
+    no longer there."""
+    import soup_cli.utils.layer_shard as layer_shard_mod
+    from soup_cli.utils.layer_shard import read_shard_index
+
+    src, out, stripe = layout
+    shard_checkpoint(src, out, dtype="float32")
+
+    def _boom(*_args, **_kwargs):
+        raise RuntimeError("interrupted")
+
+    with monkeypatch.context() as m:
+        m.setattr(layer_shard_mod, "_atomic_write_index", _boom)
+        with pytest.raises(RuntimeError, match="interrupted"):
+            shard_checkpoint(src, out, dtype="float32", stripe_roots=(stripe,))
+
+    assert os.path.exists(layer_shard_path(out, 1))
+    assert read_shard_index(out).layer_roots == ()
+
+    shard_checkpoint(src, out, dtype="float32", stripe_roots=(stripe,))
+    assert not os.path.exists(layer_shard_path(out, 1))
