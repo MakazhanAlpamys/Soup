@@ -180,6 +180,63 @@ box stamp's Python-process count was lost to a decoding error (`tasklist`
 prints in the OEM code page, and the no-break space in its memory column is
 0xFF in cp866), so run 1's `python_processes` is `null`.
 
+### Run 2 — 2026-09-28 10:35, NO VERDICT again, and foreign I/O is ruled out
+
+JSON `r1_k4_run2.json`; same rule, same spans as run 1 (the span list starts
+from the top of each drive's files every run, so run 2 re-read run 1's bytes —
+irrelevant to an unbuffered read of a drive with no DRAM cache, and stated so
+it is not discovered later); every byte check OK; no counter errors. The box
+this time: 5.26 GB available, commit 49.3 of 56.6 GB at the start (5.3 / 6.3 /
+5.9 GB and 49.3 / 46.4 / 47.4 GB in the rounds), 12-13 Python processes (the
+contributor loop's suites and watchers).
+
+| round (order) | A = C: alone | B = D: alone | both: A | both: B | both: aggregate | window (s) | r_sum | r_alt |
+|---|---|---|---|---|---|---|---|---|
+| 0 (a, b, ab) | 3.89 | 4.35 | 3.92 | 4.91 | 8.07 | 2.05 | 2.031 | 1.803 |
+| 1 (b, ab, a) | 3.99 | 4.33 | 4.15 | 5.34 | 8.26 | 1.88 | 2.192 | 1.917 |
+| 2 (ab, a, b) | 4.11 | 6.02 | 4.79 | 5.69 | 9.15 | 1.77 | 1.741 | 1.592 |
+| **median** | **3.990** | 4.351 | 4.149 | 5.341 | — | — | 2.031 | 1.803 |
+
+**Verdict under §2: none** — `alone_A` = 3.990 GB/s, outside 4.5-6.2, and also
+0.03 below the 4.02 floor of gate-974's own one-request readings, so it is not
+the "between 4.0 and 4.5" case the run-1 note hands to the owner either.
+
+**What the counters settle.** Writes on C: during the C:-alone arms averaged
+**1.2 / 1.8 / 0.2 MB/s** and during the both-at-once arms 10.4 / 0.1 / 7.0
+MB/s — against 3.7-4.4 GB/s of reads, i.e. **foreign I/O on C: is not why C:
+reads ~4 GB/s**, and neither is paging (136-689 pages/s in the C: arms, a few
+MB/s). The CPU was not asleep either: 10-23% busy, clock 136-154% of nominal in
+every arm. The read counter agrees with the harness (3.67 / 3.88 / 4.11 GB/s
+against 3.89 / 3.99 / 4.11). Two things did NOT change between runs: C: alone
+stayed at 3.9-4.1, and **each drive again read faster beside the other than
+alone** — A in 3 of 3 rounds (3.89 -> 3.92, 3.99 -> 4.15, 4.11 -> 4.79), B in
+2 of 3. The r medians reproduce: r_sum 2.014 -> 2.031, r_alt 1.707 -> 1.803.
+The both-at-once aggregate across the six rounds of the two runs is **7.65-9.15
+GB/s**, against 5.65 GB/s, the best single-drive primitive reading gate-974
+ever recorded on this box.
+
+**One host setting found while looking** (`powercfg`, active scheme Balanced
+`381b4222-...`): **PCIe Link State Power Management is "Maximum power savings"
+on AC as well as on battery** (index 2). The NVMe-specific idle settings are
+hidden on this image and do not print. So two host mechanisms fit "faster
+beside the other drive": the CPU package dropping into a deep idle state
+between completions, and each link's ASPM dropping it to L1 between bursts.
+
+### D1 — does keeping the CPU awake speed up one drive? (rule written before D1 ran)
+
+A busy loop on another core keeps the CPU package out of its deep idle states
+and cannot reach a PCIe link's ASPM, so reading C: alone with and without
+spinner processes separates the two mechanisms. Harness
+`two_drive_host_probe.py` (imports `two_drive_read.py`'s primitive, spans,
+counters and byte check): per round, rotated, C: alone and C: alone with 2
+processes running `while True: pass`; 24 spans per arm, K = 4, three rounds.
+
+| measured: spin / alone, per round | reading | next |
+|---|---|---|
+| **>= 1.10 in all three rounds** | the CPU package's idle state costs >= 10% of one drive's read | a keep-awake measure inside the reader is a software lever that needs no user setting; the owner decides on a controlled power-plan comparison before R1 is re-run |
+| **0.95-1.05 in all three rounds** | package idle is not it | the remaining host suspect is per-link ASPM, which only a power-plan change tests — owner decision, because it changes a system setting on a shared box |
+| **anything else** | ambiguous | reported as measured; no conclusion drawn |
+
 ## 6. Verdict
 
 *Pending.*
