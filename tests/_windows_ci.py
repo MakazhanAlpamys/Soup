@@ -25,11 +25,14 @@ import pytest
 def _windows_ci() -> bool:
     """True on a GitHub ``windows-latest`` runner, false on a Windows dev box.
 
-    #382 — part of GitHub's ``windows-latest`` fleet lacks an instruction the
-    bitsandbytes wheel emits, so the first test that reaches a real
-    ``trainer.train()`` dies with ``Windows fatal exception: code 0xc000001d``
-    (ILLEGAL_INSTRUCTION): a faulthandler dump, no Python exception, and a dead
-    interpreter. Occurrences so far span py3.10, py3.11 and py3.12, so it tracks
+    #382 — part of GitHub's ``windows-latest`` fleet dies with ``Windows fatal
+    exception: code 0xc000001d`` (ILLEGAL_INSTRUCTION) in some real training
+    steps: a faulthandler dump, no Python exception, and a dead interpreter. Two
+    causes are known. For the two NF4 tests in ``test_v07202.py`` it is an
+    instruction the bitsandbytes wheel emits, and those tests still use this skip.
+    For the others it was the first CPU bf16/fp16 matmul in oneDNN or MKL (#1314),
+    which the ``aten_half_matmuls`` fixture avoids, so they request the fixture
+    instead. Occurrences so far span py3.10, py3.11 and py3.12, so it tracks
     the runner CPU rather than the interpreter; the control is that ``1715261``
     is the crashing tree ``7c9a931`` plus one line of markdown and came back
     green on the same pool.
