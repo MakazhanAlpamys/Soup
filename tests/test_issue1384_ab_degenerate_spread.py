@@ -146,8 +146,9 @@ class TestValuesTooLargeToSum:
         [
             ([1e308] * 40, [1.0, 2.0] * 20),  # one arm's sum overflows: mean inf
             ([1e308] * 40, [1e308] * 40),  # no spread at all, yet the sums overflow
+            ([1.0, 2.0] * 20, [1e308] * 40),  # the treatment arm's sum alone
         ],
-        ids=["arm-sum-overflows", "constant-column"],
+        ids=["arm-sum-overflows", "constant-column", "treatment-sum-overflows"],
     )
     def test_step_names_the_size_not_the_spread(self, control, treatment):
         with pytest.raises(ValueError) as exc:
