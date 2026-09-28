@@ -299,7 +299,7 @@ class TestLoaderStagedFieldIntegration:
     ) -> None:
         monkeypatch.setattr(loader, "STAGED_FIELD_SEVERITY", severity)
         loader.load_config_from_string(_valid_with_data(**{field: spelling}))
-        assert "read by nothing" not in capsys.readouterr().out
+        assert "read by nothing" not in _plain(capsys.readouterr().out)
 
     @pytest.mark.parametrize("severity", ["warn", "error"])
     def test_load_config_file_default_equivalent_spelling_loads_silently(
@@ -309,7 +309,7 @@ class TestLoaderStagedFieldIntegration:
         cfg_file = tmp_path / "soup.yaml"
         cfg_file.write_text(_valid_with_data(split_thinking="'false'", video_dir="''"))
         loader.load_config(cfg_file)
-        assert "read by nothing" not in capsys.readouterr().out
+        assert "read by nothing" not in _plain(capsys.readouterr().out)
 
     @pytest.mark.parametrize("severity", ["warn", "error"])
     def test_convergence_rel_tol_scientific_notation_unwired_tunable_loads_silently(
