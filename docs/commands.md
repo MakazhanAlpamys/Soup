@@ -28,6 +28,7 @@ soup train --config soup.yaml --push-as user/repo --hf-resume  Resume from lates
 soup train --config soup.yaml --find-lr        LR range finder: write recommended LR JSON
 soup train --config soup.yaml --cloud modal|lambda --gpu a100  Render a cloud GPU controller (plan-only; --cloud-submit submits live)
 soup infer --model ./output --input p.jsonl [--batch-size N]   Batch inference; default batch size is 1; fp16/bf16 batching may not be bit-exact with batch size 1
+soup infer --model ./output --input p.jsonl --cuda-graphs   Experimental CUDA graph decode (Qwen2/Llama, one GPU, PyTorch >= 2.14; batch size 1 only)
 soup infer --task asr --model <whisper|adapter> --input a.jsonl --output o.jsonl [--audio-dir d --asr-language en --asr-task transcribe|translate]  Whisper transcription + WER/CER
 soup chat --model ./output                    Interactive chat
 soup push --model ./output --repo user/name   Upload to HuggingFace
@@ -181,6 +182,10 @@ soup recipes list                             List all 174 ready-made recipes
 soup recipes show llama3.1-8b-sft            Print recipe YAML
 soup recipes use llama3.1-8b-sft             Copy recipe to soup.yaml
 soup recipes search "reasoning"              Search by keyword/task/size
+soup recipes verify                           Attach every shipped config on the meta device; exit 2 if one cannot (#1116)
+soup recipes verify --config soup.yaml        Same check for one config, before downloading weights
+soup recipes verify --no-templates            Recipes only; skip src/soup_cli/templates and examples/
+soup recipes verify --json                    One JSON row per config on stdout; advisories go to stderr
 soup registry push --run-id <id> --name n --tag v1  Register run
 soup registry list [--name n] [--tag v1]     List registry entries
 soup registry show <ref>                      Entry details + artifacts + ancestors
@@ -249,11 +254,12 @@ soup ui --public [--auth-token T]             Phone-scannable Web UI (v0.53.9); 
 soup tokenizer train --input c.jsonl --vocab-size N  Train BPE tokenizer (v0.53.9)
 soup bench <model>                            Inference speed + memory (same as `soup bench infer <model>`)
 soup bench infer <model> --p50 --p95          Bench with tail-latency percentiles (v0.53.9)
+soup bench infer <model> --cuda-graphs         Bench with experimental CUDA graph decode
 soup bench train --config soup.yaml --steps 20 --warmup 3 -o bench-train.json  Timed SFT steps; exits 1 when the model was not training (#836)
 soup bench <model> --backend auto             Auto-detect transformers/mlx backend (v0.53.9)
 soup serve --reasoning-parser deepseek-r1     Strip <think> blocks from responses (v0.53.9)
 soup doctor [--nccl] [--disk] [--config F]    Check environment (optionally check NCCL bandwidth, media type; --disk ~9s cold / ~2.4s warm).
-                                              --config also reports which settings that config writes are not read on its task/backend (#755); exits 2 if it cannot be read, and exits 1 when a required core dependency is missing, or when any installed package is beyond its declared ceiling — core or [train] (#828, #874).
+                                              --config also reports which settings that config switches on (a `false` or unset value is not reported; `seed: 0` is) that its task/backend does not read (#755, #1330); exits 2 if it cannot be read, and exits 1 when a required core dependency is missing, or when any installed package is beyond its declared ceiling — core or [train] (#828, #874).
 soup monitor                                  NVIDIA / Apple Silicon GPU monitor: util / temp / VRAM / power
 soup quickstart [--dry-run]                   Full demo
 soup plugins list|install|enable|disable      Manage Soup plugins
@@ -266,8 +272,8 @@ soup adapters verify <adapter> [--strict] [--public-key <pem>] [--cert-identity 
 soup adapters check-safetensors <adapter> [--strict]  Refuse pickle / PyTorch-classic weights
 soup adapters merge ... [--license <id>] [--license-override <reason>] [--allow-unscanned]  License + backdoor-scan gates (auto-detect license; scan FAIL refused)
 soup adapters arithmetic "coder + 0.5*math - toxic" --adapter coder=<p> --adapter math=<p> --adapter toxic=<p> -o <out> [--allow-unscanned --allow-cross-base]  Task-vector algebra over LoRA adapters (add/scale/negate; same-rank; scan + same-base gated) (v0.71.34)
-soup attest emit ... [--sign ed25519 --key <pem>] [-o att.json]  in-toto/SLSA-3 attestation (+ .sig sidecar)
-soup attest verify <statement> --signature <sig> [--public-key <pem>]  Verify ed25519 attestation signature
+soup attest emit ... [--sign unsigned|ed25519|sigstore] [--key <pem>] [--interactive-oidc] [-o att.json]  in-toto/SLSA-3 attestation; Sigstore requires -o
+soup attest verify <statement> --signature <sig> [--public-key <pem>] [--cert-identity <san> --cert-oidc-issuer <url>]  Verify ed25519/Sigstore attestation signature
 soup airgap-bundle --model <m> --output <out.tar> [--repro-receipt <r.json>]  Signed tarball for data-diode transfer (embeds repro-receipt)
 soup train --config soup.yaml --annex-xi <out.md|out.pdf>  EU AI Act Annex XI/XII doc (markdown or PDF; top_domains auto-filled)
 soup train --config soup.yaml --track-energy [--energy-country USA]  codecarbon offline kWh/CO2 → annex-xi (pip install soup-cli[carbon])
@@ -294,7 +300,7 @@ soup ingest --source langfuse --pull [--since 7d --max-pages 100 --allow-private
 soup prune-prompt --input <jsonl> --output <jsonl> --min-frequency 0.95  Detect + strip shared system-prompt prefix
 soup prune-prompt ... --tokenizer <id-or-path>  Tokenizer-aware prefix detection (decodes remaining ids, boundary-safe)
 soup data active-sample --input <jsonl> --output <jsonl> --budget N  Top-N uncertain prod traces for human review
-soup ab --input <jsonl> --metric latency|judge_score|retry_rate  mSPRT sequential A/B (decision: continue / reject_h0 / accept_h0)
+soup ab --input <jsonl> --metric latency|judge_score|retry_rate  Two-sided mSPRT sequential A/B (decision: continue / reject_h0 / accept_h0; a reject_h0 reports direction better / worse; continue until 30 rows per arm, 40 when --alpha < 0.05)
 soup ingest|prune-prompt|ab|data active-sample ... --slack-url <https> | --discord-url <https>  Shared SSRF-validated webhook on completion
 soup drift-alarm --reference <jsonl> --live <jsonl> --threshold 0.2  Rolling-KL drift alarm (exit 3 on drift)
 soup drift-alarm ... --slack-url <https> | --discord-url <https>  Optional SSRF-validated webhook on drift detected
@@ -358,7 +364,8 @@ soup train --config grpo.yaml  # training.echo_trap_enabled: true [echo_trap_thr
 soup train  # task='moe_lora_routing' + mole_task_adapters  MoLE per-token gate over N frozen task LoRAs (gate-only train) — LIVE (v0.71.12)
 soup train  # task='distill' + distill_mode=token|sequence  Token logit-KL or sequence-level teacher-continuation KD — LIVE (v0.71.12)
 soup train  # task=classifier|reranker|cross_encoder + lora  LoRA-adapter classifier (frozen encoder) — LIVE (v0.71.12)
-soup train  # use_mod | expand_layers | use_longlora  Mixture-of-Depths / LLaMA Pro / LongLoRA S² (Llama/Qwen/Mistral[/Phi]) — LIVE (v0.71.12)
+soup train  # use_mod | expand_layers  Mixture-of-Depths / LLaMA Pro (Llama/Qwen/Mistral) — LIVE (v0.71.12)
+soup train  # use_longlora  LongLoRA S² is refused at config load: the override leaked future tokens and applied no S² grouping; use rope_scaling_type with plain LoRA (#1240)
 soup train  # task='tts' + tts_family + modality='audio_out'  TTS codec-string SFT; pre-encoded + Orpheus/SNAC + Llasa/XCodec2 live; Sesame CSM refused (native trainer required) — LIVE (v0.71.20)
 soup train  # task in {sft,tts} + moe_expert_quant=nf4|int8_rowwise [+moe_lora]  bnb per-expert quant of fused-MoE experts (CUDA); refused on other tasks, which never applied it (#798) — LIVE (v0.71.20)
 soup train  # task in {sft,tts} + train_router_only=true [+moe_lora]  Freeze MoE experts, train only the gating router; refused on other tasks (#798). moe_lora needs lora.dropout: 0.0 on fused-expert MoEs — LIVE (v0.71.20)
@@ -489,10 +496,11 @@ Soup gate and verdict commands follow a unified, CI-friendly exit-code contract:
 | `3` | `EXIT_USAGE_ERROR` | USAGE / INPUT / CONFIG ERROR | Bad or invalid CLI flag; missing or unparseable input file; empty series |
 | `1` | `EXIT_RUNTIME_ERROR` | RUNTIME ERROR | Unexpected crash, environment incompatibility, or live inference error |
 
-The taxonomy applies consistently across `soup ship`, `soup eval gate`, `soup eval against`, `soup eval checklist`, `soup eval behavior`, `soup eval quant-check`, `soup lock check`, `soup expect`, `soup data validate`, and `soup data lint`.
+The taxonomy applies consistently across `soup ship`, `soup eval gate`, `soup eval against`, `soup eval checklist`, `soup eval behavior`, `soup eval quant-check`, `soup lock check`, `soup expect`, `soup data validate`, `soup data lint`, and `soup recipes verify`.
 
 `soup eval checklist` requires `--evidence`. `soup eval behavior` also requires
-`--evidence` unless `--base-model` selects the live path. Omitting the required
+`--evidence` unless `--base-model` selects the live path; the `elephant` and
+`syceval` batteries cannot be scored live and exit `3` with `--base-model`. Omitting the required
 evidence exits `3` and names the JSON input to provide; it never reports a neutral
 pass for a gate that measured nothing.
 

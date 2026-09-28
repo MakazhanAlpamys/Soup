@@ -125,11 +125,13 @@ class TestTheDeadline:
 
 
 class TestStagedFieldsInventory:
-    """Validate inventory size and default handling across all 17 staged fields."""
+    """Validate inventory size and default handling across all 20 staged fields."""
 
-    def test_exactly_17_staged_fields_registered(self) -> None:
-        assert len(STAGED_FIELDS) == 17, (
-            f"Expected exactly 17 staged fields, got {len(STAGED_FIELDS)}"
+    def test_exactly_20_staged_fields_registered(self) -> None:
+        # 17 from #808, plus lr_groups / early_stop_patience /
+        # citation_recall_threshold from #761.
+        assert len(STAGED_FIELDS) == 20, (
+            f"Expected exactly 20 staged fields, got {len(STAGED_FIELDS)}"
         )
 
     @pytest.mark.parametrize(
@@ -141,6 +143,9 @@ class TestStagedFieldsInventory:
             ("training", "grace_codebook", True),
             ("training", "grace_codebook_size", 1024),
             ("training", "grace_codebook_dim", 64),
+            ("training", "lr_groups", [{"pattern": "lm_head", "lr": 1e-5}]),
+            ("training", "early_stop_patience", 5),
+            ("training", "citation_recall_threshold", 0.8),
             ("data", "video_dir", "./videos"),
             ("data", "video_fps", 2.0),
             ("data", "video_maxlen", 64),
@@ -294,7 +299,7 @@ class TestLoaderStagedFieldIntegration:
     ) -> None:
         monkeypatch.setattr(loader, "STAGED_FIELD_SEVERITY", severity)
         loader.load_config_from_string(_valid_with_data(**{field: spelling}))
-        assert "read by nothing" not in capsys.readouterr().out
+        assert "read by nothing" not in _plain(capsys.readouterr().out)
 
     @pytest.mark.parametrize("severity", ["warn", "error"])
     def test_load_config_file_default_equivalent_spelling_loads_silently(
@@ -304,7 +309,7 @@ class TestLoaderStagedFieldIntegration:
         cfg_file = tmp_path / "soup.yaml"
         cfg_file.write_text(_valid_with_data(split_thinking="'false'", video_dir="''"))
         loader.load_config(cfg_file)
-        assert "read by nothing" not in capsys.readouterr().out
+        assert "read by nothing" not in _plain(capsys.readouterr().out)
 
     @pytest.mark.parametrize("severity", ["warn", "error"])
     def test_convergence_rel_tol_scientific_notation_unwired_tunable_loads_silently(

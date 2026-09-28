@@ -439,6 +439,7 @@ def _run_single(base_cfg, params: dict, run_name: str, config_path: Path) -> dic
     from soup_cli.experiment.tracker import ExperimentTracker
     from soup_cli.monitoring.display import TrainingDisplay
     from soup_cli.trainer.sft import SFTTrainerWrapper
+    from soup_cli.utils.eval_schedule import loader_data_config, validation_notice
     from soup_cli.utils.gpu import detect_device, get_gpu_info
 
     cfg = SoupConfig(**config_dict)
@@ -447,9 +448,12 @@ def _run_single(base_cfg, params: dict, run_name: str, config_path: Path) -> dic
     device, device_name = detect_device()
     gpu_info = get_gpu_info()
 
-    # Load data
+    # Load data -- the same split `soup train` would use (#1223).
+    val_notice = validation_notice(cfg)
+    if val_notice:
+        console.print(f"[yellow]Note:[/] {val_notice}")
     dataset = load_dataset(
-        cfg.data,
+        loader_data_config(cfg),
         preserve_source_columns=cfg.task == "grpo",
     )
     console.print(f"[dim]Loaded {len(dataset['train'])} train samples[/]")

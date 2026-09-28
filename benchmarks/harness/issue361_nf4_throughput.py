@@ -50,7 +50,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import statistics
+import subprocess
 import sys
 import threading
 import time
@@ -101,25 +103,54 @@ def _source_sha() -> str:
 
     ``soup-cli`` reports a release version that does not move between commits,
     so without this a row cannot name its own tree — and this harness measures a
-    path that three post-#361-base commits changed (#989 above all).
+    path that three post-#361-base commits changed (#989 above all). Resolved
+    from the ``soup_cli`` package's own location (not this harness file's), so a
+    shadow install elsewhere on ``sys.path`` is not misreported as the checkout
+    that produced the row, and marked ``-dirty`` when that tree has uncommitted
+    changes (#1085's ``variant2_gate._source_sha`` first added both checks).
     """
-    import shutil
-    import subprocess
+    import soup_cli
 
-    tool = shutil.which("git")
-    if tool is None:
+    package_file = getattr(soup_cli, "__file__", None)
+    if package_file is None:
         return "unknown"
     try:
-        out = subprocess.run(
-            [tool, "rev-parse", "HEAD"],
-            cwd=Path(__file__).resolve().parents[2],
+        package_dir = Path(package_file).resolve().parent
+        root = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            cwd=package_dir,
+            check=True,
             capture_output=True,
             text=True,
-            timeout=10,
+            timeout=5,
+        ).stdout.strip()
+        if not root:
+            return "unknown"
+        commit = (
+            subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=Path(root),
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            .stdout.strip()
+            .lower()
         )
-    except Exception:
+        dirty = subprocess.run(
+            ["git", "status", "--porcelain", "--untracked-files=normal"],
+            cwd=Path(root),
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
         return "unknown"
-    return out.stdout.strip() or "unknown"
+    if not re.fullmatch(r"[0-9a-f]{40}", commit):
+        return "unknown"
+    return f"{commit}-dirty" if dirty else commit
 
 
 def _versions() -> dict:

@@ -3,7 +3,7 @@
 Parses OpenAPI 3.x, MCP server manifests, and GraphQL introspection JSON
 into a canonical ``Endpoint`` shape, then synthesises a tool-calling SFT
 dataset where each row is ``{messages: [user, assistant{tool_calls}],
-tool: <name>, source_endpoint: <path>}``.
+tools: [<schema>], tool: <name>, source_endpoint: <path>}``.
 
 The parser surface is intentionally parser-only — no network code, no
 ``$ref`` resolution that would let a crafted spec read arbitrary files.
@@ -56,13 +56,20 @@ class SynthRow:
     messages: Tuple[Mapping[str, Any], ...]
     tool: str
     source_endpoint: str
+    # #1217: the OpenAI-style schema of the tool the row calls. Written as a
+    # top-level "tools" key so `format: tool-calling` puts the schema in front
+    # of the model and `format: auto` detects the row as tool-calling.
+    tools: Tuple[Mapping[str, Any], ...] = ()
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        out: Dict[str, Any] = {
             "messages": [dict(m) for m in self.messages],
             "tool": self.tool,
             "source_endpoint": self.source_endpoint,
         }
+        if self.tools:
+            out["tools"] = [dict(t) for t in self.tools]
+        return out
 
 
 @dataclass(frozen=True)
@@ -417,6 +424,19 @@ def endpoint_to_rows(
             f"examples_per_endpoint must be in [1, {_MAX_ROWS_PER_ENDPOINT}]"
         )
     desc = endpoint.description or f"Call {endpoint.tool}"
+    # Parameter schemas stay opaque (see Endpoint.parameters), so each
+    # property is typed as "any" rather than guessed.
+    tool_schema = {
+        "type": "function",
+        "function": {
+            "name": endpoint.tool,
+            "description": desc,
+            "parameters": {
+                "type": "object",
+                "properties": {p: {} for p in endpoint.parameters},
+            },
+        },
+    }
     user_templates = [
         f"Please {desc}.",
         f"How do I use {endpoint.tool}?",
@@ -447,6 +467,7 @@ def endpoint_to_rows(
                 ),
                 tool=endpoint.tool,
                 source_endpoint=endpoint.path,
+                tools=(tool_schema,),
             )
         )
     return rows
