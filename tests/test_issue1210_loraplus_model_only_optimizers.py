@@ -1,7 +1,8 @@
 """#1210 — LoRA+ with an optimizer transformers can only build from the model.
 
-`attach_loraplus_optimizer` asks `Trainer.get_optimizer_cls_and_kwargs(args)` for the
-optimizer without a model. For apollo_adamw, lomo and adalomo transformers needs one,
+`build_loraplus_optimizer` (called by `attach_loraplus_optimizer` and by PPO's constructor
+injection) asks `Trainer.get_optimizer_cls_and_kwargs(args)` for the optimizer without a
+model. For apollo_adamw, lomo and adalomo transformers needs one,
 so such a config passed load and failed only after the base model had loaded. It is
 now refused at config load, as is LoRA+ with GaLore.
 

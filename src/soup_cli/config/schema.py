@@ -4208,7 +4208,8 @@ class TrainingConfig(BaseModel):
     def _validate_loraplus_compat(self) -> "TrainingConfig":
         """#1210 — refuse LoRA+ combinations that could only fail after the model loads.
 
-        attach_loraplus_optimizer asks Trainer.get_optimizer_cls_and_kwargs(args) for the
+        build_loraplus_optimizer (called by attach_loraplus_optimizer and by PPO's
+        constructor injection) asks Trainer.get_optimizer_cls_and_kwargs(args) for the
         optimizer without a model, and transformers builds these three only from one.
         """
         if self.loraplus_lr_ratio is None:
@@ -4221,7 +4222,7 @@ class TrainingConfig(BaseModel):
                 f"from the model. Use an optimizer transformers can build without the "
                 f"model (for example adamw_torch) or remove loraplus_lr_ratio."
             )
-        # attach_loraplus_optimizer also refuses this at runtime; here it fails
+        # build_loraplus_optimizer also refuses this at runtime; here it fails
         # before the model is downloaded.
         if self.use_galore:
             raise ValueError(
