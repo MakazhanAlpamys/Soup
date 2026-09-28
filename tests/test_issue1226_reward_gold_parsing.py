@@ -68,7 +68,8 @@ GOLDS_42 = {
     "G30 marker, then a box": r"#### \boxed{42}",
     "G31 phrase, answer on the next line": "The answer is\n42",
     "G32 dollars around the bare answer": "$42$",
-    # #1346: growth coverage for the new rewrites, each tested against every completion below.
+    # #1346: spelling-matrix coverage for the new rewrites, each tested against every completion
+    # below.
     "G33 text-wrapped": r"\text{42}",
     "G34 degree": r"42^\circ",
     "G35 variable prefix": "x = 42",
@@ -117,7 +118,7 @@ CORRECT_42 = {
     "C38 dollars around the bare answer": "$42$",
     "C39 italic label": "*Answer*: 42",
     "C40 a later box supersedes a marker": "#### 41\n" + r"\boxed{42}",
-    # #1346: growth coverage for the new rewrites, each tested against every gold above.
+    # #1346: spelling-matrix coverage for the new rewrites, each tested against every gold above.
     "C41 text-wrapped box": r"\boxed{\text{42}}",
     "C42 degree box": r"\boxed{42^\circ}",
     "C43 variable prefix box": r"\boxed{x = 42}",
@@ -264,6 +265,21 @@ STRING_GOLD_CASES = [
     ("x = 7", r"\boxed{7}", 1.0),
     ("x = 7", r"\boxed{8}", 0.0),
     ("x = 7", "Answer: x = 7", 1.0),
+    # review: both sides name a variable, and the names differ, so the pair conflicts even
+    # though the right-hand sides are equal (a vertical line is not a horizontal one).
+    ("x = 3", r"\boxed{y = 3}", 0.0),  # a vertical line is not a horizontal one
+    ("y = 7", r"\boxed{x = 7}", 0.0),
+    (r"y = -\frac{47}{8}", r"\boxed{x = -\frac{47}{8}}", 0.0),  # a directrix names its axis
+    ("7", r"\boxed{2x + 1 = 7}", 0.0),  # an equation is not its solution
+    ("7", r"\boxed{ab = 7}", 0.0),  # only a one-letter left-hand side is a prefix
+    # review: a compact \frac argument may be preceded by a space, or already be a braced
+    # group longer than one character; both spellings still read \frac{N}{D}.
+    (r"\frac 34", r"\boxed{\frac34}", 1.0),  # MATH-500; 1.0 on main, 0.0 before this fix
+    (r"\frac 59", r"\boxed{\frac{5}{9}}", 1.0),  # MATH-500
+    (r"\frac9{19}", r"\boxed{\frac{9}{19}}", 1.0),  # MATH-500
+    (r"\frac{270}7\text{ degrees}", r"\boxed{\frac{270}{7}\text{ degrees}}", 1.0),  # MATH-500
+    (r"\frac{1}{10}", r"\boxed{\frac1{10}}", 1.0),
+    (r"\frac{180^\circ}{3}", r"\boxed{\frac{180}{3}}", 1.0),  # needs the _DEGREE_RE brace fix
 ]
 
 # Hedges (ruling): an answer clause that names more than one DISTINCT value states no answer.
@@ -287,6 +303,10 @@ HEDGES = [
     ("The answer is 6 times 7 which is 42.", ["6", "7", "42"]),  # boundary: every number counts
     ("The answer is 42 (6 times 7).", ["42", "6", "7"]),  # boundary: so does an aside's
     ("The answer is 3, 4.", ["3", "4"]),  # boundary: a bare list in a phrase is a hedge
+    # #1346 (accepted, undocumented before this row): dropping ^\circ and unwrapping \text{}
+    # runs before the hedge scan, so digits that used to be glued to a unit now stand alone.
+    ("The answer is 30^\\circ, 60^\\circ.", ["30", "60"]),
+    (r"The answer is \text{2 and 3}.", ["2", "3"]),
 ]
 
 # Not hedges: ONE value, maybe repeated or respelled; a tuple or an expression is one answer.
@@ -320,6 +340,9 @@ HEDGED_GOLDS = [
     "The answer is 42 (or 43).",
     "6*7 is 42.\nThe answer is 42 or 43.",
     "#### Final Answer\n41 or 42",
+    # #1346 (accepted): a degree-marked pair now hedges as a gold too, since the ^\circ is
+    # dropped before the clause's values are scanned.
+    "The answer is 30^\\circ, 60^\\circ.",
 ]
 
 # The partial-credit policy, pinned: (completion, gold, accuracy before #1226, accuracy now).
@@ -470,6 +493,8 @@ class TestIssue1346:
         # Units need a ruling first (#1346's own acceptance criteria excludes them).
         assert accuracy_reward(_msg("#### 42 apples"), answer=["42"]) == [0.0]
         assert accuracy_reward(_msg(r"\boxed{42 \text{ apples}}"), answer=["42"]) == [0.0]
+        assert math_verify_reward(_msg("#### 42 apples"), answer=["42"]) == [0.0]
+        assert math_verify_reward(_msg(r"\boxed{42 \text{ apples}}"), answer=["42"]) == [0.0]
 
     def test_the_answer_is_42_apples_as_a_gold_reads_42_as_a_completion(self):
         from soup_cli.utils.final_answer import parse_completion, parse_reference

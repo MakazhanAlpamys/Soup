@@ -1326,10 +1326,13 @@ also drop the trailing punctuation `. , ; : !`, LaTeX thousands separators such 
 LaTeX spacing commands `\,` `\!` `\;` `\:` and `\ `, and a Unicode minus sign. A `\\` row break is
 kept whole, so a matrix matches however its rows are spaced. One `\text{}` / `\textbf{}` /
 `\mathrm{}` / `\mbox{}` wrapper is unwrapped to its contents, `^\circ` / `^{\circ}` / `°` are
-dropped, a one-character `\frac` argument is braced to match (`\frac12`, `\frac1{2}` and
-`\frac{1}2` all read `\frac{1}{2}`), and a one-letter variable prefix reads its right-hand side
-(`x = 7` reads `7`, on either side). Units are still not stripped (`42 apples` against `42`), and
-nothing is evaluated (`\frac{1}{2}` does not equal `0.5`).
+dropped, a compact `\frac` argument is braced to match whether it is a single bare character or
+an already-braced group, with or without a space before it (`\frac12`, `\frac1{2}`, `\frac{1}2`,
+`\frac 34` and `\frac9{19}` all read `\frac{N}{D}`), and a one-letter variable prefix reads its
+right-hand side (`x = 7` reads `7`, on either side), though when both sides name a variable and
+the names differ (`x = 3` against `y = 3`), the pair scores 0.0, since a directrix or an
+asymptote's variable is part of its answer. Units are still not stripped (`42 apples` against
+`42`), and nothing is evaluated (`\frac{1}{2}` does not equal `0.5`).
 
 For GRPO, Soup preserves source dataset columns and TRL passes them to reward functions as
 keyword arguments. An Alpaca `output` or the final assistant turn in ShareGPT/ChatML is also
