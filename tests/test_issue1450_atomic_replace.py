@@ -203,6 +203,47 @@ class TestRewardSynthForceKeepsPreviousOnFailure:
         leftover = list(tmp_path.glob(".soup.reward-candidate.*.py"))
         assert not leftover, f"orphaned candidate file(s) left behind: {leftover}"
 
+    def test_final_replace_failure_leaves_previous_verifier_and_no_orphan(
+        self, tmp_path, monkeypatch
+    ):
+        """The very last step — ``os.replace(candidate_path, output)`` on an
+        ACCEPTED candidate — must also be guarded. A lock held on ``output``
+        or a disk-full error at that exact point used to propagate as a raw
+        ``OSError`` traceback; it must instead exit cleanly (1), leave
+        ``output`` untouched, and clean up the now-useless candidate."""
+        from soup_cli.commands.reward import app
+
+        monkeypatch.chdir(tmp_path)
+        previous = "# my working verifier\ndef reward_fn(completions, **kw):\n    return [1.0]\n"
+        Path("reward.py").write_text(previous, encoding="utf-8")
+
+        import os as os_module
+
+        real_replace = os_module.replace
+
+        def _replace_fails(src, dst, *a, **kw):
+            if os.path.basename(src).startswith(".soup.reward-candidate."):
+                raise OSError(28, "No space left on device")
+            return real_replace(src, dst, *a, **kw)
+
+        monkeypatch.setattr(os_module, "replace", _replace_fails)
+
+        _write_jsonl(Path("refs.jsonl"), [{"answer": "4"}, {"answer": "6"}])
+        res = self._runner().invoke(app, [
+            "synth", "refs.jsonl", "-o", "reward.py", "--force",
+        ])
+
+        assert res.exit_code == 1, (res.output, repr(res.exception))
+        assert res.exception is None or isinstance(res.exception, SystemExit), (
+            "a failed final replace must exit cleanly, not raise an uncaught OSError"
+        )
+        assert Path("reward.py").exists(), (
+            "the previous verifier was deleted by a failed final replace"
+        )
+        assert Path("reward.py").read_text(encoding="utf-8") == previous
+        leftover = list(tmp_path.glob(".soup.reward-candidate.*.py"))
+        assert not leftover, f"orphaned candidate file(s) left behind: {leftover}"
+
 
 # ---------------------------------------------------------------------------
 # adapter_fuse.merge_adapter_to_dense — a failed swap must not delete out_dir

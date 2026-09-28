@@ -239,8 +239,14 @@ def synth(
         raise typer.Exit(2)
 
     # Accepted: atomically swap the calibrated candidate onto ``output`` —
-    # the only moment the previous verifier, if any, is replaced.
-    os.replace(candidate_path, output)
+    # the only moment the previous verifier, if any, is replaced. Guard this
+    # too: a failure here (disk full, a lock held on ``output``) must not
+    # leave the candidate orphaned or crash with a raw traceback.
+    try:
+        os.replace(candidate_path, output)
+    except OSError as exc:
+        _cleanup(candidate_path)
+        _fail(f"could not replace {output!r}: {exc}")
 
     console.print(_render_report_panel(report, result.kind, output))
     raise typer.Exit(0)
