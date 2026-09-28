@@ -513,6 +513,8 @@ def _run_distill(
         str(config_path),
         "--yes",
     ]
+    if trc:
+        argv.append("--trust-remote-code")
     try:
         result = subprocess.run(  # noqa: S603 — argv list, no shell.
             argv,

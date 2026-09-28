@@ -1229,13 +1229,15 @@ def _hf_download_dataset(
     dataset_id: str,
     split: str = "train",
     samples: int | None = None,
+    trust_remote_code: bool = False,
 ) -> list[dict]:
     """Download a dataset from HuggingFace Hub and return as list of dicts."""
     from datasets import load_dataset
 
     try:
         ds = load_dataset(
-            dataset_id, split=split, streaming=True, trust_remote_code=False,
+            dataset_id, split=split, streaming=True,
+            trust_remote_code=trust_remote_code,
         )
     except Exception as exc:
         raise ValueError(f"Failed to load dataset {dataset_id}: {exc}") from exc
@@ -1521,20 +1523,22 @@ def download_dataset(
             )
             raise typer.Exit(1)
 
-    from rich.panel import Panel
+    if trust_remote_code:
+        from rich.panel import Panel
 
-    console.print(Panel(
-        "[bold yellow]Warning:[/] Downloading this dataset may execute a "
-        "remote dataset loading script from HuggingFace Hub.\n\n"
-        "Only download datasets from sources you trust.",
-        title="Remote Code Warning",
-        border_style="yellow",
-    ))
+        console.print(Panel(
+            "[bold yellow]Warning:[/] Downloading this dataset may execute a "
+            "remote dataset loading script from HuggingFace Hub.\n\n"
+            "Only download datasets from sources you trust.",
+            title="Remote Code Warning",
+            border_style="yellow",
+        ))
     console.print(f"[dim]Downloading {dataset_id} (split={split})...[/]")
 
     try:
         data = _hf_download_dataset(
             dataset_id, split=split, samples=samples,
+            trust_remote_code=trust_remote_code,
         )
     except ValueError as exc:
         console.print(f"[red]{exc}[/]")
