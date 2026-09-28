@@ -1637,106 +1637,12 @@ def train(
         # v0.40.4 #63 — every transformer-backend trainer now threads
         # --trust-remote-code through the wrapper (closes the v0.36.0 Part B gap).
         trainer_kwargs = dict(trainer_kwargs, trust_remote_code=trust_remote_code)
-        from soup_cli.trainer.mlx_routing import resolve_trainer
+        # #1213 — one dispatch, shared with `soup sweep`: the two commands used
+        # to keep separate chains and sweep's copy fell ten tasks and the MLX
+        # route behind. See soup_cli/trainer/dispatch.py.
+        from soup_cli.trainer.dispatch import build_trainer
 
-        mlx_cls, trainer_kwargs = resolve_trainer(cfg, trainer_kwargs)
-        if mlx_cls is not None:
-            trainer_wrapper = mlx_cls(cfg, **trainer_kwargs)
-        elif cfg.task == "dpo":
-            from soup_cli.trainer.dpo import DPOTrainerWrapper
-
-            trainer_wrapper = DPOTrainerWrapper(cfg, **trainer_kwargs)
-        elif cfg.task == "online_dpo":
-            from soup_cli.trainer.online_dpo import OnlineDPOTrainerWrapper
-
-            trainer_wrapper = OnlineDPOTrainerWrapper(cfg, **trainer_kwargs)
-        elif cfg.task == "grpo":
-            from soup_cli.trainer.grpo import GRPOTrainerWrapper
-
-            trainer_wrapper = GRPOTrainerWrapper(cfg, **trainer_kwargs)
-        elif cfg.task == "ppo":
-            from soup_cli.trainer.ppo import PPOTrainerWrapper
-
-            trainer_wrapper = PPOTrainerWrapper(cfg, **trainer_kwargs)
-        elif cfg.task == "kto":
-            from soup_cli.trainer.kto import KTOTrainerWrapper
-
-            trainer_wrapper = KTOTrainerWrapper(cfg, **trainer_kwargs)
-        elif cfg.task == "orpo":
-            from soup_cli.trainer.orpo import ORPOTrainerWrapper
-
-            trainer_wrapper = ORPOTrainerWrapper(cfg, **trainer_kwargs)
-        elif cfg.task == "simpo":
-            from soup_cli.trainer.simpo import SimPOTrainerWrapper
-
-            trainer_wrapper = SimPOTrainerWrapper(cfg, **trainer_kwargs)
-        elif cfg.task == "ipo":
-            from soup_cli.trainer.ipo import IPOTrainerWrapper
-
-            trainer_wrapper = IPOTrainerWrapper(cfg, **trainer_kwargs)
-        elif cfg.task == "bco":
-            from soup_cli.trainer.bco import BCOTrainerWrapper
-
-            trainer_wrapper = BCOTrainerWrapper(cfg, **trainer_kwargs)
-        elif cfg.task == "preference":
-            from soup_cli.trainer.preference import PreferenceTrainerWrapper
-
-            trainer_wrapper = PreferenceTrainerWrapper(cfg, **trainer_kwargs)
-        elif cfg.task == "reward_model":
-            from soup_cli.trainer.reward_model import RewardModelTrainerWrapper
-
-            trainer_wrapper = RewardModelTrainerWrapper(cfg, **trainer_kwargs)
-        elif cfg.task == "pretrain":
-            from soup_cli.trainer.pretrain import PretrainTrainerWrapper
-
-            trainer_wrapper = PretrainTrainerWrapper(cfg, **trainer_kwargs)
-        elif cfg.task == "embedding":
-            from soup_cli.trainer.embedding import EmbeddingTrainerWrapper
-
-            trainer_wrapper = EmbeddingTrainerWrapper(cfg, **trainer_kwargs)
-        elif cfg.task == "distill":
-            # v0.53.2 #133 — knowledge distillation (student + frozen teacher).
-            from soup_cli.trainer.distill import DistillTrainerWrapper
-
-            trainer_wrapper = DistillTrainerWrapper(cfg, **trainer_kwargs)
-        elif cfg.task == "prm":
-            # v0.53.11 #126 — Process Reward Model trainer.
-            from soup_cli.trainer.prm import PRMTrainerWrapper
-
-            trainer_wrapper = PRMTrainerWrapper(cfg, **trainer_kwargs)
-        elif cfg.task in ("classifier", "reranker", "cross_encoder"):
-            # v0.53.2 #132 — sequence-classification head.
-            from soup_cli.trainer.classifier import ClassifierTrainerWrapper
-
-            trainer_wrapper = ClassifierTrainerWrapper(cfg, **trainer_kwargs)
-        elif cfg.task == "unlearn":
-            # v0.71.9 #193 — NPO / SimNPO / RMU unlearning.
-            from soup_cli.trainer.unlearn import UnlearnTrainerWrapper
-
-            trainer_wrapper = UnlearnTrainerWrapper(cfg, **trainer_kwargs)
-        elif cfg.task == "moe_lora_routing":
-            # v0.71.12 #222 — MoLE per-token routing over N frozen task LoRAs.
-            from soup_cli.trainer.mole_routing import MoleRoutingTrainerWrapper
-
-            trainer_wrapper = MoleRoutingTrainerWrapper(cfg, **trainer_kwargs)
-        elif cfg.task == "tts":
-            # v0.71.20 #131 — TTS fine-tuning (SFT-style next-token CE over
-            # text + audio-codec-token sequences; per-family templating).
-            from soup_cli.trainer.tts import TTSTrainerWrapper
-
-            trainer_wrapper = TTSTrainerWrapper(cfg, **trainer_kwargs)
-        elif cfg.task == "asr":
-            # v0.71.32 — ASR (Whisper) fine-tuning via Seq2SeqTrainer.
-            from soup_cli.trainer.asr import AsrTrainerWrapper
-
-            trainer_wrapper = AsrTrainerWrapper(cfg, **trainer_kwargs)
-        else:
-            # Keep the transformers/TRL SFT surface outside the backend-first MLX
-            # route. The wrapper is import-light today, but importing it eagerly
-            # makes an MLX-only install depend on that remaining true forever.
-            from soup_cli.trainer.sft import SFTTrainerWrapper
-
-            trainer_wrapper = SFTTrainerWrapper(cfg, **trainer_kwargs)
+        trainer_wrapper = build_trainer(cfg, **trainer_kwargs)
         trainer_wrapper.setup(dataset)
 
         # #350 — PEFT promotes newly-created adapters to fp32. FSDP cannot flatten
