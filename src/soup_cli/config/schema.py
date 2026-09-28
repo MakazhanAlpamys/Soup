@@ -5711,6 +5711,19 @@ class SoupConfig(BaseModel):
                     f"{sorted(_MOE_AUX_LOSS_TASKS)} read it (sft.py, "
                     f"pretrain.py). Remove it, or use one of those tasks."
                 )
+            return self
+        if self.task == "sft" and self.modality in ("vision", "audio"):
+            # #1394: only SFT's text setup reads it. The vision and audio setups
+            # build their model without the MoE step, the same gap #1179 closed
+            # for moe_lora on these paths.
+            default = type(tcfg).model_fields["moe_aux_loss_coeff"].default
+            if tcfg.moe_aux_loss_coeff != default:
+                raise ValueError(
+                    f"training.moe_aux_loss_coeff={tcfg.moe_aux_loss_coeff!r} is "
+                    f"not applied by task='sft' with modality={self.modality!r}: "
+                    "that setup never applies the MoE auxiliary loss. Remove it, "
+                    "or train with modality: text."
+                )
         return self
 
     @model_validator(mode="after")
