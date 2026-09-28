@@ -1274,7 +1274,8 @@ class TrainingConfig(BaseModel):
     freeze_trainable_layers: Optional[int] = Field(
         default=None,
         description=(
-            "LLaMA Pro: signed int. Positive = train only top-N decoder "
+            "LLaMA Pro: signed int, applies only together with "
+            "expand_layers. Positive = train only top-N decoder "
             "layers; negative = train only bottom-N. Magnitude capped at "
             "1000. (v0.41.0)"
         ),
@@ -4126,6 +4127,13 @@ class TrainingConfig(BaseModel):
                 "expand_layers requires freeze_trainable_layers (LLaMA Pro "
                 "freezes the original layers and trains only the new blocks). "
                 "Set freeze_trainable_layers: <signed int>."
+            )
+        if self.expand_layers is None and self.freeze_trainable_layers is not None:
+            raise ValueError(
+                "freeze_trainable_layers only applies together with "
+                "expand_layers (LLaMA Pro block expansion). On its own the "
+                "field is silently ignored and top-N/bottom-N training does "
+                "not happen. Remove it, or set expand_layers: <int>."
             )
         return self
 

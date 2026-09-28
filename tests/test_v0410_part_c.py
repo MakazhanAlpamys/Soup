@@ -135,10 +135,13 @@ class TestSchemaBlockExpansion:
         assert cfg.expand_layers == 4
         assert cfg.freeze_trainable_layers == 4
 
-    def test_freeze_trainable_layers_alone_ok(self):
-        cfg = TrainingConfig(freeze_trainable_layers=-4)
-        assert cfg.freeze_trainable_layers == -4
-        assert cfg.expand_layers is None
+    def test_freeze_trainable_layers_alone_refused(self):
+        # #1396 — on its own the field is silently ignored, so refuse it.
+        with pytest.raises(
+            ValidationError,
+            match="freeze_trainable_layers only applies together with expand_layers",
+        ):
+            TrainingConfig(freeze_trainable_layers=-4)
 
     def test_freeze_magnitude_oob(self):
         with pytest.raises(ValidationError, match="magnitude"):

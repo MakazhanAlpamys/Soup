@@ -176,7 +176,7 @@ data:
   train: ./domain.jsonl
 training:
   expand_layers: 4              # append 4 zero-init decoder blocks
-  freeze_trainable_layers: 4    # train only the appended blocks
+  freeze_trainable_layers: 4    # train only the appended blocks (requires expand_layers)
   lr: 5e-5
   epochs: 1
 ```
