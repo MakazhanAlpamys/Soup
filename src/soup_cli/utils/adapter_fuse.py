@@ -46,8 +46,12 @@ def merge_adapter_to_dense(
     for ``out_dir``. An in-place ``save_pretrained`` over a just-loaded model
     directory fails on Windows (error 1224 — the source ``.safetensors`` is
     still memory-mapped by the loaded weights), so the temp-dir swap is the
-    cross-platform-safe path, and it also makes the destination replacement
-    atomic.
+    cross-platform-safe path. A pre-existing ``out_dir`` is renamed aside
+    rather than deleted, and only removed once the staged model has taken
+    its place; if the final swap itself then fails (disk full, a lock held
+    on the staging dir), the renamed-aside copy is put back before the error
+    propagates, so a failure here can never leave neither the old nor the
+    new model on disk.
 
     ``out_dir`` is re-validated immediately before the swap: the training
     subprocess that produced ``adapter_dir`` may have run for hours, so the
@@ -90,6 +94,7 @@ def merge_adapter_to_dense(
     parent = os.path.dirname(os.path.abspath(out_dir)) or "."
     os.makedirs(parent, exist_ok=True)
     staging = tempfile.mkdtemp(prefix=".fuse_", dir=parent)
+    backup: str | None = None
     try:
         try:
             merged.save_pretrained(staging)
@@ -101,14 +106,32 @@ def merge_adapter_to_dense(
             gc.collect()
             release_cuda()
         # Re-validate the swap target IMMEDIATELY before the destructive
-        # rmtree/replace — the model load + merge + save above took minutes, a
+        # rename/replace — the model load + merge + save above took minutes, a
         # real window in which a junction/symlink could be planted at out_dir
         # (the entry-time check is now stale). enforce_* refuses symlinks AND
-        # Windows reparse points, so rmtree cannot be redirected outside cwd.
+        # Windows reparse points, so the rename cannot be redirected outside cwd.
         enforce_under_cwd_and_no_symlink(out_dir, "fused output dir")
         if os.path.isdir(out_dir):
-            shutil.rmtree(out_dir)
-        os.replace(staging, out_dir)
+            # Rename the previous model ASIDE instead of deleting it. The
+            # actual swap below can still fail (AV/indexer holding the
+            # staging dir, disk full), and until it succeeds the old model
+            # is the only good copy there is.
+            backup = os.path.join(
+                parent, f".{os.path.basename(os.path.normpath(out_dir))}.old-{os.getpid()}"
+            )
+            os.replace(out_dir, backup)
+        try:
+            os.replace(staging, out_dir)
+        except BaseException:
+            # The swap itself failed: put the previous model straight back
+            # before anything else runs, so this failure never leaves
+            # neither copy in place.
+            if backup is not None:
+                os.replace(backup, out_dir)
+                backup = None
+            raise
+        if backup is not None:
+            shutil.rmtree(backup, ignore_errors=True)
     except BaseException:
         # A half-written staging dir (disk full, interrupted save) must not be
         # orphaned next to the model — it would silently accumulate a full

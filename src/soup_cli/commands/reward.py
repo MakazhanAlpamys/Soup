@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import tempfile
 from dataclasses import asdict
 from typing import NoReturn, Optional
 
@@ -185,6 +186,18 @@ def synth(
         except (ValueError, OSError) as exc:
             _fail(str(exc))
 
+    # --force is about to overwrite an existing verifier: move it aside first
+    # rather than write over it, so a refusal or a calibration error below
+    # restores the previous, working verifier instead of destroying it.
+    backup_output: Optional[str] = None
+    if os.path.exists(output):
+        parent = os.path.dirname(os.path.abspath(output)) or "."
+        fd, backup_output = tempfile.mkstemp(
+            prefix=".soup.reward-prev.", suffix=".tmp", dir=parent
+        )
+        os.close(fd)
+        os.replace(output, backup_output)
+
     # Write, then LOAD it back through the real reward-loader path (round-trip
     # validation) and calibrate the loaded callable.
     atomic_write_text(result.source, output)
@@ -196,7 +209,7 @@ def synth(
         report = rs.calibrate(reward_fn, golds, negatives, kind=result.kind,
                               min_discrimination=min_discrimination)
     except Exception as exc:  # noqa: BLE001 — clean up the partial artifact
-        _cleanup(output)
+        _restore_or_cleanup(output, backup_output)
         _fail(f"calibration failed: {exc}")
 
     # Write the diagnostic report (path already validated up front) for BOTH the
@@ -209,18 +222,37 @@ def synth(
             console.print(f"[yellow]Warning: could not write report: {escape(str(exc))}[/]")
 
     if report.refused:
-        _cleanup(output)
+        _restore_or_cleanup(output, backup_output)
         console.print(Panel(
             escape(report.reason),
             title="[bold red]verifier refused (not emitted)[/]", border_style="red"))
         raise typer.Exit(2)
 
+    # Accepted: the candidate replaces the previous verifier for good.
+    if backup_output is not None:
+        try:
+            os.remove(backup_output)
+        except OSError:
+            pass
+
     console.print(_render_report_panel(report, result.kind, output))
     raise typer.Exit(0)
 
 
-def _cleanup(path: str) -> None:
-    """Remove a just-written artifact; best-effort (never masks the real error)."""
+def _restore_or_cleanup(path: str, backup: Optional[str]) -> None:
+    """Undo a just-written candidate verifier.
+
+    Puts back the previous verifier it replaced, if any; otherwise removes the
+    candidate outright since there was nothing at ``path`` before it.
+    Best-effort — never masks the real error (a failed calibration / refusal)
+    that is about to be reported.
+    """
+    if backup is not None:
+        try:
+            os.replace(backup, path)
+            return
+        except OSError:
+            pass
     try:
         os.remove(path)
     except OSError:
