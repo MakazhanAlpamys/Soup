@@ -269,7 +269,14 @@ The statistic is a Bayes factor that averages over both the size of the differen
 
 `--effect-size` is in the metric's units, but the statistic needs it in standard deviations. So the first 5 rows of each arm set that scale (their pooled standard deviation) and are not otherwise tested; the verdict table shows this as `prior_scale`, and the reported means and row counts still cover every row. If an arm's first rows are all identical, more rows are held out until one differs.
 
-A simulation of the re-run-after-every-pair procedure (`--effect-size` from 0.1 to 5 standard deviations, 100,000 runs each, up to 1000 rows per arm) gives a worst false-positive rate of 0.033 at `--alpha 0.05` and 0.0066 at `--alpha 0.01`. The burn-in design this replaced (#1227) sat at 0.051 and 0.011. Against a true difference of exactly `--effect-size`, the test finds it with probability above 0.99 when `--effect-size` is at least 0.3 standard deviations (1000 rows per arm). There are two costs. When `--effect-size` is below about 0.2 standard deviations, 1000 rows are too few for either design to be reliable, and this one detects less often (0.31 against 0.45 at 0.1 standard deviations, `--alpha 0.05`). And when there is no difference, reaching `accept_h0` takes longer: about 280 pairs at 0.5 standard deviations, where the burn-in design stopped near 43. The record, script and results are in [`benchmarks/gate-1265-ab-nig.md`](../benchmarks/gate-1265-ab-nig.md).
+A simulation of the re-run-after-every-pair procedure (`--effect-size` from 0.1 to 5 standard deviations, 100,000 runs each, up to 1000 rows per arm) gives a worst false-positive rate of 0.033 at `--alpha 0.05` and 0.0066 at `--alpha 0.01`. The burn-in design this replaced (#1227) sat at 0.051 and 0.011. Against a true difference of exactly `--effect-size`, the test finds it with probability above 0.99 when `--effect-size` is at least 0.3 standard deviations (1000 rows per arm). There are two costs. When `--effect-size` is below about 0.2 standard deviations, 1000 rows are too few for either design to be reliable, and this one detects less often (0.31 against 0.45 at 0.1 standard deviations, `--alpha 0.05`). And when there is no difference, reaching `accept_h0` takes longer. Mean pairs at stop when the two arms are the same, `--alpha 0.05`, runs of up to 1000 rows per arm, by `--effect-size` in standard deviations:
+
+| `--effect-size` / sd | 0.2 | 0.3 | 0.4 | 0.5 | 0.7 | 1 | 1.5 | 2 | 5 |
+|---|---|---|---|---|---|---|---|---|---|
+| this statistic | 889 | 621 | 406 | 281 | 155 | 82 | 41 | 26 | 10 |
+| the burn-in design it replaced | 235 | 107 | 62 | 43 | 34 | 31 | 30 | 30 | 30 |
+
+So a test that is waiting to hear "no difference" can take several times as many rows as before, and at small effect sizes may not get there within 1000. Part of the old design's speed was not free: when there was a real difference of 0.3 standard deviations, it wrongly ended about 18% of runs in `accept_h0`, against under 0.4% here. The record, script and results are in [`benchmarks/gate-1265-ab-nig.md`](../benchmarks/gate-1265-ab-nig.md).
 
 ```bash
 soup ab --input ab.jsonl --metric latency --effect-size 0.5
@@ -277,7 +284,7 @@ soup ab --input ab.jsonl --metric latency --effect-size 0.5
 soup ab --input ab.jsonl --metric judge_score --alpha 0.01 --beta 0.10 --effect-size 0.1
 ```
 
-`--alpha` and `--beta` are each in (0, 1), and their sum must stay below 1. At or above 1 the reject boundary `log((1 - beta) / alpha)` is no longer above the accept boundary `log(beta / (1 - alpha))`, so there is no `continue` band left and any verdict between them rejects — two identical arms included. `soup ab` exits `2` naming both values. `--beta` is the Type-II error rate, not the power: a power of 0.95 is `--beta 0.05`, not `--beta 0.95`.
+`--alpha` and `--beta` are each in (0, 1), and their sum must stay below 1. At or above 1 the accept boundary `beta / (1 - alpha)` is a Bayes factor of 1 or more, so the test accepts H0 when the rows show no evidence either way, and even when they point to a difference: at `--alpha 0.05 --beta 0.95`, a true difference of `--effect-size` ends in `accept_h0` in 96% of simulated runs at 0.3 standard deviations, and still 36% at 2. `soup ab` exits `2` naming both values. `--beta` is the Type-II error rate, not the power: a power of 0.95 is `--beta 0.05`, not `--beta 0.95`.
 
 A `--effect-size` that is more than about 1.3e154 standard deviations of the rows that set the prior scale overflows the test statistic; `soup ab` exits `1` naming the flag and the standard deviation it measured, from the first run (before those rows are all in, it checks the rows so far). Because it is the ratio that overflows, a near-constant metric column reaches it at the default `--effect-size` too.
 
