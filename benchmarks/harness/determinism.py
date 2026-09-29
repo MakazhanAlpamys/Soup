@@ -17,6 +17,10 @@ import sys
 from pathlib import Path
 from typing import Any
 
+HARNESS_DIR = Path(__file__).resolve().parent
+if str(HARNESS_DIR) not in sys.path:
+    sys.path.insert(0, str(HARNESS_DIR))
+
 
 class MeasurementInvalidError(RuntimeError):
     """The supplied determinism record cannot support a verdict."""
@@ -107,6 +111,7 @@ def measure_models(
     curve_batches: list[Any],
 ) -> dict[str, Any]:
     """Run forward, repeated backward, and curve measurements on both models."""
+    import bitexact
     import torch
 
     from soup_cli.utils.layer_stream_runtime import assert_canonical_parameters_intersect
@@ -121,7 +126,7 @@ def measure_models(
     gradients: dict[str, list[dict[str, Any]]] = {"streamed": [], "resident": []}
     losses: dict[str, list[float]] = {"streamed": [], "resident": []}
     for name, model in (("streamed", streamed), ("resident", resident)):
-        for _ in range(2):
+        for _ in range(3):
             model.zero_grad(set_to_none=True)
             loss = model(input_ids=input_ids, labels=input_ids).loss
             if not torch.isfinite(loss).all():
@@ -137,23 +142,41 @@ def measure_models(
             raise MeasurementInvalidError("gradient parameter sets differ")
         return all(torch.equal(left[key], right[key]) for key in left)
 
-    def curve(model: Any) -> list[float]:
-        result = []
-        for batch in curve_batches:
-            with torch.no_grad():
-                loss = model(input_ids=batch, labels=batch).loss
-            if not torch.isfinite(loss).all():
-                raise MeasurementInvalidError("curve loss is non-finite")
-            result.append(float(loss.detach()))
-        return result
+    def curve_pair(model: Any) -> tuple[list[float], list[float]]:
+        state = {
+            name: parameter.detach().clone()
+            for name, parameter in model.named_parameters()
+            if "lora_" in name
+        }
+        if not state:
+            raise MeasurementInvalidError("curve model has no LoRA parameters")
 
-    streamed_curve = (curve(streamed), curve(streamed))
-    resident_curve = (curve(resident), curve(resident))
+        def restore() -> None:
+            with torch.no_grad():
+                parameters = dict(model.named_parameters())
+                for name, value in state.items():
+                    parameters[name].copy_(value)
+
+        try:
+            first = bitexact.train_curve(model, curve_batches)
+            restore()
+            second = bitexact.train_curve(model, curve_batches)
+            curve_diff(first, second)
+            return first, second
+        finally:
+            restore()
+
+    streamed_curve = curve_pair(streamed)
+    resident_curve = curve_pair(resident)
     return {
         "streamed_forward_equal": streamed_forward,
         "resident_forward_equal": resident_forward,
-        "streamed_gradient_equal": equal(*gradients["streamed"]),
-        "resident_gradient_equal": equal(*gradients["resident"]),
+        "streamed_gradient_equal": equal(
+            gradients["streamed"][0], gradients["streamed"][2]
+        ),
+        "resident_gradient_equal": equal(
+            gradients["resident"][0], gradients["resident"][2]
+        ),
         "streamed_curve_equal": curve_diff(*streamed_curve)[0],
         "resident_curve_equal": curve_diff(*resident_curve)[0],
         "streamed_losses": losses["streamed"],
@@ -167,56 +190,27 @@ def run_measurement(args: argparse.Namespace) -> int:
         return 2
     import bitexact
     import torch
-    from mechanism_cost import install_historical_control
+    from mechanism_cost import build_streamed_arm, prepare_shards
 
-    from soup_cli.utils.layer_shard import shard_checkpoint
-    from soup_cli.utils.layer_stream_runtime import (
-        build_meta_skeleton,
-        build_streamed_model,
-    )
     from soup_cli.utils.spectrum_scan import resolve_model_weights
 
     if not torch.cuda.is_available():
         print("SKIP: CUDA is required for the measurement path")
         return 0
     weights = resolve_model_weights(str(args.weights))
-    probe = build_meta_skeleton(weights, dtype="bfloat16", quant="nf4")
-    index = shard_checkpoint(
-        weights,
-        str(args.shards),
-        dtype="bfloat16",
-        arch=probe.config.model_type,
-        quant="nf4",
-        quant_suffixes=(),
-        double_quant=True,
-        quant_device="cuda",
+    shards = str(args.shards.expanduser().resolve())
+    index, arch = prepare_shards(weights, shards)
+    streamed, runtime, restore = build_streamed_arm(
+        weights, shards, index, arch, "control", args.buffers
     )
-    streamed, runtime = build_streamed_model(
-        model_id=weights,
-        shard_dir=str(args.shards),
-        index=index,
-        lora_config=bitexact.lora_config(),
-        device="cuda",
-        dtype="bfloat16",
-        buffers=args.buffers,
-        pin=True,
-        seed=3,
-        quant="nf4",
-        double_quant=True,
-        tier="ram",
-    )
-    resident = bitexact.load_resident_reference(weights, "nf4")
+    resident = None
     try:
+        resident = bitexact.load_resident_reference(weights, "nf4")
         bitexact.make_non_vacuous_lora(streamed)
         bitexact.copy_lora(streamed, resident)
-        import soup_cli.utils.layer_stream_runtime as layer_runtime
-
-        original_loader = layer_runtime.install_dequant_forward
-        install_historical_control(layer_runtime)
         generator = torch.Generator(device="cuda").manual_seed(17)
         inputs = torch.randint(
-            0,
-            probe.config.vocab_size,
+            0, resident.config.vocab_size,
             (1, args.seq),
             generator=generator,
             device="cuda",
@@ -232,8 +226,10 @@ def run_measurement(args: argparse.Namespace) -> int:
         )
         return 0 if ok else 1
     finally:
-        layer_runtime.install_dequant_forward = original_loader
+        if resident is not None:
+            del resident
         runtime.close()
+        restore()
 
 
 def run_self_test() -> int:
@@ -256,18 +252,18 @@ def run_self_test() -> int:
 
 def main() -> int:
     args = parse_args()
-    if args.self_test:
-        return run_self_test()
-    if args.records is None:
-        return run_measurement(args)
     try:
+        if args.self_test:
+            return run_self_test()
+        if args.records is None:
+            return run_measurement(args)
         record = json.loads(args.records.read_text(encoding="utf-8"))
         if not determinism_verdict(record):
             print("ERROR: historical determinism pattern not reproduced")
             return 1
         print("RESULT: historical determinism pattern reproduced")
         return 0
-    except MeasurementInvalidError as exc:
+    except (MeasurementInvalidError, ValueError) as exc:
         print(f"ERROR: invalid measurement: {exc}")
         return 3
     except (OSError, json.JSONDecodeError, TypeError) as exc:
