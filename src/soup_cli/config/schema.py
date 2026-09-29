@@ -1274,10 +1274,10 @@ class TrainingConfig(BaseModel):
     freeze_trainable_layers: Optional[int] = Field(
         default=None,
         description=(
-            "LLaMA Pro: signed int, applies only together with "
-            "expand_layers. Positive = train only top-N decoder "
-            "layers; negative = train only bottom-N. Magnitude capped at "
-            "1000. (v0.41.0)"
+            "LLaMA Pro: applies only together with expand_layers and is "
+            "refused without it. A positive value freezes every parameter "
+            "except the appended blocks. Magnitude capped at 1000. "
+            "(v0.41.0)"
         ),
     )
     # v0.41.0 Part C schema / v0.71.12 #84 live — Mixture-of-Depths routing.
@@ -4131,9 +4131,10 @@ class TrainingConfig(BaseModel):
         if self.expand_layers is None and self.freeze_trainable_layers is not None:
             raise ValueError(
                 "freeze_trainable_layers only applies together with "
-                "expand_layers (LLaMA Pro block expansion). On its own the "
-                "field is silently ignored and top-N/bottom-N training does "
-                "not happen. Remove it, or set expand_layers: <int>."
+                "expand_layers (LLaMA Pro block expansion), where a positive "
+                "value trains only the appended blocks. Without expand_layers "
+                "nothing reads it, so the run trains as if it were unset. "
+                "Remove it, or set expand_layers: <int> to append new blocks."
             )
         return self
 

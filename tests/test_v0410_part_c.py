@@ -135,13 +135,31 @@ class TestSchemaBlockExpansion:
         assert cfg.expand_layers == 4
         assert cfg.freeze_trainable_layers == 4
 
-    def test_freeze_trainable_layers_alone_refused(self):
-        # #1396 — on its own the field is silently ignored, so refuse it.
+    @pytest.mark.parametrize("freeze", [2, -4, 0])
+    def test_freeze_trainable_layers_alone_refused(self, freeze):
+        # #1396: without expand_layers nothing reads the field, so every value
+        # (positive, negative or zero) trained as if it were unset.
         with pytest.raises(
             ValidationError,
             match="freeze_trainable_layers only applies together with expand_layers",
         ):
-            TrainingConfig(freeze_trainable_layers=-4)
+            TrainingConfig(freeze_trainable_layers=freeze)
+
+    @pytest.mark.parametrize("task", ["sft", "pretrain"])
+    def test_freeze_trainable_layers_alone_refused_at_load(self, task):
+        # The issue's own case, through the loader `soup train` uses.
+        from soup_cli.config.loader import load_config_from_string
+
+        with pytest.raises(
+            ValueError,
+            match="only applies together with expand_layers.*Remove it",
+        ):
+            load_config_from_string(
+                "base: org/model\n"
+                f"task: {task}\n"
+                "data:\n  train: ./data.jsonl\n"
+                "training:\n  freeze_trainable_layers: 2\n"
+            )
 
     def test_freeze_magnitude_oob(self):
         with pytest.raises(ValidationError, match="magnitude"):
