@@ -54,6 +54,7 @@ def _stub_optimizer(monkeypatch, ran):
 
 class TestCompileRefusesBeforeRunningTheOptimizer:
     @pytest.mark.parametrize("bad", ["../out.py", "link.py"])
+    @pytest.mark.requires_symlink
     def test_the_optimizer_is_never_called_and_exit_is_2(
         self, tmp_path, monkeypatch, bad
     ):
@@ -228,6 +229,7 @@ class TestUnlearnRefusesTheOutputBeforeLoadingAnything:
             with pytest.raises(ValueError, match="output dir must stay under cwd"):
                 wrapper.setup()
 
+    @pytest.mark.requires_symlink
     def test_setup_refuses_a_symlinked_output(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         real = tmp_path / "real-out"
