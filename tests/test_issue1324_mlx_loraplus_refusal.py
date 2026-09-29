@@ -15,6 +15,7 @@ table stays: the mlx trainer itself warns about it at runtime, and the
 #755 drift test requires the table to match that warning list.
 """
 
+import re
 from pathlib import Path
 
 import pytest
@@ -48,12 +49,17 @@ def _transformers_variant(backend: str) -> str:
     )
 
 
+def _plain(text: str) -> str:
+    """Strip ANSI escapes and collapse whitespace (Rich colours and wraps on CI)."""
+    return " ".join(re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", text or "").split())
+
+
 def test_mlx_loraplus_is_refused_at_load_with_message():
-    with pytest.raises(Exception) as excinfo:
+    with pytest.raises(ValueError) as excinfo:
         load_config_from_string(_MLX_LORAPLUS)
     msg = str(excinfo.value)
-    assert "loraplus_lr_ratio" in msg
-    assert "backend='mlx'" in msg
+    assert "training.loraplus_lr_ratio is not implemented on backend='mlx'" in msg
+    assert "Remove training.loraplus_lr_ratio, or use backend: transformers." in msg
 
 
 def test_transformers_loraplus_still_loads():
@@ -79,12 +85,47 @@ def test_mlx_loraplus_without_ratio_still_loads():
 def test_train_dry_run_exits_nonzero_on_mlx_loraplus(tmp_path: Path):
     cfg_file = tmp_path / "c1_mlx_loraplus.yaml"
     cfg_file.write_text(_MLX_LORAPLUS, encoding="utf-8")
-    (tmp_path / "data").mkdir()
-    # dry-run validates data before the config? No: config loads first, so no
-    # data files are needed for the refusal to fire.
     result = CliRunner().invoke(app, ["train", "--config", str(cfg_file), "--dry-run"])
-    assert result.exit_code != 0
-    assert "loraplus_lr_ratio" in (result.output or "")
+    assert result.exit_code == 1, (result.output, repr(result.exception))
+    assert "training.loraplus_lr_ratio is not implemented on backend='mlx'" in _plain(
+        result.output
+    )
+
+
+@pytest.mark.parametrize(
+    "task, data_format",
+    [("dpo", "dpo"), ("kto", "kto"), ("pretrain", "plaintext"), ("embedding", "alpaca")],
+)
+def test_a_task_mlx_cannot_run_is_refused_for_that_first(task, data_format):
+    """The MLX task gate runs first: switching backend is the whole fix there."""
+    text = _MLX_LORAPLUS.replace("task: sft", f"task: {task}").replace(
+        "format: alpaca", f"format: {data_format}"
+    )
+    with pytest.raises(ValueError) as excinfo:
+        load_config_from_string(text)
+    msg = str(excinfo.value)
+    assert "MLX backend only ships SFT" in msg
+    assert "is not implemented on backend=" not in msg
+
+
+def test_a_task_with_no_lora_b_keeps_its_own_refusal_on_mlx():
+    """moe_lora_routing refuses LoRA+ on every backend; "use backend: transformers"
+    would lead straight into that refusal, so it must come first."""
+    text = """
+base: org/m
+task: moe_lora_routing
+backend: mlx
+data:
+  train: ./x.jsonl
+training:
+  loraplus_lr_ratio: 16
+  mole_task_adapters: [./a, ./b]
+"""
+    with pytest.raises(ValueError) as excinfo:
+        load_config_from_string(text)
+    msg = str(excinfo.value)
+    assert "trains only the routing gate" in msg
+    assert "is not implemented on backend=" not in msg
 
 
 def test_mlx_doctor_table_has_no_loraplus_row():

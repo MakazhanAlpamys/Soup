@@ -7293,6 +7293,12 @@ class SoupConfig(BaseModel):
         validate, print nothing in ``soup doctor --config``, and train A and B
         at one learning rate. ``unsloth`` reaches the transformers wrappers'
         ``attach_loraplus_optimizer`` call, so it stays allowed (#1080).
+
+        Defined after :meth:`_validate_mlx_task_support` and
+        :meth:`_validate_loraplus_has_a_trainable_lora_b` on purpose: a task
+        MLX cannot run, or one with no LoRA B matrix on any backend, is refused
+        for that reason first, so "use backend: transformers" below always
+        leads to a config that loads.
         """
         if self.backend == "mlx" and self.training.loraplus_lr_ratio is not None:
             raise ValueError(
