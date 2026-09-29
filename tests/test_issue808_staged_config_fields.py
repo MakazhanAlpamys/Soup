@@ -125,13 +125,12 @@ class TestTheDeadline:
 
 
 class TestStagedFieldsInventory:
-    """Validate inventory size and default handling across all 20 staged fields."""
+    """Validate inventory size and default handling across all 29 staged fields."""
 
-    def test_exactly_20_staged_fields_registered(self) -> None:
-        # 17 from #808, plus lr_groups / early_stop_patience /
-        # citation_recall_threshold from #761.
-        assert len(STAGED_FIELDS) == 20, (
-            f"Expected exactly 20 staged fields, got {len(STAGED_FIELDS)}"
+    def test_exactly_29_staged_fields_registered(self) -> None:
+        # 17 from #808 initial, 3 from #761, plus 9 Group B knobs from #808.
+        assert len(STAGED_FIELDS) == 29, (
+            f"Expected exactly 29 staged fields, got {len(STAGED_FIELDS)}"
         )
 
     @pytest.mark.parametrize(
@@ -146,6 +145,15 @@ class TestStagedFieldsInventory:
             ("training", "lr_groups", [{"pattern": "lm_head", "lr": 1e-5}]),
             ("training", "early_stop_patience", 5),
             ("training", "citation_recall_threshold", 0.8),
+            ("training", "forgetting_eval_steps", 250),
+            ("training", "forgetting_benchmark", "mini_common_sense"),
+            ("training", "forgetting_stop", True),
+            ("training", "checkpoint_eval_steps", 500),
+            ("training", "checkpoint_eval_metric", "judge"),
+            ("training", "checkpoint_eval_tasks", "arc,hellaswag"),
+            ("training", "checkpoint_keep_top", 5),
+            ("training", "convergence_window", 100),
+            ("training", "convergence_rel_tol", 0.01),
             ("data", "video_dir", "./videos"),
             ("data", "video_fps", 2.0),
             ("data", "video_maxlen", 64),
@@ -312,20 +320,23 @@ class TestLoaderStagedFieldIntegration:
         assert "read by nothing" not in _plain(capsys.readouterr().out)
 
     @pytest.mark.parametrize("severity", ["warn", "error"])
-    def test_convergence_rel_tol_scientific_notation_unwired_tunable_loads_silently(
+    def test_convergence_rel_tol_scientific_notation_staged_field_loads_silently(
         self, severity: str, monkeypatch, capsys
     ) -> None:
-        """convergence_rel_tol: 5e-3 matching schema default loads cleanly as an unwired tunable."""
+        """convergence_rel_tol: 5e-3 matching schema default loads cleanly as a staged field."""
         monkeypatch.setattr(loader, "STAGED_FIELD_SEVERITY", severity)
         yaml_str = _VALID + "\ntraining:\n  convergence_rel_tol: 5e-3\n"
         cfg = loader.load_config_from_string(yaml_str)
         assert cfg.training.convergence_rel_tol == 0.005
         assert capsys.readouterr().out == ""
 
-    def test_convergence_unwired_tunables_in_train_command(self) -> None:
-        """convergence_window and convergence_rel_tol are reported as unwired training tunables."""
+    def test_group_b_tunables_no_longer_listed_in_train_command(
+        self, monkeypatch
+    ) -> None:
+        """Group B tunables are staged fields; train command lists only enabled flags."""
         from soup_cli.commands.train import _nondefault_unwired_training_settings
 
+        monkeypatch.setattr(loader, "STAGED_FIELD_SEVERITY", "warn")
         yaml_str = _VALID + "\ntraining:\n  convergence_rel_tol: 5e-3\n  convergence_window: 50\n"
         cfg = loader.load_config_from_string(yaml_str)
         assert _nondefault_unwired_training_settings(cfg.training) == []
@@ -334,10 +345,83 @@ class TestLoaderStagedFieldIntegration:
             _VALID
             + "\ntraining:\n  convergence_detection: true\n"
             + "  convergence_window: 100\n  convergence_rel_tol: 0.01\n"
+            + "  forgetting_eval_steps: 250\n  checkpoint_keep_top: 5\n"
         )
         cfg_nondef = loader.load_config_from_string(yaml_nondef)
         assert _nondefault_unwired_training_settings(cfg_nondef.training) == [
             "convergence_detection",
-            "convergence_window",
-            "convergence_rel_tol",
         ]
+
+
+class TestGroupBTunablesIntegration:
+    """Group B knobs warn at load and refuse under v0.77 deadline (#808)."""
+
+    _GROUP_B_CASES = {
+        "training.forgetting_eval_steps": "training:\n  forgetting_eval_steps: 250\n",
+        "training.forgetting_benchmark": "training:\n  forgetting_benchmark: mini_common_sense\n",
+        "training.forgetting_stop": "training:\n  forgetting_stop: true\n",
+        "training.checkpoint_eval_steps": "training:\n  checkpoint_eval_steps: 500\n",
+        "training.checkpoint_eval_metric": "training:\n  checkpoint_eval_metric: judge\n",
+        "training.checkpoint_eval_tasks": "training:\n  checkpoint_eval_tasks: arc,hellaswag\n",
+        "training.checkpoint_keep_top": "training:\n  checkpoint_keep_top: 5\n",
+        "training.convergence_window": "training:\n  convergence_window: 100\n",
+        "training.convergence_rel_tol": "training:\n  convergence_rel_tol: 0.01\n",
+    }
+
+    def test_soup_train_note_names_no_staged_field(self, monkeypatch) -> None:
+        """Each knob is reported once, by the loader; soup train's note adds none (#808)."""
+        from soup_cli.commands.train import (
+            _UNWIRED_TRAINING_TUNABLES,
+            _nondefault_unwired_training_settings,
+        )
+
+        staged = {name for section, name in STAGED_FIELDS if section == "training"}
+        assert not staged & set(_UNWIRED_TRAINING_TUNABLES)
+
+        monkeypatch.setattr(loader, "STAGED_FIELD_SEVERITY", "warn")
+        body = "".join(case.split("\n", 1)[1] for case in self._GROUP_B_CASES.values())
+        cfg = loader.load_config_from_string(_VALID + "\ntraining:\n" + body)
+        assert _nondefault_unwired_training_settings(cfg.training) == []
+
+    @pytest.mark.parametrize("path", sorted(_GROUP_B_CASES))
+    def test_group_b_knob_warns_with_deadline_under_warn_severity(
+        self, path: str, capsys, monkeypatch
+    ) -> None:
+        monkeypatch.setattr(loader, "STAGED_FIELD_SEVERITY", "warn")
+        yaml_str = _VALID + "\n" + self._GROUP_B_CASES[path]
+        loader.load_config_from_string(yaml_str)
+        plain_out = _plain(capsys.readouterr().out)
+        assert f"{path} is accepted but read by nothing" in plain_out
+        assert f"v{STAGED_FIELD_REJECTION_VERSION} will refuse it" in plain_out
+
+    @pytest.mark.parametrize("path", sorted(_GROUP_B_CASES))
+    def test_group_b_knob_refuses_under_error_severity(
+        self, path: str, monkeypatch
+    ) -> None:
+        monkeypatch.setattr(loader, "STAGED_FIELD_SEVERITY", "error")
+        yaml_str = _VALID + "\n" + self._GROUP_B_CASES[path]
+        with pytest.raises(ValueError) as excinfo:
+            loader.load_config_from_string(yaml_str)
+        assert f"{path} is accepted but read by nothing" in str(excinfo.value)
+        assert f"v{STAGED_FIELD_REJECTION_VERSION}" in str(excinfo.value)
+
+    @pytest.mark.parametrize("severity", ["warn", "error"])
+    def test_group_b_defaults_stay_silent(
+        self, severity: str, capsys, monkeypatch
+    ) -> None:
+        monkeypatch.setattr(loader, "STAGED_FIELD_SEVERITY", severity)
+        yaml_defaults = (
+            _VALID
+            + "\ntraining:\n"
+            + "  forgetting_eval_steps: 100\n"
+            + "  forgetting_benchmark: mini_mmlu\n"
+            + "  forgetting_stop: false\n"
+            + "  checkpoint_eval_steps: 200\n"
+            + "  checkpoint_eval_metric: composite\n"
+            + "  checkpoint_eval_tasks: null\n"
+            + "  checkpoint_keep_top: 3\n"
+            + "  convergence_window: 50\n"
+            + "  convergence_rel_tol: 0.005\n"
+        )
+        loader.load_config_from_string(yaml_defaults)
+        assert "read by nothing" not in _plain(capsys.readouterr().out)

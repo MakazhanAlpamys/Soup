@@ -197,7 +197,7 @@ training:
     alpha: 16
 ```
 
-Works with all training tasks: SFT, DPO, GRPO, PPO, KTO, ORPO, SimPO, IPO, and Pretrain. If unsloth is installed but not enabled, Soup will suggest it automatically.
+Works with the tasks that have an unsloth setup: SFT (text; SFT vision and audio still run the transformers setup), DPO, GRPO, PPO, KTO, ORPO, SimPO, IPO, BCO, preference, Pretrain, Embedding and TTS. The others (`reward_model`, `prm`, `classifier`, `reranker`, `cross_encoder`, `distill`, `unlearn`, `moe_lora_routing`, `online_dpo` and `asr`) have no unsloth setup, so `backend: unsloth` is refused at config load for them (#1357). If unsloth is installed but not enabled, Soup will suggest it automatically.
 
 > **Tip:** Soup auto-detects unsloth. When installed, you'll see a hint during `soup train` if you haven't enabled it yet.
 
@@ -503,6 +503,10 @@ soup sweep --config soup.yaml --param lr=1e-5,2e-5 --param epochs=2,3 --dry-run
 # Early stopping: skip remaining runs if loss exceeds 1.5x best
 soup sweep --config soup.yaml --param lr=1e-5,2e-5,5e-5 --early-stop 1.5
 ```
+
+Every arm builds the trainer `soup train` builds for the config's `task` and
+`backend`, so an arm on a `task: distill` config distills, and an arm on
+`backend: mlx` uses the MLX wrapper.
 
 
 ## Model Comparison

@@ -145,6 +145,7 @@ def _local_plan(
     backend_version: str = _MLX_VERSION,
     truncation: str = "none",
     max_sequence_length: int = 16,
+    target_token_ids: tuple[int, ...] = (3, 4, 5),
 ) -> tuple[AutoDistillPlan, Path, Path, Path]:
     teacher_root = tmp_path / "teacher"
     tokenizer_root = tmp_path / "tokenizer"
@@ -156,10 +157,11 @@ def _local_plan(
     weights = b"teacher-weights"
     tokenizer = b'{"version":"1.0"}\n'
     template = "{{ messages }}"
+    targets = ",".join(str(token_id) for token_id in target_token_ids).encode()
     dataset = (
         b'{"example_id":"example-1","prompt_token_ids":[1,2],'
         b'"schema":"soup.autodistill.tokenized-teacher-example.v1",'
-        b'"target_token_ids":[3,4,5]}\n'
+        b'"target_token_ids":[' + targets + b"]}\n"
     )
     (teacher_root / "config.json").write_bytes(config)
     (teacher_root / "model.safetensors").write_bytes(weights)
@@ -637,6 +639,34 @@ def test_changed_bound_dataset_fails_before_model_load(monkeypatch, tmp_path):
     (dataset_root / "prompts.jsonl").write_bytes(b'{"changed":true}\n')
 
     with pytest.raises(RuntimeError, match="byte count mismatch|sha256 mismatch"):
+        run_mlx_teacher_capture_process(
+            plan=plan,
+            teacher_root=teacher_root,
+            tokenizer_root=tokenizer_root,
+            dataset_root=dataset_root,
+            publication_root=tmp_path / "publication",
+            shard_id="shard-0001",
+            transaction_id="transaction-0001",
+            python_executable=sys.executable,
+            timeout_seconds=30,
+        )
+
+    assert not trace.exists()
+
+
+def test_out_of_vocabulary_dataset_id_fails_before_model_load(monkeypatch, tmp_path):
+    """#1341: the worker's own vocabulary guard, on a dataset that still
+    matches its fingerprint, so nothing earlier can refuse it first."""
+    plan, teacher_root, tokenizer_root, dataset_root = _local_plan(
+        tmp_path, target_token_ids=(3, 4, 8)
+    )
+    assert plan.capture.vocab_size == 8
+    fake_root = _write_fake_mlx_runtime(tmp_path)
+    trace = _runtime_environment(monkeypatch, tmp_path, fake_root)
+
+    with pytest.raises(
+        RuntimeError, match="teacher capture dataset contains an id outside the vocabulary"
+    ):
         run_mlx_teacher_capture_process(
             plan=plan,
             teacher_root=teacher_root,

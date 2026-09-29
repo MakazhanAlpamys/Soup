@@ -12,6 +12,7 @@ from rich.panel import Panel
 from rich.table import Table
 
 from soup_cli.config.loader import load_config
+from soup_cli.utils.terminal import for_terminal
 
 console = Console()
 
@@ -212,7 +213,12 @@ def sweep(
                         f"({best_loss:.4f} x {early_stop} = {best_loss * early_stop:.4f})[/]"
                     )
         except Exception as exc:
-            console.print(f"[red]Run {run_name} failed: {exc}[/]")
+            # #1213 — a `backend: mlx` arm now reaches the MLX wrapper, whose
+            # install hint reads `pip install "soup-cli[mlx]"`. Interpolated
+            # straight into the markup string, Rich reads `[mlx]` as a style tag
+            # and drops it, so the hint that tells the user what to install is
+            # the part that disappears. `for_terminal` escapes it.
+            console.print(f"[red]Run {run_name} failed:[/] {for_terminal(exc)}")
             results.append({
                 "name": run_name,
                 "params": combo,
@@ -442,7 +448,7 @@ def _run_single(base_cfg, params: dict, run_name: str, config_path: Path) -> dic
     )
     from soup_cli.experiment.tracker import ExperimentTracker
     from soup_cli.monitoring.display import TrainingDisplay
-    from soup_cli.trainer.sft import SFTTrainerWrapper
+    from soup_cli.trainer.dispatch import build_trainer
     from soup_cli.utils.eval_schedule import loader_data_config, validation_notice
     from soup_cli.utils.gpu import detect_device, get_gpu_info
 
@@ -472,57 +478,11 @@ def _run_single(base_cfg, params: dict, run_name: str, config_path: Path) -> dic
         experiment_name=run_name,
     )
 
-    # Build trainer
-    if cfg.task == "dpo":
-        from soup_cli.trainer.dpo import DPOTrainerWrapper
-
-        trainer_wrapper = DPOTrainerWrapper(cfg, device=device)
-    elif cfg.task == "kto":
-        from soup_cli.trainer.kto import KTOTrainerWrapper
-
-        trainer_wrapper = KTOTrainerWrapper(cfg, device=device)
-    elif cfg.task == "grpo":
-        from soup_cli.trainer.grpo import GRPOTrainerWrapper
-
-        trainer_wrapper = GRPOTrainerWrapper(cfg, device=device)
-    elif cfg.task == "ppo":
-        from soup_cli.trainer.ppo import PPOTrainerWrapper
-
-        trainer_wrapper = PPOTrainerWrapper(cfg, device=device)
-    elif cfg.task == "orpo":
-        from soup_cli.trainer.orpo import ORPOTrainerWrapper
-
-        trainer_wrapper = ORPOTrainerWrapper(cfg, device=device)
-    elif cfg.task == "simpo":
-        from soup_cli.trainer.simpo import SimPOTrainerWrapper
-
-        trainer_wrapper = SimPOTrainerWrapper(cfg, device=device)
-    elif cfg.task == "ipo":
-        from soup_cli.trainer.ipo import IPOTrainerWrapper
-
-        trainer_wrapper = IPOTrainerWrapper(cfg, device=device)
-    elif cfg.task == "bco":
-        from soup_cli.trainer.bco import BCOTrainerWrapper
-
-        trainer_wrapper = BCOTrainerWrapper(cfg, device=device)
-    elif cfg.task == "preference":
-        from soup_cli.trainer.preference import PreferenceTrainerWrapper
-
-        trainer_wrapper = PreferenceTrainerWrapper(cfg, device=device)
-    elif cfg.task == "reward_model":
-        from soup_cli.trainer.reward_model import RewardModelTrainerWrapper
-
-        trainer_wrapper = RewardModelTrainerWrapper(cfg, device=device)
-    elif cfg.task == "pretrain":
-        from soup_cli.trainer.pretrain import PretrainTrainerWrapper
-
-        trainer_wrapper = PretrainTrainerWrapper(cfg, device=device)
-    elif cfg.task == "embedding":
-        from soup_cli.trainer.embedding import EmbeddingTrainerWrapper
-
-        trainer_wrapper = EmbeddingTrainerWrapper(cfg, device=device)
-    else:
-        trainer_wrapper = SFTTrainerWrapper(cfg, device=device)
+    # Build trainer — the same dispatch `soup train` uses (#1213). This used to
+    # be a second, shorter chain that never grew past v0.40.0, so ten task
+    # values and every `backend: mlx` config were trained as plain SFT here
+    # while the tracker recorded the configured task.
+    trainer_wrapper = build_trainer(cfg, device=device)
     trainer_wrapper.setup(dataset)
 
     # Train

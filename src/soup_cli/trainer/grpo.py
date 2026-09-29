@@ -604,7 +604,7 @@ class GRPOTrainerWrapper:
             task="grpo",
         )
 
-        # v0.40.6 #67 — ReLoRA callback (magnitude-prune LoRA every N steps).
+        # v0.40.6 #67 — ReLoRA merge-and-reinitialize restart callback.
         from soup_cli.utils.peft_wiring import (
             attach_curriculum_callback,
             attach_loraplus_optimizer,
@@ -786,8 +786,14 @@ class GRPOTrainerWrapper:
             self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)
         duration = time.time() - start
 
-        # Save final model (LoRA adapter)
-        self.trainer.save_model(self._output_dir)
+        if self.config.training.relora_steps is None:
+            self.trainer.save_model(self._output_dir)
+        else:
+            from soup_cli.utils.peft_wiring import save_model_with_relora
+
+            save_model_with_relora(
+                self.trainer, self._output_dir, self.config.training.relora_steps
+            )
         self.tokenizer.save_pretrained(self._output_dir)
 
         # Extract metrics

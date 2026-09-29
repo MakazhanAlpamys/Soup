@@ -40,18 +40,12 @@ _HW_FIT_OPTIMIZERS = frozenset({
 })
 
 _UNWIRED_TRAINING_TUNABLES = (
-    "forgetting_eval_steps",
+    # Group B tunables (forgetting_eval_steps, forgetting_benchmark, forgetting_stop,
+    # checkpoint_eval_steps, checkpoint_eval_metric, checkpoint_eval_tasks,
+    # checkpoint_keep_top, convergence_window, convergence_rel_tol) moved to
+    # config/staged_fields.py (#808), and early_stop_patience moved in #761:
+    # the loader warns about them with the refusal date, so they are not listed here.
     "forgetting_threshold",
-    "forgetting_benchmark",
-    "forgetting_stop",
-    "checkpoint_eval_steps",
-    "checkpoint_eval_metric",
-    "checkpoint_eval_tasks",
-    "checkpoint_keep_top",
-    # early_stop_patience moved to config/staged_fields.py (#761): the loader
-    # warns about it with the refusal date, so it is not listed here as well.
-    "convergence_window",
-    "convergence_rel_tol",
 )
 
 
@@ -385,7 +379,8 @@ def train(
         "--resume",
         "-r",
         help="Resume from checkpoint: path to checkpoint dir ('auto' for latest); "
-        "on the MLX backend, a path to a .safetensors adapter file instead",
+        "on the MLX backend, a path to a .safetensors adapter file instead. "
+        "Not supported when training.relora_steps is configured",
     ),
     wandb: bool = typer.Option(
         False,
@@ -465,7 +460,8 @@ def train(
         "--hf-resume",
         help=(
             "Download the latest checkpoint branch from the --push-as repo "
-            "and resume from it. Requires --push-as."
+            "and resume from it. Requires --push-as; not supported when "
+            "training.relora_steps is configured."
         ),
     ),
     find_lr: bool = typer.Option(
@@ -771,6 +767,13 @@ def train(
         console.print(f"[red]{markup_escape(str(exc))}[/]")
         raise typer.Exit(code=2) from exc
 
+    if cfg.training.relora_steps is not None and (resume is not None or hf_resume):
+        console.print(
+            "[red]ReLoRA runs cannot resume from checkpoints.[/] "
+            "Remove training.relora_steps or start a fresh run."
+        )
+        raise typer.Exit(1)
+
     # An unregistered data.chat_template name raises KeyError in the trainer,
     # after the model has loaded. Check it before anything is downloaded.
     from soup_cli.data.chat_templates import resolve_chat_template
@@ -972,9 +975,10 @@ def train(
         cfg.training.eval_gate = EvalGateConfig(enabled=True, suite=gate)
         console.print(f"[green]Eval gate enabled[/] with suite: {gate}")
 
-    # Honesty guard: these staged knobs are accepted but are not enforced
-    # mid-training in this build. Warn for every non-default member of the
-    # families, not only their enable flags, so a tuned no-op is never silent.
+    # Honesty guard: these staged flags (plus forgetting_threshold) are accepted
+    # but not enforced mid-training in this build. Their other tuning knobs are
+    # reported by the loader with refusal dates, so only active flags and
+    # non-default forgetting_threshold are reported here.
     _unwired_gates = _nondefault_unwired_training_settings(cfg.training)
     if _unwired_gates:
         console.print(
@@ -1659,106 +1663,12 @@ def train(
         # v0.40.4 #63 — every transformer-backend trainer now threads
         # --trust-remote-code through the wrapper (closes the v0.36.0 Part B gap).
         trainer_kwargs = dict(trainer_kwargs, trust_remote_code=trust_remote_code)
-        from soup_cli.trainer.mlx_routing import resolve_trainer
+        # #1213 — one dispatch, shared with `soup sweep`: the two commands used
+        # to keep separate chains and sweep's copy fell ten tasks and the MLX
+        # route behind. See soup_cli/trainer/dispatch.py.
+        from soup_cli.trainer.dispatch import build_trainer
 
-        mlx_cls, trainer_kwargs = resolve_trainer(cfg, trainer_kwargs)
-        if mlx_cls is not None:
-            trainer_wrapper = mlx_cls(cfg, **trainer_kwargs)
-        elif cfg.task == "dpo":
-            from soup_cli.trainer.dpo import DPOTrainerWrapper
-
-            trainer_wrapper = DPOTrainerWrapper(cfg, **trainer_kwargs)
-        elif cfg.task == "online_dpo":
-            from soup_cli.trainer.online_dpo import OnlineDPOTrainerWrapper
-
-            trainer_wrapper = OnlineDPOTrainerWrapper(cfg, **trainer_kwargs)
-        elif cfg.task == "grpo":
-            from soup_cli.trainer.grpo import GRPOTrainerWrapper
-
-            trainer_wrapper = GRPOTrainerWrapper(cfg, **trainer_kwargs)
-        elif cfg.task == "ppo":
-            from soup_cli.trainer.ppo import PPOTrainerWrapper
-
-            trainer_wrapper = PPOTrainerWrapper(cfg, **trainer_kwargs)
-        elif cfg.task == "kto":
-            from soup_cli.trainer.kto import KTOTrainerWrapper
-
-            trainer_wrapper = KTOTrainerWrapper(cfg, **trainer_kwargs)
-        elif cfg.task == "orpo":
-            from soup_cli.trainer.orpo import ORPOTrainerWrapper
-
-            trainer_wrapper = ORPOTrainerWrapper(cfg, **trainer_kwargs)
-        elif cfg.task == "simpo":
-            from soup_cli.trainer.simpo import SimPOTrainerWrapper
-
-            trainer_wrapper = SimPOTrainerWrapper(cfg, **trainer_kwargs)
-        elif cfg.task == "ipo":
-            from soup_cli.trainer.ipo import IPOTrainerWrapper
-
-            trainer_wrapper = IPOTrainerWrapper(cfg, **trainer_kwargs)
-        elif cfg.task == "bco":
-            from soup_cli.trainer.bco import BCOTrainerWrapper
-
-            trainer_wrapper = BCOTrainerWrapper(cfg, **trainer_kwargs)
-        elif cfg.task == "preference":
-            from soup_cli.trainer.preference import PreferenceTrainerWrapper
-
-            trainer_wrapper = PreferenceTrainerWrapper(cfg, **trainer_kwargs)
-        elif cfg.task == "reward_model":
-            from soup_cli.trainer.reward_model import RewardModelTrainerWrapper
-
-            trainer_wrapper = RewardModelTrainerWrapper(cfg, **trainer_kwargs)
-        elif cfg.task == "pretrain":
-            from soup_cli.trainer.pretrain import PretrainTrainerWrapper
-
-            trainer_wrapper = PretrainTrainerWrapper(cfg, **trainer_kwargs)
-        elif cfg.task == "embedding":
-            from soup_cli.trainer.embedding import EmbeddingTrainerWrapper
-
-            trainer_wrapper = EmbeddingTrainerWrapper(cfg, **trainer_kwargs)
-        elif cfg.task == "distill":
-            # v0.53.2 #133 — knowledge distillation (student + frozen teacher).
-            from soup_cli.trainer.distill import DistillTrainerWrapper
-
-            trainer_wrapper = DistillTrainerWrapper(cfg, **trainer_kwargs)
-        elif cfg.task == "prm":
-            # v0.53.11 #126 — Process Reward Model trainer.
-            from soup_cli.trainer.prm import PRMTrainerWrapper
-
-            trainer_wrapper = PRMTrainerWrapper(cfg, **trainer_kwargs)
-        elif cfg.task in CLASSIFICATION_TASKS:
-            # v0.53.2 #132 — sequence-classification head.
-            from soup_cli.trainer.classifier import ClassifierTrainerWrapper
-
-            trainer_wrapper = ClassifierTrainerWrapper(cfg, **trainer_kwargs)
-        elif cfg.task == "unlearn":
-            # v0.71.9 #193 — NPO / SimNPO / RMU unlearning.
-            from soup_cli.trainer.unlearn import UnlearnTrainerWrapper
-
-            trainer_wrapper = UnlearnTrainerWrapper(cfg, **trainer_kwargs)
-        elif cfg.task == "moe_lora_routing":
-            # v0.71.12 #222 — MoLE per-token routing over N frozen task LoRAs.
-            from soup_cli.trainer.mole_routing import MoleRoutingTrainerWrapper
-
-            trainer_wrapper = MoleRoutingTrainerWrapper(cfg, **trainer_kwargs)
-        elif cfg.task == "tts":
-            # v0.71.20 #131 — TTS fine-tuning (SFT-style next-token CE over
-            # text + audio-codec-token sequences; per-family templating).
-            from soup_cli.trainer.tts import TTSTrainerWrapper
-
-            trainer_wrapper = TTSTrainerWrapper(cfg, **trainer_kwargs)
-        elif cfg.task == "asr":
-            # v0.71.32 — ASR (Whisper) fine-tuning via Seq2SeqTrainer.
-            from soup_cli.trainer.asr import AsrTrainerWrapper
-
-            trainer_wrapper = AsrTrainerWrapper(cfg, **trainer_kwargs)
-        else:
-            # Keep the transformers/TRL SFT surface outside the backend-first MLX
-            # route. The wrapper is import-light today, but importing it eagerly
-            # makes an MLX-only install depend on that remaining true forever.
-            from soup_cli.trainer.sft import SFTTrainerWrapper
-
-            trainer_wrapper = SFTTrainerWrapper(cfg, **trainer_kwargs)
+        trainer_wrapper = build_trainer(cfg, **trainer_kwargs)
         trainer_wrapper.setup(dataset)
 
         # #350 — PEFT promotes newly-created adapters to fp32. FSDP cannot flatten
@@ -1885,6 +1795,12 @@ def train(
         raise
 
     # Report
+    merge_hint = (
+        "ReLoRA output is already dense; no soup merge is needed"
+        if cfg.training.relora_steps is not None
+        else f"[bold]Merge LoRA:[/]  soup merge --adapter {result['output_dir']}"
+    )
+
     console.print(
         Panel(
             f"{_format_training_complete_loss(result)}\n"
@@ -1893,7 +1809,7 @@ def train(
             f"Run ID: [bold]{run_id}[/]\n\n"
             f"Quick test:  [bold]soup chat --model {result['output_dir']}[/]\n"
             f"Push to HF:  [bold]soup push --model {result['output_dir']}[/]\n"
-            f"Merge LoRA:  [bold]soup merge --adapter {result['output_dir']}[/]\n"
+            f"{merge_hint}\n"
             f"Export GGUF: [bold]soup export --model {result['output_dir']}[/]\n"
             f"Run details: [bold]soup runs show {run_id}[/]",
             title="[bold green]Training Complete![/]",

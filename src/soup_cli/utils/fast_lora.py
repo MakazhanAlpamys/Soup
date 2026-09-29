@@ -39,6 +39,8 @@ logger = logging.getLogger(__name__)
 
 _PATCH_MARKER = "_soup_fast_lora_single_projection"
 _ORIGINAL_FORWARD_MARKER = "_soup_fast_lora_original_forward"
+_GROUP_PATCH_OWNER_MARKER = "_soup_fast_lora_group_owner"
+_FORWARD_OWNER_MARKER = "_soup_fast_lora_forward_owner"
 
 __all__ = [
     "patch_fast_lora_single_projection",
@@ -419,6 +421,8 @@ def patch_fast_lora_single_projection(model: Any) -> int:
     targets = []
     for child in model.modules():
         if getattr(child, _PATCH_MARKER, False):
+            continue
+        if getattr(child, _GROUP_PATCH_OWNER_MARKER, None) is not None:
             continue
         if isinstance(child, types_to_match):
             targets.append(child)

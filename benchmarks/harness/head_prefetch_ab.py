@@ -50,13 +50,13 @@ A machine without CUDA is an intentional skip and exits 0.
 
 import argparse
 import json
-import re
 import statistics
-import subprocess
 import sys
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+from source_provenance import source_sha
 
 
 def _harness() -> Any:
@@ -122,58 +122,8 @@ def arm_name(arm: Optional[int]) -> str:
 
 
 def _source_sha() -> str:
-    """The commit of the tree that ``soup_cli`` got imported from, or ``unknown``.
-
-    I resolve this from ``soup_cli.__file__``, not from this driver's own file:
-    the driver and the ``soup_cli`` it measures can come from different
-    checkouts (a ``PYTHONPATH`` override, an editable install elsewhere), and I
-    want the tree that was actually measured. ``-dirty`` covers an uncommitted
-    change on top of that commit, scoped to ``src`` so an untracked output file
-    left at the repo root (this driver's own ``--out``, say) does not turn a
-    clean tree dirty. Written the way ``variant2_gate.py``'s ``_source_sha`` is.
-    """
-    import soup_cli
-
-    package_file = getattr(soup_cli, "__file__", None)
-    if package_file is None:
-        return "unknown"
-    try:
-        package_dir = Path(package_file).resolve().parent
-        root = subprocess.run(
-            ["git", "rev-parse", "--show-toplevel"],
-            cwd=package_dir,
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=5,
-        ).stdout.strip()
-        if not root:
-            return "unknown"
-        commit = (
-            subprocess.run(
-                ["git", "rev-parse", "HEAD"],
-                cwd=Path(root),
-                check=True,
-                capture_output=True,
-                text=True,
-                timeout=5,
-            )
-            .stdout.strip()
-            .lower()
-        )
-        dirty = subprocess.run(
-            ["git", "status", "--porcelain", "--untracked-files=normal", "--", "src"],
-            cwd=Path(root),
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=5,
-        ).stdout
-    except (OSError, subprocess.SubprocessError):
-        return "unknown"
-    if not re.fullmatch(r"[0-9a-f]{40}", commit):
-        return "unknown"
-    return f"{commit}-dirty" if dirty else commit
+    """Shared with the other harnesses; see ``source_provenance``."""
+    return source_sha(dirty_pathspec="src")
 
 
 def group_of(name: str) -> str:

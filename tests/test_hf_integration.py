@@ -1172,6 +1172,68 @@ class TestHfResumeRequiresPushAs:
         assert "push-as" in result.output.lower()
 
 
+
+class TestReLoRAResumeRefusal:
+    def _write_config(self, path):
+        path.write_text(
+            "base: meta-llama/Llama-3.1-8B\n"
+            "task: sft\n"
+            "data:\n"
+            "  train: data.jsonl\n"
+            "training:\n"
+            "  quantization: none\n"
+            "  relora_steps: 1\n",
+            encoding="utf-8",
+        )
+
+    def test_local_resume_is_rejected_before_checkpoint_resolution(
+        self, tmp_path, monkeypatch
+    ):
+        cfg = tmp_path / "soup.yaml"
+        self._write_config(cfg)
+        monkeypatch.setattr(
+            "soup_cli.commands.train._resolve_resume_or_exit",
+            lambda *_args, **_kwargs: pytest.fail("checkpoint resolution should not run"),
+        )
+        result = runner.invoke(
+            app,
+            [
+                "train",
+                "--config",
+                str(cfg),
+                "--resume",
+                str(tmp_path / "checkpoint"),
+                "--dry-run",
+            ],
+        )
+        assert result.exit_code == 1, (result.output, repr(result.exception))
+        assert "cannot resume" in result.output.lower()
+        assert "relora_steps" in result.output
+
+    def test_hf_resume_is_rejected_before_download(self, tmp_path, monkeypatch):
+        cfg = tmp_path / "soup.yaml"
+        self._write_config(cfg)
+        monkeypatch.setattr(
+            "soup_cli.monitoring.hf_push.prepare_hf_resume",
+            lambda *_args, **_kwargs: pytest.fail("HF resume should not run"),
+        )
+        result = runner.invoke(
+            app,
+            [
+                "train",
+                "--config",
+                str(cfg),
+                "--push-as",
+                "user/model",
+                "--hf-resume",
+                "--dry-run",
+            ],
+        )
+        assert result.exit_code == 1, (result.output, repr(result.exception))
+        assert "cannot resume" in result.output.lower()
+        assert "relora_steps" in result.output
+
+
 class TestDataPushHappyPathExtras:
     def test_create_repo_called_with_dataset_type(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)

@@ -20,8 +20,9 @@ from rich.console import Console
 from rich.markup import escape
 from rich.table import Table
 
+from soup_cli.config.schema import DataConfig
 from soup_cli.data.formats import detect_format
-from soup_cli.data.loader import load_raw_data
+from soup_cli.data.loader import _split_val, load_raw_data
 from soup_cli.utils.canary import (
     CANARY_FORMATS,
     _harden_permissions,
@@ -30,6 +31,7 @@ from soup_cli.utils.canary import (
     canary_rows,
     generate_canaries,
     generate_controls,
+    interleave_canary_rows,
     load_manifest,
     write_manifest,
 )
@@ -152,7 +154,7 @@ def insert(
         help="Where to write the canary manifest (CONTAINS THE SECRETS)",
     ),
     count: int = typer.Option(16, "--count", "-k", help="Number of canaries"),
-    seed: int = typer.Option(0, "--seed", help="Canary generation seed"),
+    seed: int = typer.Option(0, "--seed", help="Seed for the canaries and the rows they go to"),
     data_format: str = typer.Option(
         "auto", "--format",
         help="Dataset format to write the canaries in: auto (detect), "
@@ -181,14 +183,21 @@ def insert(
         console.print(f"[red]{escape(str(exc))}[/]")
         raise typer.Exit(1)
 
-    mixed = list(rows) + canary_rows(canaries, fmt)
+    # Spread through the file, not appended: the loader holds out the file's
+    # tail as validation, which would have held every canary (#1331).
+    mixed, positions = interleave_canary_rows(
+        rows, canary_rows(canaries, fmt), seed=seed
+    )
     # Manifest FIRST. If the dataset were written first and the manifest
     # then failed (disk full, permissions), a canary-poisoned dataset would
     # survive on disk with nothing left to identify the secrets in it — a
     # user who missed the error and trained on it could never audit what
     # was inserted. Failing before the data is written leaves no artifact.
     try:
-        write_manifest(canaries, manifest, fmt)
+        write_manifest(
+            canaries, manifest, fmt,
+            positions=positions, total_rows=len(mixed),
+        )
     except (ValueError, OSError) as exc:
         console.print(f"[red]{escape(str(exc))}[/]")
         raise typer.Exit(1)
@@ -215,6 +224,15 @@ def insert(
         f"{len(rows)} -> {len(mixed)} rows\n"
         f"Output: [bold]{escape(output)}[/]\n"
         f"Manifest: [bold]{escape(manifest)}[/]"
+    )
+    # The loader's own split, so the count is what `soup train` holds out.
+    val_split = DataConfig.model_fields["val_split"].default
+    train_part, _ = _split_val(list(range(len(mixed))), val_split)
+    trained = sum(1 for position in positions if position < len(train_part))
+    console.print(
+        f"At the default data.val_split ({val_split}), {trained} of "
+        f"{len(canaries)} canaries are in the training split; the rest are "
+        "in the held-out tail."
     )
     console.print(
         "[yellow]The manifest contains the secret canaries. Do NOT commit it "

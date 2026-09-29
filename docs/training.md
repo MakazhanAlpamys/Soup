@@ -9,7 +9,8 @@
 > VRAM is bounded by one layer instead of the whole model. Add `quantization: 4bit` and an
 > 8B base fits a 4 GB card. Works for `sft` and, from v0.72.4, for `dpo` / `orpo` /
 > `simpo` / `kto` — DPO's reference model is the same streamed base with its adapters
-> switched off, so it costs no extra weights — see
+> switched off, so it needs no second copy of the model (on an untied checkpoint `dpo` and
+> `kto` still hold one copy of the output head per step) — see
 > [Layer Streaming](performance-and-quantization.md#layer-streaming-beta-v0720-nf4-v0722-disk--wider-archs-v0723-preference-losses-v0724).
 
 **Contents:**
@@ -1326,8 +1327,15 @@ ignoring case and whitespace, `$`, `\(...\)` and `\[...\]`, `\left` / `\right`, 
 `\tfrac` versus `\frac`; so `\boxed{\dfrac{14}{3}}` matches a gold of `\frac{14}{3}`. Both sides
 also drop the trailing punctuation `. , ; : !`, LaTeX thousands separators such as `1{,}000`, the
 LaTeX spacing commands `\,` `\!` `\;` `\:` and `\ `, and a Unicode minus sign. A `\\` row break is
-kept whole, so a matrix matches however its rows are spaced. Units, `^\circ`, `\text{}` and
-`x = ` prefixes are not stripped, and nothing is evaluated (`\frac{1}{2}` does not equal `0.5`).
+kept whole, so a matrix matches however its rows are spaced. One `\text{}` / `\textbf{}` /
+`\mathrm{}` / `\mbox{}` wrapper is unwrapped to its contents, `^\circ` / `^{\circ}` / `°` are
+dropped, a compact `\frac` argument is braced to match whether it is a single bare character or
+an already-braced group, with or without a space before it (`\frac12`, `\frac1{2}`, `\frac{1}2`,
+`\frac 34` and `\frac9{19}` all read `\frac{N}{D}`), and a one-letter variable prefix reads its
+right-hand side (`x = 7` reads `7`, on either side), though when both sides name a variable and
+the names differ (`x = 3` against `y = 3`), the pair scores 0.0, since a directrix or an
+asymptote's variable is part of its answer. Units are still not stripped (`42 apples` against
+`42`), and nothing is evaluated (`\frac{1}{2}` does not equal `0.5`).
 
 For GRPO, Soup preserves source dataset columns and TRL passes them to reward functions as
 keyword arguments. An Alpaca `output` or the final assistant turn in ShareGPT/ChatML is also
@@ -1551,6 +1559,12 @@ output: ./output_ppo
 controls optimization passes within each PPO update. Soup forwards both values,
 plus `ppo_kl_penalty`, to the active TRL `PPOConfig` names and prints the
 effective schedule during setup.
+
+One PPO rollout batch is `batch_size` x `gradient_accumulation_steps` prompts on
+every process, and TRL drops a partial batch, so the train set needs at least
+`batch_size` x `gradient_accumulation_steps` x the number of processes rows.
+A smaller one would never reach a step, so `soup train` refuses it before loading
+any model and names the row count and both settings.
 
 PPO supports two reward sources:
 - **Reward model** (`reward_model`): pre-trained reward model (from step 2)

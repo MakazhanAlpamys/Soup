@@ -6,20 +6,24 @@ from typing import Any, Dict, List, Literal, Optional, Union
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-# Buffer bounds live with the streaming planner so the schema bound and the
-# runtime validator's message can never disagree (layer_stream has no torch).
-from soup_cli.utils.layer_stream import (
+# Stream-buffer, read-ahead and noise-floor bounds come from a dependency-free
+# leaf that layer_stream, async_disk_source and ship_verdict re-export, so the
+# schema bound and the runtime validator's message are the same object, and the
+# schema does not pull those runtimes onto the `soup version` path (#780).
+from soup_cli.utils.config_bounds import (
     DEFAULT_STREAM_BUFFERS,
     DEFAULT_STREAM_READ_AHEAD,
+    MAX_NOISE_FLOOR_RUNS,
     MAX_STREAM_BUFFERS,
     MAX_STREAM_READ_AHEAD,
+    MIN_NOISE_FLOOR_RUNS,
     MIN_STREAM_BUFFERS,
     MIN_STREAM_READ_AHEAD,
 )
-from soup_cli.utils.layer_stream import (
+from soup_cli.utils.config_bounds import (
     ROLLOUT_STREAM_TASKS as _STREAM_ROLLOUT_TASKS,
 )
-from soup_cli.utils.layer_stream import (
+from soup_cli.utils.config_bounds import (
     SUPPORTED_STREAM_TASKS as _STREAM_SUPPORTED_TASKS,
 )
 
@@ -29,14 +33,6 @@ from soup_cli.utils.long_context import LONGROPE_REFUSAL
 
 # Stdlib-only structural check shared by every regex a config can carry.
 from soup_cli.utils.safe_regex import check_config_regex
-
-# Noise-floor bounds live with the ship verdict so the schema bound and the
-# `--noise-floor` CLI validator can never disagree (ship_verdict has no torch,
-# same reasoning as stream_buffers importing its bounds from layer_stream).
-from soup_cli.utils.ship_verdict import (
-    MAX_NOISE_FLOOR_RUNS,
-    MIN_NOISE_FLOOR_RUNS,
-)
 
 # v0.39.0 Part C — per-pattern LoRA rank/alpha bounds
 _MAX_LORA_RANK_PATTERN_KEYS = 256
@@ -1609,7 +1605,7 @@ class TrainingConfig(BaseModel):
         return value
 
     # v0.50.0 Part A — GRPO objective variants (unsloth + axolotl parity).
-    # Schema-only in v0.50.0; live loss kernels wired in v0.50.1.
+    # The trainer applies the variant losses (trainer/grpo.py).
     grpo_variant: Optional[Literal[
         "standard", "gspo", "dapo", "dr_grpo", "bnpo", "two_sided", "rft"
     ]] = Field(
@@ -1692,7 +1688,7 @@ class TrainingConfig(BaseModel):
 
         return validate_rollout_func(value)
     # v0.50.0 Part D — GRPO stability / efficiency knobs (axolotl + unsloth).
-    # All schema-only in v0.50.0; live trainer callbacks wired in v0.50.1.
+    # The trainer wires these as callbacks (trainer/grpo.py).
     ref_model_ema_alpha: Optional[float] = Field(
         default=None,
         gt=0.0,
@@ -2584,9 +2580,9 @@ class TrainingConfig(BaseModel):
     @field_validator("minillm_pretrain_anchor_path")
     @classmethod
     def _validate_minillm_anchor_path(cls, v):
-        """v0.70.0 Part C — shape-only path validation. Cwd containment
-        deferred to v0.70.1 runtime hook (matches v0.69.0 build_dag /
-        magpie base_model policy).
+        """v0.70.0 Part C — shape-only path validation. Cwd containment is
+        checked when the trainer loads the anchor (``utils/minillm.py``,
+        matching the build_dag / magpie base_model policy).
         """
         if v is None:
             return None
@@ -3223,12 +3219,15 @@ class TrainingConfig(BaseModel):
         default=0.5, gt=0.0, lt=1.0,
         description="Multiply LR by this factor on each spike recovery (0.5 = halve)",
     )
-    # ReLoRA (v0.39.0 Part B)
+    # ReLoRA (v0.39.0 Part B / #693 paper-faithful restart)
     relora_steps: Optional[int] = Field(
         default=None, ge=1, le=10**7,
         description=(
-            "Fire ReLoRA magnitude-prune + optimizer reset every N global steps. "
-            "None disables. Requires a LoRA-style PEFT (not VeRA)."
+            "Fire a paper-faithful ReLoRA restart every N global steps: merge the "
+            "LoRA update into the base weight, reinitialize lora_A/lora_B, and "
+            "optionally clear optimizer state. None disables. Requires float LoRA "
+            "(training.quantization defaults to '4bit' and must be set to 'none'; "
+            "incompatible with VeRA, DoRA, layer streaming, and FSDP2 compile)."
         ),
     )
     relora_warmup_ratio: float = Field(
@@ -3237,13 +3236,17 @@ class TrainingConfig(BaseModel):
     )
     relora_reset_optimizer: bool = Field(
         default=True,
-        description="Clear optimizer state for pruned LoRA params on each ReLoRA fire",
+        description=(
+            "Clear optimizer state for lora_A/lora_B parameters after each "
+            "ReLoRA merge+reinit restart"
+        ),
     )
     relora_prune_ratio: float = Field(
         default=0.9, gt=0.0, lt=1.0,
         description=(
-            "Fraction of LoRA weights to zero out by magnitude on each fire "
-            "(0.9 keeps the top 10%). Must be < 1.0."
+            "Deprecated: kept so older YAML still loads. Restarts no longer "
+            "magnitude-prune adapter weights; relora_reset_optimizer controls "
+            "optimizer clearing instead."
         ),
     )
     # Convergence detection (v0.32.0 Part F)
@@ -3256,11 +3259,17 @@ class TrainingConfig(BaseModel):
     )
     convergence_window: int = Field(
         default=50, ge=5, le=10_000,
-        description="Number of recent losses to inspect for plateau / oscillation",
+        description=(
+            "Staged, not enforced during training: "
+            "number of recent losses to inspect for plateau / oscillation"
+        ),
     )
     convergence_rel_tol: float = Field(
         default=0.005, gt=0.0, le=1.0,
-        description="Relative range threshold below which the window is a plateau",
+        description=(
+            "Staged, not enforced during training: "
+            "relative range threshold below which the window is a plateau"
+        ),
     )
     # Warmup auto-schedule (v0.32.0 Part D) — reuses pre-existing warmup_ratio.
     warmup_auto: bool = Field(
@@ -4216,10 +4225,8 @@ class TrainingConfig(BaseModel):
         return validate_unlearn_alpha(v)
 
     # ---- v0.62.0 Part B — RA-DIT (Retrieval-Augmented Dual Instruction
-    # Tuning, Meta 2023). Schema-only: a YAML can declare ``ra_dit_stage``
-    # so a recipe locks the right pairing; live two-stage orchestration
-    # ships in v0.62.1 (mirrors the v0.50.0 / v0.61.0 stub-then-live
-    # pattern).
+    # Tuning, Meta 2023). A YAML declares ``ra_dit_stage`` so a recipe locks
+    # the right pairing; ``soup ra-dit`` runs the two stages.
     ra_dit_stage: Optional[Literal["retriever", "generator"]] = Field(
         default=None,
         description=(
@@ -4392,8 +4399,9 @@ class ShipConfig(BaseModel):
     )
     # v0.73.2 shipped `--noise-floor` (#376) without its config surface, so it
     # was the one gate-policy flag that could not be committed to soup.yaml
-    # (#406). Bounds import from ship_verdict so the schema and the CLI
-    # validator (_validate_noise_floor_flag) share one source of truth.
+    # (#406). Bounds import from utils/config_bounds, which ship_verdict
+    # re-exports to the CLI validator (_validate_noise_floor_flag), so the two
+    # share one object.
     noise_floor: Optional[int] = Field(
         default=None,
         ge=MIN_NOISE_FLOOR_RUNS,
@@ -5220,10 +5228,8 @@ class SoupConfig(BaseModel):
         transformers/unsloth backends. MLX rejected with distinct message
         (matches v0.34.0 review-fix policy of distinct error reasons).
 
-        Live loss kernels for non-standard variants are deferred to v0.50.1;
-        a yellow advisory at trainer construction time will name the
-        deferred wiring (mirrors v0.40.0 Part D ``NotImplementedError``
-        stub-then-live pattern).
+        The trainer applies the non-standard variant losses
+        (``trainer/grpo.py``).
         """
         if self.training.grpo_variant is None:
             return self
@@ -5268,8 +5274,8 @@ class SoupConfig(BaseModel):
         """v0.50.0 Part E — ``task='prm'`` schema gate.
 
         Delegates to :func:`prm.validate_prm_compat` so the rules are
-        single-source-of-truth. Live PRM trainer wrapper is deferred to
-        v0.50.1.
+        single-source-of-truth. Training runs through
+        ``trainer/prm.py``'s ``PRMTrainerWrapper``.
         """
         if self.task != "prm":
             return self
@@ -5651,8 +5657,8 @@ class SoupConfig(BaseModel):
 
         Mirrors v0.50.0 ``_validate_grpo_stability_task_gate`` policy.
         ``reasoning_effort`` only makes sense on SFT-family training
-        (sft / pretrain / distill / classifier-family) because the live
-        formatter (v0.52.1) will inject a system-prefix token. The other
+        (sft / pretrain / distill / classifier-family) because the SFT
+        formatter injects it as a system-prefix token. The other
         tasks (DPO / GRPO / KTO / ORPO / SimPO / IPO / BCO / preference /
         PPO / reward_model / embedding / prm / tts) do not consume it.
 
@@ -5710,7 +5716,7 @@ class SoupConfig(BaseModel):
 
         ``moe_aux_loss_coeff``'s default is ``0.01``, and a dumped config writes
         it out, so only a NON-DEFAULT value is refused: refusing the default
-        would break every stored config and the eleven shipped recipes that
+        would break every stored config and the shipped MoE recipes that
         write it explicitly.
         """
         tcfg = self.training
@@ -5732,6 +5738,19 @@ class SoupConfig(BaseModel):
                     f"not applied by task={self.task!r}: only "
                     f"{sorted(_MOE_AUX_LOSS_TASKS)} read it (sft.py, "
                     f"pretrain.py). Remove it, or use one of those tasks."
+                )
+            return self
+        if self.task == "sft" and self.modality in ("vision", "audio"):
+            # #1394: only SFT's text setup reads it. The vision and audio setups
+            # build their model without the MoE step, the same gap #1179 closed
+            # for moe_lora on these paths.
+            default = type(tcfg).model_fields["moe_aux_loss_coeff"].default
+            if tcfg.moe_aux_loss_coeff != default:
+                raise ValueError(
+                    f"training.moe_aux_loss_coeff={tcfg.moe_aux_loss_coeff!r} is "
+                    f"not applied by task='sft' with modality={self.modality!r}: "
+                    "that setup never applies the MoE auxiliary loss. Remove it, "
+                    "or train with modality: text."
                 )
         return self
 
@@ -6715,6 +6734,11 @@ class SoupConfig(BaseModel):
         tcfg = self.training
         if not tcfg.unsloth_bnb_4bit:
             return self
+        if self.backend == "unsloth" and self.task not in UNSLOTH_SETUP_TASKS:
+            # #1357 refuses the backend itself, last, and names this flag. The
+            # #795 resolver has already turned an explicit 4bit into none on most
+            # of these tasks, so the check below would blame a value never written.
+            return self
         from soup_cli.utils.advanced_precision import (
             validate_unsloth_bnb_4bit_compat,
         )
@@ -6828,9 +6852,11 @@ class SoupConfig(BaseModel):
     def _validate_relora_supported_tasks(self) -> "SoupConfig":
         """v0.40.6 (#67) — ReLoRA callback wired in every transformer-backend
         trainer (sft / dpo / grpo / kto / orpo / simpo / ipo / ppo /
-        reward_model / pretrain / embedding / bco).
+        reward_model / pretrain / embedding / bco / distill).
 
-        MLX backend still rejected: the callback is HF Trainer-specific.
+        #693 — paper-faithful restart merges into the base weight, so reject
+        combos where the base is not a writable float tensor or where the
+        adapter is not standard LoRA A/B.
         """
         if self.training.relora_steps is None:
             return self
@@ -6839,6 +6865,36 @@ class SoupConfig(BaseModel):
                 "relora_steps is not supported on the mlx backend "
                 "(callback is HF Trainer-specific). "
                 "Use backend='transformers' or remove relora_steps."
+            )
+        tcfg = self.training
+        lcfg = tcfg.lora
+        if tcfg.quantization != "none":
+            raise ValueError(
+                f"relora_steps requires quantization='none' "
+                f"(got {tcfg.quantization!r}); ReLoRA restart merges into the "
+                f"base weight, which requires a writable float base."
+            )
+        if tcfg.stream_layers:
+            raise ValueError(
+                "relora_steps is incompatible with training.stream_layers=True: "
+                "layer streaming loads weights ephemerally and cannot accept "
+                "in-place base merges."
+            )
+        if lcfg.use_vera:
+            raise ValueError(
+                "relora_steps is incompatible with lora.use_vera=True: ReLoRA "
+                "restart merges B@A into the base; VeRA uses shared vectors, "
+                "not standard LoRA A/B matrices."
+            )
+        if lcfg.use_dora:
+            raise ValueError(
+                "relora_steps is incompatible with lora.use_dora=True: ReLoRA "
+                "restart merges B@A; DoRA decomposes magnitude separately."
+            )
+        if tcfg.use_fsdp2_compile:
+            raise ValueError(
+                "relora_steps is incompatible with training.use_fsdp2_compile=True: "
+                "compiled FSDP2 wraps parameters and prevents in-place base merges."
             )
         return self
 
@@ -7032,7 +7088,7 @@ class SoupConfig(BaseModel):
         - ``unlearn_method`` is rejected on any other task (silent no-op
           footgun — mirrors v0.52.0 distill / classifier task-gate).
         - ``data.forget_set`` is present when ``task='unlearn'``.
-        - Backend != mlx (live wiring deferred to v0.61.1).
+        - Backend != mlx (there is no MLX unlearning path).
         - ``loraplus_lr_ratio`` is refused (#745): unlearn drives its own
           ``torch.optim.AdamW`` loop, not a ``Trainer``, so there is nothing
           for ``attach_loraplus_optimizer`` to attach to and LoRA+ would be
@@ -7207,8 +7263,8 @@ class SoupConfig(BaseModel):
           RAFT row carries the doc references; other formats can't supply
           ground-truth citation IDs).
         * ``citation_faithful=True`` requires ``task in {sft, pretrain}``
-          (the span-mask runtime that v0.62.1 will ship only makes sense
-          for the SFT family; mirrors v0.52.0 distill / classifier
+          (the span-mask runtime only makes sense for the SFT family;
+          mirrors v0.52.0 distill / classifier
           task-gate policy — review M3 fix).
         * ``citation_style`` set without ``citation_faithful=True`` is a
           silent-no-op footgun — rejected (mirrors v0.61.0 unlearn_alpha /
@@ -7242,8 +7298,8 @@ class SoupConfig(BaseModel):
                 raise ValueError(
                     "training.citation_faithful=true requires "
                     f"task in {{sft, pretrain}}; got task={self.task!r}. "
-                    "Citation-faithful FT is an SFT-family feature; the "
-                    "live span-mask runtime ships in v0.62.1."
+                    "Citation-faithful FT is an SFT-family feature: its "
+                    "span-mask runtime runs in the SFT trainer."
                 )
         return self
 
@@ -7694,14 +7750,34 @@ class SoupConfig(BaseModel):
             )
         return self
 
+    @model_validator(mode="after")
+    def _validate_unsloth_has_a_setup(self) -> "SoupConfig":
+        """#1357 — ``backend: unsloth`` on a task outside
+        :data:`UNSLOTH_SETUP_TASKS` was accepted and never applied: that trainer
+        picks its load path by task alone and trains on plain transformers.
+        Last in the class, so ``distill``, ``asr`` and ``online_dpo`` keep their
+        own, earlier refusals."""
+        if self.backend != "unsloth" or self.task in UNSLOTH_SETUP_TASKS:
+            return self
+        also = (
+            " and remove training.unsloth_bnb_4bit, which only unsloth reads"
+            if self.training.unsloth_bnb_4bit
+            else ""
+        )
+        raise ValueError(
+            f"backend='unsloth' is not applied by task={self.task!r}: that trainer has "
+            "no unsloth setup and would train on plain transformers. Use backend: "
+            f"transformers{also}."
+        )
+
 
 # --- Built-in templates ---
 
 # DEPRECATED (v0.39.0 Part E) — these inline templates are kept for back-compat.
 # The canonical source is `soup_cli/templates/*.yaml` with `manifest.json`.
 # Both sources are asserted equal in tests/test_templates_yaml.py — when editing
-# a template, update both. Planned removal: v0.41.0+ once external consumers
-# have migrated to the YAML registry.
+# a template, update both. It is kept until external consumers have migrated
+# to the YAML registry.
 TEMPLATES: dict[str, str] = {
     "chat": """# Soup template: Chat Assistant
 # Fine-tune a model for conversational chat
