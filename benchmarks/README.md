@@ -77,6 +77,7 @@ only in a scratchpad on a machine that is gone, which is
 | [`issue974_read_paths.py`](harness/issue974_read_paths.py) | [`gate-974-disk-tier-direct-io.md`](gate-974-disk-tier-direct-io.md) §3 | The WARM read-primitive micro-benchmark that motivated the first fix plan: per-tensor readinto vs mmap+copy vs one readinto per layer of the whole data section into an arena, split across K threads, store in the page cache. Answer: 3.9 -> 9.3 GB/s at 8 threads for the arena read — a page-cache -> pinned memcpy number, which §4 shows says nothing about cold. Kept because a record that changed its plan should show the number it changed it from | CUDA GPU; the Mistral-7B NF4 cache; ~30 s |
 | [issue725_lorafa_operating_point.py](harness/issue725_lorafa_operating_point.py) | #725 / [gate-725-lorafa-operating-point.md](gate-725-lorafa-operating-point.md) | Measures trainable parameter counts, AdamW state tensor allocations, step latency, and multi-step loss finiteness between LoRA and LoRA-FA | ~20 s, CPU or GPU, no downloads |
 | [`ab_burn_in_sweep.py`](harness/ab_burn_in_sweep.py) | [#1227](https://github.com/MakazhanAlpamys/Soup/issues/1227) / [`gate-1227-ab-burn-in.md`](gate-1227-ab-burn-in.md) | What false-positive rate does `soup ab`'s burn-in leave when the test is re-run after every new pair? A vectorised H0 simulation of the shipped statistic, checked against `_verdict_from_summary` first, by effect_size / sigma, burn-in, alpha and horizon; picks `BURN_IN_ROWS_BY_ALPHA` | CPU + numpy; ~55 s per ratio at 100,000 runs over 1000 rows; `run` writes JSON parts, `report` merges them |
+| [`layercount.py`](harness/layercount.py) | STEP 6 / rejected layer-count hypothesis | Historical reconstruction: small NF4 and bf16 layers remain exact across the 48-to-64 depth boundary, while a separate 48-layer NF4 control above 171.5 MiB/layer must turn wrong; each row carries three backwards and exactly four LoRA gradients per layer | `--measure` creates local synthetic checkpoints and needs CUDA plus the historical torch/bitsandbytes stack; JSON replay and CPU verdict tests do not require CUDA; no CUDA measurement is claimed by the index |
 
 ## Hardware
 
@@ -144,12 +145,6 @@ figure, and why the fit decision refuses rather than warns.
   anything unmeasured "not tested" rather than leaving it blank.
 - **Derived figures are labelled as arithmetic.** Where a line says "1M tokens =
   2.3 h", that is division, not a measured wall-clock run.
-
-## Additional #379 Reconstructions
-
-| File | Historical scope | Verdict | Requirements and limitations |
-|---|---|---|---|
-| [`layercount.py`](harness/layercount.py) | STEP 6 / rejected layer-count hypothesis | Historical reconstruction with a controlled NF4 synthetic layer-count sweep; depth points must keep per-layer bytes constant and streamed/resident gradients exact | CUDA synthetic measurement requires the historical torch/bitsandbytes stack; distinct depths, NF4 metadata, finite layer size, and coherent exact counts are required |
 
 ## Reproducing
 
