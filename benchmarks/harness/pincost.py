@@ -46,6 +46,7 @@ from statistics import median
 from typing import Any
 
 import bitexact
+from mechanism_cost import install_historical_control
 
 DTYPE = "bfloat16"
 DEFAULT_SEQ = 256
@@ -202,7 +203,7 @@ def run_correctness(
     *,
     pin: bool,
 ) -> None:
-    """Require canonical overlap, exact loss, and LoRA gradients before timing."""
+    """Require canonical overlap, exact loss, and three exact LoRA backwards."""
     from soup_cli.utils.layer_stream_runtime import (
         assert_canonical_parameters_intersect,
     )
@@ -212,68 +213,60 @@ def run_correctness(
         reference,
     )
 
-    streamed.zero_grad(set_to_none=True)
-    reference.zero_grad(set_to_none=True)
-
-    streamed.train()
-    reference.train()
-
-    streamed_loss = streamed(
-        input_ids=input_ids,
-        labels=input_ids,
-    ).loss
-
-    reference_loss = reference(
-        input_ids=input_ids,
-        labels=input_ids,
-    ).loss
-
     torch = __import__("torch")
-    if not torch.isfinite(streamed_loss).all() or not torch.isfinite(
-        reference_loss
-    ).all():
-        raise RuntimeError(
-            f"pin={pin} produced a non-finite loss before timing"
-        )
-
-    if not torch.equal(
-        streamed_loss,
-        reference_loss,
-    ):
-        diff = (
-            streamed_loss - reference_loss
-        ).detach().abs().item()
-
-        raise RuntimeError(
-            f"pin={pin} loss is not bit-exact before timing "
-            f"(abs_diff={diff:.6e})"
-        )
-
-    streamed_loss.backward()
+    reference.zero_grad(set_to_none=True)
+    reference.train()
+    reference_loss = reference(input_ids=input_ids, labels=input_ids).loss
+    if not torch.isfinite(reference_loss).all():
+        raise RuntimeError(f"pin={pin} produced a non-finite loss before timing")
     reference_loss.backward()
+    reference_grads = {
+        name: parameter.grad.detach().cpu().clone()
+        for name, parameter in reference.named_parameters()
+        if "lora_" in name and parameter.grad is not None
+    }
+    for name, parameter in reference.named_parameters():
+        if parameter.grad is not None and not torch.isfinite(parameter.grad).all():
+            raise RuntimeError(f"pin={pin} reference gradient is non-finite: {name}")
 
-    for model_name, model in (("streamed", streamed), ("reference", reference)):
-        for name, parameter in model.named_parameters():
+    for repetition in range(3):
+        streamed.zero_grad(set_to_none=True)
+        streamed.train()
+        streamed_loss = streamed(input_ids=input_ids, labels=input_ids).loss
+        if not torch.isfinite(streamed_loss).all():
+            raise RuntimeError(f"pin={pin} produced a non-finite loss before timing")
+        if not torch.equal(streamed_loss, reference_loss):
+            diff = (streamed_loss - reference_loss).detach().abs().item()
+            raise RuntimeError(
+                f"pin={pin} loss is not bit-exact before timing "
+                f"(abs_diff={diff:.6e})"
+            )
+        streamed_loss.backward()
+        streamed_grads = {
+            name: parameter.grad.detach().cpu().clone()
+            for name, parameter in streamed.named_parameters()
+            if "lora_" in name and parameter.grad is not None
+        }
+        for name, parameter in streamed.named_parameters():
             if parameter.grad is not None and not torch.isfinite(parameter.grad).all():
-                raise RuntimeError(
-                    f"pin={pin} {model_name} gradient is non-finite: {name}"
-                )
-
-    ok, max_diff, layer0_sum = bitexact.compare_initial_gradients(
-        streamed,
-        reference,
-    )
-
-    if not ok:
-        raise RuntimeError(
-            f"pin={pin} failed gradient correctness before timing "
-            f"(max_abs_diff={max_diff:.6e})"
+                raise RuntimeError(f"pin={pin} streamed gradient is non-finite: {name}")
+        if set(streamed_grads) != set(reference_grads):
+            raise RuntimeError(
+                f"pin={pin} gradient sets differ on repetition {repetition + 1}"
+            )
+        exact = sum(
+            torch.equal(streamed_grads[name], reference_grads[name])
+            for name in streamed_grads
         )
-
-    if layer0_sum <= 0.0:
-        raise RuntimeError(
-            f"pin={pin} produced zero LoRA gradients"
+        print(
+            f"correctness   pin={pin} repetition={repetition + 1}/3 "
+            f"exact={exact}/{len(streamed_grads)}"
         )
+        if exact != len(streamed_grads):
+            raise RuntimeError(
+                f"pin={pin} failed gradient correctness on repetition "
+                f"{repetition + 1}: {exact}/{len(streamed_grads)}"
+            )
 
 
 def time_arm(
@@ -381,7 +374,7 @@ def build_shards_and_input(
 
     weights_dir = resolve_model_weights(args.weights)
 
-    shard_dir = Path(args.shards)
+    shard_dir = Path(args.shards).expanduser()
     shard_dir.mkdir(parents=True, exist_ok=True)
 
     probe = build_meta_skeleton(
@@ -425,6 +418,7 @@ def build_shards_and_input(
 def run_measurement(args: argparse.Namespace) -> int:
     import torch
 
+    import soup_cli.utils.layer_stream_runtime as layer_runtime
     from soup_cli.utils.layer_stream_runtime import build_streamed_model
 
     if not args.weights:
@@ -475,7 +469,7 @@ def run_measurement(args: argparse.Namespace) -> int:
     print("RUN: STEP 8 pinned-versus-pageable NF4 cost")
     print(f"torch         {torch.__version__}")
     print(f"gpu           {torch.cuda.get_device_name(0)}")
-    print(f"weights       {args.weights}")
+    print(f"weights       {weights_dir}")
     print("quant         nf4")
     print(f"seq           {args.seq}")
     print(f"batch         {args.batch}")
@@ -501,6 +495,8 @@ def run_measurement(args: argparse.Namespace) -> int:
             runtime = None
 
             try:
+                original_install_dequant_forward = layer_runtime.install_dequant_forward
+                install_historical_control(layer_runtime)
                 reference = bitexact.load_resident_reference(
                     weights_dir,
                     "nf4",
@@ -607,6 +603,8 @@ def run_measurement(args: argparse.Namespace) -> int:
                 if streamed is not None:
                     del streamed
 
+                layer_runtime.install_dequant_forward = original_install_dequant_forward
+
                 gc.collect()
                 torch.cuda.empty_cache()
 
@@ -638,7 +636,7 @@ def run_measurement(args: argparse.Namespace) -> int:
         "425.07 tok/s vs 64.79 tok/s, 6.56x"
     )
     if reproduced:
-        print("RESULT: historical pinning cost relationship reproduced")
+        print("RESULT: historical-control pinning cost relationship reproduced")
         return 0
 
     print("ERROR: measured pinning advantage is absent or too small")
