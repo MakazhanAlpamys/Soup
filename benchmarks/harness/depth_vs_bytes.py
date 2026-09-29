@@ -189,10 +189,12 @@ def _measure_checkpoint(weights: str, shards: str, quant: str) -> dict[str, Any]
     finally:
         if reference is not None:
             del reference
-        runtime.close()
-        restore()
-        del streamed
-        torch.cuda.empty_cache()
+        try:
+            runtime.close()
+        finally:
+            restore()
+            del streamed
+            torch.cuda.empty_cache()
 
 
 def run_live_sweep(work_dir: Path) -> list[dict[str, Any]]:
