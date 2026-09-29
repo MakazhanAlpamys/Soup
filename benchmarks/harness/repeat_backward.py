@@ -2,9 +2,10 @@
 """Reconstruct STEP 2b's repeated-backward GRADDIFF measurement.
 
 The recorded 32B NF4 run compared repeated streamed backwards with one
-resident NF4 reference. The first streamed backward was exact; subsequent
-backwards disagreed while the loss stayed equal. This file is a historical
-reconstruction, not a claim that the current repaired runtime reproduces it.
+resident NF4 reference. Subsequent backwards disagreed while the loss stayed
+equal. The first-backward count varied in the record, so this harness reports
+it without requiring exactness. This file is a historical reconstruction, not
+a claim that the current repaired runtime reproduces it.
 """
 
 from __future__ import annotations
@@ -44,14 +45,12 @@ def repeated_backward_verdict(
     exact_counts: list[int],
     total: int,
 ) -> bool:
-    """Require exact first backward and corruption on later backwards."""
+    """Require corruption on a backward after the first."""
     if total <= 0 or len(exact_counts) < 2:
         return False
     if any(count < 0 or count > total for count in exact_counts):
         raise MeasurementInvalidError("gradient exact counts are out of range")
-    return exact_counts[0] == total and any(
-        count < total for count in exact_counts[1:]
-    )
+    return any(count < total for count in exact_counts[1:])
 
 
 def _finite_gradients(gradients: dict[str, Any]) -> None:
@@ -109,7 +108,8 @@ def run_self_test() -> int:
     cases = [3, 1, 1, 1, 1]
     assert repeated_backward_verdict(cases, 3)
     assert not repeated_backward_verdict([3, 3, 3], 3)
-    print("PASS: repeated-backward verdict checks first exact and later corruption")
+    assert repeated_backward_verdict([1, 1, 1], 3)
+    print("PASS: repeated-backward verdict checks later corruption")
     return 0
 
 
@@ -139,13 +139,25 @@ def run_measurement(args: argparse.Namespace) -> int:
         copy_lora(streamed, reference)
         input_ids = make_input(reference, seq=args.seq, batch=args.batch)
         reference.zero_grad(set_to_none=True)
-        run_backward(reference, input_ids)
+        reference_loss = run_backward(reference, input_ids)
+        if not torch.isfinite(torch.tensor(reference_loss)):
+            raise MeasurementInvalidError("non-finite resident loss")
         reference_grads = gradient_snapshot(reference)
         exact_counts: list[int] = []
         total = 0
         for repetition in range(args.repeats):
             streamed.zero_grad(set_to_none=True)
-            run_backward(streamed, input_ids)
+            loss = run_backward(streamed, input_ids)
+            if not torch.isfinite(torch.tensor(loss)):
+                raise MeasurementInvalidError(
+                    f"non-finite streamed loss on repetition {repetition + 1}"
+                )
+            if loss != reference_loss:
+                print(
+                    f"ERROR: repetition {repetition + 1} loss differs from "
+                    f"resident ({loss:.9f} != {reference_loss:.9f})"
+                )
+                return 1
             exact, total, worst = compare_gradient_maps(
                 gradient_snapshot(streamed), reference_grads
             )
