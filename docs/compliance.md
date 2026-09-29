@@ -145,7 +145,7 @@ Scanned fields per format:
 
 `expect_no_refusal_pattern` reads only the assistant side: assistant/gpt turns, DPO `chosen`, KTO `completion`, Alpaca `output`/`response`, RAFT `answer`, PRM `completions`, `segments` with `label: true`, and `text` for plaintext rows. A row with text but no assistant side passes it.
 
-Empty-text safeguard: rows containing no extractable text fail closed on all expectation gates to prevent unparseable or blank rows from passing CI.
+Empty-text safeguard: rows containing no extractable text fail closed on all expectation gates to prevent unparseable or blank rows from passing CI. Malformed JSON lines and valid JSON that is not an object are refused as an input error (exit 3) with their line numbers, a UTF-8 BOM is stripped the way the training loader strips it, and a file that yields no checkable rows is refused rather than passed.
 
 Every path is shell-quoted and validated to stay under the repo root, so the
 rendered workflow is injection-safe. Edit the paths to match your repo.
