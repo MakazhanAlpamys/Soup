@@ -26,8 +26,8 @@ The five arms are:
 - clone_quantstate: private quantization state, pooled packed weights
 - clone_packed: private packed weights, pooled quantization state
 
-The ``clone`` arm is the comparison baseline within this harness; it is not
-an independent resident NF4 reference.
+An independent resident NF4 run is the comparison baseline. The ``clone`` arm
+must match it, while the other four arms establish the pooled-buffer mechanism.
 
 Expected result
 ---------------
@@ -489,6 +489,10 @@ def run_once(
     return gradients
 
 
+class NonFiniteGradientsError(RuntimeError):
+    """A gradient set holds NaN/Inf, so no exactness verdict is possible."""
+
+
 def _assert_finite_gradients(
     gradients: dict[str, torch.Tensor],
     label: str,
@@ -497,7 +501,7 @@ def _assert_finite_gradients(
 
     for name, gradient in gradients.items():
         if not torch.isfinite(gradient).all():
-            raise RuntimeError(
+            raise NonFiniteGradientsError(
                 f"{label} contains non-finite gradient values: {name}"
             )
 
@@ -545,7 +549,13 @@ def parse_args() -> argparse.Namespace:
         description=(
             "Reproduce the NF4 pooled-buffer aliasing mechanism "
             "from Soup's #331/#379 measurements."
-        )
+        ),
+        epilog=(
+            "exit codes: 0 mechanism reproduced; 1 not reproduced, or with "
+            "--bypass-pool the mismatch disappeared (negative control caught); "
+            "2 --bypass-pool did not remove the mismatch; 3 non-finite "
+            "gradients, no verdict."
+        ),
     )
 
     parser.add_argument(
@@ -563,6 +573,15 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
+
+    try:
+        return _run(args)
+    except NonFiniteGradientsError as exc:
+        print(f"ERROR: {exc}; no verdict")
+        return 3
+
+
+def _run(args: argparse.Namespace) -> int:
 
     if not torch.cuda.is_available():
         print("SKIP: CUDA is required for mechanism.py")
@@ -726,7 +745,7 @@ def main() -> int:
         return 1
 
     if any(diff != 0.0 for diff in diff_results["clone"]):
-        print("ERROR: clone reference is not self-consistent.")
+        print("ERROR: full clone does not match the resident reference.")
         return 1
 
     print(
