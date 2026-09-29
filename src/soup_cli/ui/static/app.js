@@ -5,7 +5,9 @@ const API = '';  // same origin
 // #1136 — The Bearer token lives only in this closure: never on `window`, in
 // web storage or in a cookie, so a future rendering mistake cannot read it
 // back. Every request goes through authFetch, which adds the header itself and
-// never returns the token. The cost is deliberate: a reload asks for it again.
+// never returns the token. A reload keeps the session only through the
+// HttpOnly cookie `/?token=` sets on a loopback bind (#1191), which this
+// script never touches; otherwise it asks for the token again.
 // This narrows what injected script can take away; it does not stop script
 // already running in the page (the CSP is the defence there).
 const authFetch = (() => {
