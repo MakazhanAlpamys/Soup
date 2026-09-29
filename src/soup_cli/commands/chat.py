@@ -191,7 +191,6 @@ def chat(
             model_obj, tokenizer, history,
             max_tokens=max_tokens,
             temperature=temperature,
-            device=device,
         )
 
         history.append({"role": "assistant", "content": response})
@@ -216,8 +215,11 @@ def _load_model(
     trust_remote_code: bool = False,
 ):
     """Load model and tokenizer. Supports LoRA adapters and full models."""
-    import torch
     from transformers import AutoModelForCausalLM, AutoTokenizer
+
+    from soup_cli.utils.device_resolve import resolve_device_map_and_dtype
+
+    device_map, torch_dtype = resolve_device_map_and_dtype(device)
 
     console.print("[dim]Loading tokenizer...[/]")
     tokenizer = AutoTokenizer.from_pretrained(
@@ -233,8 +235,8 @@ def _load_model(
         base = AutoModelForCausalLM.from_pretrained(
             base_model,
             trust_remote_code=trust_remote_code,
-            device_map="auto",
-            torch_dtype=torch.float16,
+            device_map=device_map,
+            torch_dtype=torch_dtype,
         )
         console.print(f"[dim]Loading LoRA adapter: {model_path}...[/]")
         model_obj = PeftModel.from_pretrained(base, model_path)
@@ -243,8 +245,8 @@ def _load_model(
         model_obj = AutoModelForCausalLM.from_pretrained(
             model_path,
             trust_remote_code=trust_remote_code,
-            device_map="auto",
-            torch_dtype=torch.float16,
+            device_map=device_map,
+            torch_dtype=torch_dtype,
         )
 
     model_obj.eval()
@@ -257,7 +259,6 @@ def _generate(
     messages: list[dict],
     max_tokens: int = 512,
     temperature: float = 0.7,
-    device: str = "cuda",
 ) -> str:
     """Generate a response from the model given message history."""
     import torch

@@ -664,13 +664,15 @@ def _load_model(
     is_local: Optional[bool] = None,
 ) -> tuple:
     """Load a model and tokenizer (reuses diff.py pattern)."""
-    import torch
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
+    from soup_cli.utils.device_resolve import resolve_device_map_and_dtype
     from soup_cli.utils.trust_remote import (
         model_requires_trust_remote_code,
         resolve_trust_remote_code,
     )
+
+    device_map, torch_dtype = resolve_device_map_and_dtype(device)
 
     if is_local is None:
         try:
@@ -717,16 +719,16 @@ def _load_model(
         base_obj = AutoModelForCausalLM.from_pretrained(
             base_model,
             trust_remote_code=trc,
-            device_map="auto",
-            torch_dtype=torch.float16,
+            device_map=device_map,
+            torch_dtype=torch_dtype,
         )
         model_obj = PeftModel.from_pretrained(base_obj, model_path)
     else:
         model_obj = AutoModelForCausalLM.from_pretrained(
             model_path,
             trust_remote_code=trc,
-            device_map="auto",
-            torch_dtype=torch.float16,
+            device_map=device_map,
+            torch_dtype=torch_dtype,
         )
 
     model_obj.eval()
