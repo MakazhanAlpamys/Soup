@@ -67,9 +67,11 @@ class _SeqBuffer:
         return snap
 
 
-# Well-separated rewards (healthy) vs bunched rewards (reward model losing grip).
-_HEALTHY = _grpo_snapshot([0.0, 0.0, 1.0, 1.0], ["a", "b", "c", "d"])
-_HACK = _grpo_snapshot([0.5, 0.5, 0.5, 0.5], ["a", "b", "c", "d"])
+# Well-separated rewards (healthy) vs bunched rewards (reward model losing
+# grip). Both are continuous: a two-valued reward leaves a constant median
+# half, and #1438 makes info_rm return no signal for it.
+_HEALTHY = _grpo_snapshot([0.0, 0.05, 0.95, 1.0], ["a", "b", "c", "d"])
+_HACK = _grpo_snapshot([0.45, 0.49, 0.51, 0.55], ["a", "b", "c", "d"])
 
 # =====================================================================
 # Part A / Stage 0 — schema: reward_hack_mitigation field + gate (Task A1)
