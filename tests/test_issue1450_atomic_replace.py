@@ -441,6 +441,39 @@ class TestMergeAdapterToDenseSurvivesAFailedSwap:
         assert (staging_dirs[0] / "model.safetensors").read_bytes() == b"NEW"
         assert not out.exists(), "out_dir should be absent — neither replace landed there"
 
+    def test_backup_rename_failure_keeps_old_model_and_new_staging(
+        self, tmp_path, monkeypatch
+    ):
+        """The rename that moves the previous model aside can hit the same
+        lock as the swap. out_dir is then untouched, so the new merge in
+        staging is the only copy of it and must not be deleted."""
+        from soup_cli.utils import adapter_fuse
+
+        monkeypatch.chdir(tmp_path)
+        _fake_train_stack(monkeypatch)
+        adapter, out = _fresh_adapter_and_out(tmp_path)
+
+        real_replace = adapter_fuse.os.replace
+
+        def _backup_fails(src, dst, *a, **kw):
+            if ".old-" in os.path.basename(dst):
+                raise PermissionError(5, "Access is denied")
+            return real_replace(src, dst, *a, **kw)
+
+        monkeypatch.setattr(adapter_fuse.os, "replace", _backup_fails)
+
+        with pytest.raises(RuntimeError) as excinfo:
+            adapter_fuse.merge_adapter_to_dense(
+                base_model="base", adapter_dir=str(adapter), out_dir="out"
+            )
+
+        assert (out / "model.safetensors").read_bytes() == b"OLD"
+        staging_dirs = list(tmp_path.glob(".fuse_*"))
+        assert len(staging_dirs) == 1, f"staging dir missing: {staging_dirs}"
+        assert (staging_dirs[0] / "model.safetensors").read_bytes() == b"NEW"
+        assert str(staging_dirs[0]) in str(excinfo.value)
+        assert not list(tmp_path.glob(".out.old-*"))
+
     @pytest.mark.skipif(sys.platform != "win32", reason="Windows-only file-lock semantics")
     def test_out_dir_survives_an_open_handle_on_model_safetensors(self, tmp_path, monkeypatch):
         """Windows-only: another process (a viewer, a server, an antivirus

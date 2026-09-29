@@ -123,7 +123,20 @@ def merge_adapter_to_dense(
             backup = os.path.join(
                 parent, f".{os.path.basename(os.path.normpath(out_dir))}.old-{os.getpid()}"
             )
-            os.replace(out_dir, backup)
+            try:
+                os.replace(out_dir, backup)
+            except BaseException as backup_exc:
+                # Renaming the previous model aside failed (the same AV /
+                # indexer lock the swap below guards against), so out_dir was
+                # never touched and still holds the old model. Staging is now
+                # the only copy of the new merge: keep it and name it.
+                keep_staging = True
+                raise RuntimeError(
+                    f"failed to move the previous model at '{out_dir}' aside "
+                    f"({backup_exc!r}); it is unchanged, and the newly merged "
+                    f"model is intact at '{staging}' — move it into place "
+                    f"manually"
+                ) from backup_exc
         try:
             os.replace(staging, out_dir)
         except BaseException as swap_exc:
