@@ -9,9 +9,16 @@ model does not fit on the GPU).
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import torch
+from typer.testing import CliRunner
+
+from tests.conftest import strip_ansi
+
+runner = CliRunner()
 
 
 def _mock_env():
@@ -89,3 +96,113 @@ def test_diff_load_model_cpu_uses_cpu_device_map_and_dtype():
     ):
         _load_model("some-org/some-model", None, "cpu")
         _assert_cpu_placement("diff", load, model)
+
+
+def _write_adapter_config(model_dir: Path, base_model: str = "some-org/base-model") -> None:
+    model_dir.mkdir(parents=True, exist_ok=True)
+    (model_dir / "adapter_config.json").write_text(
+        json.dumps({"base_model_name_or_path": base_model, "r": 8})
+    )
+
+
+def test_infer_load_model_cpu_uses_cpu_device_map_and_dtype_on_adapter_branch(
+    tmp_path: Path,
+):
+    """The adapter branch loads the *base* model with the same device_map/dtype (#1443).
+
+    Both `_load_model` branches share one `device_map, torch_dtype` pair
+    computed up front, but the existing cpu test above only ever exercises
+    the full-model (else) branch, since its `model_path` is not a real local
+    directory. Reverting only the adapter branch's `from_pretrained` call
+    back to a hard-coded `device_map="auto"` must fail here even though the
+    full-model test still passes.
+    """
+    from soup_cli.commands.infer import _load_model
+
+    _write_adapter_config(tmp_path)
+    tokenizer, model = _mock_env()
+    base_obj = MagicMock()
+    with patch(
+        "transformers.AutoTokenizer.from_pretrained", return_value=tokenizer
+    ), patch(
+        "transformers.AutoModelForCausalLM.from_pretrained", return_value=base_obj
+    ) as load, patch(
+        "peft.PeftModel.from_pretrained", return_value=model
+    ), patch(
+        "soup_cli.utils.trust_remote.resolve_trust_remote_code", return_value=False
+    ), patch(
+        "soup_cli.utils.trust_remote.model_requires_trust_remote_code",
+        return_value=False,
+    ):
+        _load_model(str(tmp_path), None, "cpu")
+        _assert_cpu_placement("infer (adapter branch)", load, base_obj)
+
+
+def test_chat_load_model_cpu_uses_cpu_device_map_and_dtype_on_adapter_branch(
+    tmp_path: Path,
+):
+    from soup_cli.commands.chat import _load_model
+
+    _write_adapter_config(tmp_path)
+    tokenizer, model = _mock_env()
+    base_obj = MagicMock()
+    with patch(
+        "transformers.AutoTokenizer.from_pretrained", return_value=tokenizer
+    ), patch(
+        "transformers.AutoModelForCausalLM.from_pretrained", return_value=base_obj
+    ) as load, patch(
+        "peft.PeftModel.from_pretrained", return_value=model
+    ):
+        _load_model(str(tmp_path), "some-org/base-model", True, "cpu")
+        _assert_cpu_placement("chat (adapter branch)", load, base_obj)
+
+
+def test_diff_load_model_cpu_uses_cpu_device_map_and_dtype_on_adapter_branch(
+    tmp_path: Path,
+):
+    from soup_cli.commands.diff import _load_model
+
+    _write_adapter_config(tmp_path)
+    tokenizer, model = _mock_env()
+    base_obj = MagicMock()
+    with patch(
+        "transformers.AutoTokenizer.from_pretrained", return_value=tokenizer
+    ), patch(
+        "transformers.AutoModelForCausalLM.from_pretrained", return_value=base_obj
+    ) as load, patch(
+        "peft.PeftModel.from_pretrained", return_value=model
+    ), patch(
+        "soup_cli.utils.trust_remote.resolve_trust_remote_code", return_value=False
+    ), patch(
+        "soup_cli.utils.trust_remote.model_requires_trust_remote_code",
+        return_value=False,
+    ):
+        _load_model(str(tmp_path), None, "cpu")
+        _assert_cpu_placement("diff (adapter branch)", load, base_obj)
+
+
+def test_chat_cli_without_device_flag_uses_the_auto_detected_device(tmp_path: Path):
+    """Without `--device`, the auto-detected device must be what reaches the
+    load, so the panel and the actual placement agree (#1443 acceptance
+    criterion 3), and the CLI assertion goes through the ANSI-strip helper
+    (criterion 4).
+    """
+    from soup_cli.cli import app
+
+    model_dir = tmp_path / "model"
+    model_dir.mkdir()
+    (model_dir / "config.json").write_text("{}")
+
+    tokenizer, model = _mock_env()
+    with patch(
+        "soup_cli.utils.gpu.detect_device", return_value=("cpu", "CPU (no GPU detected)")
+    ), patch(
+        "transformers.AutoTokenizer.from_pretrained", return_value=tokenizer
+    ), patch(
+        "transformers.AutoModelForCausalLM.from_pretrained", return_value=model
+    ) as load:
+        result = runner.invoke(app, ["chat", "--model", str(model_dir)], input="")
+
+    output = strip_ansi(result.output)
+    assert "Device: cpu" in output, output
+    _assert_cpu_placement("chat (CLI auto-detect)", load, model)

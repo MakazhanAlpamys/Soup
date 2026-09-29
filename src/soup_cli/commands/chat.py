@@ -217,9 +217,9 @@ def _load_model(
     """Load model and tokenizer. Supports LoRA adapters and full models."""
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
-    from soup_cli.utils.device_resolve import resolve_device_map_and_dtype
+    from soup_cli.utils.gpu import resolve_inference_device_map_and_dtype
 
-    device_map, torch_dtype = resolve_device_map_and_dtype(device)
+    device_map, torch_dtype = resolve_inference_device_map_and_dtype(device)
 
     console.print("[dim]Loading tokenizer...[/]")
     tokenizer = AutoTokenizer.from_pretrained(

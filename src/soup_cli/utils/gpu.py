@@ -6,7 +6,10 @@ import json
 import math
 import os
 import re
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
+
+if TYPE_CHECKING:
+    import torch
 
 # A safetensors file starts with a u64 little-endian header length, then a
 # JSON header carrying each tensor's dtype + shape. Reading it costs a few
@@ -95,6 +98,65 @@ def resolve_device_map(device: str):
         return {"": int(local_rank)}
     except (TypeError, ValueError):
         return "auto"
+
+
+def resolve_inference_device_map_and_dtype(
+    device: Optional[str],
+) -> tuple[str | dict, "torch.dtype"]:
+    """Map an inference ``--device`` value to ``from_pretrained`` kwargs (#1443).
+
+    ``infer.py``, ``chat.py`` and ``diff.py`` each accept a ``device`` argument
+    (explicit ``--device`` flag, or auto-detected via :func:`detect_device`)
+    but used to hard-code ``device_map="auto", torch_dtype=torch.float16`` on
+    every ``from_pretrained`` call regardless of it. ``device_map="auto"``
+    lets ``accelerate`` place the model on any visible accelerator, which is
+    exactly wrong when the user asked for the CPU on purpose (to leave VRAM
+    free for a training job, or because the model does not fit on the GPU).
+
+    This lives next to :func:`resolve_device_map` because both decide what a
+    device string becomes for ``device_map=``, but they answer different
+    questions and must not be merged: :func:`resolve_device_map` pins one
+    *rank* of a ``torchrun`` / ``accelerate launch`` training job by reading
+    ``LOCAL_RANK`` / ``WORLD_SIZE`` from the environment. There is no rank
+    here — only the single device the user named or auto-detection picked —
+    so a plain, unindexed accelerator (``"cuda"``) is left as ``"auto"``
+    (harmless with one visible device, and how every trainer in this module
+    already treats that case), while an explicit index (``"cuda:0"``) or
+    ``"mps"`` is pinned directly instead.
+
+    Args:
+        device: ``"cpu"``, ``"cuda"``, ``"cuda:<n>"``, ``"mps"``, ``"mlx"``
+            (any case — MLX has its own load path and never reaches
+            ``from_pretrained`` in normal use, but a caller that lands here
+            anyway must not pass ``"mlx"`` through as a torch device),
+            another accelerator name, or ``None``/empty when it was
+            genuinely never resolved.
+
+    Returns:
+        A ``(device_map, torch_dtype)`` pair to splat into
+        ``from_pretrained(**kwargs)``: ``{"": "cpu"}`` and ``float32`` for
+        CPU/MLX, ``{"": device}`` and a bf16/fp16 pick for MPS or an
+        explicitly indexed device, ``"auto"`` and a bf16/fp16 pick for a
+        plain accelerator name, or the pre-#1443 ``"auto"``/``float16``
+        default when ``device`` is unset.
+    """
+    import torch
+
+    if not device:
+        return "auto", torch.float16
+
+    normalized = str(device).strip().lower()
+
+    if normalized == "cpu" or normalized.startswith("mlx"):
+        return {"": "cpu"}, torch.float32
+
+    use_bf16 = normalized.startswith("cuda") and cuda_supports_bf16()
+    dtype = torch.bfloat16 if use_bf16 else torch.float16
+
+    if normalized == "mps" or ":" in normalized:
+        return {"": device}, dtype
+
+    return "auto", dtype
 
 
 def detect_device(backend: Optional[str] = None) -> tuple[str, str]:
