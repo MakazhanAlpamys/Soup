@@ -6,6 +6,7 @@
 
 **Contents:**
 
+- [Experimental CUDA graph decoding](#experimental-cuda-graph-decoding)
 - [Quantization-Aware Training (QAT)](#quantization-aware-training-qat)
 - [Experimental QuEST mixed W4/A4+A16 route](#experimental-quest-mixed-w4a4a16-route)
 - [FP8 Training (Ada+)](#fp8-training-ada)
@@ -31,6 +32,52 @@
 - [Quant Menu II + Export Pipeline (v0.53.1)](#quant-menu-ii--export-pipeline-v0531)
 
 ---
+
+## Experimental CUDA graph decoding
+
+`soup infer` and `soup bench infer` accept `--cuda-graphs`. On a resident Qwen2 or Llama model,
+optionally with one LoRA adapter from `soup train`, generation replays CUDA graphs instead of
+launching every kernel from Python. The default path is unchanged.
+
+```bash
+soup infer --model ./output --input prompts.jsonl --output answers.jsonl --cuda-graphs
+soup bench infer ./model --backend transformers --max-tokens 128 --cuda-graphs
+```
+
+Measured on an RTX 5070 Laptop (Windows, unpinned, fresh processes, A-B-B-A-B-A) with
+Qwen2.5-1.5B-Instruct in FP16, 128 greedy tokens per request: the slowest run with the flag was
+**2.9x** the fastest run without it (60.1 vs 20.7 tok/s), and **2.8x** under an unmerged LoRA
+(49.2 vs 17.8 tok/s), with identical token IDs on every request and +42 MiB of reserved VRAM.
+`soup infer` over 24 prompts of varied length, model load and compile included, took 96-102 s with
+the flag against 131-282 s without. Without the flag the run-to-run spread is large (13.5-20.7 tok/s):
+the decode is bound by the host launching ~1,200 kernels per token, and Windows moves that thread
+between the hybrid CPU's fast and slow cores; with the flag the spread is 4%. The record is
+[`benchmarks/gate-v0.76.0-cuda-graph-decode.md`](../benchmarks/gate-v0.76.0-cuda-graph-decode.md).
+
+- **Cold start is slower.** Before the first row, Soup runs one greedy warm-up on your longest
+  prompt, which compiles and captures the graph (about 8-10 s on that card) and sizes the static
+  cache once for the whole batch. A one-prompt run can take longer overall. The summary panel's
+  `Duration` and `Throughput` start after the warm-up.
+- **Outputs are the same.** The flag changes no precision, sampling or stopping rule; sampled rows
+  use the temperature you asked for, and the warm-up is greedy so it consumes no sampling RNG. A
+  LoRA adapter stays unmerged, exactly as without the flag.
+- **Supported:** stock Qwen2/Llama classes, one CUDA GPU, unquantized weights, and at most one
+  active plain LoRA adapter. Anything else (quantization, CPU/disk offload, layer streaming, DoRA
+  or other LoRA variants, several adapters, flash attention, ASR) is refused before any output is
+  written, and every refusal ends with `Omit --cuda-graphs`.
+- **Needs PyTorch >= 2.14.** It uses private PyTorch compiler APIs validated on 2.14.0 (it fixes an
+  accounting defect in the stock `cudagraphs` backend that otherwise clones every weight into the
+  graph pool). Older versions, or a changed API, are refused with a one-line message.
+- **Not in `soup chat` or `soup serve`.** A chat history grows every turn, and a static cache that
+  grows recompiles every turn.
+- **Unmeasured:** `--max-tokens` far above 128 (each K/V update costs an extra copy per step, growing
+  with prompt + max_tokens), Linux/macOS, batch sizes above 1, and architectures other than Qwen2.
+  Over a 1024-prompt batch the graph tree re-records about once per three rows without any eager
+  fallback or memory growth.
+
+If generation fails with the flag on, Soup stops with `Generation failed with --cuda-graphs: ...`,
+keeps the rows already written, and names the way out. Run the same command without
+`--cuda-graphs`.
 
 ## Quantization-Aware Training (QAT)
 
@@ -202,7 +249,7 @@ training:
 
 Omitting `fp8_recipe` defaults to `tensorwise` (identical to v0.28.0 behavior).
 
-Bool `true` is not a spelling of FP8: it selected the int8 path, which is refused at config load ([#1222](https://github.com/MakazhanAlpamys/Soup/issues/1222)). FP8 requires CUDA + an Ada or newer GPU (compute capability ≥ 8.9) and is rejected at config load on the mlx backend. (`soup train` refuses it on the unsloth backend: "QAT is not compatible with the unsloth backend".) `soup train --dry-run` reports this machine's card as a note and exits 0, since FP8 configs are often written for another machine; a missing torchao still fails it. The `rowwise` and `rowwise_with_gw_hp` recipes run a separate torch kernel with its own limits: it needs a torch that dispatches it on the card (Ada 8.9: torch ≥ 2.7; Hopper 9.x and Blackwell datacenter 10.x: any supported torch; RTX 50-series 12.x: torch ≥ 2.8; 11.x: torch ≥ 2.10; no release through 2.14 runs it on 13.x), it is **never built on Windows**, and before torch 2.11 it is only built against CUDA 12 or newer. `tensorwise` has none of these limits. When FP8 is requested and this card, OS or torch build cannot run it, **the run stops at setup** with the reason (`FP8HardwareUnsupportedError`), before any layer is converted, on every trainer that reaches the converter; it never trains on without FP8. **A missing torchao stops the run the same way** (`FP8DependencyMissingError`, naming `pip install "soup-cli[qat]"`), on a card that could run FP8 too. Until this release the trainers printed a yellow advisory and trained in bf16 under a config that said FP8 (#835). `soup train` asks both questions, card first, before it loads the model, so it stops with the same reason and no download. (SFT's audio and layer-streaming setup branches do not call the converter at all, so they still accept the flag without applying it; tracked in #1124.) `fp8_attention` asks the same gate (#835). Wired across every transformer-backend trainer (SFT, DPO, GRPO, KTO, ORPO, SimPO, IPO, PPO, Reward-Model, Embedding, Pretrain).
+Bool `true` is not a spelling of FP8: it selected the int8 path, which is refused at config load ([#1222](https://github.com/MakazhanAlpamys/Soup/issues/1222)). FP8 requires CUDA + an Ada or newer GPU (compute capability ≥ 8.9) and is rejected at config load on the mlx and unsloth backends. `soup train --dry-run` reports this machine's card as a note and exits 0, since FP8 configs are often written for another machine; a missing torchao still fails it. The `rowwise` and `rowwise_with_gw_hp` recipes run a separate torch kernel with its own limits: it needs a torch that dispatches it on the card (Ada 8.9: torch ≥ 2.7; Hopper 9.x and Blackwell datacenter 10.x: any supported torch; RTX 50-series 12.x: torch ≥ 2.8; 11.x: torch ≥ 2.10; no release through 2.14 runs it on 13.x), it is **never built on Windows**, and before torch 2.11 it is only built against CUDA 12 or newer. `tensorwise` has none of these limits. When FP8 is requested and this card, OS or torch build cannot run it, **the run stops at setup** with the reason (`FP8HardwareUnsupportedError`), before any layer is converted, on every trainer that reaches the converter; it never trains on without FP8. **A missing torchao stops the run the same way** (`FP8DependencyMissingError`, naming `pip install "soup-cli[qat]"`), on a card that could run FP8 too. So does a float8 conversion that fails: it quotes torchao's error and stops, instead of training in bf16 (#1152). Until this release the trainers printed a yellow advisory and trained in bf16 under a config that said FP8 (#835). `soup train` asks both questions, card first, before it loads the model, so it stops with the same reason and no download. SFT's text, vision and audio setups all convert the model after the LoRA adapter is attached. `stream_layers: true` refuses `quantization_aware: fp8`, `fp8_attention` and `nvfp4` at config load on every task, and so does `backend: unsloth`: neither path calls the converters (#1124). `fp8_attention` asks the same gate (#835). Wired across every transformer-backend trainer (SFT, DPO, GRPO, KTO, ORPO, SimPO, IPO, PPO, Reward-Model, Embedding, Pretrain).
 
 
 ## Cut Cross-Entropy (Large-Vocab Models)
@@ -376,7 +423,16 @@ training:
 soup train --config soup.yaml
 ```
 
-**How it works.** LoRA adapters + their gradients + optimizer state stay resident in VRAM (they are small). The frozen base lives in CPU RAM, page-locked when the machine allows it, and is streamed: each decoder layer is copied into one of two pre-allocated VRAM buffers on a dedicated CUDA stream while the previous layer is still computing, so the load overlaps the compute. Vocabulary-sized `embed_tokens` and an untied `lm_head` use one additional shared slot: the embedding is loaded for the model input, then the same allocation is reused for the output head after the last decoder layer, and the embedding is reloaded into it at the tail of that step's backward pass so the copy overlaps the remaining compute instead of blocking the next step's first lookup. Each decoder layer is read **twice** per step — once in the forward pass and once when the backward pass recomputes it — because `dL/dx = Wᵀ · dL/dy` needs the weights to reach the layers below. That is physics, not an implementation detail, and it is why streaming costs time.
+**How it works.** LoRA adapters + their gradients + optimizer state stay resident in VRAM (they are small). The frozen base lives in CPU RAM, page-locked when the machine allows it, and is streamed: each decoder layer is copied into one of two pre-allocated VRAM buffers on a dedicated CUDA stream while the previous layer is still computing, so the load overlaps the compute. Vocabulary-sized `embed_tokens` and an untied `lm_head` use one additional shared slot: the embedding is loaded for the model input, then the same allocation is reused for the output head, whose copy is issued right after the embedding lookup (`StreamPrefetcher.head_prefetch_layer`, default `0`) rather than at the last decoder layer, and the embedding is reloaded into it at the tail of that step's backward pass so the copy overlaps the remaining compute instead of blocking the next step's first lookup. Each decoder layer is read **twice** per step — once in the forward pass and once when the backward pass recomputes it — because `dL/dx = Wᵀ · dL/dy` needs the weights to reach the layers below. That is physics, not an implementation detail, and it is why streaming costs time.
+
+For streamed NF4 on CUDA, Soup follows bitsandbytes' own 4-bit dispatch. When
+bitsandbytes selects its custom fused GEMM, Soup executes that GEMM through a
+checkpoint-visible autograd Function so pooled packed weights cannot outlive their
+slot ownership. When bitsandbytes selects dequantisation plus `F.linear` at larger
+training shapes, Soup keeps that path and avoids adding a third dequantisation to a
+checkpointed step. The fused arm reduces saved-weight VRAM but its backward still
+dequantises because bitsandbytes exposes no transposed 4-bit GEMM; it is therefore a
+bounded memory/time trade, not a claim that #842's full kernel ceiling is complete.
 
 **Qwen3.8-Flash-Next / Qwen4-Exp PLE.** The frozen PLE N-gram table is not a
 decoder-layer weight for storage purposes: putting it in the PLE layer's shard
@@ -462,7 +518,7 @@ Correctness is not a tradeoff here either: a streamed NF4 run is **bit-exact** a
 
 The 3B NF4-vs-bf16 rows differ by 1.85×, but attribute that to **pinning, not arithmetic** — see point 2 above. The two rows also come from different sessions, and this card's boost clock varies ~13% between sessions, so treat the factor as indicative and the mechanism as the claim.
 
-The 3.32 GB 8B row above predates large-layer streaming: its untied, unquantised `embed_tokens` + `lm_head` both stayed resident and occupied 2.10 GB. Current code writes them as separate large-layer shards and reuses one device slot sized to the larger matrix, so an equally shaped untied pair should reclaim one matrix while a tied model keeps the same one-matrix requirement. CPU CI pins bit-exact logits for both controls. The updated CUDA peak remains to be measured on the reference RTX 3050; the historical 3.32 GB figure is not relabelled as a new measurement.
+The 3.32 GB 8B row above predates large-layer streaming: its untied, unquantised `embed_tokens` + `lm_head` both stayed resident and occupied 2.10 GB. Current code writes them as separate large-layer shards and reuses one device slot sized to the larger matrix, so an equally shaped untied pair should reclaim one matrix while a tied model keeps the same one-matrix requirement. Under `dpo` and `kto` that saving is spent again: the output head's forward keeps a private copy of the matrix for its backward every step (about 1.05 GB for Llama-3.1-8B in bf16, charged by the pre-flight, #1049). CPU CI pins bit-exact logits for both controls. The updated CUDA peak remains to be measured on the reference RTX 3050; the historical 3.32 GB figure is not relabelled as a new measurement.
 
 **Honest scope:**
 - **RAM tier + disk overflow (v0.72.3).** `stream_source: auto` picks RAM when the store fits both dynamic free-RAM headroom and a physical-host ceiling, falls back to NVMe disk when not; SATA/HDD rejected. Correctness verified. **The read is off the compute thread**: a background reader parses each shard's header itself (no memory map) and stages `training.stream_read_ahead` layers in host RAM (page-locked where the box allows — see `stream_pin` below), so the GPU is fed while the next layer is still arriving. **Measured cold and warm against a same-day control of the source it replaces** (RTX 5070 Laptop, 2026-09-14, [record](../benchmarks/gate-971-async-nvme-source.md)).
@@ -694,7 +750,10 @@ pre-flight, same refusals. The interesting part is DPO's reference model.
 **DPO compares the model being trained against a frozen reference.** Implemented as a
 second model instance that doubles memory and there is no point streaming at all. Soup
 instead uses *the same streamed base with its LoRA adapters switched off*, so the
-reference costs no extra weights. Measured on an RTX 3050 4 GB with a 730 MB model:
+reference costs no extra weights. On an untied checkpoint, `dpo` and `kto` also hold
+one copy of the output head per step (about 1.05 GB for Llama-3.1-8B in bf16), which
+the VRAM pre-flight charges (#1049); tied checkpoints and `sft`/`orpo`/`simpo` pay
+nothing. Measured on an RTX 3050 4 GB with a 730 MB model:
 
 | arm | peak VRAM | vs SFT |
 |---|---|---|
@@ -709,12 +768,14 @@ byte-identical between the SFT and DPO arms.
 **KTO is not reference-free**, however it is usually described — it selects a reference
 the same way DPO does, so it gets the same treatment. ORPO and SimPO genuinely are
 reference-free. All four are verified **bit-exact** against a resident run of the same
-loss.
+loss on a tied checkpoint; on an untied one, that check covers `dpo`
+(`tests/test_issue1049_untied_streamed_preference.py`).
 
 **The cost is time, not memory.** DPO runs the layer stack three times per step (policy
 forward, reference forward, checkpoint recompute) against SFT's two — measured **1.52×**
-the layer reads on a 24-layer model. Streaming makes the reference free in memory; it
-does not make it free.
+the layer reads on a 24-layer model. Streaming adds no second copy of the weights for the
+reference (on an untied checkpoint `dpo` and `kto` still hold one output-head copy, see
+above); it does not make the reference free.
 
 **Two things to know before you configure it:**
 
@@ -1018,7 +1079,7 @@ training:
   gradient_checkpointing: true  # Required for long sequences
 
   # Long-context (128k+ tokens)
-  rope_scaling_type: dynamic  # RoPE scaling: linear, dynamic, yarn, longrope
+  rope_scaling_type: dynamic  # RoPE scaling: linear, dynamic, yarn, llama3
   # use_ring_attention: true  # Sequence parallelism across GPUs
 
 data:
@@ -1103,18 +1164,18 @@ Both reject silently-no-op combinations: setting either flag without `moe_lora=t
 |---|---|---|
 | `moe_lora` | `sft`, `pretrain`, `tts`, (since #798) `dpo`, `kto`, `orpo`, `simpo`, `grpo`, (since #1099) `ipo`, `bco`, `reward_model`, `ppo`, `embedding`, `online_dpo`, and (since #1151) `distill`, `unlearn`, and `classifier`, `reranker`, `cross_encoder` with `classifier_lora: true` | refused at config load, naming the reason, on `asr`, `moe_lora_routing`, `prm`, the classifier family without `classifier_lora: true` and `lora.r > 0`, `backend: unsloth` (any task), and `task: sft` with `modality: vision` or `audio` |
 | `moe_expert_quant`, `train_router_only` | `sft`, `tts` | refused at config load, naming the task |
-| `moe_aux_loss_coeff` | `sft`, `tts`, `pretrain` | a **non-default** value is refused; the default `0.01` still loads, because every stored config and eleven shipped recipes write it |
+| `moe_aux_loss_coeff` | `sft` (text), `tts`, `pretrain` | a **non-default** value is refused, including on `task: sft` with `modality: vision` or `audio` (#1394), whose setup never applies the auxiliary loss; the default `0.01` still loads, because every stored config and the shipped MoE recipes on those tasks write it |
 
-**`moe_lora` on the remaining LoRA tasks (#1099).** #798 left it loading but unread on `ipo`, `bco`, `reward_model`, `ppo` and `embedding`, and `online_dpo` had the same gap. All six build their adapter through the same `build_lora_config` path, so they were wired to the same helper rather than refused. On `embedding` it applies only with `lora.r >= 1`; at `r: 0` that trainer full-fine-tunes and builds no adapter for the flag to select. #1151 closed the remainder: `distill` and `unlearn` build their adapter the same way and are wired to the same helper, and so is `classifier` / `reranker` / `cross_encoder` (one trainer) on its opt-in adapter path. Without `classifier_lora: true` and `lora.r > 0` that trainer full-fine-tunes and builds no adapter, so there the flag is refused at config load; `asr`, which trains only Whisper (no experts), `moe_lora_routing`, which builds no LoRA adapter, and `prm`, which fine-tunes every base parameter, refuse the flag at config load. Two paths refuse it whatever the task: `backend: unsloth`, whose setup attaches a fixed attention list, and `task: sft` with `modality: vision` or `audio`, whose setup builds its adapter without the MoE step. Every path now either reads `moe_lora` or refuses it, except `backend: mlx`, where it loads and `soup doctor --config` reports it as ignored; a source ratchet keeps a new adapter-building trainer from missing it. `train_router_only` and `moe_expert_quant` require `moe_lora: true`, so on `backend: unsloth` they now fail to load with the same message. `preference` is covered through the trainers it dispatches to, and `tts` through the SFT trainer it subclasses.
+**`moe_lora` on the remaining LoRA tasks (#1099).** #798 left it loading but unread on `ipo`, `bco`, `reward_model`, `ppo` and `embedding`, and `online_dpo` had the same gap. All six build their adapter through the same `build_lora_config` path, so they were wired to the same helper rather than refused. On `embedding` it applies only with `lora.r >= 1`; at `r: 0` that trainer full-fine-tunes and builds no adapter for the flag to select. #1151 closed the remainder: `distill` and `unlearn` build their adapter the same way and are wired to the same helper, and so is `classifier` / `reranker` / `cross_encoder` (one trainer) on its opt-in adapter path. Without `classifier_lora: true` and `lora.r > 0` that trainer full-fine-tunes and builds no adapter, so there the flag is refused at config load; `asr`, which trains only Whisper (no experts), `moe_lora_routing`, which builds no LoRA adapter, and `prm`, which fine-tunes every base parameter, refuse the flag at config load. Two paths refuse it whatever the task: `task: sft` with `modality: vision` or `audio`, whose setup builds its adapter without the MoE step, and `backend: unsloth`. On unsloth the reason depends on the task (#1264): the thirteen tasks with an unsloth setup attach its fixed attention list and never read the flag, while the rest have no unsloth setup at all, so there it is the backend that goes unapplied. Both messages point to `backend: transformers`, where the flag is read. The other `moe_lora` refusals in the same check come first, so `asr`, `prm`, `moe_lora_routing` and SFT vision/audio get one refusal whatever the backend. Every path now either reads `moe_lora` or refuses it, except `backend: mlx`, where it loads and `soup doctor --config` reports it as ignored; a source ratchet keeps a new adapter-building trainer from missing it. `train_router_only` and `moe_expert_quant` require `moe_lora: true`, so on `backend: unsloth` they now fail to load with the same message. `preference` is covered through the trainers it dispatches to, and `tts` through the SFT trainer it subclasses.
 
-**`moe_lora` requires `lora.dropout: 0.0` on a fused-expert MoE.** transformers 5.x keeps a Qwen3-MoE's experts as fused 3-D parameters (`mlp.experts.gate_up_proj`), which peft adapts through `lora.ParamWrapper`, and that wrapper raises `lora.ParamWrapper does not work with lora_dropout != 0.` With the schema default of `0.05` the LoRA attach failed outright, so `moe_lora` did not work on any task — including `sft`. Soup now stops at the attach with a message naming the flag, instead of letting peft's reach the user, and all 31 shipped MoE recipes pin `lora.dropout: 0.0`. The check is made against the loaded model, not at config load: whether the experts are fused depends on the checkpoint and the transformers version, and a model with one module per expert takes dropout normally. A dense base is untouched — there the flag is a no-op.
+**`moe_lora` requires `lora.dropout: 0.0` on a fused-expert MoE.** transformers 5.x keeps a Qwen3-MoE's experts as fused 3-D parameters (`mlp.experts.gate_up_proj`), which peft adapts through `lora.ParamWrapper`, and that wrapper raises `lora.ParamWrapper does not work with lora_dropout != 0.` With the schema default of `0.05` the LoRA attach failed outright, so `moe_lora` did not work on any task - including `sft`. Soup now stops at the attach with a message naming the flag, instead of letting peft's reach the user, and all 33 shipped MoE recipes pin `lora.dropout: 0.0`. The check is made against the loaded model, not at config load: whether the experts are fused depends on the checkpoint and the transformers version, and a model with one module per expert takes dropout normally. A dense base is untouched - there the flag is a no-op.
 
 **`moe_lora` does not reach every MoE family (measured, v0.75.0).** `get_moe_target_modules` picks module names, and whether peft turns those into adapters on the fused expert parameters depends on the architecture. On tiny stand-ins with transformers 5.16.1 / peft 0.20.0:
 
 | family | expert adapters attach | recipes |
 |---|---|---|
 | `qwen3_moe` | yes | 11 |
-| `deepseek_v3` | yes | 6 |
+| `deepseek_v3` | yes | 8 |
 | `glm4_moe` | yes | 3 |
 | `minimax` | **no — attention-only** | 2 (`minimax-m3-sft`, `minimax-m3-dpo`) |
 | `mixtral` | **no — attention-only** | — |
@@ -1152,8 +1213,8 @@ soup serve --model ./output --kv-cache-type q8_0     # 8-bit quantized KV cache 
 Three TrainingConfig bools extend the v0.28.0 FP8 menu. `fp8_attention` and `nvfp4` are LIVE
 torchao converters as of v0.71.21 (hardware-gated):
 
-- `fp8_attention: true` — requires `quantization_aware: fp8` AND a non-MLX backend. Converts the attention projections (q/k/v/o and fused variants) to torchao float8 training on Ada or newer GPUs (the same gate as `quantization_aware: fp8`). A card, OS or torch build the gate refuses stops the run at setup, and so does a missing torchao (#835); a conversion-phase failure raises an honest "model may be PARTIALLY converted" error instead of training on a half-converted model.
-- `nvfp4: true` — Blackwell-only FP4 training via torchao `NVFP4TrainingConfig` + `quantize_`, which replaces `nn.Linear` with `NVFP4Linear` and quantises the forward **and backward** GEMMs. (Through v0.75.0 Soup asked for `NVFP4Config`, a name torchao has never exported, so the flag degraded to a yellow advisory and a bf16 run — #826.) Gated to supported tasks (rejected on `task: distill` and tasks without v0.28 speed/memory wiring) + non-MLX + `modality: text`; the SM ≥ 10 runtime check fires at trainer construction. The fix makes the flag **reach** NVFP4 training — the linears really are replaced by `NVFP4Linear`. A training step on top of that has torchao's own requirements, which Soup does not check for you: the kernels are triton, and `nvfp4_mm_triton` raises `ValueError: requires M, K, N all divisible by 128` for a shape it cannot serve (`torchao/prototype/moe_training/nvfp4_training/nvfp4_linear.py`), so a model whose hidden/intermediate sizes are not multiples of 128 will fail there rather than train slowly.
+- `fp8_attention: true` — requires `quantization_aware: fp8` AND a non-MLX, non-Unsloth backend (incompatible with `stream_layers: true`). Converts the attention projections (q/k/v/o and fused variants) to torchao float8 training on Ada or newer GPUs (the same gate as `quantization_aware: fp8`). A card, OS or torch build the gate refuses stops the run at setup, and so does a missing torchao (#835); a conversion-phase failure raises an honest "model may be PARTIALLY converted" error instead of training on a half-converted model, and a model with no attention projections stops too, instead of training on as a no-op (#1152).
+- `nvfp4: true` — Blackwell-only FP4 training via torchao `NVFP4TrainingConfig` + `quantize_`, which replaces `nn.Linear` with `NVFP4Linear` and quantises the forward **and backward** GEMMs. (Through v0.75.0 Soup asked for `NVFP4Config`, a name torchao has never exported, so the flag degraded to a yellow advisory and a bf16 run — #826.) Gated to supported tasks (rejected on `task: distill` and tasks without v0.28 speed/memory wiring) + non-MLX, non-Unsloth + `modality: text` (incompatible with `stream_layers: true`); the SM ≥ 10 runtime check fires at trainer construction. The fix makes the flag **reach** NVFP4 training — the linears really are replaced by `NVFP4Linear`. A training step on top of that has torchao's own requirements, which Soup does not check for you: the kernels are triton, and `nvfp4_mm_triton` raises `ValueError: requires M, K, N all divisible by 128` for a shape it cannot serve (`torchao/prototype/moe_training/nvfp4_training/nvfp4_linear.py`), so a model whose hidden/intermediate sizes are not multiples of 128 will fail there rather than train slowly.
 - `unsloth_bnb_4bit: true` — promotes "Unsloth Dynamic 4-bit" from an implicit `backend=unsloth + quantization=4bit` combo to a named flag. Mutual rejection of inconsistent combos at config load.
 
 Cross-validator ordering picks the most actionable error: `quantization_aware='fp8'` prerequisite fires before the MLX rejection on `fp8_attention`, and task compatibility checks fire at config load before runtime trainer construction.

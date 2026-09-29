@@ -351,8 +351,11 @@ class TestTtsSchemaAndRouting:
         assert cfg.training.tts_family == "orpheus"
 
     def test_train_routes_tts(self):
-        src = (_SRC / "commands" / "train.py").read_text(encoding="utf-8")
-        assert 'cfg.task == "tts"' in src
+        # #1213 — the routing chain moved into the dispatch both commands call.
+        train_src = (_SRC / "commands" / "train.py").read_text(encoding="utf-8")
+        assert "build_trainer(" in train_src
+        src = (_SRC / "trainer" / "dispatch.py").read_text(encoding="utf-8")
+        assert 'task == "tts"' in src
         assert "TTSTrainerWrapper" in src
 
     def test_utils_tts_no_top_level_torch(self):

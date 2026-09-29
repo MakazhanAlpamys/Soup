@@ -12,6 +12,12 @@ r"""Edge cases of the #1226 final-answer parser, found while reviewing the fix.
    text after it ("#### Solution") may be a markdown heading over an unmarked body. It is
    refused before generation instead of becoming the text gold "Solution", which every
    completion would miss. A completion's "####" line stays its answer.
+5. **A LaTeX line break keeps both backslashes.** ``\\ -14`` is a row break followed by a space,
+   not the control space ``\ ``, so it must not normalise to ``\-14``. Every MATH-500 gold with a
+   space after a row break is a matrix (7 of 500), and each one matched only a completion that
+   spaced its rows identically. The spacing commands themselves are still dropped. After an
+   answer phrase a matrix is one answer: a LaTeX environment is a bracket to the value scan, so
+   entries that stand apart are not a hedge between several values.
 
 The linear-time check of the clause scanner is in ``test_issue1226_clause_scanner_is_linear.py``.
 """
@@ -25,7 +31,13 @@ import pytest
 from soup_cli.config.schema import TrainingConfig
 from soup_cli.trainer.grpo import _validate_grpo_reward_metadata
 from soup_cli.trainer.rewards import accuracy_reward, math_verify_reward
-from soup_cli.utils.final_answer import FinalAnswer, parse_completion, parse_reference
+from soup_cli.utils.final_answer import (
+    FinalAnswer,
+    normalize_answer,
+    parse_completion,
+    parse_number,
+    parse_reference,
+)
 
 _REWARDS = [("accuracy", None), ("verifiable", "math")]
 
@@ -219,3 +231,80 @@ class TestAMarkerHeadingIsNotAGold:
         assert _scores("#### Paris\nHope this helps!", "Paris") == (1.0, 1.0)
         assert _scores("#### 42\nHope this helps!", "42") == (1.0, 1.0)
         assert _scores("#### Solution\nSix times seven is 42.", "42") == (0.0, 0.0)
+
+
+# ===========================================================================
+# 5. a LaTeX line break keeps both backslashes
+# ===========================================================================
+
+LINE_BREAK = "\\" * 2  # LaTeX's row break: two backslashes
+# The seven MATH-500 golds (HuggingFaceH4/MATH-500, test split) with a space after a row break.
+# Every one is a matrix.
+MATH500_MATRIX_GOLDS = [
+    r"\begin{pmatrix} -1/3 \\ 2/3 \\ 5/3 \end{pmatrix}",
+    r"\begin{pmatrix} -2 \\ -14 \\ -7 \end{pmatrix}",
+    r"\begin{pmatrix} -1 & 0 \\ 0 & -1 \end{pmatrix}",
+    r"\begin{pmatrix} -18 \\ -49 \\ 96 \end{pmatrix}",
+    r"\begin{pmatrix} 1/5 \\ -18/5 \end{pmatrix}",
+    r"\begin{pmatrix} -7 \\ 16 \\ 5 \end{pmatrix}",
+    r"\begin{pmatrix} 16/49 \\ 48/49 \\ 24/49 \end{pmatrix}",
+]
+
+
+def _row_spacings(gold: str) -> list[str]:
+    """The same matrix, with its rows spaced the ways a model writes them."""
+    no_space_after = gold.replace(LINE_BREAK + " ", LINE_BREAK)
+    return [
+        gold,
+        no_space_after,
+        no_space_after.replace(" " + LINE_BREAK, LINE_BREAK),
+        "".join(gold.split()),
+    ]
+
+
+MATRIX_SPELLINGS = [
+    (gold, spelling) for gold in MATH500_MATRIX_GOLDS for spelling in _row_spacings(gold)
+]
+
+
+class TestALatexLineBreakKeepsBothBackslashes:
+    @pytest.mark.parametrize(("gold", "spelling"), MATRIX_SPELLINGS)
+    def test_a_matrix_matches_however_its_rows_are_spaced(self, gold, spelling):
+        # Either side can carry either spacing, boxed or on a '####' line.
+        assert _scores(r"\boxed{" + spelling + "}", gold) == (1.0, 1.0)
+        assert _scores(r"\boxed{" + gold + "}", spelling) == (1.0, 1.0)
+        assert _scores("#### " + spelling, gold) == (1.0, 1.0)
+
+    def test_normalisation_keeps_a_row_break_whole(self):
+        assert normalize_answer(r"-2 \\ -14 \\ -7") == r"-2 \\ -14 \\ -7"
+
+    def test_a_different_matrix_still_scores_zero(self):
+        gold = MATH500_MATRIX_GOLDS[1]
+        assert _scores(r"\boxed{\begin{pmatrix}-2\\-14\\7\end{pmatrix}}", gold) == (0.0, 0.0)
+
+    def test_a_row_break_is_kept_not_dropped(self):
+        # The two entries 1 and 2 are not the one entry 12.
+        column = r"\begin{pmatrix} 1 \\ 2 \end{pmatrix}"
+        assert _scores(r"\boxed{\begin{pmatrix}1\\2\end{pmatrix}}", column) == (1.0, 1.0)
+        assert _scores(r"\boxed{\begin{pmatrix}12\end{pmatrix}}", column) == (0.0, 0.0)
+
+    @pytest.mark.parametrize(("gold", "spelling"), MATRIX_SPELLINGS)
+    def test_a_matrix_after_an_answer_phrase_is_one_answer(self, gold, spelling):
+        # A matrix's entries are one answer, not several values: no hedge, whatever the spacing.
+        assert _scores("The answer is $" + spelling + "$.", gold) == (1.0, 1.0)
+        assert _scores("Answer: $" + spelling + "$", gold) == (1.0, 1.0)
+
+    def test_a_phrased_matrix_is_one_text_answer_not_a_number(self):
+        column = r"\begin{pmatrix} 3 \\ 4 \end{pmatrix}"
+        phrased = "The answer is $" + column + "$."
+        assert _scores(phrased, column) == (1.0, 1.0)
+        assert _scores(phrased, "3") == (0.0, 0.0)  # not its first entry
+        assert parse_reference(phrased) is not None  # a gold written that way is readable
+        # The environment closes: a value on each side of the matrix is still a hedge.
+        assert _scores("The answer is 5 or $" + column + "$ or 6.", "5") == (0.0, 0.0)
+
+    @pytest.mark.parametrize("command", [r"\,", r"\!", r"\;", r"\:", "\\ "])
+    def test_the_spacing_commands_are_still_dropped(self, command):
+        # "\\ " here is one backslash and a space: the control space, which is still dropped.
+        assert normalize_answer("1" + command + "000") == "1000"
+        assert parse_number("1" + command + "000") == Decimal(1000)

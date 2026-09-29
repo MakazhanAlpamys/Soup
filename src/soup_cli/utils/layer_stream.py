@@ -23,6 +23,20 @@ from typing import Any, Callable, Dict, Optional, Sequence, Tuple, Union
 
 from rich.panel import Panel
 
+# Buffer, read-ahead and task bounds live in a dependency-free leaf so the schema
+# can import them without this module's rich subtree (#780). Re-exported here, not
+# redeclared, so the schema bound and the runtime message are the same object.
+from soup_cli.utils.config_bounds import (
+    DEFAULT_STREAM_BUFFERS,
+    DEFAULT_STREAM_READ_AHEAD,
+    MAX_STREAM_BUFFERS,
+    MAX_STREAM_READ_AHEAD,  # noqa: F401
+    MIN_STREAM_BUFFERS,
+    MIN_STREAM_READ_AHEAD,  # noqa: F401
+    ROLLOUT_STREAM_TASKS,  # noqa: F401
+    SUPPORTED_STREAM_TASKS,  # noqa: F401
+)
+
 # Quantisation names are re-exported, NOT redeclared: layer_shard owns the shard
 # format and these same strings key its cache-invalidation check. Two copies
 # could drift and leave this module's pre-flight RAM estimate disagreeing with
@@ -55,35 +69,6 @@ PHYSICAL_RAM_TIER_HEADROOM_PERCENT = round(PHYSICAL_RAM_TIER_HEADROOM * 100)
 # is not absorbed silently — a silent fallback spends the entire margin.
 PIN_THROUGHPUT_GAIN_REAL = 6.56
 PIN_THROUGHPUT_GAIN_SYNTHETIC = 7.41
-
-# --- buffers --------------------------------------------------------------
-MIN_STREAM_BUFFERS = 2
-MAX_STREAM_BUFFERS = 8
-DEFAULT_STREAM_BUFFERS = 2
-
-# Re-exported, not redeclared: the schema imports its bound from here and the
-# runtime declares it, so the message and the check cannot disagree (the same
-# reasoning as stream_buffers).
-from soup_cli.utils.async_disk_source import (  # noqa: E402
-    DEFAULT_STREAM_READ_AHEAD,  # noqa: F401
-    MAX_STREAM_READ_AHEAD,  # noqa: F401
-    MIN_STREAM_READ_AHEAD,  # noqa: F401
-)
-
-# --- tasks ----------------------------------------------------------------
-#: Tasks whose trainers can run against a streamed base (v0.72.4).
-#:
-#: DPO and KTO take their reference model from the SAME streamed base with the
-#: adapters disabled (TRL's ``null_ref_context``), so the reference costs no
-#: extra weights at all — measured 0.914x the SFT peak, where forcing a real
-#: second instance cost 9.92x. ORPO and SimPO are reference-free.
-SUPPORTED_STREAM_TASKS = ("sft", "dpo", "orpo", "simpo", "kto")
-
-#: Tasks PERMANENTLY excluded, not merely unimplemented. Generation rollouts
-#: re-read every layer once per generated token, which destroys the whole
-#: premise: streaming amortises one weight read over a training step, not over a
-#: single decoded token (plan §3.2).
-ROLLOUT_STREAM_TASKS = ("grpo", "ppo")
 
 #: FLOPs per parameter per token. 6 == WITH gradient checkpointing
 #: (2 forward + 2 recompute + 2 dL/dx; base weight-grads are skipped because

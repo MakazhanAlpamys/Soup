@@ -557,10 +557,18 @@ class TestWorkflowPins:
         ]
         assert any("main:refs/remotes/origin/main" in run for run in runs)
 
-    def test_concurrency_is_untouched_in_ci_yml(self):
-        """#1017's concurrency half is already on main; this PR must not edit it."""
+    def test_ci_yml_concurrency_keys_prs_main_and_releases_apart(self):
+        """A PR supersedes itself, main pushes share one group, a release keeps its commit.
+
+        The key is the enforcement, not ``cancel-in-progress``: a pending run is
+        superseded by a newer one in the same group whatever that flag says.
+        """
         text = CI.read_text(encoding="utf-8")
-        assert "github.event_name == 'pull_request' && github.ref || github.sha" in text
+        assert (
+            "github.event_name == 'pull_request' && github.ref"
+            " || (github.ref == 'refs/heads/main' && 'main-push' || github.sha)"
+        ) in text
+        assert "cancel-in-progress: ${{ github.event_name == 'pull_request' }}" in text
 
     def test_the_script_uses_merge_tree_not_git_merge(self):
         src = SCRIPT.read_text(encoding="utf-8")
