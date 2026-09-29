@@ -140,11 +140,11 @@ def merge_adapter_to_dense(
                     # outer handler below must not rmtree(staging) either.
                     keep_staging = True
                     raise RuntimeError(
-                        f"failed to swap the merged model into {out_dir!r} "
+                        f"failed to swap the merged model into '{out_dir}' "
                         f"({swap_exc!r}), and restoring the previous model "
-                        f"from {backup!r} also failed ({restore_exc!r}); "
-                        f"the previous model is intact at {backup!r} and the "
-                        f"newly merged model is intact at {staging!r} — move "
+                        f"from '{backup}' also failed ({restore_exc!r}); "
+                        f"the previous model is intact at '{backup}' and the "
+                        f"newly merged model is intact at '{staging}' — move "
                         f"one of them into place manually"
                     ) from restore_exc
                 backup = None

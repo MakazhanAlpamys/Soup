@@ -246,7 +246,7 @@ def synth(
         os.replace(candidate_path, output)
     except OSError as exc:
         _cleanup(candidate_path)
-        _fail(f"could not replace {output!r}: {exc}")
+        _fail(f"could not replace '{output}': {exc}")
 
     console.print(_render_report_panel(report, result.kind, output))
     raise typer.Exit(0)
