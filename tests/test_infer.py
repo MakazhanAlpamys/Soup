@@ -282,6 +282,36 @@ class TestInferCLI:
         assert result.exit_code == 2
         assert "x>=1" in result.output
 
+    def test_cuda_graphs_refuses_batched_generation_before_model_load(
+        self, tmp_path, monkeypatch
+    ):
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        prompts_file = tmp_path / "prompts.jsonl"
+        prompts_file.write_text(json.dumps({"prompt": "test"}) + "\n")
+
+        def fail_model_load(*args, **kwargs):
+            raise AssertionError("model loading must not run for an invalid option pair")
+
+        monkeypatch.setattr("soup_cli.commands.infer._load_model", fail_model_load)
+        result = CliRunner().invoke(
+            app,
+            [
+                "infer",
+                "--model", "fake/model",
+                "--input", str(prompts_file),
+                "--output", str(tmp_path / "out.jsonl"),
+                "--cuda-graphs",
+                "--batch-size", "2",
+            ],
+        )
+
+        assert result.exit_code == 2
+        assert "cannot be combined" in strip_ansi(result.output)
+        assert "--batch-size above 1" in strip_ansi(result.output)
+
     def test_required_options_error(self):
         """Should fail if required options are missing."""
         from typer.testing import CliRunner
@@ -1091,4 +1121,3 @@ class TestInferHFRepoId:
             assert called_model_arg == repo_id
             assert "\\" not in called_model_arg
             assert "/" in called_model_arg
-
