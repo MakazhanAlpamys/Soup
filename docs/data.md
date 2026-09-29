@@ -1155,8 +1155,11 @@ command prints a warning whenever this mode is active.
 
 Live provider-call failures are counted: if every attempted call for an `llm_text`
 or `judge` node fails, the command names the endpoint and exits 1. Partial failures
-keep usable rows and report their count in the completion summary, while a provider
-that legitimately returns an empty completion still counts as a successful call.
+keep usable rows and report their count in the completion summary, while an `llm_text`
+provider that legitimately returns an empty completion still counts as a successful call.
+A live `judge` node reads the first word of each reply: `OK` keeps the row, `REJECT`
+or `NOT OK` drops it, and a reply with neither, an empty one included, is dropped and
+counted as a failed call.
 
 Six node kinds now run live: **seed** (JSONL load), **llm_text** (LLM generation via
 Ollama, Anthropic, or vLLM), **code** (execution via RLVR sandbox), **judge** (binary scoring),

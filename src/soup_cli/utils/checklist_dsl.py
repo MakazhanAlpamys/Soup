@@ -30,12 +30,13 @@ Operator-supplied responses are passed in via the ``evidence`` mapping:
 from __future__ import annotations
 
 import os
-import re
 import stat
 from dataclasses import dataclass
 from typing import Mapping, Optional, Sequence
 
 import yaml
+
+from soup_cli.utils.behavior_battery import contains_whole_word
 
 # Closed allowlist.
 CHECKLIST_KINDS = frozenset({"mft", "inv", "dir"})
@@ -304,15 +305,16 @@ def _mft_pass(response: str, expected: Sequence[str]) -> bool:
     """MFT pass: any expected keyword appears as a whole WORD in the response.
 
     Whole-word match (review M2 fix — substring would let ``"and"`` pass on
-    ``"sand"``); case-insensitive. Mirrors the v0.65.0 Part B
-    ``behavior_battery._agreement_rate`` policy.
+    ``"sand"``); case-insensitive. Shares ``behavior_battery``'s
+    ``contains_whole_word`` with ``_agreement_rate``, so a keyword such as
+    ``-5`` or ``(B)`` matches too (#1467).
     """
     lower = response.lower()
     for kw in expected:
         target = kw.lower().strip()
         if not target:
             continue
-        if re.search(rf"\b{re.escape(target)}\b", lower):
+        if contains_whole_word(lower, target):
             return True
     return False
 

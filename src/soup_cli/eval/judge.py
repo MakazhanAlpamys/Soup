@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import re
 from dataclasses import dataclass, field
@@ -178,23 +179,50 @@ def _build_judge_prompt(
     )
 
 
+def _first_json_object(text: str) -> Optional[dict]:
+    """The first JSON object in ``text`` that has a ``scores`` key (#1467).
+
+    Each ``{`` is tried in turn with ``json.JSONDecoder.raw_decode``, so an
+    object nested at any depth (a quoted ``{...}`` in the reasoning) is read
+    whole. Falls back to the first JSON object when none has ``scores``.
+    """
+    decoder = json.JSONDecoder()
+    first: Optional[dict] = None
+    start = text.find("{")
+    while start != -1:
+        try:
+            obj, _end = decoder.raw_decode(text, start)
+        except json.JSONDecodeError:
+            obj = None
+        if isinstance(obj, dict):
+            if "scores" in obj:
+                return obj
+            if first is None:
+                first = obj
+        start = text.find("{", start + 1)
+    return first
+
+
 def _parse_judge_response(
     text: str,
     rubric: dict,
 ) -> tuple[dict[str, float], str]:
-    """Parse judge LLM response into scores and reasoning."""
-    # Try to extract JSON from response (supports nested braces)
-    json_match = re.search(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', text, re.DOTALL)
-    if not json_match:
-        raise ValueError(f"No JSON found in judge response: {text[:200]}")
+    """Parse judge LLM response into scores and reasoning.
 
-    try:
-        data = json.loads(json_match.group())
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"Invalid JSON in judge response: {exc}") from exc
+    Criterion keys match case-insensitively and a ``{"score": N}`` value is
+    unwrapped. A criterion the reply does not score, or scores with anything
+    but a finite number, raises ``ValueError`` naming it rather than counting
+    as the scale minimum (#1467).
+    """
+    data = _first_json_object(text)
+    if data is None:
+        raise ValueError(f"No JSON object found in judge response: {text[:200]}")
 
     scores = data.get("scores", {})
+    if not isinstance(scores, dict):
+        raise ValueError("Judge response 'scores' must be a JSON object")
     reasoning = str(data.get("reasoning", ""))
+    folded = {str(key).strip().lower(): val for key, val in scores.items()}
 
     # Validate scores against rubric criteria
     scale = rubric.get("scale", {"min": 1, "max": 5})
@@ -204,11 +232,22 @@ def _parse_judge_response(
     validated_scores: dict[str, float] = {}
     for crit in rubric["criteria"]:
         name = crit["name"]
-        val = scores.get(name, scale_min)
+        key = str(name).strip().lower()
+        if key not in folded:
+            raise ValueError(f"Judge response has no score for criterion {name!r}")
+        val = folded[key]
+        if isinstance(val, dict) and "score" in val:
+            val = val["score"]
+        if isinstance(val, bool):
+            val = None
         try:
             val = float(val)
-        except (TypeError, ValueError):
-            val = float(scale_min)
+        except (TypeError, ValueError, OverflowError):
+            val = math.nan
+        if not math.isfinite(val):
+            raise ValueError(
+                f"Judge score for criterion {name!r} is not a number: {folded[key]!r}"
+            )
         val = max(scale_min, min(scale_max, val))
         validated_scores[name] = val
 
