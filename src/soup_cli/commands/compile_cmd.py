@@ -86,7 +86,13 @@ def compile_cmd(
         console.print(f"[red]{escape(str(exc))}[/]")
         raise typer.Exit(2) from exc
 
-    atomic_write_text(result.program_text, plan.output_path, field="output_path")
+    try:
+        atomic_write_text(result.program_text, plan.output_path, field="output_path")
+    except ValueError as exc:
+        # #1445 — the write-time TOCTOU guard refuses cleanly (exit 2), not
+        # as an unhandled crash, matching the plan-time refusal above.
+        console.print(f"[red]{escape(str(exc))}[/]")
+        raise typer.Exit(2) from exc
     console.print(
         Panel(
             f"Output:      [bold]{escape(plan.output_path)}[/]\n"
