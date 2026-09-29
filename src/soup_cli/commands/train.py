@@ -2361,7 +2361,8 @@ def _run_live_lr_sweep(
     #1203: every reason the sweep cannot run is a refusal.
     :class:`LrSweepUnavailableError` covers a config that will not load and a
     model or dataset that cannot be swept; :class:`SweepTooShortError` covers
-    fewer than ``MIN_NUM_STEPS`` rows and a loss non-finite from the first step.
+    fewer than ``MIN_NUM_STEPS`` rows, and a loss that is non-finite from the
+    first step or turns non-finite before 4 steps have run.
     This used to answer all of them with a synthetic curve shaped by the LR
     schedule alone, so a base model that does not exist exited 0 with a
     ``recommended_lr`` that described no model and no data.

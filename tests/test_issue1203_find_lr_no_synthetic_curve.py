@@ -119,6 +119,10 @@ def test_broken_yaml_refuses_with_the_loader_message(find_lr):
     assert code == 1, text
     assert report is None, text
     assert "config load failed" in text, text
+    # The loader's own words, not just our prefix: Rich used to read
+    # "[unclosed ... ']" in the message as a markup tag and drop it (#1203).
+    assert "while parsing a flow sequence" in text, text
+    assert "data: [unclosed" in text, text
     assert "LR finder report written" not in text
 
 

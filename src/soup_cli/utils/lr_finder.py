@@ -37,8 +37,8 @@ class LrSweepUnavailableError(RuntimeError):
     on the LR schedule: a base model that does not exist, or a config that will
     not parse, used to write a report with a confident ``recommended_lr`` and
     exit 0.
-
     """
+
 
 # Bounds prevent runaway sweeps and silly inputs.
 MAX_NUM_STEPS = 10_000
