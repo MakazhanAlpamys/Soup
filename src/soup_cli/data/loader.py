@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from rich.console import Console
@@ -168,6 +169,31 @@ def _load_txt(path: Path) -> list[dict]:
     return [{"text": line} for line in lines]
 
 
+@dataclass(frozen=True)
+class LoadOutcome:
+    """What the most recent :func:`load_dataset` call converted (#1217).
+
+    ``fmt`` is the format the rows were converted as (resolved, never
+    ``"auto"``); ``first_drop`` is ``(format, row index, reason, source)`` for
+    the first row a converter dropped. ``soup train`` reads it to say why a
+    load ended with zero training rows instead of printing "Ready to train".
+
+    Frozen, and replaced (never mutated) as a load progresses, so a caller
+    holding one keeps a snapshot that no later load can change.
+    """
+
+    fmt: str | None = None
+    first_drop: tuple[str, int, str, str | None] | None = None
+
+
+_last_load = LoadOutcome()
+
+
+def last_load_outcome() -> LoadOutcome:
+    """The :class:`LoadOutcome` of the most recent :func:`load_dataset` call."""
+    return _last_load
+
+
 def _format_rows(
     raw_data: list[dict],
     fmt: str,
@@ -199,8 +225,15 @@ def _format_rows(
         if preserve_source_columns:
             normalized = {**raw_row, **normalized}
         formatted.append(normalized)
+    global _last_load
     if dropped and first_drop is not None:
         _report_dropped_rows(dropped, len(raw_data), fmt, first_drop, source)
+        if _last_load.first_drop is None:
+            _last_load = replace(
+                _last_load, first_drop=(fmt, first_drop[0], first_drop[1], source)
+            )
+    if _last_load.fmt is None:
+        _last_load = replace(_last_load, fmt=fmt)
     return formatted
 
 
@@ -343,7 +376,7 @@ def _classify_train_entry(value: str) -> str:
     """Classify one data.train list entry for interleave dispatch (#459).
 
     Returns ``'remote'`` / ``'hub'`` / ``'local'``. Mirrors the identical
-    classification inline in SoupConfig._validate_interleave_compat — kept
+    classification in schema._classify_data_train_entry — kept
     as two copies of the same three-line rule (suffix-in-SUPPORTED_EXTENSIONS
     check + "://"-in-entry check) rather than one shared function, since
     schema.py must stay import-light (no torch-adjacent deps) and loader.py
@@ -391,6 +424,9 @@ def load_dataset(
       consistently whenever data.train is a list, so this branch only has
       to pick which loader — not re-validate the shape.
     """
+    global _last_load
+    _last_load = LoadOutcome()
+
     train_path = data_config.train
 
     if isinstance(train_path, list):

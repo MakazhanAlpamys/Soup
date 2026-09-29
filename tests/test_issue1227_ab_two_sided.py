@@ -8,11 +8,14 @@ command said "No significant difference". On ``latency`` and ``retry_rate``
 (lower is better) that made a real improvement look like no difference too.
 
 The fix is the symmetric two-point mixture: average the likelihood RATIOS for
-``+effect_size`` and ``-effect_size`` (in log space, with logsumexp). Each point
-ratio is a martingale under H0 and so is their average, which is why the
-``log((1 - beta) / alpha)`` boundary keeps its meaning. Averaging the
-log-ratios, or substituting ``|z|``, does not have that property; the peeking
-simulations below are what catch the ``|z|`` shortcut.
+``+effect_size`` and ``-effect_size`` (in log space, with logsumexp). With a
+known variance each point ratio has expectation 1 under H0 at every step, and so
+does their average, which is why the ``log((1 - beta) / alpha)`` boundary keeps
+its meaning. Neither is exactly a martingale (the ``n_eff / (n_eff + 1)`` shrink
+moves the alternative with n), so the Type-I rate under peeking is measured, not
+derived. Averaging the log-ratios, or substituting ``|z|``, does not keep that
+expectation at 1; the peeking simulations below are what catch the ``|z|``
+shortcut.
 
 That argument needs a known variance, and ``soup ab`` estimates it from the rows.
 From a handful of rows the estimate is too noisy: without a burn-in, re-running
@@ -27,15 +30,18 @@ alpha 0.01. The simulations here stop at 200 rows per arm to stay CI-sized.
 
 from __future__ import annotations
 
+import inspect
 import json
 import math
 import re
 import statistics
+from pathlib import Path
 
 import pytest
 from typer.testing import CliRunner
 
 runner = CliRunner()
+_REPO_ROOT = Path(__file__).resolve().parents[1]
 
 # Rich colours per character on Linux CI, and wraps; compare on plain text.
 # Box-drawing characters go too, so a table row reads "direction worse" and a
@@ -292,6 +298,54 @@ class TestBurnIn:
         verdict = _step("judge_score", control, treatment)
         assert verdict.decision == "continue", verdict
         assert verdict.log_likelihood_ratio >= _upper()
+
+
+class TestTheBurnInTextFollowsTheTable:
+    """The `--alpha` help and two docs pages state the burn-in in words.
+
+    Nothing else ties that text to ``BURN_IN_ROWS_BY_ALPHA``: change a value there (after
+    re-running the sweep) and these fail until the help and the docs say it too.
+    """
+
+    @staticmethod
+    def _tiers():
+        from soup_cli.utils.ab_test import BURN_IN_ROWS_BY_ALPHA, min_rows_per_arm
+
+        # The text names two calibrated tiers, and one "N below" covers both the lower tier
+        # and the uncalibrated range, so it is right only while those share a value.
+        assert len(BURN_IN_ROWS_BY_ALPHA) == 2, BURN_IN_ROWS_BY_ALPHA
+        (high_alpha, high_rows), (low_alpha, low_rows) = BURN_IN_ROWS_BY_ALPHA
+        assert min_rows_per_arm(low_alpha / 2) == low_rows
+        return f"{high_alpha:g}", high_rows, f"{low_alpha:g}", low_rows
+
+    def test_the_alpha_help_states_the_table(self):
+        from soup_cli.commands.ab import ab
+
+        high_alpha, high_rows, low_alpha, low_rows = self._tiers()
+        help_text = " ".join(inspect.signature(ab).parameters["alpha"].default.help.split())
+        expected = (
+            f"no verdict before {high_rows} rows per arm at {high_alpha} and above, "
+            f"{low_rows} below (not calibrated below {low_alpha})"
+        )
+        assert expected in help_text, help_text
+
+    def test_docs_commands_md_states_the_table(self):
+        high_alpha, high_rows, _, low_rows = self._tiers()
+        text = (_REPO_ROOT / "docs" / "commands.md").read_text(encoding="utf-8")
+        expected = (
+            f"continue until {high_rows} rows per arm, {low_rows} when --alpha < {high_alpha}"
+        )
+        assert expected in text
+
+    def test_docs_evaluation_md_table_states_the_table(self):
+        high_alpha, high_rows, low_alpha, low_rows = self._tiers()
+        text = (_REPO_ROOT / "docs" / "evaluation.md").read_text(encoding="utf-8")
+        for row in (
+            f"| {high_alpha} and above | {high_rows} |",
+            f"| from {low_alpha} to below {high_alpha} | {low_rows} |",
+            f"| below {low_alpha} | {low_rows}, **not calibrated** |",
+        ):
+            assert row in text, row
 
 
 # ---------------------------------------------------------------------------

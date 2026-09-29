@@ -51,10 +51,13 @@ from __future__ import annotations
 import argparse
 import json
 import statistics
+import subprocess
 import sys
 import threading
 import time
 from pathlib import Path
+
+from source_provenance import source_sha
 
 DEFAULT_SEQ = 512
 DEFAULT_BATCH = 1
@@ -97,29 +100,8 @@ def _soup_version() -> str:
 
 
 def _source_sha() -> str:
-    """The tree the row was produced from, or ``unknown``.
-
-    ``soup-cli`` reports a release version that does not move between commits,
-    so without this a row cannot name its own tree — and this harness measures a
-    path that three post-#361-base commits changed (#989 above all).
-    """
-    import shutil
-    import subprocess
-
-    tool = shutil.which("git")
-    if tool is None:
-        return "unknown"
-    try:
-        out = subprocess.run(
-            [tool, "rev-parse", "HEAD"],
-            cwd=Path(__file__).resolve().parents[2],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-    except Exception:
-        return "unknown"
-    return out.stdout.strip() or "unknown"
+    """Shared with the other harnesses; see ``source_provenance``."""
+    return source_sha()
 
 
 def _versions() -> dict:
@@ -271,7 +253,6 @@ class GpuSampler:
 
     def _poll(self) -> None:
         import shutil
-        import subprocess
 
         tool = shutil.which("nvidia-smi")
         if tool is None:

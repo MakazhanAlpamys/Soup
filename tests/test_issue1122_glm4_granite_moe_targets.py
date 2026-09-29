@@ -4,8 +4,11 @@
 recipe names, but a base whose ``config.json`` cannot be fetched is recorded as
 ``unresolvable`` and skipped. Two were: ``THUDM/glm-4.6`` (404) and
 ``ibm-granite/granite-4.0-tiny-base`` (404). #1132 repoints them at
-``zai-org/GLM-4.6`` and ``ibm-granite/granite-4.0-tiny-base-preview``, which
+``zai-org/GLM-4.6`` and ``ibm-granite/granite-4.0-h-tiny-base``, which
 resolve -- and pull two uncovered MoE ``model_type`` values into the catalogue.
+The Granite measurement below was taken on the preview, before #1132 settled on
+the GA base; the two ``config.json`` files give the same layout (40 layers,
+attention at 5, 15, 25 and 35) and differ only in routed experts (62 vs 64).
 
 Measured with ``AutoConfig.from_pretrained`` + ``AutoModelForCausalLM.from_config``
 on the meta device (no weights downloaded), 2026-09-22, transformers 5.17.0:

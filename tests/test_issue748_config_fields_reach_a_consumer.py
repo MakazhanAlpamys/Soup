@@ -292,9 +292,17 @@ def _consumer_modules():
     return [p for p in SRC.rglob("*.py") if p.name != SCHEMA]
 
 
+# Fields whose name collides with an unrelated read elsewhere in src/, so only
+# a read through a `*.training` receiver counts as consumption.
+_RECEIVER_QUALIFIED = frozenset({
+    "training.forgetting_threshold",  # ship.py has a local of the same name
+    "training.load_in_16bit",  # migrate/unsloth.py reads an Unsloth kwarg of that name
+})
+
+
 def field_reaches_a_consumer(key: str, attr: str, consumed: set) -> bool:
     """Apply receiver-qualified checks where the global namespace collides."""
-    if key == "training.forgetting_threshold":
+    if key in _RECEIVER_QUALIFIED:
         return training_receiver_reads(_consumer_modules(), attr)
     return attr in consumed
 
@@ -326,15 +334,15 @@ def _consumed_in_src() -> set:
 # --------------------------------------------------------------------------
 KNOWN_UNCONSUMED = {
     # -- documented with a worked example, applied nowhere. Verified by hand.
-    "training.lr_groups": "no issue yet -- utils/lr_groups.py exports parse_lr_groups() and "
-                          "nothing outside schema.py imports it; documented at "
-                          "docs/peft-and-efficiency.md:190",
+    "training.lr_groups": "#761 -- warns at load from v0.76, refused as of v0.77; "
+                          "utils/lr_groups.py exports parse_lr_groups() and nothing "
+                          "outside schema.py imports it",
     # data.mask_history was here until #761 wired it into data/loss_mask.py.
-    "training.early_stop_patience": "#761 -- schema promises 'consecutive regressions "
-                                    "before early stopping'; documented at "
-                                    "docs/peft-and-efficiency.md:622",
-    "training.citation_recall_threshold": "no issue yet -- validated by utils/citation_faithful.py "
-                                          "and named in its error strings; never applied",
+    "training.early_stop_patience": "#761 -- warns at load from v0.76, refused as of "
+                                    "v0.77; no early-stop callback reads it",
+    "training.citation_recall_threshold": "#761 -- warns at load from v0.76, refused as "
+                                          "of v0.77; validated by utils/citation_faithful.py, "
+                                          "never applied",
     # -- found by the read/write fix, and the reason that fix exists. A user
     #    setting that is OVERRIDDEN rather than merely unread, so the strongest
     #    kind of member this list has.
@@ -374,19 +382,26 @@ KNOWN_UNCONSUMED = {
     "training.llm_int8": "no issue needed: schema assertion alias",
     "training.quantize_ref_model": "#808 -- warns at load from v0.76, refused as of v0.77 "
                                    "(reference-model quantisation staging)",
-    "training.convergence_window": "#808 group B -- soup train reports it as not enforced "
+    "training.convergence_window": "#808 -- warns at load from v0.76, refused as of v0.77 "
                                    "(convergence-detector staging)",
-    "training.convergence_rel_tol": "#808 group B -- soup train reports it as not enforced "
+    "training.convergence_rel_tol": "#808 -- warns at load from v0.76, refused as of v0.77 "
                                     "(convergence-detector staging)",
-    "training.forgetting_eval_steps": "#799 -- catastrophic-forgetting probe staging",
+    "training.forgetting_eval_steps": "#808 -- warns at load from v0.76, refused as of v0.77 "
+                                      "(catastrophic-forgetting probe staging)",
     "training.forgetting_threshold": "#799 -- staged catastrophic-forgetting threshold; "
                                      "the same name in ship.py is unrelated",
-    "training.forgetting_benchmark": "#799 -- catastrophic-forgetting probe staging",
-    "training.forgetting_stop": "#799 -- catastrophic-forgetting probe staging",
-    "training.checkpoint_eval_steps": "#799 -- checkpoint-eval staging",
-    "training.checkpoint_eval_metric": "#799 -- checkpoint-eval staging",
-    "training.checkpoint_eval_tasks": "#799 -- checkpoint-eval staging",
-    "training.checkpoint_keep_top": "#799 -- checkpoint-eval staging",
+    "training.forgetting_benchmark": "#808 -- warns at load from v0.76, refused as of v0.77 "
+                                     "(catastrophic-forgetting probe staging)",
+    "training.forgetting_stop": "#808 -- warns at load from v0.76, refused as of v0.77 "
+                                "(catastrophic-forgetting probe staging)",
+    "training.checkpoint_eval_steps": "#808 -- warns at load from v0.76, refused as of v0.77 "
+                                      "(checkpoint-eval staging)",
+    "training.checkpoint_eval_metric": "#808 -- warns at load from v0.76, refused as of v0.77 "
+                                       "(checkpoint-eval staging)",
+    "training.checkpoint_eval_tasks": "#808 -- warns at load from v0.76, refused as of v0.77 "
+                                      "(checkpoint-eval staging)",
+    "training.checkpoint_keep_top": "#808 -- warns at load from v0.76, refused as of v0.77 "
+                                    "(checkpoint-eval staging)",
     "training.grace_codebook_size": "#808 -- warns at load from v0.76, refused as of v0.77 "
                                     "(GRACE codebook staging)",
     "training.grace_codebook_dim": "#808 -- warns at load from v0.76, refused as of v0.77 "

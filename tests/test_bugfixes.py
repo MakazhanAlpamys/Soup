@@ -471,6 +471,21 @@ class TestPPODatasetCompat:
         # doesn't accept it (uses "args" path but no train_dataset param)
         assert wrapper._dataset_in_constructor is False
 
+        # #1391: the late assignment in _train_builtin hands over token columns only
+        class _StopError(Exception):
+            pass
+
+        def _stop(*args, **kwargs):
+            raise _StopError
+
+        wrapper.trainer.train_dataset = None
+        wrapper.trainer.model = MagicMock()
+        wrapper.trainer.args = MagicMock(fp16=False, bf16=False)
+        wrapper.trainer.train = _stop
+        with pytest.raises(_StopError):
+            wrapper._train_builtin(None, None, None, None)
+        assert wrapper.trainer.train_dataset.column_names == ["input_ids", "attention_mask"]
+
     def test_ppo_dataset_in_constructor_when_accepted(self):
         """_dataset_in_constructor should be True when train_dataset is accepted."""
         from unittest.mock import MagicMock
@@ -486,11 +501,13 @@ class TestPPODatasetCompat:
         wrapper = PPOTrainerWrapper(cfg, device="cpu")
 
         # Real class whose __init__ DOES accept train_dataset
+        captured = {}
+
         class FakePPOTrainer:
             def __init__(self, *, model=None, args=None,
                          processing_class=None, train_dataset=None,
                          reward_funcs=None):
-                pass
+                captured["train_dataset"] = train_dataset
 
         class FakePPOConfig:
             def __init__(self, **kwargs):
@@ -522,6 +539,8 @@ class TestPPODatasetCompat:
             wrapper.setup(dataset)
 
         assert wrapper._dataset_in_constructor is True
+        # #1391: trl pads every column it is given, so only token columns go in
+        assert captured["train_dataset"].column_names == ["input_ids", "attention_mask"]
 
 
 # --- BUG-007: PPO trl >=0.28 experimental API missing positional args (v0.10.6) ---
@@ -570,7 +589,8 @@ class TestPPOExperimentalSetup:
         )
         wrapper = PPOTrainerWrapper(cfg, device="cpu")
 
-        dataset = {"train": [{"prompt": "What is 2+2?", "answer": "4"}]}
+        # #1391: one rollout batch is batch_size (1 here) x gradient_accumulation_steps (4)
+        dataset = {"train": [{"prompt": "What is 2+2?", "answer": "4"}] * 4}
 
         # Track what args PPOTrainer receives
         captured_kwargs = {}
@@ -945,7 +965,8 @@ class TestPPOResumeCheckpoint:
             def __init__(self, **kwargs):
                 pass
 
-        dataset = {"train": [{"prompt": "Q?", "answer": "A"}]}
+        # #1391: one rollout batch is batch_size (1 here) x gradient_accumulation_steps (4)
+        dataset = {"train": [{"prompt": "Q?", "answer": "A"}] * 4}
 
         with mock_patch("soup_cli.trainer.ppo.PPOTrainerWrapper._setup_reward"), \
              mock_patch("soup_cli.trainer.ppo.PPOTrainerWrapper._setup_transformers"), \
