@@ -1398,7 +1398,7 @@ class TrainingConfig(BaseModel):
         le=1000,
         description=(
             "Replace the frozen ref model with the current student every N "
-            "epochs. None = never regen (default). DPO-family tasks only."
+            "epochs. Refused at load (#1345) - not wired yet."
         ),
     )
     # Multi-objective preference loss (v0.40.0 Part D).
@@ -6929,6 +6929,13 @@ class SoupConfig(BaseModel):
                 f"require task in {{dpo, ipo}} or task='preference' with "
                 f"preference_loss in {{dpo, ipo}}; got task={self.task!r}, "
                 f"preference_loss={tcfg.preference_loss!r}."
+            )
+        # dpo_ref_regen_epochs refusal (#1345).
+        if regen is not None:
+            raise ValueError(
+                "dpo_ref_regen_epochs is not wired yet (#1345): with LoRA TRL builds "
+                "no separate reference model, and full fine-tuning is not supported on "
+                f"task={self.task!r}. Remove dpo_ref_regen_epochs."
             )
         return self
 
