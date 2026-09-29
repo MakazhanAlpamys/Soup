@@ -41,6 +41,11 @@ soup merge --adapter ./output --output ./merged
 soup merge --adapter ./output --base meta-llama/Llama-3.1-8B --dtype bfloat16
 ```
 
+ReLoRA training outputs are already standalone dense models: Soup merges the
+final active adapter into the accumulated in-memory base before writing the
+training output. Load or export that directory directly; `soup merge` is only
+for adapter-only outputs and must not be used to reconstruct a ReLoRA run.
+
 
 ## Export to GGUF
 

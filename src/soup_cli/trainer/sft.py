@@ -13,6 +13,7 @@ from rich.console import Console
 from soup_cli.config.schema import SoupConfig
 from soup_cli.trainer.loss_summary import summarize_training_loss
 from soup_cli.trainer.stream_setup import StreamingSetupMixin
+from soup_cli.utils.eval_schedule import training_eval_kwargs
 from soup_cli.utils.gpu import (
     bf16_fp16_flags,
     estimate_batch_size,
@@ -972,6 +973,10 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             # than a new default. #353 moved the resolution into utils.seeding
             # so the other 17 task wrappers resolve it identically.
             **training_seed_kwargs(tcfg),
+            # #1223: evaluate the split handed to the trainer below, at the
+            # resolved train batch. Before this nothing set eval_strategy, so
+            # the default val_split was withheld and never evaluated.
+            **training_eval_kwargs(cfg, eval_ds, batch_size=batch_size),
         }
 
         # FSDP2 — alternative to DeepSpeed. The helper also enables
@@ -2106,6 +2111,8 @@ class SFTTrainerWrapper(StreamingSetupMixin):
         )
         self.model = get_peft_model(self.model, lora_config)
 
+        self._apply_quantization_aware(tcfg)
+
     def _prepare_audio_dataset(self, dataset: dict):
         """Prepare dataset for audio fine-tuning with audio loading."""
         from datasets import Dataset
@@ -2304,13 +2311,20 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             self.trainer.state.log_history, model=self.trainer.model
         )
 
-        # Save final model (LoRA adapter)
-        self.trainer.save_model(self._output_dir)
+        if self.config.training.relora_steps is None:
+            self.trainer.save_model(self._output_dir)
+        else:
+            from soup_cli.utils.peft_wiring import save_model_with_relora
+
+            save_model_with_relora(
+                self.trainer, self._output_dir, self.config.training.relora_steps
+            )
         if self._quest_metadata is not None:
             from soup_cli.utils.quest import write_metadata
 
             write_metadata(self._output_dir, self._quest_metadata)
-        self._assert_streamed_adapter_saved(self._output_dir)
+        if self.config.training.relora_steps is None:
+            self._assert_streamed_adapter_saved(self._output_dir)
         # #335 — under torch.compile the Trainer saves THROUGH the wrapper, so
         # every key gains `_orig_mod.` and PeftModel.from_pretrained then matches
         # none of them: it warns and leaves lora_B at zero init, i.e. the run

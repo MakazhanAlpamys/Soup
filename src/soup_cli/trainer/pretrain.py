@@ -9,6 +9,7 @@ from rich.console import Console
 
 from soup_cli.config.schema import SoupConfig
 from soup_cli.trainer.loss_summary import summarize_training_loss
+from soup_cli.utils.eval_schedule import training_eval_kwargs
 from soup_cli.utils.gpu import (
     bf16_fp16_flags,
     estimate_batch_size,
@@ -183,6 +184,7 @@ class PretrainTrainerWrapper:
             "remove_unused_columns": False,
             "deepspeed": self.deepspeed_config,
             **training_seed_kwargs(tcfg),
+            **training_eval_kwargs(cfg, eval_ds, batch_size=batch_size),
         }
 
         # FSDP2 — alternative to DeepSpeed
@@ -279,7 +281,7 @@ class PretrainTrainerWrapper:
 
             attach_empty_param_group_guard(self.trainer)
 
-        # v0.40.6 #67 — ReLoRA callback (magnitude-prune LoRA every N steps).
+        # v0.40.6 #67 — ReLoRA merge-and-reinitialize restart callback.
         from soup_cli.utils.peft_wiring import (
             attach_curriculum_callback,
             attach_lisa_callback,
@@ -521,8 +523,15 @@ class PretrainTrainerWrapper:
             self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)
         duration = time.time() - start
 
-        # Save final model (LoRA adapter)
-        self.trainer.save_model(self._output_dir)
+        # Save final model; ReLoRA output is dense.
+        if self.config.training.relora_steps is None:
+            self.trainer.save_model(self._output_dir)
+        else:
+            from soup_cli.utils.peft_wiring import save_model_with_relora
+
+            save_model_with_relora(
+                self.trainer, self._output_dir, self.config.training.relora_steps
+            )
         self.tokenizer.save_pretrained(self._output_dir)
 
         # Extract metrics

@@ -20,7 +20,7 @@ import os
 
 import pytest
 
-from tests.conftest import cuda_available
+from tests.conftest import accelerator_device, cuda_available, mps_is_the_accelerator
 
 # ==========================================================================
 # fixtures (mirroring tests/test_v07200.py so the two cannot drift)
@@ -36,19 +36,6 @@ def _torch_version():
         return torch.__version__
     except Exception:  # pragma: no cover - torch always present in CI
         return "unknown"
-
-
-def _mps_is_the_accelerator():
-    try:
-        import torch
-
-        return (
-            hasattr(torch.backends, "mps")
-            and torch.backends.mps.is_available()
-            and not cuda_available()
-        )
-    except Exception:  # pragma: no cover
-        return False
 
 
 def _tiny_llama_dir(tmp_path, n_layers=2, tie=True, vocab=64, hidden=64):
@@ -248,7 +235,8 @@ def _loss_of(trainer, model, batch):
 def _match_streamed_dtype(resident, streamed):
     """Put the resident reference on the streamed model's device AND dtype.
 
-    Streaming picks bf16 on CUDA and float32 on CPU. Comparing a float32
+    Streaming picks bf16 on CUDA, bf16 on MPS when the runtime accepts it
+    (float32 otherwise), and float32 on CPU. Comparing a float32
     resident model against a bf16 streamed one measures the dtype gap, not the
     streaming path — that mistake produced a 9.96e-04 "failure" that was
     entirely the test's own.
@@ -360,10 +348,11 @@ def _build_streamed_wrapper(
     """Build a task wrapper through the REAL `setup()` path, streaming.
 
     ``device`` defaults to the real accelerator, because `TrainingArguments`
-    picks CUDA when it is available and forcing CPU there would only produce a
-    device mismatch no user would ever hit. Numerical-equality tests pass
-    ``device='cpu'`` deliberately: the streaming path uses float32 on CPU and
-    bf16 on CUDA, and "bit-exact" is only a meaningful assertion in the former
+    picks CUDA or MPS when one is available and forcing CPU there would only
+    produce a device mismatch no user would ever hit. Numerical-equality tests pass
+    ``device='cpu'`` deliberately: the streaming path uses float32 on CPU, bf16
+    on CUDA, and bf16 on MPS when the runtime accepts it (float32 otherwise),
+    and "bit-exact" is only a meaningful assertion in float32
     (a bf16 logp of -12.75 cannot represent a change smaller than ~0.05).
     """
     weights, resident, _ = _tiny_llama_dir(
@@ -375,7 +364,7 @@ def _build_streamed_wrapper(
     training.setdefault("batch_size", _MIN_BATCH.get(task, 1))
     cfg = _stream_cfg(weights, tmp_path / "out", task=task, **training)
     if device is None:
-        device = "cuda" if cuda_available() else "cpu"
+        device = accelerator_device()
     wrapper = _wrapper_for(task)(cfg, device=device)
     wrapper.setup({"train": _TASK_ROWS[task](8)})
     return wrapper, resident, weights
@@ -682,10 +671,6 @@ class TestBitExactVsResident:
         assert next(matched.parameters()).device.type == "cpu"
         assert next(matched.parameters()).dtype is torch.float64
 
-    @pytest.mark.skipif(
-        _mps_is_the_accelerator(),
-        reason="MPS is untested for layer streaming (CUDA + CPU only)",
-    )
     @pytest.mark.parametrize("task", _ALL_PREFERENCE)
     def test_loss_matches_a_resident_run_of_the_same_loss(self, tmp_path, monkeypatch, task):
         import torch
@@ -726,10 +711,6 @@ class TestBitExactVsResident:
         diff = (streamed_loss - resident_loss).abs().max().item()
         assert diff == 0.0, f"{task}: streamed vs resident loss differs by {diff}"
 
-    @pytest.mark.skipif(
-        _mps_is_the_accelerator(),
-        reason="MPS is untested for layer streaming (CUDA + CPU only)",
-    )
     @pytest.mark.parametrize("task", _ALL_PREFERENCE)
     def test_layer_zero_adapter_receives_gradient(self, tmp_path, monkeypatch, task):
         """plan P2: a `detach()`/`no_grad()` anywhere in the base forward severs
@@ -990,10 +971,6 @@ class TestKtoNeedsMoreThanOneRow:
         cfg = _stream_cfg(str(tmp_path / "m"), tmp_path / "o", task="kto", batch_size=2)
         assert cfg.training.batch_size == 2
 
-    @pytest.mark.skipif(
-        _mps_is_the_accelerator(),
-        reason="MPS is untested for layer streaming (CUDA + CPU only)",
-    )
     def test_kto_streams_at_batch_two(self, tmp_path, monkeypatch):
         """Runs EVERYWHERE, and tolerates exactly one known failure signature.
 
@@ -1015,7 +992,7 @@ class TestKtoNeedsMoreThanOneRow:
         more ops, which is why only the newer stack surfaces it. Tracked as #328
         rather than absorbed into a device rule.
 
-        So: tolerate that one signature on CPU and nothing else. Any other
+        So: tolerate that one signature without CUDA (CPU or MPS) and nothing else. Any other
         exception, and the same signature on CUDA, is a hard failure — and when
         the leak is fixed this XPASSes instead of quietly staying skipped.
         """
@@ -1045,10 +1022,6 @@ class TestTheReferenceForwardActuallyHappens:
     model. Pinned so an "optimisation" that silently drops or caches the
     reference forward cannot pass unnoticed."""
 
-    @pytest.mark.skipif(
-        _mps_is_the_accelerator(),
-        reason="MPS is untested for layer streaming (CUDA + CPU only)",
-    )
     @pytest.mark.parametrize("task", _REFERENCE_USING)
     def test_a_reference_using_loss_reads_more_layers_than_sft(self, tmp_path, monkeypatch, task):
         def reads_for(task, root):
@@ -1238,7 +1211,7 @@ class TestNf4CombinesWithEveryPreferenceLoss:
     SmolLM2-135M). A name drift in any one copy is otherwise invisible."""
 
     @pytest.mark.skipif(
-        _mps_is_the_accelerator(),
+        mps_is_the_accelerator(),
         reason="bitsandbytes has no 4-bit MPS kernels",
     )
     @pytest.mark.parametrize("task", _ALL_PREFERENCE)

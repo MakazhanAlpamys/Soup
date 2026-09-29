@@ -148,6 +148,28 @@ _ARCH_PATTERNS = {
 }
 SUPPORTED_SHRINK_ARCHS = tuple(_ARCH_PATTERNS)
 
+# Config attributes holding one entry per decoder layer, which a prune must
+# slice in step with ``model.model.layers``: ``layer_types`` (Qwen2 / Qwen3 /
+# Qwen2-MoE / SmolLM3) and ``no_rope_layers`` (SmolLM3). transformers 5 refuses
+# to save a config whose ``layer_types`` length differs from
+# ``num_hidden_layers`` (#1241).
+_PER_LAYER_CONFIG_ATTRS = ("layer_types", "no_rope_layers")
+
+# Config attributes holding layer *indices* (or a stride over them) rather than
+# one entry per layer, mapped to their transformers 5 default for a model with
+# ``n`` layers. A prune cannot slice these, so a non-default value would put the
+# MoE and dense MLPs on the wrong layers after reload; ``prune_model_layers``
+# refuses instead. Qwen2-MoE / Qwen3-MoE / Qwen3-Next: ``mlp_only_layers``,
+# ``decoder_sparse_step``. Llama4-text: ``interleave_moe_layer_step`` and
+# ``moe_layers`` (filled from the step when unset, so every layer by default;
+# the step comes first so a non-default step is the one named).
+_LAYER_INDEX_CONFIG_DEFAULTS = {
+    "mlp_only_layers": lambda n: [],
+    "decoder_sparse_step": lambda n: 1,
+    "interleave_moe_layer_step": lambda n: 1,
+    "moe_layers": lambda n: list(range(n)),
+}
+
 
 def arch_family_of_config(config: object) -> str:
     """Return the supported family name for an HF ``config`` or raise ``ValueError``.
@@ -185,12 +207,35 @@ def layer_list(model: object) -> Any:
         raise ValueError("model has no .model.layers ModuleList") from exc
 
 
+def check_layer_index_config(config: object, n_layers: int) -> None:
+    """Refuse a config whose MoE layout names layers by index.
+
+    Any attribute in :data:`_LAYER_INDEX_CONFIG_DEFAULTS` that is not at its
+    default for ``n_layers`` holds layer numbers a prune cannot remap.
+    """
+    for attr, default_for in _LAYER_INDEX_CONFIG_DEFAULTS.items():
+        value = getattr(config, attr, None)
+        if value is None:
+            continue
+        if isinstance(value, (list, tuple)):
+            value = list(value)
+        if value != default_for(n_layers):
+            raise ValueError(
+                f"cannot prune a model whose config sets {attr}={value!r}: it holds "
+                "layer indices that would point at the wrong layers after the drop"
+            )
+
+
 def prune_model_layers(model: object, start: int, block_size: int) -> None:
     """Drop decoder layers ``[start, start + block_size)`` in place.
 
-    Slices ``model.model.layers`` and patches ``config.num_hidden_layers``. The
-    first and last decoder layers are protected (they carry the most residual
-    transformation, per the paper), so the dropped block must stay within
+    Slices ``model.model.layers`` and every per-layer config list in
+    :data:`_PER_LAYER_CONFIG_ATTRS` by the same kept indices, and patches
+    ``config.num_hidden_layers``. Refuses with ``ValueError`` when a config
+    attribute in :data:`_LAYER_INDEX_CONFIG_DEFAULTS` is not at its default,
+    since those hold layer indices a slice cannot remap. The first and last
+    decoder layers are protected (they carry the most residual transformation,
+    per the paper), so the dropped block must stay within
     ``[1, num_layers - 1)``. Callers MUST reload the model from the saved dir
     before measuring/generating — slicing leaves each surviving layer's
     ``self_attn.layer_idx`` stale, which ``from_pretrained`` reconstructs
@@ -212,9 +257,20 @@ def prune_model_layers(model: object, start: int, block_size: int) -> None:
             f"dropped block [{start}, {end}) must stay within [1, {n_total - 1}) "
             "(the first and last layer are protected)"
         )
-    kept = [layers[i] for i in range(n_total) if not (start <= i < end)]
-    model.model.layers = nn.ModuleList(kept)  # type: ignore[attr-defined]
-    model.config.num_hidden_layers = len(kept)  # type: ignore[attr-defined]
+    config = model.config  # type: ignore[attr-defined]
+    check_layer_index_config(config, n_total)
+    kept_idx = [i for i in range(n_total) if not (start <= i < end)]
+    model.model.layers = nn.ModuleList(layers[i] for i in kept_idx)  # type: ignore[attr-defined]
+    for attr in _PER_LAYER_CONFIG_ATTRS:
+        values = getattr(config, attr, None)
+        if isinstance(values, (list, tuple)) and len(values) == n_total:
+            setattr(config, attr, [values[i] for i in kept_idx])
+    # Every index-valued attribute is at its default (checked above); keep it the
+    # default for the NEW layer count, e.g. Llama4-text ``moe_layers``.
+    for attr, default_for in _LAYER_INDEX_CONFIG_DEFAULTS.items():
+        if getattr(config, attr, None) is not None:
+            setattr(config, attr, default_for(len(kept_idx)))
+    config.num_hidden_layers = len(kept_idx)
 
 
 # ---------------------------------------------------------------------------

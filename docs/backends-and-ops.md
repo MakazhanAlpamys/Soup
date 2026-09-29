@@ -197,7 +197,7 @@ training:
     alpha: 16
 ```
 
-Works with all training tasks: SFT, DPO, GRPO, PPO, KTO, ORPO, SimPO, IPO, and Pretrain. If unsloth is installed but not enabled, Soup will suggest it automatically.
+Works with the tasks that have an unsloth setup: SFT (text; SFT vision and audio still run the transformers setup), DPO, GRPO, PPO, KTO, ORPO, SimPO, IPO, BCO, preference, Pretrain, Embedding and TTS. The others (`reward_model`, `prm`, `classifier`, `reranker`, `cross_encoder`, `distill`, `unlearn`, `moe_lora_routing`, `online_dpo` and `asr`) have no unsloth setup, so `backend: unsloth` is refused at config load for them (#1357). If unsloth is installed but not enabled, Soup will suggest it automatically.
 
 > **Tip:** Soup auto-detects unsloth. When installed, you'll see a hint during `soup train` if you haven't enabled it yet.
 
@@ -503,6 +503,10 @@ soup sweep --config soup.yaml --param lr=1e-5,2e-5 --param epochs=2,3 --dry-run
 # Early stopping: skip remaining runs if loss exceeds 1.5x best
 soup sweep --config soup.yaml --param lr=1e-5,2e-5,5e-5 --early-stop 1.5
 ```
+
+Every arm builds the trainer `soup train` builds for the config's `task` and
+`backend`, so an arm on a `task: distill` config distills, and an arm on
+`backend: mlx` uses the MLX wrapper.
 
 
 ## Model Comparison
@@ -1117,6 +1121,11 @@ soup env check
 ## Hardware-Fit Calculator
 
 Given (params, seq_len, batch_size, optimizer, quant, peft, gradient_checkpointing), the analytical predictor returns a 5-bucket peak-VRAM breakdown (weights / optimizer / gradients / activations / overhead) and an OK/OOM verdict with a 10% safety margin.
+
+For `soup train`, `params_b` is derived by `model_size_from_name`:
+- A local checkpoint path is measured directly from safetensors metadata headers.
+- A Hub id is parsed: e.g. `72B`, `8x7B` → `46.7` total, `17B-16E` → `109` total, with active-parameter markers (`-A22B`) ignored.
+- An id with no size token (e.g. `DeepSeek-V3`, `Kimi-K2`, `GLM-5`, `MiniMax-M2`) still falls back to `7B`, which under-predicts these models (they have 229B to 1T parameters). Point `base:` at a local download to have the checkpoint measured instead.
 
 ```python
 from soup_cli.utils.hardware_fit import HardwareFitInput, decide_hardware_fit

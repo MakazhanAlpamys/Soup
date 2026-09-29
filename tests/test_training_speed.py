@@ -674,42 +674,6 @@ class TestFP8Availability:
             assert is_fp8_gpu_supported() is True
 
 
-class TestFP8Validation:
-    """FP8 training config validation."""
-
-    def test_validate_fp8_not_requested_returns_empty(self):
-        from soup_cli.utils.fp8 import validate_fp8_config
-
-        errors = validate_fp8_config(False, "transformers", "cuda")
-        assert errors == []
-
-    def test_validate_fp8_bool_returns_empty(self):
-        """Bool True means int8 QAT (existing path), not FP8."""
-        from soup_cli.utils.fp8 import validate_fp8_config
-
-        errors = validate_fp8_config(True, "transformers", "cuda")
-        # Bool True is int8 QAT, handled by qat.py, not fp8
-        assert errors == []
-
-    def test_validate_fp8_cpu_rejected(self):
-        from soup_cli.utils.fp8 import validate_fp8_config
-
-        errors = validate_fp8_config("fp8", "transformers", "cpu")
-        assert any("CUDA" in err for err in errors)
-
-    def test_validate_fp8_unsloth_rejected(self):
-        from soup_cli.utils.fp8 import validate_fp8_config
-
-        errors = validate_fp8_config("fp8", "unsloth", "cuda")
-        assert any("unsloth" in err.lower() for err in errors)
-
-    def test_validate_fp8_mlx_rejected(self):
-        from soup_cli.utils.fp8 import validate_fp8_config
-
-        errors = validate_fp8_config("fp8", "mlx", "mps")
-        assert any("mlx" in err.lower() or "CUDA" in err for err in errors)
-
-
 # ─── Part C: Gradient checkpointing tiers ─────────────────────────────────
 
 

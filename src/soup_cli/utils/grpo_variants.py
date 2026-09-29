@@ -415,7 +415,7 @@ def _per_token_kl(variant: str, beta: float, logp_new, reference_logp):
 
     if reference_logp is None:
         # Inside the trainer this text reaches the user through the #159
-        # fallback warning, where beta=0 is no remedy (grpo_beta must be > 0),
+        # fallback warning (for a KL-free run, set grpo_beta: 0; #1247),
         # so it names the batch key trl should have filled instead.
         raise ValueError(
             f"grpo_variant={variant!r} with beta={beta} needs reference_logp, the "

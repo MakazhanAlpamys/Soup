@@ -270,6 +270,7 @@ class TestPreferenceTaskGate:
             "data": {"train": "./data.jsonl"},
             "training": {
                 "relora_steps": 100,
+                "quantization": "none",
                 "preference_loss": "dpo",
             },
         }))
@@ -290,7 +291,7 @@ class TestReLoRASchemaGateWidened:
             "task": task,
             "backend": backend,
             "data": {"train": "./data.jsonl"},
-            "training": {"relora_steps": 100},
+            "training": {"relora_steps": 100, "quantization": "none"},
         }
 
     @pytest.mark.parametrize(
