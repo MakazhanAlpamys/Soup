@@ -130,10 +130,27 @@ def _deploy_target(target: DeployTarget, extract_dir: Path) -> int:
             "--name", target.name,
         ])
     if target.kind == "gguf":
-        # Already extracted — just confirm presence.
+        # Already extracted — just confirm presence, but verify the manifest's
+        # path really resolves inside extract_dir first. ``target.path`` comes
+        # from the can, so an absolute path (pathlib drops the left operand
+        # when the right one is absolute), a ``..`` segment, or a symlink
+        # planted in the can would otherwise reach an arbitrary file on disk.
+        # Same containment pattern as the kind=ollama branch above; the
+        # DeployTarget field validator is the first line, this is the second.
         if not target.path:
             raise ValueError("deploy_target kind=gguf requires 'path'")
-        gguf_path = (extract_dir / target.path).resolve()
+        extract_real = os.path.realpath(str(extract_dir))
+        gguf_real = os.path.realpath(str(extract_dir / target.path))
+        try:
+            common = os.path.commonpath([extract_real, gguf_real])
+        except ValueError:  # different drives on Windows — never contained
+            common = ""
+        if common != extract_real or gguf_real == extract_real:
+            raise ValueError(
+                f"deploy gguf path '{target.path}' escapes the can extract "
+                f"dir - refusing"
+            )
+        gguf_path = Path(gguf_real)
         if not gguf_path.exists():
             raise FileNotFoundError(f"deploy gguf path not found: {gguf_path}")
         return 0
