@@ -323,6 +323,41 @@ class TestNonFiniteStatistic:
         else:
             assert math.isfinite(verdict.log_likelihood_ratio), verdict
 
+    def test_held_out_rows_whose_variance_underflows_to_zero_are_refused(self):
+        """They differ, so no more rows are held out, but their variance is 0.0 in floats."""
+        held = [0.0, 1e-170, 0.0, 1e-170, 0.0]
+        rest = _CONTROL[5:]
+        with pytest.raises(ValueError, match="spread is below"):
+            _step(held + rest, held + [x + 5.0 for x in rest])
+
+    def test_one_arm_differing_is_enough_for_that_refusal(self):
+        """The other arm's held-out rows all equal, as a warm cache gives."""
+        rest = _CONTROL[5:]
+        with pytest.raises(ValueError, match="spread is below"):
+            _step([0.0, 1e-170, 0.0, 1e-170, 0.0] + rest, [0.0] * 5 + [x + 5.0 for x in rest])
+
+    def test_the_round_one_f3_input_never_accepts_h0_at_any_peek(self):
+        """The same rows, replayed one row at a time, the way soup ab is meant to be run."""
+        from soup_cli.utils.ab_test import PRIOR_SCALE_ROWS
+
+        held = [0.0, 1.83e-155, 0.0, 1.83e-155, 0.0]
+        rest = _CONTROL[5:]
+        control, treatment = held + rest, held + [x + 5.0 for x in rest]
+        for n in range(PRIOR_SCALE_ROWS + 2, len(control) + 1):
+            try:
+                verdict = _step(control[:n], treatment[:n])
+            except ValueError:
+                continue
+            assert verdict.decision != "accept_h0", (n, verdict)
+
+    def test_an_oversized_flag_on_ordinary_rows_names_the_flag_not_the_spread(self):
+        """The two --effect-size refusals are told apart by the held-out variance."""
+        with pytest.raises(ValueError) as exc:
+            _step(_CONTROL, _TREATMENT, effect_size=1e160)
+        message = str(exc.value)
+        assert "Lower --effect-size" in message
+        assert "spread is below" not in message
+
 
 # ---------------------------------------------------------------------------
 # Type-I error and power under peeking (seeded Monte-Carlo)
