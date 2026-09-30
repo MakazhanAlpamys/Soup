@@ -21,6 +21,8 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
+from tests.conftest import strip_ansi
+
 runner = CliRunner()
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -1132,6 +1134,14 @@ class TestLintCheck:
         c = LintCheck(name="length_bias", verdict="OK", message="fine", evidence="")
         assert c.verdict == "OK"
 
+    def test_skipped_verdict_never_raises_overall(self):
+        from soup_cli.utils.data_lint import LintCheck, compose_lint_report
+
+        skipped = LintCheck(name="near_duplicates", verdict="SKIPPED", message="skipped")
+        report = compose_lint_report([skipped], fmt="dpo", rows_scanned=1, total_rows=1)
+        assert report.overall == "OK"
+        assert report.skipped_count == 1
+
     def test_rejects_unknown_name(self):
         from soup_cli.utils.data_lint import LintCheck
 
@@ -1448,8 +1458,43 @@ class TestCheckNearDuplicatesNoDep:
 
         rows = [{"prompt": "x", "chosen": "a", "rejected": "b"}]
         c = check_near_duplicates(rows, key_fn=lambda r: r["prompt"])
-        assert c.verdict == "OK"
+        assert c.verdict == "SKIPPED"
         assert "skip" in c.message.lower()
+
+    def test_skipped_check_is_reported_not_passed(self, monkeypatch, tmp_path):
+        """A check that never ran must not read as OK: the lint report counts it,
+        the summary line says so, and the exit code stays 0 (skipped is not MAJOR)."""
+        import builtins
+
+        real_import = builtins.__import__
+
+        def fake_import(name, *args, **kwargs):
+            if name == "datasketch":
+                raise ImportError("no datasketch")
+            return real_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", fake_import)
+        from soup_cli.cli import app
+        from soup_cli.utils.data_lint import run_lint
+
+        rows = [
+            {"prompt": f"q{i}", "chosen": "a reasonable answer", "rejected": "a different answer"}
+            for i in range(10)
+        ]
+        report = run_lint(rows, fmt="dpo")
+        verdicts = {c.name: c.verdict for c in report.checks}
+        assert verdicts["near_duplicates"] == "SKIPPED"
+        assert report.skipped_count == 1
+        assert report.overall == "OK"
+
+        monkeypatch.chdir(tmp_path)
+        data_path = tmp_path / "pref.jsonl"
+        _write_jsonl(data_path, rows)
+        result = runner.invoke(app, ["data", "lint", str(data_path)])
+        assert result.exit_code == 0, result.output
+        output = strip_ansi(result.output)
+        assert "SKIPPED" in output
+        assert "1 check skipped" in output
 
 
 class TestRunLint:
