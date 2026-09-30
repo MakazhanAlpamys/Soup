@@ -6113,7 +6113,7 @@ class SoupConfig(BaseModel):
 
         TRL's ``KTOTrainer`` refuses ``per_device_train_batch_size=1``
         ("Actual (not effective) batch size must be > 1") because the KL
-        term degenerates. Until v0.75.x Soup only caught this at parse time
+        term degenerates. Until 0.75.x Soup only caught this at parse time
         for ``stream_layers`` runs (v0.72.4, see the note kept in
         ``_validate_stream_layers_compat``), so a resident KTO config loaded,
         loaded its model, and only then died inside TRL — after minutes of
@@ -6266,7 +6266,7 @@ class SoupConfig(BaseModel):
         # budget is exhausted (peak moved 0.842 -> 0.846 GB across accum 1->4).
         # v0.72.4 — KTO's KL term is degenerate at a per-device batch of 1, so
         # TRL refuses it outright ("Actual (not effective) batch size must be
-        # > 1"). Refused at parse time since v0.75.1 for EVERY task='kto'
+        # > 1"). Refused at parse time since 0.75.1 for EVERY task='kto'
         # config — streaming or resident — by ``_validate_kto_batch_compat``
         # (#1420); a streaming run therefore still fails before sharding the
         # checkpoint, not minutes into it.
