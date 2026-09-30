@@ -41,33 +41,66 @@ FORMAT_SIGNATURES = {
     "tool-calling": {"messages", "tools"},
 }
 
+# #1424: detection reads a bounded prefix of the file, not just row 0. A first
+# row that happens to lack an optional key (e.g. a text-only LLaVA row) must
+# not pick the converter for the WHOLE file and silently drop that key from
+# every row that has it. The cap keeps detection O(1)-ish on huge files.
+MAX_DETECT_ROWS = 100
 
-def detect_format(data: list[dict]) -> str:
-    """Auto-detect dataset format from first few rows."""
-    if not data:
-        raise ValueError("Empty dataset - cannot detect format")
+# Check more specific formats first (llava/sharegpt4v before sharegpt).
+# tool-calling (messages+tools) is checked BEFORE audio
+# (audio+messages): a row carrying both would otherwise match audio first
+# and silently drop its tools/tool_calls. tool-calling before chatml
+# (signature is a superset of chatml). asr ({audio, text}) is checked
+# BEFORE plaintext ({text}) — its signature is a superset, so plaintext
+# would otherwise win and silently drop the audio path. plaintext last.
+_CHECK_ORDER = [
+    "alpaca", "llava", "sharegpt4v", "kto", "dpo", "embedding",
+    "tool-calling", "audio", "asr", "sharegpt", "chatml", "plaintext",
+]
 
-    sample = data[0]
-    keys = set(sample.keys())
 
-    # Check more specific formats first (llava/sharegpt4v before sharegpt).
-    # tool-calling (messages+tools) is checked BEFORE audio
-    # (audio+messages): a row carrying both would otherwise match audio first
-    # and silently drop its tools/tool_calls. tool-calling before chatml
-    # (signature is a superset of chatml). asr ({audio, text}) is checked
-    # BEFORE plaintext ({text}) — its signature is a superset, so plaintext
-    # would otherwise win and silently drop the audio path. plaintext last.
-    check_order = [
-        "alpaca", "llava", "sharegpt4v", "kto", "dpo", "embedding",
-        "tool-calling", "audio", "asr", "sharegpt", "chatml", "plaintext",
-    ]
-    for fmt in check_order:
-        required_keys = FORMAT_SIGNATURES[fmt]
-        if required_keys.issubset(keys):
+def _richest_format(keys: set[str]) -> Optional[str]:
+    """First format in :data:`_CHECK_ORDER` whose signature fits ``keys``.
+
+    The check order is most-specific-first, so this is the richest format the
+    row's keys could be: a row with ``image`` + ``conversations`` is ``llava``,
+    a row with only ``conversations`` is ``sharegpt``.
+    """
+    for fmt in _CHECK_ORDER:
+        if FORMAT_SIGNATURES[fmt].issubset(keys):
             return fmt
+    return None
 
-    raise ValueError(
-        f"Cannot detect format. Keys found: {keys}. "
+
+def _richer_family_member(a: str, b: str) -> Optional[str]:
+    """Return ``a`` or ``b`` with the strictly larger signature, else ``None``.
+
+    The richer format's signature is a superset of the poorer one's, so a row
+    matching the richer signature also matches the poorer — that is what defines
+    a richer/poorer pair of the same family (llava/sharegpt,
+    tool-calling/chatml, audio/chatml, asr/plaintext). Two unrelated shapes
+    (e.g. alpaca and chatml) share no such relation and must not be merged.
+    """
+    if FORMAT_SIGNATURES[a] > FORMAT_SIGNATURES[b]:
+        return a
+    if FORMAT_SIGNATURES[b] > FORMAT_SIGNATURES[a]:
+        return b
+    return None
+
+
+def _cannot_detect_message(row: object, index: int) -> str:
+    """The existing unrecognised-keys error, naming the offending row.
+
+    ``row`` may be any JSON value, not just an object, so a bare scalar or array
+    is described by its type rather than by keys it does not have.
+    """
+    if isinstance(row, dict):
+        found = f"Keys found: {set(row.keys())}. "
+    else:
+        found = f"Row is a {type(row).__name__}, not an object. "
+    return (
+        f"Cannot detect format at row {index}. {found}"
         f"Expected one of: alpaca (instruction, output), "
         f"sharegpt (conversations), chatml (messages), "
         f"dpo (prompt, chosen, rejected), "
@@ -77,6 +110,97 @@ def detect_format(data: list[dict]) -> str:
         f"audio (audio, messages), "
         f"tool-calling (messages, tools), "
         f"plaintext (text)"
+    )
+
+
+def detect_format(data: list[dict]) -> str:
+    """Auto-detect dataset format from a bounded prefix of rows.
+
+    Reads up to :data:`MAX_DETECT_ROWS` rows — not just the first — because a
+    single first row missing an optional key must not force the poorer
+    converter on the whole file and silently drop that key everywhere (#1424).
+
+    Each sampled row resolves to its richest format (the first match in the
+    check order). If every row agrees, that format is returned — a uniform file
+    detects exactly as before. If they disagree the file is *mixed*:
+
+    - a richer/poorer pair of the same family (llava/sharegpt,
+      tool-calling/chatml, audio/chatml, asr/plaintext) upgrades to the richer
+      format, but only when its converter accepts the poorer rows too;
+    - otherwise (an unrelated pair, or a richer converter that rejects the
+      poorer rows) detection raises, naming both shapes and the row where each
+      was first seen and telling the user to set ``data.format`` explicitly.
+
+    Raises:
+    - ``ValueError`` on empty data, or when no row in the prefix matches any
+      format signature. A row that matches no signature is skipped and reported
+      like the converters do (#1217) rather than refusing the whole file.
+    """
+    if not data:
+        raise ValueError("Empty dataset - cannot detect format")
+
+    sampled = data[:MAX_DETECT_ROWS]
+    # First row index at which each richest format was seen, in sample order.
+    first_seen: dict[str, int] = {}
+    # The richest format of every sampled row, aligned with `sampled`.
+    row_formats: list[str] = []
+    ignored: list[int] = []
+    for index, row in enumerate(sampled):
+        # A JSONL line can be any JSON value, not just an object, so a bare
+        # scalar or array is skipped exactly as the converters drop it (#1217)
+        # instead of crashing on .keys().
+        fmt = _richest_format(set(row.keys())) if isinstance(row, dict) else None
+        if fmt is None:
+            # #1217: a row matching no signature is skipped by the converters
+            # rather than fatal, so detection ignores it here too and reports the
+            # index. Raising instead would make one bad row refuse the whole
+            # file, which is the "zero row stop" behaviour #1217 removed.
+            ignored.append(index)
+            row_formats.append("")
+            continue
+        row_formats.append(fmt)
+        first_seen.setdefault(fmt, index)
+
+    if not first_seen:
+        # Nothing in the prefix matched, so there is no format to resolve.
+        first_ignored = ignored[0]
+        raise ValueError(_cannot_detect_message(sampled[first_ignored], first_ignored))
+
+    if len(first_seen) == 1:
+        return next(iter(first_seen))
+
+    # The sampled rows disagree: this file is mixed.
+    ordered = sorted(first_seen.items(), key=lambda item: item[1])
+    if len(ordered) == 2:
+        (fmt_a, idx_a), (fmt_b, idx_b) = ordered
+        richer = _richer_family_member(fmt_a, fmt_b)
+        if richer is not None:
+            if richer == fmt_a:
+                poorer, poorer_idx, richer_idx = fmt_b, idx_b, idx_a
+            else:
+                poorer, poorer_idx, richer_idx = fmt_a, idx_a, idx_b
+            poorer_rows = [
+                row for row, fmt in zip(sampled, row_formats) if fmt == poorer
+            ]
+            if all(format_to_messages(row, richer) is not None for row in poorer_rows):
+                # The richer converter handles the poorer rows too, so upgrading
+                # keeps every row's fields instead of dropping the poorer ones.
+                return richer
+            missing = sorted(FORMAT_SIGNATURES[richer] - FORMAT_SIGNATURES[poorer])
+            missing_text = ", ".join(f"'{key}'" for key in missing)
+            raise ValueError(
+                f"Cannot detect format: this dataset mixes '{poorer}' (row "
+                f"{poorer_idx}) and '{richer}' (row {richer_idx}). They are the "
+                f"same family, but the richer '{richer}' converter rejects the "
+                f"'{poorer}' rows — they have no {missing_text} key — so no "
+                f"single format covers every row. Set data.format explicitly."
+            )
+
+    shapes = " and ".join(f"'{fmt}' (row {idx})" for fmt, idx in ordered)
+    raise ValueError(
+        f"Cannot detect format: this dataset mixes unrelated shapes {shapes}. "
+        f"Converting every row with one of them would silently drop the other's "
+        f"fields. Set data.format explicitly."
     )
 
 
