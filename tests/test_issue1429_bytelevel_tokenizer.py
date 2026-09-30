@@ -12,9 +12,11 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
 from soup_cli.cli import app
+from tests.conftest import strip_ansi
 
 _CORPUS = [
     "hello world number 1",
@@ -93,14 +95,40 @@ def test_no_unk_token_in_any_encoded_sequence(tmp_path, monkeypatch):
         assert "<unk>" not in tok.encode(text).tokens
 
 
-def test_vocab_size_below_alphabet_plus_specials_rejected(tmp_path, monkeypatch):
+def test_saved_model_declares_no_unk_token(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     _write_corpus(tmp_path)
     result = CliRunner().invoke(
         app,
-        ["tokenizer", "train", "-i", "corpus.jsonl", "-v", "257",
-         "-o", "tok3", "--special-token", "<|endoftext|>", "--special-token",
-         "<|endoftext2|>"],
+        ["tokenizer", "train", "-i", "corpus.jsonl", "-v", "400", "-o", "tok",
+         "--special-token", "<|endoftext|>"],
     )
-    # 256 bytes + 2 specials + merges do not fit in 257.
-    assert result.exit_code != 0
+    assert result.exit_code == 0, result.output
+    model = json.loads((tmp_path / "tok" / "tokenizer.json").read_text(encoding="utf-8"))["model"]
+    assert model["unk_token"] is None
+
+
+@pytest.mark.parametrize(
+    "vocab, extra_specials, ok",
+    [
+        (258, ("a", "b"), False),  # 256 + 2 specials = 258: zero merges
+        (259, ("a", "b"), True),   # one merge fits
+        (260, (), False),          # default four specials: 260 = zero merges
+        (261, (), True),
+    ],
+)
+def test_vocab_floor_is_alphabet_plus_specials_plus_one_merge(
+    tmp_path, monkeypatch, vocab, extra_specials, ok
+):
+    monkeypatch.chdir(tmp_path)
+    _write_corpus(tmp_path)
+    args = ["tokenizer", "train", "-i", "corpus.jsonl", "-v", str(vocab), "-o", "tok"]
+    for tok in extra_specials:
+        args += ["--special-token", tok]
+    result = CliRunner().invoke(app, args)
+    text = " ".join(strip_ansi(result.output).split())
+    if ok:
+        assert result.exit_code == 0, text
+    else:
+        assert result.exit_code == 2, text
+        assert f"--vocab-size must be >= {vocab + 1}" in text
