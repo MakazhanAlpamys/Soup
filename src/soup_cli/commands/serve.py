@@ -25,6 +25,8 @@ logger = logging.getLogger(__name__)
 
 console = Console()
 
+_SERVE_DEVICES = ("cuda", "mps", "cpu")
+
 
 def _validate_adapter_name(name: str) -> bool:
     """Validate adapter name: alphanumeric + hyphens only."""
@@ -99,7 +101,12 @@ def serve(
     device: Optional[str] = typer.Option(
         None,
         "--device",
-        help="Device: cuda, mps, cpu. Auto-detected if not set.",
+        help=(
+            "Device: cuda, mps or cpu. Auto-detected if not set. With the "
+            "transformers backend, cpu loads the model on the CPU in float32 "
+            "(unless --kv-cache-type bf16/f16 picks the dtype); cuda and mps "
+            "load with device_map=auto in float16."
+        ),
     ),
     max_tokens_default: int = typer.Option(
         512,
@@ -451,6 +458,17 @@ def serve(
                 "[red]--kv-cache-type q8_0[/] needs a quantized-cache backend. "
                 "Install one with [bold]pip install hqq[/] "
                 "(or optimum-quanto)."
+            )
+            raise typer.Exit(code=2)
+
+    if device:
+        device = device.strip().lower()
+        if device not in _SERVE_DEVICES:
+            from rich.markup import escape as _rich_escape
+
+            console.print(
+                f"[red]--device:[/] unknown device {_rich_escape(repr(device))}. "
+                f"Accepted values: {', '.join(_SERVE_DEVICES)}."
             )
             raise typer.Exit(code=2)
 
@@ -1343,8 +1361,9 @@ def _load_model(
     """Load model and tokenizer.
 
     ``kv_cache_dtype`` (v0.71.14 #140) selects the model compute dtype so the
-    transformers DynamicCache runs in it: ``"bfloat16"`` → bf16, else the
-    default float16. The bf16/f16 ``kv_cache_type`` values map here; q8_0 uses
+    transformers DynamicCache runs in it: ``"bfloat16"`` → bf16, ``"float16"``
+    → fp16, else the default (float16; float32 on ``device="cpu"``). The
+    bf16/f16 ``kv_cache_type`` values map here; q8_0 uses
     a quantized cache via generate kwargs and leaves the model dtype unchanged.
     """
     import torch
@@ -1353,8 +1372,11 @@ def _load_model(
     on_cpu = device == "cpu"
     if kv_cache_dtype == "bfloat16":
         load_dtype = torch.bfloat16
+    elif kv_cache_dtype == "float16":
+        load_dtype = torch.float16
     else:
-        # float16 is not a usable compute dtype on CPU; match _load_draft_model.
+        # float16 is not a usable default compute dtype on CPU; match
+        # _load_draft_model. An explicit --kv-cache-type f16 is still honoured.
         load_dtype = torch.float32 if on_cpu else torch.float16
     # ``device_map="auto"`` lets accelerate use any visible GPU, so an explicit
     # ``--device cpu`` has to pin the load to the CPU (#1478).
