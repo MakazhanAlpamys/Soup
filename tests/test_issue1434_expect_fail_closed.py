@@ -60,7 +60,7 @@ def test_bom_file_matches_no_bom_control(tmp_path, monkeypatch):
 def test_uncheckable_files_fail_nonzero(tmp_path, monkeypatch, name, expected_fragment):
     """Files with no checkable row exit non-zero and say why lines could not be checked."""
     result = _run(tmp_path, monkeypatch, name, FILES[name])
-    assert result.exit_code in (2, 3)
+    assert result.exit_code == 3
     clean = " ".join(strip_ansi(result.output).split())
     assert expected_fragment in clean
     assert "PASS" not in clean
@@ -70,7 +70,30 @@ def test_single_malformed_line_reported_with_line_number(tmp_path, monkeypatch):
     """One malformed line among valid rows is reported with its line number."""
     content = b'{"text": "hi"}\n{broken\n{"text": "ok"}\n'
     result = _run(tmp_path, monkeypatch, "mixed.jsonl", content)
-    assert result.exit_code in (2, 3)
+    assert result.exit_code == 3
     clean = " ".join(strip_ansi(result.output).split())
     assert "line 2" in clean
     assert "malformed JSON" in clean
+
+
+def test_refusal_is_exit_3_not_a_suite_failure(tmp_path, monkeypatch):
+    result = _run(tmp_path, monkeypatch, "bad.jsonl", b'{"text": "hi"}\n{broken\n')
+    assert result.exit_code == 3, result.output
+
+
+def test_refusal_message_counts_the_uncheckable_lines(tmp_path, monkeypatch):
+    result = _run(tmp_path, monkeypatch, "bad.jsonl", b"{not json\n{still: not}\n")
+    assert result.exit_code == 3
+    clean = " ".join(strip_ansi(result.output).split())
+    assert "2 line(s) could not be checked" in clean
+
+
+def test_refusal_lists_at_most_ten_lines_and_counts_the_rest(tmp_path, monkeypatch):
+    content = b'{"text": "ok"}\n' + b"".join(b"{bad%d\n" % i for i in range(12))
+    result = _run(tmp_path, monkeypatch, "twelve.jsonl", content)
+    assert result.exit_code == 3
+    clean = " ".join(strip_ansi(result.output).split())
+    assert "12 line(s) could not be checked" in clean
+    assert "line 11: malformed JSON" in clean
+    assert "line 12" not in clean
+    assert "(+2 more)" in clean
