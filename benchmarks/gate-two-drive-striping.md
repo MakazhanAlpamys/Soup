@@ -20,7 +20,13 @@ f798c46e), one process per arm.
 
 # Gate record — two-drive striping of the disk-tier cache (R4)
 
-**Status: rule committed before the run; results pending.**
+**Status: NO VERDICT (run 2026-09-30).** The sequence stopped at the fourth of
+its six arms. The box lost AC power 27 s into round 1's SINGLE arm, which made
+that arm void (§4). The box then stayed on battery for the
+whole 15-minute pre-arm window, so the void arm's re-run and round 2 never ran.
+The rule in §2 needs three rounds, and it got one complete round plus one
+STRIPED arm (§6). The arms that ran are published as measured in §5. The rule
+was committed before the run, and §2 and §4 are unchanged.
 
 *Amended 2026-09-30, still before any arm ran:* §4 gains a third void
 condition, a suspended box. The first build attempt timed out because the
@@ -216,8 +222,193 @@ own `.log` beside its JSON, and keeps every stamp and sample in
 
 ## 5. Results
 
-*Pending.*
+Run 2026-09-30 from worktree HEAD `a0ff99b5`. Between the header's `f798c46e`
+and that commit, `src/` and `benchmarks/harness/stream_probe.py` are
+byte-identical (`git diff f798c46e a0ff99b5 -- src
+benchmarks/harness/stream_probe.py` is empty). Only this record, the driver
+and its log changed. Every number below is quoted from the committed JSON in
+`results/probe-rtx5070/two-drive/`, at three decimals unless the column says
+otherwise.
+
+### 5.1 The build run (not a round)
+
+`gate_build_striped` ran from 14:56:36 to 15:01:14 local (UTC+5), 275.9 s wall.
+
+- Sharding: **231.812 s** (`meta.shard_seconds`). The log prints
+  `Re-sharding layer cache: cache index is missing or unreadable.`, which is
+  expected for a cache that did not exist. Model build took 5.974 s.
+- Placement: 80 `layer_roots`, exactly `i mod 2` (40 on root 0, 40 on root 1),
+  `stripe_roots ['D:\\soup-stripe']`, `direct_io True`, `pinned True`,
+  `read_ahead 3`, `AsyncDiskSource`, staging 2398 MB pinned.
+- Its one step, untimed (`--warmup 0`, the first step of a fresh process), read
+  21.538 s with 158 + 3 loads. It is not a round and is not judged.
+- The SINGLE cache got no build run. Its first arm's `shard_seconds` is 0.024 s,
+  a cache hit, as §1 recorded on 2026-09-28.
+
+During the build, PDH saw C: written at up to 774.3 MB/s and D: at up to
+390.1 MB/s (the sharder's writes). The first round started after the driver's
+60 s settle.
+
+### 5.2 The timed arms, in the order they ran
+
+| run | round | arm | ran (local) | `step_s_mean` (plain) | min-max | tok/s | implied H2D GB/s | `direct_io` / `pinned` | peak alloc GB | SM MHz start->end |
+|---|---|---|---|---|---|---|---|---|---|---|
+| `gate_r0_single` | 0 | SINGLE | 15:02:32-15:05:16 | **17.414** | 17.277-17.527 | 29.402 | 4.042 | True / True | 4.378 | 180->1432 |
+| `gate_r0_striped` | 0 | STRIPED | 15:05:17-15:07:00 | **10.320** | 9.966-10.563 | 49.613 | 6.820 | True / True | 4.378 | 180->1470 |
+| `gate_r1_striped` | 1 | STRIPED | 15:07:00-15:08:45 | **10.340** | 10.211-10.407 | 49.516 | 6.806 | True / True | 4.378 | 180->1560 |
+| `gate_r1_single_void` | 1 | SINGLE, **void** | 15:08:46-15:11:34 | 16.979 (not used) | 16.829-17.198 | 30.155 | 4.145 | True / True | 4.378 | 1072->1282 |
+| re-run of `gate_r1_single` | 1 | SINGLE | **not run**: pre-arm wait 15:11:35-15:26:58, on battery at every poll | | | | | | | |
+| `gate_r2_single` | 2 | SINGLE | **not run** | | | | | | | |
+| `gate_r2_striped` | 2 | STRIPED | **not run** | | | | | | | |
+
+Every arm that ran moved the same 70,378,258,732 bytes per step (157 layer
+loads plus 2 large loads). Peak reserved was 4.798 GB in every arm.
+
+The per-round form the rule reads:
+
+| round | SINGLE `step_s_mean` | STRIPED `step_s_mean` | speed-up (SINGLE / STRIPED) |
+|---|---|---|---|
+| 0 | 17.414 | 10.320 | 1.687x |
+| 1 | void, re-run not run | 10.340 | none |
+| 2 | not run | not run | none |
+
+The rule's "median" is the median of three STRIPED means, and it does not
+exist here, because only two STRIPED arms ran (10.320 and 10.340 s). The only
+in-round speed-up is round 0's.
+
+### 5.3 The instrumented point (`step_events`): recorded, not judged
+
+`stall_share` is read here, as §2 fixes. `copy_s/step` is the harness's
+copy-stream bracket time. It is recorded and not interpreted in this record.
+
+| run | `step_s_mean` | tok/s | implied H2D GB/s | `stall_share` | stall s/step | copy s/step | peak alloc GB | SM MHz start->end |
+|---|---|---|---|---|---|---|---|---|
+| `gate_r0_single` | 17.226 | 29.722 | 4.085 | 0.000406 | 0.0070 | 11.722 | 4.378 | 1432->1267 |
+| `gate_r0_striped` | 10.023 | 51.084 | 7.022 | 0.000054 | 0.0005 | 3.810 | 4.378 | 1470->1545 |
+| `gate_r1_striped` | 10.146 | 50.461 | 6.936 | 0.000050 | 0.0005 | 3.855 | 4.378 | 1560->1717 |
+| `gate_r1_single_void` | 19.489 (void) | 26.272 | 3.611 | 0.000026 | 0.0005 | 13.466 | 4.378 | 180->1267 |
+
+### 5.4 Losses
+
+The three timed steps of each point. The plain point's steps are process steps
+2-4, after one warm-up update. The instrumented point's are steps 6-8.
+
+| run | plain | instrumented |
+|---|---|---|
+| `gate_r0_single` | 11.935977, 11.829816, 11.611748 | 10.765285, 10.185145, 9.532068 |
+| `gate_r0_striped` | 11.950090, 11.839045, 11.606027 | 10.755948, 10.174613, 9.537658 |
+| `gate_r1_striped` | 11.943791, 11.809216, 11.616005 | 10.768602, 10.172529, 9.543611 |
+| `gate_r1_single_void` | 11.939507, 11.833977, 11.600917 | 10.766873, 10.181394, 9.545099 |
+
+As §2 expected, no two runs are bit-identical. The one valid within-round
+difference, round 0's SINGLE minus STRIPED on the plain point, is -0.014113,
+-0.009229 and +0.005721. The same-arm difference across rounds, STRIPED r0
+minus r1, is +0.006299, +0.029829 and -0.009978. So the cross-arm difference
+sits inside the same-arm one. The void arm's losses fall in the same spread;
+they are listed and not used. On the first timed step, the step gate-974 §8
+compared, the two differences are 0.014113 and 0.006299. That is 7-16x the
+0.000894 gate-974 recorded between two processes of one arm. It is reported,
+not investigated here. The data half of "same
+bytes" is settled directly in §5.5.
+
+### 5.5 Same bytes: the two caches compared tensor by tensor
+
+After the sequence ended, and with no arm running,
+`harness/compare_shard_caches.py` matched every safetensors file of the
+single-root cache with its striped counterpart (decoder layer i at the root
+`layer_roots[i]` names). It compared each tensor's name, dtype, shape and a
+SHA-256 of its data bytes, reading plain buffered 64 MiB chunks with no torch
+and no mapping. Result (`gate_cache_compare.json`): **all equal**. That is 83
+files (80 layers, `extras`, 2 `large_*`), 43 of them on C: and 40 on D:, with
+2,405 tensors and 36.388 GB compared in 132 s. No safetensors file exists in
+the striped root 0 that the single-root cache lacks. `index.json` is not
+compared, because it differs by the stripe fields by design.
+
+### 5.6 Box state and the during-arm samples
+
+From `gate_box_state.log` (a stamp before and after every arm) and
+`gate_driver.json` (every 2-s power sample and every 1-s PDH sample):
+
+- **AC.** Every 2-s sample of the three valid timed arms and of the build run
+  read AC; battery rose from 89% to 94%. The box lost AC at **15:09:13**
+  (System log: Kernel-Power event 105, "Power source change"), 27-28 s into
+  `gate_r1_single`. What removed it is not recorded. 69 of that arm's 83 power samples read
+  battery, and its after stamp reads AC 0 at 91%. No reconnect event followed.
+  At 15:27:51 the box was still discharging, at 84%.
+- **No suspend.** The largest gap between consecutive power samples was
+  2.016-2.029 s in every arm.
+- **Commit headroom** was at least 21.299 GiB at every sample of every timed
+  arm (14.503 GiB during the build), and 32.44-34.99 GiB at the before stamps.
+  The bar is 8 GiB.
+- **GPU.** 0 MiB in use and no compute apps at every stamp.
+- **Other processes.** Four `python.exe` at every timed arm's stamps, and six
+  at the build's before stamp; the driver is one of them. The command lines
+  listed at 14:56 (before the build) and 15:27 (after the stop) were a `gh`
+  polling loop, two editor language servers and a short session-audit script
+  (present at 14:56, gone by 15:27). No test suite or large copy
+  is visible: the count held at four, and neither drive saw more than
+  14.61 MB/s of writes during a timed arm.
+- **ASPM** AC index 2 at every stamp (read only; nothing was changed).
+- `soup_cli.__file__` resolved under `Soup-stripe\src` at every stamp.
+- **PDH.** These are means over each arm's whole wall time (process start,
+  model build and both step blocks), not over the step.
+
+  | run | C: read GB/s mean / max | D: read GB/s mean / max | C: write MB/s mean / max | D: write MB/s | pages/s mean |
+  |---|---|---|---|---|---|
+  | `gate_r0_single` | 3.400 / 4.466 | 0.000 / 0.000 | 0.52 / 8.97 | 0.00 | 795 |
+  | `gate_r0_striped` | 2.704 / 4.767 | 2.687 / 4.777 | 0.59 / 6.99 | 0.00 | 422 |
+  | `gate_r1_striped` | 2.684 / 4.719 | 2.668 / 4.655 | 0.82 / 14.61 | 0.00 | 389 |
+  | `gate_r1_single_void` | 3.340 / 4.721 | 0.000 / 0.000 | 0.37 / 13.89 | 0.00 | 262 |
+
+  The harness only reads, so the small writes on C: are someone else's I/O. D:
+  saw no writes during any timed arm.
+
+### 5.7 Anomalies, as measured
+
+1. **The driver's `not_run` list is incomplete.** In `gate_driver.json` the
+   invocation's `not_run` names only `gate_r2_single` and `gate_r2_striped`.
+   The re-run of `gate_r1_single` did not run either, but the list counts an
+   arm as run when any attempt has an exit code, and the void attempt has one.
+   The `outcome` string names the correct stop position ("pre-arm checks not
+   met within 15 min before gate_r1_single"). The driver was not edited after
+   the run.
+2. **The void arm's clocks.** It sampled 1072 MHz at the start of its plain
+   block, where every other arm shows the idle 180 MHz. Its instrumented block,
+   run entirely on battery, took 19.489 s against round 0's 17.226 s. It is void
+   and used for nothing.
+3. **Loss differences.** They are larger than the one cross-process difference
+   on record (§5.4).
 
 ## 6. Verdict
 
-*Pending.*
+**NO VERDICT.** The §2 rule applied row by row to the arms that exist:
+
+| row | inputs | result |
+|---|---|---|
+| any SINGLE arm outside 15.0-21.5 s | round 0: 17.414 s. Round 1: void, re-run not run. Round 2: not run | does not fire on the one valid SINGLE arm; rounds 1 and 2 have no SINGLE input |
+| either arm with `direct_io` or `pinned` false | True / True on all three valid arms (and on the void arm and the build run) | does not fire |
+| STRIPED <= 12.0 s in every round | 10.320 (round 0), 10.340 (round 1), round 2 not run | **no input for round 2**: "every round" cannot be established |
+| STRIPED <= 14.0 s in every round | the same | **no input for round 2** |
+| anything else: DO NOT SHIP | none | not applied (below) |
+
+Why this is "no verdict" and not "anything else: DO NOT SHIP". §4 ends the
+sequence when the pre-arm checks do not hold within 15 minutes, and lists the
+remaining arms as not run. That happened before the void arm's re-run, the
+fourth of six positions. The rule's rows take three rounds as input, and two
+SINGLE arms and one STRIPED arm of those three rounds do not exist. The last
+row is read here as covering a complete set of rounds that meets neither SHIP
+row, not a sequence the protocol stopped. The one stop §4 names an outcome for,
+a second void in the same position, ends with no verdict. A void whose re-run
+could never start is read the same way. The reading is stated so that it can
+be overruled. The measured numbers do not depend on it.
+
+What the arms that ran show, and no more: two STRIPED steps at 10.320 s and
+10.340 s, both under the 12.0 s line, and one valid SINGLE step at 17.414 s
+in the same round (1.687x). The caches hold the same bytes (§5.5). These are
+measurements, not a verdict, because the rule asks for every round and a third
+STRIPED arm never ran.
+
+Not decided here: whether a new, complete sequence runs. The driver has no
+resume, so a verdict needs all six arms again, under the same §1 commands and
+the same §2 and §4. It would be published beside this attempt, which stays as
+measured.
