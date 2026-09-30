@@ -4986,23 +4986,25 @@ that does not, given that #331 and this record are both public.
 ## Reproducing
 
 > **Updated 2026-09-29:** when this record was written, every script below lived
-> only in the session scratchpad, not in the repo. Five have since been published
+> only in the session scratchpad, not in the repo. Six have since been published
 > in [`harness/`](harness/) and are linked in the table; the
 > [`## Harnesses`](README.md#harnesses) index in `benchmarks/README.md` is the
 > current list. The unlinked scripts are still unpublished, and their
 > reconstruction is tracked in [#379](https://github.com/MakazhanAlpamys/Soup/issues/379).
-> `mechanism_cost.py` and `fixture_window_cpu.py` are reconstructions, not the
-> scripts as run; their own docstrings say so.
+> `mechanism_cost.py`, `fixture_window_cpu.py` and `graddiff.py` are
+> reconstructions, not the scripts as run; their own docstrings say so.
+
+Each script is small and self-contained:
 
 | script | what it does |
 |---|---|
 | [`bitexact.py`](harness/bitexact.py) | shard -> stream -> compare logits/gradients/loss curve against a resident reference of matching numerics |
-| `graddiff.py` | gradients after one backward + each model's own curve twice |
+| [`graddiff.py`](harness/graddiff.py) (reconstruction) | gradients after one backward + each model's own curve twice |
 | `determinism.py` | forward, backward and curve reproducibility of one model |
 | `repeat_backward.py` | N streamed backwards against one deterministic resident reference; `--pin`, `--buffers`, `--order` |
 | `layercount.py` / `depth_vs_bytes.py` | synthetic Llamas sweeping depth, per-layer bytes and quantisation |
 | `ckpt_hypothesis.py` | flips `StreamedDecoderLayer.use_checkpoint` at runtime, both arms |
-| `mechanism.py` / [`mechanism_cost.py`](harness/mechanism_cost.py) (reconstruction) | reconstruction of `sync` vs `clone` vs control, and what each costs |
+| `mechanism.py` / [`mechanism_cost.py`](harness/mechanism_cost.py) (reconstruction) | `sync` vs `clone` vs control, and what each costs |
 | `pincost.py` | pinned vs pageable throughput, correctness asserted in the same process |
 | `prep_convergence.py` | the emotion-classification subsets and held-out set |
 | `runbench.sh` / `variance.sh` / `runbench8.sh` | one `soup train` with VRAM and SM-clock sampling; n repeats; 8-GPU variant under torchrun |
