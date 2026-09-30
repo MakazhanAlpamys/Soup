@@ -67,10 +67,10 @@ def _model(model_type: str, text_type: str | None = None) -> types.SimpleNamespa
 
 def _standin_mistral3_config(num_layers: int = 2) -> transformers.Mistral3Config:
     """Create an offline in-memory Mistral3Config with small dimensions."""
-    from transformers import Mistral3Config, MistralConfig, PixtralVisionConfig
+    from transformers import Ministral3Config, Mistral3Config, PixtralVisionConfig
 
     return Mistral3Config(
-        text_config=MistralConfig(
+        text_config=Ministral3Config(
             vocab_size=64,
             hidden_size=16,
             intermediate_size=32,
@@ -124,9 +124,9 @@ class TestMistral3TableResolution:
         assert isinstance(resolved, str)
 
     def test_wrapper_wins_over_inner_text_config(self) -> None:
-        """When outer is mistral3 and inner is mistral, outer wrapper entry wins."""
+        """When outer is mistral3 and inner is ministral3, outer wrapper entry wins."""
         resolved = resolve_lora_target_modules(
-            _model("mistral3", text_type="mistral"), "auto"
+            _model("mistral3", text_type="ministral3"), "auto"
         )
         assert resolved == _EXPECTED_REGEX
 
@@ -229,8 +229,15 @@ class TestMistral3TargetDiscrimination:
         assert matched_head == []
 
 
-class TestMutationKilling:
-    """Can-it-fail tests: deliberate mutations to the regex or mapping must fail."""
+class TestCounterfactualRegexBehaviors:
+    """Document why counterfactual or mutated regex patterns fail against actual module keys.
+
+    These tests document why alternative pattern choices (dropping `.*`, plain suffix
+    matching, matching all attention projections, or omitting projections) fail against
+    the concrete module keys. (The tests that enforce table integrity and fail if peft_wiring
+    regresses live in TestMistral3TableResolution, TestMistral3TargetDiscrimination,
+    TestRealPeftAttachOnMetaDevice, and TestPreflightAttach).
+    """
 
     def test_mutation_dropping_leading_wildcard_matches_zero_keys(
         self, mistral3_model_and_keys
@@ -380,8 +387,8 @@ class TestPreflightAttach:
         assert check.stage == "build"
         assert "Mistral3Config" in check.detail
 
-    def test_preflight_control_without_table_entry_fails_at_attach(self) -> None:
-        """Regression control: without mistral3 in MOE_TEXT_LORA_TARGETS, peft refuses attach."""
+    def test_preflight_control_without_table_entry_fails_at_resolve(self) -> None:
+        """Without mistral3 in MOE_TEXT_LORA_TARGETS, auto resolution fails closed."""
         recipe = get_recipe("mistral-medium-3-5-sft")
         cfg = load_config_from_string(recipe.yaml_str)
         standin_config = _standin_mistral3_config(num_layers=2)
@@ -396,6 +403,6 @@ class TestPreflightAttach:
             )
 
         assert check.verdict == Verdict.CANNOT_ATTACH
-        assert check.stage == "attach"
-        assert "target_modules" in check.detail or "target_parameters" in check.detail
+        assert check.stage == "resolve"
+        assert "target_modules" in check.detail
 

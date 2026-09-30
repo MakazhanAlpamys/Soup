@@ -234,11 +234,15 @@ an explicit target list always wins unchanged:
    and `out_proj` in the fused linear-attention layers, because PEFT does not map
    `qwen3_5_text`. The MoE architectures Soup ships recipes for (`qwen3_moe`,
    `deepseek_v3`, `deepseek_v4`, `glm4_moe`, `glm_moe_dsa`, `granitemoehybrid`,
-   `kimi_k2`/`kimi_k25`, `gpt_oss`, `minimax_m2`, `minimax_m3_vl`) target their
-   attention projections; PEFT maps none of them (#1070). MiniMax-M3 uses a regex
+   `kimi_k2`/`kimi_k25`, `gpt_oss`, `minimax_m2`, `minimax_m3_vl`, `mistral3`) target
+   their attention projections; PEFT maps none of them (#1070). MiniMax-M3 uses a regex
    scoped to its language tower, so a text fine-tune does not adapt the vision
-   encoder. `glm4_moe` is GLM-4.6 and is *not* `glm_moe_dsa` (GLM-5 / GLM-5.1):
-   the two have different attention shapes.
+   encoder. `mistral3` (the vision-language wrapper behind `mistral-medium-3-5-sft`,
+   which therefore sets `modality: vision` so SFT loads the image-text class) uses the
+   same kind of language-tower regex: `q_proj`, `k_proj`, `v_proj` and `o_proj` under
+   `language_model...self_attn` only, so the Pixtral vision tower, the multimodal
+   projector and the MLP projections stay unadapted (#1395). `glm4_moe` is GLM-4.6 and
+   is *not* `glm_moe_dsa` (GLM-5 / GLM-5.1): the two have different attention shapes.
 3. **Anything else fails closed.** `auto` on an architecture neither PEFT nor Soup
    maps is refused at setup, naming the `model_type`, rather than reaching PEFT's
    `No target_modules passed`. This is not new behaviour — PEFT refused those too —
