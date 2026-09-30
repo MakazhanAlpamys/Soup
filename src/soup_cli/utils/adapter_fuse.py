@@ -55,6 +55,12 @@ def merge_adapter_to_dense(
     model (at the staging path) are left on disk and named in the raised
     error, so a failure here can never destroy the last complete copy —
     worst case it leaves two, at paths the caller can recover by hand.
+    If renaming the previous model aside fails in the first place, ``out_dir``
+    is left unchanged, the staging dir is kept, and the raised error names it.
+
+    Guarantee: whichever way the swap ends, ``out_dir`` is never left holding
+    a partial model, and a complete copy of the previous model and/or of the
+    newly merged model always survives on disk at a path the caller is told.
 
     ``out_dir`` is re-validated immediately before the swap: the training
     subprocess that produced ``adapter_dir`` may have run for hours, so the
@@ -105,7 +111,7 @@ def merge_adapter_to_dense(
             tokenizer.save_pretrained(staging)
         finally:
             # Drop every reference so Windows releases the out_dir mmap before
-            # we remove it; otherwise rmtree(out_dir) also hits error 1224.
+            # we rename it aside; otherwise the rename also hits error 1224.
             del merged, base, tokenizer
             gc.collect()
             release_cuda()
@@ -125,7 +131,7 @@ def merge_adapter_to_dense(
             )
             try:
                 os.replace(out_dir, backup)
-            except BaseException as backup_exc:
+            except OSError as backup_exc:
                 # Renaming the previous model aside failed (the same AV /
                 # indexer lock the swap below guards against), so out_dir was
                 # never touched and still holds the old model. Staging is now
@@ -146,7 +152,7 @@ def merge_adapter_to_dense(
             if backup is not None:
                 try:
                     os.replace(backup, out_dir)
-                except BaseException as restore_exc:
+                except OSError as restore_exc:
                     # The restore ALSO failed: out_dir now holds neither
                     # copy. Do not guess which of staging/backup to keep —
                     # keep both on disk and name them in the error, so the

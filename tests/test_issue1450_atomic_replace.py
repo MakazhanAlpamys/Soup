@@ -477,11 +477,9 @@ class TestMergeAdapterToDenseSurvivesAFailedSwap:
     @pytest.mark.skipif(sys.platform != "win32", reason="Windows-only file-lock semantics")
     def test_out_dir_survives_an_open_handle_on_model_safetensors(self, tmp_path, monkeypatch):
         """Windows-only: another process (a viewer, a server, an antivirus
-        scan) holds ``out_dir/model.safetensors`` open. The rename-aside or
-        the final swap can then raise ``PermissionError`` — either way, the
-        guarantee is the same as every other failure mode here: out_dir ends
-        up with a complete model (old or new), never neither, and nothing is
-        orphaned on disk."""
+        scan) holds ``out_dir/model.safetensors`` open, so the rename-aside
+        fails. The old model must be untouched and the merged model kept at
+        the staging path the error names."""
         from soup_cli.utils import adapter_fuse
 
         monkeypatch.chdir(tmp_path)
@@ -490,26 +488,22 @@ class TestMergeAdapterToDenseSurvivesAFailedSwap:
 
         handle = open(out / "model.safetensors", "rb")
         try:
-            try:
+            # Windows refuses to rename a directory that holds an open file, so
+            # the rename-aside fails: a RuntimeError that names the staged model.
+            with pytest.raises(RuntimeError, match="move the previous model") as excinfo:
                 adapter_fuse.merge_adapter_to_dense(
                     base_model="base", adapter_dir=str(adapter), out_dir="out"
                 )
-            except OSError:
-                pass
         finally:
             handle.close()
 
-        old_intact = (
-            (out / "config.json").exists()
-            and (out / "model.safetensors").exists()
-            and (out / "tokenizer.json").exists()
-            and (out / "model.safetensors").read_bytes() == b"OLD"
-        )
-        new_intact = (out / "model.safetensors").exists() and (
-            (out / "model.safetensors").read_bytes() == b"NEW"
-        )
-        assert old_intact or new_intact, (
-            "an open handle on model.safetensors left out_dir with neither a "
-            "complete old model nor a complete new one"
-        )
+        # The old model is complete and untouched ...
+        for name in ("config.json", "model.safetensors", "tokenizer.json"):
+            assert (out / name).read_bytes() == b"OLD"
+        # ... and the merged model survives at the path the error names.
+        staging_dirs = list(tmp_path.glob(".fuse_*"))
+        assert len(staging_dirs) == 1, staging_dirs
+        assert (staging_dirs[0] / "model.safetensors").read_bytes() == b"NEW"
+        assert staging_dirs[0].name in str(excinfo.value)
+        assert not list(tmp_path.glob(".out.old-*"))
 

@@ -243,8 +243,9 @@ def synth(
     # too: a failure here (disk full, a lock held on ``output``) must not
     # leave the candidate orphaned or crash with a raw traceback.
     try:
+        enforce_under_cwd_and_no_symlink(output, "output path")
         os.replace(candidate_path, output)
-    except OSError as exc:
+    except (OSError, ValueError) as exc:
         _cleanup(candidate_path)
         _fail(f"could not replace '{output}': {exc}")
 
