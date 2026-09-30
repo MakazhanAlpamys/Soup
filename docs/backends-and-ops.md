@@ -239,7 +239,10 @@ RunPod is not yet live and points to active cloud backends (`--cloud modal` and 
 
 Lambda uses an instance rather than a serverless function. The generated local controller sends a
 secret-free cloud-init script as API `user_data`, waits for it over SSH, copies the configured
-output back, and requests instance termination in a `finally` block. Keep the controller running
+output back, and requests instance termination in a `finally` block. The controller polls training
+status over short SSH connections with keepalive probes rather than holding a single persistent
+session open. It tolerates transient network drops and disconnects for up to 15 minutes with exponential
+backoff before terminating the instance to prevent runaway billing. Keep the controller running
 until it reports that termination succeeded; shutting down the guest does not terminate billing.
 Pressing Ctrl+C during `--cloud-submit` interrupts the controller, which still runs that `finally`
 block, and `soup` waits for it to terminate the instance and exit rather than killing it; the only
