@@ -78,6 +78,27 @@ def _get_trainer_callback_base():
         return object
 
 
+def _gate_failure_summary(result) -> str:
+    """Name what failed the gate: regressions, and tasks that could not be scored.
+
+    A task with ``error`` set never ran to a score (a judge that was down, a
+    missing prompts file); it fails the gate closed, but it is not a regression
+    and the log must not call it one (#1447).
+    """
+    failed = [r for r in result.task_results if not r.passed]
+    unscored = [r for r in failed if r.error]
+    regressed = len(failed) - len(unscored)
+    parts = []
+    if regressed or not unscored:
+        parts.append(f"{regressed} task(s) regressed")
+    if unscored:
+        parts.append(
+            f"{len(unscored)} task(s) could not be scored: "
+            + "; ".join(f"{r.name}: {r.error}" for r in unscored)
+        )
+    return ", ".join(parts)
+
+
 class _SoupTrainerCallback_body:  # noqa: N801
     """Bridges HF Trainer events to Soup's Rich live display and experiment tracker."""
 
@@ -533,13 +554,13 @@ class _SoupTrainerCallback_body:  # noqa: N801
             if on_reg == "stop":
                 control.should_training_stop = True
                 logger.warning(
-                    "eval gate FAILED (%d task(s) regressed); stopping training",
-                    sum(1 for r in result.task_results if not r.passed),
+                    "eval gate FAILED (%s); stopping training",
+                    _gate_failure_summary(result),
                 )
             elif on_reg == "warn":
                 logger.warning(
-                    "eval gate FAILED (%d task(s) regressed); continuing per policy",
-                    sum(1 for r in result.task_results if not r.passed),
+                    "eval gate FAILED (%s); continuing per policy",
+                    _gate_failure_summary(result),
                 )
             # on_reg == "continue": silent per user policy
 

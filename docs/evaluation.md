@@ -258,7 +258,7 @@ tasks:
 
 `judge_model` accepts `ollama://<model>`, `http://localhost:<port>/<model>` or `https://<host>/<model>`. An `https://` judge URL uses `OPENAI_API_KEY` only when its host is `api.openai.com`; other hosts are called as an OpenAI-compatible server without that key.
 
-Baselines may be a registry reference (`registry://<name-or-id>`), a file path, or omitted for the first run. A registry baseline uses the newest eval row for each benchmark — re-measuring a benchmark replaces its baseline score — and warns, per benchmark, when that row's scorer stamp is missing or from a different scorer revision. Any structured exception (`ValueError`, `FileNotFoundError`, `OSError`) during the gate is treated as a regression under `on_regression: stop`.
+Baselines may be a registry reference (`registry://<name-or-id>`), a file path, or omitted for the first run. A registry baseline uses the newest eval row for each benchmark — re-measuring a benchmark replaces its baseline score — and warns, per benchmark, when that row's scorer stamp is missing or from a different scorer revision. A task whose evaluation raises (`ValueError`, `FileNotFoundError`, `OSError`, or a judge that stays unreachable) gets no score and fails the gate closed under `on_regression: stop`; the log line lists it as a task that could not be scored, with the error, rather than as a regression (#1447).
 
 
 ## Sequential A/B Harness (`soup ab`)
@@ -399,6 +399,10 @@ soup ship --base <m> --adapter ./out --task-eval tasks.jsonl \
 # base vs tuned per prompt (swap-debiased); base = 0.5 coin-flip, won <=> winrate > 0.5
 soup ship --base <m> --adapter ./out --task-eval tasks.jsonl \
   --task-mode pairwise --judge-model ollama://llama3.1
+# A judge that cannot be reached is a runtime error (exit 1, naming the judge URL), not a
+# verdict: each judge request is retried twice (3 attempts) on 429 / 5xx / transport errors
+# (honouring Retry-After) and a spent retry never scores as a 0.5 tie (#1447). A judge
+# that answers "tie" still scores 0.5.
 
 # Leg-2 via lm-eval benchmarks, base scores supplied by --baseline
 soup ship --base <m> --tuned ./out --task-eval tasks.jsonl \
@@ -689,6 +693,8 @@ soup eval custom --tasks eval_tasks.jsonl --model ./output
 # LLM-as-a-judge (score model outputs using GPT-4o, Ollama, etc.)
 soup eval judge --target responses.jsonl --model gpt-4o-mini --provider openai
 soup eval judge --target responses.jsonl --model llama3.1 --provider ollama
+# A row whose judge call keeps failing (429 after the retries, a timeout, a reply with no
+# choices) is skipped and counted; the other rows are still scored, shown and saved (#1447).
 
 # Auto-eval after training (configure in soup.yaml)
 soup eval auto --config soup.yaml

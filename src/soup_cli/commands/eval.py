@@ -501,6 +501,7 @@ def judge(
     """Evaluate model outputs using LLM-as-a-judge."""
     from soup_cli.eval.judge import (
         JudgeEvaluator,
+        JudgeUnavailableError,
         load_rubric,
         validate_judge_api_base,
     )
@@ -593,10 +594,10 @@ def judge(
                     category=item.get("category", "default"),
                 )
                 judge_scores.append(score)
-            except (ValueError, OSError, KeyError) as exc:
+            except (ValueError, OSError, KeyError, JudgeUnavailableError) as exc:
                 skipped_count += 1
                 console.print(
-                    f"[yellow]Warning: judge failed for prompt: {exc}[/]"
+                    f"[yellow]Warning: judge failed for prompt: {for_terminal(exc)}[/]"
                 )
             progress.advance(task_bar)
 
