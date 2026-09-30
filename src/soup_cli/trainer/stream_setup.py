@@ -24,9 +24,12 @@ import math
 import os
 import shutil
 from dataclasses import dataclass
+from typing import Any, Sequence
 
 from rich.console import Console
 from rich.panel import Panel
+
+from soup_cli.utils.async_disk_source import DEFAULT_STREAM_READ_AHEAD, MAX_STREAM_READ_AHEAD
 
 console = Console()
 
@@ -300,6 +303,44 @@ def _disk_volume(path: str) -> tuple[int, int]:
     return int(os.stat(anchor).st_dev), int(shutil.disk_usage(anchor).free)
 
 
+def _effective_read_ahead(tcfg: Any, n_roots: int, console: Any) -> int:
+    """The async reader's depth with ``n_roots`` drives (R4).
+
+    Every drive needs a read in flight beside the slot the consumer holds, so the DEFAULT depth
+    becomes ``n_roots + 1`` — one more layer of host staging per extra drive. "Default" is read
+    the way the schema's own read-ahead check reads it ("a default is not a decision",
+    ``config/schema.py``): the configured value equals DEFAULT_STREAM_READ_AHEAD. That also
+    holds for a config round-tripped through ``model_dump`` (``train --replay``, ``soup
+    sweep``), where every field looks explicitly set. Any other value is the operator's call:
+    kept, with a warning naming the drives it leaves idle — a speed setting, not a correctness
+    one, so never a refusal.
+    """
+    configured = int(tcfg.stream_read_ahead)
+    if n_roots <= 1:
+        return configured
+    wanted = min(n_roots + 1, MAX_STREAM_READ_AHEAD)
+    if configured == DEFAULT_STREAM_READ_AHEAD:
+        if wanted > configured:
+            console.print(
+                f"[dim]training.stream_read_ahead {configured} -> {wanted}: the layer cache "
+                f"spans {n_roots} drives, and each needs a read in flight.[/]"
+            )
+        return max(configured, wanted)
+    if configured < wanted:
+        console.print(
+            f"[yellow]training.stream_read_ahead={configured} with {n_roots} stripe drives "
+            f"keeps {wanted - configured} of them idle between layers; {wanted} lets every "
+            f"drive read at once (one more layer of host staging each).[/]"
+        )
+    return configured
+
+
+def _stripe_write_shares(total: int, n_roots: int) -> list[int]:
+    """The shard estimate split evenly across roots, summing to it (layers alternate)."""
+    base, extra = divmod(int(total), n_roots)
+    return [base + (1 if position < extra else 0) for position in range(n_roots)]
+
+
 def _render_stream_disk_preflight(
     *,
     source_bytes: int,
@@ -309,11 +350,19 @@ def _render_stream_disk_preflight(
     shard_bytes: int,
     shard_write_bytes: int,
     shard_path: str,
+    stripe_writes: Sequence[tuple[str, int]] = (),
 ) -> None:
-    """Print and enforce the complete on-disk cost before either cache writes."""
+    """Print and enforce the complete on-disk cost before either cache writes.
+
+    ``stripe_writes`` are the (folder, bytes) writes bound for each extra stripe drive (R4);
+    each is charged to its own volume and refused by name when that drive cannot hold it.
+    """
     writes = (
         ("materialized weight copy", materialized_path, materialize_bytes),
         ("layer-shard cache", shard_path, shard_write_bytes),
+    ) + tuple(
+        (f"layer-shard stripe {position}", path, required)
+        for position, (path, required) in enumerate(stripe_writes, start=1)
     )
     required_by_device: dict[int, int] = {}
     free_by_device: dict[int, int] = {}
@@ -327,7 +376,9 @@ def _render_stream_disk_preflight(
         labels_by_device.setdefault(device, []).append(label)
 
     projected_total = source_bytes + materialized_copy_bytes + shard_bytes
-    additional = materialize_bytes + shard_write_bytes
+    additional = (
+        materialize_bytes + shard_write_bytes + sum(required for _path, required in stripe_writes)
+    )
     lines = [
         f"HF/local source: {source_bytes / 1e9:.2f} GB",
         (
@@ -524,6 +575,7 @@ class StreamingSetupMixin:
             resolve_shard_dir,
             shard_checkpoint,
             source_weight_bytes,
+            stripe_dirs,
         )
         from soup_cli.utils.layer_stream import (
             RAM_TIER_HEADROOM,
@@ -553,6 +605,8 @@ class StreamingSetupMixin:
         from soup_cli.utils.moe import resolve_moe_lora_targets
         from soup_cli.utils.qwen4_ple import external_tensor_bytes
         from soup_cli.utils.spectrum_scan import resolve_model_weights
+        from soup_cli.utils.stripe_roots import resolve_stripe_roots
+        from soup_cli.utils.terminal import for_terminal
 
         console.print(f"[dim]Loading tokenizer: {cfg.base}[/]")
         self.tokenizer = AutoTokenizer.from_pretrained(
@@ -589,6 +643,22 @@ class StreamingSetupMixin:
         double_quant = tcfg.double_quant_on
 
         shard_dir = resolve_shard_dir(cfg.base)
+        # R4: extra NVMe roots, validated once here (the ~9 s disk probe runs per volume only
+        # when the variable is set). A bad entry refuses the run by name.
+        stripe_roots = resolve_stripe_roots(
+            os.path.dirname(shard_dir),
+            disk_kind=lambda path: resolve_disk_kind(
+                path, tcfg.stream_disk_kind, notify=console.print
+            ).kind,
+        )
+        if stripe_roots:
+            console.print(
+                "[dim]Layer cache striped over "
+                + ", ".join(
+                    for_terminal(root) for root in (os.path.dirname(shard_dir), *stripe_roots)
+                )
+                + "[/]"
+            )
         quant_device_kind = str(self.device).split(":", 1)[0] if quant == QUANT_NF4 else ""
 
         def _disk_preflight(weights_plan) -> None:
@@ -621,15 +691,20 @@ class StreamingSetupMixin:
                     double_quant,
                     quant_device_kind,
                     "qwen4_ple" if arch == "qwen4_exp" else "",
+                    stripe_roots=stripe_roots,
                 )
+            write_total = 0 if cached is not None else shard_estimate
+            shares = _stripe_write_shares(write_total, 1 + len(stripe_roots))
+            dirs = stripe_dirs(shard_dir, stripe_roots)
             _render_stream_disk_preflight(
                 source_bytes=weights_plan.source_bytes,
                 materialized_copy_bytes=weights_plan.materialized_copy_bytes,
                 materialize_bytes=weights_plan.materialize_bytes,
                 materialized_path=weights_plan.weights_dir,
                 shard_bytes=shard_estimate,
-                shard_write_bytes=0 if cached is not None else shard_estimate,
+                shard_write_bytes=shares[0],
                 shard_path=shard_dir,
+                stripe_writes=tuple(zip(dirs[1:], shares[1:])),
             )
 
         weights_dir = resolve_model_weights(
@@ -718,7 +793,14 @@ class StreamingSetupMixin:
             # Quantise on the device that will run the model: CPU and CUDA agree
             # on the packed nibbles but not on every float32 nested statistic.
             quant_device=str(self.device),
+            stripe_roots=stripe_roots,
             notify=console.print,
+        )
+        # R4: decided once, from the roots the index actually carries (a reused cache keeps its
+        # own), so the plan's staging figure, the host pre-flight and the reader all agree. Read
+        # with getattr like `external_tensors` below: an index without the field is one root.
+        read_ahead = _effective_read_ahead(
+            tcfg, 1 + len(getattr(index, "stripe_roots", None) or ()), console
         )
 
         layer_specs = RamSource.layer_specs_from_paths(layer_paths(shard_dir, index))
@@ -829,7 +911,7 @@ class StreamingSetupMixin:
             # #971: the depth decides how much host memory the async reader
             # page-locks, so the plan has to carry it or the pre-flight is
             # predicting zero residency for a tier that holds GBs of it.
-            read_ahead=tcfg.stream_read_ahead,
+            read_ahead=read_ahead,
         )
         # v0.72.3 — the disk overflow tier is live, so a base that does not fit
         # in RAM is no longer fatal. `stream_source` decides: 'ram' insists,
@@ -863,7 +945,7 @@ class StreamingSetupMixin:
                 # _bytes` is read off the PRE-replace plan, since the line above
                 # has just zeroed it.
                 staging_bytes=staging_bytes_for(
-                    read_ahead=tcfg.stream_read_ahead,
+                    read_ahead=read_ahead,
                     n_layers=plan.n_layers,
                     layer_bytes=plan.layer_bytes,
                     large_store_bytes=plan.large_store_bytes,
@@ -887,7 +969,7 @@ class StreamingSetupMixin:
         if plan.tier == TIER_DISK:
             _validate_stream_staging_ram_fit(
                 staging_bytes=plan.staging_bytes,
-                read_ahead=tcfg.stream_read_ahead,
+                read_ahead=read_ahead,
                 free_ram=free_ram,
                 resident_ram=embed_bytes,
             )
@@ -955,7 +1037,7 @@ class StreamingSetupMixin:
             # #971: the depth the async reader stages to on the disk tier.
             # Ignored on the RAM tier, which holds every layer and reads
             # nothing ahead.
-            read_ahead=tcfg.stream_read_ahead,
+            read_ahead=read_ahead,
             pin=plan.pinned and on_cuda,
             # #366: stream_pin=true refuses rather than silently falling back to
             # pageable memory — on the RAM tier that is the store, and since
