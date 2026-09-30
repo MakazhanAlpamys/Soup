@@ -11,7 +11,10 @@ constant-ref-model path is unchanged when both flags are unset.
 
 from __future__ import annotations
 
+import ast
+import importlib
 import math
+from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
@@ -30,6 +33,16 @@ class TestDPOVariantsConfig:
             data={"train": "./data.jsonl", "format": "dpo"},
             training={"dpo_beta": 0.1, **training},
         )
+
+    @pytest.mark.parametrize("lora_r", [0, 16])
+    def test_ref_regen_epochs_refused_at_load(self, lora_r):
+        with pytest.raises(ValidationError, match="dpo_ref_regen_epochs is not wired yet"):
+            SoupConfig(
+                base="some-model",
+                task="dpo",
+                data={"train": "./data.jsonl", "format": "dpo"},
+                training={"dpo_ref_regen_epochs": 2, "lora": {"r": lora_r}},
+            )
 
     @pytest.mark.parametrize("sched", ["linear", "cosine", "exponential"])
     def test_beta_schedule_accepted(self, sched):
@@ -53,10 +66,6 @@ class TestDPOVariantsConfig:
         """Setting end without schedule is meaningless."""
         with pytest.raises(ValidationError, match="dpo_beta_schedule"):
             self._base(dpo_beta_end=0.01)
-
-    def test_ref_regen_epochs_positive(self):
-        cfg = self._base(dpo_ref_regen_epochs=2)
-        assert cfg.training.dpo_ref_regen_epochs == 2
 
     def test_ref_regen_epochs_zero_rejected(self):
         with pytest.raises(ValidationError, match="dpo_ref_regen_epochs"):
@@ -142,15 +151,42 @@ class TestDPOVariantsConfig:
 # ─── β schedule math ────────────────────────────────────────────────────────
 
 
+@pytest.mark.parametrize(
+    ("task", "extra"),
+    [
+        ("dpo", {}),
+        ("ipo", {}),
+        ("preference", {"preference_loss": "dpo"}),
+        ("preference", {"preference_loss": "ipo"}),
+    ],
+)
+def test_ref_regen_epochs_refused_on_every_dpo_family_task(task, extra):
+    with pytest.raises(ValidationError, match="dpo_ref_regen_epochs is not wired yet"):
+        SoupConfig(
+            base="some-model",
+            task=task,
+            data={"train": "./data.jsonl", "format": "dpo"},
+            training={"dpo_ref_regen_epochs": 2, **extra},
+        )
+
+
 class TestBetaSchedule:
     def test_linear_endpoints(self):
         from soup_cli.utils.dpo_variants import compute_beta_at_step
 
         assert compute_beta_at_step(
-            beta_start=0.1, beta_end=0.01, step=0, total_steps=100, schedule="linear",
+            beta_start=0.1,
+            beta_end=0.01,
+            step=0,
+            total_steps=100,
+            schedule="linear",
         ) == pytest.approx(0.1)
         assert compute_beta_at_step(
-            beta_start=0.1, beta_end=0.01, step=100, total_steps=100, schedule="linear",
+            beta_start=0.1,
+            beta_end=0.01,
+            step=100,
+            total_steps=100,
+            schedule="linear",
         ) == pytest.approx(0.01)
 
     def test_linear_midpoint(self):
@@ -158,7 +194,11 @@ class TestBetaSchedule:
 
         # Schema requires beta_end > 0; mid of (0.1, 0.02) = 0.06.
         mid = compute_beta_at_step(
-            beta_start=0.1, beta_end=0.02, step=50, total_steps=100, schedule="linear",
+            beta_start=0.1,
+            beta_end=0.02,
+            step=50,
+            total_steps=100,
+            schedule="linear",
         )
         assert mid == pytest.approx(0.06)
 
@@ -166,10 +206,18 @@ class TestBetaSchedule:
         from soup_cli.utils.dpo_variants import compute_beta_at_step
 
         assert compute_beta_at_step(
-            beta_start=0.1, beta_end=0.01, step=0, total_steps=100, schedule="cosine",
+            beta_start=0.1,
+            beta_end=0.01,
+            step=0,
+            total_steps=100,
+            schedule="cosine",
         ) == pytest.approx(0.1)
         assert compute_beta_at_step(
-            beta_start=0.1, beta_end=0.01, step=100, total_steps=100, schedule="cosine",
+            beta_start=0.1,
+            beta_end=0.01,
+            step=100,
+            total_steps=100,
+            schedule="cosine",
         ) == pytest.approx(0.01)
 
     def test_cosine_midpoint(self):
@@ -177,7 +225,11 @@ class TestBetaSchedule:
 
         # Cosine: at midpoint we expect (start+end)/2.
         mid = compute_beta_at_step(
-            beta_start=0.2, beta_end=0.02, step=50, total_steps=100, schedule="cosine",
+            beta_start=0.2,
+            beta_end=0.02,
+            step=50,
+            total_steps=100,
+            schedule="cosine",
         )
         assert mid == pytest.approx(0.11, abs=1e-6)
 
@@ -185,11 +237,17 @@ class TestBetaSchedule:
         from soup_cli.utils.dpo_variants import compute_beta_at_step
 
         assert compute_beta_at_step(
-            beta_start=0.1, beta_end=0.01, step=0, total_steps=100,
+            beta_start=0.1,
+            beta_end=0.01,
+            step=0,
+            total_steps=100,
             schedule="exponential",
         ) == pytest.approx(0.1)
         end = compute_beta_at_step(
-            beta_start=0.1, beta_end=0.01, step=100, total_steps=100,
+            beta_start=0.1,
+            beta_end=0.01,
+            step=100,
+            total_steps=100,
             schedule="exponential",
         )
         assert end == pytest.approx(0.01, rel=1e-4)
@@ -199,14 +257,22 @@ class TestBetaSchedule:
         from soup_cli.utils.dpo_variants import compute_beta_at_step
 
         assert compute_beta_at_step(
-            beta_start=0.1, beta_end=0.01, step=200, total_steps=100, schedule="linear",
+            beta_start=0.1,
+            beta_end=0.01,
+            step=200,
+            total_steps=100,
+            schedule="linear",
         ) == pytest.approx(0.01)
 
     def test_negative_step_clamps_to_start(self):
         from soup_cli.utils.dpo_variants import compute_beta_at_step
 
         assert compute_beta_at_step(
-            beta_start=0.1, beta_end=0.01, step=-5, total_steps=100, schedule="linear",
+            beta_start=0.1,
+            beta_end=0.01,
+            step=-5,
+            total_steps=100,
+            schedule="linear",
         ) == pytest.approx(0.1)
 
     def test_invalid_schedule_raises(self):
@@ -214,7 +280,10 @@ class TestBetaSchedule:
 
         with pytest.raises(ValueError, match="schedule"):
             compute_beta_at_step(
-                beta_start=0.1, beta_end=0.01, step=0, total_steps=100,
+                beta_start=0.1,
+                beta_end=0.01,
+                step=0,
+                total_steps=100,
                 schedule="garbage",
             )
 
@@ -222,7 +291,11 @@ class TestBetaSchedule:
         from soup_cli.utils.dpo_variants import compute_beta_at_step
 
         assert compute_beta_at_step(
-            beta_start=0.1, beta_end=0.01, step=0, total_steps=0, schedule="linear",
+            beta_start=0.1,
+            beta_end=0.01,
+            step=0,
+            total_steps=0,
+            schedule="linear",
         ) == pytest.approx(0.01)
 
     def test_negative_total_steps_rejected(self):
@@ -230,7 +303,10 @@ class TestBetaSchedule:
 
         with pytest.raises(ValueError, match="total_steps"):
             compute_beta_at_step(
-                beta_start=0.1, beta_end=0.01, step=0, total_steps=-1,
+                beta_start=0.1,
+                beta_end=0.01,
+                step=0,
+                total_steps=-1,
                 schedule="linear",
             )
 
@@ -240,7 +316,10 @@ class TestBetaSchedule:
         for bad in (float("nan"), float("inf"), -1.0):
             with pytest.raises(ValueError, match="finite|> 0"):
                 compute_beta_at_step(
-                    beta_start=bad, beta_end=0.01, step=0, total_steps=100,
+                    beta_start=bad,
+                    beta_end=0.01,
+                    step=0,
+                    total_steps=100,
                     schedule="linear",
                 )
 
@@ -249,7 +328,10 @@ class TestBetaSchedule:
 
         with pytest.raises(ValueError, match="step"):
             compute_beta_at_step(
-                beta_start=0.1, beta_end=0.01, step=True, total_steps=100,
+                beta_start=0.1,
+                beta_end=0.01,
+                step=True,
+                total_steps=100,
                 schedule="linear",
             )
 
@@ -262,7 +344,10 @@ class TestBetaScheduleCallback:
         from soup_cli.utils.dpo_variants import BetaScheduleCallback
 
         cb = BetaScheduleCallback(
-            beta_start=0.1, beta_end=0.01, total_steps=100, schedule="linear",
+            beta_start=0.1,
+            beta_end=0.01,
+            total_steps=100,
+            schedule="linear",
         )
         trainer = MagicMock()
         trainer.beta = 0.1
@@ -278,7 +363,10 @@ class TestBetaScheduleCallback:
         from soup_cli.utils.dpo_variants import BetaScheduleCallback
 
         cb = BetaScheduleCallback(
-            beta_start=0.1, beta_end=0.01, total_steps=100, schedule="linear",
+            beta_start=0.1,
+            beta_end=0.01,
+            total_steps=100,
+            schedule="linear",
         )
         state = MagicMock(global_step=50)
         # Should not raise.
@@ -351,8 +439,11 @@ class TestBuildDPOVariantCallbacks:
         from soup_cli.utils.dpo_variants import build_dpo_variant_callbacks
 
         cbs = build_dpo_variant_callbacks(
-            beta_start=0.1, beta_end=None, schedule=None,
-            total_steps=0, ref_regen_epochs=None,
+            beta_start=0.1,
+            beta_end=None,
+            schedule=None,
+            total_steps=0,
+            ref_regen_epochs=None,
         )
         assert cbs == []
 
@@ -363,8 +454,11 @@ class TestBuildDPOVariantCallbacks:
         )
 
         cbs = build_dpo_variant_callbacks(
-            beta_start=0.1, beta_end=0.01, schedule="linear",
-            total_steps=0, ref_regen_epochs=None,
+            beta_start=0.1,
+            beta_end=0.01,
+            schedule="linear",
+            total_steps=0,
+            ref_regen_epochs=None,
         )
         assert len(cbs) == 1
         assert isinstance(cbs[0], BetaScheduleCallback)
@@ -376,8 +470,11 @@ class TestBuildDPOVariantCallbacks:
         )
 
         cbs = build_dpo_variant_callbacks(
-            beta_start=0.1, beta_end=None, schedule=None,
-            total_steps=0, ref_regen_epochs=2,
+            beta_start=0.1,
+            beta_end=None,
+            schedule=None,
+            total_steps=0,
+            ref_regen_epochs=2,
         )
         assert len(cbs) == 1
         assert isinstance(cbs[0], RefModelRegenCallback)
@@ -390,8 +487,11 @@ class TestBuildDPOVariantCallbacks:
         )
 
         cbs = build_dpo_variant_callbacks(
-            beta_start=0.1, beta_end=0.01, schedule="linear",
-            total_steps=0, ref_regen_epochs=2,
+            beta_start=0.1,
+            beta_end=0.01,
+            schedule="linear",
+            total_steps=0,
+            ref_regen_epochs=2,
         )
         assert len(cbs) == 2
         kinds = {type(cb) for cb in cbs}
@@ -403,7 +503,10 @@ class TestBetaScheduleLazyTotalSteps:
         from soup_cli.utils.dpo_variants import BetaScheduleCallback
 
         cb = BetaScheduleCallback(
-            beta_start=0.1, beta_end=0.01, total_steps=0, schedule="linear",
+            beta_start=0.1,
+            beta_end=0.01,
+            total_steps=0,
+            schedule="linear",
         )
         # Initially 0 — sentinel.
         assert cb.total_steps == 0
@@ -416,7 +519,10 @@ class TestBetaScheduleLazyTotalSteps:
         from soup_cli.utils.dpo_variants import BetaScheduleCallback
 
         cb = BetaScheduleCallback(
-            beta_start=0.1, beta_end=0.01, total_steps=0, schedule="linear",
+            beta_start=0.1,
+            beta_end=0.01,
+            total_steps=0,
+            schedule="linear",
         )
         trainer = MagicMock()
         trainer.beta = 0.1
@@ -432,8 +538,216 @@ class TestBetaScheduleLazyTotalSteps:
 
         # Cosine at progress=0 should equal beta_start exactly (cos(0)=1).
         result = compute_beta_at_step(
-            beta_start=0.1, beta_end=0.01, step=1, total_steps=10**9,
+            beta_start=0.1,
+            beta_end=0.01,
+            step=1,
+            total_steps=10**9,
             schedule="cosine",
         )
         # Very near beta_start since progress ~ 1e-9.
         assert math.isclose(result, 0.1, rel_tol=1e-6)
+
+
+# ─── Issue #1229: TrainerCallback Subclassing & Dispatch ────────────────────
+
+
+class TestCallbacksSubclassTrainerCallback:
+    """Pins issue #1229: callbacks must be real TrainerCallback subclasses."""
+
+    def test_beta_schedule_is_trainer_callback_subclass(self):
+        from transformers import TrainerCallback
+
+        from soup_cli.utils.dpo_variants import BetaScheduleCallback
+
+        cb = BetaScheduleCallback(0.1, 0.05, 10, "linear")
+        assert isinstance(cb, TrainerCallback)
+
+    def test_ref_model_regen_is_trainer_callback_subclass(self):
+        from transformers import TrainerCallback
+
+        from soup_cli.utils.dpo_variants import RefModelRegenCallback
+
+        cb = RefModelRegenCallback(1)
+        assert isinstance(cb, TrainerCallback)
+
+    def test_inherits_noop_unimplemented_events(self):
+        from soup_cli.utils.dpo_variants import BetaScheduleCallback, RefModelRegenCallback
+
+        beta_cb = BetaScheduleCallback(0.1, 0.05, 10, "linear")
+        assert callable(beta_cb.on_epoch_begin)
+        # Calling inherited no-op stub must not raise AttributeError
+        beta_cb.on_epoch_begin(None, None, None)
+
+        regen_cb = RefModelRegenCallback(1)
+        assert callable(regen_cb.on_train_begin)
+        regen_cb.on_train_begin(None, None, None)
+
+    def test_callback_handler_dispatch_no_attribute_error(self):
+        from transformers.trainer_callback import CallbackHandler, TrainerControl, TrainerState
+
+        from soup_cli.utils.dpo_variants import BetaScheduleCallback, RefModelRegenCallback
+
+        for callback, event in (
+            (BetaScheduleCallback(0.1, 0.05, 10, "linear"), "on_epoch_begin"),
+            (RefModelRegenCallback(1), "on_train_begin"),
+        ):
+            handler = CallbackHandler([], None, None, None, None)
+            handler.add_callback(callback)
+            # HF CallbackHandler.call_event dispatches with getattr(cb, event)
+            getattr(handler, event)(None, TrainerState(), TrainerControl())
+
+
+class TestRealTrainerBetaSchedule:
+    """Real DPO / IPO / Preference train() runs on tiny CPU model."""
+
+    @pytest.mark.parametrize("sched", ["linear", "cosine", "exponential"])
+    def test_dpo_train_beta_schedule_acts(self, tmp_path, sched):
+        from soup_cli.config.loader import load_config_from_string
+        from soup_cli.trainer.dpo import DPOTrainerWrapper
+        from soup_cli.utils.dpo_variants import compute_beta_at_step
+
+        rows = [
+            {"prompt": f"Q{i}?", "chosen": f"A{i} good.", "rejected": f"A{i} bad."}
+            for i in range(4)
+        ]
+        out_dir = (tmp_path / f"out_dpo_{sched}").as_posix()
+        cfg = load_config_from_string(f"""
+base: sshleifer/tiny-gpt2
+task: dpo
+data:
+  train: x.jsonl
+  max_length: 64
+training:
+  epochs: 2
+  batch_size: 2
+  quantization: none
+  lr: 1e-4
+  dpo_beta: 0.1
+  dpo_beta_schedule: {sched}
+  dpo_beta_end: 0.05
+output: {out_dir}
+""")
+        wrapper = DPOTrainerWrapper(cfg, device="cpu")
+        wrapper.setup({"train": list(rows)})
+        res = wrapper.train()
+        assert res.get("total_steps", 0) >= 2
+        expected_beta = compute_beta_at_step(
+            beta_start=0.1,
+            beta_end=0.05,
+            step=1,
+            total_steps=wrapper.trainer.state.max_steps,
+            schedule=sched,
+        )
+        assert wrapper.trainer.beta == pytest.approx(expected_beta, abs=1e-5)
+
+
+def _run_schedule(tmp_path, task, training):
+    from soup_cli.config.loader import load_config_from_string
+
+    rows = [
+        {"prompt": f"Q{i}?", "chosen": f"A{i} good.", "rejected": f"A{i} bad."} for i in range(4)
+    ]
+    cfg = load_config_from_string(
+        "base: sshleifer/tiny-gpt2\n"
+        f"task: {task}\n"
+        "data:\n  train: x.jsonl\n  max_length: 64\n"
+        "training:\n  epochs: 2\n  batch_size: 2\n  quantization: none\n  lr: 1e-4\n"
+        f"{training}"
+        f"output: {(tmp_path / 'out').as_posix()}\n"
+    )
+    if task == "ipo":
+        from soup_cli.trainer.ipo import IPOTrainerWrapper as Wrapper
+    else:
+        from soup_cli.trainer.preference import PreferenceTrainerWrapper as Wrapper
+    wrapper = Wrapper(cfg, device="cpu")
+    wrapper.setup({"train": list(rows)})
+    return wrapper, wrapper.train()
+
+
+def test_ipo_schedule_anneals_from_ipo_tau(tmp_path):
+    from soup_cli.utils.dpo_variants import compute_beta_at_step
+
+    wrapper, result = _run_schedule(
+        tmp_path, "ipo", "  ipo_tau: 0.2\n  dpo_beta_schedule: linear\n  dpo_beta_end: 0.05\n"
+    )
+    assert result.get("total_steps", 0) >= 2
+    expected = compute_beta_at_step(
+        beta_start=0.2,
+        beta_end=0.05,
+        step=1,
+        total_steps=wrapper.trainer.state.max_steps,
+        schedule="linear",
+    )
+    assert wrapper.trainer.beta == pytest.approx(expected, abs=1e-6)
+
+
+@pytest.mark.parametrize("loss", ["dpo", "ipo"])
+def test_preference_dispatcher_schedule_acts(tmp_path, loss):
+    from soup_cli.utils.dpo_variants import compute_beta_at_step
+
+    start, start_key = (0.1, "dpo_beta") if loss == "dpo" else (0.2, "ipo_tau")
+    wrapper, result = _run_schedule(
+        tmp_path,
+        "preference",
+        f"  preference_loss: {loss}\n  {start_key}: {start}\n"
+        "  dpo_beta_schedule: cosine\n  dpo_beta_end: 0.05\n",
+    )
+    assert result.get("total_steps", 0) >= 2
+    expected = compute_beta_at_step(
+        beta_start=start,
+        beta_end=0.05,
+        step=1,
+        total_steps=wrapper.trainer.state.max_steps,
+        schedule="cosine",
+    )
+    assert wrapper.trainer.beta == pytest.approx(expected, abs=1e-6)
+
+
+def _lazy_body_names(tree):
+    names = set()
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Assign) and isinstance(node.value, ast.Dict)):
+            continue
+        if any(isinstance(t, ast.Name) and t.id == "_LAZY_CALLBACKS" for t in node.targets):
+            names |= {v.id for v in node.value.values if isinstance(v, ast.Name)}
+    return names
+
+
+def test_no_bare_callback_classes():
+    from transformers import TrainerCallback
+
+    import soup_cli
+
+    root = Path(soup_cli.__file__).parent
+    events = {name for name in dir(TrainerCallback) if name.startswith("on_")}
+    bare = []
+    for path in sorted(root.rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"), str(path))
+        lazy = _lazy_body_names(tree)
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.ClassDef) or node.name in lazy:
+                continue
+            methods = {n.name for n in node.body if isinstance(n, ast.FunctionDef)}
+            if not methods & events:
+                continue
+            bases = [b.id for b in node.bases if isinstance(b, ast.Name)]
+            if not node.bases or bases == ["object"]:
+                bare.append(f"{path.relative_to(root).as_posix()}::{node.name}")
+    assert not bare, f"callback classes without a TrainerCallback base: {bare}"
+
+
+def test_every_lazy_callback_builds_a_trainer_callback():
+    from transformers import TrainerCallback
+
+    import soup_cli
+
+    root = Path(soup_cli.__file__).parent
+    for path in sorted(root.rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"), str(path))
+        if not _lazy_body_names(tree):
+            continue
+        dotted = ".".join(path.relative_to(root.parent).with_suffix("").parts)
+        module = importlib.import_module(dotted)
+        for name in module._LAZY_CALLBACKS:
+            cls = getattr(module, name)
+            assert issubclass(cls, TrainerCallback), f"{dotted}.{name}"

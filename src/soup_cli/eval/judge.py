@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import re
 from dataclasses import dataclass, field
@@ -178,23 +179,72 @@ def _build_judge_prompt(
     )
 
 
+#: A judge reply longer than this is refused before it is scanned (#1467). The
+#: judge is asked for at most 1,024 tokens, so a real reply is far shorter, and
+#: scanning a runaway reply made of ``{`` costs time quadratic in its length.
+_MAX_JUDGE_REPLY_CHARS = 64 * 1024
+
+
+def _first_json_object(text: str) -> Optional[dict]:
+    """The first JSON object in ``text`` that has a ``scores`` key (#1467).
+
+    Each ``{`` is tried in turn with ``json.JSONDecoder.raw_decode``, so an
+    object nested at any depth (a quoted ``{...}`` in the reasoning) is read
+    whole. Falls back to the first JSON object when none has ``scores``.
+    Nesting deeper than the decoder's recursion limit (a model repeating
+    ``{"a":`` in a loop) ends the scan instead of retrying every ``{``.
+    """
+    decoder = json.JSONDecoder()
+    first: Optional[dict] = None
+    start = text.find("{")
+    while start != -1:
+        try:
+            obj, _end = decoder.raw_decode(text, start)
+        except json.JSONDecodeError:
+            obj = None
+        except RecursionError:
+            return first
+        if isinstance(obj, dict):
+            if "scores" in obj:
+                return obj
+            if first is None:
+                first = obj
+        start = text.find("{", start + 1)
+    return first
+
+
 def _parse_judge_response(
     text: str,
     rubric: dict,
 ) -> tuple[dict[str, float], str]:
-    """Parse judge LLM response into scores and reasoning."""
-    # Try to extract JSON from response (supports nested braces)
-    json_match = re.search(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', text, re.DOTALL)
-    if not json_match:
-        raise ValueError(f"No JSON found in judge response: {text[:200]}")
+    """Parse judge LLM response into scores and reasoning.
 
-    try:
-        data = json.loads(json_match.group())
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"Invalid JSON in judge response: {exc}") from exc
+    Criterion keys match case-insensitively and a ``{"score": N}`` value is
+    unwrapped. A criterion the reply does not score, scores under two
+    spellings (``Helpfulness`` and ``helpfulness``), or scores with anything
+    but a finite number, raises ``ValueError`` naming it rather than counting
+    as the scale minimum, and a reply over ``_MAX_JUDGE_REPLY_CHARS`` is
+    refused unread (#1467).
+    """
+    if len(text) > _MAX_JUDGE_REPLY_CHARS:
+        raise ValueError(
+            f"Judge response is {len(text):,} characters, over the "
+            f"{_MAX_JUDGE_REPLY_CHARS:,}-character limit"
+        )
+    data = _first_json_object(text)
+    if data is None:
+        raise ValueError(f"No JSON object found in judge response: {text[:200]}")
 
     scores = data.get("scores", {})
+    if not isinstance(scores, dict):
+        raise ValueError("Judge response 'scores' must be a JSON object")
     reasoning = str(data.get("reasoning", ""))
+    folded: dict[str, object] = {}
+    spellings: dict[str, list[str]] = {}
+    for reply_key, reply_val in scores.items():
+        folded_key = str(reply_key).strip().lower()
+        folded[folded_key] = reply_val
+        spellings.setdefault(folded_key, []).append(str(reply_key))
 
     # Validate scores against rubric criteria
     scale = rubric.get("scale", {"min": 1, "max": 5})
@@ -204,11 +254,27 @@ def _parse_judge_response(
     validated_scores: dict[str, float] = {}
     for crit in rubric["criteria"]:
         name = crit["name"]
-        val = scores.get(name, scale_min)
+        key = str(name).strip().lower()
+        if key not in folded:
+            raise ValueError(f"Judge response has no score for criterion {name!r}")
+        if len(spellings[key]) > 1:
+            raise ValueError(
+                f"Judge response scores criterion {name!r} more than once, as "
+                + ", ".join(repr(spelling) for spelling in spellings[key])
+            )
+        val = folded[key]
+        if isinstance(val, dict) and "score" in val:
+            val = val["score"]
+        if isinstance(val, bool):
+            val = None
         try:
             val = float(val)
-        except (TypeError, ValueError):
-            val = float(scale_min)
+        except (TypeError, ValueError, OverflowError):
+            val = math.nan
+        if not math.isfinite(val):
+            raise ValueError(
+                f"Judge score for criterion {name!r} is not a number: {folded[key]!r}"
+            )
         val = max(scale_min, min(scale_max, val))
         validated_scores[name] = val
 

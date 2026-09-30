@@ -24,13 +24,15 @@ across the whole forward-to-backward span, ANY de-aliasing keeps one copy of eve
 layer alive for that span and costs O(model), not O(window). On real 32B that was
 peak VRAM 4 220 -> 19 720 MiB, which deletes the feature's premise.
 
-THE REPAIR: do not send a streamed NF4 weight through ``MatMul4Bit`` at all.
-Dequantise inside the checkpointed region and use a native matmul. ``F.linear``
-saves the dequantised weight properly, so checkpointing DOES discard and recompute
-it, and the transient lives only inside the recomputed block — O(window) by
-construction.
+THE REPAIR: do not send a streamed NF4 weight through bitsandbytes'
+``MatMul4Bit`` autograd Function at all. v0.73.0 dequantised inside the
+checkpointed region and used ``F.linear``. #842 may instead call the native
+``bitsandbytes::gemm_4bit`` forward through Soup's own autograd Function, whose
+packed weight and quantisation tensors all pass through ``save_for_backward``.
+Either route is visible to checkpointing; the unsafe plain-ctx lifetime remains
+forbidden.
 
-WHY THIS IS NOT A NUMERICS CHANGE AT TRAINING SHAPES (STEP 13 of the record)
+HOW #842 PRESERVES THE NATIVE BITSANDBYTES REFERENCE
 
 ``bitsandbytes::gemm_4bit`` chooses between its fused kernel and
 ``_dequant_linear_fallback``. The constant this file used to cite is only the OUTER
@@ -46,19 +48,13 @@ occupancy heuristic over the full shape ``(M, N, K)`` and the device. The consta
 therefore explains the ``M > 1536`` half only, and citing it alone is not an argument
 about training shapes.
 
-What carries the claim is measurement, and it is SHAPE-DEPENDENT rather than
-universal. On REAL 8B/32B projections the fallback was taken at every M measured from
-8 to 2048, so at those shapes bitsandbytes is ALREADY doing what this repair does and
-the repair only makes it explicit and moves it inside the checkpoint: measured over
-423 rows, the gradient is bit-exact in every one of them, worst ``max_abs`` exactly
-0.0 — by construction, since bnb's own backward is dequantise-then-matmul.
-
-On SMALL shapes the fused kernel genuinely does run, and the forward then differs by
-one bf16 ulp: worst 3.95e-3 relative to scale against 2^-8 = 3.9e-3. That is not
-hypothetical: this file's own fixture (hidden 64) sits inside the fused window at
-M <= 32, which is precisely what ``TestFixtureIsOutsideTheFusedKernelWindow`` below
-exists to pin. Read the two together — the "always fallback" result belongs to the
-real projection shapes it was measured on, not to every call site.
+Soup now asks those private bitsandbytes dispatch symbols the same question. At a
+custom-GEMM shape it calls that GEMM through a checkpoint-visible Function; at a
+fallback shape it retains the dequantise + ``F.linear`` repair. Thus the streamed
+model matches an unpatched resident bitsandbytes model at both shapes without
+paying the Function's extra backward dequantisation at ordinary training M. If the
+private symbols move, Soup fails toward the safe Function and a GPU test reports
+the upstream change.
 """
 
 import os
@@ -215,8 +211,8 @@ class TestStreamedPreferenceLossesDisableHfGradientCheckpointing:
 # the CI fixture must exercise the kernel path production actually takes
 # ==========================================================================
 @pytest.mark.gpu(reason="the fused-kernel window is a CUDA dispatch")
-class TestFixtureIsOutsideTheFusedKernelWindow:
-    """The streamed-vs-resident gate was comparing a code path no real model uses.
+class TestBitsandbytesDispatchAtTrainingShape:
+    """The larger fixture shape pins bitsandbytes' fallback branch.
 
     ``bitsandbytes::gemm_4bit`` dispatches on M. Measured on this fixture (hidden 64,
     so every projection is [64x64] or [32x64]), on an H100:
@@ -234,9 +230,9 @@ class TestFixtureIsOutsideTheFusedKernelWindow:
     measured to coincide EXACTLY at 64, which is what identifies the dispatch as the
     cause of the ulp rather than something else that merely correlates with size.
 
-    This test pins the fixture outside that window, so shrinking the sequence back
-    for speed fails here with the reason attached instead of silently returning the
-    gate to the wrong kernel.
+    #842 separately pins a fused shape and requires exact parity with an unpatched
+    resident model. This test keeps a representative training M on the native
+    fallback branch, where Soup must avoid its custom Function.
     """
 
     def test_every_resident_4bit_call_takes_the_dequant_fallback(self, tmp_path):
@@ -289,10 +285,8 @@ class TestFixtureIsOutsideTheFusedKernelWindow:
         )
         assert counts["fallback"] == counts["total"], (
             f"{counts['total'] - counts['fallback']} of {counts['total']} resident "
-            "4-bit calls took the FUSED kernel at the token count the CUDA gates use. "
-            "Real models never take that branch, so the gate would be pinning a path "
-            "no user runs — and the streamed arm, which always dequantises, differs "
-            "from it by one bf16 ulp. Raise the fixture's sequence length."
+            "4-bit calls took the custom GEMM at the training-shape control. "
+            "Update the #842 fused/fallback matrix for this bitsandbytes dispatch."
         )
 
 

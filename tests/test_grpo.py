@@ -40,14 +40,24 @@ class TestGRPOConfig:
         )
         assert cfg.training.grpo_beta == pytest.approx(0.04)
 
-    def test_grpo_beta_must_be_positive(self):
-        """grpo_beta must be > 0."""
+    def test_grpo_beta_zero_allowed(self):
+        """grpo_beta: 0 is allowed for KL-free recipes (#1247)."""
+        cfg = SoupConfig(
+            base="some-model",
+            task="grpo",
+            data={"train": "./data.jsonl"},
+            training={"grpo_beta": 0},
+        )
+        assert cfg.training.grpo_beta == 0.0
+
+    def test_grpo_beta_negative_rejected(self):
+        """grpo_beta must be >= 0."""
         with pytest.raises(Exception):
             SoupConfig(
                 base="some-model",
                 task="grpo",
                 data={"train": "./data.jsonl"},
-                training={"grpo_beta": 0},
+                training={"grpo_beta": -0.01},
             )
 
     def test_num_generations_default(self):
@@ -457,3 +467,250 @@ class TestGRPOSweepParams:
         config = {"training": {"reward_fn": "accuracy"}}
         _set_nested_param(config, "reward_fn", "format")
         assert config["training"]["reward_fn"] == "format"
+
+
+# ─── #342 Gradient watchdog — real-trainer smoke tests ───────────────────────
+# These download a model and run a real GRPOTrainer on CPU.
+# Marked @pytest.mark.smoke — deselected by the 3x3 matrix, run by pytorch-smoke.
+
+
+@pytest.mark.smoke
+class TestGRPOStabilityWiring:
+    """Assert exactly one GRPOStabilityCallback after a real GRPOTrainer setup."""
+
+    def test_exactly_one_callback_attached(self, tmp_path):
+        """After GRPOTrainerWrapper.setup(), exactly one GRPOStabilityCallback
+        is in the trainer's callback list.  On main without this PR there are
+        none.  Deleting the ensure_grpo_stability_callback call fails this.
+        """
+        from soup_cli.monitoring.grpo_stability_callback import (
+            GRPOStabilityCallback,
+        )
+        from soup_cli.trainer.grpo import GRPOTrainerWrapper
+
+        config = SoupConfig(
+            base="hf-internal-testing/tiny-random-LlamaForCausalLM",
+            task="grpo",
+            data={"train": str(tmp_path / "train.jsonl"), "max_length": 64},
+            training={
+                "epochs": 1,
+                "lr": 1e-4,
+                "batch_size": 2,
+                "num_generations": 2,
+                "gradient_accumulation_steps": 2,
+                "grpo_beta": 0.04,
+                "lora": {"r": 8, "alpha": 16},
+                "quantization": "none",
+            },
+        )
+        # Write minimal training data
+        import json
+        train_file = tmp_path / "train.jsonl"
+        for i in range(4):
+            train_file.open("a").write(
+                json.dumps({"prompt": f"What is {i}+{i}?", "answer": str(i * 2)}) + "\n"
+            )
+
+        wrapper = GRPOTrainerWrapper(config, device="cpu")
+        dataset = {"train": [json.loads(line) for line in train_file.read_text().splitlines()]}
+        wrapper.setup(dataset)
+
+        cbs = [
+            cb for cb in wrapper.trainer.callback_handler.callbacks
+            if isinstance(cb, GRPOStabilityCallback)
+        ]
+        assert len(cbs) == 1, f"Expected exactly 1 GRPOStabilityCallback, got {len(cbs)}"
+
+
+@pytest.mark.smoke
+class TestGRPOWatchdogE2E:
+    """End-to-end: NaN injection on a real GRPOTrainer, watchdog skips the step."""
+
+    def test_nan_step_leaves_weights_unchanged(self, tmp_path):
+        """Inject NaN into one lora_B gradient on microbatch 1 of optimizer
+        step 2.  Assert every trainable weight is bit-identical before and
+        after step 2, and all weights are finite.
+
+        This test kills four mutations:
+        - Moving the check into training_step (microbatch 2 gets applied)
+        - Deleting ensure_grpo_stability_callback (weights go NaN)
+        - Changing zero_grad(set_to_none=False) (weights move)
+        - Removing the watchdog's zero_grad (weights go NaN)
+        """
+        import json
+
+        import torch
+        from trl import GRPOConfig, GRPOTrainer
+
+        from soup_cli.utils.peft_wiring import ensure_grpo_stability_callback
+
+        model_name = "hf-internal-testing/tiny-random-LlamaForCausalLM"
+
+        # Write minimal training data — 4 prompts
+        train_file = tmp_path / "train.jsonl"
+        for i in range(4):
+            train_file.open("a").write(
+                json.dumps({"prompt": f"What is {i}+{i}?", "answer": str(i * 2)}) + "\n"
+            )
+
+        # Load model + tokenizer + LoRA
+        from peft import LoraConfig, get_peft_model
+        from transformers import AutoModelForCausalLM, AutoTokenizer
+
+        tokenizer = AutoTokenizer.from_pretrained(model_name)
+        if tokenizer.pad_token is None:
+            tokenizer.pad_token = tokenizer.eos_token
+        model = AutoModelForCausalLM.from_pretrained(model_name)
+        lora_config = LoraConfig(r=8, lora_alpha=16, task_type="CAUSAL_LM")
+        model = get_peft_model(model, lora_config)
+
+        from datasets import Dataset
+
+        ds = Dataset.from_list([
+            {"prompt": f"What is {i}+{i}?"}
+            for i in range(4)
+        ])
+
+        def reward_fn(completions, **kwargs):
+            return [1.0] * len(completions)
+
+        grpo_config = GRPOConfig(
+            output_dir=str(tmp_path / "output"),
+            num_train_epochs=1,
+            per_device_train_batch_size=2,
+            gradient_accumulation_steps=2,
+            learning_rate=1e-4,
+            # With a constant reward and lora_B initialised to zero, every
+            # gradient but the injected NaN is exactly zero, so an applied
+            # step moves nothing unless weight decay is on.
+            weight_decay=0.01,
+            max_completion_length=32,
+            num_generations=2,
+            beta=0.04,
+            logging_steps=1,
+            save_strategy="no",
+            report_to="none",
+            use_cpu=True,
+            bf16=False,
+        )
+
+        trainer = GRPOTrainer(
+            model=model,
+            args=grpo_config,
+            train_dataset=ds,
+            processing_class=tokenizer,
+            reward_funcs=reward_fn,
+        )
+
+        # Wire the watchdog
+        ensure_grpo_stability_callback(trainer)
+
+        # Find a lora_B parameter and register a NaN-injecting hook
+        # that fires on the second optimizer step's first microbatch
+        target_param = None
+        for name, param in model.named_parameters():
+            if "lora_B" in name and param.requires_grad:
+                target_param = param
+                break
+        assert target_param is not None, "No lora_B parameter found"
+
+        step_counter = {"count": 0}
+
+        def poison_hook(grad):
+            step_counter["count"] += 1
+            # Poison on the 3rd backward call = microbatch 1 of step 2
+            # (step 1 has 2 microbatches, step 2 starts at call 3)
+            if step_counter["count"] == 3:
+                return torch.full_like(grad, float("nan"))
+            return grad
+
+        handle = target_param.register_hook(poison_hook)
+
+        # Callback to snapshot weights after step 1 (before poisoned step 2)
+        from transformers import TrainerCallback
+
+        class _SnapshotCallback(TrainerCallback):
+            def __init__(self):
+                self.snapshot = {}
+
+            def on_step_end(self, args, state, control, model=None, **kwargs):
+                if state.global_step == 1 and model is not None:
+                    for n, p in model.named_parameters():
+                        if p.requires_grad:
+                            self.snapshot[n] = p.data.clone()
+
+        snap_cb = _SnapshotCallback()
+        trainer.add_callback(snap_cb)
+
+        try:
+            trainer.train()
+
+            # Assert all weights are finite
+            for name, param in model.named_parameters():
+                if param.requires_grad:
+                    assert torch.isfinite(param.data).all(), (
+                        f"Parameter {name} has non-finite values after training"
+                    )
+
+            # Assert weights are bit-identical to the step-1 snapshot
+            # (step 2 was poisoned, so the watchdog should have skipped it)
+            assert snap_cb.snapshot, "Snapshot callback did not fire"
+            for name, pre in snap_cb.snapshot.items():
+                post = dict(model.named_parameters())[name].data
+                assert torch.equal(pre, post), (
+                    f"Parameter {name} changed during poisoned step 2 "
+                    f"(watchdog failed to skip)"
+                )
+        finally:
+            handle.remove()
+
+
+@pytest.mark.smoke
+class TestGRPORunRecordReachesTheAudit:
+    def test_a_real_run_writes_the_record_and_the_audit_reads_it(self, tmp_path, monkeypatch):
+        """save_state() puts trainer_state.json next to the adapter; the audit reads it."""
+        import json
+        import os
+        import pathlib
+
+        import yaml
+        from typer.testing import CliRunner
+
+        from soup_cli.commands.adapters import app as adapters_app
+        from soup_cli.trainer.grpo import GRPOTrainerWrapper
+
+        monkeypatch.chdir(tmp_path)
+        raw = {
+            "base": "hf-internal-testing/tiny-random-LlamaForCausalLM",
+            "task": "grpo",
+            "data": {"train": "train.jsonl", "max_length": 64},
+            "output": "out",
+            "training": {
+                "epochs": 1,
+                "lr": 1e-4,
+                "batch_size": 2,
+                "num_generations": 2,
+                "gradient_accumulation_steps": 2,
+                "grpo_beta": 0.04,
+                "reward_fn": "format",
+                "lora": {"r": 8, "alpha": 16},
+                "quantization": "none",
+            },
+        }
+        (tmp_path / "soup.yaml").write_text(yaml.safe_dump(raw))
+        rows = [{"prompt": f"What is {i}+{i}?", "answer": str(i * 2)} for i in range(4)]
+        wrapper = GRPOTrainerWrapper(SoupConfig(**raw), device="cpu")
+        wrapper.setup({"train": rows})
+        wrapper.train()
+
+        out = pathlib.Path(wrapper._output_dir)
+        state = json.loads((out / "trainer_state.json").read_text())
+        assert state["log_history"][-1] == {"nan_skip_count": 0, "nan_skip_fraction": 0.0}
+
+        rel = os.path.relpath(out, tmp_path)
+        res = CliRunner().invoke(adapters_app, ["audit", rel, "--config", "soup.yaml", "--json"])
+        assert res.exit_code in (0, 2), (res.output, repr(res.exception))
+        row = next(
+            r for r in json.loads(res.stdout)["rows"] if r["setting"] == "nan_skip_fraction"
+        )
+        assert (row["status"], row["ran"]) == ("ok", 0.0)

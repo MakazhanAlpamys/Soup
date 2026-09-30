@@ -502,6 +502,11 @@ def post_processor_leading_bos_count(tokenizer: Any) -> Optional[int]:
     BOS is the post-processor's, independent of anything a chat template renders.
     ``None`` means it could not be measured, and the caller falls back to
     :func:`strip_doubled_leading_bos`.
+
+    That measures a ``TemplateProcessing``-style post-processor, which adds the
+    same specials to every input; a content-conditional post-processor could
+    mis-measure it, and the ``None`` fallback covers the probe failing, not the
+    probe lying.
     """
     bos_id = _resolve_bos_token_id(tokenizer)
     if bos_id is None:

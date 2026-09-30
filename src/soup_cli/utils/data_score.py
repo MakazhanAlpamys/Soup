@@ -206,18 +206,18 @@ def decontaminate_rows(
 # ---------------------------------------------------------------------------
 
 
-_PII_SCAN_CAP = 50_000  # ReDoS defence — finditer never sees more than 50 KB
+_PII_SCAN_CAP = 50_000  # Bounds each row; the regex fallback is linear within this cap.
 
 
 # Narrow regex set — false positives are acceptable for triage; live
 # Presidio integration ships behind `[data-pro]` in v0.47.1.
 #
-# All patterns are written to avoid nested optional quantifiers, which
-# trigger catastrophic backtracking on near-miss inputs. The phone and
-# credit-card patterns specifically use a flat alternation and a hard
-# `{n,m}` cap with no optional inner group repetition.
+# The email matcher starts only at the beginning of a local-part run. Without
+# that guard, a long near-miss run can be retried at every word boundary.
+# Phone and credit-card patterns use bounded repetitions and no optional inner
+# group repetition. The 50 KB cap still applies per row, not per dataset.
 _PII_PATTERNS: Tuple[Tuple[str, "re.Pattern[str]"], ...] = (
-    ("email", re.compile(r"\b[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}\b")),
+    ("email", re.compile(r"(?<![\w.+-])[.+-]*\w[\w.+-]*@[\w.-]+\.[A-Za-z]{2,}\b")),
     # Phone: optional leading "+", 7-15 digits with at most one separator
     # between each pair of digits. No nested optional groups.
     ("phone", re.compile(r"(?:\+?\d{1,3}[\s.\-]?)?\d{3}[\s.\-]?\d{3,4}[\s.\-]?\d{0,4}")),

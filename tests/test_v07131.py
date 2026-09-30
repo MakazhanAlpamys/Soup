@@ -712,14 +712,17 @@ class TestBuildJudgeOrReward:
 
 class TestOnlineDpoRouting:
     def test_train_routes_online_dpo(self):
-        # A distinct-string `elif cfg.task == ...` branch (cannot be shadowed by
-        # another equality branch) that instantiates the wrapper.
+        # A distinct-string `task == ...` branch (cannot be shadowed by another
+        # equality branch) that instantiates the wrapper. #1213 moved the chain
+        # into the dispatch both commands call, so the branch is read there.
         import inspect
 
         from soup_cli.commands import train as train_cmd
+        from soup_cli.trainer import dispatch as dispatch_mod
 
-        src = inspect.getsource(train_cmd)
-        assert 'elif cfg.task == "online_dpo":' in src
+        assert "build_trainer(" in inspect.getsource(train_cmd)
+        src = inspect.getsource(dispatch_mod)
+        assert 'task == "online_dpo"' in src
         assert "OnlineDPOTrainerWrapper(cfg, **trainer_kwargs)" in src
 
 

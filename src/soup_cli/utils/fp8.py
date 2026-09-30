@@ -19,12 +19,6 @@ Requires:
 
 from __future__ import annotations
 
-from typing import Literal, Union
-
-from soup_cli.utils.torchao_compat import TORCHAO_MIN_VERSION
-
-QuantizationAwareLike = Union[bool, Literal["fp8"]]
-
 
 def is_torchao_float8_available() -> bool:
     """True when torchao's float8 converter, the one Soup applies, is importable."""
@@ -250,7 +244,7 @@ def apply_fp8_training(
         recipe: Scaling recipe name. Default ``"tensorwise"``.
 
     Returns:
-        True on success, False if the conversion itself failed.
+        True: every failure raises instead (#1152).
 
     Raises:
         FP8HardwareUnsupportedError: this card, OS or torch build cannot run
@@ -258,6 +252,9 @@ def apply_fp8_training(
         FP8DependencyMissingError: torchao's float8 training is not installed
             (#835 ruling). Checked after the card, so an unsupported card is
             named as the reason rather than a package that would not help.
+        RuntimeError: the conversion itself failed. It converts in place, so
+            the model may be partly converted; the run stops rather than train
+            it in bf16 under a config that asked for FP8 (#1152).
     """
     # The hardware gate runs FIRST, before the dependency probe (#1044 review).
     # torchao is not a default dependency, so "absent" is the common case: asking
@@ -282,63 +279,10 @@ def apply_fp8_training(
     try:
         config = Float8LinearConfig.from_recipe_name(recipe)
         convert_to_float8_training(model, config=config)
-        return True
-    except (RuntimeError, ValueError):
-        return False
-
-
-def validate_fp8_config(
-    quantization_aware: QuantizationAwareLike,
-    backend: str,
-    device: str,
-    recipe: str = "tensorwise",
-) -> list[str]:
-    """Validate FP8 training config.
-
-    Args:
-        quantization_aware: TrainingConfig.quantization_aware (False/True/'fp8').
-        backend: Training backend (transformers/unsloth/mlx).
-        device: Training device (cuda/cpu/mps).
-        recipe: TrainingConfig.fp8_recipe; rowwise has its own floor (#835).
-
-    Returns:
-        List of error messages. Empty list means valid (or FP8 not requested).
-    """
-    errors: list[str] = []
-
-    # Only validate when FP8 is explicitly requested
-    if quantization_aware != "fp8":
-        return errors
-
-    if backend == "unsloth":
-        errors.append(
-            "FP8 training is not compatible with the unsloth backend. "
-            "Unsloth uses its own fused kernels. Use backend: transformers."
-        )
-        return errors
-
-    if backend == "mlx":
-        errors.append(
-            "FP8 training is not supported on the mlx backend (Apple Silicon). "
-            "Use backend: transformers."
-        )
-        return errors
-
-    if device != "cuda":
-        errors.append(
-            "FP8 training requires CUDA. "
-            f"Current device: {device}."
-        )
-        return errors
-
-    ok, reason = fp8_training_supported(recipe)
-    if not ok:
-        errors.append(reason)
-
-    if not is_fp8_available():
-        errors.append(
-            "FP8 training dependencies are not installed. "
-            f"Install with: pip install torchao (>={TORCHAO_MIN_VERSION})"
-        )
-
-    return errors
+    except Exception as exc:  # noqa: BLE001 — in-place mutation honesty
+        raise RuntimeError(
+            "quantization_aware=fp8: the float8 conversion failed and the model may "
+            "be partly converted, so the run stops instead of training without FP8 "
+            f"({type(exc).__name__}: {exc})"
+        ) from exc
+    return True

@@ -348,7 +348,7 @@ def run_eval(
     return eval_results
 
 
-def _create_default_generator(model_path: str):
+def _create_default_generator(model_path: str, trust_remote_code: bool = False):
     """Create a default text generation function using transformers pipeline."""
     from rich.console import Console
     from rich.panel import Panel
@@ -367,6 +367,7 @@ def _create_default_generator(model_path: str):
         model=model_path,
         max_new_tokens=512,
         do_sample=False,
+        trust_remote_code=trust_remote_code,
     )
 
     def generate(prompt: str) -> str:

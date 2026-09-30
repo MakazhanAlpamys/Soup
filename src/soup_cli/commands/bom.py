@@ -148,7 +148,9 @@ def emit_cmd(
                 "(nothing written to attach).[/]"
             )
             raise typer.Exit(_EXIT_USAGE)
-        console.print(render_bom(entry, fmt_lc))
+        # Machine-readable BOM JSON: raw stdout, not console.print — Rich
+        # folds long lines and parses ``[...]`` as markup when piped (issue #1468).
+        typer.echo(render_bom(entry, fmt_lc))
         return
 
     try:

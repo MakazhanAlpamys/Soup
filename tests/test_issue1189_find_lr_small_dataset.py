@@ -120,9 +120,11 @@ def test_fewer_than_four_rows_is_refused_before_the_model_loads(find_lr, rows):
     count = f"{rows} row" + ("" if rows == 1 else "s")
     assert f"has {count}," in text and "--find-lr-steps 5" in text, text
     assert loads == 0
-    # Not swallowed by the synthetic-curve fallback.
+    # Not swallowed by either refusal: #1203's "live sweep unavailable" and the
+    # deleted synthetic curve would both replace this message (#1203 review).
     assert report is None
     assert "synthetic" not in text
+    assert "live sweep unavailable" not in text, text
 
 
 def test_too_few_steps_is_rejected_before_the_model_loads(find_lr):

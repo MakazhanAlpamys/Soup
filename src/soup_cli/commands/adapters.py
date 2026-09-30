@@ -1809,6 +1809,30 @@ def audit(
         raise typer.Exit(1) from exc
     cfg = soup_config.model_dump()
 
+    # #342 — read the sibling trainer_state.json for nan_skip data.
+    # The audit module is deliberately filesystem-free, so the command
+    # reads the file and passes the relevant keys into the record.
+    trainer_state_file = adapter_path / "trainer_state.json"
+    if trainer_state_file.is_file():
+        try:
+            state_data = _json.loads(
+                trainer_state_file.read_text(encoding="utf-8")
+            )
+        except (OSError, ValueError):
+            state_data = None  # unreadable or not JSON: the row stays unknown
+        history = (
+            state_data.get("log_history")
+            if isinstance(state_data, dict)
+            else None
+        )
+        for entry in reversed(history if isinstance(history, list) else []):
+            if isinstance(entry, dict) and "nan_skip_count" in entry:
+                record["nan_skip_count"] = entry["nan_skip_count"]
+                record["nan_skip_fraction"] = entry.get(
+                    "nan_skip_fraction", 0.0
+                )
+                break
+
     result = audit_adapter(cfg, record)
 
     if json_out:

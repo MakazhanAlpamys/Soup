@@ -47,7 +47,6 @@ import gc
 import json
 import re
 import statistics
-import subprocess
 import sys
 import time
 from dataclasses import asdict, dataclass
@@ -58,6 +57,7 @@ from types import ModuleType
 from typing import Any, Callable
 
 import bitexact as shared
+from source_provenance import source_sha
 
 DEFAULT_BATCH = 1
 DEFAULT_BUFFERS = 2
@@ -211,48 +211,8 @@ def _rewired_modules(model: Any) -> int:
 
 
 def _source_sha() -> str:
-    import soup_cli
-
-    package_file = getattr(soup_cli, "__file__", None)
-    if package_file is None:
-        return "unknown"
-    try:
-        package_dir = Path(package_file).resolve().parent
-        root = subprocess.run(
-            ["git", "rev-parse", "--show-toplevel"],
-            cwd=package_dir,
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=5,
-        ).stdout.strip()
-        if not root:
-            return "unknown"
-        commit = (
-            subprocess.run(
-                ["git", "rev-parse", "HEAD"],
-                cwd=Path(root),
-                check=True,
-                capture_output=True,
-                text=True,
-                timeout=5,
-            )
-            .stdout.strip()
-            .lower()
-        )
-        dirty = subprocess.run(
-            ["git", "status", "--porcelain", "--untracked-files=normal"],
-            cwd=Path(root),
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=5,
-        ).stdout
-    except (OSError, subprocess.SubprocessError):
-        return "unknown"
-    if not re.fullmatch(r"[0-9a-f]{40}", commit):
-        return "unknown"
-    return f"{commit}-dirty" if dirty else commit
+    """Shared with the other harnesses; see ``source_provenance``."""
+    return source_sha()
 
 
 def _versions() -> dict[str, str]:

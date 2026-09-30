@@ -399,28 +399,7 @@ class TestOneGate:
         assert seen == ["tensorwise", "tensorwise"]
         assert converts == ["tensorwise", "tensorwise"]
 
-    def test_validate_fp8_config_reports_the_gates_reason(self, gate):
-        from soup_cli.utils.fp8 import validate_fp8_config
 
-        seen, _ = gate
-        errors = validate_fp8_config("fp8", "transformers", "cuda", recipe="rowwise")
-        assert "SENTINEL-REASON" in errors
-        assert seen == ["rowwise"]
-
-
-class TestValidateFp8Config:
-    def test_ada_has_no_hardware_error(self, monkeypatch, converts):
-        from soup_cli.utils.fp8 import validate_fp8_config
-
-        _card(monkeypatch, (8, 9))
-        assert validate_fp8_config("fp8", "transformers", "cuda") == []
-
-    def test_ampere_has_the_ada_error(self, monkeypatch, converts):
-        from soup_cli.utils.fp8 import validate_fp8_config
-
-        _card(monkeypatch, (8, 6))
-        errors = validate_fp8_config("fp8", "transformers", "cuda")
-        assert any("8.9" in e for e in errors)
 
 
 class TestTheRunStops:
@@ -612,7 +591,12 @@ class TestSoupTrainReachesTheStop:
             yaml.safe_dump({
                 "base": "nobody/not-a-real-model",
                 "task": "sft",
-                "data": {"train": "train.jsonl", "format": "chatml", "max_length": 64},
+                # val_split 0: at the default 0.1 the one row goes to validation
+                # and `soup train` stops on an empty train split (#1217).
+                "data": {
+                    "train": "train.jsonl", "format": "chatml", "max_length": 64,
+                    "val_split": 0.0,
+                },
                 **({"backend": backend} if backend else {}),
                 "training": {
                     "epochs": 1,
@@ -928,18 +912,26 @@ class TestTheTorchaoProbeItself:
 
 
 class TestTheConversionFailedWording:
-    def test_a_failed_conversion_says_so(self, monkeypatch):
-        """Round 1 renamed the yellow line; nothing held it (non-blocking, taken)."""
+    def test_a_failed_conversion_says_so(self, monkeypatch, converts):
+        """Round 1 renamed the yellow line; nothing held it (non-blocking, taken).
+        INVERTED by #1152 (ruled 2026-09-22): the failure now stops the run instead
+        of printing that line, and its message still names the conversion, not a
+        missing torchao."""
         from soup_cli.config.schema import TrainingConfig
         from soup_cli.utils.v028_features import apply_v028_speed_memory
 
-        monkeypatch.setattr("soup_cli.utils.fp8.apply_fp8_training", lambda *a, **k: False)
-        out, console = TestTheRunStops()._console()
-        applied = apply_v028_speed_memory(
-            model=_Attn(), tcfg=TrainingConfig(quantization_aware="fp8"), base_model="m",
-            console=console, device="cuda",
-        )
+        def _fail(*_a, **_k):
+            raise RuntimeError("conversion blew up")
 
-        assert applied["fp8"] is False
-        assert "the float8 conversion failed" in out.getvalue()
-        assert "torchao.float8 missing" not in out.getvalue()
+        _card(monkeypatch, (9, 0))
+        monkeypatch.setattr(sys.modules["torchao.float8"], "convert_to_float8_training", _fail)
+        out, console = TestTheRunStops()._console()
+        with pytest.raises(RuntimeError) as info:
+            apply_v028_speed_memory(
+                model=_Attn(), tcfg=TrainingConfig(quantization_aware="fp8"), base_model="m",
+                console=console, device="cuda",
+            )
+
+        assert "the float8 conversion failed" in str(info.value)
+        assert "torchao.float8 missing" not in str(info.value)
+        assert out.getvalue() == ""
