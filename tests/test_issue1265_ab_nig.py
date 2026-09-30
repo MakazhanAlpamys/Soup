@@ -157,6 +157,18 @@ class TestPriorScale:
 
         assert PRIOR_SCALE_ROWS == 5
 
+    def test_the_docs_give_the_same_row_counts(self):
+        """docs/evaluation.md states both counts in words; they follow the constant."""
+        from pathlib import Path
+
+        from soup_cli.utils.ab_test import PRIOR_SCALE_ROWS
+
+        docs = (Path(__file__).parent.parent / "docs" / "evaluation.md").read_text(
+            encoding="utf-8"
+        )
+        assert f"the first {PRIOR_SCALE_ROWS} rows of each arm" in docs
+        assert f"from {PRIOR_SCALE_ROWS + 2} rows per arm" in docs
+
     @pytest.mark.parametrize("effect_size", [0.01, 0.1, 2.0])
     def test_statistic_runs_on_the_rows_after_them(self, effect_size):
         s0 = _sd(_CONTROL[:5], _TREATMENT[:5])
@@ -285,6 +297,31 @@ class TestBoundaries:
         assert verdict.mean_treatment < verdict.mean_control  # whole arms: always lower
         assert verdict.decision == "reject_h0", verdict
         assert verdict.direction == direction
+
+
+class TestNonFiniteStatistic:
+    """Values a float cannot carry are refused, not decided on (#1419 review)."""
+
+    def test_huge_means_are_refused_not_a_bare_overflow(self):
+        control = [-1e154 * (1 + k * 1e-10) for k in range(12)]
+        treatment = [1e154 * (1 + k * 1e-10) for k in range(12)]
+        with pytest.raises(ValueError, match="judge_score"):
+            _step(control, treatment)
+
+    def test_near_constant_tested_rows_are_refused_not_a_nan_continue(self):
+        held = [0.1, 0.2, 0.3, 0.4, 0.5]
+        with pytest.raises(ValueError, match="judge_score"):
+            _step(held + [0.0, 1e-160] * 10, held + [1e-5] * 20)
+
+    def test_a_prior_scale_just_under_the_bound_is_never_minus_inf(self):
+        held = [0.0, 1.83e-155, 0.0, 1.83e-155, 0.0]  # effect_size / s0 ~ 1.0e154
+        rest = _CONTROL[5:]
+        try:
+            verdict = _step(held + rest, held + [x + 5.0 for x in rest])
+        except ValueError as exc:
+            assert "--effect-size" in str(exc) or "judge_score" in str(exc)
+        else:
+            assert math.isfinite(verdict.log_likelihood_ratio), verdict
 
 
 # ---------------------------------------------------------------------------
