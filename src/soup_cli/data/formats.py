@@ -134,7 +134,9 @@ def detect_format(data: list[dict]) -> str:
     Raises:
     - ``ValueError`` on empty data, or when no row in the prefix matches any
       format signature. A row that matches no signature is skipped and reported
-      like the converters do (#1217) rather than refusing the whole file.
+      like the converters do (#1217) rather than refusing the whole file. A file
+      that mixes shapes is also refused, naming both shapes and the row where
+      each was first seen.
     """
     if not data:
         raise ValueError("Empty dataset - cannot detect format")
@@ -152,9 +154,10 @@ def detect_format(data: list[dict]) -> str:
         fmt = _richest_format(set(row.keys())) if isinstance(row, dict) else None
         if fmt is None:
             # #1217: a row matching no signature is skipped by the converters
-            # rather than fatal, so detection ignores it here too and reports the
-            # index. Raising instead would make one bad row refuse the whole
-            # file, which is the "zero row stop" behaviour #1217 removed.
+            # rather than fatal, so detection ignores it here too and drops it
+            # from the decision. Refusing on one bad row would restore the
+            # "zero row stop" behaviour #1217 removed; the loader's own drop
+            # warning is what tells the user which row it was.
             ignored.append(index)
             row_formats.append("")
             continue
@@ -182,7 +185,18 @@ def detect_format(data: list[dict]) -> str:
             poorer_rows = [
                 row for row, fmt in zip(sampled, row_formats) if fmt == poorer
             ]
-            if all(format_to_messages(row, richer) is not None for row in poorer_rows):
+            # The richer converter must accept EVERY poorer row, and must
+            # convert it to the same messages the poorer one would: the
+            # tool-calling converter rebuilds each message from role, content,
+            # tool_calls and tool_call_id, so a chatml row whose messages carry
+            # name or weight converts "successfully" but loses them. An upgrade
+            # that silently drops a field is the defect this change exists to fix.
+            upgrades = all(
+                format_to_messages(row, richer) is not None
+                and format_to_messages(row, richer) == format_to_messages(row, poorer)
+                for row in poorer_rows
+            )
+            if upgrades:
                 # The richer converter handles the poorer rows too, so upgrading
                 # keeps every row's fields instead of dropping the poorer ones.
                 return richer

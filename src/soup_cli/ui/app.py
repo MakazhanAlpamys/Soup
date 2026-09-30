@@ -747,20 +747,29 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
         total = len(raw_data)
         sample = raw_data[: req.limit]
 
-        # Detect format
+        # Detect format. detect_format samples a bounded prefix itself (#1424),
+        # and a file that mixes shapes is refused, so a ValueError here is a
+        # reportable outcome for the explorer rather than a 500: this is where
+        # someone lands after soup train refused the same file.
         from soup_cli.data.formats import detect_format
 
-        fmt = detect_format(raw_data[:5]) if raw_data else "unknown"
+        format_error = None
+        try:
+            fmt = detect_format(raw_data) if raw_data else "unknown"
+        except ValueError as exc:
+            fmt, format_error = "unknown", str(exc)
 
         # Basic stats
         keys = set()
         for entry in sample:
-            keys.update(entry.keys())
+            if isinstance(entry, dict):
+                keys.update(entry.keys())
 
         return {
             "path": str(resolved),
             "total": total,
             "format": fmt,
+            "format_error": format_error,
             "keys": sorted(keys),
             "sample": sample,
         }

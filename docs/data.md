@@ -159,8 +159,8 @@ soup data canary check --manifest secrets.json --base ./my-model --adapter ./lor
 ```
 
 `insert` writes the canaries in the dataset's own format, so the loader keeps them:
-`--format auto` (the default) detects it from the first row, as `data.format: auto`
-does. Alpaca, sharegpt and chatml are supported, each with the carrier as the prompt
+`--format auto` (the default) detects it from the first 100 rows, as `data.format: auto`
+does (a file that mixes shapes is refused, see Data Formats). Alpaca, sharegpt and chatml are supported, each with the carrier as the prompt
 and the secret as the trained response. Every other format is refused: dpo, kto and
 embedding have no single supervised response, plaintext trains on raw text rather
 than the chat turn `check` scores, tool-calling puts a tool-schema system turn
@@ -580,6 +580,16 @@ An axolotl `rl:` value with no Soup task (for example `rl: ebft`) stops the migr
 ## Data Formats
 
 Soup supports these formats (auto-detected). Files can be JSONL, JSON, CSV, Parquet, or TXT.
+
+**Auto-detection.** It reads the first 100 rows, not just the first. Each row resolves
+to the richest format its keys fit. If every row agrees, that format is used. A file
+that mixes `chatml` and `tool-calling` rows loads as `tool-calling` (the plain rows
+convert as ordinary chat turns). Every other mix (`sharegpt` with `llava`, `chatml`
+with `audio`, `plaintext` with `asr`, or two unrelated shapes) is refused with a message
+naming both shapes and the row where each first appears, because converting the file
+with either one would drop the other's keys or rows; set `data.format` to choose. Rows
+after the first 100 are not inspected; `soup data validate` lists every row the chosen
+format drops.
 
 **Alpaca:**
 ```json

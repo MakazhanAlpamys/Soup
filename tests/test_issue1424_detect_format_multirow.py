@@ -263,3 +263,92 @@ def test_mixed_asr_file_refuses(tmp_path):
     _write(path, [_PLAINTEXT_ROW, _ASR_ROW])
     with pytest.raises(ValueError, match="asr"):
         _load(path)
+
+
+# ---------------------------------------------------------------------------
+# Pinned by review: behaviours the refusal message promises
+# ---------------------------------------------------------------------------
+
+
+def test_upgrade_needs_the_richer_converter_to_accept_every_poorer_row():
+    # Row 0 converts fine as tool-calling, row 1 does not (list content is refused
+    # by the tool-calling converter). One accepted row must not be enough to upgrade.
+    multipart = [
+        {"role": "user", "content": [{"type": "text", "text": "q"}]},
+        {"role": "assistant", "content": "a"},
+    ]
+    data = [
+        {"messages": _CHAT},
+        {"messages": multipart},
+        {"messages": _CHAT, "tools": [_TOOL]},
+    ]
+    with pytest.raises(ValueError) as exc:
+        detect_format(data)
+    message = str(exc.value)
+    assert "'chatml' (row 0)" in message
+    assert "'tool-calling' (row 2)" in message
+    assert "data.format" in message
+
+
+def test_refusal_names_the_first_row_of_each_shape():
+    sharegpt = {"conversations": _SHAREGPT}
+    llava = {"image": "i.png", "conversations": _SHAREGPT}
+    with pytest.raises(ValueError) as exc:
+        detect_format([sharegpt, sharegpt, sharegpt, llava, llava, llava])
+    message = str(exc.value)
+    assert "'sharegpt' (row 0)" in message
+    assert "'llava' (row 3)" in message
+
+
+def test_inspect_endpoint_reports_a_mixed_file_instead_of_a_500(tmp_path):
+    try:
+        from fastapi.testclient import TestClient
+    except ImportError:
+        pytest.skip("FastAPI not installed")
+    from unittest.mock import patch
+
+    from soup_cli.ui.app import create_app, get_auth_token
+
+    path = tmp_path / "mixed.jsonl"
+    rows = [{"conversations": _SHAREGPT}] + [
+        {"image": "i.png", "conversations": _SHAREGPT}
+    ] * 3
+    path.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+
+    client = TestClient(create_app(), raise_server_exceptions=False)
+    with patch("soup_cli.ui.app.Path.cwd", return_value=tmp_path):
+        response = client.post(
+            "/api/data/inspect",
+            json={"path": str(path), "limit": 10},
+            headers={"Authorization": f"Bearer {get_auth_token()}"},
+        )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["total"] == 4
+    assert body["format"] == "unknown"
+    assert "mixes" in body["format_error"]
+
+
+def test_upgrade_refuses_when_the_richer_converter_would_drop_a_field():
+    # A chatml row whose messages carry `name`/`weight` converts through the
+    # chatml converter with those fields and through the tool-calling converter
+    # without them, so the "upgrade" would silently drop them. The converter
+    # accepts the row rather than rejecting it, so acceptance alone is not enough.
+    extras = {
+        "messages": [
+            {"role": "user", "content": "q", "name": "alice", "weight": 0.5},
+            {"role": "assistant", "content": "a"},
+        ]
+    }
+    data = [{"messages": _CHAT}, extras, _TOOL_ROW]
+    with pytest.raises(ValueError) as exc:
+        detect_format(data)
+    message = str(exc.value)
+    assert "'chatml' (row 0)" in message
+    assert "'tool-calling' (row 2)" in message
+    assert "data.format" in message
+
+
+def test_upgrade_still_happens_when_the_converters_agree():
+    # The plain case must still upgrade: no field is lost.
+    assert detect_format([{"messages": _CHAT}, _TOOL_ROW]) == "tool-calling"
