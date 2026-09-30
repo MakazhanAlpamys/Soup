@@ -104,7 +104,7 @@ soup data clean raw_data.jsonl --strip-boilerplate --repair-code --repair-json -
 ### Cleaning Rules & Defaults:
 - **Default (Safe & Non-Destructive):**
   1. **Control Characters & Whitespace:** Strips C0 controls (`\x00-\x1f`), zero-width spaces (`\u200b-\u200d`, `\ufeff`), and normalizes CRLF/CR to Unix LF.
-  2. **Empty & Degenerate Turns:** Drops rows where the assistant turn is empty or shorter than `--min-tokens`.
+  2. **Empty & Degenerate Turns:** Drops rows where the assistant turn is empty or shorter than `--min-tokens`. A turn that carries tool calls is exempt: its payload is the calls, and `"content": ""` is what the tool-calling format writes on a call-only turn.
 - **Opt-In Heuristic Repairs (Flags):**
   1. `--strip-boilerplate`: Strips canned preambles (*"Certainly! As an AI language model..."*) and sign-offs (*"I hope this helps!"*) across multiple passes.
   2. `--repair-code`: Auto-closes unclosed triple backtick (```` ``` ````) code fences in assistant completions.
