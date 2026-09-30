@@ -66,11 +66,12 @@ HIGHER_IS_BETTER: Mapping[str, bool] = MappingProxyType(
 # benchmarks/gate-1265-ab-nig.md; changing it means re-running that sweep.
 PRIOR_SCALE_ROWS = 5
 
-# #1339 - the largest standardised effect whose square is still a float. The
-# prior variance below squares effect_size / s0, and ** raises OverflowError
-# where * would have returned inf, so the bound is checked rather than the
-# result. Division does not raise: a near-constant held-out column would turn
-# the ratio into inf and the Bayes factor into -inf, a silent accept_h0.
+# #1339 - the largest standardised effect whose square is still a float. A
+# near-constant held-out column turns effect_size / s0 into a huge ratio or inf,
+# so the ratio is refused past this bound with a message that names the flag.
+# Below it, 1 + n_eff * g can still overflow at the tested row count; that and
+# every other non-finite statistic is refused in msprt_step before the
+# boundaries are compared, so neither ends in a silent -inf accept_h0.
 MAX_STANDARDISED_EFFECT = math.sqrt(sys.float_info.max)
 _MAX_METRIC_NAME_LEN = 32
 _MAX_SAMPLES_PER_ARM = 1_000_000
@@ -265,7 +266,9 @@ def _nig_log_bayes_factor(
     """
     nu = n_control + n_treatment - 2
     n_eff = (n_control * n_treatment) / (n_control + n_treatment)
-    t_squared = mean_difference**2 * n_eff / pooled_variance
+    # Squared with * so an overflow is inf, which msprt_step refuses, not a bare
+    # OverflowError (** raises).
+    t_squared = mean_difference * mean_difference * n_eff / pooled_variance
     spread = 1.0 + n_eff * prior_variance
     return -0.5 * math.log(spread) - 0.5 * (nu + 1) * (
         math.log1p(t_squared / (nu * spread)) - math.log1p(t_squared / nu)
@@ -288,16 +291,57 @@ def _held_out_rows(control: Sequence[float], treatment: Sequence[float]) -> int 
     return held if held <= shortest else None
 
 
+def _require_finite_means(
+    metric: str,
+    control: Sequence[float],
+    treatment: Sequence[float],
+    mean_c: float,
+    mean_t: float,
+) -> None:
+    """#1384 - refuse an arm whose values sum past the largest float.
+
+    Its mean is infinite however little the values spread, so the message names
+    their size, not their spread.
+    """
+    if math.isfinite(mean_c) and math.isfinite(mean_t):
+        return
+    values = [*control, *treatment]
+    raise ValueError(
+        f"The {metric!r} column's values are too large for the test "
+        f"statistic: they run from {min(values):.3g} to {max(values):.3g}, "
+        "and an arm's sum overflows a float. Rescale the metric (divide its "
+        "values by a large constant) and re-run."
+    )
+
+
 def _means_and_pooled_variance(
-    control: Sequence[float], treatment: Sequence[float]
+    metric: str, control: Sequence[float], treatment: Sequence[float]
 ) -> tuple[float, float, float]:
-    """Per-arm means and the Bessel-pooled variance (each arm needs ``>= 2`` rows)."""
+    """Per-arm means and the Bessel-pooled variance (each arm needs ``>= 2`` rows).
+
+    Called for the held-out rows and for the tested rows, so the #1384 refusals
+    cover both: an arm sum past the largest float, and deviations whose squares
+    are.
+    """
     mean_c = sum(control) / len(control)
     mean_t = sum(treatment) / len(treatment)
-    sum_sq = sum((x - mean_c) ** 2 for x in control) + sum(
-        (x - mean_t) ** 2 for x in treatment
+    _require_finite_means(metric, control, treatment, mean_c, mean_t)
+    # Squared as d * d, not d ** 2: ** raises OverflowError where * returns inf,
+    # and inf is refused below.
+    sum_sq = sum((x - mean_c) * (x - mean_c) for x in control) + sum(
+        (x - mean_t) * (x - mean_t) for x in treatment
     )
-    return mean_c, mean_t, sum_sq / (len(control) + len(treatment) - 2)
+    variance = sum_sq / (len(control) + len(treatment) - 2)
+    # #1384 - deviations past about 1.3e154 square past the largest float.
+    if not math.isfinite(variance):
+        values = [*control, *treatment]
+        raise ValueError(
+            f"The {metric!r} column's spread is above what the test "
+            f"statistic can represent: its values run from {min(values):.3g} to "
+            f"{max(values):.3g}, and their variance overflows a float. Rescale "
+            "the metric (divide its values by a large constant) and re-run."
+        )
+    return mean_c, mean_t, variance
 
 
 def _standardised_effect(
@@ -319,12 +363,23 @@ def _standardised_effect(
     if scale_rows < 2:
         return 0.0
     _, _, variance = _means_and_pooled_variance(
-        control[:scale_rows], treatment[:scale_rows]
+        config.metric, control[:scale_rows], treatment[:scale_rows]
     )
     if variance <= 0.0:
         return 0.0
     scale = math.sqrt(variance)
     effect = config.effect_size / scale
+    # #1384 - a variance below the smallest normal float is a spread the
+    # statistic cannot carry at any --effect-size: say so, and how to fix it.
+    if effect > MAX_STANDARDISED_EFFECT and variance < sys.float_info.min:
+        raise ValueError(
+            f"The {config.metric!r} column's spread is below what the test "
+            f"statistic can represent: its first {scale_rows} rows per arm have a "
+            f"pooled standard deviation of {scale:.3g}, which puts --effect-size "
+            f"{config.effect_size!r} at {effect:.3g} standard deviations, past the "
+            f"{MAX_STANDARDISED_EFFECT:.3g} the statistic can square. Rescale the "
+            "metric (multiply its values by a large constant) and re-run."
+        )
     if effect > MAX_STANDARDISED_EFFECT:
         raise ValueError(
             f"--effect-size {config.effect_size!r} is {effect:.3g} standard "
@@ -359,6 +414,8 @@ def msprt_step(
     treat = _validate_sample_list(treatment, arm="treatment")
 
     n_c, n_t = len(ctrl), len(treat)
+    if n_c and n_t:
+        _require_finite_means(config.metric, ctrl, treat, sum(ctrl) / n_c, sum(treat) / n_t)
 
     def verdict(llr: float = 0.0, decision: str = "continue", direction: str | None = None):
         return MsprtVerdict(
@@ -378,20 +435,44 @@ def msprt_step(
     if held is None or n_c - held < 2 or n_t - held < 2:
         return verdict()
     rest_c, rest_t = ctrl[held:], treat[held:]
-    mean_c, mean_t, pooled_variance = _means_and_pooled_variance(rest_c, rest_t)
+    mean_c, mean_t, pooled_variance = _means_and_pooled_variance(
+        config.metric, rest_c, rest_t
+    )
     # Both tested arms constant: t is 0/0, and without measurement noise
     # sequential testing cannot bound the Type-I error honestly (code-review LOW
     # fix v0.63.0), so keep collecting.
     if pooled_variance <= 0.0:
         return verdict()
     diff = mean_t - mean_c
+    prior_variance = standardised_effect * standardised_effect
     llr = _nig_log_bayes_factor(
         n_control=len(rest_c),
         n_treatment=len(rest_t),
         mean_difference=diff,
         pooled_variance=pooled_variance,
-        prior_variance=standardised_effect**2,
+        prior_variance=prior_variance,
     )
+    # A non-finite statistic cannot be compared with the boundaries: nan crosses
+    # neither (a continue that never ends) and -inf is a silent accept_h0.
+    if not math.isfinite(llr):
+        n_eff = len(rest_c) * len(rest_t) / (len(rest_c) + len(rest_t))
+        if not math.isfinite(1.0 + n_eff * prior_variance):
+            raise ValueError(
+                f"--effect-size {config.effect_size!r} is {standardised_effect:.3g} "
+                f"standard deviations of the {config.metric!r} column's held-out "
+                f"rows, and at {len(rest_c)} + {len(rest_t)} tested rows the prior "
+                "variance of the test statistic overflows a float. Lower "
+                f"--effect-size, or check the {config.metric!r} column: a "
+                "near-constant held-out column reaches this at any --effect-size."
+            )
+        raise ValueError(
+            f"The {config.metric!r} column's tested rows are outside what the "
+            f"test statistic can represent: the arm means differ by {diff:.3g} at "
+            f"a pooled variance of {pooled_variance:.3g}, and the t statistic "
+            "overflows a float. Check the column for a near-constant arm, or "
+            "rescale the metric (divide its values by a large constant) if its "
+            "values are very large, and re-run."
+        )
     if llr >= math.log(1.0 / config.alpha):
         return verdict(llr, "reject_h0", _direction(config.metric, diff))
     if llr <= math.log(config.beta / (1.0 - config.alpha)):
