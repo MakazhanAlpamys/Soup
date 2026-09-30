@@ -1272,9 +1272,10 @@ class TrainingConfig(BaseModel):
     freeze_trainable_layers: Optional[int] = Field(
         default=None,
         description=(
-            "LLaMA Pro: signed int. Positive = train only top-N decoder "
-            "layers; negative = train only bottom-N. Magnitude capped at "
-            "1000. (v0.41.0)"
+            "LLaMA Pro: applies only together with expand_layers and is "
+            "refused without it. A positive value freezes every parameter "
+            "except the appended blocks. Magnitude capped at 1000. "
+            "(v0.41.0)"
         ),
     )
     # v0.41.0 Part C schema / v0.71.12 #84 live — Mixture-of-Depths routing.
@@ -4138,6 +4139,14 @@ class TrainingConfig(BaseModel):
                 "freezes the original layers and trains only the new blocks). "
                 "Set freeze_trainable_layers: <signed int>."
             )
+        if self.expand_layers is None and self.freeze_trainable_layers is not None:
+            raise ValueError(
+                "freeze_trainable_layers only applies together with "
+                "expand_layers (LLaMA Pro block expansion), where a positive "
+                "value trains only the appended blocks. Without expand_layers "
+                "nothing reads it, so the run trains as if it were unset. "
+                "Remove it, or set expand_layers: <int> to append new blocks."
+            )
         return self
 
     @model_validator(mode="after")
@@ -4862,6 +4871,30 @@ class SoupConfig(BaseModel):
         )
 
     @model_validator(mode="after")
+    def _validate_expand_layers_scope(self) -> "SoupConfig":
+        """#1325 - ``training.expand_layers`` (LLaMA Pro) is wired only in the
+        transformers text SFT/pretrain ``_setup_transformers`` paths. Every
+        other task/backend/modality accepts the fields and then silently
+        trains the unexpanded model, so refuse at load with the actual
+        task/backend/modality in the message."""
+        tcfg = self.training
+        if tcfg.expand_layers is None:
+            return self
+        if not (
+            self.task in {"sft", "pretrain"}
+            and self.backend == "transformers"
+            and self.modality == "text"
+        ):
+            raise ValueError(
+                "training.expand_layers (LLaMA Pro) is only wired for task "
+                "sft/pretrain on backend transformers with modality text; got "
+                f"task={self.task!r}, backend={self.backend!r}, "
+                f"modality={self.modality!r}. Remove expand_layers and "
+                "freeze_trainable_layers."
+            )
+        return self
+
+    @model_validator(mode="after")
     def _validate_cross_encoder_format(self) -> "SoupConfig":
         """#1219 - only the cross_encoder trainer reads pair rows."""
         if self.data.format == "cross_encoder" and self.task != "cross_encoder":
@@ -5434,6 +5467,10 @@ class SoupConfig(BaseModel):
                     "model's native CSM/AutoProcessor training path until Soup has "
                     "a dedicated CSM trainer."
                 )
+            if self.data.format == "audio" and tcfg.tts_family in {"spark", "oute"}:
+                from soup_cli.utils.tts_codec import incompatible_live_codec_error
+
+                raise ValueError(str(incompatible_live_codec_error(tcfg.tts_family)))
             if tcfg.tts_emotion is not None:
                 try:
                     validate_emotion_tag(tcfg.tts_emotion, family=tcfg.tts_family)
@@ -7181,6 +7218,9 @@ class SoupConfig(BaseModel):
 
         ``unlearn`` is refused in :meth:`_validate_unlearn_compat` for a
         different reason (it has an adapter but no ``Trainer`` optimizer).
+
+        The ``mlx`` backend is refused separately, in
+        :meth:`_validate_loraplus_backend` (#1324), after the MLX task gate.
         """
         tcfg = self.training
         if tcfg.loraplus_lr_ratio is None:
@@ -7412,6 +7452,32 @@ class SoupConfig(BaseModel):
             "is not yet implemented (upstream mlx-lm does not expose a "
             f"training helper). Use backend=transformers for task={self.task}."
         )
+
+    @model_validator(mode="after")
+    def _validate_loraplus_backend(self) -> "SoupConfig":
+        """#1324: ``loraplus_lr_ratio`` is not implemented on ``backend: mlx``.
+
+        MLX builds its LoRA adapter with ``mlx_lm``'s ``linear_to_lora_layers``
+        and its optimizer from a single learning rate (``plan_optimizer`` in
+        ``trainer/mlx_optim.py`` takes no parameter groups), so the ratio would
+        validate, print nothing in ``soup doctor --config``, and train A and B
+        at one learning rate. ``unsloth`` reaches the transformers wrappers'
+        ``attach_loraplus_optimizer`` call, so it stays allowed (#1080).
+
+        Defined after :meth:`_validate_mlx_task_support` and
+        :meth:`_validate_loraplus_has_a_trainable_lora_b` on purpose: a task
+        MLX cannot run, or one with no LoRA B matrix on any backend, is refused
+        for that reason first, so "use backend: transformers" below always
+        leads to a config that loads.
+        """
+        if self.backend == "mlx" and self.training.loraplus_lr_ratio is not None:
+            raise ValueError(
+                "Refused: training.loraplus_lr_ratio is not implemented on "
+                "backend='mlx' (the MLX optimizer uses one "
+                "learning rate for every LoRA tensor). Remove "
+                "training.loraplus_lr_ratio, or use backend: transformers."
+            )
+        return self
 
     @model_validator(mode="after")
     def _validate_uld_compat(self) -> "SoupConfig":

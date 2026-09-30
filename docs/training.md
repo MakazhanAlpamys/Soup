@@ -1285,6 +1285,13 @@ soup init --template reasoning
 soup train --config soup.yaml
 ```
 
+**Gradient watchdog (#342).** If non-finite gradients (NaN or Inf) appear during
+a GRPO run, the optimizer step is skipped: weights and optimizer state are
+unchanged, and the step still counts toward the step total and the LR schedule.
+The skipped-step count is logged at the end of the run (as a console warning
+when the fraction exceeds 5%) and persisted in `trainer_state.json` so
+`soup adapters audit` can see it.
+
 **Built-in reward functions:**
 - `accuracy` — 1.0 when the completion's final answer matches the gold's, else 0.0 (no partial credit)
 - `format` — checks for structured `<think>...</think>` reasoning blocks
@@ -1827,13 +1834,18 @@ that pairing — then Soup resamples to 16 kHz and calls the
 Transformers-native `HKUSTAudio/xcodec2-hf` codec, and
 renders the resulting ids as `<|s_ID|>` between Llasa's speech-generation
 boundary tokens. Audio remains duration/byte-capped and is read through an
-`O_NOFOLLOW` fd. Spark and Oute remain dependency-gated pending their #265
-slice. Sesame CSM fails earlier with an architecture-specific message because
+`O_NOFOLLOW` fd. Spark and Oute raw-audio live encoding now fails closed:
+Spark-TTS has no installable `sparktts` package and its official environment pins
+Torch/Transformers below Soup's supported stack; current `outetts` pins
+Transformers 4.52.3 and Oute preparation also needs transcript/word alignment.
+For those two families, pre-encode in the upstream environment and train the
+resulting codec-token chat with `data.format: chatml`. Sesame CSM fails earlier
+with an architecture-specific message because
 its 32 parallel Mimi codebooks require a native multimodal trainer, not a
 codec-string adapter.
 
-Four ready-made codec-string recipes ship: `orpheus-tts-sft`, `llasa-tts`,
-`spark-tts`, `oute-tts` — copy with `soup recipes use <name>`. Cross-validators
+Three ready-made codec-string recipes ship: `orpheus-tts-sft`, `llasa-tts`,
+`oute-tts` — copy with `soup recipes use <name>`. Cross-validators
 reject the `mlx` backend, `modality != audio_out`, and emotion tags outside the
 per-family allowlist.
 
@@ -1910,7 +1922,7 @@ training:
   epochs: 1
 ```
 
-The gate is the only trainable parameter; it is saved as `mole_gate.pt` alongside the run.
+The gate is the only trainable parameter; it is saved as `mole_gate.pt` alongside the run, saved into every `checkpoint-N`, and restored by `--resume`.
 It trains as an fp32 master weight on every device, so its gradient and AdamW moments are
 fp32 too, even where the frozen base loads in bf16 (on CUDA), and `mole_gate.pt` is saved in
 fp32: a `Linear(hidden, N)` of `4 x hidden x N` bytes, about 7 KB for the example above and

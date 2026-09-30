@@ -176,14 +176,14 @@ data:
   train: ./domain.jsonl
 training:
   expand_layers: 4              # append 4 zero-init decoder blocks
-  freeze_trainable_layers: 4    # train only the appended blocks
+  freeze_trainable_layers: 4    # train only the appended blocks (requires expand_layers)
   lr: 5e-5
   epochs: 1
 ```
 
 **What happens at trainer start.** Soup deep-copies the last `expand_layers` decoder blocks, zero-inits each clone's residual projections (`mlp.down_proj` + `self_attn.o_proj`) so the appended block initially acts as identity, appends them to `model.model.layers`, and updates `config.num_hidden_layers`. When `freeze_trainable_layers > 0` is set, every parameter except the appended blocks is frozen — this is the canonical LLaMA Pro "train only new blocks" recipe.
 
-**Scope.** Works on both `task: sft` and `task: pretrain` with `backend: transformers`. Bounds: `expand_layers ∈ [1, 64]`. Over-expansion (more new blocks than the base has layers) silently clamps to the base layer count. Non-Llama-shaped architectures (e.g. Falcon's `dense_4h_to_h`) emit a `warnings.warn` because the residual zero-init heuristic only matches the standard `down_proj` / `o_proj` names — the appended blocks are still appended + trainable, but lose the identity-init guarantee.
+**Scope.** Works on `task: sft` and `task: pretrain` with `backend: transformers` and `modality: text`; any other task, backend or modality is refused at config load, because no other trainer applies the expansion. Bounds: `expand_layers ∈ [1, 64]`. Over-expansion (more new blocks than the base has layers) silently clamps to the base layer count. Non-Llama-shaped architectures (e.g. Falcon's `dense_4h_to_h`) emit a `warnings.warn` because the residual zero-init heuristic only matches the standard `down_proj` / `o_proj` names — the appended blocks are still appended + trainable, but lose the identity-init guarantee.
 
 
 ## Optimizer & PEFT Zoo
@@ -402,7 +402,7 @@ training:
     alpha: 16
 ```
 
-- **Compatibility:** Wired on every Trainer-based task that trains a LoRA adapter, including the preference and RL tasks (`dpo`, `kto`, `orpo`, `simpo`, `ipo`, `bco`, `grpo`, `online_dpo`, `ppo`, `reward_model`, `distill`). Most attach the LoRA+ optimizer once the trainer is built; `ppo` passes it to the trainer's constructor instead, because trl's PPO trainer builds its optimizer and LR scheduler eagerly, and adds the value model to it at the base learning rate, as trl's default optimizer does. `classifier`, `reranker`, `cross_encoder` and `asr` full fine-tune by default, so LoRA+ applies there only with `classifier_lora: true` / `asr_lora: true` and `lora.r > 0`. Refused at config parse on tasks with no trainable LoRA $B$ matrix: `prm` (full fine-tune), `moe_lora_routing` (only the routing gate trains), and `classifier` / `reranker` / `cross_encoder` / `asr` without their LoRA flag. Also refused on `unlearn`, which runs its own optimizer loop rather than a Trainer. Refused with `lora.use_vera` (VeRA trains scaling vectors, not $A$/$B$ matrices, so every trainable tensor would run at `lr * ratio`). Mutually exclusive with `use_lorafa`.
+- **Compatibility:** Wired on every Trainer-based task that trains a LoRA adapter, including the preference and RL tasks (`dpo`, `kto`, `orpo`, `simpo`, `ipo`, `bco`, `grpo`, `online_dpo`, `ppo`, `reward_model`, `distill`). Most attach the LoRA+ optimizer once the trainer is built; `ppo` passes it to the trainer's constructor instead, because trl's PPO trainer builds its optimizer and LR scheduler eagerly, and adds the value model to it at the base learning rate, as trl's default optimizer does. `classifier`, `reranker`, `cross_encoder` and `asr` full fine-tune by default, so LoRA+ applies there only with `classifier_lora: true` / `asr_lora: true` and `lora.r > 0`. Refused at config parse on tasks with no trainable LoRA $B$ matrix: `prm` (full fine-tune), `moe_lora_routing` (only the routing gate trains), and `classifier` / `reranker` / `cross_encoder` / `asr` without their LoRA flag. Also refused on `unlearn`, which runs its own optimizer loop rather than a Trainer. Refused with `lora.use_vera` (VeRA trains scaling vectors, not $A$/$B$ matrices, so every trainable tensor would run at `lr * ratio`). Also refused on the `mlx` backend (#1324): the MLX optimizer Soup builds (`trainer/mlx_optim.py`) runs every LoRA tensor at one learning rate (no parameter groups), so the ratio would be silently ignored; remove it or use `backend: transformers`. Mutually exclusive with `use_lorafa`.
 
 
 ## LoRA-FA (Frozen-A LoRA)
@@ -643,7 +643,7 @@ soup train --config soup.yaml \
 
 The report contains the geometric `lrs[]`, raw + EMA-smoothed `losses[]`, the recommended LR (steepest negative gradient before divergence), the LR with min loss, and the divergence point if any.
 
-The sweep takes one training row per step. With fewer rows than `--find-lr-steps`, it runs one step per row over the same `--find-lr-start` → `--find-lr-end` range and prints a line saying so. The recommendation needs at least 4 points, so `--find-lr-steps` must be at least 4 and a training set with fewer than 4 rows is refused before the model loads. If the loss turns non-finite partway through, the report covers the steps before it; if that leaves fewer than 4, the command says where it diverged instead of writing a report.
+The sweep takes one training row per step. With fewer rows than `--find-lr-steps`, it runs one step per row over the same `--find-lr-start` → `--find-lr-end` range and prints a line saying so. The recommendation needs at least 4 points, so `--find-lr-steps` must be at least 4 and a training set with fewer than 4 rows is refused before the model loads. If the loss turns non-finite partway through, the report covers the steps before it; if that leaves fewer than 4, the command says where it diverged instead of writing a report. If the sweep cannot run at all (the config does not load, the model or dataset cannot be loaded, or `torch` is not installed), the command names the cause, exits 1 and writes no report.
 
 ### Auto Warmup Schedule
 

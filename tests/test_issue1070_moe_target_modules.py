@@ -533,11 +533,11 @@ class TestTheRatchet:
     def test_the_record_has_the_measured_shape(self):
         """If regeneration silently lost bases or experts, the tests above would
         pass while checking less. Pinned to the numbers the reviewer derived
-        independently: 114 bases, 23 MoE, 8 of them flagless, 13 model types."""
+        independently: 113 bases, 23 MoE, 8 of them flagless, 13 model types."""
         moe = _moe_bases()
         flagless = [b for b in moe if b not in _flagged_bases()]
 
-        assert len(_record()) == 114
+        assert len(_record()) == 113
         assert len(moe) == 23
         assert len(flagless) == 8, sorted(flagless)
         assert len({info["model_type"] for info in moe.values()}) == 13

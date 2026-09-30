@@ -70,6 +70,9 @@ def _nondefault_unwired_training_settings(training_config) -> list[str]:
     return enabled_flags + changed_tunables
 
 
+UNSUPPORTED_RESUME_TASKS: frozenset[str] = frozenset({"unlearn"})
+
+
 def _format_training_complete_loss(result: dict) -> str:
     """Render only a loss comparison that the trainer actually measured."""
     summary_kind = result.get("loss_summary_kind")
@@ -712,6 +715,7 @@ def train(
     # --- LR range finder fast path ---
     if find_lr:
         from soup_cli.utils.lr_finder import (
+            LrSweepUnavailableError,
             SweepTooShortError,
             compute_lr_schedule,
             save_lr_finder_report,
@@ -726,16 +730,15 @@ def train(
         except ValueError as exc:
             console.print(f"[red]Invalid --find-lr range:[/] {exc}")
             raise typer.Exit(1) from exc
-        # v0.33.0 #56: live LR-sweep training loop. Falls back to a
-        # synthetic curve only when the real loop cannot run (no torch /
-        # config load failure) so users still get a parseable report.
+        # v0.33.0 #56: live LR-sweep training loop. #1203: when it cannot run, the
+        # command refuses rather than writing a curve nobody measured.
         # #1189: the sweep returns the LRs it actually ran, which can be fewer than
         # --find-lr-steps (a short dataset, or a loss that went non-finite).
         try:
-            lrs, losses_for_report = _run_live_lr_sweep_or_synth(
+            lrs, losses_for_report = _run_live_lr_sweep(
                 config_path, schedule,
             )
-        except SweepTooShortError as exc:
+        except (SweepTooShortError, LrSweepUnavailableError) as exc:
             console.print(f"[red]{markup_escape(str(exc))}[/]")
             raise typer.Exit(1) from exc
         try:
@@ -959,6 +962,9 @@ def train(
             raise typer.Exit(1) from exc
     if hf_resume and not push_as:
         console.print("[red]--hf-resume requires --push-as <repo>[/]")
+        raise typer.Exit(1)
+    if hf_resume and cfg.task in UNSUPPORTED_RESUME_TASKS:
+        console.print(f"[red]--hf-resume is not supported for task {cfg.task!r}[/]")
         raise typer.Exit(1)
 
     # --- Eval-gate shortcut: --gate <path> sets training.eval_gate ---
@@ -2335,6 +2341,9 @@ def _resolve_resume_or_exit(resume: str, cfg: "SoupConfig") -> str | None:
     """
     if not resume:
         return None
+    if cfg.task in UNSUPPORTED_RESUME_TASKS:
+        console.print(f"[red]--resume is not supported for task {cfg.task!r}[/]")
+        raise typer.Exit(1)
     resume_from = _resolve_checkpoint(resume, cfg.output, cfg.experiment_name, backend=cfg.backend)
     if resume_from:
         console.print(f"[green]Resuming from:[/] {resume_from}")
@@ -2344,55 +2353,39 @@ def _resolve_resume_or_exit(resume: str, cfg: "SoupConfig") -> str | None:
     return resume_from
 
 
-def _run_live_lr_sweep_or_synth(
+def _run_live_lr_sweep(
     config_path: str, schedule: list[float],
 ) -> tuple[list[float], list[float]]:
-    """v0.33.0 #56 — try to run an in-process LR sweep; fall back to a
-    synthetic curve when prerequisites are missing.
+    """v0.33.0 #56 — run the in-process LR sweep over the config's own model.
 
     Returns ``(lrs, losses)`` of equal length.
 
-    Falls back when:
-      - torch / transformers / datasets are not importable
-      - config load fails
-      - dataset cannot be tokenized into a small in-memory loader
-    The fallback curve descends 60% then diverges so the recommended-LR
-    extraction in :func:`find_optimal_lr` still produces sensible output.
-    A ``SweepTooShortError`` is a refusal and is never turned into a curve.
+    #1203: every reason the sweep cannot run is a refusal.
+    :class:`LrSweepUnavailableError` covers a config that will not load and a
+    model or dataset that cannot be swept; :class:`SweepTooShortError` covers
+    fewer than ``MIN_NUM_STEPS`` rows, and a loss that is non-finite from the
+    first step or turns non-finite before 4 steps have run.
+    This used to answer all of them with a synthetic curve shaped by the LR
+    schedule alone, so a base model that does not exist exited 0 with a
+    ``recommended_lr`` that described no model and no data.
     """
-    from soup_cli.utils.lr_finder import SweepTooShortError
+    from soup_cli.utils.lr_finder import LrSweepUnavailableError, SweepTooShortError
 
     try:
         cfg = load_config(config_path)
-    except Exception as exc:  # noqa: BLE001 — fall back rather than abort
-        console.print(
-            f"[yellow]--find-lr: config load failed ({exc}); "
-            f"writing synthetic curve.[/]"
-        )
-        return schedule, _synth_lr_curve(len(schedule))
+    except Exception as exc:  # noqa: BLE001 — one refusal line, not a traceback
+        raise LrSweepUnavailableError(
+            f"--find-lr: config load failed ({exc}); no LR report was written."
+        ) from exc
 
     try:
         return _live_lr_sweep_from_config(cfg, schedule)
     except SweepTooShortError:
         raise
-    except Exception as exc:  # noqa: BLE001 — informative fallback
-        console.print(
-            f"[yellow]--find-lr: live sweep unavailable ({exc}); "
-            f"writing synthetic curve.[/]"
-        )
-        return schedule, _synth_lr_curve(len(schedule))
-
-
-def _synth_lr_curve(n: int) -> list[float]:
-    descend_until = max(1, int(n * 0.6))
-    out: list[float] = []
-    for i in range(n):
-        if i < descend_until:
-            out.append(3.0 - 2.0 * (i / descend_until))
-        else:
-            tail = (i - descend_until) / max(1, n - descend_until)
-            out.append(1.0 + 8.0 * tail * tail)
-    return out
+    except Exception as exc:  # noqa: BLE001 — the cause is the useful half
+        raise LrSweepUnavailableError(
+            f"--find-lr: live sweep unavailable ({exc}); no LR report was written."
+        ) from exc
 
 
 def _lr_finder_dataset_path(train) -> str:
@@ -2413,7 +2406,7 @@ def _live_lr_sweep_from_config(
     the train dataset, then call :func:`run_lr_sweep`. Returns the
     ``(lrs, losses)`` the sweep actually ran."""
     # v0.40.1 Part C / G12 — fix broken `load_local` import that previously
-    # always fell through to the synthetic curve. The actual exported symbol
+    # made the live sweep fail every time. The actual exported symbol
     # is ``load_raw_data`` (path-only loader) — we use that.
     from pathlib import Path as _Path
 

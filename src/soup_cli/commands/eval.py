@@ -821,7 +821,10 @@ def leaderboard(
 
     if fmt in ("json", "csv"):
         output = export_leaderboard(lb, fmt=fmt)
-        console.print(output)
+        # Machine-readable JSON/CSV: raw stdout, not console.print — Rich folds
+        # rows/lines at the console width and parses ``[...]`` as markup when
+        # piped, corrupting the output (issue #1468).
+        typer.echo(output)
         return
 
     # Table format

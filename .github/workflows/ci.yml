@@ -501,7 +501,7 @@ jobs:
           files: coverage.xml
           fail_ci_if_error: false
       - name: Update test count badge
-        if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.11' && github.ref == 'refs/heads/main' && github.event_name == 'push'
+        if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.11' && github.ref == 'refs/heads/main' && github.event_name == 'push' && github.repository == 'MakazhanAlpamys/Soup'
         run: |
           TESTS=$(python -c "
           import xml.etree.ElementTree as ET
