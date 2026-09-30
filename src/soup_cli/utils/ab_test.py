@@ -66,15 +66,18 @@ HIGHER_IS_BETTER: Mapping[str, bool] = MappingProxyType(
 # benchmarks/gate-1265-ab-nig.md; changing it means re-running that sweep.
 PRIOR_SCALE_ROWS = 5
 
-# #1339 - the largest standardised effect whose square is still a float. A
-# near-constant held-out column turns effect_size / s0 into a huge ratio or inf,
-# so the ratio is refused past this bound with a message that names the flag.
-# Below it, 1 + n_eff * g can still overflow at the tested row count; that and
-# every other non-finite statistic is refused in msprt_step before the
-# boundaries are compared, so neither ends in a silent -inf accept_h0.
+# #1339 - the largest standardised effect whose square is still a float.
 MAX_STANDARDISED_EFFECT = math.sqrt(sys.float_info.max)
 _MAX_METRIC_NAME_LEN = 32
 _MAX_SAMPLES_PER_ARM = 1_000_000
+# The prior variance enters the statistic as 1 + n_eff * effect**2, and n_eff
+# grows with every row. So effect_size / s0 is checked against the largest n_eff
+# the tool accepts (half of _MAX_SAMPLES_PER_ARM), not the row count so far:
+# otherwise the same held-out rows would give a silent -inf accept_h0 at a few
+# rows and be refused only later, and an operator who stops at the first
+# verdict would never see the refusal. About 1.9e151. Any statistic that is
+# still non-finite is refused in msprt_step before the boundaries are compared.
+_MAX_PRIOR_EFFECT = math.sqrt(sys.float_info.max / (_MAX_SAMPLES_PER_ARM / 2))
 _VALID_DECISIONS: frozenset[str] = frozenset(
     {"continue", "reject_h0", "accept_h0"}
 )
@@ -366,25 +369,36 @@ def _standardised_effect(
         config.metric, control[:scale_rows], treatment[:scale_rows]
     )
     if variance <= 0.0:
+        # Rows that differ can still have a variance of 0.0 in floats (0 and
+        # 1e-170). Held out, they would set a prior variance of 0 and a continue
+        # that never ends, so only rows that are all equal wait for more.
+        if len(set(control[:scale_rows])) > 1 or len(set(treatment[:scale_rows])) > 1:
+            raise ValueError(
+                f"The {config.metric!r} column's spread is below what the test "
+                f"statistic can represent: its first {scale_rows} rows per arm "
+                "differ, but their variance underflows to 0. Rescale the metric "
+                "(multiply its values by a large constant) and re-run."
+            )
         return 0.0
     scale = math.sqrt(variance)
     effect = config.effect_size / scale
+    too_large = not math.isfinite(1.0 + (_MAX_SAMPLES_PER_ARM / 2) * effect * effect)
     # #1384 - a variance below the smallest normal float is a spread the
     # statistic cannot carry at any --effect-size: say so, and how to fix it.
-    if effect > MAX_STANDARDISED_EFFECT and variance < sys.float_info.min:
+    if too_large and variance < sys.float_info.min:
         raise ValueError(
             f"The {config.metric!r} column's spread is below what the test "
             f"statistic can represent: its first {scale_rows} rows per arm have a "
             f"pooled standard deviation of {scale:.3g}, which puts --effect-size "
             f"{config.effect_size!r} at {effect:.3g} standard deviations, past the "
-            f"{MAX_STANDARDISED_EFFECT:.3g} the statistic can square. Rescale the "
+            f"{_MAX_PRIOR_EFFECT:.3g} the statistic can carry. Rescale the "
             "metric (multiply its values by a large constant) and re-run."
         )
-    if effect > MAX_STANDARDISED_EFFECT:
+    if too_large:
         raise ValueError(
             f"--effect-size {config.effect_size!r} is {effect:.3g} standard "
             f"deviations at a pooled standard deviation of {scale:.3g}, and the "
-            f"test statistic overflows above {MAX_STANDARDISED_EFFECT:.3g}. "
+            f"test statistic overflows above {_MAX_PRIOR_EFFECT:.3g}. "
             f"Lower --effect-size, or check the {config.metric!r} column: a "
             "near-constant column reaches this at any --effect-size."
         )
