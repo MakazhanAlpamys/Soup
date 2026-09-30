@@ -110,6 +110,9 @@ soup data clean raw_data.jsonl --strip-boilerplate --repair-code --repair-json -
   2. `--repair-code`: Auto-closes unclosed triple backtick (```` ``` ````) code fences in assistant completions.
   3. `--repair-json`: Unwraps markdown code blocks from JSON arguments and repairs trailing commas in tool calls.
   4. `--prune-echo`: Drops rows where the assistant merely repeats the user prompt verbatim.
+  5. `--drop-invalid-json`: Drops rows with a tool call whose arguments still do not parse as JSON (after `--repair-json`, when both are set).
+
+  `--repair-json` and `--drop-invalid-json` read every call the tool-calling loader reads: the row's top-level `tool_calls` and each assistant turn's `tool_calls`, in the documented `{"function": {"name": ..., "arguments": ...}}` shape or flat. Arguments given as a JSON object are left as they are.
 
 Supports all standard formats: `chatml`, `alpaca`, `sharegpt`, `dpo`, `kto`, and `tool-calling`.
 
@@ -163,6 +166,17 @@ embedding have no single supervised response, plaintext trains on raw text rathe
 than the chat turn `check` scores, tool-calling puts a tool-schema system turn
 before the prompt, which `check` does not render, and the multimodal formats need a
 real image or audio file per row. `-o` takes `.jsonl`, or `.json` for a JSON array.
+
+`insert` spreads the canaries through the file rather than appending them: the file is
+cut into one equal stretch per canary, and each canary goes to a random row of its own
+stretch (`--seed` fixes the rows). The dataset's own rows keep their order. The
+loader holds out the file's last rows as validation (`data.val_split`, 0.1 by default),
+and a canary there is never trained on, so appending put every canary out of reach
+from 135 rows on. Spread, a held-out tail of
+`data.val_split` holds about that share of them: `insert` prints how many of them the
+default split trains on, and the manifest records each canary's row in the written file
+(`"row"`, counted from 0) and the file's row count (`"rows"`). Set `data.val_split: 0`
+for a run where every canary must be trained on.
 
 `check` measures the model's loss on each inserted secret and ranks it against
 never-inserted **controls** drawn from the same secret space and sharing the same

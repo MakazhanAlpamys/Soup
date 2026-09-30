@@ -1126,7 +1126,14 @@ class DistillTrainerWrapper:
             self.nonfinite_tracker.check_and_warn()
         duration = time.time() - start
 
-        self.trainer.save_model(self._output_dir)
+        if self.config.training.relora_steps is None:
+            self.trainer.save_model(self._output_dir)
+        else:
+            from soup_cli.utils.peft_wiring import save_model_with_relora
+
+            save_model_with_relora(
+                self.trainer, self._output_dir, self.config.training.relora_steps
+            )
         self.tokenizer.save_pretrained(self._output_dir)
 
         logs = self.trainer.state.log_history

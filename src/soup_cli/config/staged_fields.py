@@ -40,11 +40,11 @@ class StagedField:
 #: or data pipeline. A field is only flagged if the user provides a value that
 #: DIFFERS from its schema default.
 #:
-#: Note: Training intelligence tunables already reported by ``soup train``
-#: (e.g. ``forgetting_*``, ``checkpoint_*``, ``convergence_*``) are excluded here
-#: to avoid conflicting diagnostics and adhere to their respective issue ownership
-#: (#808). ``early_stop_patience`` moved here from that report (#761), so it is
-#: reported once, with the refusal date.
+#: Note: Training intelligence parent enable flags (``forgetting_detection``,
+#: ``checkpoint_intelligence``, ``early_stop_on_regression``,
+#: ``convergence_detection``) continue to be reported by ``soup train``'s
+#: live honesty guard. The tunables themselves (Group B) are staged here (#808),
+#: so non-default values warn at load with the v0.77 refusal deadline.
 STAGED_FIELDS: dict[tuple[str, str], Any] = {
     ("training", "long_context_grpo"): False,
     ("training", "vision_grpo"): False,
@@ -56,6 +56,16 @@ STAGED_FIELDS: dict[tuple[str, str], Any] = {
     ("training", "lr_groups"): None,
     ("training", "early_stop_patience"): 2,
     ("training", "citation_recall_threshold"): None,
+    # #808 Group B: training-intelligence and convergence tunables
+    ("training", "forgetting_eval_steps"): 100,
+    ("training", "forgetting_benchmark"): "mini_mmlu",
+    ("training", "forgetting_stop"): False,
+    ("training", "checkpoint_eval_steps"): 200,
+    ("training", "checkpoint_eval_metric"): "composite",
+    ("training", "checkpoint_eval_tasks"): None,
+    ("training", "checkpoint_keep_top"): 3,
+    ("training", "convergence_window"): 50,
+    ("training", "convergence_rel_tol"): 0.005,
     ("data", "video_dir"): None,
     ("data", "video_fps"): None,
     ("data", "video_maxlen"): None,

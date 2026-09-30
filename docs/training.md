@@ -9,7 +9,8 @@
 > VRAM is bounded by one layer instead of the whole model. Add `quantization: 4bit` and an
 > 8B base fits a 4 GB card. Works for `sft` and, from v0.72.4, for `dpo` / `orpo` /
 > `simpo` / `kto` — DPO's reference model is the same streamed base with its adapters
-> switched off, so it costs no extra weights — see
+> switched off, so it needs no second copy of the model (on an untied checkpoint `dpo` and
+> `kto` still hold one copy of the output head per step) — see
 > [Layer Streaming](performance-and-quantization.md#layer-streaming-beta-v0720-nf4-v0722-disk--wider-archs-v0723-preference-losses-v0724).
 
 **Contents:**
@@ -1279,6 +1280,13 @@ soup init --template reasoning
 soup train --config soup.yaml
 ```
 
+**Gradient watchdog (#342).** If non-finite gradients (NaN or Inf) appear during
+a GRPO run, the optimizer step is skipped: weights and optimizer state are
+unchanged, and the step still counts toward the step total and the LR schedule.
+The skipped-step count is logged at the end of the run (as a console warning
+when the fraction exceeds 5%) and persisted in `trainer_state.json` so
+`soup adapters audit` can see it.
+
 **Built-in reward functions:**
 - `accuracy` — 1.0 when the completion's final answer matches the gold's, else 0.0 (no partial credit)
 - `format` — checks for structured `<think>...</think>` reasoning blocks
@@ -1321,8 +1329,15 @@ ignoring case and whitespace, `$`, `\(...\)` and `\[...\]`, `\left` / `\right`, 
 `\tfrac` versus `\frac`; so `\boxed{\dfrac{14}{3}}` matches a gold of `\frac{14}{3}`. Both sides
 also drop the trailing punctuation `. , ; : !`, LaTeX thousands separators such as `1{,}000`, the
 LaTeX spacing commands `\,` `\!` `\;` `\:` and `\ `, and a Unicode minus sign. A `\\` row break is
-kept whole, so a matrix matches however its rows are spaced. Units, `^\circ`, `\text{}` and
-`x = ` prefixes are not stripped, and nothing is evaluated (`\frac{1}{2}` does not equal `0.5`).
+kept whole, so a matrix matches however its rows are spaced. One `\text{}` / `\textbf{}` /
+`\mathrm{}` / `\mbox{}` wrapper is unwrapped to its contents, `^\circ` / `^{\circ}` / `°` are
+dropped, a compact `\frac` argument is braced to match whether it is a single bare character or
+an already-braced group, with or without a space before it (`\frac12`, `\frac1{2}`, `\frac{1}2`,
+`\frac 34` and `\frac9{19}` all read `\frac{N}{D}`), and a one-letter variable prefix reads its
+right-hand side (`x = 7` reads `7`, on either side), though when both sides name a variable and
+the names differ (`x = 3` against `y = 3`), the pair scores 0.0, since a directrix or an
+asymptote's variable is part of its answer. Units are still not stripped (`42 apples` against
+`42`), and nothing is evaluated (`\frac{1}{2}` does not equal `0.5`).
 
 For GRPO, Soup preserves source dataset columns and TRL passes them to reward functions as
 keyword arguments. An Alpaca `output` or the final assistant turn in ShareGPT/ChatML is also
@@ -1546,6 +1561,12 @@ output: ./output_ppo
 controls optimization passes within each PPO update. Soup forwards both values,
 plus `ppo_kl_penalty`, to the active TRL `PPOConfig` names and prints the
 effective schedule during setup.
+
+One PPO rollout batch is `batch_size` x `gradient_accumulation_steps` prompts on
+every process, and TRL drops a partial batch, so the train set needs at least
+`batch_size` x `gradient_accumulation_steps` x the number of processes rows.
+A smaller one would never reach a step, so `soup train` refuses it before loading
+any model and names the row count and both settings.
 
 PPO supports two reward sources:
 - **Reward model** (`reward_model`): pre-trained reward model (from step 2)
@@ -1808,13 +1829,18 @@ that pairing — then Soup resamples to 16 kHz and calls the
 Transformers-native `HKUSTAudio/xcodec2-hf` codec, and
 renders the resulting ids as `<|s_ID|>` between Llasa's speech-generation
 boundary tokens. Audio remains duration/byte-capped and is read through an
-`O_NOFOLLOW` fd. Spark and Oute remain dependency-gated pending their #265
-slice. Sesame CSM fails earlier with an architecture-specific message because
+`O_NOFOLLOW` fd. Spark and Oute raw-audio live encoding now fails closed:
+Spark-TTS has no installable `sparktts` package and its official environment pins
+Torch/Transformers below Soup's supported stack; current `outetts` pins
+Transformers 4.52.3 and Oute preparation also needs transcript/word alignment.
+For those two families, pre-encode in the upstream environment and train the
+resulting codec-token chat with `data.format: chatml`. Sesame CSM fails earlier
+with an architecture-specific message because
 its 32 parallel Mimi codebooks require a native multimodal trainer, not a
 codec-string adapter.
 
-Four ready-made codec-string recipes ship: `orpheus-tts-sft`, `llasa-tts`,
-`spark-tts`, `oute-tts` — copy with `soup recipes use <name>`. Cross-validators
+Three ready-made codec-string recipes ship: `orpheus-tts-sft`, `llasa-tts`,
+`oute-tts` — copy with `soup recipes use <name>`. Cross-validators
 reject the `mlx` backend, `modality != audio_out`, and emotion tags outside the
 per-family allowlist.
 
@@ -1891,7 +1917,7 @@ training:
   epochs: 1
 ```
 
-The gate is the only trainable parameter; it is saved as `mole_gate.pt` alongside the run.
+The gate is the only trainable parameter; it is saved as `mole_gate.pt` alongside the run, saved into every `checkpoint-N`, and restored by `--resume`.
 It trains as an fp32 master weight on every device, so its gradient and AdamW moments are
 fp32 too, even where the frozen base loads in bf16 (on CUDA), and `mole_gate.pt` is saved in
 fp32: a `Linear(hidden, N)` of `4 x hidden x N` bytes, about 7 KB for the example above and

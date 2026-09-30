@@ -591,6 +591,16 @@ class GRPOTrainerWrapper:
 
         attach_grpo_stability_callback(self.trainer, tcfg)
 
+        # #342 — gradient watchdog (on_pre_optimizer_step) must be always-on.
+        # attach_grpo_stability_callback only fires when stability knobs
+        # are set.  ensure_grpo_stability_callback is a no-op if already
+        # attached, otherwise attaches with defaults (only watchdog fires).
+        from soup_cli.utils.peft_wiring import (
+            ensure_grpo_stability_callback,
+        )
+
+        ensure_grpo_stability_callback(self.trainer)
+
         # v0.71.11 #235/#238/#240 — wire the live RL callbacks (reward-hack,
         # echo-trap, mid-epoch RL checkpoint).
         from soup_cli.utils.peft_wiring import attach_rl_callbacks
@@ -604,7 +614,7 @@ class GRPOTrainerWrapper:
             task="grpo",
         )
 
-        # v0.40.6 #67 — ReLoRA callback (magnitude-prune LoRA every N steps).
+        # v0.40.6 #67 — ReLoRA merge-and-reinitialize restart callback.
         from soup_cli.utils.peft_wiring import (
             attach_curriculum_callback,
             attach_loraplus_optimizer,
@@ -786,9 +796,19 @@ class GRPOTrainerWrapper:
             self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)
         duration = time.time() - start
 
-        # Save final model (LoRA adapter)
-        self.trainer.save_model(self._output_dir)
+        if self.config.training.relora_steps is None:
+            self.trainer.save_model(self._output_dir)
+        else:
+            from soup_cli.utils.peft_wiring import save_model_with_relora
+
+            save_model_with_relora(
+                self.trainer, self._output_dir, self.config.training.relora_steps
+            )
         self.tokenizer.save_pretrained(self._output_dir)
+        # #342 — persist trainer_state.json (including nan_skip_count
+        # from the stability callback) next to adapter_config.json so
+        # ``soup adapters audit`` can read the skipped-step fraction.
+        self.trainer.save_state()
 
         # Extract metrics
         logs = self.trainer.state.log_history

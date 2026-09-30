@@ -1,0 +1,92 @@
+# Recipe attach ratchet (#1116).
+#
+# `soup recipes verify` builds every shipped config's base on the meta device
+# and runs the trainer's own target resolution and the real peft attach, so a
+# recipe whose target_modules match nothing is caught before a user downloads
+# the weights. It reads `config.json` from the Hub, nothing else.
+# `scripts/check_recipe_attach.py` pins the configs that knowingly cannot attach
+# yet, and fails only on a change: a new cannot-attach, or a pinned one that now
+# attaches and should leave its list.
+#
+# Two trigger shapes, by ruling on #1116:
+#
+#   push to main    -- HF_TOKEN is in scope, so gated bases are verified.
+#   pull_request    -- no token, on purpose. Fork PRs never see secrets anyway,
+#                      and a same-repo PR must not report more coverage than a
+#                      fork PR would. A gated base is SKIPPED (never a pass,
+#                      never a failure); the count line says how many, so a
+#                      green PR run is not mistaken for full coverage.
+#
+# Not a required check, and must never become one: a Hub outage would then
+# block every merge. The recipe-repo-ids job (#677) stays token-free on a
+# schedule for the same reason; this one is the attach-level complement.
+name: recipe attach
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/soup_cli/recipes/**'
+      - 'src/soup_cli/config/**'
+      - 'src/soup_cli/templates/**'
+      - 'src/soup_cli/utils/attach_preflight.py'
+      - 'src/soup_cli/utils/peft_wiring.py'
+      - 'src/soup_cli/utils/moe.py'
+      - 'src/soup_cli/commands/recipes.py'
+      - 'scripts/check_recipe_attach.py'
+      - 'examples/**'
+      - 'pyproject.toml'
+      - '.github/workflows/recipe-attach.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'src/soup_cli/recipes/**'
+      - 'src/soup_cli/config/**'
+      - 'src/soup_cli/templates/**'
+      - 'src/soup_cli/utils/attach_preflight.py'
+      - 'src/soup_cli/utils/peft_wiring.py'
+      - 'src/soup_cli/utils/moe.py'
+      - 'src/soup_cli/commands/recipes.py'
+      - 'scripts/check_recipe_attach.py'
+      - 'examples/**'
+      - 'pyproject.toml'
+      - '.github/workflows/recipe-attach.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Same rule as recipe-validation.yml (#1374): a pull request supersedes its own
+# earlier run; pushes to main share one group, so a running main run finishes
+# and a newer push replaces only the pending one.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || (github.ref == 'refs/heads/main' && 'main-push' || github.sha) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  verify:
+    name: attach every shipped config on the meta device
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      PYTHONUTF8: "1"
+      PYTHONIOENCODING: "utf-8"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install the training stack
+        # `[train]`, not `[dev]`: the attach needs torch, transformers and peft
+        # and nothing from the test extras.
+        run: pip install -e ".[train]"
+      - name: Ratchet every shipped config's attach
+        # Exit 2 is a new cannot-attach, or a pinned config that now attaches;
+        # exit 1 is the command itself failing. Skipped (gated, no token) exits 0
+        # and is counted on the line this prints.
+        env:
+          # This step only: the install above runs third-party build code and
+          # never needs the token. Empty on anything but a push to main, and
+          # huggingface_hub reads an empty HF_TOKEN as "no token".
+          HF_TOKEN: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && secrets.HF_TOKEN || '' }}
+        run: python scripts/check_recipe_attach.py

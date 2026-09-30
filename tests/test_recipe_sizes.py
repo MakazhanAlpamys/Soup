@@ -44,7 +44,6 @@ _FIXTURE_PATH = (
 #: Bases that have no safetensors metadata on the Hugging Face Hub.
 EXCLUDED_SIZE_BASES = {
     "BioMistral/BioMistral-7B",
-    "SparkAudio/Spark-TTS-0.5B",
     "baichuan-inc/Baichuan2-13B-Chat",
     "mistralai/Mistral-Large-3-675B-Instruct-2512",
     "mistralai/Pixtral-12B-2409",
@@ -121,7 +120,12 @@ def size_problems(recipes, arch):
 def test_every_recipe_label_matches_its_base():
     problems, checked = size_problems(RECIPES, _load_base_architectures())
     assert problems == [], "\n".join(problems)
-    assert checked >= 150, checked
+    excluded = sum(
+        1 for m in RECIPES.values()
+        if (yaml.safe_load(m.yaml_str) or {}).get("base") in EXCLUDED_SIZE_BASES
+    )
+    na_count = sum(1 for m in RECIPES.values() if m.size == "N/A")
+    assert checked + excluded + na_count == len(RECIPES)
 
 
 @pytest.mark.parametrize(("name", "old_label"), [

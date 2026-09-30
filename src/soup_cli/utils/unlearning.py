@@ -173,8 +173,8 @@ def validate_unlearn_compat(*, task: str, backend: str) -> None:
         )
     if backend == "mlx":
         raise ValueError(
-            "task='unlearn' is not supported on backend=mlx in v0.61.0 "
-            "(deferred to v0.61.1)"
+            "task='unlearn' is not supported on backend=mlx: there is no MLX "
+            "unlearning path. Use backend: transformers."
         )
 
 

@@ -296,6 +296,8 @@ Input rows look like `{"arm": "control", "latency": 1.23}` or `{"arm": "treatmen
 
 `soup ab` exits `0` on every decision, including a `worse` one; to gate a pipeline on a regression, read `direction` from the output or the webhook payload.
 
+`soup ab` exits `1`, naming the metric column, when its values are outside what a float can carry: so close together that the standard error of the difference underflows to 0 (a column of `0` and `1e-161`), so far apart that their variance overflows (a column of `0` and `1e200`), or so large that an arm's sum overflows (an arm of `1e308` values). Rescale the metric and re-run.
+
 `soup ab` accepts `--slack-url` / `--discord-url` (v0.71.5) and pings the webhook **only when the test actually decides** (`reject_h0` / `accept_h0`) — a still-running `continue` stays quiet so you're not paged on every peek. The payload carries `decision` and `direction` (`null` on `accept_h0`). Same SSRF-hardened validator as `soup drift-alarm`.
 
 

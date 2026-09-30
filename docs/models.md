@@ -14,7 +14,7 @@ Soup works with **any** of the **340,000+** text-generation models on [HuggingFa
 
 | Model Family | Models | Sizes | Best For |
 |---|---|---|---|
-| **Llama 4** | Llama-4-Scout-17B, Llama-4-Maverick-17B | 17B | General, multilingual |
+| **Llama 4** | Llama-4-Scout-17B, Llama-4-Maverick-17B | 109B-400B | General, multilingual |
 | **Llama 3.x** | Llama-3.1-8B-Instruct, Llama-3.3-70B-Instruct | 1B–70B | Chat, instruction following |
 | **Llama 3.2 Vision** | Llama-3.2-11B-Vision-Instruct, Llama-3.2-90B-Vision | 11B–90B | Image understanding |
 | **Gemma 3** | Gemma-3-4B-IT, Gemma-3-9B-IT, Gemma-3-27B-IT | 4B–27B | Efficient, multilingual |

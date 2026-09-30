@@ -46,10 +46,6 @@ _UNRESOLVABLE_CATALOG_REASONS = {
     "zai-org/GLM-5.1": "Model ID specifies release '5.1' without parameter count (754B).",
 }
 
-# Hub safetensors totals for catalog bases whose recipe label is NOT the total
-# parameter count (#1161 / #1168), so the label cannot be the yardstick for them.
-# All previously known divergences are resolved by #1168.
-_KNOWN_TOTAL_B: dict[str, float] = {}
 
 
 
@@ -174,9 +170,9 @@ class TestIssue1198HubModelSizeParsing:
         assert model_size_from_name("ise-uiuc/Magicoder-S-DS-6.7B") == 6.7
 
     def test_every_allowlisted_base_is_still_used(self) -> None:
-        """Ensure every base in allowlist and _KNOWN_TOTAL_B is actually used in RECIPES."""
+        """Ensure every base in allowlist is actually used in RECIPES."""
         used = {recipe.model for recipe in RECIPES.values()}
-        stale = sorted((set(_UNRESOLVABLE_CATALOG_REASONS) | set(_KNOWN_TOTAL_B)) - used)
+        stale = sorted(set(_UNRESOLVABLE_CATALOG_REASONS) - used)
         assert not stale, f"allowlist names bases no recipe uses: {stale}"
 
     def test_recipe_catalog_resolution_or_allowlist(self) -> None:
@@ -196,7 +192,6 @@ class TestIssue1198HubModelSizeParsing:
                 val = float(size_match.group(1))
                 unit = size_match.group(2)
                 expected_b = val if unit == "B" else val / 1000.0
-                expected_b = _KNOWN_TOTAL_B.get(model, expected_b)
                 rel_diff = abs(parsed - expected_b) / expected_b
 
                 if rel_diff > 0.10:

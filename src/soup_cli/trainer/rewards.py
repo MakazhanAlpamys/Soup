@@ -300,7 +300,7 @@ def math_verify_reward(
             matched = final_answer.answers_match(parsed, reference)
             rewards.append(1.0 if matched else 0.0)
             continue
-        if parsed.number is None:
+        if parsed.number is None or final_answer.variables_conflict(parsed, reference):
             rewards.append(0.0)
             continue
         try:

@@ -314,7 +314,8 @@ def _run_ppo_setup(
         training=training,
     )
     wrapper = PPOTrainerWrapper(cfg, device="cpu", deepspeed_config=deepspeed_config)
-    dataset = {"train": [{"prompt": "What is 2+2?", "answer": "4"}]}
+    # #1391: one rollout batch is batch_size (1 here) x gradient_accumulation_steps (4)
+    dataset = {"train": [{"prompt": "What is 2+2?", "answer": "4"}] * 4}
 
     with mock_patch("soup_cli.trainer.ppo.PPOTrainerWrapper._setup_reward"), \
          mock_patch("soup_cli.trainer.ppo.PPOTrainerWrapper._setup_transformers"), \
@@ -531,6 +532,8 @@ def test_real_ppo_trainer_trains_the_value_model_with_loraplus(tmp_path, monkeyp
         f"  reward_model: {reward_dir.as_posix()}\n"
         "  epochs: 1\n"
         "  batch_size: 2\n"
+        # #1391: two prompts have to fill one rollout batch (2 x 1)
+        "  gradient_accumulation_steps: 1\n"
         "  lr: 1e-4\n"
         f"  loraplus_lr_ratio: {RATIO}\n"
         "output: ./out\n"
