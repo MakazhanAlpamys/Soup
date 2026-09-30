@@ -805,6 +805,20 @@ the run refuses before either write when that volume lacks free space. Override 
 roots with `SOUP_SPECTRUM_CACHE_DIR` and `SOUP_LAYER_STREAM_CACHE_DIR`; both retain Soup's
 home/cwd/tmp containment policy.
 
+**Two or more NVMe drives.** On the disk tier the step waits on the read, and one drive is the
+ceiling. Set `SOUP_LAYER_STREAM_STRIPE_DIRS` to extra folders on OTHER NVMe drives
+(`os.pathsep`-separated: `;` on Windows, `:` elsewhere) and the layer cache is striped over them:
+decoder layer `i` lives on drive `i mod N`, and the reader keeps one layer in flight per drive.
+Each folder must already exist, sit on a different volume from the primary cache root and from
+every other entry, and classify as NVMe (`training.stream_disk_kind` overrides a wrong probe);
+anything else refuses the run and names the entry. The bytes are exactly the ones the single-drive
+cache holds, so striping changes the speed, not the result. It costs one more layer of host staging
+per extra drive (`stream_read_ahead` defaults to drives + 1). Changing the list re-shards the cache;
+unsetting it re-shards to one drive and names the folder left behind. Measured on two PM9B1 drives:
+7.65-9.15 GB/s together against ~4 for one ([record](../benchmarks/probe-rtx5070-two-drive-read.md));
+on a cold 70B-shaped NF4 store at seq 512 the training step went from 17.4 s to 9.97 s, 1.75x
+([gate](../benchmarks/gate-two-drive-striping.md)).
+
 Hugging Face snapshots normally expose symlinks into their blob cache, which the sharder
 deliberately does not follow. Soup materialises those weights under its Spectrum cache. If the
 HF cache already exposes real files, Soup now reads them in place instead of creating a second
