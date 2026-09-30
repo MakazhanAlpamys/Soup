@@ -22,6 +22,11 @@ f798c46e), one process per arm.
 
 **Status: rule committed before the run; results pending.**
 
+*Amended 2026-09-30, still before any arm ran:* §4 gains a third void
+condition, a suspended box. The first build attempt timed out because the
+laptop slept with its lid closed (2026-09-28/29), and a step that spans a
+suspend reads as a slow step. §2 is unchanged.
+
 ---
 
 ## 0. The question
@@ -190,7 +195,9 @@ read and write bytes/s, `\Memory\Pages/sec`, `\Memory\Committed Bytes`,
 only reads the two drives, so a write on either one during an arm is someone
 else's I/O. These are recorded, never used to set a verdict.
 
-**A void arm.** An arm during which any AC sample reads battery, or that exits
+**A void arm.** An arm during which any AC sample reads battery, during which
+the box was suspended (two consecutive 2-s power samples more than 30 s apart:
+a closed lid sleeps this laptop, and the sampler freezes with it), or that exits
 without writing its `step_plain` point, is void: its JSON and log are kept and
 published under a `_void` name, and it is re-run once, in the same position,
 when the pre-arm checks hold again. A second void in the same position ends the

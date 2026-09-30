@@ -1,0 +1,35 @@
+{
+ "runs": [
+  {
+   "run": "gate_build_striped",
+   "arm": "STRIPED",
+   "precheck_notes": [
+    "23:25:45 pre-arm check not met: headroom=6.98GiB",
+    "23:26:15 pre-arm check not met: headroom=5.82GiB",
+    "23:26:46 pre-arm check not met: headroom=6.10GiB",
+    "23:27:16 pre-arm check not met: headroom=3.54GiB",
+    "23:27:46 pre-arm check not met: headroom=7.84GiB",
+    "23:28:16 pre-arm check not met: headroom=3.60GiB",
+    "23:28:46 pre-arm check not met: headroom=3.81GiB",
+    "23:29:16 pre-arm check not met: headroom=4.02GiB",
+    "14:59:57 pre-arm check not met: headroom=5.37GiB"
+   ]
+  }
+ ],
+ "invocations": [
+  {
+   "started": "2026-09-28T23:25:45",
+   "plan": "build",
+   "build_arm": "STRIPED",
+   "settle_s": 0.0,
+   "python": "C:\\Users\\user\\AppData\\Local\\Programs\\Python\\Python312\\python.exe",
+   "pythonpath": "C:/Users/user/projects/Soup-stripe/src",
+   "dry_run": false,
+   "ended": "2026-09-29T14:59:57",
+   "outcome": "stopped: pre-arm checks not met within 15 min before gate_build_striped",
+   "not_run": [
+    "gate_build_striped"
+   ]
+  }
+ ]
+}

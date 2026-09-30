@@ -15,8 +15,10 @@ READS the two drives, so a write on either during an arm is someone else's I/O.
 It decides nothing about shipping. It applies only the two rows of the rule a single arm
 can settle (a SINGLE arm outside 15.0-21.5 s; ``direct_io`` or ``pinned`` not true), and
 stops when one fires, because no later arm can turn a no-verdict outcome into a verdict.
-An arm that sees battery power, or writes no ``step_plain`` point, is void: kept under a
-``_void`` name and re-run once in the same position.
+An arm that sees battery power, that the box was suspended in (two consecutive 2-s power
+samples more than 30 s apart: a closed lid sleeps this laptop, and a suspended step would
+read as a slow one), or that writes no ``step_plain`` point, is void: kept under a ``_void``
+name and re-run once in the same position.
 
 ``--plan build`` runs one untimed arm (``--steps 1 --warmup 0 --step --skip-events``) to
 build a cache before the rounds. No torch import: the driver must not charge commit or
@@ -76,6 +78,7 @@ PRECHECK_WAIT_S = 15 * 60
 PRECHECK_POLL_S = 30
 AC_POLL_S = 2.0
 PDH_POLL_S = 1.0
+SUSPEND_GAP_S = 30.0  # a gap this long between 2-s power samples means the box slept
 _AC_INDEX = re.compile(r"Current AC Power Setting Index:\s*(0x[0-9a-fA-F]+)")
 
 
@@ -465,9 +468,16 @@ def run_arm(name: str, arm: str, label: str, build: bool, dry_run: bool) -> Dict
     entry["shard_seconds"] = meta.get("shard_seconds")
     entry["layer_roots_head"] = (meta.get("layer_roots") or [])[:8]
     entry["stripe_roots"] = meta.get("stripe_roots")
+    # Gaps between consecutive power samples, and from the last one to the arm's end: the
+    # sampler thread freezes with the rest of the box, so a suspend shows up as one long gap.
+    sample_times = [row[0] for row in sampler.power_rows] + [ended]
+    max_gap = max((b - a for a, b in zip(sample_times, sample_times[1:])), default=None)
+    entry["during"]["max_power_sample_gap_s"] = max_gap
     void_reasons = []
     if entry["during"]["ac_min"] != 1 or entry["after"]["ac_line_status"] != 1:
         void_reasons.append(f"AC values seen {entry['during']['ac_values_seen']}")
+    if max_gap is None or max_gap > SUSPEND_GAP_S:
+        void_reasons.append(f"suspended: {max_gap} s between power samples")
     if plain is None:
         void_reasons.append(f"no step_plain point (exit code {exit_code})")
     entry["void_reasons"] = void_reasons
