@@ -103,6 +103,7 @@
     "training.embedding_temperature": 0.05,
     "training.epochs": 3,
     "training.eval_gate": null,
+    "training.eval_steps": null,
     "training.expand_layers": null,
     "training.forgetting_benchmark": "mini_mmlu",
     "training.forgetting_detection": false,
@@ -346,15 +347,6 @@
       "training.lora.r": 32,
       "training.lr": 5e-06
     },
-    "cogito-v2-sft": {
-      "base": "deepcogito/cogito-v2-preview",
-      "data.format": "auto",
-      "data.max_length": 4096,
-      "data.train": "./data/train.jsonl",
-      "training.lora.alpha": 32,
-      "training.lora.r": 16,
-      "training.lr": 0.0002
-    },
     "deepseek-ocr-sft": {
       "base": "deepseek-ai/DeepSeek-OCR",
       "data.format": "llava",
@@ -528,6 +520,37 @@
       "training.lr": 0.0001,
       "training.moe_lora": true
     },
+    "deepseek-v4-pro-dpo": {
+      "base": "deepseek-ai/DeepSeek-V4-Pro",
+      "data.format": "dpo",
+      "data.max_length": 4096,
+      "data.train": "./data/preference_train.jsonl",
+      "task": "dpo",
+      "training.batch_size": 1,
+      "training.epochs": 1,
+      "training.gradient_accumulation_steps": 32,
+      "training.gradient_checkpointing": true,
+      "training.lora.alpha": 64,
+      "training.lora.dropout": 0.0,
+      "training.lora.r": 32,
+      "training.lr": 5e-06,
+      "training.moe_lora": true
+    },
+    "deepseek-v4-pro-grpo": {
+      "base": "deepseek-ai/DeepSeek-V4-Pro",
+      "data.format": "auto",
+      "data.max_length": 8192,
+      "data.train": "./data/reasoning_train.jsonl",
+      "task": "grpo",
+      "training.batch_size": 1,
+      "training.gradient_accumulation_steps": 16,
+      "training.gradient_checkpointing": true,
+      "training.lora.alpha": 64,
+      "training.lora.dropout": 0.0,
+      "training.lora.r": 32,
+      "training.lr": 1e-05,
+      "training.moe_lora": true
+    },
     "deepseek-v4-pro-sft": {
       "base": "deepseek-ai/DeepSeek-V4-Pro",
       "data.format": "auto",
@@ -544,7 +567,7 @@
       "training.moe_lora": true
     },
     "devstral-sft": {
-      "base": "mistralai/Devstral-Small",
+      "base": "mistralai/Devstral-Small-2507",
       "data.format": "auto",
       "data.max_length": 8192,
       "data.train": "./data/code_train.jsonl",
@@ -604,16 +627,8 @@
       "training.lora.r": 16,
       "training.lr": 0.0001
     },
-    "gemma3-9b-sft": {
-      "base": "google/gemma-3-9b-it",
-      "data.format": "auto",
-      "data.train": "./data/train.jsonl",
-      "training.lora.alpha": 32,
-      "training.lora.r": 16,
-      "training.lr": 0.0002
-    },
     "glm-4.6-sft": {
-      "base": "THUDM/glm-4.6",
+      "base": "zai-org/GLM-4.6",
       "data.format": "auto",
       "data.max_length": 4096,
       "data.train": "./data/train.jsonl",
@@ -699,7 +714,7 @@
       "training.lr": 0.0001
     },
     "granite-4-sft": {
-      "base": "ibm-granite/granite-4.0-tiny-base",
+      "base": "ibm-granite/granite-4.0-h-tiny-base",
       "data.format": "auto",
       "data.train": "./data/train.jsonl",
       "training.lora.alpha": 32,
@@ -767,7 +782,7 @@
       "training.lr": 1e-05
     },
     "internvl-3-5-sft": {
-      "base": "OpenGVLab/InternVL3-5",
+      "base": "OpenGVLab/InternVL3_5-8B",
       "data.format": "llava",
       "data.image_dir": "./data/images",
       "data.max_length": 4096,
@@ -779,7 +794,7 @@
       "training.lr": 1e-05
     },
     "kimi-k2-sft": {
-      "base": "moonshotai/Kimi-K2",
+      "base": "moonshotai/Kimi-K2-Base",
       "data.format": "auto",
       "data.max_length": 8192,
       "data.train": "./data/train.jsonl",
@@ -1310,7 +1325,7 @@
       "training.moe_lora": true
     },
     "mistral-medium-3-5-sft": {
-      "base": "mistralai/Mistral-Medium-3.5",
+      "base": "mistralai/Mistral-Medium-3.5-128B",
       "data.format": "auto",
       "data.max_length": 4096,
       "data.train": "./data/train.jsonl",
@@ -1369,9 +1384,7 @@
     },
     "oute-tts": {
       "base": "OuteAI/OuteTTS-0.3-500M",
-      "data.audio_dir": "./data/audio",
-      "data.format": "audio",
-      "data.train": "./data/tts_train.jsonl",
+      "data.train": "./data/tts_pre_encoded.jsonl",
       "modality": "audio_out",
       "task": "tts",
       "training.lr": 5e-05,
@@ -2151,18 +2164,8 @@
       "training.lr": 0.0001,
       "training.quantization": "none"
     },
-    "spark-tts": {
-      "base": "SparkAudio/Spark-TTS-0.5B",
-      "data.audio_dir": "./data/audio",
-      "data.format": "audio",
-      "data.train": "./data/tts_train.jsonl",
-      "modality": "audio_out",
-      "task": "tts",
-      "training.lr": 5e-05,
-      "training.tts_family": "spark"
-    },
     "voxtral-sft": {
-      "base": "mistralai/Voxtral-Mini-3B",
+      "base": "mistralai/Voxtral-Mini-3B-2507",
       "data.audio_dir": "./data/audio",
       "data.format": "audio",
       "data.train": "./data/audio_train.jsonl",

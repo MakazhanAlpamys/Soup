@@ -1225,17 +1225,32 @@ def _hf_dataset_info(dataset_id: str) -> dict:
     }
 
 
+def _datasets_major_version() -> int | None:
+    """Return the installed ``datasets`` package's major version, or None if unreadable."""
+    import re
+
+    try:
+        import datasets
+    except ImportError:
+        return None
+
+    match = re.match(r"(\d+)", str(getattr(datasets, "__version__", "")))
+    return int(match.group(1)) if match else None
+
+
 def _hf_download_dataset(
     dataset_id: str,
     split: str = "train",
     samples: int | None = None,
+    trust_remote_code: bool = False,
 ) -> list[dict]:
     """Download a dataset from HuggingFace Hub and return as list of dicts."""
     from datasets import load_dataset
 
     try:
         ds = load_dataset(
-            dataset_id, split=split, streaming=True, trust_remote_code=False,
+            dataset_id, split=split, streaming=True,
+            trust_remote_code=trust_remote_code,
         )
     except Exception as exc:
         raise ValueError(f"Failed to load dataset {dataset_id}: {exc}") from exc
@@ -1521,20 +1536,34 @@ def download_dataset(
             )
             raise typer.Exit(1)
 
-    from rich.panel import Panel
+    if trust_remote_code:
+        datasets_major = _datasets_major_version()
+        if datasets_major is not None and datasets_major >= 4:
+            console.print(
+                "[red]--trust-remote-code is refused: the installed "
+                f"datasets package (v{datasets_major}.x) dropped "
+                "trust_remote_code support upstream, so it would be silently "
+                "ignored rather than doing what you asked. Install "
+                "datasets<4 if this dataset needs its remote loading "
+                "script, or drop --trust-remote-code if it doesn't.[/]"
+            )
+            raise typer.Exit(1)
 
-    console.print(Panel(
-        "[bold yellow]Warning:[/] Downloading this dataset may execute a "
-        "remote dataset loading script from HuggingFace Hub.\n\n"
-        "Only download datasets from sources you trust.",
-        title="Remote Code Warning",
-        border_style="yellow",
-    ))
+        from rich.panel import Panel
+
+        console.print(Panel(
+            "[bold yellow]Warning:[/] Downloading this dataset may execute a "
+            "remote dataset loading script from HuggingFace Hub.\n\n"
+            "Only download datasets from sources you trust.",
+            title="Remote Code Warning",
+            border_style="yellow",
+        ))
     console.print(f"[dim]Downloading {dataset_id} (split={split})...[/]")
 
     try:
         data = _hf_download_dataset(
             dataset_id, split=split, samples=samples,
+            trust_remote_code=trust_remote_code,
         )
     except ValueError as exc:
         console.print(f"[red]{exc}[/]")

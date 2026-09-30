@@ -14,6 +14,9 @@ _RL_MAP = {
     "kto": "kto",
     "grpo": "grpo",
     "gdpo": "grpo",
+    "orpo": "orpo",
+    "ipo": "ipo",
+    "simpo": "simpo",
 }
 
 # Axolotl dataset type → Soup format
@@ -35,6 +38,9 @@ _TASK_FORMAT_MAP = {
     "dpo": "dpo",
     "kto": "kto",
     "grpo": "auto",
+    "orpo": "dpo",
+    "ipo": "dpo",
+    "simpo": "dpo",
 }
 
 
@@ -59,7 +65,16 @@ def migrate_axolotl(config_path: Path) -> Dict[str, Any]:
 
     # --- Task ---
     rl_type = raw.get("rl")
-    task = _RL_MAP.get(rl_type, "sft") if rl_type else "sft"
+    if rl_type:
+        if rl_type not in _RL_MAP:
+            supported = ", ".join(sorted(_RL_MAP))
+            raise ValueError(
+                f"No Soup task matches axolotl rl: {rl_type}. Supported rl "
+                f"values are {supported}."
+            )
+        task = _RL_MAP[rl_type]
+    else:
+        task = "sft"
 
     # --- Data ---
     data: Dict[str, Any] = {}
@@ -89,10 +104,14 @@ def migrate_axolotl(config_path: Path) -> Dict[str, Any]:
     if "sequence_len" in raw:
         data["max_length"] = raw["sequence_len"]
 
-    # --- LoRA ---
+    # --- LoRA / Full Fine-tuning ---
     adapter = raw.get("adapter")
     lora_section: Dict[str, Any] = {}
     include_lora = adapter in ("lora", "qlora")
+
+    if adapter and not include_lora:
+        warnings.append(f"adapter: {adapter} has no Soup equivalent. Using LoRA instead.")
+        include_lora = True
 
     if include_lora:
         if "lora_r" in raw:
@@ -105,6 +124,20 @@ def migrate_axolotl(config_path: Path) -> Dict[str, Any]:
             lora_section["target_modules"] = "auto"
         elif "lora_target_modules" in raw:
             lora_section["target_modules"] = raw["lora_target_modules"]
+    else:
+        # No adapter specified -> full fine-tuning requested
+        if task in ("sft", "embedding"):
+            warnings.append(
+                f"No adapter specified for task '{task}' - "
+                "full fine-tuning will be used (lora.r: 0)."
+            )
+            lora_section["r"] = 0
+        else:
+            raise ValueError(
+                f"No adapter specified for task '{task}', but Soup only supports full "
+                "fine-tuning (lora.r: 0) for sft and embedding tasks. "
+                "Specify an adapter (lora/qlora)."
+            )
 
     # --- Training ---
     training: Dict[str, Any] = {}
@@ -125,10 +158,14 @@ def migrate_axolotl(config_path: Path) -> Dict[str, Any]:
         training["warmup_ratio"] = raw["warmup_ratio"]
 
     # Quantization
-    if adapter == "qlora" or raw.get("load_in_4bit"):
+    if lora_section.get("r") == 0:
+        training["quantization"] = "none"
+    elif adapter == "qlora" or raw.get("load_in_4bit"):
         training["quantization"] = "4bit"
     elif raw.get("load_in_8bit"):
         training["quantization"] = "8bit"
+    else:
+        training["quantization"] = "none"
 
     # Flash attention. use_flash_attn is only read by the SFT-family trainer
     # (#806), so mapping it for any other task produces a config the loader
@@ -144,7 +181,7 @@ def migrate_axolotl(config_path: Path) -> Dict[str, Any]:
             )
 
     # Add lora section
-    if include_lora and lora_section:
+    if lora_section:
         training["lora"] = lora_section
 
     # --- Output ---

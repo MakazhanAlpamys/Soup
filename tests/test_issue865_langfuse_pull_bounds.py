@@ -33,8 +33,12 @@ _SECRET = "sk-lf-SOUP865SECRET-3c4d"
 # inside the timeout, the total is far past it.
 _TIMEOUT = 0.4
 _DRIP_GAP = 0.1
-_DRIP_CHUNKS = 20
-_EPSILON = 0.6  # scheduling slack on a loaded CI runner
+_DRIP_CHUNKS = 40
+# Scheduling slack on a loaded CI runner. 0.6 s was not enough on windows-latest:
+# a deadline that fired correctly still measured 1.05 s and 1.22 s end to end on
+# 2026-09-27/28. The bound stays a full second below the undefended drip
+# (_DRIP_CHUNKS * _DRIP_GAP = 4 s), so a missing deadline still fails it.
+_EPSILON = 1.6
 
 
 def _creds(host="https://cloud.langfuse.com"):
