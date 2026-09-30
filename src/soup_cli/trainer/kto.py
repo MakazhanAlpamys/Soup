@@ -11,6 +11,7 @@ from soup_cli.config.schema import SoupConfig
 from soup_cli.data.chat_templates import apply_chat_template_override
 from soup_cli.trainer.loss_summary import summarize_training_loss
 from soup_cli.trainer.stream_setup import StreamingSetupMixin
+from soup_cli.utils.eval_schedule import training_eval_kwargs
 from soup_cli.utils.gpu import (
     bf16_fp16_flags,
     estimate_batch_size,
@@ -36,6 +37,9 @@ class KTOTrainerWrapper(StreamingSetupMixin):
     #: KTO runs its KL batch as a SEPARATE forward rather than concatenating
     #: it (``kto_trainer.py`` :939-977), so the row count per forward is 1x.
     _STREAM_ROWS_PER_EXAMPLE = 1
+
+    #: The reference forward runs after the policy forward, before its backward.
+    _STREAM_REFILL_BEFORE_BACKWARD = True
 
     def __init__(
         self,
@@ -193,6 +197,7 @@ class KTOTrainerWrapper(StreamingSetupMixin):
             remove_unused_columns=False,
             deepspeed=self.deepspeed_config,
             **training_seed_kwargs(tcfg),
+            **training_eval_kwargs(cfg, eval_ds, batch_size=batch_size),
             **(self.fsdp_config or {}),
             beta=tcfg.kto_beta,
             max_length=cfg.data.max_length,
@@ -223,12 +228,15 @@ class KTOTrainerWrapper(StreamingSetupMixin):
 
             attach_empty_param_group_guard(self.trainer)
 
-        # v0.40.6 #67 — ReLoRA callback (magnitude-prune LoRA every N steps).
+        # v0.40.6 #67 — ReLoRA merge-and-reinitialize restart callback.
         from soup_cli.utils.peft_wiring import (
             attach_curriculum_callback,
+            attach_loraplus_optimizer,
             attach_plugin_callback,
             attach_relora_callback,
         )
+        # LoRA+ optimizer (#724/#745) — build and attach now that the trainer exists.
+        attach_loraplus_optimizer(self.trainer, tcfg)
         attach_relora_callback(self.trainer, tcfg)
         # v0.53.5 #114/#115 — dynamic curriculum live callback.
         attach_curriculum_callback(self.trainer, tcfg, str(output_dir), console)
@@ -290,7 +298,7 @@ class KTOTrainerWrapper(StreamingSetupMixin):
             resolve_lora_target_modules,
         )
 
-        target_modules = resolve_lora_target_modules(self.model, tcfg.lora.target_modules)
+        target_modules = resolve_lora_target_modules(self.model, tcfg.lora.target_modules, console)
         # #798: moe_lora picks the expert-FFN targets. Without this the flag
         # was accepted and ignored here, and on a fused-expert MoE the auto
         # resolution leaves peft with nothing to attach.
@@ -386,6 +394,7 @@ class KTOTrainerWrapper(StreamingSetupMixin):
 
         # v0.72.4 — the shared context releases the streaming weight source even
         # if training raises (see StreamingSetupMixin._training_context).
+        self._attach_streamed_save_guard()
         with self._training_context(
             activation_offloading_context(self.config.training, self._output_dir)
         ):
@@ -397,8 +406,17 @@ class KTOTrainerWrapper(StreamingSetupMixin):
             self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)
         duration = time.time() - start
 
-        # Save final model (LoRA adapter)
-        self.trainer.save_model(self._output_dir)
+        # Save final model; ReLoRA output is dense.
+        if self.config.training.relora_steps is None:
+            self.trainer.save_model(self._output_dir)
+        else:
+            from soup_cli.utils.peft_wiring import save_model_with_relora
+
+            save_model_with_relora(
+                self.trainer, self._output_dir, self.config.training.relora_steps
+            )
+        if self.config.training.relora_steps is None:
+            self._assert_streamed_adapter_saved(self._output_dir)
         self.tokenizer.save_pretrained(self._output_dir)
 
         # Extract metrics

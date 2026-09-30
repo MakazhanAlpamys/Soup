@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import json
 import os
 import re
 from pathlib import Path
@@ -34,15 +35,12 @@ _HW_FIT_OPTIMIZERS = frozenset({
 })
 
 _UNWIRED_TRAINING_TUNABLES = (
-    "forgetting_eval_steps",
+    # Group B tunables (forgetting_eval_steps, forgetting_benchmark, forgetting_stop,
+    # checkpoint_eval_steps, checkpoint_eval_metric, checkpoint_eval_tasks,
+    # checkpoint_keep_top, convergence_window, convergence_rel_tol) moved to
+    # config/staged_fields.py (#808), and early_stop_patience moved in #761:
+    # the loader warns about them with the refusal date, so they are not listed here.
     "forgetting_threshold",
-    "forgetting_benchmark",
-    "forgetting_stop",
-    "checkpoint_eval_steps",
-    "checkpoint_eval_metric",
-    "checkpoint_eval_tasks",
-    "checkpoint_keep_top",
-    "early_stop_patience",
 )
 
 
@@ -77,6 +75,71 @@ def _format_training_complete_loss(result: dict) -> str:
     ):
         return f"Loss: [bold]{result['final_loss']:.4f}[/]"
     return f"Loss: [bold]{result['initial_loss']:.4f} -> {result['final_loss']:.4f}[/]"
+
+
+def _train_sample_count(dcfg, dataset) -> int:
+    """Rows training will actually consume (#1054).
+
+    For ``format: pre_tokenized`` the rows come from the Arrow cache at
+    ``data.tokenized_path`` (loaded later, in the trainer), not from
+    ``load_dataset`` — which sees the ORIGINAL ``data.train`` file and drops
+    every row for want of an ``input_ids`` column, printing "0 train samples"
+    for a run that then trains on the whole cache. Read the count preprocess
+    recorded instead, falling back to the loader's view if it is unavailable or
+    not a plausible count (a negative ``row_count`` is a corrupt or hand-edited
+    metadata.json, and printing "Loaded: -3 train samples" helps nobody).
+    """
+    rows = len(dataset.get("train", []))
+    if dcfg.format != "pre_tokenized" or not dcfg.tokenized_path:
+        return rows
+    try:
+        with open(
+            os.path.join(dcfg.tokenized_path, "metadata.json"), encoding="utf-8"
+        ) as f:
+            count = json.load(f).get("row_count")
+    except (OSError, ValueError):
+        return rows
+    valid = isinstance(count, int) and not isinstance(count, bool) and count >= 0
+    return count if valid else rows
+
+
+def _refuse_empty_train(dcfg, dataset) -> None:
+    """Stop a run whose data loaded zero training rows (#1217).
+
+    The loader drops rows its format cannot convert (one bad line must not
+    abort a load), so a format mismatch loads nothing and still returns
+    cleanly. Before this, ``--dry-run`` then printed "Data OK: 0 train
+    samples" and "Config valid. Ready to train!", and the real run loaded the
+    model before failing on an empty dataset. Names the format and the first
+    drop reason, which is what the user has to change.
+    """
+    from rich.markup import escape
+
+    from soup_cli.data.loader import last_load_outcome
+
+    if _train_sample_count(dcfg, dataset) > 0:
+        return
+    outcome = last_load_outcome()
+    fmt = outcome.fmt or dcfg.format
+    message = (
+        f"[red]No training rows:[/] {escape(str(dcfg.train))} loaded 0 train "
+        f"samples as format {escape(repr(fmt))}."
+    )
+    if outcome.first_drop is not None:
+        drop_fmt, index, reason, _source = outcome.first_drop
+        message += (
+            f"\nEvery row that failed to convert was dropped. First: row "
+            f"{index} (as {escape(repr(drop_fmt))}): {escape(reason)}."
+            "\nFix those rows, or set data.format to the format they are in."
+        )
+    else:
+        message += (
+            "\nNo row failed to convert: the data is empty, every row went to "
+            "validation (data.val_split), or the rows were skipped for missing "
+            "media files."
+        )
+    console.print(message)
+    raise typer.Exit(1)
 
 
 def _build_hardware_fit_input(cfg):
@@ -295,7 +358,8 @@ def train(
         "--resume",
         "-r",
         help="Resume from checkpoint: path to checkpoint dir ('auto' for latest); "
-        "on the MLX backend, a path to a .safetensors adapter file instead",
+        "on the MLX backend, a path to a .safetensors adapter file instead. "
+        "Not supported when training.relora_steps is configured",
     ),
     wandb: bool = typer.Option(
         False,
@@ -375,7 +439,8 @@ def train(
         "--hf-resume",
         help=(
             "Download the latest checkpoint branch from the --push-as repo "
-            "and resume from it. Requires --push-as."
+            "and resume from it. Requires --push-as; not supported when "
+            "training.relora_steps is configured."
         ),
     ),
     find_lr: bool = typer.Option(
@@ -626,6 +691,7 @@ def train(
     # --- LR range finder fast path ---
     if find_lr:
         from soup_cli.utils.lr_finder import (
+            SweepTooShortError,
             compute_lr_schedule,
             save_lr_finder_report,
         )
@@ -642,11 +708,17 @@ def train(
         # v0.33.0 #56: live LR-sweep training loop. Falls back to a
         # synthetic curve only when the real loop cannot run (no torch /
         # config load failure) so users still get a parseable report.
-        losses_for_report = _run_live_lr_sweep_or_synth(
-            config_path, schedule,
-        )
+        # #1189: the sweep returns the LRs it actually ran, which can be fewer than
+        # --find-lr-steps (a short dataset, or a loss that went non-finite).
         try:
-            save_lr_finder_report(schedule, losses_for_report, find_lr_output)
+            lrs, losses_for_report = _run_live_lr_sweep_or_synth(
+                config_path, schedule,
+            )
+        except SweepTooShortError as exc:
+            console.print(f"[red]{markup_escape(str(exc))}[/]")
+            raise typer.Exit(1) from exc
+        try:
+            save_lr_finder_report(lrs, losses_for_report, find_lr_output)
         except ValueError as exc:
             console.print(f"[red]Invalid --find-lr-output:[/] {exc}")
             raise typer.Exit(1) from exc
@@ -673,6 +745,24 @@ def train(
     except Exception as exc:  # noqa: BLE001 — pydantic ValidationError et al.
         console.print(f"[red]{markup_escape(str(exc))}[/]")
         raise typer.Exit(code=2) from exc
+
+    if cfg.training.relora_steps is not None and (resume is not None or hf_resume):
+        console.print(
+            "[red]ReLoRA runs cannot resume from checkpoints.[/] "
+            "Remove training.relora_steps or start a fresh run."
+        )
+        raise typer.Exit(1)
+
+    # An unregistered data.chat_template name raises KeyError in the trainer,
+    # after the model has loaded. Check it before anything is downloaded.
+    from soup_cli.data.chat_templates import resolve_chat_template
+    from soup_cli.utils.terminal import for_terminal
+
+    try:
+        resolve_chat_template(cfg.data.chat_template)
+    except KeyError as exc:
+        console.print(f"[red]Invalid data.chat_template:[/] {for_terminal(exc.args[0])}")
+        raise typer.Exit(1) from exc
 
     # v0.72.3 — --resume / --hf-resume now work with layer streaming. v0.72.0-.2
     # refused them because a streamed model's `named_parameters()` carry an
@@ -864,9 +954,10 @@ def train(
         cfg.training.eval_gate = EvalGateConfig(enabled=True, suite=gate)
         console.print(f"[green]Eval gate enabled[/] with suite: {gate}")
 
-    # Honesty guard: these staged knobs are accepted but are not enforced
-    # mid-training in this build. Warn for every non-default member of the
-    # families, not only their enable flags, so a tuned no-op is never silent.
+    # Honesty guard: these staged flags (plus forgetting_threshold) are accepted
+    # but not enforced mid-training in this build. Their other tuning knobs are
+    # reported by the loader with refusal dates, so only active flags and
+    # non-default forgetting_threshold are reported here.
     _unwired_gates = _nondefault_unwired_training_settings(cfg.training)
     if _unwired_gates:
         console.print(
@@ -1250,7 +1341,7 @@ def train(
             cfg.training.use_galore, cfg.training.quantization, cfg.backend,
         )
         for err in galore_errors:
-            console.print(f"[red]GaLore error:[/] {err}")
+            console.print(f"[red]GaLore error:[/] {for_terminal(err)}")
         if galore_errors:
             raise typer.Exit(1)
 
@@ -1263,9 +1354,26 @@ def train(
 
         qat_errors = validate_qat_config(
             cfg.training.quantization, cfg.backend, cfg.modality,
+            quantization_aware=cfg.training.quantization_aware,
+            fp8_recipe=cfg.training.fp8_recipe,
+            check_card=not dry_run,
         )
         for err in qat_errors:
-            console.print(f"[red]QAT error:[/] {err}")
+            console.print(f"[red]QAT error:[/] {for_terminal(err)}")
+        if dry_run and cfg.training.quantization_aware == "fp8" and cfg.backend != "unsloth":
+            # #1154 review: a dry run validates the config, and FP8 configs are
+            # routinely written on a laptop for a remote card, so the local card
+            # is a note here -- printed before any error exit, so a dry run that
+            # also lacks torchao still shows the whole picture. The real run
+            # still stops on the card. (Unsloth: its refusal is the answer.)
+            from soup_cli.utils.fp8 import fp8_training_supported
+
+            card_ok, card_reason = fp8_training_supported(cfg.training.fp8_recipe)
+            if not card_ok:
+                console.print(
+                    "[yellow]Note:[/] this machine could not run it: "
+                    f"{markup_escape(card_reason)}"
+                )
         if qat_errors:
             raise typer.Exit(1)
 
@@ -1280,7 +1388,7 @@ def train(
             device=device,
         )
         for err in fsdp_errors:
-            console.print(f"[red]FSDP error:[/] {err}")
+            console.print(f"[red]FSDP error:[/] {for_terminal(err)}")
         if fsdp_errors:
             raise typer.Exit(1)
 
@@ -1296,7 +1404,7 @@ def train(
             deepspeed_config=ds_config_path,
         )
         for err in compile_errors:
-            console.print(f"[red]FSDP2 + torch.compile error:[/] {err}")
+            console.print(f"[red]FSDP2 + torch.compile error:[/] {for_terminal(err)}")
         if compile_errors:
             raise typer.Exit(1)
 
@@ -1311,7 +1419,7 @@ def train(
             gpu_count=gpu_info.get("gpu_count", 0),
         )
         for err in pp_errors:
-            console.print(f"[red]Pipeline parallel error:[/] {err}")
+            console.print(f"[red]Pipeline parallel error:[/] {for_terminal(err)}")
         if pp_errors:
             raise typer.Exit(1)
         console.print(
@@ -1336,7 +1444,7 @@ def train(
             cfg.training.use_liger, cfg.backend, device,
         )
         for err in liger_errors:
-            console.print(f"[red]Liger error:[/] {err}")
+            console.print(f"[red]Liger error:[/] {for_terminal(err)}")
         if liger_errors:
             raise typer.Exit(1)
 
@@ -1348,7 +1456,7 @@ def train(
             cfg.training.use_flash_attn, cfg.backend, device,
         )
         for err in fa_errors:
-            console.print(f"[red]FlashAttention error:[/] {err}")
+            console.print(f"[red]FlashAttention error:[/] {for_terminal(err)}")
         if fa_errors:
             raise typer.Exit(1)
 
@@ -1360,7 +1468,7 @@ def train(
             cfg.training.use_ring_attention, device, cfg.data.max_length,
         )
         for err in ring_errors:
-            console.print(f"[red]Ring Attention error:[/] {err}")
+            console.print(f"[red]Ring Attention error:[/] {for_terminal(err)}")
         if ring_errors:
             raise typer.Exit(1)
 
@@ -1391,13 +1499,25 @@ def train(
             console.print("[yellow]Cancelled.[/]")
             raise typer.Exit()
 
+    # #1223: a split nothing evaluates is not withheld -- generation tasks train
+    # on every row unless training.eval_steps asks for evaluation.
+    from soup_cli.utils.eval_schedule import loader_data_config, validation_notice
+
+    run_data_config = loader_data_config(cfg)
+    val_notice = validation_notice(cfg)
+
     if dry_run:
         console.print("[yellow]Dry run - validating data...[/]")
+        if val_notice:
+            console.print(f"[yellow]Note:[/] {val_notice}")
         dataset = load_dataset(
-            cfg.data,
+            run_data_config,
             preserve_source_columns=cfg.task == "grpo",
         )
-        console.print(f"[green]Data OK:[/] {len(dataset['train'])} train samples")
+        _refuse_empty_train(cfg.data, dataset)
+        console.print(
+            f"[green]Data OK:[/] {_train_sample_count(cfg.data, dataset)} train samples"
+        )
         if "val" in dataset:
             console.print(f"[green]Val:[/] {len(dataset['val'])} samples")
         console.print("[green]Config valid. Ready to train![/]")
@@ -1405,11 +1525,16 @@ def train(
 
     # Load data
     console.print("[dim]Loading dataset...[/]")
+    if val_notice:
+        console.print(f"[yellow]Note:[/] {val_notice}")
     dataset = load_dataset(
-        cfg.data,
+        run_data_config,
         preserve_source_columns=cfg.task == "grpo",
     )
-    console.print(f"[green]Loaded:[/] {len(dataset['train'])} train samples")
+    _refuse_empty_train(cfg.data, dataset)
+    console.print(
+        f"[green]Loaded:[/] {_train_sample_count(cfg.data, dataset)} train samples"
+    )
 
     # Capture the --tracker CLI value BEFORE the local ExperimentTracker
     # shadows it (v0.43.0 review fix — name-collision regression).
@@ -1516,106 +1641,12 @@ def train(
         # v0.40.4 #63 — every transformer-backend trainer now threads
         # --trust-remote-code through the wrapper (closes the v0.36.0 Part B gap).
         trainer_kwargs = dict(trainer_kwargs, trust_remote_code=trust_remote_code)
-        from soup_cli.trainer.mlx_routing import resolve_trainer
+        # #1213 — one dispatch, shared with `soup sweep`: the two commands used
+        # to keep separate chains and sweep's copy fell ten tasks and the MLX
+        # route behind. See soup_cli/trainer/dispatch.py.
+        from soup_cli.trainer.dispatch import build_trainer
 
-        mlx_cls, trainer_kwargs = resolve_trainer(cfg, trainer_kwargs)
-        if mlx_cls is not None:
-            trainer_wrapper = mlx_cls(cfg, **trainer_kwargs)
-        elif cfg.task == "dpo":
-            from soup_cli.trainer.dpo import DPOTrainerWrapper
-
-            trainer_wrapper = DPOTrainerWrapper(cfg, **trainer_kwargs)
-        elif cfg.task == "online_dpo":
-            from soup_cli.trainer.online_dpo import OnlineDPOTrainerWrapper
-
-            trainer_wrapper = OnlineDPOTrainerWrapper(cfg, **trainer_kwargs)
-        elif cfg.task == "grpo":
-            from soup_cli.trainer.grpo import GRPOTrainerWrapper
-
-            trainer_wrapper = GRPOTrainerWrapper(cfg, **trainer_kwargs)
-        elif cfg.task == "ppo":
-            from soup_cli.trainer.ppo import PPOTrainerWrapper
-
-            trainer_wrapper = PPOTrainerWrapper(cfg, **trainer_kwargs)
-        elif cfg.task == "kto":
-            from soup_cli.trainer.kto import KTOTrainerWrapper
-
-            trainer_wrapper = KTOTrainerWrapper(cfg, **trainer_kwargs)
-        elif cfg.task == "orpo":
-            from soup_cli.trainer.orpo import ORPOTrainerWrapper
-
-            trainer_wrapper = ORPOTrainerWrapper(cfg, **trainer_kwargs)
-        elif cfg.task == "simpo":
-            from soup_cli.trainer.simpo import SimPOTrainerWrapper
-
-            trainer_wrapper = SimPOTrainerWrapper(cfg, **trainer_kwargs)
-        elif cfg.task == "ipo":
-            from soup_cli.trainer.ipo import IPOTrainerWrapper
-
-            trainer_wrapper = IPOTrainerWrapper(cfg, **trainer_kwargs)
-        elif cfg.task == "bco":
-            from soup_cli.trainer.bco import BCOTrainerWrapper
-
-            trainer_wrapper = BCOTrainerWrapper(cfg, **trainer_kwargs)
-        elif cfg.task == "preference":
-            from soup_cli.trainer.preference import PreferenceTrainerWrapper
-
-            trainer_wrapper = PreferenceTrainerWrapper(cfg, **trainer_kwargs)
-        elif cfg.task == "reward_model":
-            from soup_cli.trainer.reward_model import RewardModelTrainerWrapper
-
-            trainer_wrapper = RewardModelTrainerWrapper(cfg, **trainer_kwargs)
-        elif cfg.task == "pretrain":
-            from soup_cli.trainer.pretrain import PretrainTrainerWrapper
-
-            trainer_wrapper = PretrainTrainerWrapper(cfg, **trainer_kwargs)
-        elif cfg.task == "embedding":
-            from soup_cli.trainer.embedding import EmbeddingTrainerWrapper
-
-            trainer_wrapper = EmbeddingTrainerWrapper(cfg, **trainer_kwargs)
-        elif cfg.task == "distill":
-            # v0.53.2 #133 — knowledge distillation (student + frozen teacher).
-            from soup_cli.trainer.distill import DistillTrainerWrapper
-
-            trainer_wrapper = DistillTrainerWrapper(cfg, **trainer_kwargs)
-        elif cfg.task == "prm":
-            # v0.53.11 #126 — Process Reward Model trainer.
-            from soup_cli.trainer.prm import PRMTrainerWrapper
-
-            trainer_wrapper = PRMTrainerWrapper(cfg, **trainer_kwargs)
-        elif cfg.task in ("classifier", "reranker", "cross_encoder"):
-            # v0.53.2 #132 — sequence-classification head.
-            from soup_cli.trainer.classifier import ClassifierTrainerWrapper
-
-            trainer_wrapper = ClassifierTrainerWrapper(cfg, **trainer_kwargs)
-        elif cfg.task == "unlearn":
-            # v0.71.9 #193 — NPO / SimNPO / RMU unlearning.
-            from soup_cli.trainer.unlearn import UnlearnTrainerWrapper
-
-            trainer_wrapper = UnlearnTrainerWrapper(cfg, **trainer_kwargs)
-        elif cfg.task == "moe_lora_routing":
-            # v0.71.12 #222 — MoLE per-token routing over N frozen task LoRAs.
-            from soup_cli.trainer.mole_routing import MoleRoutingTrainerWrapper
-
-            trainer_wrapper = MoleRoutingTrainerWrapper(cfg, **trainer_kwargs)
-        elif cfg.task == "tts":
-            # v0.71.20 #131 — TTS fine-tuning (SFT-style next-token CE over
-            # text + audio-codec-token sequences; per-family templating).
-            from soup_cli.trainer.tts import TTSTrainerWrapper
-
-            trainer_wrapper = TTSTrainerWrapper(cfg, **trainer_kwargs)
-        elif cfg.task == "asr":
-            # v0.71.32 — ASR (Whisper) fine-tuning via Seq2SeqTrainer.
-            from soup_cli.trainer.asr import AsrTrainerWrapper
-
-            trainer_wrapper = AsrTrainerWrapper(cfg, **trainer_kwargs)
-        else:
-            # Keep the transformers/TRL SFT surface outside the backend-first MLX
-            # route. The wrapper is import-light today, but importing it eagerly
-            # makes an MLX-only install depend on that remaining true forever.
-            from soup_cli.trainer.sft import SFTTrainerWrapper
-
-            trainer_wrapper = SFTTrainerWrapper(cfg, **trainer_kwargs)
+        trainer_wrapper = build_trainer(cfg, **trainer_kwargs)
         trainer_wrapper.setup(dataset)
 
         # #350 — PEFT promotes newly-created adapters to fp32. FSDP cannot flatten
@@ -1742,6 +1773,12 @@ def train(
         raise
 
     # Report
+    merge_hint = (
+        "ReLoRA output is already dense; no soup merge is needed"
+        if cfg.training.relora_steps is not None
+        else f"[bold]Merge LoRA:[/]  soup merge --adapter {result['output_dir']}"
+    )
+
     console.print(
         Panel(
             f"{_format_training_complete_loss(result)}\n"
@@ -1750,7 +1787,7 @@ def train(
             f"Run ID: [bold]{run_id}[/]\n\n"
             f"Quick test:  [bold]soup chat --model {result['output_dir']}[/]\n"
             f"Push to HF:  [bold]soup push --model {result['output_dir']}[/]\n"
-            f"Merge LoRA:  [bold]soup merge --adapter {result['output_dir']}[/]\n"
+            f"{merge_hint}\n"
             f"Export GGUF: [bold]soup export --model {result['output_dir']}[/]\n"
             f"Run details: [bold]soup runs show {run_id}[/]",
             title="[bold green]Training Complete![/]",
@@ -2287,9 +2324,11 @@ def _resolve_resume_or_exit(resume: str, cfg: "SoupConfig") -> str | None:
 
 def _run_live_lr_sweep_or_synth(
     config_path: str, schedule: list[float],
-) -> list[float]:
+) -> tuple[list[float], list[float]]:
     """v0.33.0 #56 — try to run an in-process LR sweep; fall back to a
     synthetic curve when prerequisites are missing.
+
+    Returns ``(lrs, losses)`` of equal length.
 
     Falls back when:
       - torch / transformers / datasets are not importable
@@ -2297,7 +2336,10 @@ def _run_live_lr_sweep_or_synth(
       - dataset cannot be tokenized into a small in-memory loader
     The fallback curve descends 60% then diverges so the recommended-LR
     extraction in :func:`find_optimal_lr` still produces sensible output.
+    A ``SweepTooShortError`` is a refusal and is never turned into a curve.
     """
+    from soup_cli.utils.lr_finder import SweepTooShortError
+
     try:
         cfg = load_config(config_path)
     except Exception as exc:  # noqa: BLE001 — fall back rather than abort
@@ -2305,16 +2347,18 @@ def _run_live_lr_sweep_or_synth(
             f"[yellow]--find-lr: config load failed ({exc}); "
             f"writing synthetic curve.[/]"
         )
-        return _synth_lr_curve(len(schedule))
+        return schedule, _synth_lr_curve(len(schedule))
 
     try:
         return _live_lr_sweep_from_config(cfg, schedule)
+    except SweepTooShortError:
+        raise
     except Exception as exc:  # noqa: BLE001 — informative fallback
         console.print(
             f"[yellow]--find-lr: live sweep unavailable ({exc}); "
             f"writing synthetic curve.[/]"
         )
-        return _synth_lr_curve(len(schedule))
+        return schedule, _synth_lr_curve(len(schedule))
 
 
 def _synth_lr_curve(n: int) -> list[float]:
@@ -2340,9 +2384,12 @@ def _lr_finder_dataset_path(train) -> str:
     return train[0] if isinstance(train, list) else train
 
 
-def _live_lr_sweep_from_config(cfg, schedule: list[float]) -> list[float]:
+def _live_lr_sweep_from_config(
+    cfg, schedule: list[float],
+) -> tuple[list[float], list[float]]:
     """Build a tiny in-process loop: load model + tokenizer + a slice of
-    the train dataset, then call :func:`run_lr_sweep`."""
+    the train dataset, then call :func:`run_lr_sweep`. Returns the
+    ``(lrs, losses)`` the sweep actually ran."""
     # v0.40.1 Part C / G12 — fix broken `load_local` import that previously
     # always fell through to the synthetic curve. The actual exported symbol
     # is ``load_raw_data`` (path-only loader) — we use that.
@@ -2352,7 +2399,31 @@ def _live_lr_sweep_from_config(cfg, schedule: list[float]) -> list[float]:
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
     from soup_cli.data.loader import load_raw_data
-    from soup_cli.utils.lr_finder import run_lr_sweep
+    from soup_cli.utils.lr_finder import (
+        MIN_NUM_STEPS,
+        SweepTooShortError,
+        compute_lr_schedule,
+        run_lr_sweep,
+    )
+
+    # #1189: one row is one sweep step, so size the sweep before the model loads.
+    lr_finder_train_path = _lr_finder_dataset_path(cfg.data.train)
+    rows = list(load_raw_data(_Path(lr_finder_train_path)))[: len(schedule)]
+    if len(rows) < MIN_NUM_STEPS:
+        row_count = f"{len(rows)} row" + ("" if len(rows) == 1 else "s")
+        raise SweepTooShortError(
+            f"--find-lr: the training set has {row_count}, but the sweep needs at "
+            f"least {MIN_NUM_STEPS} (one row per step; --find-lr-steps {len(schedule)})"
+        )
+    if len(rows) < len(schedule):
+        # Rebuilt over the same range: keeping the first rows' worth of the original
+        # schedule would never reach the high LRs where training diverges.
+        console.print(
+            f"[yellow]--find-lr: the training set has {len(rows)} rows, fewer than "
+            f"--find-lr-steps {len(schedule)}; sweeping {len(rows)} steps over the "
+            f"same {schedule[0]:.3g} to {schedule[-1]:.3g} range.[/]"
+        )
+        schedule = compute_lr_schedule(schedule[0], schedule[-1], len(rows))
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     tokenizer = AutoTokenizer.from_pretrained(
@@ -2364,12 +2435,6 @@ def _live_lr_sweep_from_config(cfg, schedule: list[float]) -> list[float]:
         cfg.base, trust_remote_code=False,
     ).to(device)
     model.train()
-
-    lr_finder_train_path = _lr_finder_dataset_path(cfg.data.train)
-    dataset = load_raw_data(_Path(lr_finder_train_path))
-    rows = list(dataset)[: max(2, len(schedule))]
-    if not rows:
-        raise RuntimeError("training dataset is empty")
 
     def _tokenize(row):
         text = row.get("text") or row.get("prompt") or ""
@@ -2388,10 +2453,32 @@ def _live_lr_sweep_from_config(cfg, schedule: list[float]) -> list[float]:
             tok = _tokenize(row)
             yield {k: v.unsqueeze(0) for k, v in tok.items()}
 
-    return run_lr_sweep(
+    losses = run_lr_sweep(
         model=model,
         dataloader=_batched_loader(),
         schedule=schedule,
         optimizer_factory=lambda params: torch.optim.AdamW(params, lr=schedule[0]),
         device=device,
     )
+    # With a row for every step, a short result means the loss went non-finite.
+    if len(losses) < len(schedule):
+        diverged_lr = schedule[len(losses)]
+        if not losses:
+            # No update has run yet, so the learning rate cannot be the cause.
+            raise SweepTooShortError(
+                f"--find-lr: the loss was non-finite on the first step (lr {diverged_lr:.3g}), "
+                "before any update; check the training data, dtype and model rather "
+                "than the LR range"
+            )
+        if len(losses) < MIN_NUM_STEPS:
+            steps_run = f"{len(losses)} step" + ("" if len(losses) == 1 else "s")
+            raise SweepTooShortError(
+                f"--find-lr: the loss became non-finite at lr {diverged_lr:.3g} after "
+                f"{steps_run}, too few for a recommendation (need "
+                f"{MIN_NUM_STEPS}); lower --find-lr-start / --find-lr-end"
+            )
+        console.print(
+            f"[yellow]--find-lr: the loss became non-finite at lr {diverged_lr:.3g}; "
+            f"the report covers the {len(losses)} steps before it.[/]"
+        )
+    return schedule[: len(losses)], losses

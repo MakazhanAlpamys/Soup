@@ -1,4 +1,4 @@
-"""#755 — declared per-(task, backend) config support.
+"""#755 — declared per-(task, backend, modality) config support.
 
 A field can be declared, validated, documented and still be read by nothing on
 the backend you chose. That has been filed one field at a time: #683, #686,
@@ -18,15 +18,22 @@ drift -- every entry must name a real field, and every dotted field name in
 ``trainer/mlx_sft.py``'s own warning list must appear here. It cannot originate
 the truth; it can only stop it rotting, which is the failure that produced #749.
 
-Scope today: ``task=sft`` on ``backend=mlx``. Other pairs report nothing rather
+Scope today: ``task=sft`` on ``backend=mlx`` and on ``backend=unsloth`` (#1124;
+both apply to every modality), plus multimodal vision and audio on
+``backend=transformers`` (#1156). Other combinations report nothing rather
 than guessing, which is the honest default for a table that has not been
 reviewed for them.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from collections.abc import Callable
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Any
+
+from soup_cli.utils.advanced_precision import (
+    UNSLOTH_PRECISION_INCOMPATIBLE_REASON,
+)
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from soup_cli.config.schema import SoupConfig
@@ -46,6 +53,17 @@ REJECTED = "rejected"
 STATUSES = frozenset({IGNORED, REJECTED})
 
 DEFAULT_BACKEND = "transformers"
+DEFAULT_MODALITY = "text"
+
+
+def _default_active(value: Any) -> bool:
+    """A setting is active when it is switched on (truthy)."""
+    return bool(value)
+
+
+def _seed_active(value: Any) -> bool:
+    """0 is a valid random seed, so any non-None value is active."""
+    return value is not None
 
 
 @dataclass(frozen=True)
@@ -62,6 +80,7 @@ class SupportEntry:
     #: (this is what happens to ``max_grad_norm`` when #750 lands), and a
     #: ``True`` entry the trainer stops reading means the warning was deleted.
     trainer_reads: bool = False
+    active: Callable[[Any], bool] = field(default=_default_active, compare=False, repr=False)
 
     def describe(self) -> str:
         suffix = f" (#{self.issue})" if self.issue else ""
@@ -79,12 +98,14 @@ _MLX_SFT: tuple[SupportEntry, ...] = (
         IGNORED,
         "MLX seeds through mx.random, not this field",
         trainer_reads=True,
+        active=_seed_active,
     ),
     SupportEntry(
         "training.data_seed",
         IGNORED,
         "MLX seeds through mx.random, not this field",
         trainer_reads=True,
+        active=_seed_active,
     ),
     SupportEntry(
         "training.use_galore",
@@ -190,12 +211,89 @@ _MLX_SFT: tuple[SupportEntry, ...] = (
 )
 
 
-#: ``(task, backend)`` -> the settings that pair does not honour.
-REGISTRY: dict[tuple[str, str], tuple[SupportEntry, ...]] = {
-    ("sft", "mlx"): _MLX_SFT,
+# Note: The drift guard accepts these unread entries because the text path
+# reads data.train_on_responses_only and data.mask_history in
+# data/sft_format.py and data/loss_mask.py, outside the declared trainer modules.
+_TRANSFORMERS_VISION_SFT: tuple[SupportEntry, ...] = (
+    SupportEntry(
+        "data.train_on_responses_only",
+        IGNORED,
+        "multimodal vision collator supervises all tokens; assistant-only masking "
+        "is not implemented for vision datasets",
+        issue=1156,
+        trainer_reads=False,
+    ),
+    SupportEntry(
+        "data.mask_history",
+        IGNORED,
+        "multimodal vision collator supervises all tokens; mask_history is applied "
+        "only by the transformers text label builder",
+        issue=1156,
+        trainer_reads=False,
+    ),
+)
+
+_TRANSFORMERS_AUDIO_SFT: tuple[SupportEntry, ...] = (
+    SupportEntry(
+        "data.train_on_responses_only",
+        IGNORED,
+        "audio training supervises all tokens; assistant-only masking "
+        "is not implemented for audio datasets",
+        issue=1156,
+        trainer_reads=False,
+    ),
+    SupportEntry(
+        "data.mask_history",
+        IGNORED,
+        "audio training supervises all tokens; mask_history is applied "
+        "only by the transformers text label builder",
+        issue=1156,
+        trainer_reads=False,
+    ),
+)
+
+
+_UNSLOTH_SFT: tuple[SupportEntry, ...] = (
+    SupportEntry(
+        "training.quantization_aware",
+        REJECTED,
+        f"QAT and FP8 training are not compatible with the unsloth backend "
+        f"({UNSLOTH_PRECISION_INCOMPATIBLE_REASON})",
+        issue=1124,
+    ),
+    SupportEntry(
+        "training.fp8_attention",
+        REJECTED,
+        f"fp8_attention is not supported on backend=unsloth "
+        f"({UNSLOTH_PRECISION_INCOMPATIBLE_REASON})",
+        issue=1124,
+    ),
+    SupportEntry(
+        "training.nvfp4",
+        REJECTED,
+        f"nvfp4 is not supported on backend=unsloth ({UNSLOTH_PRECISION_INCOMPATIBLE_REASON})",
+        issue=1124,
+    ),
+)
+
+
+#: ``(task, backend, modality)`` -> the settings that combination does not honour.
+REGISTRY: dict[tuple[str, str, str], tuple[SupportEntry, ...]] = {
+    ("sft", "mlx", "text"): _MLX_SFT,
+    ("sft", "unsloth", "text"): _UNSLOTH_SFT,
+    ("sft", "transformers", "vision"): _TRANSFORMERS_VISION_SFT,
+    ("sft", "transformers", "audio"): _TRANSFORMERS_AUDIO_SFT,
 }
 
-#: Every module a reviewed pair can read config through -- the trainer plus the
+_TRANSFORMERS_SFT_MODULES = (
+    "soup_cli/trainer/sft.py",
+    "soup_cli/trainer/loss_summary.py",
+    "soup_cli/trainer/stream_setup.py",
+    "soup_cli/trainer/rewind_hf.py",
+    "soup_cli/trainer/raft.py",
+)
+
+#: Every module a reviewed combination can read config through -- the trainer plus the
 #: helpers it delegates to. The guard scans the **union**.
 #:
 #: Naming only the trainer was a real hole, found by mutation on #756: the
@@ -203,39 +301,59 @@ REGISTRY: dict[tuple[str, str], tuple[SupportEntry, ...]] = {
 #: ``mlx_sft.py``. The guard caught that drift only because #734 happened to
 #: leave ``warmup_ratio=`` and ``weight_decay=`` visible at the call site. A
 #: field wired entirely inside a helper would have passed.
-TRAINER_MODULES: dict[tuple[str, str], tuple[str, ...]] = {
-    ("sft", "mlx"): (
+TRAINER_MODULES: dict[tuple[str, str, str], tuple[str, ...]] = {
+    ("sft", "mlx", "text"): (
         "soup_cli/trainer/mlx_sft.py",
         "soup_cli/trainer/mlx_optim.py",
         "soup_cli/trainer/mlx_masking.py",
         "soup_cli/trainer/rewind_mlx.py",
         "soup_cli/trainer/loss_summary.py",
     ),
+    # utils/unsloth.py handles the loader path. trainer/sft.py::_setup_unsloth is not listed
+    # here because listing sft.py would cause the drift guard to inspect transformers-only
+    # precision reads; an AST test in test_issue1124 guards _setup_unsloth instead.
+    ("sft", "unsloth", "text"): ("soup_cli/utils/unsloth.py",),
+    ("sft", "transformers", "vision"): _TRANSFORMERS_SFT_MODULES,
+    ("sft", "transformers", "audio"): _TRANSFORMERS_SFT_MODULES,
 }
 
 
-def unsupported_for(task: str, backend: str) -> tuple[SupportEntry, ...]:
-    """Every declared gap for a task/backend pair, or ``()`` if unreviewed."""
-    return REGISTRY.get((task, backend), ())
+def unsupported_for(
+    task: str, backend: str, modality: str = DEFAULT_MODALITY
+) -> tuple[SupportEntry, ...]:
+    """Every declared gap for a task/backend/modality combination, or ``()`` if unreviewed."""
+    if (task, backend, modality) in REGISTRY:
+        return REGISTRY[(task, backend, modality)]
+    # MLX and Unsloth have no modality-specific trainers; their SFT gaps
+    # apply to any modality setting.
+    if backend in ("mlx", "unsloth"):
+        return REGISTRY.get((task, backend, DEFAULT_MODALITY), ())
+    return ()
 
 
 def check_config(cfg: "SoupConfig") -> list[SupportEntry]:
     """The declared gaps that apply to the fields this config actually sets.
 
-    Only fields the user wrote are reported. Pydantic's ``model_fields_set``
-    distinguishes those from the ones sitting at their schema default, which is
-    the difference between a useful pre-flight check and a wall of 275 rows.
+    Only fields the user wrote and switched on are reported. Pydantic's
+    ``model_fields_set`` distinguishes the written fields from the ones sitting
+    at their schema default, which is the difference between a useful pre-flight
+    check and a wall of 275 rows. ``entry.active`` then drops a field written in
+    its off position (e.g. ``false``); ``seed: 0`` still counts as set.
     """
-    entries = unsupported_for(cfg.task, getattr(cfg, "backend", DEFAULT_BACKEND))
+    backend = getattr(cfg, "backend", DEFAULT_BACKEND)
+    modality = getattr(cfg, "modality", DEFAULT_MODALITY)
+    entries = unsupported_for(cfg.task, backend, modality)
     if not entries:
         return []
 
-    written: set[str] = set()
+    written: dict[str, Any] = {}
     for namespace in ("training", "data"):
         section = getattr(cfg, namespace, None)
         if section is None:
             continue
         for name in getattr(section, "model_fields_set", ()):
-            written.add(f"{namespace}.{name}")
+            written[f"{namespace}.{name}"] = getattr(section, name)
 
-    return [entry for entry in entries if entry.field in written]
+    return [
+        entry for entry in entries if entry.field in written and entry.active(written[entry.field])
+    ]

@@ -36,10 +36,13 @@ class TestTtsCodecPackage:
     def test_per_family_packages(self):
         from soup_cli.utils.tts import TTS_CODEC_PACKAGES, tts_codec_package
 
-        for fam in ("orpheus", "sesame_csm", "llasa", "spark", "oute"):
+        for fam in ("orpheus", "llasa", "spark", "oute"):
             assert tts_codec_package(fam) == TTS_CODEC_PACKAGES[fam]
         assert tts_codec_package("orpheus") == "snac"
+        assert tts_codec_package("llasa") == "torchaudio"
         assert tts_codec_package("spark") == "sparktts"
+        with pytest.raises(RuntimeError, match="no Soup-compatible"):
+            tts_codec_package("sesame_csm")
 
     def test_case_insensitive(self):
         from soup_cli.utils.tts import tts_codec_package
@@ -348,8 +351,11 @@ class TestTtsSchemaAndRouting:
         assert cfg.training.tts_family == "orpheus"
 
     def test_train_routes_tts(self):
-        src = (_SRC / "commands" / "train.py").read_text(encoding="utf-8")
-        assert 'cfg.task == "tts"' in src
+        # #1213 — the routing chain moved into the dispatch both commands call.
+        train_src = (_SRC / "commands" / "train.py").read_text(encoding="utf-8")
+        assert "build_trainer(" in train_src
+        src = (_SRC / "trainer" / "dispatch.py").read_text(encoding="utf-8")
+        assert 'task == "tts"' in src
         assert "TTSTrainerWrapper" in src
 
     def test_utils_tts_no_top_level_torch(self):

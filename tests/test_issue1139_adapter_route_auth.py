@@ -1,11 +1,9 @@
-"""#1139 — the adapter hot-swap honours the serve tool token, and soup loop can send it.
+"""#1139 — soup loop can send the serve tool token the adapter routes require.
 
-`/v1/adapters/activate` and `/deactivate` depended only on the Host/Origin guard,
-so on a non-loopback bind a server started with `--tool-auth-token` still let
-anyone whose Host header named the bind switch the served adapter. They now
-require the token whenever one is configured, and `soup loop watch` gains
-`--tool-auth-token` (falling back to `SOUP_TOOL_AUTH_TOKEN`) so its deploy
-stage can present it.
+`soup serve` gates `/v1/adapters/activate` and `/deactivate` on its
+`--tool-auth-token` (#1126), so `soup loop watch` gains `--tool-auth-token`
+(falling back to `SOUP_TOOL_AUTH_TOKEN`) for its deploy stage to present. The
+server-side tests pin the contract the loop depends on.
 """
 
 from __future__ import annotations
@@ -66,22 +64,31 @@ def test_the_loopback_default_without_a_token_is_unchanged():
     assert client.post("/v1/adapters/deactivate").status_code == 200
 
 
-def test_the_token_does_not_gate_the_inference_routes():
-    """The inference routes stay unguarded so a reverse proxy can front them."""
+def test_the_token_gates_the_adapter_listing_but_not_the_model_list():
     client = _client(LAN_HOST, TOKEN)
 
     assert client.get("/v1/models").status_code == 200
-    assert client.get("/v1/adapters").status_code == 200
+    assert client.get("/v1/adapters").status_code == 401
+    assert client.get("/v1/adapters", headers=_bearer(TOKEN)).status_code == 200
 
 
-def test_the_host_guard_still_runs_before_the_token_check():
+def test_the_host_guard_runs_before_the_token_check():
     client = _client(LAN_HOST, TOKEN)
 
-    resp = client.post(
-        "/v1/adapters/activate/chat",
-        headers={**_bearer(TOKEN), "Host": "evil.example"},
-    )
+    # No token: a token check that ran first would answer 401.
+    resp = client.post("/v1/adapters/activate/chat", headers={"Host": "evil.example"})
     assert resp.status_code == 421
+
+
+@pytest.mark.parametrize("path", ["/v1/adapters/activate/chat", "/v1/adapters/deactivate"])
+def test_adapter_token_check_uses_compare_digest(monkeypatch, path):
+    import secrets
+
+    calls, real = [], secrets.compare_digest
+    monkeypatch.setattr(secrets, "compare_digest", lambda a, b: calls.append(1) or real(a, b))
+    client = _client(LAN_HOST, TOKEN)
+    assert client.post(path, headers=_bearer(TOKEN)).status_code == 200
+    assert calls
 
 
 # ---------------------------------------------------------------------------

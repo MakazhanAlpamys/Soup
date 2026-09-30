@@ -557,10 +557,18 @@ class TestWorkflowPins:
         ]
         assert any("main:refs/remotes/origin/main" in run for run in runs)
 
-    def test_concurrency_is_untouched_in_ci_yml(self):
-        """#1017's concurrency half is already on main; this PR must not edit it."""
+    def test_ci_yml_concurrency_keys_prs_main_and_releases_apart(self):
+        """A PR supersedes itself, main pushes share one group, a release keeps its commit.
+
+        The key is the enforcement, not ``cancel-in-progress``: a pending run is
+        superseded by a newer one in the same group whatever that flag says.
+        """
         text = CI.read_text(encoding="utf-8")
-        assert "github.event_name == 'pull_request' && github.ref || github.sha" in text
+        assert (
+            "github.event_name == 'pull_request' && github.ref"
+            " || (github.ref == 'refs/heads/main' && 'main-push' || github.sha)"
+        ) in text
+        assert "cancel-in-progress: ${{ github.event_name == 'pull_request' }}" in text
 
     def test_the_script_uses_merge_tree_not_git_merge(self):
         src = SCRIPT.read_text(encoding="utf-8")
@@ -616,10 +624,17 @@ class TestContributingDocumentsTheTrap:
         assert src.count(f"MAX_BEHIND = {MAX_BEHIND}") == 1
 
     def test_the_changelog_fragment_is_named_for_the_pr(self):
-        fragment = ROOT / "changelog.d" / "0.75.0" / "1071.fixed.md"
+        # The baseline directory is named for the newest release, so it MOVES at
+        # every release (v0.75.1 renamed 0.75.0/ to 0.75.1/). Hardcoding it made
+        # this test fail for a reason that has nothing to do with the naming rule
+        # it exists to pin, so the directory is discovered instead.
+        baseline = next(
+            d for d in (ROOT / "changelog.d").iterdir() if d.is_dir()
+        )
+        fragment = baseline / "1071.fixed.md"
         text = fragment.read_text(encoding="utf-8")
         assert "#1017 by @jagadeepmamidi in #1071" in text
-        assert not (ROOT / "changelog.d" / "0.75.0" / "1017.fixed.md").exists()
+        assert not (baseline / "1017.fixed.md").exists()
 
 
 def _clean_ruff(argv, *, cwd):

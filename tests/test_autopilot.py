@@ -186,11 +186,18 @@ class TestDecisionEngine:
         result = decide_max_length(p95_tokens=20000, model_context=4096)
         assert result == 4096
 
-    def test_decide_performance_flags_ampere(self):
-        from soup_cli.autopilot.decisions import decide_performance_flags
+    def test_decide_performance_flags_ampere(self, monkeypatch):
+        from soup_cli.autopilot import decisions
 
-        flags = decide_performance_flags(gpu_name="rtx4090", compute_capability=8.9)
+        # #1212 — the flags are install-aware: Ampere+ alone is not enough,
+        # the packages must also be present (patched here; CI has neither).
+        monkeypatch.setattr(decisions, "check_liger_available", lambda: True)
+        monkeypatch.setattr(
+            decisions, "check_flash_attn_available", lambda: "flash_attention_2"
+        )
+        flags = decisions.decide_performance_flags(gpu_name="rtx4090", compute_capability=8.9)
         assert flags["use_flash_attn"] is True
+        assert flags["use_liger"] is True
 
     def test_decide_performance_flags_old_gpu(self):
         from soup_cli.autopilot.decisions import decide_performance_flags
@@ -397,3 +404,4 @@ class TestGPUBudgetParsing:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
