@@ -649,7 +649,7 @@ def version(
                 except ImportError:
                     pass
 
-        console.print(json.dumps(info), highlight=False)
+        typer.echo(json.dumps(info))
         return
 
     if not full:
