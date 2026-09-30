@@ -1229,7 +1229,10 @@ def _datasets_major_version() -> int | None:
     """Return the installed ``datasets`` package's major version, or None if unreadable."""
     import re
 
-    import datasets
+    try:
+        import datasets
+    except ImportError:
+        return None
 
     match = re.match(r"(\d+)", str(getattr(datasets, "__version__", "")))
     return int(match.group(1)) if match else None

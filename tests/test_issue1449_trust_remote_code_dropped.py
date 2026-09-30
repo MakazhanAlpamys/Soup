@@ -18,9 +18,16 @@ import subprocess
 import sys
 import types
 
+import pytest
 from typer.testing import CliRunner
 
+from tests.conftest import strip_ansi
+
 runner = CliRunner()
+
+
+def _flat(text: str) -> str:
+    return " ".join(strip_ansi(text).split())
 
 
 # ─── 1. soup data download -> _hf_download_dataset -> load_dataset ───
@@ -452,3 +459,98 @@ class TestChildTrainArgvTrust:
             pass
         assert argvs, "subprocess.run (child `soup train`) was never called"
         assert "--trust-remote-code" not in argvs[-1], argvs[-1]
+
+
+# ─── Default-deny: without the flag, no site may opt in to remote code ───
+
+
+class TestDefaultsStayDeny:
+    def test_eval_auto_without_flag_trusts_nothing(self, tmp_path, monkeypatch):
+        from soup_cli.cli import app
+
+        seen_model_args, seen_generator_calls = TestEvalAutoTrust()._setup(tmp_path, monkeypatch)
+        result = runner.invoke(app, ["eval", "auto", "-c", "soup.yaml"])
+        assert result.exit_code == 0, result.output
+        assert seen_model_args and "trust_remote_code" not in seen_model_args[0], seen_model_args
+        assert seen_generator_calls[0][1].get("trust_remote_code") is False, seen_generator_calls
+
+    @pytest.mark.parametrize(("flag", "expected"), [([], False), (["--trust-remote-code"], True)])
+    def test_eval_benchmark_cli_model_args(self, tmp_path, monkeypatch, flag, expected):
+        from soup_cli.cli import app
+
+        seen_model_args, _ = TestEvalAutoTrust()._setup(tmp_path, monkeypatch)
+        result = runner.invoke(app, ["eval", "benchmark", "-m", "out", "-b", "mmlu", *flag])
+        assert result.exit_code == 0, result.output
+        assert ("trust_remote_code=True" in seen_model_args[0]) is expected, seen_model_args
+
+    @pytest.mark.parametrize(("flag", "expected"), [([], False), (["--trust-remote-code"], True)])
+    def test_eval_custom_cli_generator_kwargs(self, tmp_path, monkeypatch, flag, expected):
+        from soup_cli.cli import app
+
+        _, seen_generator_calls = TestEvalAutoTrust()._setup(tmp_path, monkeypatch)
+        result = runner.invoke(app, ["eval", "custom", "-t", "tasks.jsonl", "-m", "out", *flag])
+        assert result.exit_code == 0, result.output
+        assert seen_generator_calls[0][1].get("trust_remote_code") is expected, seen_generator_calls
+
+    def test_training_auto_eval_callback_never_opts_in(self, monkeypatch):
+        import soup_cli.commands.eval as ce
+        from soup_cli.monitoring.callback import SoupTrainerCallback
+
+        calls: dict = {}
+        monkeypatch.setattr(ce, "benchmark", lambda **kw: calls.__setitem__("benchmark", kw))
+        monkeypatch.setattr(ce, "custom", lambda **kw: calls.__setitem__("custom", kw))
+        callback = SoupTrainerCallback.__new__(SoupTrainerCallback)
+        callback.eval_config = type(
+            "EvalCfg", (),
+            {"auto_eval": True, "benchmarks": ["mmlu"], "custom_tasks": "tasks.jsonl"},
+        )()
+        callback.output_dir = "out"
+        callback.run_id = "run-1"
+        callback._run_auto_eval()
+        assert calls["benchmark"]["trust_remote_code"] is False, calls
+        assert calls["custom"]["trust_remote_code"] is False, calls
+
+    @pytest.mark.parametrize(("flag", "panel"), [([], False), (["--trust-remote-code"], True)])
+    def test_data_download_warning_panel_only_with_flag(self, tmp_path, monkeypatch, flag, panel):
+        import datasets
+
+        from soup_cli.cli import app
+
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr(datasets, "__version__", "3.6.0")
+        monkeypatch.setattr(datasets, "load_dataset", lambda *a, **k: iter([{"text": "x"}]))
+        result = runner.invoke(
+            app, ["data", "download", "org/ds", "-n", "1", "-o", "o.jsonl", *flag],
+        )
+        assert result.exit_code == 0, result.output
+        assert ("Remote Code Warning" in _flat(result.output)) is panel, _flat(result.output)
+
+    def test_default_generator_defaults_to_false(self, monkeypatch):
+        """Callers that omit the kwarg must get an explicit False, not None."""
+        import transformers
+
+        _ = transformers.pipeline
+        live_transformers = sys.modules["transformers"]
+
+        from soup_cli.eval.custom import _create_default_generator
+
+        seen = []
+
+        def fake_pipeline(*args, **kwargs):
+            seen.append(kwargs.get("trust_remote_code", "missing"))
+            return lambda *a, **k: [{"generated_text": "x"}]
+
+        monkeypatch.setattr(live_transformers, "pipeline", fake_pipeline)
+        _create_default_generator("org/model")
+        assert seen == [False], seen
+
+    def test_flag_without_datasets_installed_gets_the_install_hint(self, tmp_path, monkeypatch):
+        from soup_cli.cli import app
+
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setitem(sys.modules, "datasets", None)  # `import datasets` raises ImportError
+        result = runner.invoke(
+            app, ["data", "download", "org/ds", "-n", "1", "-o", "o.jsonl", "--trust-remote-code"],
+        )
+        assert result.exit_code == 1, (result.output, repr(result.exception))
+        assert "datasets library not available" in _flat(result.output)

@@ -866,6 +866,9 @@ Coverage:
 - `soup train` (every task — SFT, DPO, GRPO, KTO, ORPO, SimPO, IPO, PPO, Reward Model, Pretrain, Embedding, BCO, and the unified Preference dispatcher)
 - `soup chat`, `soup serve`, `soup data download`, `soup eval auto`
 - `soup diff`, `soup export`, `soup merge`, `soup infer`, `soup data generate`
+- `soup eval benchmark`, `soup eval custom`, `soup train --find-lr`, `soup draft distill`, `soup shrink`
+
+`soup data download --trust-remote-code` is refused when the installed `datasets` is 4 or newer, because those versions no longer support remote dataset code and would silently ignore the flag.
 
 ```bash
 soup train --config soup.yaml --trust-remote-code
