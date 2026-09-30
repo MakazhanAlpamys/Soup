@@ -336,6 +336,12 @@ class TestNonFiniteStatistic:
         with pytest.raises(ValueError, match="spread is below"):
             _step([0.0, 1e-170, 0.0, 1e-170, 0.0] + rest, [0.0] * 5 + [x + 5.0 for x in rest])
 
+    def test_the_treatment_arm_differing_is_enough_too(self):
+        """The mirror of the control-arm case: control's held-out rows all equal."""
+        rest = _CONTROL[5:]
+        with pytest.raises(ValueError, match="spread is below"):
+            _step([0.0] * 5 + rest, [0.0, 1e-170, 0.0, 1e-170, 0.0] + [x + 5.0 for x in rest])
+
     def test_the_round_one_f3_input_never_accepts_h0_at_any_peek(self):
         """The same rows, replayed one row at a time, the way soup ab is meant to be run."""
         from soup_cli.utils.ab_test import PRIOR_SCALE_ROWS
@@ -357,6 +363,95 @@ class TestNonFiniteStatistic:
         message = str(exc.value)
         assert "Lower --effect-size" in message
         assert "spread is below" not in message
+
+
+@pytest.mark.parametrize(("factor", "refused"), [(0.99, False), (1.01, True)])
+def test_the_prior_bound_sits_at_the_largest_n_eff_the_tool_accepts(factor, refused):
+    """sqrt(float max / (1,000,000 / 2)) standard deviations, about 1.9e151, and no further."""
+    import sys
+
+    held = [0.0, 1.0, 0.0, 1.0, 0.0]  # pooled variance 0.3 in both arms
+    bound = math.sqrt(sys.float_info.max / (1_000_000 / 2))
+    effect_size = factor * bound * math.sqrt(0.3)
+    control, treatment = held + _CONTROL[5:], held + _CONTROL[5:]
+    if refused:
+        with pytest.raises(ValueError, match="Lower --effect-size"):
+            _step(control, treatment, effect_size=effect_size)
+    else:
+        _step(control, treatment, effect_size=effect_size)
+
+
+# A saturated start: the first rows barely vary (a warm cache, a judge that gives
+# 1.0 early), then ordinary rows. Seeded Gaussian rows, sd 0.03, rounded.
+_SATURATED_C = [1.0, 1.0, 1.0, 1.0, 0.99]
+_SATURATED_T = [1.0] * 5
+_ORDINARY_C = [0.792, 0.815, 0.793, 0.791, 0.772, 0.794, 0.833, 0.813, 0.831, 0.807,
+               0.812, 0.806, 0.75, 0.826, 0.815, 0.815, 0.749, 0.748, 0.773, 0.786]
+_ORDINARY_T = [0.818, 0.782, 0.786, 0.762, 0.771, 0.784, 0.839, 0.739, 0.756, 0.807,
+               0.843, 0.817, 0.743, 0.724, 0.811, 0.778, 0.766, 0.829, 0.833, 0.805]
+
+
+def _peeks(control, treatment, **kwargs):
+    """Every verdict from 7 rows per arm on, one row at a time."""
+    return [_step(control[:n], treatment[:n], **kwargs) for n in range(7, len(control) + 1)]
+
+
+class TestAcceptHold:
+    """accept_h0 waits while the tested rows spread far more than the held-out ones."""
+
+    @pytest.mark.parametrize("shift", [0.0, -0.03], ids=["no-difference", "worse"])
+    def test_a_saturated_start_never_accepts_h0(self, shift, monkeypatch):
+        from soup_cli.utils import ab_test
+
+        control = _SATURATED_C + _ORDINARY_C[5:]
+        treatment = _SATURATED_T + [x + shift for x in _ORDINARY_T[5:]]
+        assert all(v.decision != "accept_h0" for v in _peeks(control, treatment))
+        # The premise: without the hold, both accept at the first peek.
+        monkeypatch.setattr(ab_test, "ACCEPT_HOLD_SPREAD_RATIO", math.inf)
+        assert _peeks(control, treatment)[0].decision == "accept_h0"
+
+    def test_the_same_tested_rows_with_ordinary_held_out_rows_still_accept(self):
+        verdict = _step(_ORDINARY_C[:7], _ORDINARY_T[:7])
+        assert verdict.decision == "accept_h0", verdict
+
+    def test_a_reject_is_never_held_back(self):
+        """A saturated start with a clear shift still rejects, with its direction."""
+        control = _SATURATED_C + _ORDINARY_C[5:]
+        treatment = _SATURATED_T + [x - 0.3 for x in _ORDINARY_T[5:]]
+        verdicts = [v for v in _peeks(control, treatment) if v.decision != "continue"]
+        assert verdicts and verdicts[0].decision == "reject_h0"
+        assert verdicts[0].direction == "worse"
+
+    def test_the_ratio_is_three(self):
+        from soup_cli.utils.ab_test import ACCEPT_HOLD_SPREAD_RATIO
+
+        assert ACCEPT_HOLD_SPREAD_RATIO == 3.0
+
+    def test_gaussian_rows_rarely_change_and_rejects_never_do(self, monkeypatch):
+        """600 seeded runs of Gaussian rows, first verdict with and without the hold."""
+        import random
+
+        from soup_cli.utils import ab_test
+
+        def first(control, treatment, effect_size, ratio):
+            monkeypatch.setattr(ab_test, "ACCEPT_HOLD_SPREAD_RATIO", ratio)
+            for v in _peeks(control, treatment, effect_size=effect_size):
+                if v.decision != "continue":
+                    return v.decision, v.direction, v.n_control
+            return None
+
+        changed = 0
+        for effect_size, shift in ((1.0, 0.0), (2.0, 0.0), (1.0, 1.0)):
+            for seed in range(200):
+                rng = random.Random(1_265_000 + seed)
+                control = [rng.gauss(0.0, 1.0) for _ in range(60)]
+                treatment = [rng.gauss(shift, 1.0) for _ in range(60)]
+                held = first(control, treatment, effect_size, 3.0)
+                free = first(control, treatment, effect_size, math.inf)
+                if free is not None and free[0] == "reject_h0":
+                    assert held == free, (effect_size, shift, seed)
+                changed += held != free
+        assert changed <= 6, changed  # 1% of 600; 2 on this seed range
 
 
 # ---------------------------------------------------------------------------
