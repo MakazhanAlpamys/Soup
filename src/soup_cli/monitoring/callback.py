@@ -578,6 +578,7 @@ class _SoupTrainerCallback_body:  # noqa: N801
                     batch_size=8,
                     run_id=self.run_id,
                     device=None,
+                    trust_remote_code=False,
                 )
             except Exception as exc:
                 logger.exception("Auto-eval benchmark failed")
@@ -594,6 +595,7 @@ class _SoupTrainerCallback_body:  # noqa: N801
                     run_id=self.run_id,
                     attach_to_registry=None,
                     output=None,
+                    trust_remote_code=False,
                 )
             except Exception as exc:
                 logger.exception("Auto-eval custom failed")

@@ -32,6 +32,7 @@ soup infer --model ./output --input p.jsonl   Batch inference
 soup infer --model ./output --input p.jsonl --cuda-graphs   Experimental CUDA graph decode (Qwen2/Llama, one GPU, PyTorch >= 2.14)
 soup infer --task asr --model <whisper|adapter> --input a.jsonl --output o.jsonl [--audio-dir d --asr-language en --asr-task transcribe|translate]  Whisper transcription + WER/CER
 soup chat --model ./output                    Interactive chat
+soup infer|chat|diff ... --device cpu|cuda|cuda:N|mps  Pick where the model loads (see below)
 soup push --model ./output --repo user/name   Upload to HuggingFace
 soup push --model ./output --repo user/name --collection user/coll-abc123  Add to HF Collection
 soup merge --adapter ./output                 Merge LoRA with base model
@@ -96,6 +97,7 @@ soup serve --model <m> --record-thumbs ./rl.db  Capture 👍/👎 feedback into 
 soup serve --model <m> --kv-cache-type bf16|f16|q8_0|fp8  KV-cache type (transformers; q8_0 needs hqq; fp8 = vLLM+Hopper only) (v0.71.14)
 POST /v1/adapters/activate/<name>             Hot-swap active LoRA adapter
 soup sweep --config soup.yaml --param lr=...  Hyperparameter search
+soup sweep --config soup.yaml --sweep-config sweep.yaml  Sweep from a standalone strategy/n_runs/seed/params file
 soup diff --model-a ./a --model-b ./b         Compare two models
 soup data inspect <path>                      View dataset stats
 soup data validate <path>                     Check format (auto-detect)
@@ -375,6 +377,23 @@ soup export --model ./output --format bitnet|tq1_0  BitNet 1.58 TQ1_0 ternary GG
 soup version [--full] [--json]                Show version (--full: system info, --json: JSON output)
 soup --verbose <command>                      Full traceback on errors
 ```
+
+### Choosing the device for `soup infer`, `soup chat` and `soup diff`
+
+`--device` decides where these commands load the model. Without it, the
+device is auto-detected and the same rules apply to what was detected (this
+also covers `soup bench`, which loads through the `soup infer` path).
+
+| `--device` | Placement | Dtype |
+|---|---|---|
+| `cpu` | pinned to the CPU | `float32` (twice the RAM of `float16`: a 7B model needs about 28 GB) |
+| `cuda` | `device_map="auto"`: accelerate may use every visible GPU and spill to the CPU if the model does not fit | `float16` |
+| `cuda:N` | pinned to GPU `N` | `float16` |
+| `mps` | pinned to the Apple GPU | `float16` |
+| `mlx` | runs on the CPU on this path | `float32` |
+
+Values are case-insensitive. Any other value (`gpu`, `auto`, `cuda:0,1`, ...)
+is refused with an error instead of being ignored.
 
 ### Best-of-N recovery and publication
 

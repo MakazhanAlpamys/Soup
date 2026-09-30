@@ -128,12 +128,16 @@ A minimal `expectations.yaml` for the second step:
 expectations:
   - name: expect_no_pii
   - name: expect_token_length_between
-    min_tokens: 1
-    max_tokens: 512
+    args:
+      min_tokens: 1
+      max_tokens: 512
 ```
 
 Supported names: `expect_no_pii`, `expect_token_length_between`,
 `expect_no_refusal_pattern`, `expect_chosen_preferred_over_rejected_by_judge`.
+Arguments go under `args:`. An entry key other than `name` / `args`, or an
+argument the expectation does not take (`max_token`), is refused when the suite
+loads (exit 3), so a mistyped bound cannot silently run on the defaults.
 
 Scanned fields per format:
 - ChatML / tool-calling / audio: every `messages[].content` (string or text parts), tool-call arguments (per message and top-level `tool_calls`), and `tools[].function.description`.

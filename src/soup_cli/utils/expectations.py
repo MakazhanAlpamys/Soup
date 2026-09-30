@@ -14,19 +14,11 @@ Composes with:
 
 from __future__ import annotations
 
+import difflib
 import math
 import os
 from dataclasses import dataclass
 from typing import Any, Callable, List, Mapping, Optional, Sequence, Tuple
-
-# Closed allowlist — the 4 expectation kinds the v0.69.0 plan calls out.
-_SUPPORTED_EXPECTATIONS = (
-    "expect_no_pii",
-    "expect_token_length_between",
-    "expect_no_refusal_pattern",
-    "expect_chosen_preferred_over_rejected_by_judge",
-)
-SUPPORTED_EXPECTATIONS: frozenset = frozenset(_SUPPORTED_EXPECTATIONS)
 
 # DoS caps + bounds for validators.
 _MAX_NAME_LEN = 128
@@ -36,6 +28,19 @@ _MAX_SUITE_LEN = 64
 _MAX_FILE_BYTES = 1_048_576  # 1 MiB
 _MIN_TOKEN_BOUND = 1
 _MAX_TOKEN_BOUND = 1_048_576
+
+# Closed allowlist — the 4 expectation kinds the v0.69.0 plan calls out — mapped to
+# the arguments each one takes and their defaults. #1428: a suite key outside this
+# table is refused at parse time instead of running the expectation on its defaults.
+_EXPECTATION_ARGS: dict[str, dict[str, Any]] = {
+    "expect_no_pii": {},
+    "expect_token_length_between": {"min_tokens": 1, "max_tokens": _MAX_TOKEN_BOUND},
+    "expect_no_refusal_pattern": {},
+    "expect_chosen_preferred_over_rejected_by_judge": {"threshold": 0.7},
+}
+_SUPPORTED_EXPECTATIONS = tuple(_EXPECTATION_ARGS)
+SUPPORTED_EXPECTATIONS: frozenset = frozenset(_SUPPORTED_EXPECTATIONS)
+_ENTRY_KEYS = ("name", "args")
 
 # JudgeFn signature: row mapping in, [0,1] score out (1.0 = chosen wins).
 JudgeFn = Callable[[Mapping[str, Any]], float]
@@ -146,6 +151,16 @@ def _check_token_bound(value: object, *, field: str) -> int:
             f"{field} must be in [{_MIN_TOKEN_BOUND}, {_MAX_TOKEN_BOUND}]"
         )
     return value
+
+
+def _check_token_bounds(min_tokens: object, max_tokens: object) -> Tuple[int, int]:
+    low = _check_token_bound(min_tokens, field="min_tokens")
+    high = _check_token_bound(max_tokens, field="max_tokens")
+    if low > high:
+        raise ValueError(
+            f"min_tokens ({low}) must be <= max_tokens ({high})"
+        )
+    return low, high
 
 
 # -----------------------------------------------------------------------------
@@ -563,12 +578,7 @@ def expect_token_length_between(
     max_tokens: int,
 ) -> ExpectationResult:
     """Fail when any row's token count (whitespace-split) is out of bounds."""
-    low = _check_token_bound(min_tokens, field="min_tokens")
-    high = _check_token_bound(max_tokens, field="max_tokens")
-    if low > high:
-        raise ValueError(
-            f"min_tokens ({low}) must be <= max_tokens ({high})"
-        )
+    low, high = _check_token_bounds(min_tokens, max_tokens)
     materialised = _check_rows(rows)
     num_violations = 0
     details: List[str] = []
@@ -727,6 +737,47 @@ def expect_chosen_preferred_over_rejected_by_judge(
 # -----------------------------------------------------------------------------
 
 
+def _key_repr(key: object) -> str:
+    # repr() spells control bytes out, so a hostile key cannot reach the terminal raw.
+    return repr(str(key)[:_MAX_NAME_LEN])
+
+
+def _validate_entry_keys(index: int, name: str, entry: Mapping[str, Any]) -> None:
+    extra = [key for key in entry if key not in _ENTRY_KEYS]
+    if not extra:
+        return
+    misplaced = [key for key in extra if key in _EXPECTATION_ARGS[name]]
+    if misplaced:
+        raise ValueError(
+            f"expectations[{index}]: {', '.join(map(_key_repr, misplaced))} "
+            f"must go under 'args:' for {name}, not beside 'name'"
+        )
+    raise ValueError(
+        f"expectations[{index}]: unknown key(s) {', '.join(map(_key_repr, extra))}; "
+        "an entry takes only 'name' and 'args'"
+    )
+
+
+def _validate_args(index: int, name: str, args: Mapping[str, Any]) -> None:
+    accepted = _EXPECTATION_ARGS[name]
+    unknown = [key for key in args if key not in accepted]
+    if unknown:
+        shown = _key_repr(unknown[0])
+        if not accepted:
+            raise ValueError(f"expectations[{index}]: {name} takes no arguments, got {shown}")
+        close = difflib.get_close_matches(str(unknown[0]), sorted(accepted), n=1)
+        hint = f" (did you mean {close[0]!r}?)" if close else ""
+        raise ValueError(
+            f"expectations[{index}]: {name} takes no argument {shown}{hint}; "
+            f"accepted: {', '.join(sorted(accepted))}"
+        )
+    merged = {**accepted, **args}
+    if name == "expect_token_length_between":
+        _check_token_bounds(merged["min_tokens"], merged["max_tokens"])
+    elif name == "expect_chosen_preferred_over_rejected_by_judge":
+        _check_threshold(merged["threshold"], field="threshold")
+
+
 def parse_suite_spec(raw: Any) -> SuiteSpec:
     """Validate a suite dict and return a ``SuiteSpec``."""
     if not isinstance(raw, dict):
@@ -748,9 +799,11 @@ def parse_suite_spec(raw: Any) -> SuiteSpec:
         if not isinstance(entry, dict):
             raise TypeError(f"expectations[{index}] must be a dict")
         name = validate_expectation_name(entry.get("name", ""))
+        _validate_entry_keys(index, name, entry)
         args = entry.get("args", {})
         if not isinstance(args, dict):
             raise TypeError(f"expectations[{index}].args must be a dict")
+        _validate_args(index, name, args)
         items.append(ExpectationSpec(name=name, args=dict(args)))
     return SuiteSpec(expectations=tuple(items))
 
@@ -808,14 +861,14 @@ def _dispatch_expectation(
     bypassing ``_check_token_bound`` bool-rejection.
     """
     name = spec.name
-    args = dict(spec.args)
+    args = {**_EXPECTATION_ARGS.get(name, {}), **spec.args}
     if name == "expect_no_pii":
         return expect_no_pii(rows)
     if name == "expect_token_length_between":
         return expect_token_length_between(
             rows,
-            min_tokens=args.get("min_tokens", 1),
-            max_tokens=args.get("max_tokens", _MAX_TOKEN_BOUND),
+            min_tokens=args["min_tokens"],
+            max_tokens=args["max_tokens"],
         )
     if name == "expect_no_refusal_pattern":
         return expect_no_refusal_pattern(rows)
@@ -823,7 +876,7 @@ def _dispatch_expectation(
         return expect_chosen_preferred_over_rejected_by_judge(
             rows,
             judge_fn=judge_fn,
-            threshold=args.get("threshold", 0.7),
+            threshold=args["threshold"],
         )
     raise ValueError(f"unhandled expectation: {name!r}")  # pragma: no cover
 

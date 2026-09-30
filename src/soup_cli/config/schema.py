@@ -4147,6 +4147,11 @@ class TrainingConfig(BaseModel):
                 "nothing reads it, so the run trains as if it were unset. "
                 "Remove it, or set expand_layers: <int> to append new blocks."
             )
+        # The expand_layers + quantization rule is enforced by
+        # SoupConfig._validate_expand_layers_quantization, which runs after
+        # _resolve_quantization_for_unhonouring_tasks so it reads the resolved
+        # value (an unset quantization on a #795 task has resolved to none by
+        # then and must not be refused here on its unresolved 4bit default).
         return self
 
     @model_validator(mode="after")
@@ -4895,12 +4900,23 @@ class SoupConfig(BaseModel):
         return self
 
     @model_validator(mode="after")
-    def _validate_cross_encoder_format(self) -> "SoupConfig":
-        """#1219 - only the cross_encoder trainer reads pair rows."""
-        if self.data.format == "cross_encoder" and self.task != "cross_encoder":
+    def _validate_expand_layers_quantization(self) -> "SoupConfig":
+        """v0.41.0 Part C — expand_layers requires an unquantized base.
+
+        Runs after ``_resolve_quantization_for_unhonouring_tasks`` so it reads the
+        RESOLVED quantization. For the #795 unhonoured tasks an unset
+        ``quantization`` has resolved to ``none`` by now, so a minimal config for
+        those tasks (which defaults the field to ``4bit``) is not wrongly refused;
+        the check fires only when the base actually trains quantised.
+        """
+        tcfg = self.training
+        if tcfg.expand_layers is not None and tcfg.quantization != "none":
             raise ValueError(
-                "data.format='cross_encoder' requires task='cross_encoder'; "
-                f"got task={self.task!r}"
+                "training.expand_layers (LLaMA Pro block expansion) requires "
+                f"training.quantization: none, but it is {tcfg.quantization!r}. "
+                "The appended blocks are zero-initialised and trained, which the "
+                "block-expansion path only supports on an unquantized base. "
+                "Set quantization: none."
             )
         return self
 
@@ -5553,6 +5569,16 @@ class SoupConfig(BaseModel):
             raise ValueError(
                 "training.classifier_lora requires task in "
                 "(classifier, reranker, cross_encoder); "
+                f"got task={self.task!r}"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_cross_encoder_format(self) -> "SoupConfig":
+        """#1219 - only the cross_encoder trainer reads pair rows."""
+        if self.data.format == "cross_encoder" and self.task != "cross_encoder":
+            raise ValueError(
+                "data.format='cross_encoder' requires task='cross_encoder'; "
                 f"got task={self.task!r}"
             )
         return self

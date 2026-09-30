@@ -705,6 +705,8 @@ soup eval leaderboard --format csv
 soup eval human --input prompts.jsonl --model-a ./model_a --model-b ./model_b
 ```
 
+`soup eval judge` asks the judge for one JSON object, `{"scores": {"<criterion>": <number>, ...}, "reasoning": "..."}`, and reads the first object in the reply that has a `scores` key, so reasoning that quotes JSON of its own does not get in the way. Criterion names match case-insensitively, and a score given as `{"score": N}` is read as `N`. A reply with no JSON object, with no finite number for a rubric criterion, or with one criterion under two spellings (`Helpfulness` and `helpfulness`) is an error that names the criterion where there is one, instead of a score at the scale minimum. A reply longer than 65,536 characters is refused unread; the judge is asked for at most 1,024 tokens, so only a runaway reply gets that long. `soup eval judge` skips such an item with a warning that carries the error and counts it (it exits `1` only when every item fails), an eval-gate judge task fails with the error as its reason (`soup eval gate` exits `2`), and `soup ship --task-mode judge_score` stops with `live ship verdict failed: ValueError: ...` and exits `1` without a verdict.
+
 soup eval compare and soup eval leaderboard use the newest eval row for each benchmark (on the leaderboard, for each model and benchmark), so re-running a benchmark replaces its score; rows with the same created_at resolve to the later insert. soup registry diff compares eval scores the same way.
 
 ### Aider Polyglot
@@ -878,7 +880,7 @@ Without the live `--base-model` path, `--evidence` is required. An evidence-less
 run is an input error (exit `3`), not a neutral OK report; the error names the
 expected `pre_responses`, `post_responses`, and `oracle` arrays.
 
-Scoring depends on the path. With `--evidence`, each `oracle` entry is a word that must appear in the matching response (word-boundary and case-insensitive, so `"safe"` does not match `"unsafe"`). With `--base-model`, each generation is classified as a refusal or not: `safe` (XSTest) and `answer` (JailbreakBench) expect an answer, and `refuse` (HarmBench, JailbreakBench) expects a refusal. `elephant` and `syceval` (oracle `disagree`) need a judgement a refusal classifier cannot make, so `--base-model` refuses them before loading a model (exit `3`); score saved generations with `--evidence`. OK/MINOR/MAJOR thresholds match the v0.26 / v0.56 taxonomy.
+Scoring depends on the path. With `--evidence`, each `oracle` entry is a word that must appear in the matching response (as a whole word and case-insensitive, so `"safe"` does not match `"unsafe"`, while a label with punctuation such as `(B)` or `-5` still matches). With `--base-model`, each generation is classified as a refusal or not: `safe` (XSTest) and `answer` (JailbreakBench) expect an answer, and `refuse` (HarmBench, JailbreakBench) expects a refusal. `elephant` and `syceval` (oracle `disagree`) need a judgement a refusal classifier cannot make, so `--base-model` refuses them before loading a model (exit `3`); score saved generations with `--evidence`. OK/MINOR/MAJOR thresholds match the v0.26 / v0.56 taxonomy.
 
 **Capability auto-suite** — pre-bundled profile selector with friendly `lm-eval-harness` task ids:
 
@@ -919,7 +921,7 @@ soup eval checklist tests.yaml --evidence responses.json
 strings. Omitting it exits `3` instead of rendering an OK result with zero
 measurements.
 
-`mft` = response must contain a keyword as a whole word (`"sand"` won't pass for `"and"`); `inv` = all paraphrases must agree; `dir` = directional expectation under perturbation.
+`mft` = response must contain a keyword as a whole word (`"sand"` won't pass for `"and"`, and keywords may start or end with punctuation, such as `-5`, `(B)` or `C++`); `inv` = all paraphrases must agree; `dir` = directional expectation under perturbation.
 
 **IRT subset selection** — pick a smaller eval set that preserves ranking power:
 

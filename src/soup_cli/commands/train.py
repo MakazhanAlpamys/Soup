@@ -736,7 +736,7 @@ def train(
         # --find-lr-steps (a short dataset, or a loss that went non-finite).
         try:
             lrs, losses_for_report = _run_live_lr_sweep(
-                config_path, schedule,
+                config_path, schedule, trust_remote_code=trust_remote_code,
             )
         except (SweepTooShortError, LrSweepUnavailableError) as exc:
             console.print(f"[red]{markup_escape(str(exc))}[/]")
@@ -2354,7 +2354,7 @@ def _resolve_resume_or_exit(resume: str, cfg: "SoupConfig") -> str | None:
 
 
 def _run_live_lr_sweep(
-    config_path: str, schedule: list[float],
+    config_path: str, schedule: list[float], trust_remote_code: bool = False,
 ) -> tuple[list[float], list[float]]:
     """v0.33.0 #56 — run the in-process LR sweep over the config's own model.
 
@@ -2379,7 +2379,9 @@ def _run_live_lr_sweep(
         ) from exc
 
     try:
-        return _live_lr_sweep_from_config(cfg, schedule)
+        return _live_lr_sweep_from_config(
+            cfg, schedule, trust_remote_code=trust_remote_code,
+        )
     except SweepTooShortError:
         raise
     except Exception as exc:  # noqa: BLE001 — the cause is the useful half
@@ -2400,7 +2402,7 @@ def _lr_finder_dataset_path(train) -> str:
 
 
 def _live_lr_sweep_from_config(
-    cfg, schedule: list[float],
+    cfg, schedule: list[float], trust_remote_code: bool = False,
 ) -> tuple[list[float], list[float]]:
     """Build a tiny in-process loop: load model + tokenizer + a slice of
     the train dataset, then call :func:`run_lr_sweep`. Returns the
@@ -2442,12 +2444,12 @@ def _live_lr_sweep_from_config(
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     tokenizer = AutoTokenizer.from_pretrained(
-        cfg.base, trust_remote_code=False,
+        cfg.base, trust_remote_code=trust_remote_code,
     )
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
     model = AutoModelForCausalLM.from_pretrained(
-        cfg.base, trust_remote_code=False,
+        cfg.base, trust_remote_code=trust_remote_code,
     ).to(device)
     model.train()
 
