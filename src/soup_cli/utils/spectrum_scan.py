@@ -815,6 +815,21 @@ def plan_model_weights(model: str) -> ModelWeightsPlan:
     if os.path.isdir(model):
         source = os.path.realpath(model)
         manifest = _weight_file_manifest(source, permit_symlinks=True)
+        if any(os.path.islink(os.path.join(source, name)) for name, _s, _m in manifest):
+            # A local path to an HF cache snapshot: its weights are symlinks into
+            # blobs/, which the sharder and the scanner skip. Copy it like the
+            # snapshot a Hub id resolves to, sharing that copy's cache slot.
+            source_revision = _hf_snapshot_revision(source)
+            if source_revision is None:
+                raise ValueError(
+                    f"{model} holds symlinked .safetensors files outside a Hugging "
+                    "Face snapshots/<commit> directory; Soup reads weights only "
+                    "from regular files: pass the Hub id, the HF snapshot "
+                    "directory, or a directory of regular files"
+                )
+            return _hf_snapshot_plan(
+                _hf_cache_repo_id(source) or model, source, manifest, source_revision
+            )
         return ModelWeightsPlan(
             model=model,
             source_dir=source,
@@ -846,7 +861,24 @@ def plan_model_weights(model: str) -> ModelWeightsPlan:
             source_files=manifest,
             source_revision=source_revision,
         )
+    return _hf_snapshot_plan(model, source, manifest, source_revision)
 
+
+def _hf_cache_repo_id(source_dir: str) -> Optional[str]:
+    """``org/name`` for a ``models--org--name/snapshots/<sha>`` directory."""
+    repo_dir = os.path.basename(os.path.dirname(os.path.dirname(source_dir)))
+    if not repo_dir.startswith("models--"):
+        return None
+    return repo_dir[len("models--"):].replace("--", "/") or None
+
+
+def _hf_snapshot_plan(
+    model: str,
+    source: str,
+    manifest: Tuple[Tuple[str, int, int], ...],
+    source_revision: Optional[str],
+) -> ModelWeightsPlan:
+    """Plan the regular-file copy of a symlinked HF snapshot (reused when current)."""
     materialized = os.path.join(
         resolve_cache_dir(), "weights", model_slug(model)
     )
