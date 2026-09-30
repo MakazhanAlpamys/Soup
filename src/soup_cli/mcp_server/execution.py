@@ -202,6 +202,13 @@ class ExecutionManager:
     def snapshot_config(self, run_id: str, content: str) -> str:
         """Write the exact validated config content to .soup/mcp-runs/<run_id>/config.yaml."""
         run_dir = Path(self.cwd) / ".soup" / "mcp-runs" / run_id
+        try:
+            refuse_linked_dirs(run_dir.parent, stop_at=self.cwd)
+        except OSError as exc:
+            raise ExecutionError(
+                "cannot plan: config snapshot directory or file is a "
+                "symbolic link or junction"
+            ) from exc
         run_dir.mkdir(parents=True, exist_ok=True)
         snapshot_file = str(run_dir / "config.yaml")
         atomic_write_text(content, snapshot_file, field="config snapshot")
