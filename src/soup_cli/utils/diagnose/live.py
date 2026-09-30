@@ -21,7 +21,8 @@ from __future__ import annotations
 import json
 import os
 from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, Dict, List, Optional
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
 
 from soup_cli.utils.diagnose.report import FAILURE_MODES
 from soup_cli.utils.diagnose.runner import build_report, neutral_score, not_run_score
@@ -99,6 +100,166 @@ def _row_output(row: object) -> str:
                 if isinstance(content, str):
                     return content
     return ""
+
+
+@dataclass(frozen=True)
+class _ProbeInputs:
+    """What the dataset rows turned into for the live probes (#1435)."""
+
+    pairs: List[Tuple[str, str]]  # (prompt, target), prompt within MAX_PROMPT_CHARS
+    memo_rows: List[Mapping[str, object]]  # rows handed to the memorization probe
+    unreadable: int  # rows that yielded neither a pair nor text
+    too_long: int  # pairs dropped because the prompt exceeds MAX_PROMPT_CHARS
+    plaintext: int  # plaintext rows (no prompt/answer split by design)
+    media_rows: int  # vision/audio rows skipped: the probes are text-only
+    media: str  # "image", "audio" or "image or audio" for the skipped media rows, else ""
+    no_answer: int  # rows with text but no prompt/answer pair (tool-call-only, DPO lists, ...)
+
+
+def _convert_row(row: Mapping) -> Tuple[Optional[str], Optional[Mapping]]:
+    """Detect a row's training format and convert it, exactly as training does."""
+    from soup_cli.data.formats import detect_format, format_to_messages_with_reason
+
+    try:
+        fmt = detect_format([row])
+    except ValueError:
+        return None, None
+    try:
+        converted, _reason = format_to_messages_with_reason(row, fmt)
+    except Exception:  # noqa: BLE001 - a converter may raise beyond the drop contract
+        # e.g. AttributeError on a malformed tool schema: one bad row must not crash
+        # the run (or waste a model load); it falls back to the flat-key lookup.
+        return fmt, None
+    return fmt, converted
+
+
+def _pair_from_converted(converted: Mapping[str, object]) -> Optional[Tuple[str, str]]:
+    """Prompt/target from a converted row: messages up to the first assistant turn, or DPO/KTO."""
+    msgs = converted.get("messages")
+    if isinstance(msgs, Sequence) and not isinstance(msgs, (str, bytes)):
+        context: List[str] = []
+        for msg in msgs:
+            if not isinstance(msg, Mapping):
+                continue
+            if msg.get("role") == "assistant" and msg.get("tool_calls"):
+                continue  # a tool call is not the answer; look for the final reply
+            if not isinstance(msg.get("content"), str):
+                continue
+            if msg.get("role") == "assistant":
+                prompt = "\n".join(context)
+                target = msg["content"]
+                return (prompt, target) if prompt and target else None
+            context.append(msg["content"])
+        return None
+    prompt = converted.get("prompt")
+    target = converted.get("chosen") if "chosen" in converted else converted.get("completion")
+    if isinstance(prompt, str) and isinstance(target, str) and prompt and target:
+        return prompt, target
+    return None
+
+
+def _pair_for_row(row: object) -> Optional[Tuple[str, str]]:
+    """Prompt/target for one row: training converters first, flat-key lookup as fallback."""
+    if not isinstance(row, Mapping):
+        return None
+    _fmt, converted = _convert_row(row)
+    pair = _pair_from_converted(converted) if converted else None
+    if pair is None:
+        prompt, target = _row_input(row), _row_output(row)
+        pair = (prompt, target) if prompt and target else None
+    return pair
+
+
+def _memo_row(
+    row: Mapping, converted: Optional[Mapping], pair: Optional[Tuple[str, str]]
+) -> Optional[Mapping[str, object]]:
+    """The row the memorization probe should scan, or ``None`` if the row has no text.
+
+    Rows ``extract_row_text`` already reads are passed through unchanged, so scores
+    for alpaca / chatml / plaintext do not move; only unreadable rows fall back.
+    """
+    from soup_cli.utils.diagnose._common import extract_row_text
+
+    if extract_row_text(row):
+        return row
+    if converted and extract_row_text(converted):
+        return converted
+    if pair:
+        return {"text": f"{pair[0]}\n{pair[1]}"}
+    return None
+
+
+def _analyse_rows(rows: Sequence[Mapping[str, object]]) -> _ProbeInputs:
+    from soup_cli.data.formats import is_audio_format, is_vision_format
+    from soup_cli.utils.diagnose._common import MAX_PROMPT_CHARS
+
+    pairs: List[Tuple[str, str]] = []
+    memo_rows: List[Mapping[str, object]] = []
+    unreadable = too_long = plaintext = media_rows = no_answer = 0
+    media_kinds: set = set()
+    for row in rows:
+        if not isinstance(row, Mapping):
+            unreadable += 1
+            continue
+        fmt, converted = _convert_row(row)
+        if fmt is not None and (is_vision_format(fmt) or is_audio_format(fmt)):
+            media_rows += 1
+            media_kinds.add("image" if is_vision_format(fmt) else "audio")
+            continue
+        pair = _pair_from_converted(converted) if converted else None
+        if pair is None:
+            flat_prompt, flat_target = _row_input(row), _row_output(row)
+            pair = (flat_prompt, flat_target) if flat_prompt and flat_target else None
+        text_row = _memo_row(row, converted, pair)
+        if fmt == "plaintext":
+            plaintext += 1
+        if pair is None and text_row is None:
+            unreadable += 1
+            continue
+        if text_row is not None:
+            memo_rows.append(text_row)
+        if pair is None and fmt != "plaintext":
+            no_answer += 1
+        if pair is not None:
+            if len(pair[0]) > MAX_PROMPT_CHARS:
+                too_long += 1
+            else:
+                pairs.append(pair)
+    media = " or ".join(sorted(media_kinds))
+    return _ProbeInputs(
+        pairs, memo_rows, unreadable, too_long, plaintext, media_rows, media, no_answer
+    )
+
+
+def _skipped_note(probe: _ProbeInputs) -> str:
+    parts = []
+    if probe.unreadable:
+        parts.append(f"{probe.unreadable} unreadable")
+    if probe.too_long:
+        parts.append(f"{probe.too_long} over-long")
+    if probe.no_answer:
+        parts.append(f"{probe.no_answer} without an answer")
+    if probe.media_rows:
+        parts.append(f"{probe.media_rows} need {probe.media}")
+    return ", ".join(parts)
+
+
+def _media_reason(probe: _ProbeInputs) -> str:
+    noun = {"image": "an image", "audio": "audio"}.get(probe.media, "an image or audio")
+    return f"rows need {noun}; the probes are text-only"
+
+
+def _no_pairs_reason(probe: _ProbeInputs) -> str:
+    from soup_cli.utils.diagnose._common import MAX_PROMPT_CHARS
+
+    # The dominant cause wins; ties go media > too long > plaintext.
+    candidates = [
+        (probe.media_rows, 2, _media_reason(probe)),
+        (probe.too_long, 1, f"every prompt is over {MAX_PROMPT_CHARS} chars"),
+        (probe.plaintext, 0, "plaintext rows have no prompt/answer split"),
+    ]
+    count, _rank, reason = max(candidates, key=lambda item: (item[0], item[1]))
+    return reason if count else "no usable prompt/answer rows in --dataset"
 
 
 def _load_dataset_rows(dataset_path: str) -> List[Mapping[str, object]]:
@@ -182,12 +343,11 @@ def load_adapter_pair(
     }
 
 
-def _looks_like_json_dataset(rows: Sequence[Mapping[str, object]]) -> bool:
-    """True iff a sample of dataset outputs parse as JSON objects/arrays."""
-    sample = [_row_output(r) for r in rows[:20]]
+def _targets_look_like_json(targets: Sequence[str]) -> bool:
+    """True iff a sample of dataset targets parse as JSON objects/arrays."""
     parsed = 0
     seen = 0
-    for out in sample:
+    for out in targets[:20]:
         out = out.strip()
         if not out:
             continue
@@ -199,6 +359,15 @@ def _looks_like_json_dataset(rows: Sequence[Mapping[str, object]]) -> bool:
         if isinstance(obj, (dict, list)):
             parsed += 1
     return seen > 0 and parsed / seen >= 0.6
+
+
+def _looks_like_json_dataset(rows: Sequence[Mapping[str, object]]) -> bool:
+    """True iff a sample of dataset outputs parse as JSON objects/arrays."""
+    targets = []
+    for row in rows[:20]:
+        pair = _pair_for_row(row)
+        targets.append(pair[1] if pair else _row_output(row))
+    return _targets_look_like_json(targets)
 
 
 def run_live_diagnose(
@@ -234,7 +403,6 @@ def run_live_diagnose(
     """
     if not isinstance(base, str) or not base.strip():
         raise ValueError("base must be a non-empty string")
-    from soup_cli.utils.diagnose._common import extract_row_text
     from soup_cli.utils.diagnose.forgetting import score_forgetting
     from soup_cli.utils.diagnose.format import score_format
     from soup_cli.utils.diagnose.memorization import score_memorization
@@ -251,6 +419,8 @@ def run_live_diagnose(
     rows: List[Mapping[str, object]] = []
     if dataset_path:
         rows = _load_dataset_rows(dataset_path)
+    # Read the rows before any model loads, so a problem there costs nothing.
+    probe = _analyse_rows(rows)
 
     closures = load_adapter_pair(base, adapter, device=device)
     base_gen = closures["base_gen"]
@@ -270,13 +440,8 @@ def run_live_diagnose(
     except (ValueError, TypeError) as exc:
         scores["refusal"] = _probe_failed("refusal", exc)
 
-    # The dataset-driven probes need rows.
-    pairs = [
-        (_row_input(r), _row_output(r))
-        for r in rows
-        if isinstance(r, Mapping)
-    ]
-    pairs = [(p, t) for p, t in pairs if p and t]
+    # The dataset-driven probes need rows, read through the training converters.
+    pairs = probe.pairs
 
     if pairs:
         prompts = [p for p, _ in pairs[:_PROBE_PROMPTS]]
@@ -294,7 +459,7 @@ def run_live_diagnose(
             scores["forgetting"] = _probe_failed("forgetting", exc)
 
         # --- format (only when the dataset targets look like JSON) ---
-        if _looks_like_json_dataset(rows):
+        if _targets_look_like_json([t for _, t in pairs]):
             try:
                 scores["format"] = score_format(prompts, adapter_gen, kind="json")
             except (ValueError, TypeError) as exc:
@@ -311,30 +476,28 @@ def run_live_diagnose(
             )
         except (ValueError, TypeError) as exc:
             scores["mode_collapse"] = _probe_failed("mode_collapse", exc)
-
-        # --- memorization (training-prefix echo) ---
-        # score_memorization reads only text/content/prompt/instruction/messages, while
-        # the pair builder also accepts question/answer, query/response and
-        # input/output rows; for those it answers "nothing to check" with OK 1.00.
-        if not any(extract_row_text(row) for row in rows[:_MEMORIZATION_ROWS]):
-            scores["memorization"] = not_run_score(
-                "memorization",
-                "none of the first rows has a text, content, prompt, instruction "
-                "or messages field to split",
-            )
-        else:
-            try:
-                scores["memorization"] = score_memorization(
-                    rows[:_MEMORIZATION_ROWS], adapter_gen, tokenizer=tokenizer
-                )
-            except (ValueError, TypeError) as exc:
-                scores["memorization"] = _probe_failed("memorization", exc)
     elif dataset_path:
-        # A dataset was supplied but nothing in it could be turned into a probe
-        # input: the dataset probes were requested and did not run (#1435).
-        reason = "no usable prompt/answer rows in --dataset"
-        for mode in ("forgetting", "format", "mode_collapse", "memorization"):
+        # A dataset was supplied but nothing in it could be turned into a prompt/answer
+        # pair: these probes were requested and did not run (#1435).
+        reason = _no_pairs_reason(probe)
+        for mode in ("forgetting", "format", "mode_collapse"):
             scores[mode] = not_run_score(mode, reason)
+
+    # --- memorization (training-prefix echo): needs text, not prompt/answer pairs ---
+    if probe.memo_rows:
+        try:
+            scores["memorization"] = score_memorization(
+                probe.memo_rows[:_MEMORIZATION_ROWS], adapter_gen, tokenizer=tokenizer
+            )
+        except (ValueError, TypeError) as exc:
+            scores["memorization"] = _probe_failed("memorization", exc)
+    elif dataset_path:
+        scores["memorization"] = not_run_score(
+            "memorization",
+            _media_reason(probe)
+            if probe.media_rows
+            else "no row has text to split into a prefix and a suffix",
+        )
 
     # --- contamination (no benchmark corpus supplied → neutral) ---
     scores.setdefault(
@@ -361,12 +524,14 @@ def run_live_diagnose(
     for mode in FAILURE_MODES:
         scores.setdefault(mode, neutral_score(mode, "probe inputs unavailable"))
 
+    skipped = _skipped_note(probe)
     return build_report(
         run_id=run_id,
         base=base,
         adapter=adapter or "",
         scores=scores,
         soup_version=soup_version,
+        extras={"rows_skipped": skipped} if skipped else None,
     )
 
 
