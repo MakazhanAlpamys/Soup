@@ -162,7 +162,9 @@ def cost(
         raise typer.Exit(1)
 
     if json_output:
-        console.print(json.dumps(results, indent=2), highlight=False)
+        # Machine-readable JSON: raw stdout, not console.print -- Rich folds
+        # long lines and parses ``[...]`` as markup when piped (issue #1468).
+        typer.echo(json.dumps(results, indent=2))
         return
 
     table = Table(title="Training Cost Estimate", title_justify="left", box=None, padding=(0, 2))

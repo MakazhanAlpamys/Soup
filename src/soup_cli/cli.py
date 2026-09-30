@@ -649,7 +649,10 @@ def version(
                 except ImportError:
                     pass
 
-        console.print(json.dumps(info), highlight=False)
+        # Machine-readable JSON: raw stdout, not console.print -- Rich folds
+        # lines at the console width when piped and parses ``[...]`` as markup,
+        # corrupting the output (issue #1468).
+        typer.echo(json.dumps(info))
         return
 
     if not full:
