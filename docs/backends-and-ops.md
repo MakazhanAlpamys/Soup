@@ -903,6 +903,17 @@ params:
 
 Strict scalar allowlist on values (`str` / `int` / `float` / `bool`); `_MAX_FILE_BYTES=256KB`, `_MAX_PARAM_KEYS=32`, `_MAX_VALUES_PER_KEY=64`; `SweepSpec.params` is `MappingProxyType[str, Tuple[Any, ...]]` for genuine immutability.
 
+`--param` and `--sweep-config` are mutually exclusive. With `--sweep-config`:
+
+- The file's `strategy` and `seed` win over `--strategy`.
+- A non-zero `n_runs` wins over `--max-runs`; `0` or absent falls back to `--max-runs`.
+- `n_runs` only caps the run count, so a grid smaller than `n_runs` runs every combination
+  (the example above is 3 x 3 = 9, so it runs 9 trials, not 20).
+- `seed` seeds the random sampler.
+
+A file that omits `strategy`, combined with `--strategy random --max-runs 2` on the command
+line, silently runs grid, because the file's default `grid` wins over both flags.
+
 
 ## Alternative Model Hubs (ModelScope / Modelers)
 

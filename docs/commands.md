@@ -96,6 +96,7 @@ soup serve --model <m> --record-thumbs ./rl.db  Capture 👍/👎 feedback into 
 soup serve --model <m> --kv-cache-type bf16|f16|q8_0|fp8  KV-cache type (transformers; q8_0 needs hqq; fp8 = vLLM+Hopper only) (v0.71.14)
 POST /v1/adapters/activate/<name>             Hot-swap active LoRA adapter
 soup sweep --config soup.yaml --param lr=...  Hyperparameter search
+soup sweep --config soup.yaml --sweep-config sweep.yaml  Sweep from a standalone strategy/n_runs/seed/params file
 soup diff --model-a ./a --model-b ./b         Compare two models
 soup data inspect <path>                      View dataset stats
 soup data validate <path>                     Check format (auto-detect)

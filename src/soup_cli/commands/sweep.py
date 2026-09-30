@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Optional
 
 import typer
+import yaml
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
@@ -120,8 +121,11 @@ def sweep(
     if sweep_config:
         try:
             spec = load_sweep_yaml(sweep_config)
-        except (OSError, ValueError, TypeError) as exc:
-            console.print(f"[red]Failed to load --sweep-config {sweep_config}: {exc}[/]")
+        except (OSError, ValueError, TypeError, yaml.YAMLError) as exc:
+            console.print(
+                f"[red]Failed to load --sweep-config {for_terminal(sweep_config)}: "
+                f"{for_terminal(exc)}[/]"
+            )
             raise typer.Exit(1) from exc
         sweep_params = {key: list(values) for key, values in spec.params.items()}
         strategy = spec.strategy
