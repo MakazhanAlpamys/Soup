@@ -24,12 +24,13 @@ import math
 import os
 import shutil
 from dataclasses import dataclass
-from typing import Any, Sequence
+from typing import Any, Optional, Sequence
 
 from rich.console import Console
 from rich.panel import Panel
 
-from soup_cli.utils.async_disk_source import DEFAULT_STREAM_READ_AHEAD, MAX_STREAM_READ_AHEAD
+from soup_cli.utils.config_bounds import DEFAULT_STREAM_READ_AHEAD, MAX_STREAM_READ_AHEAD
+from soup_cli.utils.stripe_roots import ReadAheadDecision, effective_read_ahead
 
 console = Console()
 
@@ -211,6 +212,7 @@ def _validate_stream_staging_ram_fit(
     read_ahead: int,
     free_ram: int,
     resident_ram: int = 0,
+    read_ahead_decision: Optional[ReadAheadDecision] = None,
 ) -> None:
     """Refuse a disk-tier run whose host staging will not fit free RAM.
 
@@ -228,23 +230,23 @@ def _validate_stream_staging_ram_fit(
     Refusing beats clamping ``read_ahead``: a depth the operator set is a
     decision, and silently lowering it would hand back a slower run than the
     one they configured with no line saying why.
+
+    ``read_ahead_decision`` (R4) says how the depth came about. On a striped
+    cache the default is raised to drives + 1, so a bare "lower it" loops: the
+    operator writes the default back and it is raised again. The advice then
+    names a value that is not re-raised.
     """
-    from soup_cli.utils.layer_stream import (
-        MIN_STREAM_READ_AHEAD,
-        RAM_TIER_HEADROOM,
-    )
+    from soup_cli.utils.layer_stream import RAM_TIER_HEADROOM
 
     required = int(staging_bytes) + int(resident_ram)
     budget = free_ram * RAM_TIER_HEADROOM
     if required < budget:
         return
+    decision = read_ahead_decision or ReadAheadDecision(depth=read_ahead, configured=read_ahead)
     # At the floor there is no lower depth to suggest, and an impossible remedy
     # is worse than none: it reads as "you did not try hard enough".
-    lower = (
-        ""
-        if read_ahead <= MIN_STREAM_READ_AHEAD
-        else f"Lower training.stream_read_ahead (currently {read_ahead}), "
-    )
+    advice = decision.lowering_advice()
+    lower = f"{advice}, " if advice else ""
     raise ValueError(
         f"layer streaming's disk tier would hold "
         f"{staging_bytes / 1e9:.2f} GB of host staging (page-locked when the "
@@ -303,8 +305,8 @@ def _disk_volume(path: str) -> tuple[int, int]:
     return int(os.stat(anchor).st_dev), int(shutil.disk_usage(anchor).free)
 
 
-def _effective_read_ahead(tcfg: Any, n_roots: int, console: Any) -> int:
-    """The async reader's depth with ``n_roots`` drives (R4).
+def _effective_read_ahead(tcfg: Any, n_roots: int, console: Any) -> ReadAheadDecision:
+    """The async reader's depth with ``n_roots`` drives (R4), and how it came about.
 
     Every drive needs a read in flight beside the slot the consumer holds, so the DEFAULT depth
     becomes ``n_roots + 1`` — one more layer of host staging per extra drive. "Default" is read
@@ -313,26 +315,33 @@ def _effective_read_ahead(tcfg: Any, n_roots: int, console: Any) -> int:
     holds for a config round-tripped through ``model_dump`` (``train --replay``, ``soup
     sweep``), where every field looks explicitly set. Any other value is the operator's call:
     kept, with a warning naming the drives it leaves idle — a speed setting, not a correctness
-    one, so never a refusal.
+    one, so never a refusal. The rule itself is ``stripe_roots.effective_read_ahead``.
+
+    Returns the whole decision, not just the depth: every message that advises lowering the
+    depth needs to know whether Soup raised it, or its advice loops (the operator writes the
+    default back and it is raised again).
     """
     configured = int(tcfg.stream_read_ahead)
+    decision = ReadAheadDecision(
+        depth=effective_read_ahead(configured, n_roots), configured=configured, n_roots=n_roots
+    )
     if n_roots <= 1:
-        return configured
+        return decision
     wanted = min(n_roots + 1, MAX_STREAM_READ_AHEAD)
-    if configured == DEFAULT_STREAM_READ_AHEAD:
-        if wanted > configured:
-            console.print(
-                f"[dim]training.stream_read_ahead {configured} -> {wanted}: the layer cache "
-                f"spans {n_roots} drives, and each needs a read in flight.[/]"
-            )
-        return max(configured, wanted)
-    if configured < wanted:
+    if decision.raised:
+        console.print(
+            f"[dim]training.stream_read_ahead {configured} -> {decision.depth}: the layer "
+            f"cache spans {n_roots} drives, and each needs a read in flight "
+            f"({DEFAULT_STREAM_READ_AHEAD} counts as the default; any other value is kept as "
+            f"set).[/]"
+        )
+    elif configured < wanted:
         console.print(
             f"[yellow]training.stream_read_ahead={configured} with {n_roots} stripe drives "
             f"keeps {wanted - configured} of them idle between layers; {wanted} lets every "
             f"drive read at once (one more layer of host staging each).[/]"
         )
-    return configured
+    return decision
 
 
 def _stripe_write_shares(total: int, n_roots: int) -> list[int]:
@@ -799,9 +808,11 @@ class StreamingSetupMixin:
         # R4: decided once, from the roots the index actually carries (a reused cache keeps its
         # own), so the plan's staging figure, the host pre-flight and the reader all agree. Read
         # with getattr like `external_tensors` below: an index without the field is one root.
-        read_ahead = _effective_read_ahead(
+        # The whole decision travels to every message that advises lowering the depth.
+        read_ahead_decision = _effective_read_ahead(
             tcfg, 1 + len(getattr(index, "stripe_roots", None) or ()), console
         )
+        read_ahead = read_ahead_decision.depth
 
         layer_specs = RamSource.layer_specs_from_paths(layer_paths(shard_dir, index))
         # Measured from the shard headers, not derived from `total_params`:
@@ -972,6 +983,7 @@ class StreamingSetupMixin:
                 read_ahead=read_ahead,
                 free_ram=free_ram,
                 resident_ram=embed_bytes,
+                read_ahead_decision=read_ahead_decision,
             )
         # v0.72.3 — VRAM pre-flight. Streaming bounds the WEIGHTS; activations
         # and the logits tensor are untouched by it and both scale with batch x
@@ -1038,6 +1050,8 @@ class StreamingSetupMixin:
             # Ignored on the RAM tier, which holds every layer and reads
             # nothing ahead.
             read_ahead=read_ahead,
+            # R4: how that depth came about, for the page-lock refusal and fallback advice.
+            read_ahead_decision=read_ahead_decision,
             pin=plan.pinned and on_cuda,
             # #366: stream_pin=true refuses rather than silently falling back to
             # pageable memory — on the RAM tier that is the store, and since

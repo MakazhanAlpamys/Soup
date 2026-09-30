@@ -102,7 +102,7 @@ def test_async_source_refuses_a_placement_of_the_wrong_length(caches):
         AsyncDiskSource(striped_dir, 3, spec, pin=False, shard_paths=paths, layer_roots=[0, 1])
 
 
-def _stream(weights, shard_dir, index, *, read_ahead):
+def _stream(weights, shard_dir, index, *, read_ahead, **extra):
     from peft import LoraConfig, TaskType
 
     from soup_cli.utils.layer_stream_runtime import build_streamed_model
@@ -114,7 +114,7 @@ def _stream(weights, shard_dir, index, *, read_ahead):
     return build_streamed_model(
         model_id=weights, shard_dir=shard_dir, index=index, lora_config=lora, device="cpu",
         dtype="float32", buffers=2, pin=False, seed=3, tier="disk", quant="none",
-        read_ahead=read_ahead,
+        read_ahead=read_ahead, **extra,
     )
 
 
@@ -186,3 +186,28 @@ def test_an_untied_striped_training_step_is_bit_identical_to_one_root(tmp_path):
             close = getattr(runtime, "close", None)
             if close is not None:
                 close()
+
+
+def test_the_read_ahead_decision_reaches_the_source_builder(caches, monkeypatch):
+    """Fix wave, finding A: the page-lock advice lives in `_build_source`, so the setup's
+    decision has to travel build_streamed_model -> install_streaming -> _build_source."""
+    import soup_cli.utils.layer_stream_runtime as rt
+    from soup_cli.utils.stripe_roots import ReadAheadDecision
+
+    weights, _, (striped_dir, striped), _ = caches
+    seen = {}
+    real = rt._build_source
+
+    def spy(*args, **kwargs):
+        seen.update(kwargs)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(rt, "_build_source", spy)
+    decision = ReadAheadDecision(depth=3, configured=2, n_roots=2)
+    _model, runtime = _stream(
+        weights, striped_dir, striped, read_ahead=3, read_ahead_decision=decision
+    )
+    try:
+        assert seen["read_ahead_decision"] is decision
+    finally:
+        runtime.close()

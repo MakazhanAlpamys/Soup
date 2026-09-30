@@ -2800,12 +2800,17 @@ def install_streaming(
     tier: str = "ram",
     read_ahead: int = DEFAULT_STREAM_READ_AHEAD,
     refill_before_backward: bool = False,
+    read_ahead_decision: Any = None,
 ) -> StreamRuntime:
     """Wrap every decoder layer and wire the buffer pool + prefetch scheduler.
 
     ``refill_before_backward`` says the loss runs a second forward before each
     step's backward; an untied output head then hands autograd a private copy
     of its weight (#1049).
+
+    ``read_ahead_decision`` (a ``stripe_roots.ReadAheadDecision``, R4) says how
+    ``read_ahead`` came about, so the page-lock messages advise a depth that is
+    not raised straight back up on a striped cache.
     """
     import torch
 
@@ -2922,6 +2927,7 @@ def install_streaming(
         shard_paths=source_paths,
         read_ahead=read_ahead,
         layer_roots=source_roots,
+        read_ahead_decision=read_ahead_decision,
     )
     pool = LayerBufferPool(
         spec,
@@ -3199,6 +3205,7 @@ def _build_source(
     shard_paths=None,
     read_ahead=DEFAULT_STREAM_READ_AHEAD,
     layer_roots=None,
+    read_ahead_decision=None,
 ):
     """Build the weight source for the chosen tier.
 
@@ -3224,7 +3231,10 @@ def _build_source(
 
     ``read_ahead`` (``training.stream_read_ahead``) is the reader's depth and
     therefore the multiplier on how much host memory is page-locked, which makes
-    lowering it a remedy the RAM tier cannot offer.
+    lowering it a remedy the RAM tier cannot offer. ``read_ahead_decision`` (R4)
+    says how that depth came about; without it the depth is taken as set, over
+    the drives ``layer_roots`` names. Either way the advice names a depth that
+    the N + 1 rule does not raise straight back up.
 
     The second element of the returned tuple means the same thing on both tiers:
     the host-side source memory is page-locked.
@@ -3232,7 +3242,14 @@ def _build_source(
     source_kwargs = {} if shard_paths is None else {"shard_paths": shard_paths}
     if tier == "disk":
         from soup_cli.utils.async_disk_source import AsyncDiskSource
+        from soup_cli.utils.stripe_roots import ReadAheadDecision
 
+        decision = read_ahead_decision or ReadAheadDecision(
+            depth=read_ahead,
+            configured=read_ahead,
+            n_roots=(max(layer_roots) + 1) if layer_roots else 1,
+        )
+        advice = decision.lowering_advice()
         open_kwargs = dict(read_ahead=read_ahead, **source_kwargs)
         if layer_roots is not None:
             # R4: which drive each source index lives on. Only the async reader uses it; the
@@ -3256,18 +3273,18 @@ def _build_source(
                         "how much gets page-locked. Refusing rather than silently "
                         "degrading to pageable staging, which makes host-to-device "
                         "copies synchronous and costs the ~97% -> ~79% "
-                        "GPU-utilisation overlap pinning buys. Lower "
-                        "training.stream_read_ahead, free RAM, or unset "
-                        "training.stream_pin to allow the pageable fallback."
+                        "GPU-utilisation overlap pinning buys. "
+                        + (f"{advice}, free RAM, " if advice else "Free RAM, ")
+                        + "or unset training.stream_pin to allow the pageable fallback."
                     ) from exc
                 message = (
                     "layer streaming could not page-lock the disk tier's host "
                     f"staging ({type(exc).__name__}); falling back to PAGEABLE "
                     "staging. Host-to-device copies become synchronous, which "
                     "costs overlap — measured GPU utilisation drops from ~97% to "
-                    "~79%. Lower training.stream_read_ahead (its depth is what "
-                    "decides how much is page-locked) or free RAM to keep the "
-                    "pinned staging."
+                    "~79%. The read-ahead depth decides how much is page-locked. "
+                    + (f"{advice}, or free RAM" if advice else "Free RAM")
+                    + " to keep the pinned staging."
                 )
                 if console is not None:
                     console.print(f"[yellow]{message}[/]")
@@ -3371,8 +3388,13 @@ def build_streamed_model(
     weights_dir: Optional[str] = None,
     ngram_source: str = "disk",
     refill_before_backward: bool = False,
+    read_ahead_decision: Any = None,
 ) -> Tuple[Any, StreamRuntime]:
-    """Meta skeleton -> extras -> LoRA -> streaming. No resident base load."""
+    """Meta skeleton -> extras -> LoRA -> streaming. No resident base load.
+
+    ``read_ahead_decision`` (R4) is the setup's ``ReadAheadDecision`` for ``read_ahead``,
+    handed to ``install_streaming`` for its page-lock advice.
+    """
     from peft import get_peft_model
 
     model = build_meta_skeleton(
@@ -3418,6 +3440,7 @@ def build_streamed_model(
             tier=tier,
             read_ahead=read_ahead,
             refill_before_backward=refill_before_backward,
+            read_ahead_decision=read_ahead_decision,
         )
     except BaseException:
         for external in external_sources:

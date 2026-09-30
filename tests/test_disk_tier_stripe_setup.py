@@ -24,7 +24,8 @@ def _console():
 
 def _depth(value, n_roots):
     console, out = _console()
-    return stream_setup._effective_read_ahead(_tcfg(value), n_roots, console), out.getvalue()
+    decision = stream_setup._effective_read_ahead(_tcfg(value), n_roots, console)
+    return decision.depth, out.getvalue()
 
 
 class TestTheDepth:
@@ -98,7 +99,9 @@ class TestTheDiskPreflight:
     def test_the_additional_writes_line_counts_every_stripe(self, tmp_path, monkeypatch):
         """A striped cache writes to several drives; the headline figure must add them up."""
         recorder = io.StringIO()
-        monkeypatch.setattr(stream_setup, "console", Console(file=recorder, width=200))
+        monkeypatch.setattr(
+        stream_setup, "console", Console(file=recorder, width=200, color_system=None)
+    )
         monkeypatch.setattr(stream_setup, "_disk_volume", lambda path: (hash(path), 10**15))
         stream_setup._render_stream_disk_preflight(
             source_bytes=0, materialized_copy_bytes=0, materialize_bytes=0,
@@ -165,7 +168,9 @@ def _drive_setup(tmp_path, monkeypatch, *, striped):
 
     monkeypatch.setattr(runtime_module, "build_streamed_model", spy_build)
     buffer = io.StringIO()
-    monkeypatch.setattr(stream_setup, "console", Console(file=buffer, width=400))
+    monkeypatch.setattr(
+        stream_setup, "console", Console(file=buffer, width=400, color_system=None)
+    )
 
     cfg = load_config_from_string(_cfg_yaml(weights, ""))
     wrapper = SFTTrainerWrapper(cfg)
@@ -183,6 +188,8 @@ class TestTheSetupPathUsesTheRoots:
         assert index.stripe_roots == (os.path.realpath(second_drive),)
         assert index.layer_roots == (0, 1, 0)
         assert captured["read_ahead"] == DEFAULT_STREAM_READ_AHEAD + 1
+        # Finding A: the page-lock advice downstream needs to know the depth was raised.
+        assert captured["read_ahead_decision"].raised
         assert "Layer cache striped over" in said
         assert "layer-shard stripe 1" in said  # the second drive is charged on its own
         assert f"training.stream_read_ahead {DEFAULT_STREAM_READ_AHEAD} -> 3" in said
