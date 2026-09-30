@@ -237,6 +237,17 @@ def cmd_report(args: argparse.Namespace) -> None:
                     print((f"  {ratio:5.3f} " + "".join(cells)).rstrip())
                 print("  worst " + "".join(f"{w:11.5f} " for w, _ in worst.values())
                       + " at " + ", ".join(f"{r:g}" for _, r in worst.values()))
+        print(f"\nH0: time to accept_h0 (mean pairs at stop), {runs} runs per ratio")
+        for horizon in sorted(HORIZONS, reverse=True):
+            for alpha in (0.05, 0.01):
+                print(f"\nalpha {alpha}, horizon {horizon}")
+                print("  ratio " + "".join(f"{d:>12s}" for d in designs))
+                for ratio, item in h0.items():
+                    cells = "".join(
+                        f"{item['counts'][f'{design}|{alpha}|{horizon}'][2] / item['runs']:12.1f}"
+                        for design in designs
+                    )
+                    print(f"  {ratio:5.3f} " + cells)
     if h1:
         runs = min(item["runs"] for item in h1.values())
         print(f"\nH1 (true difference = +effect_size): power (reject_h0, direction right) / "
