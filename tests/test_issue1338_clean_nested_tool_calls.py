@@ -188,6 +188,27 @@ def test_a_nested_call_row_gains_no_top_level_tool_calls():
     assert rules == []
 
 
+@pytest.mark.parametrize(
+    "flags",
+    [{}, {"repair_json": True}, {"drop_invalid_json": True}],
+    ids=["none", "repair", "drop"],
+)
+def test_a_null_top_level_tool_calls_is_kept(flags):
+    """The loader reads ``"tool_calls": null`` as no calls (``top_level_calls is None``)."""
+    row = {
+        "messages": [
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": "hello"},
+        ],
+        "tools": TOOLS,
+        "tool_calls": None,
+    }
+    assert format_to_messages(row, "tool-calling") is not None
+    cleaned, rules = clean_row(row, "tool-calling", **flags)
+    assert cleaned == row, rules
+    assert rules == []
+
+
 def test_nested_control_chars_are_sanitised():
     row = _nested_row('{"city": "Pa​ris"}')
     cleaned, rules = clean_row(row, "chatml")
