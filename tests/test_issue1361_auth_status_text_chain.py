@@ -2,16 +2,19 @@
 
 `_auth_status` (#1268) reads a 401/403 from the exception object by walking
 `__cause__`/`__context__`, but its text fallback searches only `str(exc)`, the
-outermost message. A library that wraps a text-only auth failure, as peft and
-transformers do, therefore printed the raw error:
+outermost message. A wrapper that says nothing about status, such as
+`RuntimeError("Failed to load adapter")` around a text-only
+`401 Client Error: Unauthorized`, therefore printed the wrapper's message:
 
     RuntimeError("Failed to load adapter")  <-  __cause__
         Exception("401 Client Error: Unauthorized for url: ...")
 
 The fallback now walks the chain too, exception-major, so the outermost
-exception that carries a status phrase decides.
+exception that carries a status phrase decides, and a 403 wrapper of a text-only
+401 still reads as the 403 it says.
 """
 
+import urllib.error
 from io import StringIO
 from unittest.mock import patch
 
@@ -77,3 +80,36 @@ def test_the_inner_phrasing_still_decides_when_the_outer_has_none():
     exc.__cause__ = inner
     out = _render(exc)
     assert "Access denied." in out
+
+
+class _QuietHTTPError(urllib.error.HTTPError):
+    """A urllib error whose message states no status, so only `.code` can classify it."""
+
+    def __str__(self) -> str:
+        return "download refused"
+
+
+def test_a_wrapped_code_only_error_is_still_read_from_its_code():
+    # urllib's own HTTPError always renders "HTTP Error 403: ...", which the text
+    # fallback now reads anywhere in the chain, so a plain wrapped HTTPError no
+    # longer shows whether the `.code` probe works. This one says nothing in text.
+    cause = _QuietHTTPError("https://x/y", 403, "Forbidden", None, None)
+    try:
+        raise RuntimeError("download failed") from cause
+    except RuntimeError as exc:
+        out = _render(exc)
+    assert "Access denied." in out
+
+
+class _UnprintableError(Exception):
+    def __str__(self) -> str:
+        raise RuntimeError("__str__ failed")
+
+
+def test_an_unprintable_wrapped_exception_does_not_break_the_formatter():
+    # The text fallback now calls str() on every wrapped exception; one whose own
+    # __str__ raises must not turn the friendly error into a second traceback.
+    exc = RuntimeError("Failed to load adapter")
+    exc.__cause__ = _UnprintableError()
+    out = _render(exc)
+    assert "Failed to load adapter" in out

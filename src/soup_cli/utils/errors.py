@@ -275,6 +275,19 @@ def _exception_chain(exc: Exception):
         current = current.__cause__ or current.__context__
 
 
+def _safe_str(exc: BaseException) -> str:
+    """`str(exc)`, or an empty string when the exception's own `__str__` raises.
+
+    The text fallback below runs over every exception in the chain, so one class
+    with a broken `__str__` would otherwise turn the friendly error into a second
+    traceback. Same guard CPython's `traceback` module applies.
+    """
+    try:
+        return str(exc)
+    except Exception:
+        return ""
+
+
 def _auth_status(exc: Exception) -> int | None:
     """Return 401/403 when the exception is genuinely an auth failure.
 
@@ -306,7 +319,7 @@ def _auth_status(exc: Exception) -> int | None:
                 return status
     for e in chain:
         for pattern, status in _AUTH_STATUS_TEXT:
-            if pattern.search(str(e)):
+            if pattern.search(_safe_str(e)):
                 return status
     return None
 
