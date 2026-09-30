@@ -782,6 +782,12 @@ def parse_suite_spec(raw: Any) -> SuiteSpec:
     """Validate a suite dict and return a ``SuiteSpec``."""
     if not isinstance(raw, dict):
         raise TypeError("suite spec must be a dict")
+    extra = [key for key in raw if key != "expectations"]
+    if extra:  # #1483: a top-level key is a typo or an option that does not exist
+        raise ValueError(
+            f"unknown top-level key(s) {', '.join(map(_key_repr, extra))}; "
+            "a suite takes only 'expectations'"
+        )
     raw_expectations = raw.get("expectations")
     if raw_expectations is None:
         raise ValueError("suite must define 'expectations' key")
