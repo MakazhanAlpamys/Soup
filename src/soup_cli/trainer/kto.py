@@ -137,8 +137,11 @@ class KTOTrainerWrapper(StreamingSetupMixin):
                 quantization=tcfg.quantization,
                 lora_r=tcfg.lora.r,
             )
-            # KTO processes unpaired samples — similar memory to DPO
-            batch_size = max(1, batch_size // 2)
+            # KTO processes unpaired samples — similar memory to DPO. The
+            # floor is 2, not 1: TRL's KTOTrainer refuses a per-device batch
+            # of 1 (degenerate KL term), so handing it 1 just moves the
+            # failure after the model has loaded (#1420).
+            batch_size = max(2, batch_size // 2)
             console.print(f"[green]Auto batch size (KTO):[/] {batch_size}")
 
         # --- Dataset ---

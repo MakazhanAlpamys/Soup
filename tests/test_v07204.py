@@ -1092,10 +1092,35 @@ class TestKtoBatchIsRefusedEarly:
             cfg = _stream_cfg(str(tmp_path / "m"), tmp_path / "o", task=task, batch_size=1)
             assert cfg.training.batch_size == 1
 
-    def test_non_streaming_kto_is_left_alone(self, tmp_path):
-        """Scoped to streaming deliberately: resident KTO at batch 1 fails the
-        same way, but that is pre-existing behaviour outside this slot, and
-        widening the gate here could reject configs that parse today."""
+    def test_non_streaming_kto_batch_one_is_refused(self, tmp_path):
+        """#1420 widened this gate to resident runs: TRL's KTOTrainer refuses
+        a per-device batch of 1 with the same error, but only AFTER the model
+        has loaded. Refusing at parse time everywhere (streaming or not)
+        fails fast with Soup's own message instead. Before v0.75.1 this test
+        asserted the opposite — that resident KTO at batch 1 was left alone —
+        which just relocated the crash to `KTOTrainer.__init__`."""
+        import yaml
+
+        from soup_cli.config.loader import load_config_from_string
+
+        with pytest.raises(ValueError) as excinfo:
+            load_config_from_string(
+                yaml.safe_dump(
+                    {
+                        "base": "sshleifer/tiny-gpt2",
+                        "task": "kto",
+                        "data": {"train": "t.jsonl"},
+                        "training": {"batch_size": 1, "quantization": "none"},
+                        "output": str(tmp_path / "o"),
+                    }
+                )
+            )
+        message = str(excinfo.value)
+        assert "kto" in message.lower()
+        assert "batch_size" in message
+
+    def test_non_streaming_kto_batch_two_still_parses(self, tmp_path):
+        """Control: the #1420 gate refuses only batch 1, not KTO outright."""
         import yaml
 
         from soup_cli.config.loader import load_config_from_string
@@ -1106,12 +1131,33 @@ class TestKtoBatchIsRefusedEarly:
                     "base": "sshleifer/tiny-gpt2",
                     "task": "kto",
                     "data": {"train": "t.jsonl"},
-                    "training": {"batch_size": 1, "quantization": "none"},
+                    "training": {"batch_size": 2, "quantization": "none"},
                     "output": str(tmp_path / "o"),
                 }
             )
         )
-        assert cfg.training.batch_size == 1
+        assert cfg.training.batch_size == 2
+
+    def test_non_streaming_other_tasks_still_accept_batch_one(self, tmp_path):
+        """The #1420 widening is KTO-only: batch 1 stays valid for dpo/orpo
+        resident runs, which TRL accepts."""
+        import yaml
+
+        from soup_cli.config.loader import load_config_from_string
+
+        for task in ("dpo", "orpo"):
+            cfg = load_config_from_string(
+                yaml.safe_dump(
+                    {
+                        "base": "sshleifer/tiny-gpt2",
+                        "task": task,
+                        "data": {"train": "t.jsonl", "format": "dpo"},
+                        "training": {"batch_size": 1, "quantization": "none"},
+                        "output": str(tmp_path / "o"),
+                    }
+                )
+            )
+            assert cfg.training.batch_size == 1
 
     def test_trl_itself_still_refuses_batch_one(self, tmp_path):
         """Pins the UPSTREAM behaviour our schema gate mirrors.
@@ -1241,3 +1287,162 @@ class TestNf4CombinesWithEveryPreferenceLoss:
         message = str(excinfo.value)
         assert "auto" in message
         assert "RESIDENT" in message or "probe" in message
+
+
+class TestIssue1420KtoBatchAutoAndLocalRl:
+    """#1420 — two more ways KTO reached TRL with a per-device batch of 1:
+
+    `batch_size: auto` floored its estimate at 1, and `soup local-rl train
+    --train-method kto` hard-wrote `batch_size: 1`. Both must now land at >= 2
+    (or refuse), so TRL never sees batch 1 for KTO at all."""
+
+    @pytest.mark.parametrize("estimate", [1, 2, 3])
+    def test_auto_floors_at_two(self, tmp_path, monkeypatch, estimate):
+        """The estimator's result is halved (unpaired samples), but the floor
+        is 2, not 1 — TRL refuses 1 outright. A real wrapper.setup() on a tiny
+        random-init CPU model with a patched estimator; mutation check:
+        restoring `max(1, batch_size // 2)` fails this at estimate 1."""
+        from tokenizers import Tokenizer, models, pre_tokenizers
+        from transformers import LlamaConfig, LlamaForCausalLM, PreTrainedTokenizerFast
+
+        words = ["<unk>", "<s>", "</s>", "<pad>", "hi", "good", "bad", "answer"]
+        raw = Tokenizer(
+            models.WordLevel(vocab={w: i for i, w in enumerate(words)}, unk_token="<unk>")
+        )
+        raw.pre_tokenizer = pre_tokenizers.Whitespace()
+        PreTrainedTokenizerFast(
+            tokenizer_object=raw, unk_token="<unk>", bos_token="<s>",
+            eos_token="</s>", pad_token="<pad>",
+        ).save_pretrained(str(tmp_path / "tiny"))
+        LlamaForCausalLM(
+            LlamaConfig(
+                vocab_size=len(words), hidden_size=32, intermediate_size=64,
+                num_hidden_layers=2, num_attention_heads=2, num_key_value_heads=2,
+                pad_token_id=3,
+            )
+        ).save_pretrained(str(tmp_path / "tiny"))
+
+        import yaml
+
+        from soup_cli.config.loader import load_config_from_string
+        from soup_cli.trainer import kto as kto_mod
+        from soup_cli.trainer.kto import KTOTrainerWrapper
+
+        monkeypatch.setattr(kto_mod, "estimate_batch_size", lambda **kwargs: estimate)
+        import soup_cli.utils.gpu as gpu_mod
+
+        monkeypatch.setattr(
+            gpu_mod, "get_gpu_info", lambda: {"memory_total_bytes": 24 * 1024**3}
+        )
+
+        cfg = load_config_from_string(
+            yaml.safe_dump(
+                {
+                    "base": str(tmp_path / "tiny"),
+                    "task": "kto",
+                    "data": {"train": "unused.jsonl", "format": "kto", "max_length": 64},
+                    "training": {
+                        "batch_size": "auto", "quantization": "none", "epochs": 1,
+                        "lora": {"r": 4, "alpha": 8},
+                    },
+                    "output": str(tmp_path / "out"),
+                }
+            )
+        )
+        wrapper = KTOTrainerWrapper(cfg, device="cpu")
+        wrapper.setup(
+            {"train": [
+                {"prompt": "hi", "completion": " good answer", "label": i % 2 == 0}
+                for i in range(8)
+            ]}
+        )
+        assert wrapper.trainer.args.per_device_train_batch_size >= 2
+
+    def test_local_rl_default_yaml_builds_a_kto_trainer(self, tmp_path, monkeypatch):
+        """The YAML `_default_train_fn` renders for `train_method='kto'` must
+        itself clear the widened schema gate: batch 2, loads, and (on a tiny
+        random-init model) builds a real KTOTrainer on CPU."""
+        import os
+
+        from tokenizers import Tokenizer, models, pre_tokenizers
+        from transformers import LlamaConfig, LlamaForCausalLM, PreTrainedTokenizerFast
+
+        words = ["<unk>", "<s>", "</s>", "<pad>", "hi", "good", "bad", "answer"]
+        raw = Tokenizer(
+            models.WordLevel(vocab={w: i for i, w in enumerate(words)}, unk_token="<unk>")
+        )
+        raw.pre_tokenizer = pre_tokenizers.Whitespace()
+        PreTrainedTokenizerFast(
+            tokenizer_object=raw, unk_token="<unk>", bos_token="<s>",
+            eos_token="</s>", pad_token="<pad>",
+        ).save_pretrained(str(tmp_path / "tiny"))
+        LlamaForCausalLM(
+            LlamaConfig(
+                vocab_size=len(words), hidden_size=32, intermediate_size=64,
+                num_hidden_layers=2, num_attention_heads=2, num_key_value_heads=2,
+                pad_token_id=3,
+            )
+        ).save_pretrained(str(tmp_path / "tiny"))
+
+        import yaml
+
+        from soup_cli.utils.local_rl import _default_train_fn
+
+        pairs_path = str(tmp_path / "pairs.jsonl")
+        with open(pairs_path, "w") as fh:
+            for i in range(8):
+                label = "true" if i % 2 == 0 else "false"
+                fh.write('{"prompt": "hi", "completion": " good answer", "label": %s}\n' % label)
+        out_dir = str(tmp_path / "out")
+
+        # Capture the rendered YAML instead of spawning `soup train`.
+        rendered = {}
+
+        def fake_run(argv, *a, **k):
+            rendered["yaml"] = open(argv[argv.index("--config") + 1]).read()
+
+            class _R:
+                returncode = 0
+
+            return _R()
+
+        import subprocess as _sp
+
+        monkeypatch.setattr(_sp, "run", fake_run)
+        cwd = os.getcwd()
+        os.chdir(tmp_path)
+        try:
+            _default_train_fn(
+                base_model=str(tmp_path / "tiny"),
+                pairs_path=pairs_path,
+                output_dir=out_dir,
+                train_method="kto",
+            )
+        finally:
+            os.chdir(cwd)
+
+        cfg_dict = yaml.safe_load(rendered["yaml"])
+        assert cfg_dict["task"] == "kto"
+        assert cfg_dict["training"]["batch_size"] == 2, rendered["yaml"]
+
+        from soup_cli.config.loader import load_config_from_string
+        from soup_cli.trainer.kto import KTOTrainerWrapper
+
+        cfg = load_config_from_string(rendered["yaml"])
+        assert cfg.training.batch_size == 2
+        # The rendered YAML defaults quantization to 4bit; the point here is
+        # the batch size, so run the tiny CPU model unquantised.
+        cfg = cfg.model_copy(
+            update={"training": cfg.training.model_copy(update={"quantization": "none"})}
+        )
+
+        wrapper = KTOTrainerWrapper(cfg, device="cpu")
+        wrapper.setup(
+            {
+                "train": [
+                    {"prompt": "hi", "completion": " good answer", "label": i % 2 == 0}
+                    for i in range(8)
+                ]
+            }
+        )
+        assert wrapper.trainer.args.per_device_train_batch_size == 2

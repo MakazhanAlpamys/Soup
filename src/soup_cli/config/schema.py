@@ -6108,6 +6108,33 @@ class SoupConfig(BaseModel):
         return self
 
     @model_validator(mode="after")
+    def _validate_kto_batch_compat(self) -> "SoupConfig":
+        """#1420 — a per-device KTO batch of 1 is invalid, streaming or not.
+
+        TRL's ``KTOTrainer`` refuses ``per_device_train_batch_size=1``
+        ("Actual (not effective) batch size must be > 1") because the KL
+        term degenerates. Until v0.75.x Soup only caught this at parse time
+        for ``stream_layers`` runs (v0.72.4, see the note kept in
+        ``_validate_stream_layers_compat``), so a resident KTO config loaded,
+        loaded its model, and only then died inside TRL — after minutes of
+        I/O on a real base. The same refusal now applies to every
+        ``task='kto'`` config, resident or streamed, before anything loads.
+        """
+        tcfg = self.training
+        if (
+            self.task == "kto"
+            and isinstance(tcfg.batch_size, int)
+            and tcfg.batch_size < 2
+        ):
+            raise ValueError(
+                "task='kto' requires training.batch_size >= 2 (TRL's KL term is "
+                "degenerate at batch 1). Checked here rather than in the "
+                "trainer so a streaming run fails before sharding the "
+                "checkpoint, not minutes into it."
+            )
+        return self
+
+    @model_validator(mode="after")
     def _validate_stream_layers_compat(self) -> "SoupConfig":
         """v0.72.0 BETA — layer-streaming compatibility gates.
 
@@ -6239,21 +6266,10 @@ class SoupConfig(BaseModel):
         # budget is exhausted (peak moved 0.842 -> 0.846 GB across accum 1->4).
         # v0.72.4 — KTO's KL term is degenerate at a per-device batch of 1, so
         # TRL refuses it outright ("Actual (not effective) batch size must be
-        # > 1"). Under streaming that ValueError arrives only AFTER the RAM
-        # pre-flight, the checkpoint sharding and — at quantization='4bit' —
-        # the NF4 quantisation pass: minutes of disk I/O on a real base, to
-        # fail on a config that was already invalid. Refuse it at parse time.
-        if (
-            self.task == "kto"
-            and isinstance(tcfg.batch_size, int)
-            and tcfg.batch_size < 2
-        ):
-            raise ValueError(
-                "task='kto' requires training.batch_size >= 2 (TRL's KL term is "
-                "degenerate at batch 1). Checked here rather than in the "
-                "trainer so a streaming run fails before sharding the "
-                "checkpoint, not minutes into it."
-            )
+        # > 1"). Refused at parse time since v0.75.1 for EVERY task='kto'
+        # config — streaming or resident — by ``_validate_kto_batch_compat``
+        # (#1420); a streaming run therefore still fails before sharding the
+        # checkpoint, not minutes into it.
         if tcfg.lora.r < 1:
             raise ValueError(
                 "training.stream_layers requires LoRA (training.lora.r >= 1) — "
