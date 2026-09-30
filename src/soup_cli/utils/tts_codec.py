@@ -20,10 +20,11 @@ per-family encoder) is family-agnostic. It now has codec-string encoders for:
 * **Llasa / XCodec2** — 16 kHz XCodec2 ids are rendered as Llasa speech
   tokens between its native speech-generation boundary tokens.
 
-Spark and Oute remain separate #265 work. Sesame CSM is deliberately refused
-on this codec-string path: current CSM training uses 32 Mimi codebooks plus
-text as parallel multimodal frames, which cannot be represented faithfully by
-replacing a text assistant turn.
+Spark and Oute raw-audio live encoding is deliberately refused on this path
+because their current upstream stacks are incompatible with Soup. Sesame CSM
+is also refused: current CSM training uses 32 Mimi codebooks plus text as
+parallel multimodal frames, which cannot be represented faithfully by replacing
+a text assistant turn.
 
 Security / robustness:
 - Heavy imports (numpy / soundfile / torch / snac / transformers) are lazy — module import
@@ -43,7 +44,7 @@ import os
 import stat
 from typing import Any, Callable, Optional
 
-from soup_cli.utils.tts import tts_codec_package, validate_tts_family
+from soup_cli.utils.tts import validate_tts_family
 
 # SNAC checkpoint for the Orpheus family (24 kHz, 3 codebooks).
 SNAC_MODEL_ID = "hubertsiuzdak/snac_24khz"
@@ -380,15 +381,46 @@ def csm_live_codec_error() -> RuntimeError:
     )
 
 
+def incompatible_live_codec_error(family: str) -> RuntimeError:
+    """Explain upstream packaging/objective blockers for #265 families."""
+    canonical = validate_tts_family(family)
+    if canonical == "spark":
+        return RuntimeError(
+            "TTS family 'spark' has no installable 'sparktts' PyPI package. "
+            "The official Spark-TTS source pins torch==2.5.1, torchaudio==2.5.1 "
+            "and transformers==4.46.2, which conflicts with Soup's supported "
+            "training stack (#265). Refusing raw-audio live encoding instead of "
+            "suggesting a nonexistent install or downgrading the environment. "
+            "Pre-encode with the official Spark-TTS environment and train with "
+            "data.format=chatml until a compatible native codec integration lands."
+        )
+    if canonical == "oute":
+        return RuntimeError(
+            "TTS family 'oute' live-codec preparation cannot safely depend on "
+            "the current outetts package: its published metadata pins "
+            "transformers==4.52.3 while Soup requires transformers>=5.16.1. "
+            "Oute v0.3 training also needs transcript/word alignment plus audio "
+            "codes, not a bare WAV-to-token substitution (#265). Refusing raw-audio "
+            "live encoding rather than silently downgrading Transformers or "
+            "training the wrong target. Use an upstream Oute environment to "
+            "pre-encode training examples and train with data.format=chatml "
+            "until a compatible native path lands."
+        )
+    return RuntimeError(
+        f"TTS family {canonical!r} has no incompatible-live-codec contract"
+    )
+
+
 def tts_encoder_for_family(
     family: str, *, device: Optional[str] = None
 ) -> Callable[[str], str]:
     """Return the live audio→codec-string encoder for ``family``.
 
     Only the families in :data:`LIVE_CODEC_FAMILIES` have a codec-string
-    encoder. Orpheus uses SNAC and Llasa uses XCodec2. Spark/Oute remain #265
-    work; Sesame CSM is refused because its parallel Mimi-codebook objective
-    needs a dedicated multimodal trainer rather than this text-SFT adapter.
+    encoder. Orpheus uses SNAC and Llasa uses XCodec2. Spark/Oute raw-audio
+    encoding is refused for upstream-stack incompatibility; Sesame CSM is
+    refused because its parallel Mimi-codebook objective needs a dedicated
+    multimodal trainer rather than this text-SFT adapter.
     """
     canonical = validate_tts_family(family)
     if canonical == "orpheus":
@@ -405,13 +437,9 @@ def tts_encoder_for_family(
         return _encode
     if canonical == "sesame_csm":
         raise csm_live_codec_error()
-    pkg = tts_codec_package(canonical)
-    raise RuntimeError(
-        f"Live-codec encoding for TTS family '{canonical}' is not yet "
-        f"implemented (Orpheus/SNAC and Llasa/XCodec2 are live; the "
-        f"'{canonical}' encoder via {pkg!r} is tracked in #265). Pre-encode "
-        "your audio to codec tokens offline and train with data.format=chatml."
-    )
+    if canonical in {"spark", "oute"}:
+        raise incompatible_live_codec_error(canonical)
+    raise AssertionError(f"unhandled TTS family after validation: {canonical!r}")
 
 
 # ---------------------------------------------------------------------------

@@ -47,6 +47,10 @@ from rich.panel import Panel
 from rich.table import Table
 
 from soup_cli import __version__
+
+# Declared in the dependency-free leaf so the schema can import the bound
+# without this module (#780); re-exported so there is only one object.
+from soup_cli.utils.config_bounds import MAX_NOISE_FLOOR_RUNS, MIN_NOISE_FLOOR_RUNS
 from soup_cli.utils.terminal import strip_control as for_terminal
 
 # ---------------------------------------------------------------------------
@@ -122,11 +126,6 @@ _MIN_MD_FENCE_LEN = 3
 #: ``_parse_suite`` accepts any name, and ``--general-suite __task__`` is
 #: harmless only because it then fails downstream as an unscoreable benchmark.
 TASK_AXIS = "__task__"
-
-#: A floor needs a spread, and a spread needs at least two samples.
-MIN_NOISE_FLOOR_RUNS = 2
-#: Each run is a full pass over the base model; ten is already expensive.
-MAX_NOISE_FLOOR_RUNS = 10
 
 # Input hygiene on an evidence-supplied floors mapping. These mirror
 # ``commands/ship._MAX_SUITE_BENCHMARKS`` / ``_MAX_BENCHMARK_NAME_CHARS`` so the

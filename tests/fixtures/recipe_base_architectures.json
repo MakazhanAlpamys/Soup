@@ -194,9 +194,6 @@
   "model_type": "qwen3_5",
   "routed_experts": 0
  },
- "SparkAudio/Spark-TTS-0.5B": {
-  "unresolvable": "the repo has no config.json"
- },
  "baichuan-inc/Baichuan2-13B-Chat": {
   "model_type": "baichuan",
   "routed_experts": 0

@@ -48,7 +48,7 @@ def search_recipes(
 
 
 # ---------------------------------------------------------------------------
-# Recipe catalog (172 recipes)
+# Recipe catalog (173 recipes)
 # ---------------------------------------------------------------------------
 
 RECIPES: Dict[str, RecipeMeta] = {
@@ -3513,47 +3513,20 @@ training:
 output: ./output
 """,
     ),
-    "spark-tts": RecipeMeta(
-        model="SparkAudio/Spark-TTS-0.5B",
-        task="tts",
-        size="0.5B",
-        tags=("tts", "spark", "audio_out", "v0.52.0"),
-        description="Spark-TTS — live (v0.71.20)",
-        yaml_str="""\
-base: SparkAudio/Spark-TTS-0.5B
-task: tts
-modality: audio_out
-
-data:
-  train: ./data/tts_train.jsonl
-  format: audio
-  audio_dir: ./data/audio
-  max_length: 2048
-
-training:
-  epochs: 3
-  lr: 5e-5
-  batch_size: auto
-  tts_family: spark
-
-output: ./output
-""",
-    ),
     "oute-tts": RecipeMeta(
         model="OuteAI/OuteTTS-0.3-500M",
         task="tts",
         size="0.5B",
         tags=("tts", "oute", "audio_out", "emotion", "v0.52.0"),
-        description="Oute-TTS with emotion conditioning — live (v0.71.20)",
+        description="OuteTTS v0.3 pre-encoded SFT; raw-audio live codec refused by upstream pin",
         yaml_str="""\
 base: OuteAI/OuteTTS-0.3-500M
 task: tts
 modality: audio_out
 
 data:
-  train: ./data/tts_train.jsonl
-  format: audio
-  audio_dir: ./data/audio
+  train: ./data/tts_pre_encoded.jsonl
+  format: chatml
   max_length: 2048
 
 training:
@@ -4520,6 +4493,91 @@ training:
     alpha: 64
     target_modules: auto
   quantization: 4bit
+  moe_lora: true
+  moe_aux_loss_coeff: 0.01
+  gradient_checkpointing: true
+
+output: ./output
+""",
+    ),
+    "deepseek-v4-pro-dpo": RecipeMeta(
+        model="deepseek-ai/DeepSeek-V4-Pro",
+        task="dpo",
+        size="N/A",
+        tags=(
+            "deepseek",
+            "deepseek-v4",
+            "dpo",
+            "alignment",
+            "preference",
+            "moe",
+            "large",
+            "multi-gpu",
+        ),
+        description=(
+            "DeepSeek V4 Pro flagship MoE DPO alignment (MIT, 1.6T-class). "
+            "Requires multi-node DeepSpeed."
+        ),
+        yaml_str="""\
+base: deepseek-ai/DeepSeek-V4-Pro
+task: dpo
+
+data:
+  train: ./data/preference_train.jsonl
+  format: dpo
+  max_length: 4096
+
+training:
+  epochs: 1
+  lr: 5e-6
+  batch_size: 1
+  gradient_accumulation_steps: 32
+  lora:
+    dropout: 0.0        # peft's ParamWrapper refuses dropout on fused MoE experts (#798)
+    r: 32
+    alpha: 64
+    target_modules: auto
+  quantization: 4bit
+  dpo_beta: 0.1
+  moe_lora: true
+  moe_aux_loss_coeff: 0.01
+  gradient_checkpointing: true
+
+output: ./output
+""",
+    ),
+    "deepseek-v4-pro-grpo": RecipeMeta(
+        model="deepseek-ai/DeepSeek-V4-Pro",
+        task="grpo",
+        size="N/A",
+        tags=("deepseek", "deepseek-v4", "grpo", "reasoning", "moe", "large", "multi-gpu"),
+        description=(
+            "DeepSeek V4 Pro flagship MoE GRPO reasoning training (MIT, 1.6T-class). "
+            "Requires multi-node DeepSpeed."
+        ),
+        yaml_str="""\
+base: deepseek-ai/DeepSeek-V4-Pro
+task: grpo
+
+data:
+  train: ./data/reasoning_train.jsonl
+  format: auto
+  max_length: 8192
+
+training:
+  epochs: 3
+  lr: 1e-5
+  batch_size: 1
+  gradient_accumulation_steps: 16
+  lora:
+    dropout: 0.0        # peft's ParamWrapper refuses dropout on fused MoE experts (#798)
+    r: 32
+    alpha: 64
+    target_modules: auto
+  quantization: 4bit
+  grpo_beta: 0.1
+  num_generations: 4
+  reward_fn: accuracy
   moe_lora: true
   moe_aux_loss_coeff: 0.01
   gradient_checkpointing: true

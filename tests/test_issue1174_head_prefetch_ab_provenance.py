@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import subprocess
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -62,11 +63,12 @@ def test_git_sha_names_the_imported_tree_and_marks_it_dirty(
         return SimpleNamespace(stdout=status)
 
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(_driver.subprocess, "run", fake_run)
+    monkeypatch.setattr(subprocess, "run", fake_run)
 
     assert _driver._source_sha() == expected_sha + ("-dirty" if status else "")
     assert calls == [
         (["git", "rev-parse", "--show-toplevel"], package_dir),
+        (["git", "ls-files", "--error-unmatch", str(Path(package_file).resolve())], tmp_path),
         (["git", "rev-parse", "HEAD"], tmp_path),
         (["git", "status", "--porcelain", "--untracked-files=normal", "--", "src"], tmp_path),
     ]
@@ -76,7 +78,7 @@ def test_source_sha_is_unknown_without_a_git_toplevel(monkeypatch: pytest.Monkey
     def fake_run(command: list[str], *, cwd: Path, **kwargs: object) -> Any:
         return SimpleNamespace(stdout="\n")
 
-    monkeypatch.setattr(_driver.subprocess, "run", fake_run)
+    monkeypatch.setattr(subprocess, "run", fake_run)
     assert _driver._source_sha() == "unknown"
 
 
@@ -84,7 +86,7 @@ def test_source_sha_is_unknown_when_git_is_missing(monkeypatch: pytest.MonkeyPat
     def fake_run(command: list[str], *, cwd: Path, **kwargs: object) -> Any:
         raise FileNotFoundError("no git")
 
-    monkeypatch.setattr(_driver.subprocess, "run", fake_run)
+    monkeypatch.setattr(subprocess, "run", fake_run)
     assert _driver._source_sha() == "unknown"
 
 
@@ -93,9 +95,9 @@ def test_source_sha_is_unknown_when_git_exits_non_zero(monkeypatch: pytest.Monke
     --show-toplevel`` exit 128; with ``check=True`` that is a ``CalledProcessError``."""
 
     def fake_run(command: list[str], *, cwd: Path, **kwargs: object) -> Any:
-        raise _driver.subprocess.CalledProcessError(128, command)
+        raise subprocess.CalledProcessError(128, command)
 
-    monkeypatch.setattr(_driver.subprocess, "run", fake_run)
+    monkeypatch.setattr(subprocess, "run", fake_run)
     assert _driver._source_sha() == "unknown"
 
 
@@ -109,7 +111,7 @@ def test_source_sha_does_not_record_a_head_that_is_not_a_commit(
             return SimpleNamespace(stdout="not-a-commit\n")
         return SimpleNamespace(stdout="")
 
-    monkeypatch.setattr(_driver.subprocess, "run", fake_run)
+    monkeypatch.setattr(subprocess, "run", fake_run)
     assert _driver._source_sha() == "unknown"
 
 

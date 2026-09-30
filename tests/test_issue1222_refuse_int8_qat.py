@@ -313,9 +313,9 @@ def test_the_unsloth_refusal_points_at_the_transformers_backend_only():
     assert not any("quantization_aware: true" in error for error in errors), errors
 
 
-def test_fp8_on_unsloth_prints_the_new_refusal(tmp_path, monkeypatch):
-    """``fp8`` with ``backend: unsloth`` still loads, and ``soup train``'s QAT
-    check refuses it; that refusal must not name ``quantization_aware: true``."""
+def test_fp8_on_unsloth_is_refused_without_recommending_true(tmp_path, monkeypatch):
+    """``fp8`` with ``backend: unsloth`` is refused at config load (#1124); the
+    refusal must not send the user to ``quantization_aware: true``."""
     from soup_cli.cli import app
 
     monkeypatch.setenv("HF_HUB_OFFLINE", "1")
@@ -326,8 +326,9 @@ def test_fp8_on_unsloth_prints_the_new_refusal(tmp_path, monkeypatch):
 
     output = _plain(result.output)
     assert result.exit_code == 1, (result.output, repr(result.exception))
-    assert f"QAT error: {UNSLOTH_REFUSAL}" in output, output
+    assert "not supported on the unsloth backend" in output, output
     assert "quantization_aware: true" not in output, output
+    assert "pip install" not in output, output
 
 
 # --------------------------------------------------------------------------

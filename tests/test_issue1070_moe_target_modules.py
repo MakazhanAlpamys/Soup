@@ -4,7 +4,7 @@
 returned ``None`` for everything else, delegating to peft. peft has no default
 for any MoE ``model_type`` Soup ships a recipe for, so the attach did not fall
 back -- it raised ``No target_modules passed but also no target_parameters
-found``, and every one of the 31 shipped MoE recipes uses ``target_modules:
+found``, and every one of the 33 shipped MoE recipes uses ``target_modules:
 auto``.
 
 Measured on peft 0.20 / transformers 5.16.1, shrunk real models on CPU, before
@@ -533,11 +533,11 @@ class TestTheRatchet:
     def test_the_record_has_the_measured_shape(self):
         """If regeneration silently lost bases or experts, the tests above would
         pass while checking less. Pinned to the numbers the reviewer derived
-        independently: 114 bases, 23 MoE, 8 of them flagless, 13 model types."""
+        independently: 113 bases, 23 MoE, 8 of them flagless, 13 model types."""
         moe = _moe_bases()
         flagless = [b for b in moe if b not in _flagged_bases()]
 
-        assert len(_record()) == 114
+        assert len(_record()) == 113
         assert len(moe) == 23
         assert len(flagless) == 8, sorted(flagless)
         assert len({info["model_type"] for info in moe.values()}) == 13

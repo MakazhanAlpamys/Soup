@@ -10,8 +10,6 @@ import math
 
 import pytest
 
-from tests._windows_ci import skip_on_windows_ci
-
 # Skip the whole module when torch is unavailable — the math kernels are
 # torch-based by design.
 torch = pytest.importorskip("torch")
@@ -755,8 +753,7 @@ class TestGRPOVariantRuntimeContract:
         # rft computes NLL on positive advantages whereas gspo uses centered ratio
         assert losses["rft"] != losses["gspo"]
 
-    @skip_on_windows_ci
-    def test_real_trl_grpotrainer_end_to_end_step(self, tmp_path):
+    def test_real_trl_grpotrainer_end_to_end_step(self, tmp_path, aten_half_matmuls):
         """End-to-end single step with real trl.GRPOTrainer and tiny model."""
         from datasets import Dataset
         from transformers import AutoTokenizer, GPT2Config, GPT2LMHeadModel

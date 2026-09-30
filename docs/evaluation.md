@@ -288,9 +288,15 @@ soup ab --input ab.jsonl --metric latency --effect-size 0.5
 soup ab --input ab.jsonl --metric judge_score --alpha 0.01 --beta 0.10 --effect-size 0.1
 ```
 
+`--alpha` and `--beta` are each in (0, 1), and their sum must stay below 1. At or above 1 the reject boundary `log((1 - beta) / alpha)` is no longer above the accept boundary `log(beta / (1 - alpha))`, so there is no `continue` band left and any verdict between them rejects — two identical arms included. `soup ab` exits `2` naming both values. `--beta` is the Type-II error rate, not the power: a power of 0.95 is `--beta 0.05`, not `--beta 0.95`.
+
+A `--effect-size` that is more than about 1.3e154 pooled standard errors overflows the test statistic; `soup ab` exits `1` naming the flag and the standard error it measured. Because it is the ratio that overflows, a near-constant metric column reaches it at the default `--effect-size` too.
+
 Input rows look like `{"arm": "control", "latency": 1.23}` or `{"arm": "treatment", "judge_score": 0.91}`. Decision is one of `continue` (keep collecting samples), `reject_h0` (real difference detected, in either direction), `accept_h0` (no significant difference). A `reject_h0` also reports a `direction`, `better` or `worse`, read through the metric's polarity: `judge_score` is higher-is-better, `latency` and `retry_rate` are lower-is-better. Composes with `soup loop canary` (v0.58): the panel recommends promoting a `better` treatment and a rollback only for a `worse` one.
 
 `soup ab` exits `0` on every decision, including a `worse` one; to gate a pipeline on a regression, read `direction` from the output or the webhook payload.
+
+`soup ab` exits `1`, naming the metric column, when its values are outside what a float can carry: so close together that the standard error of the difference underflows to 0 (a column of `0` and `1e-161`), so far apart that their variance overflows (a column of `0` and `1e200`), or so large that an arm's sum overflows (an arm of `1e308` values). Rescale the metric and re-run.
 
 `soup ab` accepts `--slack-url` / `--discord-url` (v0.71.5) and pings the webhook **only when the test actually decides** (`reject_h0` / `accept_h0`) — a still-running `continue` stays quiet so you're not paged on every peek. The payload carries `decision` and `direction` (`null` on `accept_h0`). Same SSRF-hardened validator as `soup drift-alarm`.
 
@@ -699,6 +705,8 @@ soup eval leaderboard --format csv
 soup eval human --input prompts.jsonl --model-a ./model_a --model-b ./model_b
 ```
 
+`soup eval judge` asks the judge for one JSON object, `{"scores": {"<criterion>": <number>, ...}, "reasoning": "..."}`, and reads the first object in the reply that has a `scores` key, so reasoning that quotes JSON of its own does not get in the way. Criterion names match case-insensitively, and a score given as `{"score": N}` is read as `N`. A reply with no JSON object, with no finite number for a rubric criterion, or with one criterion under two spellings (`Helpfulness` and `helpfulness`) is an error that names the criterion where there is one, instead of a score at the scale minimum. A reply longer than 65,536 characters is refused unread; the judge is asked for at most 1,024 tokens, so only a runaway reply gets that long. `soup eval judge` skips such an item with a warning that carries the error and counts it (it exits `1` only when every item fails), an eval-gate judge task fails with the error as its reason (`soup eval gate` exits `2`), and `soup ship --task-mode judge_score` stops with `live ship verdict failed: ValueError: ...` and exits `1` without a verdict.
+
 soup eval compare and soup eval leaderboard use the newest eval row for each benchmark (on the leaderboard, for each model and benchmark), so re-running a benchmark replaces its score; rows with the same created_at resolve to the later insert. soup registry diff compares eval scores the same way.
 
 ### Aider Polyglot
@@ -872,7 +880,7 @@ Without the live `--base-model` path, `--evidence` is required. An evidence-less
 run is an input error (exit `3`), not a neutral OK report; the error names the
 expected `pre_responses`, `post_responses`, and `oracle` arrays.
 
-Scoring depends on the path. With `--evidence`, each `oracle` entry is a word that must appear in the matching response (word-boundary and case-insensitive, so `"safe"` does not match `"unsafe"`). With `--base-model`, each generation is classified as a refusal or not: `safe` (XSTest) and `answer` (JailbreakBench) expect an answer, and `refuse` (HarmBench, JailbreakBench) expects a refusal. `elephant` and `syceval` (oracle `disagree`) need a judgement a refusal classifier cannot make, so `--base-model` refuses them before loading a model (exit `3`); score saved generations with `--evidence`. OK/MINOR/MAJOR thresholds match the v0.26 / v0.56 taxonomy.
+Scoring depends on the path. With `--evidence`, each `oracle` entry is a word that must appear in the matching response (as a whole word and case-insensitive, so `"safe"` does not match `"unsafe"`, while a label with punctuation such as `(B)` or `-5` still matches). With `--base-model`, each generation is classified as a refusal or not: `safe` (XSTest) and `answer` (JailbreakBench) expect an answer, and `refuse` (HarmBench, JailbreakBench) expects a refusal. `elephant` and `syceval` (oracle `disagree`) need a judgement a refusal classifier cannot make, so `--base-model` refuses them before loading a model (exit `3`); score saved generations with `--evidence`. OK/MINOR/MAJOR thresholds match the v0.26 / v0.56 taxonomy.
 
 **Capability auto-suite** — pre-bundled profile selector with friendly `lm-eval-harness` task ids:
 
@@ -913,7 +921,7 @@ soup eval checklist tests.yaml --evidence responses.json
 strings. Omitting it exits `3` instead of rendering an OK result with zero
 measurements.
 
-`mft` = response must contain a keyword as a whole word (`"sand"` won't pass for `"and"`); `inv` = all paraphrases must agree; `dir` = directional expectation under perturbation.
+`mft` = response must contain a keyword as a whole word (`"sand"` won't pass for `"and"`, and keywords may start or end with punctuation, such as `-5`, `(B)` or `C++`); `inv` = all paraphrases must agree; `dir` = directional expectation under perturbation.
 
 **IRT subset selection** — pick a smaller eval set that preserves ranking power:
 

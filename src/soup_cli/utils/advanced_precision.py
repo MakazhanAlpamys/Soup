@@ -47,6 +47,9 @@ _ATTENTION_PROJ_NAMES: frozenset[str] = frozenset({
 # Blackwell-family; Hopper is SM 9.x.
 _BLACKWELL_MIN_CC_MAJOR = 10
 
+#: Shared diagnostic explanation for precision feature incompatibility with Unsloth (#1124).
+UNSLOTH_PRECISION_INCOMPATIBLE_REASON: str = "unsloth uses its own fused kernels"
+
 
 def is_attention_projection(fqn: object) -> bool:
     """Return True when ``fqn``'s last component names an attention projection.
@@ -136,6 +139,11 @@ def validate_fp8_attention_compat(
         raise ValueError(
             "fp8_attention=true is not supported on backend=mlx"
         )
+    if backend == "unsloth":
+        raise ValueError(
+            "fp8_attention=true is not supported on backend=unsloth "
+            f"({UNSLOTH_PRECISION_INCOMPATIBLE_REASON})"
+        )
 
 
 def validate_nvfp4_compat(
@@ -163,6 +171,11 @@ def validate_nvfp4_compat(
         raise ValueError(
             "nvfp4=true is not supported on backend=mlx "
             "(NVFP4 is CUDA-only — requires Blackwell)"
+        )
+    if backend == "unsloth":
+        raise ValueError(
+            "nvfp4=true is not supported on backend=unsloth "
+            f"({UNSLOTH_PRECISION_INCOMPATIBLE_REASON})"
         )
     if modality != "text":
         raise ValueError(
@@ -301,6 +314,19 @@ def apply_fp8_attention(model: object, *, recipe: str = "tensorwise") -> int:
                 f"flag ({type(exc).__name__}: {exc})"
             ) from exc
     return len(already_converted) + len(pending)
+
+
+def is_nvfp4_software_supported() -> bool:
+    """Return True when the installed torchao exposes NVFP4 training support."""
+    try:
+        from soup_cli.utils.torchao_compat import resolve_torchao_class
+
+        resolve_torchao_class("NVFP4Training")
+        resolve_torchao_class("quantize_")
+    except Exception:  # noqa: BLE001 — diagnostic probe must not crash
+        return False
+
+    return True
 
 
 def apply_nvfp4(model: object) -> int:

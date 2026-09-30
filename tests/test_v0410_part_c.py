@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import typing
+
 import pytest
 from pydantic import ValidationError
 
@@ -21,6 +23,19 @@ from soup_cli.utils.loftq_init import (
 
 def _base_data():
     return {"train": "/tmp/x.jsonl"}
+
+
+# Every quantization value except "none", read from the schema, so a new Quant
+# Menu format is refused -- and tested -- without editing a list here.
+_QUANTIZED = tuple(
+    value
+    for value in typing.get_args(TrainingConfig.model_fields["quantization"].annotation)
+    if value != "none"
+)
+
+
+def _sft(**training):
+    return SoupConfig(base="fake-org/fake-model", task="sft", data=_base_data(), training=training)
 
 
 # ---------- LoftQ ----------
@@ -131,14 +146,105 @@ class TestSchemaBlockExpansion:
             TrainingConfig(expand_layers=4)
 
     def test_expand_layers_with_freeze_accepted(self):
-        cfg = TrainingConfig(expand_layers=4, freeze_trainable_layers=4)
+        cfg = TrainingConfig(
+            expand_layers=4, freeze_trainable_layers=4, quantization="none"
+        )
         assert cfg.expand_layers == 4
         assert cfg.freeze_trainable_layers == 4
 
-    def test_freeze_trainable_layers_alone_ok(self):
-        cfg = TrainingConfig(freeze_trainable_layers=-4)
-        assert cfg.freeze_trainable_layers == -4
-        assert cfg.expand_layers is None
+    @pytest.mark.parametrize("freeze", [2, -4, 0])
+    def test_freeze_trainable_layers_alone_refused(self, freeze):
+        # #1396: without expand_layers nothing reads the field, so every value
+        # (positive, negative or zero) trained as if it were unset.
+        with pytest.raises(
+            ValidationError,
+            match="freeze_trainable_layers only applies together with expand_layers",
+        ):
+            TrainingConfig(freeze_trainable_layers=freeze)
+
+    @pytest.mark.parametrize("task", ["sft", "pretrain"])
+    def test_freeze_trainable_layers_alone_refused_at_load(self, task):
+        # The issue's own case, through the loader `soup train` uses.
+        from soup_cli.config.loader import load_config_from_string
+
+        with pytest.raises(
+            ValueError,
+            match="only applies together with expand_layers.*Remove it",
+        ):
+            load_config_from_string(
+                "base: org/model\n"
+                f"task: {task}\n"
+                "data:\n  train: ./data.jsonl\n"
+                "training:\n  freeze_trainable_layers: 2\n"
+            )
+
+    @pytest.mark.parametrize("quantization", _QUANTIZED)
+    @pytest.mark.parametrize("freeze", [4, -4, 0])
+    def test_expand_layers_refused_on_quantized_base(self, quantization, freeze):
+        # The refusal lives on SoupConfig now (it reads the resolved
+        # quantization), so build a full config rather than a bare TrainingConfig.
+        with pytest.raises(ValidationError, match="requires training.quantization: none"):
+            _sft(
+                expand_layers=4,
+                freeze_trainable_layers=freeze,
+                quantization=quantization,
+            )
+
+    def test_expand_layers_refused_on_default_quantization(self):
+        with pytest.raises(ValidationError, match="requires training.quantization: none"):
+            _sft(expand_layers=2, freeze_trainable_layers=2)
+
+    def test_load_in_16bit_alias_satisfies_the_requirement(self):
+        # docs/peft-and-efficiency.md: load_in_16bit: true == quantization: none
+        cfg = _sft(expand_layers=2, freeze_trainable_layers=2, load_in_16bit=True)
+        assert cfg.training.quantization == "none"
+        assert cfg.training.expand_layers == 2
+
+    def test_load_in_8bit_alias_is_refused(self):
+        with pytest.raises(ValidationError, match="requires training.quantization: none"):
+            _sft(expand_layers=2, freeze_trainable_layers=2, load_in_8bit=True)
+
+    @pytest.mark.parametrize("task", ["sft", "pretrain"])
+    def test_default_quantization_refused_through_the_loader(self, task):
+        # #1237's acceptance box: task sft AND pretrain, through the loader `soup train` uses.
+        from soup_cli.config.loader import load_config_from_string
+
+        with pytest.raises(ValueError, match="requires training.quantization: none"):
+            load_config_from_string(
+                "base: org/model\n"
+                f"task: {task}\n"
+                "data:\n  train: ./data.jsonl\n"
+                "training:\n  expand_layers: 2\n  freeze_trainable_layers: 2\n"
+            )
+
+    @pytest.mark.parametrize(
+        "task,backend", [("dpo", "transformers"), ("sft", "mlx"), ("sft", "unsloth")]
+    )
+    def test_scope_refusal_precedes_the_quantization_refusal(self, task, backend):
+        with pytest.raises(ValidationError, match="only wired for task sft/pretrain"):
+            SoupConfig(
+                base="fake-org/fake-model",
+                task=task,
+                backend=backend,
+                data=_base_data(),
+                training={"expand_layers": 2, "freeze_trainable_layers": 2},
+            )
+
+    def test_expand_layers_explicit_quant_still_refused_on_unhonoured_task(self):
+        # A quant-menu value the resolver never rewrites (gptq) is still refused on an
+        # unhonoured task, and with THAT task's reason: this check must not mask it.
+        # (Fails if the check is defined above the resolver.)
+        with pytest.raises(ValidationError, match="task='prm' does not apply"):
+            SoupConfig(
+                base="fake-org/fake-model",
+                task="prm",
+                data=_base_data(),
+                training={
+                    "expand_layers": 2,
+                    "freeze_trainable_layers": 2,
+                    "quantization": "gptq",
+                },
+            )
 
     def test_freeze_magnitude_oob(self):
         with pytest.raises(ValidationError, match="magnitude"):

@@ -738,9 +738,12 @@ class TestAsrRouting:
         import inspect
 
         import soup_cli.commands.train as train_mod
+        from soup_cli.trainer import dispatch as dispatch_mod
 
-        src = inspect.getsource(train_mod)
-        assert 'cfg.task == "asr"' in src
+        # #1213 — routing lives in the dispatch both commands call now.
+        assert "build_trainer(" in inspect.getsource(train_mod)
+        src = inspect.getsource(dispatch_mod)
+        assert 'task == "asr"' in src
         assert "AsrTrainerWrapper" in src
 
 

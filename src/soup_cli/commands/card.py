@@ -34,6 +34,7 @@ from soup_cli.commands.push import (
     _render_training_section,
     _safe_md_cell,
 )
+from soup_cli.eval.results import newest_eval_rows
 from soup_cli.registry.store import AmbiguousRefError, RegistryStore
 from soup_cli.utils.paths import atomic_write_text
 
@@ -132,14 +133,12 @@ def build_model_card(
     # Row caps: bound the card regardless of how many rows the registry holds.
     artifacts = list(artifacts or [])[:_MAX_ROWS]
     ancestors = list(ancestors or [])[:_MAX_ROWS]
-    eval_results = list(eval_results or [])[:_MAX_ROWS]
+    eval_results = list(eval_results or [])
 
-    scorecard: dict[str, Any] = {}
-    for row in eval_results or []:
-        bench = row.get("benchmark")
-        score = row.get("score")
-        if bench is not None and score is not None:
-            scorecard[str(bench)] = score
+    scorecard = {
+        str(row["benchmark"]): row["score"]
+        for row in newest_eval_rows(eval_results)[:_MAX_ROWS]
+    }
 
     is_adapter = _is_adapter(artifacts, config)
 

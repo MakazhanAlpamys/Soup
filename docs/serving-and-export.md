@@ -41,6 +41,11 @@ soup merge --adapter ./output --output ./merged
 soup merge --adapter ./output --base meta-llama/Llama-3.1-8B --dtype bfloat16
 ```
 
+ReLoRA training outputs are already standalone dense models: Soup merges the
+final active adapter into the accumulated in-memory base before writing the
+training output. Load or export that directory directly; `soup merge` is only
+for adapter-only outputs and must not be used to reconstruct a ReLoRA run.
+
 
 ## Export to GGUF
 
@@ -648,7 +653,7 @@ soup ui
 
 **Pages:**
 - **Dashboard** — view all experiment runs, loss charts, system info, multi-run comparison
-- **New Training** — create configs from templates or 172 ready-made recipes, validate, start training with live SSE log streaming and progress bar
+- **New Training** — create configs from templates or 173 ready-made recipes, validate, start training with live SSE log streaming and progress bar
 - **Data Explorer** — browse and inspect datasets (JSONL, JSON, CSV, Parquet)
 - **Model Chat** — chat with streaming responses, configurable temperature/top_p/max_tokens, system prompt, adapter selection, markdown rendering, chat export
 
@@ -657,7 +662,7 @@ soup ui
 - **Enhanced Metrics** — 2x2 chart grid (loss, LR, grad_norm, throughput) + GPU memory chart, eval results table
 - **Multi-Run Compare** — overlay loss curves from up to 5 runs side-by-side
 - **Chat Upgrade** — SSE streaming via proxy, typing indicator, cancel button, markdown renderer (bold, italic, code blocks), chat export as JSON
-- **Config Builder** — recipe dropdown (172 recipes), config schema API for dynamic form generation
+- **Config Builder** — recipe dropdown (173 recipes), config schema API for dynamic form generation
 
 Gradient norm is nullable: backends or steps that do not report it store and
 stream `null`, and the Web UI chart leaves a gap instead of drawing a false

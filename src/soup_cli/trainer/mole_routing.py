@@ -34,6 +34,17 @@ logger = logging.getLogger(__name__)
 console = Console()
 
 
+def _save_mole_gate(gate: Any, path: Path | str) -> None:
+    """Save the MoLE gate module with all floating point tensors in fp32."""
+    import torch
+
+    gate_state = {
+        name: tensor.to(torch.float32) if tensor.is_floating_point() else tensor
+        for name, tensor in gate.state_dict().items()
+    }
+    torch.save(gate_state, str(path))
+
+
 @lru_cache(maxsize=4)
 def make_mole_trainer_class(base_cls: type) -> type:
     """Factory: build a ``_MoleTrainer`` subclass of HF ``Trainer``.
@@ -57,6 +68,28 @@ def make_mole_trainer_class(base_cls: type) -> type:
 
     class _MoleTrainer(base_cls):  # type: ignore[misc, valid-type]
         """HF Trainer subclass for MoLE per-token routing."""
+
+        def _save_checkpoint(self, model, trial):
+            super()._save_checkpoint(model, trial)
+            step = int(getattr(self.state, "global_step", 0) or 0)
+            if step > 0 and getattr(self.args, "should_save", True):
+                ckpt_dir = Path(self.args.output_dir) / f"checkpoint-{step}"
+                gate = getattr(model, "mole_gate", None)
+                if ckpt_dir.is_dir() and gate is not None:
+                    _save_mole_gate(gate, ckpt_dir / "mole_gate.pt")
+
+        def _load_from_checkpoint(self, resume_from_checkpoint: str, model=None):
+            super()._load_from_checkpoint(resume_from_checkpoint, model=model)
+            target = model if model is not None else self.model
+            if target is not None:
+                for param in target.parameters():
+                    param.requires_grad_(False)
+                if hasattr(target, "mole_gate"):
+                    target.mole_gate.requires_grad_(True)
+                    gate_path = Path(resume_from_checkpoint) / "mole_gate.pt"
+                    if gate_path.is_file():
+                        gate_state = torch.load(gate_path, map_location="cpu", weights_only=True)
+                        target.mole_gate.load_state_dict(gate_state)
 
         def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
             input_ids = inputs["input_ids"]
@@ -336,8 +369,17 @@ class MoleRoutingTrainerWrapper:
             f"trainable_params={n_trainable}"
         )
 
-    def train(self, **_kwargs) -> dict:
+    def train(
+        self,
+        display=None,
+        tracker=None,
+        run_id=None,
+        resume_from_checkpoint: Optional[str] = None,
+        **_kwargs,
+    ) -> dict:
         """Train the gating kernel with the MoLE Trainer subclass."""
+        # #802 contract: display, tracker, and run_id are accepted for caller
+        # uniformity but not wired here.
         if self.model is None:
             raise RuntimeError(
                 "MoleRoutingTrainerWrapper.train() called before setup()"
@@ -383,6 +425,7 @@ class MoleRoutingTrainerWrapper:
             report_to=self.report_to,
             remove_unused_columns=False,
             deepspeed=self.deepspeed_config,
+            **(self.fsdp_config or {}),  # #1204: --fsdp was stored and dropped
             **training_seed_kwargs(tcfg),
             **training_eval_kwargs(cfg, eval_rows, batch_size=bs),
         )
@@ -409,25 +452,21 @@ class MoleRoutingTrainerWrapper:
             from soup_cli.utils.deepspeed import attach_empty_param_group_guard
 
             attach_empty_param_group_guard(self.trainer)
+
         console.print("[green]Starting MoLE gate training...[/]")
         align_trainable_dtype_for_fp16(
             self.trainer.model,
             fp16=getattr(self.trainer.args, "fp16", False),
             bf16=getattr(self.trainer.args, "bf16", False),
         )
-        result = self.trainer.train()
+        result = self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)
         # Persist the trained gate (the base + adapters are unchanged on disk).
-        import torch
-
         gate_path = output_dir / "mole_gate.pt"
         # #1266: always fp32, whatever the module holds by now (a DeepSpeed bf16/fp16
         # engine casts it to 16-bit in place); a Linear(hidden, N) costs nothing.
         # The serve loader builds an fp32 gate, so a bf16 file from before loads too.
-        gate_state = {
-            name: tensor.to(torch.float32) if tensor.is_floating_point() else tensor
-            for name, tensor in self.model.mole_gate.state_dict().items()
-        }
-        torch.save(gate_state, str(gate_path))
+        _save_mole_gate(self.model.mole_gate, gate_path)
+
         # v0.71.17 #259 — write a self-describing manifest next to the gate so
         # `soup serve --mole <dir>` can reconstruct the decode-time blend
         # (base + N frozen task LoRAs + gate geometry).

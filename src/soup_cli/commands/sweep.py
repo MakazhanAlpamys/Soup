@@ -7,11 +7,14 @@ from pathlib import Path
 from typing import Optional
 
 import typer
+import yaml
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
 from soup_cli.config.loader import load_config
+from soup_cli.utils.sweep_config import load_sweep_yaml
+from soup_cli.utils.terminal import for_terminal
 
 console = Console()
 
@@ -56,11 +59,20 @@ def sweep(
         "-c",
         help="Path to base soup.yaml config file",
     ),
-    param: list[str] = typer.Option(
-        ...,
+    param: Optional[list[str]] = typer.Option(
+        None,
         "--param",
         "-p",
         help="Parameter to sweep: key=val1,val2,val3 (e.g., lr=1e-5,2e-5,5e-5)",
+    ),
+    sweep_config: Optional[str] = typer.Option(
+        None,
+        "--sweep-config",
+        help=(
+            "Path to a standalone sweep YAML (strategy/n_runs/seed/params) "
+            "instead of --param; its strategy, n_runs and seed take "
+            "precedence over --strategy/--max-runs"
+        ),
     ),
     strategy: str = typer.Option(
         "grid",
@@ -102,12 +114,35 @@ def sweep(
         console.print(f"[red]Config not found: {config_path}[/]")
         raise typer.Exit(1)
 
+    if param and sweep_config:
+        console.print("[red]Use either --param or --sweep-config, not both.[/]")
+        raise typer.Exit(1)
+
+    if sweep_config:
+        try:
+            spec = load_sweep_yaml(sweep_config)
+        except (OSError, ValueError, TypeError, yaml.YAMLError) as exc:
+            console.print(
+                f"[red]Failed to load --sweep-config {for_terminal(sweep_config)}: "
+                f"{for_terminal(exc)}[/]"
+            )
+            raise typer.Exit(1) from exc
+        sweep_params = {key: list(values) for key, values in spec.params.items()}
+        strategy = spec.strategy
+        max_runs = spec.n_runs or max_runs
+        random.seed(spec.seed)
+    elif param:
+        sweep_params = _parse_sweep_params(param)
+    else:
+        console.print(
+            "[red]Provide --param, or --sweep-config for a standalone sweep file.[/]"
+        )
+        raise typer.Exit(1)
+
     if strategy not in ("grid", "random"):
         console.print(f"[red]Invalid strategy: {strategy}. Must be grid or random.[/]")
         raise typer.Exit(1)
 
-    # Parse sweep parameters
-    sweep_params = _parse_sweep_params(param)
     if not sweep_params:
         console.print("[red]No valid sweep parameters provided.[/]")
         raise typer.Exit(1)
@@ -212,7 +247,12 @@ def sweep(
                         f"({best_loss:.4f} x {early_stop} = {best_loss * early_stop:.4f})[/]"
                     )
         except Exception as exc:
-            console.print(f"[red]Run {run_name} failed: {exc}[/]")
+            # #1213 — a `backend: mlx` arm now reaches the MLX wrapper, whose
+            # install hint reads `pip install "soup-cli[mlx]"`. Interpolated
+            # straight into the markup string, Rich reads `[mlx]` as a style tag
+            # and drops it, so the hint that tells the user what to install is
+            # the part that disappears. `for_terminal` escapes it.
+            console.print(f"[red]Run {run_name} failed:[/] {for_terminal(exc)}")
             results.append({
                 "name": run_name,
                 "params": combo,
@@ -438,7 +478,7 @@ def _run_single(base_cfg, params: dict, run_name: str, config_path: Path) -> dic
     from soup_cli.data.loader import load_dataset
     from soup_cli.experiment.tracker import ExperimentTracker
     from soup_cli.monitoring.display import TrainingDisplay
-    from soup_cli.trainer.sft import SFTTrainerWrapper
+    from soup_cli.trainer.dispatch import build_trainer
     from soup_cli.utils.eval_schedule import loader_data_config, validation_notice
     from soup_cli.utils.gpu import detect_device, get_gpu_info
 
@@ -468,57 +508,11 @@ def _run_single(base_cfg, params: dict, run_name: str, config_path: Path) -> dic
         experiment_name=run_name,
     )
 
-    # Build trainer
-    if cfg.task == "dpo":
-        from soup_cli.trainer.dpo import DPOTrainerWrapper
-
-        trainer_wrapper = DPOTrainerWrapper(cfg, device=device)
-    elif cfg.task == "kto":
-        from soup_cli.trainer.kto import KTOTrainerWrapper
-
-        trainer_wrapper = KTOTrainerWrapper(cfg, device=device)
-    elif cfg.task == "grpo":
-        from soup_cli.trainer.grpo import GRPOTrainerWrapper
-
-        trainer_wrapper = GRPOTrainerWrapper(cfg, device=device)
-    elif cfg.task == "ppo":
-        from soup_cli.trainer.ppo import PPOTrainerWrapper
-
-        trainer_wrapper = PPOTrainerWrapper(cfg, device=device)
-    elif cfg.task == "orpo":
-        from soup_cli.trainer.orpo import ORPOTrainerWrapper
-
-        trainer_wrapper = ORPOTrainerWrapper(cfg, device=device)
-    elif cfg.task == "simpo":
-        from soup_cli.trainer.simpo import SimPOTrainerWrapper
-
-        trainer_wrapper = SimPOTrainerWrapper(cfg, device=device)
-    elif cfg.task == "ipo":
-        from soup_cli.trainer.ipo import IPOTrainerWrapper
-
-        trainer_wrapper = IPOTrainerWrapper(cfg, device=device)
-    elif cfg.task == "bco":
-        from soup_cli.trainer.bco import BCOTrainerWrapper
-
-        trainer_wrapper = BCOTrainerWrapper(cfg, device=device)
-    elif cfg.task == "preference":
-        from soup_cli.trainer.preference import PreferenceTrainerWrapper
-
-        trainer_wrapper = PreferenceTrainerWrapper(cfg, device=device)
-    elif cfg.task == "reward_model":
-        from soup_cli.trainer.reward_model import RewardModelTrainerWrapper
-
-        trainer_wrapper = RewardModelTrainerWrapper(cfg, device=device)
-    elif cfg.task == "pretrain":
-        from soup_cli.trainer.pretrain import PretrainTrainerWrapper
-
-        trainer_wrapper = PretrainTrainerWrapper(cfg, device=device)
-    elif cfg.task == "embedding":
-        from soup_cli.trainer.embedding import EmbeddingTrainerWrapper
-
-        trainer_wrapper = EmbeddingTrainerWrapper(cfg, device=device)
-    else:
-        trainer_wrapper = SFTTrainerWrapper(cfg, device=device)
+    # Build trainer — the same dispatch `soup train` uses (#1213). This used to
+    # be a second, shorter chain that never grew past v0.40.0, so ten task
+    # values and every `backend: mlx` config were trained as plain SFT here
+    # while the tracker recorded the configured task.
+    trainer_wrapper = build_trainer(cfg, device=device)
     trainer_wrapper.setup(dataset)
 
     # Train

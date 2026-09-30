@@ -175,15 +175,16 @@ task: sft
 data:
   train: ./domain.jsonl
 training:
+  quantization: none            # block expansion needs an unquantized base
   expand_layers: 4              # append 4 zero-init decoder blocks
-  freeze_trainable_layers: 4    # train only the appended blocks
+  freeze_trainable_layers: 4    # train only the appended blocks (requires expand_layers)
   lr: 5e-5
   epochs: 1
 ```
 
 **What happens at trainer start.** Soup deep-copies the last `expand_layers` decoder blocks, zero-inits each clone's residual projections (`mlp.down_proj` + `self_attn.o_proj`) so the appended block initially acts as identity, appends them to `model.model.layers`, and updates `config.num_hidden_layers`. When `freeze_trainable_layers > 0` is set, every parameter except the appended blocks is frozen — this is the canonical LLaMA Pro "train only new blocks" recipe.
 
-**Scope.** Works on both `task: sft` and `task: pretrain` with `backend: transformers`. Bounds: `expand_layers ∈ [1, 64]`. Over-expansion (more new blocks than the base has layers) silently clamps to the base layer count. Non-Llama-shaped architectures (e.g. Falcon's `dense_4h_to_h`) emit a `warnings.warn` because the residual zero-init heuristic only matches the standard `down_proj` / `o_proj` names — the appended blocks are still appended + trainable, but lose the identity-init guarantee.
+**Scope.** Works on `task: sft` and `task: pretrain` with `backend: transformers`, `modality: text` and `quantization: none`; any other combination is refused at config load. No other trainer applies the expansion, and the appended blocks are only supported on an unquantized base. Bounds: `expand_layers ∈ [1, 64]`. Over-expansion (more new blocks than the base has layers) silently clamps to the base layer count. Non-Llama-shaped architectures (e.g. Falcon's `dense_4h_to_h`) emit a `warnings.warn` because the residual zero-init heuristic only matches the standard `down_proj` / `o_proj` names — the appended blocks are still appended + trainable, but lose the identity-init guarantee.
 
 
 ## Optimizer & PEFT Zoo
@@ -248,7 +249,7 @@ an explicit target list always wins unchanged:
    the refusal. `training.lora.target_parameters` on its own also suffices.
 
 **`granitemoehybrid` is adapted only in part, and says so at setup.** Granite 4.0
-is a hybrid: on `ibm-granite/granite-4.0-tiny-base-preview` only 4 of the 40
+is a hybrid: on `ibm-granite/granite-4.0-h-tiny-base` only 4 of the 40
 decoder layers carry a `self_attn` at all (`config.layer_types` is 36
 `linear_attention` + 4 `full_attention`), so the attention-projection entry above
 reaches a tenth of the decoder. The other 36 layers are Mamba-2 blocks
@@ -309,7 +310,7 @@ Five PEFT-surface improvements that LlamaFactory and Axolotl maintain:
 
 ```yaml
 training:
-  quantization: none            # required: PiSSA initializes from float weights
+  quantization: none            # required: schema default is 4bit; ReLoRA/PiSSA need float
   lora:
     init_strategy: pissa          # 'random' (default), 'pissa', 'olora'
     rank_pattern:                 # per-target-module rank override
@@ -317,10 +318,10 @@ training:
       v_proj: 16
     alpha_pattern:                # per-target-module alpha override
       q_proj: 16
-  relora_steps: 500               # magnitude-prune LoRA every 500 steps
+  relora_steps: 500               # merge+reinit restart every 500 steps
   relora_warmup_ratio: 0.1        # skip first 10% of training
-  relora_prune_ratio: 0.9         # zero out smallest 90% by magnitude
-  relora_reset_optimizer: true    # clear optimizer state on each fire
+  relora_prune_ratio: 0.9         # deprecated; kept for old YAML (ignored)
+  relora_reset_optimizer: true    # clear optimizer state after each restart
 ```
 
 **PiSSA** initializes the LoRA pair from the SVD of the base weight, giving faster
@@ -328,10 +329,30 @@ early convergence than random init at the cost of one extra SVD pass on the firs
 epoch. `init_strategy: olora` is also accepted; setting the legacy `use_olora: true`
 auto-aligns for back-compat.
 
-**ReLoRA** fires every N global steps, magnitude-prunes the LoRA adapter weights
-(keeping the top `1 - relora_prune_ratio` by absolute value), and optionally clears
-optimizer state for the pruned parameters so momentum doesn't fight the new sparse
-weights. Useful for very long training runs where the LoRA capacity saturates.
+**ReLoRA is a behaviour break.** Soup's `training.quantization` **defaults to `4bit`**.
+ReLoRA restarts merge the LoRA update into the base weight, so `relora_steps` now
+**requires an explicit `quantization: none`** in soup.yaml. A config that previously
+set only `relora_steps` is refused at parse. No shipped recipe, template, or example
+sets `relora_steps`.
+
+ReLoRA fires every N global steps, merges the LoRA update (B @ A, with PEFT
+scaling) into the frozen base weight, reinitializes `lora_A` (Kaiming) and
+`lora_B` (zeros), optionally clears optimizer state for those adapter parameters,
+and runs a short learning-rate re-warmup. The first post-restart step uses
+`1/(W+1)` of the target LR, then advances by that same increment to full LR.
+Restarts accumulate faithfully only on an fp32 base; bf16/fp16 bases lose merge
+delta to rounding. Embedding adapters (empty `lora_A`, typically `embed_tokens`)
+are skipped; Linear LoRA is merged even though peft puts empty
+`lora_embedding_A`/`lora_embedding_B` dicts on every `LoraLayer`. Useful for very
+long training runs where adapter capacity saturates. `relora_prune_ratio` is
+retained for backward-compatible YAML but no longer prunes adapter weights.
+
+After training, Soup merges the active adapter into the already-accumulated
+in-memory base and saves the final output as a standalone dense model. Load or
+export that output directly; do not run `soup merge` on it. Intermediate
+checkpoint directories remain trainer artifacts, and `--resume` / `--hf-resume`
+are refused when `relora_steps` is configured because those checkpoints do not
+encode the accumulated restart state.
 
 **Per-pattern rank/alpha** map module name patterns to integer ranks. Useful in MoE
 configs where expert FFNs need lower rank than attention. Caps: 256 keys × value 1024.
@@ -348,8 +369,10 @@ deprecated in favour of the YAML registry.
 **Multi-trainer scope** — ReLoRA and the surgical patches are wired into every
 transformer-backend trainer: `sft`, `dpo`, `grpo`, `kto`, `orpo`, `simpo`, `ipo`,
 `ppo`, `reward_model`, `pretrain`, `embedding`, `bco`, plus the unified
-`task: preference` dispatcher. Schema cross-validator only rejects MLX backend
-(the callback is HF Trainer-specific).
+`task: preference` dispatcher. Schema cross-validator rejects MLX backend,
+quantization other than `none`, `stream_layers`, `lora.use_vera`, `lora.use_dora`,
+and `use_fsdp2_compile` (the callback is HF Trainer-specific and restart requires
+a writable float base).
 
 
 ## DoRA (Weight-Decomposed LoRA)
@@ -380,7 +403,7 @@ training:
     alpha: 16
 ```
 
-- **Compatibility:** Wired on every Trainer-based task that trains a LoRA adapter, including the preference and RL tasks (`dpo`, `kto`, `orpo`, `simpo`, `ipo`, `bco`, `grpo`, `online_dpo`, `ppo`, `reward_model`, `distill`). Most attach the LoRA+ optimizer once the trainer is built; `ppo` passes it to the trainer's constructor instead, because trl's PPO trainer builds its optimizer and LR scheduler eagerly, and adds the value model to it at the base learning rate, as trl's default optimizer does. `classifier`, `reranker`, `cross_encoder` and `asr` full fine-tune by default, so LoRA+ applies there only with `classifier_lora: true` / `asr_lora: true` and `lora.r > 0`. Refused at config parse on tasks with no trainable LoRA $B$ matrix: `prm` (full fine-tune), `moe_lora_routing` (only the routing gate trains), and `classifier` / `reranker` / `cross_encoder` / `asr` without their LoRA flag. Also refused on `unlearn`, which runs its own optimizer loop rather than a Trainer. Refused with `lora.use_vera` (VeRA trains scaling vectors, not $A$/$B$ matrices, so every trainable tensor would run at `lr * ratio`). Mutually exclusive with `use_lorafa`.
+- **Compatibility:** Wired on every Trainer-based task that trains a LoRA adapter, including the preference and RL tasks (`dpo`, `kto`, `orpo`, `simpo`, `ipo`, `bco`, `grpo`, `online_dpo`, `ppo`, `reward_model`, `distill`). Most attach the LoRA+ optimizer once the trainer is built; `ppo` passes it to the trainer's constructor instead, because trl's PPO trainer builds its optimizer and LR scheduler eagerly, and adds the value model to it at the base learning rate, as trl's default optimizer does. `classifier`, `reranker`, `cross_encoder` and `asr` full fine-tune by default, so LoRA+ applies there only with `classifier_lora: true` / `asr_lora: true` and `lora.r > 0`. Refused at config parse on tasks with no trainable LoRA $B$ matrix: `prm` (full fine-tune), `moe_lora_routing` (only the routing gate trains), and `classifier` / `reranker` / `cross_encoder` / `asr` without their LoRA flag. Also refused on `unlearn`, which runs its own optimizer loop rather than a Trainer. Refused with `lora.use_vera` (VeRA trains scaling vectors, not $A$/$B$ matrices, so every trainable tensor would run at `lr * ratio`). Also refused on the `mlx` backend (#1324): the MLX optimizer Soup builds (`trainer/mlx_optim.py`) runs every LoRA tensor at one learning rate (no parameter groups), so the ratio would be silently ignored; remove it or use `backend: transformers`. Mutually exclusive with `use_lorafa`.
 
 
 ## LoRA-FA (Frozen-A LoRA)
@@ -621,7 +644,7 @@ soup train --config soup.yaml \
 
 The report contains the geometric `lrs[]`, raw + EMA-smoothed `losses[]`, the recommended LR (steepest negative gradient before divergence), the LR with min loss, and the divergence point if any.
 
-The sweep takes one training row per step. With fewer rows than `--find-lr-steps`, it runs one step per row over the same `--find-lr-start` → `--find-lr-end` range and prints a line saying so. The recommendation needs at least 4 points, so `--find-lr-steps` must be at least 4 and a training set with fewer than 4 rows is refused before the model loads. If the loss turns non-finite partway through, the report covers the steps before it; if that leaves fewer than 4, the command says where it diverged instead of writing a report.
+The sweep takes one training row per step. With fewer rows than `--find-lr-steps`, it runs one step per row over the same `--find-lr-start` → `--find-lr-end` range and prints a line saying so. The recommendation needs at least 4 points, so `--find-lr-steps` must be at least 4 and a training set with fewer than 4 rows is refused before the model loads. If the loss turns non-finite partway through, the report covers the steps before it; if that leaves fewer than 4, the command says where it diverged instead of writing a report. If the sweep cannot run at all (the config does not load, the model or dataset cannot be loaded, or `torch` is not installed), the command names the cause, exits 1 and writes no report.
 
 ### Auto Warmup Schedule
 
@@ -670,8 +693,9 @@ training:
 ```
 
 Computes `continue` / `early_stop` / `lower_lr` advice from the loss curve for
-callers that invoke the detector. `soup train` currently reports this option as
-not enforced; a live training callback remains a follow-up.
+callers that invoke the detector. `convergence_detection` is reported as not
+enforced by `soup train`; setting `convergence_window` or `convergence_rel_tol` away from their
+defaults emits a load-time warning in v0.76 and will be refused as of v0.77 (#808).
 
 ### VRAM Pressure Advisory
 
@@ -690,14 +714,15 @@ Records peak memory each step. When pressure crosses the threshold, recommends a
 
 ## Training Intelligence (Forgetting + Checkpoint Quality)
 
-The `forgetting_*`, `checkpoint_*`, `early_stop_on_regression`, and `convergence_*` settings are
+The `forgetting_detection`, `checkpoint_intelligence`, `early_stop_on_regression`, `convergence_detection`, and `forgetting_threshold` settings are
 reserved for planned in-training callbacks. They are accepted by the schema but
 are not enforced during training in this build. `soup train` prints an advisory note
 when one is set away from its default, directing users to `--gate <suite.yaml>`.
-(Other unconsumed configuration fields staged for features that have not landed emit
-a load-time warning in v0.76 and are refused as of v0.77 per #808. That includes
-`early_stop_patience`, which moved from the advisory note to the load-time warning
-in #761, so it is reported once, with the refusal date.)
+Their tuning knobs (`forgetting_eval_steps`, `forgetting_benchmark`, `forgetting_stop`,
+`checkpoint_eval_steps`, `checkpoint_eval_metric`, `checkpoint_eval_tasks`, `checkpoint_keep_top`,
+`convergence_window`, and `convergence_rel_tol`) emit a load-time warning in v0.76
+and are refused as of v0.77 per #808, alongside `early_stop_patience` (#761), so each
+is reported once with the refusal date.
 
 Use the live eval gate for regression detection and automatic stopping today:
 

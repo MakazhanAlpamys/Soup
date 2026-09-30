@@ -60,6 +60,7 @@ def build_soup_config(
         data_size=dataset_profile.samples,
         model_size_b=model_profile.params_b,
         vram_gb=target_vram,
+        quantization=quantization,
     )
     max_length = decide_max_length(
         p95_tokens=dataset_profile.p95_tokens,

@@ -15,6 +15,7 @@ soup advise compare                           Show prior verdicts from advise hi
 soup advise explain                           Rubric + evidence trail of the last verdict
 soup fetch <name>                             Fetch a ready-to-edit example config from the bundled catalog
 soup train --config soup.yaml                 Start training
+soup train --config soup.yaml --resume ./output/checkpoint-100  Resume from local checkpoint (not with training.relora_steps)
 soup train --config soup.yaml --tensorboard   Train with TensorBoard logging
 soup train --config soup.yaml --replay old.jsonl --replay-ratio 0.1  Continual-learning rehearsal: interleave old data so the new task doesn't erase it (sft/pretrain)
 soup train --config soup.yaml --fsdp full_shard  Train with FSDP2
@@ -24,13 +25,14 @@ soup train --config soup.yaml --gpus 8 --nodes 2 --node-rank 0 --master-addr 10.
 soup train --config soup.yaml --gpus 4 --no-reexec  Print the launch command without running it
 soup train --config soup.yaml --gate evals/gate.yaml  Eval-gated training
 soup train --config soup.yaml --push-as user/repo  Auto-push each checkpoint to HF as branch
-soup train --config soup.yaml --push-as user/repo --hf-resume  Resume from latest HF checkpoint branch
+soup train --config soup.yaml --push-as user/repo --hf-resume  Resume from latest HF checkpoint branch (not with training.relora_steps)
 soup train --config soup.yaml --find-lr        LR range finder: write recommended LR JSON
 soup train --config soup.yaml --cloud modal|lambda --gpu a100  Render a cloud GPU controller (plan-only; --cloud-submit submits live)
 soup infer --model ./output --input p.jsonl   Batch inference
 soup infer --model ./output --input p.jsonl --cuda-graphs   Experimental CUDA graph decode (Qwen2/Llama, one GPU, PyTorch >= 2.14)
 soup infer --task asr --model <whisper|adapter> --input a.jsonl --output o.jsonl [--audio-dir d --asr-language en --asr-task transcribe|translate]  Whisper transcription + WER/CER
 soup chat --model ./output                    Interactive chat
+soup infer|chat|diff ... --device cpu|cuda|cuda:N|mps  Pick where the model loads (see below)
 soup push --model ./output --repo user/name   Upload to HuggingFace
 soup push --model ./output --repo user/name --collection user/coll-abc123  Add to HF Collection
 soup merge --adapter ./output                 Merge LoRA with base model
@@ -95,6 +97,7 @@ soup serve --model <m> --record-thumbs ./rl.db  Capture 👍/👎 feedback into 
 soup serve --model <m> --kv-cache-type bf16|f16|q8_0|fp8  KV-cache type (transformers; q8_0 needs hqq; fp8 = vLLM+Hopper only) (v0.71.14)
 POST /v1/adapters/activate/<name>             Hot-swap active LoRA adapter
 soup sweep --config soup.yaml --param lr=...  Hyperparameter search
+soup sweep --config soup.yaml --sweep-config sweep.yaml  Sweep from a standalone strategy/n_runs/seed/params file
 soup diff --model-a ./a --model-b ./b         Compare two models
 soup data inspect <path>                      View dataset stats
 soup data validate <path>                     Check format (auto-detect)
@@ -178,7 +181,7 @@ soup migrate --from llamafactory config.yaml  Import config from LLaMA-Factory
 soup migrate --from axolotl config.yml        Import config from Axolotl
 soup migrate --from unsloth notebook.ipynb    Import config from Unsloth notebook
 soup migrate --from llamafactory c.yaml --dry-run  Preview without writing
-soup recipes list                             List all 172 ready-made recipes
+soup recipes list                             List all 173 ready-made recipes
 soup recipes show llama3.1-8b-sft            Print recipe YAML
 soup recipes use llama3.1-8b-sft             Copy recipe to soup.yaml
 soup recipes search "reasoning"              Search by keyword/task/size
@@ -259,7 +262,7 @@ soup bench train --config soup.yaml --steps 20 --warmup 3 -o bench-train.json  T
 soup bench <model> --backend auto             Auto-detect transformers/mlx backend (v0.53.9)
 soup serve --reasoning-parser deepseek-r1     Strip <think> blocks from responses (v0.53.9)
 soup doctor [--nccl] [--disk] [--config F]    Check environment (optionally check NCCL bandwidth, media type; --disk ~9s cold / ~2.4s warm).
-                                              --config also reports which settings that config writes are not read on its task/backend (#755); exits 2 if it cannot be read, and exits 1 when a required core dependency is missing, or when any installed package is beyond its declared ceiling — core or [train] (#828, #874).
+                                              --config also reports which settings that config switches on (a `false` or unset value is not reported; `seed: 0` is) that its task/backend does not read (#755, #1330); exits 2 if it cannot be read, and exits 1 when a required core dependency is missing, or when any installed package is beyond its declared ceiling — core or [train] (#828, #874).
 soup monitor                                  NVIDIA / Apple Silicon GPU monitor: util / temp / VRAM / power
 soup quickstart [--dry-run]                   Full demo
 soup plugins list|install|enable|disable      Manage Soup plugins
@@ -366,7 +369,7 @@ soup train  # task='distill' + distill_mode=token|sequence  Token logit-KL or se
 soup train  # task=classifier|reranker|cross_encoder + lora  LoRA-adapter classifier (frozen encoder) — LIVE (v0.71.12)
 soup train  # use_mod | expand_layers  Mixture-of-Depths / LLaMA Pro (Llama/Qwen/Mistral) — LIVE (v0.71.12)
 soup train  # use_longlora  LongLoRA S² is refused at config load: the override leaked future tokens and applied no S² grouping; use rope_scaling_type with plain LoRA (#1240)
-soup train  # task='tts' + tts_family + modality='audio_out'  TTS codec-string SFT; pre-encoded + Orpheus/SNAC + Llasa/XCodec2 live; Sesame CSM refused (native trainer required) — LIVE (v0.71.20)
+soup train  # task='tts' + tts_family + modality='audio_out'  TTS pre-encoded codec-token SFT + emotion templating; Orpheus/Llasa live-codec; Spark/Oute raw-audio refused (upstream pins); Sesame CSM refused — LIVE (v0.71.20)
 soup train  # task in {sft,tts} + moe_expert_quant=nf4|int8_rowwise [+moe_lora]  bnb per-expert quant of fused-MoE experts (CUDA); refused on other tasks, which never applied it (#798) — LIVE (v0.71.20)
 soup train  # task in {sft,tts} + train_router_only=true [+moe_lora]  Freeze MoE experts, train only the gating router; refused on other tasks (#798). moe_lora needs lora.dropout: 0.0 on fused-expert MoEs — LIVE (v0.71.20)
 soup train  # quantization='bitnet_1.58'  BitNet 1.58 training is not implemented; config load refuses it
@@ -374,6 +377,23 @@ soup export --model ./output --format bitnet|tq1_0  BitNet 1.58 TQ1_0 ternary GG
 soup version [--full] [--json]                Show version (--full: system info, --json: JSON output)
 soup --verbose <command>                      Full traceback on errors
 ```
+
+### Choosing the device for `soup infer`, `soup chat` and `soup diff`
+
+`--device` decides where these commands load the model. Without it, the
+device is auto-detected and the same rules apply to what was detected (this
+also covers `soup bench`, which loads through the `soup infer` path).
+
+| `--device` | Placement | Dtype |
+|---|---|---|
+| `cpu` | pinned to the CPU | `float32` (twice the RAM of `float16`: a 7B model needs about 28 GB) |
+| `cuda` | `device_map="auto"`: accelerate may use every visible GPU and spill to the CPU if the model does not fit | `float16` |
+| `cuda:N` | pinned to GPU `N` | `float16` |
+| `mps` | pinned to the Apple GPU | `float16` |
+| `mlx` | runs on the CPU on this path | `float32` |
+
+Values are case-insensitive. Any other value (`gpu`, `auto`, `cuda:0,1`, ...)
+is refused with an error instead of being ignored.
 
 ### Best-of-N recovery and publication
 
