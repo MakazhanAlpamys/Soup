@@ -128,17 +128,19 @@ def resolve_inference_device_map_and_dtype(
         device: ``"cpu"``, ``"cuda"``, ``"cuda:<n>"``, ``"mps"``, ``"mlx"``
             (any case — MLX has its own load path and never reaches
             ``from_pretrained`` in normal use, but a caller that lands here
-            anyway must not pass ``"mlx"`` through as a torch device),
-            another accelerator name, or ``None``/empty when it was
-            genuinely never resolved.
+            anyway must not pass ``"mlx"`` through as a torch device), or
+            ``None``/empty when it was genuinely never resolved. Any other
+            value raises :class:`ValueError` instead of being silently
+            ignored.
 
     Returns:
         A ``(device_map, torch_dtype)`` pair to splat into
         ``from_pretrained(**kwargs)``: ``{"": "cpu"}`` and ``float32`` for
-        CPU/MLX, ``{"": device}`` and a bf16/fp16 pick for MPS or an
-        explicitly indexed device, ``"auto"`` and a bf16/fp16 pick for a
-        plain accelerator name, or the pre-#1443 ``"auto"``/``float16``
-        default when ``device`` is unset.
+        CPU/MLX, ``{"": device}`` (lower-cased) and a bf16/fp16 pick for
+        MPS or an explicitly indexed ``cuda:<n>``, ``"auto"`` and a bf16/fp16
+        pick for plain ``cuda`` (accelerate may use every visible GPU), or
+        the pre-#1443 ``"auto"``/``float16`` default when ``device`` is
+        unset.
     """
     import torch
 
@@ -146,15 +148,19 @@ def resolve_inference_device_map_and_dtype(
         return "auto", torch.float16
 
     normalized = str(device).strip().lower()
+    if not re.fullmatch(r"cpu|mlx|mps|cuda(:\d+)?", normalized):
+        raise ValueError(
+            f"Unsupported --device {device!r}: use cpu, cuda, cuda:<index> or mps."
+        )
 
-    if normalized == "cpu" or normalized.startswith("mlx"):
+    if normalized in ("cpu", "mlx"):
         return {"": "cpu"}, torch.float32
 
     use_bf16 = normalized.startswith("cuda") and cuda_supports_bf16()
     dtype = torch.bfloat16 if use_bf16 else torch.float16
 
     if normalized == "mps" or ":" in normalized:
-        return {"": device}, dtype
+        return {"": normalized}, dtype
 
     return "auto", dtype
 

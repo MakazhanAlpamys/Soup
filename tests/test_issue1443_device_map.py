@@ -13,6 +13,7 @@ import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
 import torch
 from typer.testing import CliRunner
 
@@ -43,9 +44,9 @@ def _assert_cpu_placement(name: str, load, model) -> None:
         f"the CPU (device_map={device_map!r}, model.to() called="
         f"{model.to.called})"
     )
-    assert dtype != torch.float16, (
-        f"{name}._load_model(device='cpu') still hard-codes float16, which "
-        f"is not a CPU-appropriate dtype (got {dtype})"
+    assert dtype == torch.float32, (
+        f"{name}._load_model(device='cpu') must load in float32 on the CPU "
+        f"(got {dtype})"
     )
 
 
@@ -206,3 +207,98 @@ def test_chat_cli_without_device_flag_uses_the_auto_detected_device(tmp_path: Pa
     output = strip_ansi(result.output)
     assert "Device: cpu" in output, output
     _assert_cpu_placement("chat (CLI auto-detect)", load, model)
+
+
+@pytest.mark.parametrize(
+    ("device", "expected"),
+    [
+        ("cpu", ({"": "cpu"}, torch.float32)),
+        ("CPU", ({"": "cpu"}, torch.float32)),
+        ("mlx", ({"": "cpu"}, torch.float32)),
+        ("mps", ({"": "mps"}, torch.float16)),
+        ("cuda:1", ({"": "cuda:1"}, torch.float16)),
+        # Plain `cuda` deliberately stays "auto" (every visible GPU); pinned
+        # here so the choice cannot drift silently.
+        ("cuda", ("auto", torch.float16)),
+        (None, ("auto", torch.float16)),
+        ("", ("auto", torch.float16)),
+    ],
+)
+def test_resolver_table(monkeypatch, device, expected):
+    from soup_cli.utils import gpu
+
+    monkeypatch.setattr(gpu, "cuda_supports_bf16", lambda: False)
+    assert gpu.resolve_inference_device_map_and_dtype(device) == expected
+
+
+def test_resolver_uses_bf16_only_on_cuda_when_supported(monkeypatch):
+    from soup_cli.utils import gpu
+
+    monkeypatch.setattr(gpu, "cuda_supports_bf16", lambda: True)
+    assert gpu.resolve_inference_device_map_and_dtype("cuda") == ("auto", torch.bfloat16)
+    assert gpu.resolve_inference_device_map_and_dtype("cuda:0") == (
+        {"": "cuda:0"}, torch.bfloat16,
+    )
+    assert gpu.resolve_inference_device_map_and_dtype("mps") == ({"": "mps"}, torch.float16)
+
+
+@pytest.mark.parametrize(
+    "device", ["foo", "gpu", "tpu", "xpu", "auto", "cuda:abc", "cuda:0,1"]
+)
+def test_resolver_refuses_an_unknown_device(device):
+    from soup_cli.utils import gpu
+
+    with pytest.raises(ValueError, match="cpu, cuda"):
+        gpu.resolve_inference_device_map_and_dtype(device)
+
+
+@pytest.mark.parametrize(
+    ("device", "expected"), [("MPS", {"": "mps"}), ("CUDA:0", {"": "cuda:0"})]
+)
+def test_pinned_device_map_uses_the_normalised_name(monkeypatch, device, expected):
+    from soup_cli.utils import gpu
+
+    monkeypatch.setattr(gpu, "cuda_supports_bf16", lambda: False)
+    device_map, dtype = gpu.resolve_inference_device_map_and_dtype(device)
+    assert device_map == expected and dtype == torch.float16
+    assert torch.device(device_map[""])  # what accelerate will hand to torch
+
+
+def _prep(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    model_dir = tmp_path / "merged"
+    model_dir.mkdir()
+    (model_dir / "config.json").write_text(json.dumps({}))
+    (tmp_path / "prompts.jsonl").write_text(json.dumps({"prompt": "hi"}) + "\n")
+    return str(model_dir)
+
+
+def test_infer_cli_hands_the_resolved_device_to_the_loader(tmp_path, monkeypatch):
+    from soup_cli.cli import app
+
+    model_dir = _prep(tmp_path, monkeypatch)
+    with patch(
+        "soup_cli.commands.infer._load_model",
+        side_effect=RuntimeError("stop after the load call"),
+    ) as load:
+        result = runner.invoke(
+            app,
+            ["infer", "-m", model_dir, "-i", "prompts.jsonl", "-o", "o.jsonl", "--device", "cpu"],
+        )
+    assert "Device: cpu" in " ".join(strip_ansi(result.output).split()), result.output
+    assert load.call_args.args[2] == "cpu", load.call_args
+
+
+def test_diff_cli_hands_the_resolved_device_to_the_loader(tmp_path, monkeypatch):
+    from soup_cli.cli import app
+
+    model_dir = _prep(tmp_path, monkeypatch)
+    with patch(
+        "soup_cli.commands.diff._load_model",
+        side_effect=RuntimeError("stop after the load call"),
+    ) as load:
+        result = runner.invoke(
+            app, ["diff", "-a", model_dir, "-b", model_dir, "--prompt", "hi", "--device", "cpu"],
+        )
+    assert "Device: cpu" in " ".join(strip_ansi(result.output).split()), result.output
+    assert load.call_args_list[0].args[2] == "cpu", load.call_args_list
