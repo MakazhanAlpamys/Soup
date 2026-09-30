@@ -202,8 +202,8 @@ def run_correctness(
     input_ids: Any,
     *,
     pin: bool,
-) -> None:
-    """Require canonical overlap, exact loss, and three exact LoRA backwards."""
+) -> list[tuple[int, int]]:
+    """Measure canonical overlap, loss, and three LoRA backward comparisons."""
     from soup_cli.utils.layer_stream_runtime import (
         assert_canonical_parameters_intersect,
     )
@@ -229,6 +229,7 @@ def run_correctness(
         if parameter.grad is not None and not torch.isfinite(parameter.grad).all():
             raise RuntimeError(f"pin={pin} reference gradient is non-finite: {name}")
 
+    results: list[tuple[int, int]] = []
     for repetition in range(3):
         streamed.zero_grad(set_to_none=True)
         streamed.train()
@@ -262,11 +263,9 @@ def run_correctness(
             f"correctness   pin={pin} repetition={repetition + 1}/3 "
             f"exact={exact}/{len(streamed_grads)}"
         )
-        if exact != len(streamed_grads):
-            raise RuntimeError(
-                f"pin={pin} failed gradient correctness on repetition "
-                f"{repetition + 1}: {exact}/{len(streamed_grads)}"
-            )
+        results.append((exact, len(streamed_grads)))
+
+    return results
 
 
 def time_arm(
@@ -559,12 +558,32 @@ def run_measurement(args: argparse.Namespace) -> int:
                     lora_state,
                 )
 
-                run_correctness(
+                correctness = run_correctness(
                     streamed,
                     reference,
                     input_ids,
                     pin=pin,
                 )
+                total = correctness[0][1]
+                if any(rep_total != total for _, rep_total in correctness):
+                    raise RuntimeError(
+                        f"pin={pin} gradient totals changed across repetitions"
+                    )
+                exact_summary = ",".join(
+                    f"{exact}/{rep_total}" for exact, rep_total in correctness
+                )
+                all_exact = all(
+                    exact == rep_total for exact, rep_total in correctness
+                )
+                print(
+                    f"gradients    pin={pin} {exact_summary} "
+                    f"{'OK' if all_exact else 'WRONG'}"
+                )
+                if not pin and not all_exact:
+                    raise RuntimeError(
+                        "pin=False failed gradient correctness across all "
+                        f"repetitions: {exact_summary}"
+                    )
 
                 # Correctness and timing use the same streamed instance.
                 # Remove the resident reference before timing so it does not

@@ -71,8 +71,13 @@ class _Toy(nn.Module):
             self.clock.now += -step if self.scenario == "clock_backwards" else step
             if self.scenario == "wrong_first":
                 factor = 3.0
-            elif self.scenario == "wrong_after_first" and self.streamed_calls > 1:
+            elif (
+                self.scenario in {"wrong_after_first", "pinned_wrong_after_first"}
+                and self.streamed_calls > 1
+            ):
                 factor = 3.0
+            if self.scenario == "pinned_wrong_after_first" and not self.pin:
+                factor = None
         x = self.embed(input_ids)
         for layer in self.model.layers:
             x = layer(x, factor)
@@ -165,6 +170,14 @@ def test_an_arm_that_fails_its_gate_is_never_reported(
     assert code == 1, out
     assert message in out
     assert "RESULT:" not in out
+
+def test_wrong_pinned_arm_is_reported_but_can_still_be_timed(
+    monkeypatch, capsys, tmp_path
+):
+    code, out = _run(monkeypatch, capsys, tmp_path, "pinned_wrong_after_first")
+    assert code == 0, out
+    assert "gradients    pin=True 4/4,0/4,0/4 WRONG" in out
+    assert "RESULT: historical-control pinning cost relationship reproduced" in out
 
 def test_an_invalid_timing_exits_3(monkeypatch, capsys, tmp_path):
     code, out = _run(monkeypatch, capsys, tmp_path, "clock_backwards")
