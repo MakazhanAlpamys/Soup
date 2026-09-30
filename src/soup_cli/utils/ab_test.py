@@ -65,6 +65,12 @@ HIGHER_IS_BETTER: Mapping[str, bool] = MappingProxyType(
 # against power at large ones (a less noisy prior scale). Chosen by the sweep in
 # benchmarks/gate-1265-ab-nig.md; changing it means re-running that sweep.
 PRIOR_SCALE_ROWS = 5
+# accept_h0 is held at continue while the tested rows' pooled standard deviation
+# is more than this many times the held-out rows' (#1265 review). With a
+# saturated start the prior scale is far too small and nearly every run accepted
+# H0, with or without a real difference; on Gaussian rows the two spreads agree
+# and no verdict changes. Only accepts are held back, so Type-I is untouched.
+ACCEPT_HOLD_SPREAD_RATIO = 3.0
 
 # #1339 - the largest standardised effect whose square is still a float.
 MAX_STANDARDISED_EFFECT = math.sqrt(sys.float_info.max)
@@ -382,7 +388,7 @@ def _standardised_effect(
         return 0.0
     scale = math.sqrt(variance)
     effect = config.effect_size / scale
-    too_large = not math.isfinite(1.0 + (_MAX_SAMPLES_PER_ARM / 2) * effect * effect)
+    too_large = effect > _MAX_PRIOR_EFFECT
     # #1384 - a variance below the smallest normal float is a spread the
     # statistic cannot carry at any --effect-size: say so, and how to fix it.
     if too_large and variance < sys.float_info.min:
@@ -490,6 +496,14 @@ def msprt_step(
     if llr >= math.log(1.0 / config.alpha):
         return verdict(llr, "reject_h0", _direction(config.metric, diff))
     if llr <= math.log(config.beta / (1.0 - config.alpha)):
+        # Held-out rows far tighter than the tested ones (a warm cache, a judge
+        # that saturates early) make the prior far too wide, and the Bayes
+        # factor then favours H0 whether or not there is a difference. Hold the
+        # accept back until the spreads agree; a reject is never held back, so
+        # the Type-I bound is unchanged.
+        held_out_sd = config.effect_size / standardised_effect
+        if math.sqrt(pooled_variance) > ACCEPT_HOLD_SPREAD_RATIO * held_out_sd:
+            return verdict(llr)
         return verdict(llr, "accept_h0")
     return verdict(llr)
 
@@ -546,6 +560,7 @@ def run_msprt(
 
 
 __all__ = [
+    "ACCEPT_HOLD_SPREAD_RATIO",
     "HIGHER_IS_BETTER",
     "MAX_STANDARDISED_EFFECT",
     "MsprtConfig",
