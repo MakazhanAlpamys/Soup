@@ -1,13 +1,14 @@
 """Training-prefix echo probe (v0.56.0).
 
 Given a training row's first ``prefix_fraction`` of tokens, the probe
-asks the adapter to continue. If the adapter's continuation Jaccard-
-overlaps the held-out suffix above a threshold, that's a memorization
-signal. Score = 1 - mean(echo_rate) so 1.0 = healthy / no echo.
+asks the adapter to continue. If enough of the adapter's continuation
+tokens occur in the held-out suffix, that's a memorization signal.
+Score = 1 - mean(echo_rate) so 1.0 = healthy / no echo.
 """
 
 from __future__ import annotations
 
+from collections import Counter
 from typing import Mapping, Optional, Sequence
 
 from soup_cli.utils.diagnose._common import (
@@ -16,7 +17,6 @@ from soup_cli.utils.diagnose._common import (
     decode_ids,
     encode_ids,
     extract_row_text,
-    jaccard,
     merge_evidence,
     require_finite_unit,
     require_str,
@@ -87,7 +87,9 @@ def score_memorization(
     the echo-overlap are computed over sub-word tokens (resolved ONCE up front,
     not per row) instead of whitespace words — catching BPE-level memorization
     that whitespace tokenisation misses. The live ``soup diagnose`` wiring of
-    ``--tokenizer`` lands with the live probe runner (#165).
+    ``--tokenizer`` lands with the live probe runner (#165). Overlap uses
+    completion precision against the suffix, so the live generation cap does
+    not make longer rows harder to flag.
     """
     if not isinstance(training_rows, Sequence):
         raise TypeError("training_rows must be a sequence of dicts")
@@ -122,7 +124,13 @@ def score_memorization(
         if not tok_comp or not tok_suff:
             overlap = 0.0
         else:
-            overlap = jaccard(tok_comp, tok_suff)
+            # A live completion is capped, while the held-out suffix is not.
+            # Completion precision detects reproduced suffix spans without
+            # diluting the score as the untouched suffix grows.
+            completion_counts = Counter(tok_comp)
+            suffix_counts = Counter(tok_suff)
+            matched = sum((completion_counts & suffix_counts).values())
+            overlap = matched / len(tok_comp)
         echoes.append(1.0 if overlap >= echo_threshold else 0.0)
         if scanned >= 1000:
             break

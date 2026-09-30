@@ -349,6 +349,8 @@ soup diagnose my-run-id --output diag.json --attach-to-registry abc123
 `--tokenizer` for a sub-word bigram memorization variant) instead of emitting neutral OK. `refusal` uses
 a built-in probe set; `format` only fires when the dataset's own targets look like JSON;
 `contamination` stays neutral unless a benchmark corpus is supplied. Validated on SmolLM2-135M.
+The memorization probe measures completion-token precision against the held-out suffix, so its
+64-token live generation limit does not dilute the overlap score for long training rows.
 
 **Seven failure-mode probes:**
 
