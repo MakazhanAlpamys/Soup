@@ -171,7 +171,7 @@ def score_contains(output: str, expected: str) -> bool:
     if not needle:
         return True
     pattern = r"(?<![A-Za-z0-9])" + re.escape(needle) + r"(?![A-Za-z0-9])"
-    return re.search(pattern, output[:MAX_REGEX_INPUT_LEN], re.IGNORECASE) is not None
+    return re.search(pattern, output, re.IGNORECASE) is not None
 
 
 def score_answer(output: str, expected: str) -> bool:

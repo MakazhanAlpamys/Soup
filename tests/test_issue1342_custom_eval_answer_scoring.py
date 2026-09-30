@@ -99,3 +99,20 @@ def test_gate_answer_scorer_refuses_an_unreadable_expected(tmp_path):
     (task,) = run_gate(suite, generate_fn=lambda _prompt: "4").task_results
     assert task.score is None and not task.passed
     assert "row 1" in task.error and "scoring 'answer'" in task.error
+
+
+
+@pytest.mark.parametrize(
+    ("expected", "output", "truth"),
+    [
+        ("C++", "I like C++ a lot", True),
+        ("a.b", "axb", False),
+        ("a.b", "see a.b here", True),
+        ("4|5", "5", False),
+        ("[0]", "x [0] y", True),
+        ("(", "a ( b", True),
+    ],
+)
+def test_contains_reads_expected_literally(expected, output, truth):
+    """`expected` is data, never a pattern: regex metacharacters match themselves."""
+    assert score_contains(output, expected) is truth

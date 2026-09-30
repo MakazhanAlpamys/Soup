@@ -819,8 +819,18 @@ How the string scorers read an output:
 
 `answer` refuses, at load time, an `expected` that states no single answer (a multi-line
 worked solution with no `####`, an empty `\boxed{}`, a hedge between values), naming the line.
-`contains` cannot read negation: `It is not 4, so 5.` still contains `4`, so prefer `answer`
-for math and short-answer tasks. The eval gate's `scorer:` override accepts `answer` too.
+`contains` cannot read negation: `It is not 4, so 5.` still contains `4`. Its bound is an
+ASCII alphanumeric run, so `4` still matches inside `3.4`, `4.5` and `v1.42.3`. `answer`
+reads the answer a model *states*: `The capital of France is Paris.` scores `False` for a
+gold `Paris` while `Answer: Paris` and `Paris` score `True` — prefer `answer` for math and
+short-answer tasks, where the model states its answer. The eval gate's `scorer:` override
+accepts `answer` too.
+
+**Changed:** `contains` used to be a raw substring test, so it paid `14` for an expected `4`.
+Scores recorded with the old test (a `soup eval gate --baseline` file or `registry://` row, or
+a `soup eval custom --run-id` result) can be higher than the same outputs score now. The
+baseline scorer stamp covers the bundled suites only and will not warn: re-measure those
+baselines, or compare new runs only with runs made on this version.
 
 ### Auto-Eval Config (soup.yaml)
 
