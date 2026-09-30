@@ -575,7 +575,7 @@ def train(
         help=(
             "After training, run `soup diagnose` against the supplied evidence "
             "JSON (or scratch evidence). Refuses to mark the run successful "
-            "if any of the 6 v0.56.0 failure modes returns MAJOR."
+            "if any failure mode returns MAJOR (exit 2) or NOT_RUN (exit 3)."
         ),
     ),
     annex_xi: str = typer.Option(
@@ -2112,8 +2112,8 @@ def _run_diagnose_gate(
     """Post-training failure-mode gate (v0.56.0).
 
     Loads a JSON ``evidence`` file with optional per-mode scores and
-    refuses to mark the run successful if any mode comes back MAJOR.
-    Missing modes fall back to a neutral OK score so partial evidence
+    refuses to mark the run successful if any mode comes back MAJOR (exit 2)
+    or NOT_RUN (exit 3, #1435). Missing modes fall back to a neutral OK score so partial evidence
     still produces a useful report card. The train command only calls
     this helper on the chief worker (RANK==0 in a multi-node launch, else
     LOCAL_RANK==0) so distributed runs execute the gate once per cluster,
@@ -2141,7 +2141,8 @@ def _run_diagnose_gate(
     if not isinstance(raw_scores, dict):
         raise ValueError("evidence.scores must be an object")
 
-    from soup_cli.utils.diagnose.report import classify_score
+    from soup_cli.utils.diagnose.report import classify_score, evidence_default_score
+    from soup_cli.utils.exit_codes import EXIT_USAGE_ERROR
 
     scores: dict = {}
     for mode in FAILURE_MODES:
@@ -2150,7 +2151,9 @@ def _run_diagnose_gate(
             continue
         if not isinstance(entry, dict):
             raise ValueError(f"scores.{mode} must be an object")
-        score = entry.get("score", 1.0)
+        score = entry.get("score", evidence_default_score(entry))
+        if isinstance(score, bool) or not isinstance(score, (int, float)):
+            raise ValueError(f"scores.{mode}.score must be a number")
         verdict = entry.get("verdict") or classify_score(score)
         scores[mode] = FailureScore(
             mode=mode,
@@ -2169,8 +2172,19 @@ def _run_diagnose_gate(
         for mode in FAILURE_MODES:
             sc = report.scores[mode]
             if sc.verdict == "MAJOR":
-                console.print(f"  [red]MAJOR[/] {mode}: {sc.evidence}")
+                console.print(f"  [red]MAJOR[/] {mode}: {markup_escape(sc.evidence)}")
         raise typer.Exit(2)
+    if report.overall == "NOT_RUN":
+        # An unmeasured mode is not a pass (#1435); same exit as `soup diagnose`.
+        console.print(
+            "[yellow]--diagnose-gate: one or more modes did not run (NOT_RUN); "
+            "the run is not verified.[/]"
+        )
+        for mode in FAILURE_MODES:
+            sc = report.scores[mode]
+            if sc.verdict == "NOT_RUN":
+                console.print(f"  [yellow]NOT_RUN[/] {mode}: {markup_escape(sc.evidence)}")
+        raise typer.Exit(EXIT_USAGE_ERROR)
     console.print(
         f"[green]--diagnose-gate: {report.overall}[/] across "
         f"{len(FAILURE_MODES)} modes."

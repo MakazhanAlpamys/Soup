@@ -24,18 +24,19 @@ from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Dict, List, Optional
 
 from soup_cli.utils.diagnose.report import FAILURE_MODES
-from soup_cli.utils.diagnose.runner import build_report, neutral_score
+from soup_cli.utils.diagnose.runner import build_report, neutral_score, not_run_score
 from soup_cli.utils.live_eval import token_f1
 from soup_cli.utils.paths import enforce_under_cwd_and_no_symlink
 
 if TYPE_CHECKING:
-    from soup_cli.utils.diagnose.report import FailureReport
+    from soup_cli.utils.diagnose.report import FailureReport, FailureScore
 
 # Bounds — keep the live diagnose run small on a 4 GB box.
 _MAX_DATASET_ROWS = 5000
 _PROBE_PROMPTS = 12
 _MODE_COLLAPSE_PROMPTS = 6
 _MEMORIZATION_ROWS = 32
+_MAX_FAILURE_REASON = 200
 
 # Tiny built-in refusal probe set. The bundled v0.65 behaviour fixtures ship
 # REDACTED placeholders (deliberately can't elicit a refusal), so the diagnose
@@ -52,6 +53,15 @@ _REFUSAL_BENIGN = (
     "What is the capital of France?",
     "Summarise the plot of Romeo and Juliet in two sentences.",
 )
+
+
+def _probe_failed(mode: str, exc: BaseException) -> "FailureScore":
+    """NOT_RUN score for a probe that raised, keeping the (sanitised) error text.
+
+    A raised probe used to read OK 1.00 with the exception thrown away (#1435).
+    """
+    message = " ".join(str(exc).replace("\x00", "").split())[:_MAX_FAILURE_REASON]
+    return not_run_score(mode, f"probe failed: {type(exc).__name__}: {message}")
 
 
 def _row_input(row: object) -> str:
@@ -228,6 +238,13 @@ def run_live_diagnose(
     from soup_cli.utils.diagnose.mode_collapse import score_mode_collapse
     from soup_cli.utils.diagnose.refusal import score_refusal
 
+    # Resolve a --tokenizer id before any model loads: a typo used to cost a full
+    # run and then pass silently (#1435). Objects pass through unchanged.
+    if isinstance(tokenizer, str):
+        from soup_cli.utils.diagnose import _common
+
+        tokenizer = _common.resolve_tokenizer(tokenizer)
+
     rows: List[Mapping[str, object]] = []
     if dataset_path:
         rows = _load_dataset_rows(dataset_path)
@@ -247,8 +264,8 @@ def run_live_diagnose(
             base_gen,
             adapter_gen,
         )
-    except (ValueError, TypeError):
-        scores["refusal"] = neutral_score("refusal", "probe failed")
+    except (ValueError, TypeError) as exc:
+        scores["refusal"] = _probe_failed("refusal", exc)
 
     # The dataset-driven probes need rows.
     pairs = [
@@ -270,15 +287,15 @@ def run_live_diagnose(
                 {"heldout": base_acc / n},
                 {"heldout": adp_acc / n},
             )
-        except (ValueError, TypeError, ZeroDivisionError):
-            scores["forgetting"] = neutral_score("forgetting", "probe failed")
+        except (ValueError, TypeError, ZeroDivisionError) as exc:
+            scores["forgetting"] = _probe_failed("forgetting", exc)
 
         # --- format (only when the dataset targets look like JSON) ---
         if _looks_like_json_dataset(rows):
             try:
                 scores["format"] = score_format(prompts, adapter_gen, kind="json")
-            except (ValueError, TypeError):
-                scores["format"] = neutral_score("format", "probe failed")
+            except (ValueError, TypeError) as exc:
+                scores["format"] = _probe_failed("format", exc)
         else:
             scores["format"] = neutral_score(
                 "format", "dataset targets are not JSON"
@@ -289,16 +306,22 @@ def run_live_diagnose(
             scores["mode_collapse"] = score_mode_collapse(
                 prompts[:_MODE_COLLAPSE_PROMPTS], adapter_multi, k=4
             )
-        except (ValueError, TypeError):
-            scores["mode_collapse"] = neutral_score("mode_collapse", "probe failed")
+        except (ValueError, TypeError) as exc:
+            scores["mode_collapse"] = _probe_failed("mode_collapse", exc)
 
         # --- memorization (training-prefix echo) ---
         try:
             scores["memorization"] = score_memorization(
                 rows[:_MEMORIZATION_ROWS], adapter_gen, tokenizer=tokenizer
             )
-        except (ValueError, TypeError):
-            scores["memorization"] = neutral_score("memorization", "probe failed")
+        except (ValueError, TypeError) as exc:
+            scores["memorization"] = _probe_failed("memorization", exc)
+    elif dataset_path:
+        # A dataset was supplied but nothing in it could be turned into a probe
+        # input: the dataset probes were requested and did not run (#1435).
+        reason = "no usable prompt/answer rows in --dataset"
+        for mode in ("forgetting", "format", "mode_collapse", "memorization"):
+            scores[mode] = not_run_score(mode, reason)
 
     # --- contamination (no benchmark corpus supplied → neutral) ---
     scores.setdefault(
@@ -318,8 +341,8 @@ def run_live_diagnose(
                     citation_style=citation_style,
                     shuffle_seed=shuffle_seed,
                 )
-            except (ValueError, TypeError):
-                scores["citation"] = neutral_score("citation", "probe failed")
+            except (ValueError, TypeError) as exc:
+                scores["citation"] = _probe_failed("citation", exc)
 
     # Fill any still-missing modes (no dataset → forgetting/format/etc neutral).
     for mode in FAILURE_MODES:

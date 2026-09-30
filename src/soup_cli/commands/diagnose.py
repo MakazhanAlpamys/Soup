@@ -32,12 +32,18 @@ from rich.table import Table
 from soup_cli import __version__
 from soup_cli.utils.diagnose import FailureReport, compose_report
 from soup_cli.utils.diagnose.badge import render_badge_svg
-from soup_cli.utils.diagnose.report import FAILURE_MODES, FailureScore, classify_score
+from soup_cli.utils.diagnose.report import (
+    FAILURE_MODES,
+    FailureScore,
+    classify_score,
+    evidence_default_score,
+)
 from soup_cli.utils.diagnose.runner import (
     build_report,
     neutral_score,
     write_report,
 )
+from soup_cli.utils.exit_codes import EXIT_USAGE_ERROR
 from soup_cli.utils.paths import enforce_under_cwd_and_no_symlink
 
 console = Console()
@@ -48,9 +54,28 @@ _MAX_EVIDENCE_BYTES = 16 * 1024 * 1024
 
 
 def _verdict_style(verdict: str) -> str:
-    return {"OK": "green", "MINOR": "yellow", "MAJOR": "red"}.get(
-        verdict, "white"
-    )
+    return {
+        "OK": "green",
+        "MINOR": "yellow",
+        "MAJOR": "red",
+        "NOT_RUN": "bright_black",
+    }.get(verdict, "white")
+
+
+def _exit_for(report: FailureReport, allow_not_run: bool) -> None:
+    """Exit 2 on MAJOR; exit 3 when a requested probe did not run (#1435).
+
+    MAJOR wins: a known regression is reported as such even if another probe did
+    not run. ``--allow-not-run`` keeps exit 0 for runs that knowingly skip probes.
+    """
+    if report.overall == "MAJOR":
+        raise typer.Exit(code=2)
+    if report.overall == "NOT_RUN" and not allow_not_run:
+        console.print(
+            "[yellow]One or more requested probes did not run, so the verdict is "
+            "not a pass. Fix the input, or pass --allow-not-run to accept it.[/]"
+        )
+        raise typer.Exit(code=EXIT_USAGE_ERROR)
 
 
 def _render_report(report: FailureReport) -> None:
@@ -116,7 +141,7 @@ def _scores_from_evidence(payload: dict) -> dict:
             continue
         if not isinstance(entry, dict):
             raise typer.BadParameter(f"scores.{mode} must be an object")
-        score = entry.get("score", 1.0)
+        score = entry.get("score", evidence_default_score(entry))
         # Validate numeric before float() — a non-numeric score otherwise raised
         # ValueError that exited 1 with zero output. BadParameter prints a clear
         # message.
@@ -126,12 +151,15 @@ def _scores_from_evidence(payload: dict) -> dict:
             )
         evidence = entry.get("evidence", "supplied by --evidence")
         verdict = entry.get("verdict") or classify_score(score)
-        out[mode] = FailureScore(
-            mode=mode,
-            score=float(score),
-            verdict=verdict,
-            evidence=str(evidence),
-        )
+        try:
+            out[mode] = FailureScore(
+                mode=mode,
+                score=float(score),
+                verdict=verdict,
+                evidence=str(evidence),
+            )
+        except (ValueError, TypeError) as exc:
+            raise typer.BadParameter(f"scores.{mode} is invalid: {exc}") from exc
     return out
 
 
@@ -279,6 +307,14 @@ def diagnose(
             "style the model was trained to emit. (v0.71.17 #254)"
         ),
     ),
+    allow_not_run: bool = typer.Option(
+        False,
+        "--allow-not-run",
+        help=(
+            "Exit 0 even when a requested probe did not run (verdict NOT_RUN). "
+            "Without it such a run exits 3."
+        ),
+    ),
     shuffle_seed: Optional[int] = typer.Option(
         None,
         "--shuffle-seed",
@@ -312,7 +348,17 @@ def diagnose(
         raise typer.Exit(code=2) from exc
 
     if base_model is not None:
+        from soup_cli.utils.diagnose import _common
         from soup_cli.utils.diagnose.live import run_live_diagnose
+
+        # Resolve --tokenizer before any model loads; a bad id is an input error.
+        tokenizer_arg: object = tokenizer
+        if tokenizer:
+            try:
+                tokenizer_arg = _common.resolve_tokenizer(tokenizer)
+            except (TypeError, ValueError) as exc:
+                console.print(f"[red]Error:[/] {escape(str(exc))}")
+                raise typer.Exit(code=EXIT_USAGE_ERROR) from exc
 
         try:
             report = run_live_diagnose(
@@ -321,7 +367,7 @@ def diagnose(
                 adapter=adapter or None,
                 dataset_path=dataset,
                 device=device,
-                tokenizer=tokenizer,
+                tokenizer=tokenizer_arg,
                 soup_version=__version__,
                 citation_style=resolved_citation_style,
                 shuffle_seed=shuffle_seed,
@@ -333,8 +379,7 @@ def diagnose(
             )
             raise typer.Exit(code=1) from exc
         _emit_report(report, output=output, badge=badge, attach_to_registry=attach_to_registry)
-        if report.overall == "MAJOR":
-            raise typer.Exit(code=2)
+        _exit_for(report, allow_not_run)
         return
 
     scores = {}
@@ -375,9 +420,7 @@ def diagnose(
         extras=extras,
     )
     _emit_report(report, output=output, badge=badge, attach_to_registry=attach_to_registry)
-
-    if report.overall == "MAJOR":
-        raise typer.Exit(code=2)
+    _exit_for(report, allow_not_run)
 
 
 # Compose a tiny helper so the CLI module is callable from tests.
