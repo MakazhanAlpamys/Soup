@@ -104,6 +104,9 @@ def _render_report(report: FailureReport) -> None:
             title="overall",
         )
     )
+    skipped = report.extras.get("rows_skipped")
+    if skipped:
+        console.print(f"[dim]Rows skipped: {escape(skipped)}[/]")
 
 
 def _load_evidence(path: str) -> dict:
