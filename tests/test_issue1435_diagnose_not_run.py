@@ -343,3 +343,107 @@ class TestEvidenceNotRun:
         out = tool_diagnose_evidence({"run_id": "r", "evidence": path})
         assert out["overall"] == "NOT_RUN"
         assert out["scores"]["format"]["verdict"] == "NOT_RUN"
+
+
+# ---------------------------------------------------------------------------
+# Every probe site reports NOT_RUN, and a probe with nothing to measure is not OK
+# ---------------------------------------------------------------------------
+
+JSON_ROWS = [
+    {"prompt": f"Return object {i}.", "completion": f'{{"id": {i}}}'} for i in range(12)
+]
+RAFT_ROWS = [
+    {
+        "query": f"question {i}?",
+        "golden_doc": f"golden doc {i}",
+        "answer": f"answer {i} [doc-1]",
+        "text": f"document {i} has several separate words that can be split",
+    }
+    for i in range(12)
+]
+# Pairs exist (the pair builder reads these keys) but score_memorization reads none of them
+# and used to answer "nothing to check" with OK 1.00.
+QUESTION_ANSWER = [
+    {"question": f"What is topic {i} about in detail?", "answer": f"Topic {i} is about things."}
+    for i in range(12)
+]
+QUERY_RESPONSE = [
+    {"query": f"Tell me about topic {i} in detail.", "response": f"Topic {i} is about things."}
+    for i in range(12)
+]
+INPUT_OUTPUT = [
+    {"input": f"translate sentence number {i} to French", "output": f"phrase {i}"}
+    for i in range(12)
+]
+
+PROBE_SITES = [
+    ("refusal", "soup_cli.utils.diagnose.refusal.score_refusal", RECOGNISED),
+    ("forgetting", "soup_cli.utils.diagnose.forgetting.score_forgetting", RECOGNISED),
+    ("format", "soup_cli.utils.diagnose.format.score_format", JSON_ROWS),
+    ("mode_collapse", "soup_cli.utils.diagnose.mode_collapse.score_mode_collapse", RECOGNISED),
+    ("memorization", "soup_cli.utils.diagnose.memorization.score_memorization", RECOGNISED),
+    ("citation", "soup_cli.utils.diagnose.citation.score_citation", RAFT_ROWS),
+]
+
+
+class TestEveryProbeSite:
+    @pytest.mark.parametrize(
+        ("mode", "target", "rows"), PROBE_SITES, ids=[site[0] for site in PROBE_SITES]
+    )
+    def test_a_probe_that_raises_is_not_run_with_its_reason(
+        self, tmp_path, monkeypatch, mode, target, rows
+    ):
+        with mock.patch(target, side_effect=ValueError("probe exploded")):
+            report, _ = _run_live(tmp_path, monkeypatch, rows, _gens())
+        score = report.scores[mode]
+        assert score.verdict == "NOT_RUN", (mode, score)
+        assert "ValueError: probe exploded" in score.evidence
+        assert report.overall == "NOT_RUN"
+
+    @pytest.mark.parametrize(
+        "rows",
+        [QUESTION_ANSWER, QUERY_RESPONSE, INPUT_OUTPUT],
+        ids=["question_answer", "query_response", "input_output"],
+    )
+    def test_memorization_with_no_splittable_text_is_not_run(self, tmp_path, monkeypatch, rows):
+        report, _ = _run_live(tmp_path, monkeypatch, rows, _gens())
+        score = report.scores["memorization"]
+        assert score.verdict == "NOT_RUN", score
+        assert "text, content" in score.evidence  # the new guard, not "no usable rows"
+        assert report.scores["forgetting"].verdict != "NOT_RUN"  # the rows do form pairs
+        assert report.overall == "NOT_RUN"
+
+
+# ---------------------------------------------------------------------------
+# Review follow-ups: table cell, empty --tokenizer, grey style
+# ---------------------------------------------------------------------------
+
+
+class TestReviewFollowUps:
+    def test_table_shows_a_dash_not_a_zero_score_for_not_run(self, tmp_path, monkeypatch):
+        result, out, _ = _cli(
+            tmp_path, monkeypatch, UNRECOGNISED, _gens(), "--allow-not-run"
+        )
+        assert result.exit_code == 0
+        modes = ("forgetting", "format", "mode_collapse", "memorization")
+        rows = [
+            line for line in out.splitlines()
+            if "NOT_RUN" in line and any(mode in line for mode in modes)
+        ]
+        assert len(rows) == 4  # one table row per NOT_RUN probe, not the overall panel
+        for line in rows:
+            assert "\u2014" in line
+            assert "0.000" not in line
+
+    def test_empty_tokenizer_is_an_input_error(self, tmp_path, monkeypatch):
+        result, out, calls = _cli(
+            tmp_path, monkeypatch, RECOGNISED, _gens(), "--tokenizer", ""
+        )
+        assert result.exit_code == 3
+        assert "non-empty" in out
+        assert calls == []
+
+    def test_not_run_is_styled_grey(self):
+        from soup_cli.commands.diagnose import _verdict_style
+
+        assert _verdict_style("NOT_RUN") == "bright_black"

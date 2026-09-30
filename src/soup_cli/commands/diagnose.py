@@ -90,7 +90,8 @@ def _render_report(report: FailureReport) -> None:
             continue
         table.add_row(
             escape(mode),
-            f"{score.score:.3f}",
+            # A NOT_RUN score is a stored 0.0 placeholder, not a measurement.
+            "\u2014" if score.verdict == "NOT_RUN" else f"{score.score:.3f}",
             f"[{_verdict_style(score.verdict)}]{score.verdict}[/]",
             escape(score.evidence),
         )
@@ -353,7 +354,7 @@ def diagnose(
 
         # Resolve --tokenizer before any model loads; a bad id is an input error.
         tokenizer_arg: object = tokenizer
-        if tokenizer:
+        if tokenizer is not None:
             try:
                 tokenizer_arg = _common.resolve_tokenizer(tokenizer)
             except (TypeError, ValueError) as exc:

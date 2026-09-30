@@ -227,11 +227,14 @@ def run_live_diagnose(
     * **contamination** — pure data overlap (no model; empty benchmark corpus
       → neutral when none is supplied).
 
-    Any probe whose inputs are unavailable falls back to a neutral OK score
-    with a reason, matching the v0.56.0 ``build_report`` policy.
+    A probe that was requested but produced no measurement (no usable dataset rows,
+    or it raised) reports ``NOT_RUN`` with the reason. Only a probe that does not
+    apply (no ``--dataset``, non-JSON format targets, no benchmark corpus) falls
+    back to a neutral OK score, matching the v0.56.0 ``build_report`` policy.
     """
     if not isinstance(base, str) or not base.strip():
         raise ValueError("base must be a non-empty string")
+    from soup_cli.utils.diagnose._common import extract_row_text
     from soup_cli.utils.diagnose.forgetting import score_forgetting
     from soup_cli.utils.diagnose.format import score_format
     from soup_cli.utils.diagnose.memorization import score_memorization
@@ -310,12 +313,22 @@ def run_live_diagnose(
             scores["mode_collapse"] = _probe_failed("mode_collapse", exc)
 
         # --- memorization (training-prefix echo) ---
-        try:
-            scores["memorization"] = score_memorization(
-                rows[:_MEMORIZATION_ROWS], adapter_gen, tokenizer=tokenizer
+        # score_memorization reads only text/content/prompt/instruction/messages, while
+        # the pair builder also accepts question/answer, query/response and
+        # input/output rows; for those it answers "nothing to check" with OK 1.00.
+        if not any(extract_row_text(row) for row in rows[:_MEMORIZATION_ROWS]):
+            scores["memorization"] = not_run_score(
+                "memorization",
+                "none of the first rows has a text, content, prompt, instruction "
+                "or messages field to split",
             )
-        except (ValueError, TypeError) as exc:
-            scores["memorization"] = _probe_failed("memorization", exc)
+        else:
+            try:
+                scores["memorization"] = score_memorization(
+                    rows[:_MEMORIZATION_ROWS], adapter_gen, tokenizer=tokenizer
+                )
+            except (ValueError, TypeError) as exc:
+                scores["memorization"] = _probe_failed("memorization", exc)
     elif dataset_path:
         # A dataset was supplied but nothing in it could be turned into a probe
         # input: the dataset probes were requested and did not run (#1435).
