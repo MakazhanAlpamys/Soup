@@ -67,3 +67,18 @@ def test_the_other_domains_ask_for_an_answer_line(domain):
     prompt = build_prompt(5, "alpaca", "spec", domain=domain)
     assert "'Answer: <answer>'" in prompt
     assert "####" not in prompt
+
+
+@pytest.mark.parametrize(
+    ("gold", "number", "text"),
+    [
+        ("<think>6 * 7 = 42</think>\n#### 42", Decimal(42), "42"),
+        ("<think>p implies q</think>\nAnswer: yes", None, "yes"),
+        ("<think>one pass</think>\nAnswer: O(n)", None, "O(n)"),
+    ],
+)
+def test_a_gold_written_the_way_the_template_asks_is_readable(gold, number, text):
+    parsed = parse_reference(gold)
+    assert parsed is not None
+    assert parsed.number == number
+    assert parsed.text == text
