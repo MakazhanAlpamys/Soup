@@ -20,15 +20,15 @@ f798c46e), one process per arm.
 
 # Gate record — two-drive striping of the disk-tier cache (R4)
 
-**Status: NO VERDICT (2026-09-30, two sequences).** Sequence 2 (`gate2_*`), a
-new complete sequence, stopped after four of its six arms on §2's first row.
-Round 1's SINGLE arm measured 22.107 s, outside 15.0-21.5 s (one of its three
-steps took 31.581 s), so the session did not reproduce the known step. The
-same round's STRIPED arm measured 18.052 s; that is recorded, but the
-no-verdict row decides first (§6.1). Attempt 3 (sequence 1, `gate_*`) had
-stopped earlier on a loss of AC power. It is kept as measured and does not
-count toward this verdict. The rule was committed before either run, and §2
-and §4 are unchanged.
+**Status: NO VERDICT (2026-09-30, three sequences).** Sequence 3 (`gate3_*`),
+the latest complete sequence, has no valid arm. The box lost AC power
+(Kernel-Power event 105, `AcOnline=false`) 12 s into its first arm, which made
+that arm void (§4). It stayed on battery through the whole 15-minute pre-arm
+window, so the void arm's re-run and the five other arms never ran (§6.3).
+Sequence 2 (`gate2_*`, §6.1) had stopped on §2's first row, and attempt 3
+(`gate_*`, §6.2) on an earlier loss of AC power. Both are kept as measured and
+do not count toward this verdict. The rule was committed before any run. §2 is
+unchanged, and §4 changed only by a diagnostic addition made before sequence 3.
 
 *Amended 2026-09-30, still before any arm ran:* §4 gains a third void
 condition, a suspended box. The first build attempt timed out because the
@@ -230,11 +230,17 @@ own `.log` beside its JSON, and keeps every stamp and sample in
 
 ## 5. Results
 
-Two sequences ran on 2026-09-30. **Attempt 3** (sequence 1, files `gate_*`,
-§5.1-§5.7) built the striped cache and stopped after four arms on a loss of AC
-power. **Sequence 2** (files `gate2_*`, §5.8-§5.13) is a new, complete
-sequence. It reused the striped cache and none of attempt 3's arms. Attempt 3's
-subsections below are as written when it stopped.
+Three sequences ran on 2026-09-30:
+
+- **Attempt 3** (sequence 1, files `gate_*`, §5.1-§5.7) built the striped
+  cache and stopped after four arms on a loss of AC power.
+- **Sequence 2** (files `gate2_*`, §5.8-§5.13) is a new, complete sequence. It
+  reused the striped cache and none of attempt 3's arms, and it stopped on §2's
+  first row.
+- **Sequence 3** (files `gate3_*`, §5.14-§5.16), a third complete sequence,
+  stopped after its first arm on a loss of AC power.
+
+Each sequence's subsections are as written when it stopped.
 
 Attempt 3 ran from worktree HEAD `a0ff99b5`. Between the header's `f798c46e`
 and that commit, `src/` and `benchmarks/harness/stream_probe.py` are
@@ -527,7 +533,98 @@ that arm was ending. The same arms read 2.5-4.1 GB/s outside it.
    three of the four arms, not the idle 180 MHz of attempt 3's valid arms.
 4. **The first-step loss separation** pooled over both sequences (§5.11).
 
+### 5.14 Sequence 3: how it ran, and its one arm
+
+The driver was invoked at 20:35:13 from worktree HEAD `2dc4145a` with
+`--plan rounds --run-prefix gate3 --settle-s 60`. `2dc4145a` adds only the
+diagnostic per-process capture to the box stamps (§4). `src/` and
+`benchmarks/harness/stream_probe.py` are byte-identical to `f798c46e`.
+
+- At 20:35:02, before the launch, the box read AC at 100%, with 35.46 GiB of
+  commit headroom and 0 MiB of GPU memory in use. The only `python.exe`
+  processes were the `gh` polling loop and two editor language servers.
+- After the 60 s settle, `gate3_r0_single` started at 20:36:15. Its before
+  stamp read AC, 100%, `charging=False` (flag 1: full, not charging), 35.63 GiB
+  of headroom, four `python.exe`, 0 MiB of GPU memory and ASPM 2.
+- **At 20:36:26 the box lost AC** (Kernel-Power event 105, `AcOnline=false`,
+  `RemainingCapacity=80000` of `FullChargeCapacity=80000`). The first battery
+  sample came 12.0 s into the arm, and 72 of the arm's 78 power samples read
+  battery. Its after stamp (20:38:53) reads AC 0 at 96%. The arm is void and
+  is kept as `gate3_r0_single_void.*`.
+- For the record, not used: the void arm's plain point read 17.526 s (steps
+  17.361, 17.577 and 17.639), 29.214 tok/s and 4.016 GB/s implied H2D. The
+  instrumented point read 17.462 s. `direct_io` / `pinned` were True / True,
+  and peak alloc was 4.378 GB. Its plain losses were 11.953904, 11.832334 and
+  11.601729.
+- The pre-arm wait ran from 20:38:56 to 20:54:17: 29 polls, `AC=0` at every
+  one, and the battery went from 96% to 91%. The outcome was
+  `stopped: pre-arm checks not met within 15 min before gate3_r0_single`, so
+  the re-run and the other five arms did not run. At 20:54:58 the box was
+  still discharging, at 90%, with no AC-on event since 20:36:26.
+- **The per-process capture's first real arm.** The after stamp's top readers
+  were `NVDisplay.Container.exe` 28.5 MB, `msedgewebview2.exe` 17.6 MB, two
+  `svchost.exe` at 7.4 and 6.4 MB, `LenovoUtilityService.exe` 4.1 MB and
+  `nvcontainer.exe` 3.1 MB. No foreign process read more than 28.5 MB during
+  the arm. The arm's throughput did not dip: C: read 3.66-4.00 GB/s in every
+  10-s bin from 20 s to 140 s. D: saw at most 0.03 MB/s of writes, and C: at
+  most 4.51 MB/s. The lowest commit headroom was 25.21 GiB, and the largest
+  gap between power samples 2.016 s.
+
+### 5.15 The power source over the day
+
+Every Kernel-Power event 105 ("Power source change") in the System log on
+2026-09-30, with the event's own fields:
+
+| time | `AcOnline` | `RemainingCapacity` / `FullChargeCapacity` | during |
+|---|---|---|---|
+| 11:44:49 | true | 8010 / 80000 | |
+| 12:19:00 | false | 50410 / 80000 | |
+| 14:00:00 | true | 4010 / 80000 | |
+| 15:09:13 | false | 75210 / 80000 | attempt 3, `gate_r1_single`, 27 s in (void) |
+| 15:56:12 | true | 52010 / 80000 | before sequence 2 |
+| 16:58:37 | false | 76010 / 80000 | no arm running |
+| 19:15:25 | true | 30410 / 80000 | before sequence 3 |
+| 20:36:26 | false | 80000 / 80000 | sequence 3, `gate3_r0_single`, 12 s in (void) |
+
+Every `AcOnline=false` event came at 63-100% of full capacity, and every
+`true` event at 5-65%. Sequence 2 ran its four arms (15:58-16:09) while
+charging from 68% to 84%, and AC held throughout. The log does not record what
+removed AC. For sequence 3 the laptop was reported plugged in with the lid
+open, so a charger, a cable and a vendor battery feature cannot be told apart
+from this box's records. The box runs a vendor utility service
+(`LenovoUtilityService.exe`). That is noted, not tested.
+
+### 5.16 Sequence 3: anomalies, as measured
+
+1. **No valid arm.** The one arm that ran is void (§5.14).
+2. **The driver's `not_run` list is incomplete again.** It names the five
+   untouched arms and not the void arm's re-run, for the reason §5.7 gives.
+3. **The first-step loss separation of §5.11 does not survive the next SINGLE
+   arm.** The void arm's first timed-step loss, 11.953904, falls inside the
+   range of the four STRIPED ones (11.943206-11.955779). Its timing is what is
+   void; its loss is ordinary data.
+
 ## 6. Verdict
+
+The current verdict is sequence 3's (§6.3, directly below). §6.1 (sequence 2)
+and §6.2 (attempt 3) are kept as written when each stopped.
+
+### 6.3 Sequence 3 (`gate3_*`): **NO VERDICT**
+
+Attempt 3 and sequence 2 (§5.1-§5.13, §6.1, §6.2) stay in this record as
+measured and do not count toward this verdict.
+
+| row | inputs (sequence 3) | result |
+|---|---|---|
+| any SINGLE arm outside 15.0-21.5 s | round 0: void, re-run not run. Rounds 1 and 2: not run | no input |
+| either arm with `direct_io` or `pinned` false | no valid arm (the void arm read True / True) | no input |
+| STRIPED <= 12.0 s in every round | no STRIPED arm ran | no input |
+| STRIPED <= 14.0 s in every round | the same | no input |
+| anything else: DO NOT SHIP | none | not applied, for the reason §6.2 gives |
+
+§4 stopped the sequence when its 15-minute pre-arm wait expired before the
+void arm's re-run, the first of six positions. No row of §2 has an input, so
+there is no verdict. Nothing in sequence 3 bears on the layout.
 
 ### 6.1 Sequence 2 (`gate2_*`): **NO VERDICT**
 
