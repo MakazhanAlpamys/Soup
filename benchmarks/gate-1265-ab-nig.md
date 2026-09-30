@@ -72,16 +72,16 @@ come from 7 rows per arm.
 ## Power against the asked-for effect
 
 Share of H1 runs that end in `reject_h0` with the right direction, and mean pairs at stop,
-runs to 1000 rows per arm. Wrong-direction rejections were at most 0.0002 in every design.
+runs to 1000 rows per arm. Wrong-direction rejections were at most 0.0002 in the designs shown.
 
 | ratio | burn-in, alpha 0.05 | NIG k=5, alpha 0.05 | burn-in, alpha 0.01 | NIG k=5, alpha 0.01 |
 |---|---|---|---|---|
 | 0.1 | 0.446 / 800 | 0.311 / 885 | 0.176 / 922 | 0.130 / 960 |
 | 0.15 | 0.768 / 450 | 0.724 / 652 | 0.637 / 628 | 0.513 / 805 |
 | 0.2 | 0.811 / 261 | **0.946** / 431 | 0.790 / 389 | **0.859** / 583 |
-| 0.3 | 0.817 / 119 | **0.996** / 201 | 0.818 / 177 | **0.997** / 280 |
+| 0.3 | 0.817 / 119 | **0.996** / 201 | 0.818 / 177 | **0.997** / 279 |
 | 0.5 | 0.840 / 49 | **0.996** / 79 | 0.864 / 71 | **0.997** / 107 |
-| 1 | 0.977 / 31 | **0.997** / 26 | 0.989 / 41 | **0.997** / 34 |
+| 1 | 0.977 / 31 | **0.997** / 26 | 0.989 / 41 | **0.997** / 33 |
 | 2 | 1.000 / 30 | 0.998 / 12 | 1.000 / 40 | 0.999 / 15 |
 | 5 | 1.000 / 30 | 1.000 / 8 | 1.000 / 40 | 1.000 / 9 |
 
@@ -96,7 +96,8 @@ detects more up to ratio 0.35 at alpha 0.05 (0.4 at alpha 0.01) and the mixture 
 
 ## What it costs: time to `accept_h0`
 
-Under H0 the mixture needs more rows to accept. Mean pairs at stop, runs to 1000 rows:
+Under H0 the mixture needs more rows to accept. Mean pairs at stop, runs to 1000 rows (the
+"H0: time to accept_h0" section of `report.txt`):
 
 | ratio | 0.2 | 0.3 | 0.4 | 0.5 | 0.7 | 1 | 1.5 | 2 | 5 |
 |---|---|---|---|---|---|---|---|---|---|
