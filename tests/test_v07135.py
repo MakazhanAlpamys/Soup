@@ -690,7 +690,8 @@ class TestBuildModelCardEdges:
         assert "0.900" in md
         assert "0.100" not in md
 
-    def test_scorecard_duplicate_benchmark_tie_uses_later_insert(self):
+    @pytest.mark.parametrize("newest_first", [True, False])
+    def test_scorecard_tie_uses_later_insert_in_either_input_order(self, newest_first):
         from soup_cli.commands.card import build_model_card
 
         entry = {
@@ -702,9 +703,64 @@ class TestBuildModelCardEdges:
             {"benchmark": "mmlu", "score": 0.9, "created_at": "2026-01-01", "id": 2},
             {"benchmark": "mmlu", "score": 0.1, "created_at": "2026-01-01", "id": 1},
         ]
+        if not newest_first:
+            evals.reverse()
         md = build_model_card(entry, [], evals, [])
-        assert "0.900" in md
+        assert "| mmlu | 0.900 |" in md
         assert "0.100" not in md
+
+    def test_scorecard_cap_is_applied_after_picking_the_newest_row(self):
+        """300 newer rows of one benchmark must not push an older benchmark off the card."""
+        from soup_cli.commands.card import _MAX_ROWS, build_model_card
+
+        entry = {
+            "id": "r", "name": "m", "base_model": "b", "task": "sft",
+            "created_at": "t", "notes": None, "config_hash": "", "data_hash": "",
+            "run_id": "run1", "tags": [], "config_json": "{}",
+        }
+        noise = [
+            {"benchmark": "noise", "score": 0.5, "created_at": "2026-02-01", "id": 1000 - i}
+            for i in range(_MAX_ROWS + 100)
+        ]
+        older = {"benchmark": "mmlu", "score": 0.7, "created_at": "2026-01-01", "id": 1}
+        md = build_model_card(entry, [], noise + [older], [])
+        assert "| mmlu | 0.700 |" in md
+
+    def test_scorecard_is_capped_at_max_rows_benchmarks_newest_first(self):
+        from soup_cli.commands.card import _MAX_ROWS, build_model_card
+
+        entry = {
+            "id": "r", "name": "m", "base_model": "b", "task": "sft",
+            "created_at": "t", "notes": None, "config_hash": "", "data_hash": "",
+            "run_id": "run1", "tags": [], "config_json": "{}",
+        }
+        evals = [
+            {"benchmark": f"bench{index:04d}", "score": 0.5,
+             "created_at": "2026-01-01", "id": 10_000 - index}
+            for index in range(_MAX_ROWS + 50)
+        ]
+        md = build_model_card(entry, [], evals, [])
+        assert "| bench0000 |" in md
+        assert f"| bench{_MAX_ROWS - 1:04d} |" in md
+        assert f"| bench{_MAX_ROWS:04d} |" not in md
+
+    def test_card_shows_newest_score_from_real_tracker_rows(self, tmp_path):
+        from soup_cli.commands.card import build_model_card
+        from soup_cli.experiment.tracker import ExperimentTracker
+
+        entry = {
+            "id": "r", "name": "m", "base_model": "b", "task": "sft",
+            "created_at": "t", "notes": None, "config_hash": "", "data_hash": "",
+            "run_id": "run1", "tags": [], "config_json": "{}",
+        }
+        tracker = ExperimentTracker(db_path=tmp_path / "exp.db")
+        tracker.save_eval_result("model", "mmlu", 0.30, {}, run_id="run1")
+        tracker.save_eval_result("model", "mmlu", 0.45, {}, run_id="run1")
+        evals = tracker.get_eval_results("run1")
+        assert [row["score"] for row in evals] == [0.45, 0.30]
+        md = build_model_card(entry, [], evals, [])
+        assert "| mmlu | 0.450 |" in md
+        assert "0.300" not in md
 
     def test_malformed_config_json_does_not_crash(self):
         from soup_cli.commands.card import build_model_card
