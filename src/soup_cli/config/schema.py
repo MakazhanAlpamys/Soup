@@ -6120,6 +6120,8 @@ class SoupConfig(BaseModel):
         I/O on a real base. The same refusal now applies to every
         ``task='kto'`` config, resident or streamed, before anything loads.
         """
+        if self.backend == "mlx":
+            return self  # _validate_mlx_task_support gives the more basic answer
         tcfg = self.training
         if (
             self.task == "kto"
@@ -6127,10 +6129,10 @@ class SoupConfig(BaseModel):
             and tcfg.batch_size < 2
         ):
             raise ValueError(
-                "task='kto' requires training.batch_size >= 2 (TRL's KL term is "
-                "degenerate at batch 1). Checked here rather than in the "
-                "trainer so a streaming run fails before sharding the "
-                "checkpoint, not minutes into it."
+                "task='kto' requires training.batch_size >= 2: TRL's KL term is "
+                "degenerate at a per-device batch of 1. Set batch_size to 2 or "
+                "more and raise gradient_accumulation_steps to keep the "
+                "effective batch size."
             )
         return self
 

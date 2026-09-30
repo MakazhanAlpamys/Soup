@@ -1096,8 +1096,8 @@ class TestKtoBatchIsRefusedEarly:
         """#1420 widened this gate to resident runs: TRL's KTOTrainer refuses
         a per-device batch of 1 with the same error, but only AFTER the model
         has loaded. Refusing at parse time everywhere (streaming or not)
-        fails fast with Soup's own message instead. Before v0.75.1 this test
-        asserted the opposite — that resident KTO at batch 1 was left alone —
+        fails fast with Soup's own message instead. This test used to assert
+        the opposite — that resident KTO at batch 1 was left alone —
         which just relocated the crash to `KTOTrainer.__init__`."""
         import yaml
 
@@ -1118,6 +1118,26 @@ class TestKtoBatchIsRefusedEarly:
         message = str(excinfo.value)
         assert "kto" in message.lower()
         assert "batch_size" in message
+        assert "KL term" in message and "gradient_accumulation_steps" in message
+        assert "streaming" not in message
+
+    def test_mlx_kto_reports_the_backend_refusal_first(self):
+        import yaml
+
+        from soup_cli.config.loader import load_config_from_string
+
+        with pytest.raises(ValueError, match="MLX backend only ships SFT"):
+            load_config_from_string(
+                yaml.safe_dump(
+                    {
+                        "base": "org/model",
+                        "task": "kto",
+                        "backend": "mlx",
+                        "data": {"train": "t.jsonl", "format": "kto"},
+                        "training": {"batch_size": 1, "quantization": "none"},
+                    }
+                )
+            )
 
     def test_non_streaming_kto_batch_two_still_parses(self, tmp_path):
         """Control: the #1420 gate refuses only batch 1, not KTO outright."""
