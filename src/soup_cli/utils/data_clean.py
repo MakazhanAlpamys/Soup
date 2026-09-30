@@ -205,6 +205,8 @@ def _clean_tool_calls(
 
     Returns None when ``drop_invalid_json`` is set and a call does not parse.
     Anything that is not a list, or a call that is not a dict, is passed through.
+    Since None means "drop the row", callers skip a ``tool_calls`` of None (the
+    loader reads it as no calls) instead of passing it here.
     """
     if not isinstance(tool_calls, list):
         return tool_calls
@@ -276,7 +278,7 @@ def clean_row(
 
     if fmt == "tool-calling" or "tool_calls" in row:
         cleaned_row = dict(row)
-        if "tool_calls" in row:
+        if row.get("tool_calls") is not None:
             cleaned_calls = _clean_tool_calls(
                 row["tool_calls"], applied_rules, repair_json, drop_invalid_json
             )
