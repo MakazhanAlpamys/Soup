@@ -1350,9 +1350,15 @@ def _load_model(
     import torch
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
-    load_dtype = (
-        torch.bfloat16 if kv_cache_dtype == "bfloat16" else torch.float16
-    )
+    on_cpu = device == "cpu"
+    if kv_cache_dtype == "bfloat16":
+        load_dtype = torch.bfloat16
+    else:
+        # float16 is not a usable compute dtype on CPU; match _load_draft_model.
+        load_dtype = torch.float32 if on_cpu else torch.float16
+    # ``device_map="auto"`` lets accelerate use any visible GPU, so an explicit
+    # ``--device cpu`` has to pin the load to the CPU (#1478).
+    device_map = "cpu" if on_cpu else "auto"
 
     console.print("[dim]Loading tokenizer...[/]")
     tokenizer = AutoTokenizer.from_pretrained(
@@ -1368,7 +1374,7 @@ def _load_model(
         base = AutoModelForCausalLM.from_pretrained(
             base_model,
             trust_remote_code=trust_remote_code,
-            device_map="auto",
+            device_map=device_map,
             torch_dtype=load_dtype,
         )
         console.print(f"[dim]Loading LoRA adapter: {model_path}...[/]")
@@ -1378,7 +1384,7 @@ def _load_model(
         model_obj = AutoModelForCausalLM.from_pretrained(
             model_path,
             trust_remote_code=trust_remote_code,
-            device_map="auto",
+            device_map=device_map,
             torch_dtype=load_dtype,
         )
 
