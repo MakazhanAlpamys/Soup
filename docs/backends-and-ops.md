@@ -883,8 +883,12 @@ Five-question wizard input → fully-validated `soup.yaml`. Literal allowlists o
 
 ## Standalone Sweep Config
 
+`--config` stays the base `soup.yaml` to train against; `--sweep-config` points at a
+separate file holding the strategy, run count, seed and swept parameters, in place of
+repeating `--param` on the command line.
+
 ```bash
-soup sweep --config sweep.yaml
+soup sweep --config soup.yaml --sweep-config sweep.yaml
 ```
 
 ```yaml

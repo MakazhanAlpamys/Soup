@@ -12,6 +12,7 @@ from rich.panel import Panel
 from rich.table import Table
 
 from soup_cli.config.loader import load_config
+from soup_cli.utils.sweep_config import load_sweep_yaml
 from soup_cli.utils.terminal import for_terminal
 
 console = Console()
@@ -57,11 +58,20 @@ def sweep(
         "-c",
         help="Path to base soup.yaml config file",
     ),
-    param: list[str] = typer.Option(
-        ...,
+    param: Optional[list[str]] = typer.Option(
+        None,
         "--param",
         "-p",
         help="Parameter to sweep: key=val1,val2,val3 (e.g., lr=1e-5,2e-5,5e-5)",
+    ),
+    sweep_config: Optional[str] = typer.Option(
+        None,
+        "--sweep-config",
+        help=(
+            "Path to a standalone sweep YAML (strategy/n_runs/seed/params) "
+            "instead of --param; its strategy, n_runs and seed take "
+            "precedence over --strategy/--max-runs"
+        ),
     ),
     strategy: str = typer.Option(
         "grid",
@@ -103,12 +113,32 @@ def sweep(
         console.print(f"[red]Config not found: {config_path}[/]")
         raise typer.Exit(1)
 
+    if param and sweep_config:
+        console.print("[red]Use either --param or --sweep-config, not both.[/]")
+        raise typer.Exit(1)
+
+    if sweep_config:
+        try:
+            spec = load_sweep_yaml(sweep_config)
+        except (OSError, ValueError, TypeError) as exc:
+            console.print(f"[red]Failed to load --sweep-config {sweep_config}: {exc}[/]")
+            raise typer.Exit(1) from exc
+        sweep_params = {key: list(values) for key, values in spec.params.items()}
+        strategy = spec.strategy
+        max_runs = spec.n_runs or max_runs
+        random.seed(spec.seed)
+    elif param:
+        sweep_params = _parse_sweep_params(param)
+    else:
+        console.print(
+            "[red]Provide --param, or --sweep-config for a standalone sweep file.[/]"
+        )
+        raise typer.Exit(1)
+
     if strategy not in ("grid", "random"):
         console.print(f"[red]Invalid strategy: {strategy}. Must be grid or random.[/]")
         raise typer.Exit(1)
 
-    # Parse sweep parameters
-    sweep_params = _parse_sweep_params(param)
     if not sweep_params:
         console.print("[red]No valid sweep parameters provided.[/]")
         raise typer.Exit(1)
