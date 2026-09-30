@@ -25,7 +25,6 @@ logger = logging.getLogger(__name__)
 
 console = Console()
 
-_SERVE_DEVICES = ("cuda", "mps", "cpu")
 
 
 def _validate_adapter_name(name: str) -> bool:
@@ -102,10 +101,11 @@ def serve(
         None,
         "--device",
         help=(
-            "Device: cuda, mps or cpu. Auto-detected if not set. With the "
-            "transformers backend, cpu loads the model on the CPU in float32 "
-            "(unless --kv-cache-type bf16/f16 picks the dtype); cuda and mps "
-            "load with device_map=auto in float16."
+            "Device: cuda, cuda:<index>, mps or cpu. Auto-detected if not set. "
+            "With the transformers backend, cpu loads on the CPU in float32 "
+            "(unless --kv-cache-type bf16/f16 picks the dtype); cuda:<index> "
+            "and mps are pinned to that device; cuda uses device_map=auto, "
+            "all in float16."
         ),
     ),
     max_tokens_default: int = typer.Option(
@@ -462,15 +462,16 @@ def serve(
             raise typer.Exit(code=2)
 
     if device:
-        device = device.strip().lower()
-        if device not in _SERVE_DEVICES:
-            from rich.markup import escape as _rich_escape
+        from rich.markup import escape as _rich_escape
 
-            console.print(
-                f"[red]--device:[/] unknown device {_rich_escape(repr(device))}. "
-                f"Accepted values: {', '.join(_SERVE_DEVICES)}."
-            )
-            raise typer.Exit(code=2)
+        from soup_cli.utils.gpu import resolve_inference_device_map_and_dtype
+
+        device = device.strip().lower()
+        try:
+            resolve_inference_device_map_and_dtype(device)
+        except ValueError as exc:
+            console.print(f"[red]--device:[/] {_rich_escape(str(exc))}")
+            raise typer.Exit(code=2) from exc
 
     # v0.53.10 #152 — pre-fetch base from a non-HF hub before serve starts.
     if hub and hub != "hf":
@@ -1369,18 +1370,15 @@ def _load_model(
     import torch
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
-    on_cpu = device == "cpu"
+    from soup_cli.utils.gpu import resolve_inference_device_map_and_dtype
+
+    device_map, default_dtype = resolve_inference_device_map_and_dtype(device)
     if kv_cache_dtype == "bfloat16":
         load_dtype = torch.bfloat16
     elif kv_cache_dtype == "float16":
         load_dtype = torch.float16
     else:
-        # float16 is not a usable default compute dtype on CPU; match
-        # _load_draft_model. An explicit --kv-cache-type f16 is still honoured.
-        load_dtype = torch.float32 if on_cpu else torch.float16
-    # ``device_map="auto"`` lets accelerate use any visible GPU, so an explicit
-    # ``--device cpu`` has to pin the load to the CPU (#1478).
-    device_map = "cpu" if on_cpu else "auto"
+        load_dtype = default_dtype
 
     console.print("[dim]Loading tokenizer...[/]")
     tokenizer = AutoTokenizer.from_pretrained(
@@ -1480,9 +1478,10 @@ def _load_draft_model(speculative_model: str, device: str):
     import os
     import re
 
-    import torch
     from rich.markup import escape
     from transformers import AutoModelForCausalLM
+
+    from soup_cli.utils.gpu import resolve_inference_device_map_and_dtype
 
     # SSRF protection: block URL-based model paths
     if re.match(r'^https?://', speculative_model):
@@ -1501,11 +1500,12 @@ def _load_draft_model(speculative_model: str, device: str):
 
         assert_safe_top_level_weights(speculative_model)
 
+    device_map, dtype = resolve_inference_device_map_and_dtype(device)
     console.print(f"[dim]Loading draft model: {escape(speculative_model)}...[/]")
     draft = AutoModelForCausalLM.from_pretrained(
         speculative_model,
-        device_map="auto" if device != "cpu" else "cpu",
-        torch_dtype=torch.float16 if device != "cpu" else torch.float32,
+        device_map=device_map,
+        torch_dtype=dtype,
     )
     draft.eval()
     return draft
