@@ -99,7 +99,11 @@ def serve(
     device: Optional[str] = typer.Option(
         None,
         "--device",
-        help="Device: cuda, mps, cpu. Auto-detected if not set.",
+        help=(
+            "Device: cuda, cuda:<index>, mps, cpu. Auto-detected if not set; "
+            "a named device is honoured by every transformers from_pretrained "
+            "load (the draft model included), and cpu loads float32."
+        ),
     ),
     max_tokens_default: int = typer.Option(
         512,
@@ -1350,8 +1354,11 @@ def _load_model(
     import torch
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
+    from soup_cli.utils.gpu import resolve_inference_device_map_and_dtype
+
+    device_map, device_dtype = resolve_inference_device_map_and_dtype(device)
     load_dtype = (
-        torch.bfloat16 if kv_cache_dtype == "bfloat16" else torch.float16
+        torch.bfloat16 if kv_cache_dtype == "bfloat16" else device_dtype
     )
 
     console.print("[dim]Loading tokenizer...[/]")
@@ -1368,7 +1375,7 @@ def _load_model(
         base = AutoModelForCausalLM.from_pretrained(
             base_model,
             trust_remote_code=trust_remote_code,
-            device_map="auto",
+            device_map=device_map,
             torch_dtype=load_dtype,
         )
         console.print(f"[dim]Loading LoRA adapter: {model_path}...[/]")
@@ -1378,7 +1385,7 @@ def _load_model(
         model_obj = AutoModelForCausalLM.from_pretrained(
             model_path,
             trust_remote_code=trust_remote_code,
-            device_map="auto",
+            device_map=device_map,
             torch_dtype=load_dtype,
         )
 
