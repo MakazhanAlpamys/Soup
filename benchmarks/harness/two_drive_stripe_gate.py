@@ -10,7 +10,10 @@ once per arm, never two at once, in the order the rule fixes:
 Around every arm it takes the §4 box stamp (before and after), and while the arm runs it
 samples AC power and commit every 2 s and Windows performance counters (PDH, English names)
 every 1 s: per-volume read/write bytes for C: and D:, paging, commit, CPU. The harness only
-READS the two drives, so a write on either during an arm is someone else's I/O.
+READS the two drives, so a write on either during an arm is someone else's I/O. Since
+sequence 3, each stamp also records every process's cumulative read/write bytes
+(``Win32_Process``, one CIM query) and whether the battery is charging, and the after stamp
+names the processes that read most during the arm; diagnostic only, it gates nothing.
 
 It decides nothing about shipping. It applies only the two rows of the rule a single arm
 can settle (a SINGLE arm outside 15.0-21.5 s; ``direct_io`` or ``pinned`` not true), and
@@ -80,6 +83,15 @@ AC_POLL_S = 2.0
 PDH_POLL_S = 1.0
 SUSPEND_GAP_S = 30.0  # a gap this long between 2-s power samples means the box slept
 _AC_INDEX = re.compile(r"Current AC Power Setting Index:\s*(0x[0-9a-fA-F]+)")
+_BATTERY_FLAG_UNKNOWN = 255  # GetSystemPowerStatus: battery status unknown
+_BATTERY_CHARGING = 0x08  # GetSystemPowerStatus BatteryFlag bit: the battery is charging
+PROC_IO_TOP = 8  # processes listed in an after stamp, by read bytes gained during the arm
+# One CIM query; fields joined by a tab ([char]9) so the command needs no quoting.
+_PROC_IO_QUERY = (
+    "Get-CimInstance Win32_Process -Property ProcessId,Name,ReadTransferCount,"
+    "WriteTransferCount | ForEach-Object { ($_.ProcessId,$_.ReadTransferCount,"
+    "$_.WriteTransferCount,$_.Name) -join [char]9 }"
+)
 
 
 # ==========================================================================
@@ -116,6 +128,17 @@ def power() -> Tuple[int, int]:
     if not ctypes.windll.kernel32.GetSystemPowerStatus(ctypes.byref(status)):
         return 255, 255
     return int(status.ACLineStatus), int(status.BatteryLifePercent)
+
+
+def battery_charging() -> Tuple[int, Optional[bool]]:
+    """(BatteryFlag, charging); charging is None when Windows reports the status unknown."""
+    status = _SystemPowerStatus()
+    if not ctypes.windll.kernel32.GetSystemPowerStatus(ctypes.byref(status)):
+        return _BATTERY_FLAG_UNKNOWN, None
+    flag = int(status.BatteryFlag)
+    if flag == _BATTERY_FLAG_UNKNOWN:
+        return flag, None
+    return flag, bool(flag & _BATTERY_CHARGING)
 
 
 def memory() -> Dict[str, int]:
@@ -189,31 +212,123 @@ def soup_cli_file(env: Dict[str, str]) -> Optional[str]:
     return out.strip() if out else None
 
 
-def stamp(run: str, when: str, env: Dict[str, str]) -> Dict[str, Any]:
+def process_io() -> Tuple[Optional[List[List[Any]]], Optional[str]]:
+    """Every process's cumulative I/O bytes: ``[[pid, name, read, write], ...]`` or an error.
+
+    Diagnostic only (added after sequence 2, before sequence 3): it names who else read a
+    drive during a disturbed arm, and it never fails the arm; any failure comes back as the
+    error string. Counters are ``Win32_Process`` ``ReadTransferCount``/``WriteTransferCount``
+    (all I/O the process issued, any device), from one CIM query.
+    """
+    try:
+        done = subprocess.run(
+            ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", _PROC_IO_QUERY],
+            capture_output=True,
+            encoding="oem",
+            errors="replace",
+            timeout=60,
+            check=False,
+        )
+        if done.returncode != 0:
+            # One line, so the box-state log keeps one line per stamp.
+            return None, f"exit {done.returncode}: {' '.join(done.stderr.split())[:300]}"
+        rows: List[List[Any]] = []
+        for text in done.stdout.splitlines():
+            parts = text.split("\t", 3)
+            if len(parts) != 4:
+                continue
+            try:
+                rows.append([int(parts[0]), parts[3], int(parts[1] or 0), int(parts[2] or 0)])
+            except ValueError:
+                continue
+        return (rows, None) if rows else (None, "no process rows parsed")
+    except Exception as exc:  # a diagnostic must never fail the arm
+        return None, f"{type(exc).__name__}: {' '.join(str(exc).split())[:300]}"
+
+
+def top_readers(before: List[List[Any]], after: List[List[Any]]) -> List[Dict[str, Any]]:
+    """The PROC_IO_TOP processes whose read bytes grew most between two stamps of one arm.
+
+    Keyed by pid and name, so a reused pid under another name reads as a new process. A
+    process absent from ``before``, or whose counter went down, started during the arm and
+    counts from 0. The arm's own process has exited by the after stamp, and a process that
+    started and exited within the arm is in neither stamp: the list names the survivors.
+    """
+    earlier = {(row[0], row[1]): row for row in before}
+    ranked: List[Dict[str, Any]] = []
+    for pid, name, read, write in after:
+        prev = earlier.get((pid, name))
+        new = prev is None or read < prev[2] or write < prev[3]
+        ranked.append(
+            {
+                "pid": pid,
+                "name": name,
+                "read_delta": read if new else read - prev[2],
+                "write_delta": write if new else write - prev[3],
+                "new": new,
+            }
+        )
+    ranked.sort(key=lambda row: row["read_delta"], reverse=True)
+    return ranked[:PROC_IO_TOP]
+
+
+def stamp(
+    run: str, when: str, env: Dict[str, str], before: Optional[Dict[str, Any]] = None
+) -> Dict[str, Any]:
     ac_line, battery = power()
+    battery_flag, charging = battery_charging()
     mem = memory()
     gpu_used, apps = gpu_state()
+    io_rows, io_error = process_io()
     state: Dict[str, Any] = {
         "time": time.strftime("%Y-%m-%dT%H:%M:%S"),
         "run": run,
         "when": when,
         "ac_line_status": ac_line,
         "battery_pct": battery,
+        "battery_flag": battery_flag,
+        "battery_charging": charging,
         **mem,
         "python_processes": python_processes(),
         "gpu_mem_used_mib": gpu_used,
         "compute_apps": apps,
         "aspm_ac_index": aspm_ac_index(),
         "soup_cli_file": soup_cli_file(env),
+        "process_io": io_rows,
+        "process_io_error": io_error,
     }
+    top_text = ""
+    if before is not None:
+        try:
+            if io_rows and before.get("process_io"):
+                state["top_readers"] = top_readers(before["process_io"], io_rows)
+                top_text = (
+                    " top_read=["
+                    + ", ".join(
+                        f"{row['name']}({row['pid']}{',new' if row['new'] else ''}) "
+                        f"{row['read_delta'] / 1e6:.1f}MB"
+                        for row in state["top_readers"]
+                    )
+                    + "]"
+                )
+            else:
+                state["top_readers"] = None
+        except Exception as exc:  # a diagnostic must never fail the arm
+            state["top_readers"] = None
+            state["process_io_error"] = f"top_readers {type(exc).__name__}: {exc}"
+    error_text = (
+        f" process_io_error={state['process_io_error']}" if state["process_io_error"] else ""
+    )
     line = (
         f"{state['time']} run={run} when={when} AC={ac_line} battery={battery}% "
+        f"charging={charging} "
         f"avail_phys={mem['avail_phys'] / 1e9:.2f}GB "
         f"commit={mem['commit_used'] / 1e9:.2f}/{mem['commit_limit'] / 1e9:.2f}GB "
         f"headroom={mem['commit_headroom'] / 2**30:.2f}GiB "
         f"python_processes={state['python_processes']} gpu_used={gpu_used}MiB "
         f"compute_apps=[{apps}] aspm_ac={state['aspm_ac_index']} "
         f"soup_cli={state['soup_cli_file']}"
+        f"{top_text}{error_text}"
     )
     os.makedirs(OUT_DIR, exist_ok=True)
     with open(BOX_LOG, "a", encoding="utf-8") as handle:
@@ -460,7 +575,7 @@ def run_arm(name: str, arm: str, label: str, build: bool, dry_run: bool) -> Dict
         "power": [list(row) for row in sampler.power_rows],
         "pdh": [[stamp_s, row] for stamp_s, row in sampler.pdh_rows],
     }
-    entry["after"] = stamp(name, "after", env)
+    entry["after"] = stamp(name, "after", env, before=entry["before"])
     plain, meta = step_plain(json_path)
     entry["step_plain_mean_s"] = plain["step_s_mean"] if plain else None
     entry["direct_io"] = meta.get("direct_io")

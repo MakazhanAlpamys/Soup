@@ -188,6 +188,12 @@ before each arm, and again right after it, one stamp is appended to
   ASPM`, read only — this gate changes no setting);
 - `soup_cli.__file__` as the arm's own environment resolves it.
 
+*Added after sequence 2 and before sequence 3, diagnostic only (it sets and
+gates nothing):* each stamp also records every process's cumulative read and
+write bytes (`Win32_Process` `ReadTransferCount` / `WriteTransferCount`, one
+CIM query) and whether the battery is charging, and each after stamp lists the
+eight processes whose read bytes grew most during the arm.
+
 **Before an arm starts:** AC on, GPU memory in use <= 1024 MiB, commit headroom
 (limit - used) >= 8 GiB. The driver waits for those, polling every 30 s, for at
 most 15 minutes; if they do not hold by then the sequence stops and the arms
