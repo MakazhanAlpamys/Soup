@@ -288,8 +288,14 @@ def diagnose(
     dataset: Optional[str] = typer.Option(
         None,
         "--dataset",
-        help="Training JSONL for the live forgetting / format / memorization "
+        help="Training JSONL for live format / memorization / citation "
         "probes (must stay under cwd).",
+    ),
+    holdout: Optional[str] = typer.Option(
+        None,
+        "--holdout",
+        help="Held-out evaluation JSONL for the live forgetting probe "
+        "(must stay under cwd; falls back to built-in general prompts if unset).",
     ),
     tokenizer: Optional[str] = typer.Option(
         None,
@@ -328,7 +334,7 @@ def diagnose(
     """Compute a 6-mode FailureReport for a completed run.
 
     With ``--base-model`` the six probes run LIVE against the loaded model
-    (+ optional ``--adapter`` LoRA path, ``--dataset``, ``--tokenizer``).
+    (+ optional ``--adapter`` LoRA path, ``--dataset``, ``--holdout``, ``--tokenizer``).
     Without it, scores come from ``--evidence`` JSON or default to neutral OK.
     """
     if not isinstance(run_id, str) or not run_id.strip():
@@ -367,6 +373,7 @@ def diagnose(
                 base=base_model,
                 adapter=adapter or None,
                 dataset_path=dataset,
+                holdout_path=holdout,
                 device=device,
                 tokenizer=tokenizer_arg,
                 soup_version=__version__,
