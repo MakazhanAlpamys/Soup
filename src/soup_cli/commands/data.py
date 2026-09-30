@@ -2034,7 +2034,24 @@ def from_traces_cmd(
         else:  # openai
             trace_iter = parse_openai(events)
 
-    pairs = list(build_pairs(trace_iter, signal=signal))
+    trace_list = list(trace_iter)
+    pairs = list(build_pairs(trace_list, signal=signal))
+    if not pairs and trace_list:
+        # #1440: reading traces that match no pair mode used to print a normal
+        # green "Wrote 0 preference pair(s)" and exit 0, so an empty output file
+        # read as a completed harvest. Name what was read and what was wanted.
+        signals = sorted({t.signal for t in trace_list if t.signal != "none"})
+        console.print(
+            f"[yellow]Read {len(trace_list)} trace(s) but built no pairs for "
+            f"--signal {signal}. "
+            + (
+                f"Signals present: {', '.join(signals)}. "
+                if signals
+                else "No trace carried a signal. "
+            )
+            + "Check the record shape: `soup ingest` writes a top-level "
+            "`signal`, and `feedback.rating` is still read as a fallback.[/]"
+        )
 
     if judge:
         # v0.40.3 (#33 (a)) — LLM-judge confidence filter.

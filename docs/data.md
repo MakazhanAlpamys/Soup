@@ -509,20 +509,39 @@ Harvest DPO / KTO-ready preference pairs from your production inference logs —
 soup data from-traces --logs ./logs/langchain.jsonl \
   --format langchain --signal thumbs_up --output prefs.jsonl
 
-# OpenAI API logs + regeneration signal (second response wins)
+# OpenAI API logs + regeneration signal (last response wins). The signal is
+# `regenerations`; `regeneration` is refused by the CLI (#1440).
 soup data from-traces --logs ./logs/openai.jsonl \
-  --format openai --signal regeneration --output prefs.jsonl
+  --format openai --signal regenerations --output prefs.jsonl
 
-# Soup-serve logs + user-edit signal (edited response wins over original)
-soup data from-traces --logs ./logs/soup-serve.jsonl \
-  --format soup_serve --signal user_edit --output prefs.jsonl
+# Soup-serve logs + user-edit signal (edited response wins over original).
+# `--logs` is a DIRECTORY of *.jsonl: the soup-serve parser reads a directory,
+# and returns nothing for a single file (#1440).
+soup data from-traces --logs ./traces \
+  --format soup-serve --signal user_edit --output prefs.jsonl
 
 # Preview generated pairs before training
 soup data review prefs.jsonl --sample 10
 ```
 
-**Supported log formats:** `langchain`, `openai`, `soup_serve`
-**Supported signals:** `thumbs_up` (rating-based), `regeneration` (latest wins), `user_edit` (edited wins)
+**Supported log formats:** `langchain`, `openai`, `soup-serve`
+**Supported signals:** `thumbs_up` (rating-based), `regenerations` (latest wins), `user_edit` (edited wins)
+
+**The `soup-serve` record shape.** `soup ingest` is the producer, and it writes
+a top-level `signal` in the canonical vocabulary, so its output feeds this
+command directly:
+
+```json
+{"id": "1", "prompt": "Q", "output": "Good", "signal": "thumbs_up"}
+{"id": "2", "prompt": "Q", "output": "Bad",  "signal": "thumbs_down"}
+{"id": "3", "prompt": "Q", "output": "Raw",  "signal": "user_edit", "edited_output": "Polished"}
+```
+
+`--signal user_edit` reads the edit from `edited_output`, `edited_response`, or
+a nested `feedback.edited_output`. A nested `feedback.rating` (`up` / `down`) is
+still read as a fallback for older logs. When traces are read but none pair, the
+command prints how many it read, which signal it wanted and which signals were
+present, instead of reporting a normal write of 0 pairs.
 
 Trace files are capped at 100,000 lines to prevent OOM on production logs. A PII warning panel appears on every run — redact sensitive fields before harvesting.
 
