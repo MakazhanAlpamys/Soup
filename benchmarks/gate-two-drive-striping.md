@@ -20,13 +20,15 @@ f798c46e), one process per arm.
 
 # Gate record — two-drive striping of the disk-tier cache (R4)
 
-**Status: NO VERDICT (2026-09-30, three sequences).** Sequence 3 (`gate3_*`),
-the latest complete sequence, has no valid arm. The box lost AC power
-(Kernel-Power event 105, `AcOnline=false`) 12 s into its first arm, which made
-that arm void (§4). It stayed on battery through the whole 15-minute pre-arm
-window, so the void arm's re-run and the five other arms never ran (§6.3).
-Sequence 2 (`gate2_*`, §6.1) had stopped on §2's first row, and attempt 3
-(`gate_*`, §6.2) on an earlier loss of AC power. Both are kept as measured and
+**Status: SHIP (2026-09-30, sequence 4).** Sequence 4 (`gate4_*`) is the first
+sequence to complete: three rounds, six valid arms, and no void (§6.4).
+STRIPED read 10.050 s, 9.971 s and 9.929 s, at or under 12.0 s in every round,
+with a median of **9.971 s**. SINGLE read 17.552 s, 17.431 s and 17.438 s in
+the same rounds, inside its 15.0-21.5 s band. The speed-up over the same
+round's SINGLE is 1.746x, 1.748x and 1.756x. `direct_io` and `pinned` were true
+on every arm. The three earlier sequences stopped with no verdict: attempt 3
+(`gate_*`, §6.2) and sequence 3 (`gate3_*`, §6.3) on losses of AC power, and
+sequence 2 (`gate2_*`, §6.1) on §2's first row. They are kept as measured and
 do not count toward this verdict. The rule was committed before any run. §2 is
 unchanged, and §4 changed only by a diagnostic addition made before sequence 3.
 
@@ -230,7 +232,7 @@ own `.log` beside its JSON, and keeps every stamp and sample in
 
 ## 5. Results
 
-Three sequences ran on 2026-09-30:
+Four sequences ran on 2026-09-30:
 
 - **Attempt 3** (sequence 1, files `gate_*`, §5.1-§5.7) built the striped
   cache and stopped after four arms on a loss of AC power.
@@ -239,6 +241,8 @@ Three sequences ran on 2026-09-30:
   first row.
 - **Sequence 3** (files `gate3_*`, §5.14-§5.16), a third complete sequence,
   stopped after its first arm on a loss of AC power.
+- **Sequence 4** (files `gate4_*`, §5.17-§5.22) ran all six arms. It decides
+  the gate (§6.4).
 
 Each sequence's subsections are as written when it stopped.
 
@@ -589,10 +593,8 @@ Every Kernel-Power event 105 ("Power source change") in the System log on
 Every `AcOnline=false` event came at 63-100% of full capacity, and every
 `true` event at 5-65%. Sequence 2 ran its four arms (15:58-16:09) while
 charging from 68% to 84%, and AC held throughout. The log does not record what
-removed AC. For sequence 3 the laptop was reported plugged in with the lid
-open, so a charger, a cable and a vendor battery feature cannot be told apart
-from this box's records. The box runs a vendor utility service
-(`LenovoUtilityService.exe`). That is noted, not tested.
+removed AC. *Corrected after sequence 4:* the owner confirmed that the 20:36:26
+loss was the laptop being left unplugged, not a battery setting.
 
 ### 5.16 Sequence 3: anomalies, as measured
 
@@ -604,10 +606,160 @@ from this box's records. The box runs a vendor utility service
    range of the four STRIPED ones (11.943206-11.955779). Its timing is what is
    void; its loss is ordinary data.
 
+### 5.17 Sequence 4: how it ran
+
+The driver was invoked at 21:47:54 from worktree HEAD `8579da46` with
+`--plan rounds --run-prefix gate4 --settle-s 60`. `src/` and
+`benchmarks/harness/stream_probe.py` are byte-identical to `f798c46e`, and the
+driver is `2dc4145a`'s (§5.14).
+
+- At 21:47:42, before the launch, the box read AC, charging at 69%, with 35.37
+  GiB of commit headroom and 0 MiB of GPU memory in use. The only `python.exe`
+  processes were the `gh` polling loop and two editor language servers.
+- The first arm started at 21:48:59, after the 60 s settle.
+- **The sequence completed:** `OUTCOME: complete; not run: []`. It had six
+  arms in the rule's order, no void and no pre-arm wait, and ended at 22:01:39.
+- No build run. The striped cache is the one attempt 3 built (§5.1) and §5.5
+  found byte-identical to the single-root cache. Every arm's `shard_seconds` is
+  0.003-0.158 s, a cache hit.
+
+### 5.18 Sequence 4: the timed arms, in the order they ran
+
+| run | round | arm | ran (local) | `step_s_mean` (plain) | min-max | tok/s | implied H2D GB/s | `direct_io` / `pinned` | peak alloc GB | SM MHz start->end |
+|---|---|---|---|---|---|---|---|---|---|---|
+| `gate4_r0_single` | 0 | SINGLE | 21:48:59-21:51:33 | **17.552** | 17.428-17.658 | 29.171 | 4.010 | True / True | 4.378 | 1417->1417 |
+| `gate4_r0_striped` | 0 | STRIPED | 21:51:35-21:53:11 | **10.050** | 9.893-10.178 | 50.944 | 7.003 | True / True | 4.378 | 1432->1575 |
+| `gate4_r1_striped` | 1 | STRIPED | 21:53:13-21:54:48 | **9.971** | 9.910-10.078 | 51.351 | 7.059 | True / True | 4.378 | 1417->907 |
+| `gate4_r1_single` | 1 | SINGLE | 21:54:50-21:57:25 | **17.431** | 17.389-17.468 | 29.374 | 4.038 | True / True | 4.378 | 2040->1485 |
+| `gate4_r2_single` | 2 | SINGLE | 21:57:26-22:00:01 | **17.438** | 17.403-17.497 | 29.361 | 4.036 | True / True | 4.378 | 1417->1222 |
+| `gate4_r2_striped` | 2 | STRIPED | 22:00:03-22:01:38 | **9.929** | 9.840-10.060 | 51.566 | 7.088 | True / True | 4.378 | 1417->1620 |
+
+Every arm moved 70,378,258,732 bytes per step (157 + 2 loads), and peak
+reserved was 4.798 GB in every arm. The STRIPED arms kept `layer_roots`
+0,1,0,1,... and `stripe_roots ['D:\\soup-stripe']` at read-ahead 3. The SINGLE
+arms had no stripe roots, at read-ahead 2.
+
+| round | SINGLE `step_s_mean` | STRIPED `step_s_mean` | speed-up (SINGLE / STRIPED) |
+|---|---|---|---|
+| 0 | 17.552 | 10.050 | 1.746x |
+| 1 | 17.431 | 9.971 | 1.748x |
+| 2 | 17.438 | 9.929 | 1.756x |
+
+- **The median of the three STRIPED means is 9.971 s.** The largest is
+  10.050 s.
+- The SINGLE means span 17.431-17.552 s, and the speed-ups 1.746-1.756x
+  (median 1.748x).
+- STRIPED's implied rate, 7.003-7.088 GB/s, is above the 5.65 GB/s the
+  unbuffered read primitive ever reached on C: alone (§0).
+
+### 5.19 Sequence 4: the instrumented point (`step_events`), recorded, not judged
+
+| run | `step_s_mean` | tok/s | implied H2D GB/s | `stall_share` | stall s/step | copy s/step | peak alloc GB | SM MHz start->end |
+|---|---|---|---|---|---|---|---|---|
+| `gate4_r0_single` | 17.540 | 29.190 | 4.012 | 0.000368 | 0.0064 | 12.578 | 4.378 | 1455->1312 |
+| `gate4_r0_striped` | 9.871 | 51.871 | 7.130 | 0.000047 | 0.0005 | 4.124 | 4.378 | 262->1642 |
+| `gate4_r1_striped` | 9.926 | 51.579 | 7.090 | 0.000050 | 0.0005 | 4.123 | 4.378 | 180->1642 |
+| `gate4_r1_single` | 17.370 | 29.477 | 4.052 | 0.000439 | 0.0076 | 12.364 | 4.378 | 180->1267 |
+| `gate4_r2_single` | 17.363 | 29.489 | 4.053 | 0.000387 | 0.0067 | 12.401 | 4.378 | 1222->1335 |
+| `gate4_r2_striped` | 9.997 | 51.215 | 7.040 | 0.000047 | 0.0005 | 4.236 | 4.378 | 187->1635 |
+
+### 5.20 Sequence 4: losses
+
+| run | plain | instrumented |
+|---|---|---|
+| `gate4_r0_single` | 11.936743, 11.836274, 11.606114 | 10.756406, 10.192263, 9.545835 |
+| `gate4_r0_striped` | 11.930804, 11.840003, 11.595283 | 10.760937, 10.183208, 9.528210 |
+| `gate4_r1_striped` | 11.948195, 11.825723, 11.594663 | 10.758006, 10.199796, 9.541428 |
+| `gate4_r1_single` | 11.931085, 11.831561, 11.606992 | 10.765861, 10.175399, 9.526673 |
+| `gate4_r2_single` | 11.942653, 11.826338, 11.607478 | 10.769373, 10.183278, 9.519795 |
+| `gate4_r2_striped` | 11.947904, 11.838518, 11.610622 | 10.753118, 10.167705, 9.539720 |
+
+On the plain point:
+
+- **Cross-arm, same round** (SINGLE minus STRIPED): round 0 +0.005939,
+  -0.003729, +0.010832; round 1 -0.017111, +0.005838, +0.012329; round 2
+  -0.005251, -0.012180, -0.003144.
+- **Same arm, across rounds:** SINGLE differences reach 0.011568, and STRIPED
+  0.017391 (r0 minus r1, first step).
+- The largest cross-arm difference (0.017111) sits inside the largest same-arm
+  one (0.017391), and their medians are 0.005939 and 0.005784.
+- On the first timed step, the SINGLE losses (11.931085-11.942653) and the
+  STRIPED ones (11.930804-11.948195) overlap. That agrees with §5.16: the
+  separation noticed after sequence 2 does not hold.
+- The same bytes are read in both arms (§5.5), and the differences are of the
+  size the same arm shows from run to run.
+
+### 5.21 Sequence 4: box state, the during-arm samples and the per-process capture
+
+- **AC** at every 2-s sample of every arm; the battery was **charging, 71% to
+  89%**, with `charging=True` at every stamp (flag 9).
+- **No suspend.** The largest gap between power samples was 2.015-2.023 s.
+- **Commit headroom** was at least 23.981 GiB at every sample, and 35.38-35.57
+  GiB at the before stamps.
+- **GPU:** 0 MiB and no compute apps at every stamp. **ASPM** AC index 2 at
+  every stamp. `soup_cli.__file__` resolved under `Soup-stripe\src` at every
+  stamp. **Python processes:** 5, 5, 4, 4, 4 and 4 at the before stamps.
+
+| run | C: read GB/s mean / max | D: read GB/s mean / max | C: write MB/s mean / max | D: write MB/s max | pages/s mean |
+|---|---|---|---|---|---|
+| `gate4_r0_single` | 3.604 / 4.461 | 0.000 / 0.000 | 0.27 / 7.44 | 0.02 | 10 |
+| `gate4_r0_striped` | 2.892 / 4.466 | 2.876 / 4.412 | 0.10 / 0.88 | 0.06 | 16 |
+| `gate4_r1_striped` | 2.921 / 4.468 | 2.905 / 4.843 | 0.09 / 0.68 | 0.00 | 15 |
+| `gate4_r1_single` | 3.626 / 4.351 | 0.000 / 0.000 | 0.16 / 12.17 | 0.00 | 13 |
+| `gate4_r2_single` | 3.627 / 4.497 | 0.000 / 0.000 | 0.13 / 7.99 | 0.00 | 10 |
+| `gate4_r2_striped` | 2.921 / 4.462 | 2.905 / 4.412 | 0.19 / 7.27 | 0.00 | 15 |
+
+- **No arm's throughput dipped.** In the 10-s bins from 20 s to the arm's last
+  full bin, every SINGLE arm read C: at 3.68-4.06 GB/s, and every STRIPED arm
+  read 3.15-3.47 GB/s from each drive. The first and last bins are process
+  start and teardown.
+- **Top readers**, from the after stamps: the largest foreign reader in any
+  arm was `MoUsoCoreWorker.exe` (Windows Update's orchestrator, started during
+  the arm), which read 58.2 MB during `gate4_r0_single`. The largest in every
+  other arm was `NVDisplay.Container.exe`, at 22.0-30.6 MB. Every other process
+  on the lists read less than 20 MB per arm, and no capture failed.
+
+### 5.22 Sequence 4: anomalies, as measured
+
+1. **SM clock at the start of the plain block** was 1417-2040 MHz, not the idle
+   180 MHz of attempt 3's valid arms. It is recorded, not interpreted.
+2. **`gate4_r0_striped`'s `shard_seconds` was 0.158 s**, where the other arms
+   read 0.003-0.004 s. It was still a cache hit; nothing was re-sharded.
+3. **The round-1 slowdown of sequence 2 (§5.12) is still unexplained.**
+   Sequence 4 does not explain it and does not depend on it.
+
 ## 6. Verdict
 
-The current verdict is sequence 3's (§6.3, directly below). §6.1 (sequence 2)
-and §6.2 (attempt 3) are kept as written when each stopped.
+The current verdict is sequence 4's (§6.4, directly below). §6.3
+(sequence 3), §6.1 (sequence 2) and §6.2 (attempt 3) are kept as written when
+each stopped.
+
+### 6.4 Sequence 4 (`gate4_*`): **SHIP**
+
+Attempt 3 and sequences 2 and 3 (§5.1-§5.16, §6.1-§6.3) stay in this record as
+measured and do not count toward this verdict.
+
+| row | inputs (sequence 4) | result |
+|---|---|---|
+| any SINGLE arm outside 15.0-21.5 s | 17.552 (round 0), 17.431 (round 1), 17.438 (round 2) | does not fire |
+| either arm with `direct_io` or `pinned` false | True / True on all six arms | does not fire |
+| STRIPED <= 12.0 s in every round | 10.050 (round 0), 9.971 (round 1), 9.929 (round 2) | **met: SHIP** |
+| STRIPED <= 14.0 s in every round, the row above not met | none | not reached |
+| anything else: DO NOT SHIP | none | not reached |
+
+**SHIP.** The rule asks for the median and the speed-up over the same round's
+SINGLE:
+
+- **median STRIPED `step_s_mean` 9.971 s**;
+- **speed-up 1.746x (round 0), 1.748x (round 1), 1.756x (round 2)**.
+
+The 12.0 s target was met in every round, and the largest STRIPED mean was
+10.050 s. The two caches hold the same bytes (§5.5), and the losses differ
+between arms by no more than they differ between runs of one arm (§5.20).
+
+What this verdict does not cover is §3: a real 70B checkpoint, warm reads,
+other drive pairs, batch > 1, seq other than 512, the RAM tier, the setup path
+that `soup train` goes through, and sustained load.
 
 ### 6.3 Sequence 3 (`gate3_*`): **NO VERDICT**
 
