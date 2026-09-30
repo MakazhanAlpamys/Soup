@@ -235,3 +235,61 @@ def enforce_preference_sequence_limit(
         "TRL prepared a preference dataset with an unknown token layout; "
         f"cannot enforce max_length={max_length}. Columns: {sorted(columns)}"
     )
+
+
+def preference_rows_with_empty_completion(
+    dataset: Any, *, max_length: int, layout: str,
+) -> list[int]:
+    """Row indices whose completion would lose every trainable token to TRL.
+
+    #1208. trl 0.29's CPO truncation (the SimPO path) slices each answer to
+    ``answer[: max_length - longer_response_length]`` — identical in 0.29.0 and
+    0.29.1 — where ``longer_response_length`` is the *longer* of the two
+    answers. A long ``chosen`` against a short ``rejected`` therefore leaves the
+    short answer with zero tokens, and SimPO's length-normalised log-probability
+    becomes 0/0: every LoRA tensor goes NaN while transformers'
+    ``logging_nan_inf_filter`` reports the loss as 0.0.
+
+    Returns the affected row indices (empty when the dataset is already safe).
+    The caller decides between refusing and repairing; this only answers the
+    question, so the same predicate covers both the DPO and combined layouts.
+    """
+    columns = set(getattr(dataset, "column_names", ()))
+    if layout == "dpo":
+        needed = ("chosen_ids", "rejected_ids")
+    else:
+        needed = ("chosen_labels", "rejected_labels")
+    if not set(needed) <= columns:
+        return []
+
+    def completion_len(labels: list[int], prompt_size: int) -> int:
+        # Labels are -100 over the prompt; anything else is trainable.
+        return sum(1 for label in labels[prompt_size:] if label != -100)
+
+    def prompt_size(labels: list[int]) -> int:
+        return next(
+            (index for index, label in enumerate(labels) if label != -100),
+            len(labels),
+        )
+
+    affected: list[int] = []
+    for index, row in enumerate(dataset):
+        if layout == "dpo":
+            longer = max(len(row["chosen_ids"]), len(row["rejected_ids"]))
+            shorter = min(len(row["chosen_ids"]), len(row["rejected_ids"]))
+            shorter_after = max(0, min(shorter, max_length - longer))
+        else:
+            chosen_labels = list(row["chosen_labels"])
+            rejected_labels = list(row["rejected_labels"])
+            longer = max(
+                completion_len(chosen_labels, prompt_size(chosen_labels)),
+                completion_len(rejected_labels, prompt_size(rejected_labels)),
+            )
+            shorter_len = min(
+                completion_len(chosen_labels, prompt_size(chosen_labels)),
+                completion_len(rejected_labels, prompt_size(rejected_labels)),
+            )
+            shorter_after = max(0, min(shorter_len, max_length - longer))
+        if shorter_after == 0:
+            affected.append(index)
+    return affected

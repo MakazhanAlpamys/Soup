@@ -223,6 +223,16 @@ class SimPOTrainerWrapper(StreamingSetupMixin):
             processing_class=self.tokenizer,
         )
 
+        # #1208 — trl 0.29 slices each answer to `max_length -
+        # longer_response_length`, so a long `chosen` beside a short `rejected`
+        # leaves the short one with zero tokens; SimPO's length-normalised
+        # log-probability is then 0/0, every LoRA tensor goes NaN, and
+        # transformers' nan-inf filter logs the loss as 0.0. Refuse before the
+        # first step instead of training to NaN behind a plausible number.
+        self._refuse_empty_completion_rows(self.trainer, split="train")
+        if self.trainer.eval_dataset is not None:
+            self._refuse_empty_completion_rows(self.trainer, split="eval")
+
         # #359 - the same exposure #336 fixed in sft.py: with LoRA the
         # no-decay optimizer group is empty, DeepSpeed drops it, and the LR
         # scheduler keeps two base_lrs until torch's strict zip raises at the
@@ -356,6 +366,45 @@ class SimPOTrainerWrapper(StreamingSetupMixin):
         )
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
+
+    def _refuse_empty_completion_rows(self, trainer, *, split: str) -> None:
+        """Raise when a row's completion would lose every trainable token (#1208).
+
+        Runs against the prepared, tokenised dataset trl itself will read, so it
+        sees the same answers the trainer does rather than the raw strings.
+        """
+        from soup_cli.trainer._trl_compat import (
+            preference_rows_with_empty_completion,
+        )
+
+        dataset = trainer.train_dataset if split == "train" else trainer.eval_dataset
+        columns = set(getattr(dataset, "column_names", ()))
+        if {"chosen_labels", "rejected_labels"} <= columns:
+            layout = "combined"
+        elif {"chosen_ids", "rejected_ids"} <= columns:
+            layout = "dpo"
+        else:
+            return
+
+        max_length = self.config.data.max_length
+        affected = preference_rows_with_empty_completion(
+            dataset, max_length=max_length, layout=layout,
+        )
+        if not affected:
+            return
+
+        shown = ", ".join(str(index) for index in affected[:5])
+        if len(affected) > 5:
+            shown += f", ... (+{len(affected) - 5} more)"
+        raise ValueError(
+            f"SimPO: {len(affected)} {split} row(s) would train on zero completion "
+            f"tokens at data.max_length={max_length} (rows: {shown}). trl "
+            "truncates each answer to max_length minus the LONGER answer's "
+            "length, so the shorter side of a lopsided pair is emptied and "
+            "SimPO's length-normalised log-probability becomes 0/0 — the run "
+            "trains every LoRA tensor to NaN while the logged loss reads 0.0. "
+            "Raise data.max_length, balance the pair, or drop the row."
+        )
 
     def train(
         self,
