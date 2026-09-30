@@ -23,6 +23,8 @@ runner = CliRunner()
 
 NESTED_REASONING = 'It returns {"function": {"name": "get_weather"}} as asked.'
 FIVES = {"helpfulness": 5.0, "accuracy": 5.0, "safety": 5.0}
+#: ``_MAX_JUDGE_REPLY_CHARS`` in ``soup_cli.eval.judge``, spelled out so the limit is pinned.
+JUDGE_REPLY_LIMIT = 65_536
 
 
 class TestJudgeReadsTheWholeObject:
@@ -72,6 +74,73 @@ class TestJudgeReadsTheWholeObject:
             _parse_judge_response(reply, DEFAULT_RUBRIC)
 
 
+def test_degenerate_nesting_is_an_unreadable_reply_not_a_crash() -> None:
+    # _first_json_object, without `except RecursionError` the error escapes. 13,000
+    # levels exceed the decoder's nesting limit on every supported Python (1,000 on 3.10
+    # and 3.11, 10,000 on 3.12) and the reply stays under the size limit.
+    reply = '{"a":' * 13_000
+    assert len(reply) <= JUDGE_REPLY_LIMIT
+    with pytest.raises(ValueError, match="No JSON object found"):
+        _parse_judge_response(reply, DEFAULT_RUBRIC)
+
+
+def test_a_capitalised_rubric_criterion_is_found_under_any_reply_casing() -> None:
+    # _parse_judge_response, fold only the reply side
+    rubric = {"criteria": [{"name": "Helpfulness", "weight": 1.0}], "scale": {"min": 1, "max": 5}}
+    for reply_key in ("Helpfulness", "helpfulness", "HELPFULNESS"):
+        scores, _ = _parse_judge_response(json.dumps({"scores": {reply_key: 4}}), rubric)
+        assert scores == {"Helpfulness": 4.0}
+
+
+def test_the_object_with_a_scores_key_wins_over_an_earlier_object() -> None:
+    # _first_json_object, drop the preference for an object that has "scores"
+    reply = '{"note": "draft"} then ' + json.dumps(
+        {"scores": {"helpfulness": 5, "accuracy": 5, "safety": 5}, "reasoning": "final"}
+    )
+    scores, reasoning = _parse_judge_response(reply, DEFAULT_RUBRIC)
+    assert scores == {"helpfulness": 5.0, "accuracy": 5.0, "safety": 5.0}
+    assert reasoning == "final"
+
+
+@pytest.mark.parametrize("scores", [[5, 5, 5], "5,5,5", 5, None])
+def test_scores_that_is_not_an_object_is_a_value_error(scores: object) -> None:
+    # _parse_judge_response, without the guard `.items()` raises AttributeError
+    with pytest.raises(ValueError, match="'scores' must be a JSON object"):
+        _parse_judge_response(json.dumps({"scores": scores}), DEFAULT_RUBRIC)
+
+
+def test_a_criterion_scored_under_two_spellings_is_refused() -> None:
+    # _parse_judge_response, without the check the later spelling's score wins
+    reply = json.dumps(
+        {"scores": {"Helpfulness": 5, "helpfulness": 1, "accuracy": 5, "safety": 5}}
+    )
+    with pytest.raises(
+        ValueError,
+        match="criterion 'helpfulness' more than once, as 'Helpfulness', 'helpfulness'",
+    ):
+        _parse_judge_response(reply, DEFAULT_RUBRIC)
+
+
+def test_a_reply_over_the_size_limit_is_refused_before_it_is_scanned(monkeypatch) -> None:
+    # _parse_judge_response, without the length check the reply is scanned
+    import soup_cli.eval.judge as judge
+
+    def scan(_text: str) -> None:
+        raise AssertionError("an oversized reply was scanned")
+
+    monkeypatch.setattr(judge, "_first_json_object", scan)
+    with pytest.raises(ValueError, match="100,000 characters, over the 65,536-character limit"):
+        _parse_judge_response("{ " * 50_000, DEFAULT_RUBRIC)
+
+
+def test_a_reply_at_the_size_limit_is_still_read() -> None:
+    # _parse_judge_response, `>=` in the length check refuses this reply
+    body = json.dumps({"scores": {"helpfulness": 5, "accuracy": 5, "safety": 5}})
+    reply = body + " " * (JUDGE_REPLY_LIMIT - len(body))
+    assert len(reply) == JUDGE_REPLY_LIMIT
+    assert _parse_judge_response(reply, DEFAULT_RUBRIC) == (FIVES, "")
+
+
 PUNCTUATION_EDGES = (
     ("The answer is -5.", "-5"),
     ("-5", "-5"),
@@ -95,7 +164,11 @@ class TestKeywordsWithPunctuationEdges:
 
     @pytest.mark.parametrize(
         ("response", "keyword"),
-        [("sand castle", "and"), ("unsafe", "safe"), ("C++ and C", "C#"), ("x-5y", "-5")],
+        [
+            ("sand castle", "and"), ("unsafe", "safe"), ("C++ and C", "C#"), ("x-5y", "-5"),
+            ("the safety net", "safe"), ("uses C++11 here", "C++"), ("andy came", "and"),
+            ("5th", "5"),
+        ],
     )
     def test_whole_word_rule_still_holds(self, response: str, keyword: str) -> None:
         assert not _mft_pass(response, [keyword])
@@ -199,6 +272,32 @@ class TestRecipeJudgeReadsTheVerdict:
         assert result.rows == ()
         assert result.failure_count == 1
         assert result.call_count == 1
+
+
+def test_the_recipe_judge_default_prompt_asks_for_one_word(monkeypatch) -> None:
+    # _node_judge, revert the default prompt to the old wording
+    import soup_cli.utils.data_forge as data_forge
+    from soup_cli.utils.recipe_dag import RecipeNode
+    from soup_cli.utils.recipe_run import _node_judge
+
+    seen: list[str] = []
+
+    def factory(*_args, **_kwargs):
+        def call(prompt: str) -> dict:
+            seen.append(prompt)
+            return {"text": "OK"}
+
+        return call
+
+    monkeypatch.setattr(data_forge, "make_judge_provider_fn", factory)
+    _node_judge(
+        RecipeNode(name="j", kind="judge", config={}),
+        [[{"text": "row"}]],
+        judge_provider="ollama",
+        judge_model=None,
+        judge_base_url=None,
+    )
+    assert "one word" in seen[0]
 
 
 def test_judge_accepts_a_rubric_name_that_is_not_a_string() -> None:
