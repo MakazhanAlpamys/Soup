@@ -20,13 +20,15 @@ f798c46e), one process per arm.
 
 # Gate record — two-drive striping of the disk-tier cache (R4)
 
-**Status: NO VERDICT (run 2026-09-30).** The sequence stopped at the fourth of
-its six arms. The box lost AC power 27 s into round 1's SINGLE arm, which made
-that arm void (§4). The box then stayed on battery for the
-whole 15-minute pre-arm window, so the void arm's re-run and round 2 never ran.
-The rule in §2 needs three rounds, and it got one complete round plus one
-STRIPED arm (§6). The arms that ran are published as measured in §5. The rule
-was committed before the run, and §2 and §4 are unchanged.
+**Status: NO VERDICT (2026-09-30, two sequences).** Sequence 2 (`gate2_*`), a
+new complete sequence, stopped after four of its six arms on §2's first row.
+Round 1's SINGLE arm measured 22.107 s, outside 15.0-21.5 s (one of its three
+steps took 31.581 s), so the session did not reproduce the known step. The
+same round's STRIPED arm measured 18.052 s; that is recorded, but the
+no-verdict row decides first (§6.1). Attempt 3 (sequence 1, `gate_*`) had
+stopped earlier on a loss of AC power. It is kept as measured and does not
+count toward this verdict. The rule was committed before either run, and §2
+and §4 are unchanged.
 
 *Amended 2026-09-30, still before any arm ran:* §4 gains a third void
 condition, a suspended box. The first build attempt timed out because the
@@ -222,7 +224,13 @@ own `.log` beside its JSON, and keeps every stamp and sample in
 
 ## 5. Results
 
-Run 2026-09-30 from worktree HEAD `a0ff99b5`. Between the header's `f798c46e`
+Two sequences ran on 2026-09-30. **Attempt 3** (sequence 1, files `gate_*`,
+§5.1-§5.7) built the striped cache and stopped after four arms on a loss of AC
+power. **Sequence 2** (files `gate2_*`, §5.8-§5.13) is a new, complete
+sequence. It reused the striped cache and none of attempt 3's arms. Attempt 3's
+subsections below are as written when it stopped.
+
+Attempt 3 ran from worktree HEAD `a0ff99b5`. Between the header's `f798c46e`
 and that commit, `src/` and `benchmarks/harness/stream_probe.py` are
 byte-identical (`git diff f798c46e a0ff99b5 -- src
 benchmarks/harness/stream_probe.py` is empty). Only this record, the driver
@@ -230,7 +238,7 @@ and its log changed. Every number below is quoted from the committed JSON in
 `results/probe-rtx5070/two-drive/`, at three decimals unless the column says
 otherwise.
 
-### 5.1 The build run (not a round)
+### 5.1 Attempt 3: the build run (not a round)
 
 `gate_build_striped` ran from 14:56:36 to 15:01:14 local (UTC+5), 275.9 s wall.
 
@@ -249,7 +257,7 @@ During the build, PDH saw C: written at up to 774.3 MB/s and D: at up to
 390.1 MB/s (the sharder's writes). The first round started after the driver's
 60 s settle.
 
-### 5.2 The timed arms, in the order they ran
+### 5.2 Attempt 3: the timed arms, in the order they ran
 
 | run | round | arm | ran (local) | `step_s_mean` (plain) | min-max | tok/s | implied H2D GB/s | `direct_io` / `pinned` | peak alloc GB | SM MHz start->end |
 |---|---|---|---|---|---|---|---|---|---|---|
@@ -276,7 +284,7 @@ The rule's "median" is the median of three STRIPED means, and it does not
 exist here, because only two STRIPED arms ran (10.320 and 10.340 s). The only
 in-round speed-up is round 0's.
 
-### 5.3 The instrumented point (`step_events`): recorded, not judged
+### 5.3 Attempt 3: the instrumented point (`step_events`), recorded, not judged
 
 `stall_share` is read here, as §2 fixes. `copy_s/step` is the harness's
 copy-stream bracket time. It is recorded and not interpreted in this record.
@@ -288,7 +296,7 @@ copy-stream bracket time. It is recorded and not interpreted in this record.
 | `gate_r1_striped` | 10.146 | 50.461 | 6.936 | 0.000050 | 0.0005 | 3.855 | 4.378 | 1560->1717 |
 | `gate_r1_single_void` | 19.489 (void) | 26.272 | 3.611 | 0.000026 | 0.0005 | 13.466 | 4.378 | 180->1267 |
 
-### 5.4 Losses
+### 5.4 Attempt 3: losses
 
 The three timed steps of each point. The plain point's steps are process steps
 2-4, after one warm-up update. The instrumented point's are steps 6-8.
@@ -311,7 +319,7 @@ compared, the two differences are 0.014113 and 0.006299. That is 7-16x the
 not investigated here. The data half of "same
 bytes" is settled directly in §5.5.
 
-### 5.5 Same bytes: the two caches compared tensor by tensor
+### 5.5 Attempt 3: same bytes, the two caches compared tensor by tensor
 
 After the sequence ended, and with no arm running,
 `harness/compare_shard_caches.py` matched every safetensors file of the
@@ -324,7 +332,7 @@ files (80 layers, `extras`, 2 `large_*`), 43 of them on C: and 40 on D:, with
 the striped root 0 that the single-root cache lacks. `index.json` is not
 compared, because it differs by the stripe fields by design.
 
-### 5.6 Box state and the during-arm samples
+### 5.6 Attempt 3: box state and the during-arm samples
 
 From `gate_box_state.log` (a stamp before and after every arm) and
 `gate_driver.json` (every 2-s power sample and every 1-s PDH sample):
@@ -363,7 +371,7 @@ From `gate_box_state.log` (a stamp before and after every arm) and
   The harness only reads, so the small writes on C: are someone else's I/O. D:
   saw no writes during any timed arm.
 
-### 5.7 Anomalies, as measured
+### 5.7 Attempt 3: anomalies, as measured
 
 1. **The driver's `not_run` list is incomplete.** In `gate_driver.json` the
    invocation's `not_run` names only `gate_r2_single` and `gate_r2_striped`.
@@ -379,7 +387,176 @@ From `gate_box_state.log` (a stamp before and after every arm) and
 3. **Loss differences.** They are larger than the one cross-process difference
    on record (§5.4).
 
+### 5.8 Sequence 2: how it ran
+
+The driver was invoked at 15:57:47 from worktree HEAD `7599360c` with
+`--plan rounds --run-prefix gate2 --settle-s 60`. `7599360c` adds only
+`--run-prefix` to the driver, which renames the round files so that attempt
+3's committed files are not overwritten. `src/` and
+`benchmarks/harness/stream_probe.py` are byte-identical to `a0ff99b5` and
+`f798c46e`.
+
+- No build run. The striped cache built in attempt 3 (§5.1), byte-identical to
+  the single-root cache (§5.5), was reused. Every arm's `shard_seconds` is
+  0.005-0.008 s, a cache hit.
+- The box read AC at 15:57:36, before the launch.
+- The first arm started at 15:58:50, after the 60 s settle.
+- No arm was void.
+- After round 1's SINGLE arm, the driver applied §2's first row and stopped:
+  `stopped: no verdict: SINGLE arm gate2_r1_single at 22.106659533334703 s is
+  outside 15.0-21.5 s`. `gate2_r2_single` and `gate2_r2_striped` were not run.
+
+### 5.9 Sequence 2: the timed arms, in the order they ran
+
+| run | round | arm | ran (local) | `step_s_mean` (plain) | min-max | tok/s | implied H2D GB/s | `direct_io` / `pinned` | peak alloc GB | SM MHz start->end |
+|---|---|---|---|---|---|---|---|---|---|---|
+| `gate2_r0_single` | 0 | SINGLE | 15:58:50-16:01:41 | **18.133** | 17.917-18.275 | 28.236 | 3.881 | True / True | 4.378 | 180->1312 |
+| `gate2_r0_striped` | 0 | STRIPED | 16:01:41-16:03:31 | **11.367** | 11.036-11.914 | 45.041 | 6.191 | True / True | 4.378 | 330->1530 |
+| `gate2_r1_striped` | 1 | STRIPED | 16:03:32-16:06:12 | **18.052** | 17.894-18.204 | 28.362 | 3.899 | True / True | 4.378 | 457->1320 |
+| `gate2_r1_single` | 1 | SINGLE | 16:06:13-16:09:31 | **22.107** | 16.974-31.581 | 23.160 | 3.184 | True / True | 4.378 | 420->1492 |
+| `gate2_r2_single` | 2 | SINGLE | **not run** (the driver stopped on §2's first row) | | | | | | | |
+| `gate2_r2_striped` | 2 | STRIPED | **not run** | | | | | | | |
+
+The three plain steps of `gate2_r1_single` were 31.581, 17.765 and 16.974 s,
+so one step makes its mean. Those of `gate2_r1_striped` were 17.894, 18.204
+and 18.059 s, uniformly slow. Every arm moved 70,378,258,732 bytes per step
+(157 + 2 loads), and peak reserved was 4.798 GB in every arm.
+
+| round | SINGLE `step_s_mean` | STRIPED `step_s_mean` | speed-up (SINGLE / STRIPED) |
+|---|---|---|---|
+| 0 | 18.133 | 11.367 | 1.595x |
+| 1 | 22.107 (outside 15.0-21.5) | 18.052 | 1.225x |
+| 2 | not run | not run | none |
+
+The rule's median of three STRIPED means does not exist: round 2 was not run.
+
+### 5.10 Sequence 2: the instrumented point (`step_events`), recorded, not judged
+
+| run | `step_s_mean` | tok/s | implied H2D GB/s | `stall_share` | stall s/step | copy s/step | peak alloc GB | SM MHz start->end |
+|---|---|---|---|---|---|---|---|---|
+| `gate2_r0_single` | 18.653 | 27.448 | 3.773 | 0.000687 | 0.0128 | 14.150 | 4.378 | 1312->1380 |
+| `gate2_r0_striped` | 10.179 | 50.300 | 6.914 | 0.000056 | 0.0006 | 3.857 | 4.378 | 1530->1567 |
+| `gate2_r1_striped` | 17.961 | 28.506 | 3.918 | 0.000021 | 0.0004 | 12.710 | 4.378 | 1320->1605 |
+| `gate2_r1_single` | 20.176 | 25.376 | 3.488 | 0.000017 | 0.0003 | 14.680 | 4.378 | 1492->1440 |
+
+### 5.11 Sequence 2: losses
+
+| run | plain | instrumented |
+|---|---|---|
+| `gate2_r0_single` | 11.941118, 11.828694, 11.597034 | 10.762340, 10.179412, 9.541021 |
+| `gate2_r0_striped` | 11.955779, 11.843419, 11.606232 | 10.769289, 10.173697, 9.538158 |
+| `gate2_r1_striped` | 11.943206, 11.842164, 11.607185 | 10.766464, 10.176335, 9.522297 |
+| `gate2_r1_single` | 11.941950, 11.832151, 11.606636 | 10.758423, 10.193248, 9.533957 |
+
+On the plain point:
+
+- **Cross-arm, same round** (SINGLE minus STRIPED): round 0 -0.014661,
+  -0.014725, -0.009197; round 1 -0.001256, -0.010013, -0.000549.
+- **Same arm, across rounds** (r0 minus r1): SINGLE -0.000832, -0.003457,
+  -0.009602; STRIPED +0.012573, +0.001255, -0.000954.
+- Within this sequence, the largest cross-arm difference (0.014725) is
+  slightly larger than the largest same-arm one (0.012573). Attempt 3's
+  same-arm spread reached 0.029829 (§5.4).
+
+**Pooled over both sequences, which is observed after the fact, not a
+finding.** On the first timed step, all four SINGLE losses on record fall
+below all four STRIPED ones. The SINGLE ones are 11.935977 to 11.941950 (the
+void arm included), and the STRIPED ones are 11.943206 to 11.955779. On the
+second and third steps the two sets overlap. The two caches hold the same
+bytes (§5.5), so this is not a data difference. It is noticed across eight
+numbers and not investigated here.
+
+### 5.12 Sequence 2: box state and the during-arm samples
+
+- **AC** at every 2-s sample of every arm. The battery was **charging, 68% to
+  84%**, over the sequence; in attempt 3's valid arms it read 89-94%.
+- **No suspend.** The largest gap between power samples was 2.016-2.036 s.
+- **Commit headroom** was at least 20.429 GiB at every sample, and 32.25-33.83
+  GiB at the before stamps.
+- **GPU:** 0 MiB and no compute apps at every stamp. **ASPM** AC index 2 at
+  every stamp. `soup_cli.__file__` resolved under `Soup-stripe\src` at every
+  stamp.
+- **Python processes:** 4 at every stamp except the after stamp of
+  `gate2_r1_single` (16:09:31), which read 5. At 16:09:53 only the `gh` polling
+  loop and the two editor language servers remained, so the fifth was
+  transient and its command line was not captured.
+- **System log, 15:58-16:10:** one Service Control Manager event 7040 at
+  15:59:43 (the Background Intelligent Transfer Service's start type changed),
+  and one Kernel-Power 566 session-state event at 16:09:49, after the last arm.
+  No disk, storage, thermal or power-source event.
+
+| run | C: read GB/s mean / max | D: read GB/s mean / max | C: write MB/s mean / max | D: write MB/s max | pages/s mean |
+|---|---|---|---|---|---|
+| `gate2_r0_single` | 3.266 / 4.388 | 0.000 / 0.000 | 0.90 / 15.60 | 0.02 | 1699 |
+| `gate2_r0_striped` | 2.536 / 4.740 | 2.518 / 4.727 | 0.57 / 9.15 | 0.06 | 860 |
+| `gate2_r1_striped` | 1.717 / 4.670 | 1.707 / 4.399 | 0.82 / 25.15 | 0.00 | 257 |
+| `gate2_r1_single` | 2.804 / 4.580 | 0.000 / 0.000 | 0.23 / 8.61 | 0.00 | 49 |
+
+The 10-s bins of the same PDH samples (`gate_driver.json`, seconds after
+each arm started) show where round 1's time went:
+
+- `gate2_r0_striped`: each drive read 2.7-3.4 GB/s in every bin from 20 s to
+  100 s.
+- `gate2_r1_striped`: each drive read 3.0-3.1 GB/s in the 20-s bin, then
+  1.75-1.97 GB/s in every bin from 30 s to 140 s, both drives together.
+- `gate2_r1_single`: C: read 2.07-2.23 GB/s in every bin from 20 s to 70 s,
+  then 2.50-4.07 GB/s from 80 s on. Its 31.581 s step is its first timed step.
+
+On the wall clock, those two slow stretches meet, about 16:04:02 to 16:07:33.
+Every 10-s bin with reads in that interval reads 2.23 GB/s per drive or less:
+1.75-2.23, and 1.40-1.45 in the last, partial bin of `gate2_r1_striped`, where
+that arm was ending. The same arms read 2.5-4.1 GB/s outside it.
+
+### 5.13 Sequence 2: anomalies, as measured
+
+1. **Round 1 is slow in both arms, on both drives at once** (§5.12). The
+   slowdown spans the end of one arm and the start of the next, a different
+   process each. What caused it is not established. Two things are recorded
+   and not tested: the battery was charging throughout sequence 2 and not
+   during attempt 3's valid arms, and a service start-type event came at
+   15:59:43. The harness only reads, and D: saw no writes.
+2. **SINGLE round 0 read 18.133 s**, against attempt 3's 17.414 s. Both are
+   inside the band.
+3. **SM clock at the start of the plain block** was 330, 457 and 420 MHz in
+   three of the four arms, not the idle 180 MHz of attempt 3's valid arms.
+4. **The first-step loss separation** pooled over both sequences (§5.11).
+
 ## 6. Verdict
+
+### 6.1 Sequence 2 (`gate2_*`): **NO VERDICT**
+
+Attempt 3's arms (§5.1-§5.7, §6.2) stay in this record as measured and do not
+count toward this verdict.
+
+| row | inputs (sequence 2) | result |
+|---|---|---|
+| any SINGLE arm outside 15.0-21.5 s | round 0: 18.133 s (inside). Round 1: **22.107 s (outside)**. Round 2: not run | **fires: no verdict**, "the session does not reproduce the known step" |
+| either arm with `direct_io` or `pinned` false | True / True on all four arms | does not fire |
+| STRIPED <= 12.0 s in every round | 11.367 (round 0), 18.052 (round 1), round 2 not run | not reached: the first row has decided |
+| STRIPED <= 14.0 s in every round | the same | not reached |
+| anything else: DO NOT SHIP | none | not reached |
+
+The rule's rows are applied in order. The first row is a validity condition
+whose outcome is "no verdict ... record and stop", and "anything else" means
+what no earlier row covers. The driver applied that row after round 1's SINGLE
+arm and stopped, as §4 says, because no later arm can turn a no-verdict
+outcome into a verdict.
+
+What sequence 2 measured, and no more:
+
+- Round 0: SINGLE 18.133 s, STRIPED 11.367 s (1.595x).
+- Round 1: STRIPED 18.052 s, above both SHIP thresholds, and in the same round
+  SINGLE 22.107 s, outside its validity band. By the rule, the session did not
+  reproduce the known step in that round, so the 18.052 s is recorded and
+  sets nothing.
+- Round 1's two arms ran through one stretch in which every drive read well
+  below its rate outside that stretch (§5.12).
+
+Across both sequences, as a count and not a verdict: three of the four
+STRIPED arms on record are under 12.0 s (10.320, 10.340, 11.367). The fourth,
+18.052 s, is in the round whose SINGLE arm fell outside the band.
+
+### 6.2 Attempt 3 (sequence 1, `gate_*`), as written when it stopped
 
 **NO VERDICT.** The §2 rule applied row by row to the arms that exist:
 
