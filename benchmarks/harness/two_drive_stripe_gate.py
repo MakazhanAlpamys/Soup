@@ -540,7 +540,16 @@ def parse() -> argparse.Namespace:
         help="seconds to wait before the first arm (the record asks 60 after the build run)",
     )
     parser.add_argument("--dry-run", action="store_true", help="stamp and print, run nothing")
-    return parser.parse_args()
+    parser.add_argument(
+        "--run-prefix",
+        default="gate",
+        help="file-name prefix of the round arms, so a complete re-run does not overwrite an "
+        "earlier sequence's committed files (default: gate)",
+    )
+    args = parser.parse_args()
+    if not re.fullmatch(r"gate[a-z0-9]{0,8}", args.run_prefix):
+        parser.error("--run-prefix must be 'gate' plus at most 8 lowercase letters or digits")
+    return args
 
 
 def main() -> int:
@@ -557,13 +566,14 @@ def main() -> int:
         "python": sys.executable,
         "pythonpath": SRC,
         "dry_run": args.dry_run,
+        "run_prefix": args.run_prefix,
     }
     payload["invocations"].append(invocation)
     save_driver_json(payload)
     if args.plan == "build":
         plan = [("gate_build_" + args.build_arm.lower(), args.build_arm, None)]
     else:
-        plan = [(f"gate_r{rnd}_{arm.lower()}", arm, rnd) for rnd, arm in ROUND_PLAN]
+        plan = [(f"{args.run_prefix}_r{rnd}_{arm.lower()}", arm, rnd) for rnd, arm in ROUND_PLAN]
     if args.settle_s > 0:
         print(f"settling {args.settle_s:.0f} s before the first arm", flush=True)
         time.sleep(args.settle_s)

@@ -13510,6 +13510,16 @@
     "gate_r2_single",
     "gate_r2_striped"
    ]
+  },
+  {
+   "started": "2026-09-30T15:35:56",
+   "plan": "rounds",
+   "build_arm": null,
+   "settle_s": 0.0,
+   "python": "C:\\Users\\user\\AppData\\Local\\Programs\\Python\\Python312\\python.exe",
+   "pythonpath": "C:/Users/user/projects/Soup-stripe/src",
+   "dry_run": true,
+   "run_prefix": "gate2"
   }
  ]
 }
