@@ -136,9 +136,9 @@ def resolve_inference_device_map_and_dtype(
     Returns:
         A ``(device_map, torch_dtype)`` pair to splat into
         ``from_pretrained(**kwargs)``: ``{"": "cpu"}`` and ``float32`` for
-        CPU/MLX, ``{"": device}`` (lower-cased) and a bf16/fp16 pick for
-        MPS or an explicitly indexed ``cuda:<n>``, ``"auto"`` and a bf16/fp16
-        pick for plain ``cuda`` (accelerate may use every visible GPU), or
+        CPU/MLX, ``{"": device}`` (lower-cased) and ``float16`` for
+        MPS or an explicitly indexed ``cuda:<n>``, ``"auto"`` and ``float16``
+        for plain ``cuda`` (accelerate may use every visible GPU), or
         the pre-#1443 ``"auto"``/``float16`` default when ``device`` is
         unset.
     """
@@ -156,13 +156,10 @@ def resolve_inference_device_map_and_dtype(
     if normalized in ("cpu", "mlx"):
         return {"": "cpu"}, torch.float32
 
-    use_bf16 = normalized.startswith("cuda") and cuda_supports_bf16()
-    dtype = torch.bfloat16 if use_bf16 else torch.float16
-
     if normalized == "mps" or ":" in normalized:
-        return {"": normalized}, dtype
+        return {"": normalized}, torch.float16
 
-    return "auto", dtype
+    return "auto", torch.float16
 
 
 def detect_device(backend: Optional[str] = None) -> tuple[str, str]:

@@ -385,8 +385,8 @@ also covers `soup bench`, which loads through the `soup infer` path).
 | `--device` | Placement | Dtype |
 |---|---|---|
 | `cpu` | pinned to the CPU | `float32` (twice the RAM of `float16`: a 7B model needs about 28 GB) |
-| `cuda` | `device_map="auto"`: accelerate may use every visible GPU and spill to the CPU if the model does not fit | `bfloat16` where the GPU supports it, else `float16` |
-| `cuda:N` | pinned to GPU `N` | `bfloat16` where supported, else `float16` |
+| `cuda` | `device_map="auto"`: accelerate may use every visible GPU and spill to the CPU if the model does not fit | `float16` |
+| `cuda:N` | pinned to GPU `N` | `float16` |
 | `mps` | pinned to the Apple GPU | `float16` |
 | `mlx` | runs on the CPU on this path | `float32` |
 

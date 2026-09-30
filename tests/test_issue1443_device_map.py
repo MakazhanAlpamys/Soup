@@ -231,13 +231,13 @@ def test_resolver_table(monkeypatch, device, expected):
     assert gpu.resolve_inference_device_map_and_dtype(device) == expected
 
 
-def test_resolver_uses_bf16_only_on_cuda_when_supported(monkeypatch):
+def test_resolver_keeps_float16_even_when_cuda_supports_bf16(monkeypatch):
     from soup_cli.utils import gpu
 
     monkeypatch.setattr(gpu, "cuda_supports_bf16", lambda: True)
-    assert gpu.resolve_inference_device_map_and_dtype("cuda") == ("auto", torch.bfloat16)
+    assert gpu.resolve_inference_device_map_and_dtype("cuda") == ("auto", torch.float16)
     assert gpu.resolve_inference_device_map_and_dtype("cuda:0") == (
-        {"": "cuda:0"}, torch.bfloat16,
+        {"": "cuda:0"}, torch.float16,
     )
     assert gpu.resolve_inference_device_map_and_dtype("mps") == ({"": "mps"}, torch.float16)
 
