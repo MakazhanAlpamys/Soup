@@ -48,3 +48,15 @@ def compute_warmup_steps(
     total_steps = steps_per_epoch * epochs
     raw = int(round(total_steps * ratio))
     return max(MIN_WARMUP, min(MAX_WARMUP, raw))
+
+
+def resolve_trainer_warmup_steps(warmup_ratio: float | int | None) -> float:
+    """Return the warmup fraction to pass to HF TrainingArguments(warmup_steps=...).
+
+    HuggingFace TrainingArguments interprets warmup_steps in [0, 1) as a warmup
+    ratio over the actual number of optimizer steps executed by the trainer:
+        warmup_steps = math.ceil(num_training_steps * warmup_steps)
+    """
+    if warmup_ratio is None:
+        return 0.0
+    return float(warmup_ratio)

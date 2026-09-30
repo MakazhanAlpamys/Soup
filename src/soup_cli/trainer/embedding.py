@@ -1,6 +1,5 @@
 """Embedding model trainer — contrastive/triplet loss for sentence embeddings."""
 
-import math
 import time
 from pathlib import Path
 from typing import Optional
@@ -168,12 +167,10 @@ class EmbeddingTrainerWrapper:
             f"pooling={tcfg.embedding_pooling}"
         )
 
-        # --- Calculate warmup steps from ratio ---
-        total_steps = (
-            math.ceil(len(train_ds) / batch_size / tcfg.gradient_accumulation_steps)
-            * tcfg.epochs
-        )
-        warmup_steps = int(total_steps * tcfg.warmup_ratio)
+        # --- Calculate warmup steps from ratio (#1431) ---
+        from soup_cli.utils.warmup import resolve_trainer_warmup_steps
+
+        warmup_steps = resolve_trainer_warmup_steps(tcfg.warmup_ratio)
 
         # --- Training args ---
         _bf16, _fp16 = bf16_fp16_flags(self.device)

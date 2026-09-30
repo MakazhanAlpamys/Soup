@@ -21,7 +21,6 @@ Security / robustness:
 
 from __future__ import annotations
 
-import math
 import os
 import time
 from pathlib import Path
@@ -316,11 +315,10 @@ class AsrTrainerWrapper:
         output_dir.mkdir(parents=True, exist_ok=True)
 
         batch_size = tcfg.batch_size if tcfg.batch_size != "auto" else 8
-        total_steps = (
-            math.ceil(len(train_ds) / batch_size / tcfg.gradient_accumulation_steps)
-            * tcfg.epochs
-        )
-        warmup_steps = int(total_steps * tcfg.warmup_ratio)
+        # --- Calculate warmup steps from ratio (#1431) ---
+        from soup_cli.utils.warmup import resolve_trainer_warmup_steps
+
+        warmup_steps = resolve_trainer_warmup_steps(tcfg.warmup_ratio)
 
         # Mixed precision by GPU capability — bf16=cuda was hardcoded, which
         # crashes on pre-Ampere cards (T4 / GTX 16xx) that lack bf16. Fall back

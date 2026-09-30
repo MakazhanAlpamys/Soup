@@ -1,6 +1,5 @@
 """IPO (Identity Preference Optimization) trainer — wraps trl.DPOTrainer with loss_type='ipo'."""
 
-import math
 import time
 from pathlib import Path
 from typing import Optional
@@ -133,12 +132,10 @@ class IPOTrainerWrapper:
             output_dir = output_dir / cfg.experiment_name
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        # --- Calculate warmup steps from ratio ---
-        total_steps = (
-            math.ceil(len(train_ds) / batch_size / tcfg.gradient_accumulation_steps)
-            * tcfg.epochs
-        )
-        warmup_steps = int(total_steps * tcfg.warmup_ratio)
+        # --- Calculate warmup steps from ratio (#1431) ---
+        from soup_cli.utils.warmup import resolve_trainer_warmup_steps
+
+        warmup_steps = resolve_trainer_warmup_steps(tcfg.warmup_ratio)
 
         # --- IPO config (DPO with loss_type='ipo') ---
         # In IPO, the beta parameter acts as tau (regularization strength)
