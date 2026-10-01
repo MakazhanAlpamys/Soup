@@ -36,6 +36,7 @@ console = Console()
 
 _MAX_INPUT_BYTES = 64 * 1024 * 1024
 _MAX_ROWS = 1_000_000
+_MAX_LISTED_REJECTED = 10
 _ALLOWED_KINDS = ("auto",) + rs.KINDS
 _MAX_SENTINEL_LEN = 256
 
@@ -235,9 +236,11 @@ def synth(
 
     if report.refused:
         _cleanup(candidate_path)
-        rejected = "".join(
-            f"\nrejected reference: {escape(repr(ref))}" for ref in report.rejected_references
-        )
+        shown = report.rejected_references[:_MAX_LISTED_REJECTED]
+        rejected = "".join(f"\nrejected reference: {escape(repr(ref))}" for ref in shown)
+        remaining = len(report.rejected_references) - len(shown)
+        if remaining:
+            rejected += f"\n+{remaining} more (see --output-report)"
         console.print(Panel(
             escape(report.reason) + rejected,
             title="[bold red]verifier refused (not emitted)[/]", border_style="red"))

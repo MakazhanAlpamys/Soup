@@ -363,9 +363,15 @@ def _last_content(completion):
 
 _NUMERIC_BODY = '''
 # Both sides are read by the parser Soup's built-in `math` / `accuracy` rewards use
-# (\\\\boxed{...}, "#### ...", "The answer is ...", "1,000", a Unicode minus), so this
-# verifier agrees with them. It is loaded through `load_reward_fn`, where Soup is installed.
-from soup_cli.utils.final_answer import parse_completion, parse_reference
+# (\\boxed{...}, "#### ...", "The answer is ...", "1,000", a Unicode minus), so this
+# verifier agrees with them on exact matches (near-misses inside the induced
+# tolerance are binary here, where the built-ins give partial credit). It is
+# loaded through `load_reward_fn`, where Soup is installed.
+from soup_cli.utils.final_answer import (
+    parse_completion,
+    parse_reference,
+    variables_conflict,
+)
 
 
 def _numbers_match(pred, gold, tol):
@@ -384,7 +390,12 @@ def reward_fn(completions, **kwargs):
         predicted = parse_completion(_last_content(completion))
         gold = reference.number if reference is not None else None
         pred = predicted.number if predicted is not None else None
-        out.append(1.0 if _numbers_match(pred, gold, _TOLERANCE) else 0.0)
+        conflict = (
+            predicted is not None
+            and reference is not None
+            and variables_conflict(predicted, reference)
+        )
+        out.append(1.0 if not conflict and _numbers_match(pred, gold, _TOLERANCE) else 0.0)
     return out
 '''
 

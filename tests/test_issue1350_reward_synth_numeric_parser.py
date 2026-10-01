@@ -142,3 +142,67 @@ def test_a_synthesized_float_verifier_refuses_an_unparseable_gold(tmp_path):
     spec.loader.exec_module(module)
     assert module.reward_fn(_msgs("#### 0.5"), answer=["forty-two"]) == [0.0]
     assert module.reward_fn(_msgs("#### 0.5"), answer=["0.5"]) == [1.0]
+
+
+def test_a_multi_line_unmarked_gold_is_refused_like_the_builtin(verifier):
+    # parse_reference refuses a multi-line gold with no marker; reading it as a
+    # completion would take its last number (42) and score a bare "#### 42" 1.0
+    gold = "Step 1: 6\nStep 2: 42"
+    assert math_verify_reward(_msgs("#### 42"), answer=[gold]) == [0.0]
+    assert verifier(_msgs("#### 42"), answer=[gold]) == [0.0]
+
+
+def test_an_unmarked_multi_line_completion_reads_its_last_number(verifier):
+    completion = "Let me compute.\n6*7 = 42"
+    assert math_verify_reward(_msgs(completion), answer=["42"]) == [1.0]
+    assert verifier(_msgs(completion), answer=["42"]) == [1.0]
+
+
+def test_a_refused_synthesis_names_its_rejected_references(tmp_path, monkeypatch):
+    from soup_cli.commands.reward import app
+
+    monkeypatch.chdir(tmp_path)
+    golds = ['{"a": 1}'] * 7 + ["not json at all", "also bad", "nope"]
+    _write_jsonl(Path("refs.jsonl"), golds)
+    res = CliRunner().invoke(
+        app, ["synth", "refs.jsonl", "--kind", "json_schema", "-o", "reward.py"]
+    )
+    assert res.exit_code == 2, (res.output, repr(res.exception))
+    out = " ".join(res.output.split())
+    assert "not json at all" in out and "also bad" in out and "nope" in out
+
+
+def test_a_synthesized_verifier_refuses_a_conflicting_variable(verifier):
+    # math_verify_reward refuses when both sides name different variables (#1346);
+    # the emitted verifier must too
+    assert math_verify_reward(_msgs(r"\boxed{y = 42}"), answer=["x = 42"]) == [0.0]
+    assert verifier(_msgs(r"\boxed{y = 42}"), answer=["x = 42"]) == [0.0]
+    assert verifier(_msgs(r"\boxed{x = 42}"), answer=["x = 42"]) == [1.0]
+
+
+def test_a_refused_synthesis_caps_the_rejected_listing(tmp_path, monkeypatch):
+    from soup_cli.commands.reward import app
+
+    monkeypatch.chdir(tmp_path)
+    bad = [f"bad-{i:02d}" for i in range(12)]
+    _write_jsonl(Path("refs.jsonl"), ['{"a": 1}'] * 7 + bad)
+    res = CliRunner().invoke(
+        app,
+        [
+            "synth",
+            "refs.jsonl",
+            "--kind",
+            "json_schema",
+            "-o",
+            "reward.py",
+            "--output-report",
+            "report.json",
+        ],
+    )
+    assert res.exit_code == 2, (res.output, repr(res.exception))
+    out = " ".join(res.output.split())
+    assert "bad-00" in out and "bad-09" in out
+    assert "bad-10" not in out and "bad-11" not in out
+    assert "+2 more (see --output-report)" in out
+    report = json.loads(Path("report.json").read_text(encoding="utf-8"))
+    assert report["rejected_references"] == bad

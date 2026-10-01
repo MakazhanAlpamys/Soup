@@ -1419,9 +1419,15 @@ names every reference the emitted verifier rejects (`rejected_references` in `--
 
 **Changed:** a `reward.py` synthesized before this version pulled the last number with a local
 regex; ones synthesized now read both sides with the shared answer parser, so `1,000`-style
-golds and `The answer is \u2026` completions score where they scored 0 before — regenerate old
-verifiers before comparing runs. The emitted file imports `soup_cli`, so it runs where Soup is
-installed rather than being fully self-contained.
+golds and `The answer is …` completions score where they scored 0 before — regenerate old
+verifiers before comparing runs. Regeneration also stops paying some completions the old regex
+paid: a `####` or `\boxed{}` answer carrying units, `%` or a currency symbol (`#### 42 apples`,
+`\boxed{42\%}`, `#### €42`), a hedged or justified answer phrase (`The answer is either 41 or
+42`, `The answer is 42 because 6*7=42`), and a completion whose last `\boxed{}` is wrong after
+a right first one now score 0 — matching the built-ins. A bare `42%` or `The answer is 42%.`
+still pays, as under the built-ins; only marker-delimited answers refuse suffixes. The emitted
+file imports `soup_cli`, so it runs where Soup is installed rather than being fully
+self-contained.
 
 ### Stress-test a verifier for gameability (`soup reward stress`)
 
