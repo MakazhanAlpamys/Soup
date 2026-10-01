@@ -175,8 +175,9 @@ def _memo_row(
 ) -> Optional[Mapping[str, object]]:
     """The row the memorization probe should scan, or ``None`` if the row has no text.
 
-    Rows ``extract_row_text`` already reads are passed through unchanged, so scores
-    for alpaca / chatml / plaintext do not move; only unreadable rows fall back.
+    Rows ``extract_row_text`` already reads are passed through unchanged, so a row's
+    own text is never altered; only rows it cannot read fall back. (Text-less and media
+    rows are left out, so in a mixed file the 32-row window can still shift.)
     """
     from soup_cli.utils.diagnose._common import extract_row_text
 
@@ -252,11 +253,13 @@ def _media_reason(probe: _ProbeInputs) -> str:
 def _no_pairs_reason(probe: _ProbeInputs) -> str:
     from soup_cli.utils.diagnose._common import MAX_PROMPT_CHARS
 
-    # The dominant cause wins; ties go media > too long > plaintext.
+    # The dominant cause wins; ties go media > too long > no answer > plaintext > unreadable.
     candidates = [
-        (probe.media_rows, 2, _media_reason(probe)),
-        (probe.too_long, 1, f"every prompt is over {MAX_PROMPT_CHARS} chars"),
-        (probe.plaintext, 0, "plaintext rows have no prompt/answer split"),
+        (probe.media_rows, 4, _media_reason(probe)),
+        (probe.too_long, 3, f"prompts over {MAX_PROMPT_CHARS} chars were skipped"),
+        (probe.no_answer, 2, "rows have no prompt/answer pair"),
+        (probe.plaintext, 1, "plaintext rows have no prompt/answer split"),
+        (probe.unreadable, 0, "rows could not be read as prompt/answer pairs"),
     ]
     count, _rank, reason = max(candidates, key=lambda item: (item[0], item[1]))
     return reason if count else "no usable prompt/answer rows in --dataset"
@@ -495,7 +498,7 @@ def run_live_diagnose(
         scores["memorization"] = not_run_score(
             "memorization",
             _media_reason(probe)
-            if probe.media_rows
+            if probe.media_rows and probe.media_rows >= probe.unreadable
             else "no row has text to split into a prefix and a suffix",
         )
 
