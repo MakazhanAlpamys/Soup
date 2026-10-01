@@ -1483,6 +1483,15 @@ training:
   quantization: 4bit
 ```
 
+**Rows whose completion trl truncates away are refused.** trl's CPO trainer
+truncates each answer to `data.max_length` minus the **longer** answer's length,
+so a long `chosen` beside a short `rejected` leaves the short side with zero
+trainable tokens — SimPO's length-normalised log-probability is then 0/0, every
+adapter tensor trains to NaN, and transformers' nan-inf filter reports the loss
+as `0.0`. `soup train` stops before the first step, naming how many rows and
+which, with the `data.max_length` involved. Raise `data.max_length`, balance the
+pair, or drop the row.
+
 
 ## IPO Training (Regularized Preference)
 

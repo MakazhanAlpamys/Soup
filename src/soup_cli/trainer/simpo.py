@@ -368,7 +368,7 @@ class SimPOTrainerWrapper(StreamingSetupMixin):
             self.tokenizer.pad_token = self.tokenizer.eos_token
 
     def _refuse_empty_completion_rows(self, trainer, *, split: str) -> None:
-        """Raise when a row's completion would lose every trainable token (#1208).
+        """Raise when a row's completion has no trainable token left (#1208).
 
         Runs against the prepared, tokenised dataset trl itself will read, so it
         sees the same answers the trainer does rather than the raw strings.
@@ -378,18 +378,7 @@ class SimPOTrainerWrapper(StreamingSetupMixin):
         )
 
         dataset = trainer.train_dataset if split == "train" else trainer.eval_dataset
-        columns = set(getattr(dataset, "column_names", ()))
-        if {"chosen_labels", "rejected_labels"} <= columns:
-            layout = "combined"
-        elif {"chosen_ids", "rejected_ids"} <= columns:
-            layout = "dpo"
-        else:
-            return
-
-        max_length = self.config.data.max_length
-        affected = preference_rows_with_empty_completion(
-            dataset, max_length=max_length, layout=layout,
-        )
+        affected = preference_rows_with_empty_completion(dataset)
         if not affected:
             return
 
@@ -398,12 +387,13 @@ class SimPOTrainerWrapper(StreamingSetupMixin):
             shown += f", ... (+{len(affected) - 5} more)"
         raise ValueError(
             f"SimPO: {len(affected)} {split} row(s) would train on zero completion "
-            f"tokens at data.max_length={max_length} (rows: {shown}). trl "
-            "truncates each answer to max_length minus the LONGER answer's "
-            "length, so the shorter side of a lopsided pair is emptied and "
-            "SimPO's length-normalised log-probability becomes 0/0 — the run "
-            "trains every LoRA tensor to NaN while the logged loss reads 0.0. "
-            "Raise data.max_length, balance the pair, or drop the row."
+            f"tokens at data.max_length={self.config.data.max_length} "
+            f"(rows: {shown}). trl truncates each answer to max_length minus "
+            "the LONGER answer's length, so the shorter side of a lopsided "
+            "pair is emptied and SimPO's length-normalised log-probability "
+            "becomes 0/0 — the run trains every LoRA tensor to NaN while the "
+            "logged loss reads 0.0. Raise data.max_length, balance the pair, "
+            "or drop the row."
         )
 
     def train(

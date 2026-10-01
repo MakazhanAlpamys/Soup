@@ -69,7 +69,12 @@ def _guard(wrapper, trainer, split="train"):
 
 
 def _combined(chosen_len: int, rejected_len: int, prompt: int = 4) -> dict:
-    """A prepared combined-layout row: -100 over the prompt, ids after it."""
+    """A row in the shape ``CPOTrainer`` hands over: already truncated.
+
+    trl tokenises and truncates in ``__init__``, so these are POST-truncation
+    shapes. The issue's original 80/4 pair arrives here as 64/0 — the longer side
+    is exactly ``max_length`` trainable tokens and the short side is empty.
+    """
     marker = [-100] * prompt
     return {
         "chosen_labels": marker + list(range(chosen_len)),
@@ -81,21 +86,30 @@ COMBINED_COLUMNS = {"chosen_labels", "rejected_labels"}
 
 
 # --------------------------------------------------------------------------- #
-# The predicate, on both layouts trl prepares
+# The predicate, on the layout a CPOTrainer actually prepares
 # --------------------------------------------------------------------------- #
 
 
 class TestThePredicateMatchesTrl:
-    def test_a_lopsided_pair_is_flagged(self):
+    def test_a_pair_emptied_by_truncation_is_flagged(self):
         from soup_cli.trainer._trl_compat import (
             preference_rows_with_empty_completion,
         )
 
-        # The issue's shape: an 80-token chosen against " bad bad world".
-        rows = [{"chosen_ids": list(range(80)), "rejected_ids": list(range(4))}]
-        dataset = _FakeDataset(rows, {"chosen_ids", "rejected_ids"})
+        # The issue's shape as trl hands it over: 80-token chosen against
+        # " bad bad world" arrives already cut to 64 / 0.
+        rows = [_combined(MAX_LENGTH, 0)]
+        dataset = _FakeDataset(rows, COMBINED_COLUMNS)
+        assert preference_rows_with_empty_completion(dataset) == [0]
+
+    def test_an_empty_chosen_side_is_also_flagged(self):
+        from soup_cli.trainer._trl_compat import (
+            preference_rows_with_empty_completion,
+        )
+
+        rows = [_combined(0, MAX_LENGTH)]
         assert preference_rows_with_empty_completion(
-            dataset, max_length=MAX_LENGTH, layout="dpo",
+            _FakeDataset(rows, COMBINED_COLUMNS),
         ) == [0]
 
     def test_a_balanced_pair_is_not_flagged(self):
@@ -104,22 +118,31 @@ class TestThePredicateMatchesTrl:
         )
 
         rows = [_combined(20, 18)]
-        dataset = _FakeDataset(rows, COMBINED_COLUMNS)
         assert preference_rows_with_empty_completion(
-            dataset, max_length=MAX_LENGTH, layout="combined",
+            _FakeDataset(rows, COMBINED_COLUMNS),
         ) == []
 
-    def test_a_longer_that_keeps_fourteen_tokens_is_not_flagged(self):
+    def test_a_truncated_pair_that_keeps_fourteen_tokens_is_not_flagged(self):
         from soup_cli.trainer._trl_compat import (
             preference_rows_with_empty_completion,
         )
 
-        # The issue's own control: a long `chosen` whose `rejected` keeps 14
-        # trainable tokens trains normally.
-        rows = [_combined(60, 14)]
-        dataset = _FakeDataset(rows, COMBINED_COLUMNS)
+        # The issue's own control, in post-truncation shape: 64 / 14 trains
+        # normally on `main`, and the first version of this guard refused it by
+        # re-applying trl's slice to already-truncated rows (#1208 review).
+        rows = [_combined(MAX_LENGTH, 14)]
         assert preference_rows_with_empty_completion(
-            dataset, max_length=MAX_LENGTH, layout="combined",
+            _FakeDataset(rows, COMBINED_COLUMNS),
+        ) == []
+
+    def test_two_long_balanced_answers_are_not_flagged(self):
+        from soup_cli.trainer._trl_compat import (
+            preference_rows_with_empty_completion,
+        )
+
+        rows = [_combined(MAX_LENGTH, MAX_LENGTH - 2)]
+        assert preference_rows_with_empty_completion(
+            _FakeDataset(rows, COMBINED_COLUMNS),
         ) == []
 
     def test_only_the_affected_row_is_reported(self):
@@ -127,10 +150,9 @@ class TestThePredicateMatchesTrl:
             preference_rows_with_empty_completion,
         )
 
-        rows = [_combined(20, 18), _combined(80, 4), _combined(19, 19)]
-        dataset = _FakeDataset(rows, COMBINED_COLUMNS)
+        rows = [_combined(20, 18), _combined(MAX_LENGTH, 0), _combined(19, 19)]
         assert preference_rows_with_empty_completion(
-            dataset, max_length=MAX_LENGTH, layout="combined",
+            _FakeDataset(rows, COMBINED_COLUMNS),
         ) == [1]
 
     def test_an_unknown_layout_is_left_to_the_caller(self):
@@ -139,8 +161,18 @@ class TestThePredicateMatchesTrl:
         )
 
         dataset = _FakeDataset([{"text": "x"}], {"text"})
+        assert preference_rows_with_empty_completion(dataset) == []
+
+    def test_the_dpo_collator_shape_is_not_read(self):
+        """SimPO only builds a CPOTrainer; `chosen_ids`/`rejected_ids` is
+        DPOTrainer's collator input, so it is not a layout to flag on."""
+        from soup_cli.trainer._trl_compat import (
+            preference_rows_with_empty_completion,
+        )
+
+        rows = [{"chosen_ids": list(range(80)), "rejected_ids": []}]
         assert preference_rows_with_empty_completion(
-            dataset, max_length=MAX_LENGTH, layout="combined",
+            _FakeDataset(rows, {"chosen_ids", "rejected_ids"}),
         ) == []
 
     def test_the_installed_trl_still_truncates_the_way_this_assumes(self):
@@ -178,7 +210,7 @@ class TestThePredicateMatchesTrl:
 
 class TestTheRefusal:
     def test_a_zero_token_row_is_refused_with_count_and_limit(self):
-        trainer = _FakeTrainer([_combined(80, 4)], COMBINED_COLUMNS)
+        trainer = _FakeTrainer([_combined(MAX_LENGTH, 0)], COMBINED_COLUMNS)
         with pytest.raises(ValueError) as excinfo:
             _guard(_Wrapper(), trainer)
         message = str(excinfo.value)
@@ -188,7 +220,7 @@ class TestTheRefusal:
         assert "NaN" in message and "0.0" in message, message
 
     def test_the_refusal_names_rows_past_the_fifth(self):
-        rows = [_combined(80, 2) for _ in range(7)]
+        rows = [_combined(MAX_LENGTH, 0) for _ in range(7)]
         trainer = _FakeTrainer(rows, COMBINED_COLUMNS)
         with pytest.raises(ValueError) as excinfo:
             _guard(_Wrapper(), trainer)
@@ -202,17 +234,149 @@ class TestTheRefusal:
 
     def test_the_eval_split_is_checked_too(self):
         trainer = _FakeTrainer(
-            [_combined(20, 18)], COMBINED_COLUMNS, eval_rows=[_combined(80, 4)],
+            [_combined(20, 18)], COMBINED_COLUMNS, eval_rows=[_combined(MAX_LENGTH, 0)],
         )
         with pytest.raises(ValueError) as excinfo:
             _guard(_Wrapper(), trainer, split="eval")
         assert "1 eval row(s)" in str(excinfo.value), str(excinfo.value)
 
-    def test_a_larger_max_length_clears_the_same_pair(self):
-        """The refusal is about this limit, not the data being unusable."""
-        trainer = _FakeTrainer([_combined(80, 4)], COMBINED_COLUMNS)
-        _guard(_Wrapper(max_length=128), trainer)  # must not raise
+    def test_a_truncated_pair_that_keeps_some_tokens_is_not_refused(self):
+        """#1208 review: this pair trains fine on `main`, so the guard must not
+        stop it just because both answers were cut."""
+        trainer = _FakeTrainer([_combined(MAX_LENGTH, 14)], COMBINED_COLUMNS)
+        _guard(_Wrapper(), trainer)  # must not raise
 
     def test_an_unrecognised_layout_is_skipped_rather_than_guessed(self):
         trainer = _FakeTrainer([{"text": "x"}], {"text"})
         _guard(_Wrapper(), trainer)  # must not raise
+
+
+# --------------------------------------------------------------------------- #
+# The call site and the data, through a real trl CPOTrainer (#1208 review)
+# --------------------------------------------------------------------------- #
+
+
+WORDS = [
+    "<pad>", "<s>", "</s>", "<unk>", "what", "is", "one", "plus", "?",
+    "two", "three", "hello", "there", "hi", "no", "bad", "world",
+]
+
+
+def _tiny_model_dir(tmp_path):
+    """A random-init 2-layer Llama plus a WordLevel tokenizer."""
+    import torch
+    from tokenizers import Tokenizer, models, pre_tokenizers
+    from transformers import (
+        LlamaConfig,
+        LlamaForCausalLM,
+        PreTrainedTokenizerFast,
+    )
+
+    raw = Tokenizer(
+        models.WordLevel(vocab={w: i for i, w in enumerate(WORDS)}, unk_token="<unk>"),
+    )
+    raw.pre_tokenizer = pre_tokenizers.Whitespace()
+    tok = PreTrainedTokenizerFast(
+        tokenizer_object=raw, bos_token="<s>", eos_token="</s>",
+        pad_token="<pad>", unk_token="<unk>",
+    )
+    torch.manual_seed(0)
+    path = tmp_path / "tiny"
+    LlamaForCausalLM(LlamaConfig(
+        vocab_size=len(WORDS), hidden_size=32, intermediate_size=64,
+        num_hidden_layers=2, num_attention_heads=2, num_key_value_heads=2,
+        pad_token_id=0, bos_token_id=1, eos_token_id=2, max_position_embeddings=512,
+    )).save_pretrained(path)
+    tok.save_pretrained(path)
+    return path
+
+
+def _setup_simpo(tmp_path, monkeypatch, rows):
+    """Run a real SimPO `setup()` and return the wrapper.
+
+    `importorskip("trl")` is not enough: trl is a lazy module, so that passes
+    while `trl.experimental.cpo` still fails to import. Resolving the concrete
+    class is what actually tells us the test can run.
+    """
+    from soup_cli.trainer._trl_compat import resolve_trl_symbol
+
+    try:
+        resolve_trl_symbol("CPOConfig", "trl.experimental.cpo")
+    except Exception as exc:  # noqa: BLE001 — a broken trl is not a failure
+        pytest.skip(f"this environment cannot import a trl CPO config: {exc}")
+
+    from soup_cli.config.loader import load_config_from_string
+    from soup_cli.trainer.simpo import SimPOTrainerWrapper
+
+    monkeypatch.chdir(tmp_path)
+    base = _tiny_model_dir(tmp_path)
+    cfg = load_config_from_string(
+        f"base: {base.as_posix()}\ntask: simpo\n"
+        "data: {train: ./unused.jsonl, format: dpo, max_length: 64}\n"
+        "training:\n  epochs: 1\n  batch_size: 2\n  quantization: none\n"
+        "  lora: {r: 4, alpha: 8, dropout: 0.0}\noutput: ./out\n"
+    )
+    wrapper = SimPOTrainerWrapper(cfg, device="cpu")
+    wrapper.setup({"train": rows})
+    return wrapper
+
+
+def _rows(chosen_words: int, rejected: str):
+    return [{
+        "prompt": "what is one plus one ?",
+        "chosen": " ".join(["hello"] * chosen_words),
+        "rejected": rejected,
+    }] * 4
+
+
+def _trainable(row, side: str) -> int:
+    return sum(1 for x in row[f"{side}_labels"] if x != -100)
+
+
+class TestTheGuardIsWiredIntoSetup:
+    """Deleting the two calls in `setup()` must fail here.
+
+    Every other test in the refusal classes calls the guard on a fake trainer, so
+    with the calls removed they all still passed — the run was silently inert
+    again (#1208 review). `TestOnARealCpoTrainer` is the real evidence; this one
+    runs without trl, so the wiring cannot go unpinned on a machine where the CPO
+    trainer cannot import.
+    """
+
+    def test_setup_invokes_the_guard_for_both_splits(self):
+        import inspect
+
+        from soup_cli.trainer.simpo import SimPOTrainerWrapper
+
+        source = inspect.getsource(SimPOTrainerWrapper.setup)
+        assert '_refuse_empty_completion_rows(self.trainer, split="train")' in source, (
+            "SimPOTrainerWrapper.setup no longer runs the empty-completion guard "
+            "on the train split; a PPO-path SimPO run with a lopsided pair would "
+            "train to NaN behind a logged loss of 0.0"
+        )
+        assert '_refuse_empty_completion_rows(self.trainer, split="eval")' in source, (
+            "the eval split is no longer guarded"
+        )
+
+
+class TestOnARealCpoTrainer:
+    """The guard as trl's own prepared dataset presents it (#1208 review)."""
+
+    def test_the_issue_shape_is_refused(self, tmp_path, monkeypatch):
+        with pytest.raises(ValueError, match="zero completion tokens"):
+            _setup_simpo(tmp_path, monkeypatch, _rows(80, " bad bad world"))
+
+    def test_the_issues_own_control_still_loads(self, tmp_path, monkeypatch):
+        wrapper = _setup_simpo(
+            tmp_path, monkeypatch, _rows(80, " ".join(["bad"] * 30)),
+        )
+        assert _trainable(wrapper.trainer.train_dataset[0], "rejected") == 14
+
+    def test_two_long_balanced_answers_still_load(self, tmp_path, monkeypatch):
+        rows = [{
+            "prompt": "what is one plus one ?",
+            "chosen": " ".join(["hello"] * 70),
+            "rejected": " ".join(["bad"] * 68),
+        }] * 4
+        wrapper = _setup_simpo(tmp_path, monkeypatch, rows)
+        assert _trainable(wrapper.trainer.train_dataset[0], "rejected") > 0
