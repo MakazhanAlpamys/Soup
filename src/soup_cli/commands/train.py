@@ -87,6 +87,53 @@ def _format_training_complete_loss(result: dict) -> str:
     return f"Loss: [bold]{result['initial_loss']:.4f} -> {result['final_loss']:.4f}[/]{label}"
 
 
+def _format_training_duration(result: dict) -> str:
+    """Render the run duration, tolerating a wrapper that omits the string form.
+
+    #1529: ``unlearn`` returned only ``duration_secs`` while every other wrapper
+    returned a pre-formatted ``duration`` next to it, and this panel indexed
+    ``result['duration']`` directly. The run had already been recorded as
+    complete by ``finish_run()`` above, so the KeyError surfaced as a
+    traceback on an otherwise successful run. Falling back to ``duration_secs``
+    keeps the next wrapper that forgets the key from crashing a finished run;
+    the wrapper-level contract test is the real guard against that regression.
+    """
+    duration = result.get("duration")
+    if isinstance(duration, str) and duration:
+        return duration
+    duration_secs = result.get("duration_secs")
+    if isinstance(duration_secs, int | float):
+        hours = int(duration_secs // 3600)
+        minutes = int((duration_secs % 3600) // 60)
+        return f"{hours}h {minutes}m" if hours > 0 else f"{minutes}m"
+    return "unknown"
+
+
+def _format_training_complete_panel(
+    result: dict, run_id: str, merge_hint: str
+) -> Panel:
+    """Build the completion panel for a finished run.
+
+    Split out of ``train`` so the panel can be rendered by a test. #1529 was a
+    ``KeyError`` on ``result['duration']`` raised here, after ``finish_run()``
+    had already recorded the run as complete, so the failure was only ever
+    visible as a traceback on an otherwise successful run.
+    """
+    output_dir = result["output_dir"]
+    return Panel(
+        f"{_format_training_complete_loss(result)}\n"
+        f"Duration: [bold]{_format_training_duration(result)}[/]\n"
+        f"Output: [bold]{output_dir}[/]\n"
+        f"Run ID: [bold]{run_id}[/]\n\n"
+        f"Quick test:  [bold]soup chat --model {output_dir}[/]\n"
+        f"Push to HF:  [bold]soup push --model {output_dir}[/]\n"
+        f"{merge_hint}\n"
+        f"Export GGUF: [bold]soup export --model {output_dir}[/]\n"
+        f"Run details: [bold]soup runs show {run_id}[/]",
+        title="[bold green]Training Complete![/]",
+    )
+
+
 def _train_sample_count(dcfg, dataset) -> int:
     """Rows training will actually consume (#1054).
 
@@ -1810,18 +1857,7 @@ def train(
     )
 
     console.print(
-        Panel(
-            f"{_format_training_complete_loss(result)}\n"
-            f"Duration: [bold]{result['duration']}[/]\n"
-            f"Output: [bold]{result['output_dir']}[/]\n"
-            f"Run ID: [bold]{run_id}[/]\n\n"
-            f"Quick test:  [bold]soup chat --model {result['output_dir']}[/]\n"
-            f"Push to HF:  [bold]soup push --model {result['output_dir']}[/]\n"
-            f"{merge_hint}\n"
-            f"Export GGUF: [bold]soup export --model {result['output_dir']}[/]\n"
-            f"Run details: [bold]soup runs show {run_id}[/]",
-            title="[bold green]Training Complete![/]",
-        )
+        _format_training_complete_panel(result, run_id, merge_hint)
     )
 
     # --- v0.56.0 --diagnose-gate: post-training failure-mode check ---
