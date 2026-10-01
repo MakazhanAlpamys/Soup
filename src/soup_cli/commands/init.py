@@ -1,5 +1,8 @@
 """soup init — interactive project setup wizard."""
 
+import errno
+import os
+import stat
 from pathlib import Path
 
 import typer
@@ -8,8 +11,63 @@ from rich.panel import Panel
 from rich.prompt import Prompt
 
 from soup_cli.templates import list_templates, load_template
+from soup_cli.utils.paths import open_no_follow, refuse_linked_dirs
+from soup_cli.utils.terminal import for_terminal
 
 console = Console()
+
+
+def _print_link_refusal(output: str) -> None:
+    console.print(
+        f"[red]{for_terminal(output)} is a symbolic link or junction; "
+        "soup init does not write through a link.[/]\n"
+        "Remove the link or choose a different --output."
+    )
+
+
+def _refuse_link_at(output: str) -> None:
+    """Exit 1 when the starter config path is a symbolic link or junction.
+
+    Only the target itself is inspected (``stop_at`` is its own parent); the
+    directories above it are where the user chose to write.
+    """
+    output_path = Path(output)
+    try:
+        refuse_linked_dirs(output_path, stop_at=output_path.parent)
+    except OSError as exc:
+        if exc.errno != errno.ELOOP:
+            raise
+        _print_link_refusal(output)
+        raise typer.Exit(1) from exc
+
+
+def _write_config(output: str, config_text: str) -> None:
+    """Write ``config_text`` to ``output`` without following a link there.
+
+    ``open_no_follow`` refuses a link at open time (``O_NOFOLLOW`` on POSIX, an
+    lstat/fstat cross-check on Windows), so a link that appears after
+    :func:`_refuse_link_at` is refused too. The file is truncated only after
+    that check has passed, which leaves a link's target untouched when the open
+    is refused. Mode, truncation and newline handling match the
+    ``Path.write_text`` this replaces.
+    """
+    flags = os.O_WRONLY | os.O_CREAT | getattr(os, "O_BINARY", 0)
+    try:
+        fd = open_no_follow(output, flags, 0o666)
+    except OSError as exc:
+        if exc.errno != errno.ELOOP:
+            raise
+        _print_link_refusal(output)
+        raise typer.Exit(1) from exc
+    try:
+        # O_TRUNC semantics: only a regular file is truncated.
+        if stat.S_ISREG(os.fstat(fd).st_mode):
+            os.ftruncate(fd, 0)
+    except OSError:
+        os.close(fd)
+        raise
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        handle.write(config_text)
 
 
 def _template_help_string() -> str:
@@ -41,6 +99,7 @@ def init(
 ):
     """Create a new soup.yaml config interactively or from a template."""
     output_path = Path(output)
+    _refuse_link_at(output)
 
     if output_path.exists() and not force:
         overwrite = typer.confirm(f"{output_path} already exists. Overwrite?")
@@ -57,7 +116,7 @@ def init(
     else:
         config_text = _interactive_wizard()
 
-    output_path.write_text(config_text, encoding="utf-8")
+    _write_config(output, config_text)
     console.print(
         Panel(
             f"[bold green]Config saved to {output_path}[/]\n\n"
