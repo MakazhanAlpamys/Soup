@@ -527,6 +527,8 @@ class TestWeightedCombineHook:
             )
 
     def test_blended_loss_scales_with_weight(self):
+        """#1425: this asserted `2.0 * 0.7`, i.e. the silent primary-only
+        fallback. It now refuses; `inputs=None` is the shape it exercised."""
         from soup_cli.utils.preference_combine import (
             attach_weighted_preference_combine,
         )
@@ -539,9 +541,9 @@ class TestWeightedCombineHook:
         attach_weighted_preference_combine(
             trainer, {"dpo": 0.7, "simpo": 0.3}
         )
-        # Primary is dpo (highest weight). Loss = 2.0 * 0.7 = 1.4
-        out = trainer.compute_loss(None, None)
-        assert float(out) == pytest.approx(1.4)
+        with pytest.raises(ValueError) as excinfo:
+            trainer.compute_loss(None, None)
+        assert "cannot compute" in str(excinfo.value)
 
 
 # ---------------------------------------------------------------------------
@@ -885,7 +887,12 @@ class TestTrueWeightedCombine:
         assert float(out) != 99.0
         assert math.isfinite(float(out))
 
-    def test_falls_back_when_logps_missing(self):
+    def test_refuses_when_logps_missing(self):
+        """#1425: no trl 0.29 trainer puts log-probs on the batch.
+
+        This used to return `primary * primary_weight` — training only the
+        highest-weighted loss while reporting a blended number, silently.
+        """
         from soup_cli.utils.preference_combine import (
             attach_weighted_preference_combine,
         )
@@ -898,9 +905,37 @@ class TestTrueWeightedCombine:
         attach_weighted_preference_combine(
             trainer, {"dpo": 0.7, "simpo": 0.3}
         )
-        # No logps → fallback to primary scaling.
-        out = trainer.compute_loss(model=None, inputs={})
-        assert float(out) == pytest.approx(2.0 * 0.7)
+        # No logps -> refuse, naming the terms, instead of scaling silently.
+        with pytest.raises(ValueError) as excinfo:
+            trainer.compute_loss(model=None, inputs={})
+        message = str(excinfo.value)
+        assert "dpo" in message and "simpo" in message, message
+        assert "preference_loss_weights" in message, message
+
+    def test_refusal_names_only_the_terms_it_could_not_compute(self):
+        """Policy logps present, reference ones absent: `simpo` computes and
+        only `dpo` is named as missing."""
+        from soup_cli.utils.preference_combine import (
+            attach_weighted_preference_combine,
+        )
+
+        class _Trainer:
+            def compute_loss(self, model, inputs, return_outputs=False):
+                return torch.tensor(2.0)
+
+        trainer = _Trainer()
+        attach_weighted_preference_combine(
+            trainer, {"dpo": 0.7, "simpo": 0.3}
+        )
+        inputs = {
+            "policy_chosen_logps": torch.tensor([0.0, 0.1]),
+            "policy_rejected_logps": torch.tensor([-0.5, -0.6]),
+        }
+        with pytest.raises(ValueError) as excinfo:
+            trainer.compute_loss(model=None, inputs=inputs)
+        message = str(excinfo.value)
+        assert "cannot compute dpo" in message, message
+        assert "computed: simpo" in message, message
 
 
 # ---------------------------------------------------------------------------
