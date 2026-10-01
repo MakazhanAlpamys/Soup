@@ -48,7 +48,11 @@ def score(
     input: str = typer.Option(..., "--input", "-i", help="JSONL input under cwd."),
     benchmarks: Optional[str] = typer.Option(
         None, "--benchmarks", "-b",
-        help="Comma-separated benchmark names (e.g. mmlu,gsm8k).",
+        help="Benchmark labels (e.g. mmlu,gsm8k); requires --benchmark-file, corpora not bundled.",
+    ),
+    benchmark_file: Optional[str] = typer.Option(
+        None, "--benchmark-file",
+        help="Operator-supplied benchmark JSONL under cwd, with usable 8-gram text in every row.",
     ),
     threshold: float = typer.Option(
         0.8, "--threshold",
@@ -57,7 +61,13 @@ def score(
     ),
 ):
     """Composite data-quality scorecard (PII + keyword triage + lang + edu + dec)."""
-    from soup_cli.utils.data_score import BENCHMARKS, compute_scorecard
+    from soup_cli.utils.data_score import (
+        BENCHMARKS,
+        compute_scorecard,
+        extract_row_text,
+        load_jsonl_rows,
+        ngram_set,
+    )
 
     rows = _read_rows(input)
     bench_list: List[str] = []
@@ -73,11 +83,28 @@ def score(
                 )
             bench_list.append(canonical)
 
+    if bench_list and not benchmark_file:
+        _exit("score --benchmarks labels need --benchmark-file; benchmark corpora are not bundled")
+    benchmark_texts: List[str] = []
+    if benchmark_file:
+        try:
+            bench_rows = load_jsonl_rows(benchmark_file, strict=True)
+            for index, row in enumerate(bench_rows, 1):
+                text = extract_row_text(row)
+                if not ngram_set(text, n=8):
+                    raise ValueError(f"row {index} has no usable 8-gram text")
+                benchmark_texts.append(text)
+            if not benchmark_texts:
+                raise ValueError("no benchmark texts were supplied")
+        except (TypeError, ValueError, FileNotFoundError, OSError) as exc:
+            _exit(f"--benchmark-file: {exc}")
+        console.print(f"[cyan]Loaded {len(benchmark_texts)} operator-supplied benchmark texts[/]")
+
     try:
         report = compute_scorecard(
             rows,
             benchmarks=bench_list,
-            decontaminate_texts=None,
+            benchmark_texts=benchmark_texts if benchmark_file else None,
             decontaminate_threshold=threshold,
         )
     except (TypeError, ValueError) as exc:
@@ -90,7 +117,10 @@ def score(
     table.add_row("PII flagged", str(report.pii_flagged))
     table.add_row("Abuse-keyword flagged", str(report.toxic_flagged))
     table.add_row("Edu mean", f"{report.educational_mean:.3f}")
-    table.add_row("Decontaminated", str(report.decontaminated_removed))
+    table.add_row(
+        "Decontaminated",
+        str(report.decontaminated_removed) if benchmark_file else "not run (no benchmark texts)",
+    )
     for lang, count in sorted(report.languages.items(), key=lambda kv: -kv[1]):
         table.add_row(f"lang:{escape(lang)}", str(count))
     console.print(table)
