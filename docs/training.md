@@ -547,7 +547,8 @@ soup eval unlearning <run-id> --benchmark tofu --evidence evidence.json --output
 
 Unlearning honors `training.optimizer`, `scheduler`, `warmup_ratio`, `weight_decay`,
 `max_grad_norm`, `batch_size` and `gradient_accumulation_steps`. The default
-`batch_size: auto` uses the same memory estimate as the other trainers. This
+`batch_size: auto` resolves to 1 for unlearning rather than to the memory estimate
+the other trainers use, so a config makes the same number of updates on any card. This
 memory-constrained loop processes one example at a time and accumulates gradients
 for `batch_size * gradient_accumulation_steps` examples per optimizer update;
 a final partial group is averaged by its actual size. `initial_loss` and
