@@ -996,7 +996,8 @@ class DataConfig(BaseModel):
                 raise ValueError(
                     "format='pre_tokenized' cannot be combined with "
                     + ", ".join(conflicts)
-                    + "; pre-tokenized ids already contain the transformed input"
+                    + "; soup data preprocess never applies it, so the cached ids "
+                    "do not contain it. Remove it, or train from the source format."
                 )
         return self
 

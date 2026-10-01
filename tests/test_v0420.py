@@ -162,7 +162,10 @@ class TestPartANewFormats:
         ],
     )
     def test_pre_tokenized_rejects_live_text_transform(self, field, value):
-        with pytest.raises(Exception, match=fr"pre_tokenized.*{field}"):
+        with pytest.raises(
+            Exception,
+            match=fr"pre_tokenized.*data\.{field}.*cached ids do not contain it",
+        ):
             DataConfig(
                 train="data.jsonl",
                 format="pre_tokenized",
