@@ -9,7 +9,7 @@ The Bearer header keeps working unchanged for scripted clients.
 
 from __future__ import annotations
 
-from urllib.parse import parse_qsl, urlsplit
+from urllib.parse import parse_qsl, urlencode, urlsplit
 
 import pytest
 from fastapi.testclient import TestClient
@@ -207,3 +207,46 @@ class TestNoCredentialedCors:
         ]
         for resp in responses:
             assert "access-control-allow-credentials" not in resp.headers
+
+def _spy_compare_digest(monkeypatch) -> list:
+    seen = []
+    real = ui_app.secrets.compare_digest
+
+    def spy(a, b):
+        seen.append((a, b))
+        return real(a, b)
+
+    monkeypatch.setattr(ui_app.secrets, "compare_digest", spy)
+    return seen
+
+
+class TestConstantTimeComparisons:
+    def test_exchange_compares_the_token_in_constant_time(self, monkeypatch):
+        seen = _spy_compare_digest(monkeypatch)
+        assert _sign_in(_client()).status_code == 303
+        presented = f"Bearer {get_auth_token()}".encode("utf-8")
+        assert any(a == presented and isinstance(b, bytes) for a, b in seen), seen
+
+    def test_session_cookie_is_compared_in_constant_time(self, monkeypatch):
+        client = _signed_in()
+        session_id = client.cookies[COOKIE].encode("utf-8")
+        seen = _spy_compare_digest(monkeypatch)
+        assert client.get("/api/train/status").status_code == 200
+        assert any(a == session_id and isinstance(b, bytes) for a, b in seen), seen
+
+
+class TestRedirectStaysOnThisServer:
+    def test_hostile_parameters_never_become_the_redirect_target(self):
+        hostile = [
+            ("next", "//evil.example/"),
+            ("redirect", "http://evil.example/"),
+            ("url", "\\\\evil.example"),
+            ("x", "a\r\nSet-Cookie: pwn=1"),
+        ]
+        resp = _sign_in(_client(), "&" + urlencode(hostile))
+        assert resp.status_code == 303
+        parts = urlsplit(resp.headers["location"])
+        assert parts.scheme == "" and parts.netloc == "", resp.headers["location"]
+        assert parts.path == "/"
+        assert parse_qsl(parts.query) == hostile
+        assert all("pwn" not in c for c in _set_cookie_headers(resp))

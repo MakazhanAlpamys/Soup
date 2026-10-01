@@ -485,6 +485,8 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
         exactly this server -- scheme, host and port. `check_local_request`
         cannot do this: it compares hostnames without ports on purpose.
         """
+        # Defence in depth: `_new_session` only runs behind the same check in
+        # `index()`, so a non-loopback app never holds an id to match.
         if not _session_enabled:
             return False
         value = request.cookies.get(_session_cookie, "").encode("utf-8")
