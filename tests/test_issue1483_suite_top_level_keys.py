@@ -44,6 +44,12 @@ class TestTopLevelKeys:
             parse_suite_yaml(text)
         assert "fail_fast" in str(info.value) and "severity" in str(info.value)
 
+    @pytest.mark.parametrize("key", ["name", "description", "version", "expectation"])
+    def test_a_label_or_typo_beside_expectations_is_refused(self, key: str) -> None:
+        # `name:` is the label the #1231 fixture carried; the rest are the next guesses.
+        with pytest.raises(ValueError, match=key):
+            parse_suite_yaml(f"{key}: x\nexpectations:\n  - name: expect_no_pii\n")
+
     def test_control_the_plain_form_still_loads(self) -> None:
         assert [e.name for e in parse_suite_yaml(_CONTROL).expectations] == ["expect_no_pii"]
 
