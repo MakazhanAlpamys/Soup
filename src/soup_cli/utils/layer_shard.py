@@ -509,6 +509,8 @@ def large_shard_path(out_dir: str, key: str) -> str:
 
 #: Written into every stripe root's per-model folder; the cache check compares it to the index.
 STRIPE_MARKER_NAME = "stripe.json"
+#: A marker Soup writes is ~250 bytes; anything past this is not one, and is not parsed.
+_MAX_STRIPE_MARKER_BYTES = 4096
 
 
 def stripe_dirs(shard_dir: str, stripe_roots: Sequence[str]) -> List[str]:
@@ -576,18 +578,32 @@ def _write_stripe_marker(
 def _stripe_marker_problem(
     directory: str, *, fingerprint: str, position: int, n_roots: int, primary: str
 ) -> Optional[str]:
-    """Why ``directory``'s marker does not describe this cache, or ``None`` when it does."""
+    """Why ``directory``'s marker does not describe this cache, or ``None`` when it does.
+
+    The marker sits on a drive outside the contained primary cache, so its content is treated
+    as untrusted: at most ``_MAX_STRIPE_MARKER_BYTES`` are read, only a JSON object is
+    compared, and the reason NEVER quotes it (it is printed to a terminal). Deep nesting is a
+    RecursionError inside ``json``, which is a miss like any other malformed marker.
+    """
     path = os.path.join(directory, STRIPE_MARKER_NAME)
     try:
-        with open(path, encoding="utf-8") as handle:
-            payload = json.load(handle)
-    except (OSError, ValueError):
+        with open(path, "rb") as handle:
+            raw = handle.read(_MAX_STRIPE_MARKER_BYTES + 1)
+    except OSError:
         return f"stripe marker {path} is missing or unreadable"
+    if len(raw) > _MAX_STRIPE_MARKER_BYTES:
+        return f"{path} is not a stripe marker Soup wrote (larger than any marker)"
+    try:
+        payload = json.loads(raw.decode("utf-8"))
+    except (ValueError, RecursionError):
+        return f"{path} is not a stripe marker Soup wrote (not valid JSON)"
+    if not isinstance(payload, dict):
+        return f"{path} is not a stripe marker Soup wrote (not a JSON object)"
     expected = _stripe_marker_payload(
         fingerprint=fingerprint, position=position, n_roots=n_roots, primary=primary
     )
     if payload != expected:
-        return f"stripe marker {path} belongs to another cache ({payload} != {expected})"
+        return f"stripe marker {path} belongs to another cache"
     return None
 
 
@@ -1002,9 +1018,10 @@ def inspect_shard_cache(
             f"({index.format_version!r} -> {_SHARD_FORMAT_VERSION!r})"
         )
     if not _same_roots(index.stripe_roots, stripe_roots):
+        # Joined plainly: a list repr doubles every Windows backslash in the printed reason.
         return None, (
-            f"stripe roots changed ({list(index.stripe_roots) or 'none'} -> "
-            f"{list(stripe_roots) or 'none'})"
+            f"stripe roots changed ({', '.join(index.stripe_roots) or 'none'} -> "
+            f"{', '.join(stripe_roots) or 'none'})"
         )
     from soup_cli.utils.stripe_roots import primary_cache_identity, stripe_folder_problem
 
@@ -1226,7 +1243,11 @@ def shard_checkpoint(
         if cached is not None:
             return cached
         if notify is not None:
-            notify(f"[yellow]Re-sharding layer cache:[/] {miss_reason}.")
+            from soup_cli.utils.terminal import for_terminal
+
+            # The reason can carry paths from the index, the variable and stripe drives: printed
+            # as text, never as markup or raw control bytes.
+            notify(f"[yellow]Re-sharding layer cache:[/] {for_terminal(miss_reason)}.")
             _notify_orphaned_stripes(resolved_out, stripe, notify)
 
     from safetensors import safe_open
@@ -1690,9 +1711,14 @@ def shard_checkpoint(
             pass
         except OSError as exc:
             if notify is not None:
+                from soup_cli.utils.terminal import for_terminal
+
+                # This branch must not raise (the shard is committed): a `[/]` in the path or
+                # the error text would otherwise be a MarkupError right here.
                 notify(
-                    f"[yellow]Could not delete the stale layer copy {stale} ({exc}); "
-                    f"the cache is complete without it — delete it to reclaim the space.[/]"
+                    f"[yellow]Could not delete the stale layer copy {for_terminal(stale)} "
+                    f"({for_terminal(exc)}); the cache is complete without it — delete it to "
+                    f"reclaim the space.[/]"
                 )
     return index
 
@@ -1721,6 +1747,7 @@ def _notify_orphaned_stripes(
     except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
         return
     from soup_cli.utils.stripe_roots import stripe_folder_problem
+    from soup_cli.utils.terminal import for_terminal
 
     for root in previous.stripe_roots:
         if any(_same_roots((root,), (kept,)) for kept in keep):
@@ -1730,7 +1757,7 @@ def _notify_orphaned_stripes(
         if stripe_folder_problem(folder, root) is not None or not os.path.isdir(folder):
             continue
         notify(
-            f"[yellow]The previous layer cache also used {folder} "
+            f"[yellow]The previous layer cache also used {for_terminal(folder)} "
             f"({_folder_bytes(folder) / 1e9:.2f} GB); this layout no longer does. Delete it "
             f"to reclaim the space.[/]"
         )

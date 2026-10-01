@@ -83,13 +83,11 @@ class TestOneEntry:
         got = validate_stripe_root(os.path.join("~", "stripe"), primary_root=primary)
         assert got == os.path.realpath(stripe)
 
+    @pytest.mark.requires_symlink
     def test_a_symlink_is_refused(self, layout, tmp_path):
         primary, stripe = layout
         link = tmp_path / "link"
-        try:
-            os.symlink(stripe, link, target_is_directory=True)
-        except (OSError, NotImplementedError):
-            pytest.skip("this account cannot create symlinks")
+        os.symlink(stripe, link, target_is_directory=True)
         with pytest.raises(StripeRootError, match="symlink"):
             validate_stripe_root(str(link), primary_root=primary)
 
