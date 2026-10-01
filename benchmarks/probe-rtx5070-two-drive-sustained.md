@@ -24,10 +24,13 @@ driver two_drive_stripe_gate.py unchanged. One process per arm.
 
 # Probe — does the two-drive speed-up hold under sustained reading? (R4)
 
-**Status: rule committed 2026-10-01, BEFORE the run. Results pending.** No arm has run and
-the striped cache §1 needs has not been rebuilt. The only executions so far are the driver's
-`--dry-run` into a scratch folder and a synthetic check of its rule code on fake arm files.
-Neither wrote anything under `results/`.
+**Status: NO VERDICT (§2 row 2), 2026-10-01.** The rule (§2) was committed in `119991f8`,
+before the run. The sequence rebuilt the striped cache and ran round 0 and round 1's STRIPED arm.
+It then stopped inside round 1's SINGLE arm, when the laptop lost AC and hibernated at 20:49 local.
+That arm is void under §4. It was not re-run, and round 2 never ran, so the rule's three rounds do
+not exist (§5.1, §6). Round 0 alone reads u_late 2.065, which is **not a verdict**. Both STRIPED
+arms had recurring stretches of 13.5-s steps, with both drives at about 2.5 GB/s; this is
+recorded, not judged (§5.7).
 
 ---
 
@@ -320,8 +323,362 @@ inputs and rows from the committed files.
 
 ## 5. Results
 
-Pending.
+One sequence ran on 2026-10-01, from worktree HEAD `119991f8`. The driver's `worktree_state`
+found `src/` and `benchmarks/harness` clean at both invocations. The sequence built the striped
+cache, ran three arms, and stopped inside the fourth. Every number below is quoted from the
+committed `sustain_*` files in `results/probe-rtx5070/two-drive/`, at three decimals unless a
+column says otherwise. Times are local (UTC+5).
+
+### 5.1 How it ran, and how it stopped
+
+- **Pre-flight, 20:08:54-20:09:16.** `soup_cli.__file__` resolved to
+  `Soup-sustain\src\soup_cli\__init__.py`. A `--dry-run` of the build plan, written into a
+  scratch folder (not `results/`), found the pre-arm check met: AC on, charging at 66%, 26.40 GiB
+  of commit headroom, GPU at 0 MiB with no compute apps. The other `python.exe` processes were a
+  merge-polling loop (gone by 20:09:41) and two editor language servers.
+- **The build.** `--plan build` was invoked at 20:09:26 and completed (§5.2). `--plan rounds
+  --settle-s 300` was invoked at 20:14:23 and settled until 20:19:23.
+- **Three arms.** Round 0's SINGLE and STRIPED arms and round 1's STRIPED arm ran back to back,
+  20:19:26-20:38:31, with no void and no pre-arm wait (§5.3).
+- **Round 1's SINGLE arm.** It started at 20:38:36. Its log ends at the last line an arm prints
+  before its timed block (`nf4 linears 560 patched for the ablation`). Its JSON holds only `meta`
+  (`started` 20:38:52) and an empty `records`, which is what an arm's JSON holds until its last
+  step.
+- **20:49:08-20:49:12, from the System log (Kernel-Power).**
+  - Event 566 at 20:49:08: session 143 to 145, `PowerStateAc=true`.
+  - Event 105 at 20:49:10: "Power source change", `AcOnline=false`.
+  - Event 42 at 20:49:12: "The system is entering sleep", `TargetState=5` and
+    `EffectiveState=5` (hibernate), `Reason=0`.
+  - The box resumed at 22:57:54-22:57:58. Kernel-General 1 records the system time moving from
+    20:49:16 to 22:57:54; Kernel-Boot 18, 25, 27, 30 and 32 record a resume through the boot
+    manager; Power-Troubleshooter 1 records the return from a low-power state.
+  - At 22:58 the box read AC 0, battery 93%.
+- **The driver did not survive the resume.**
+  - The driver ran inside a background shell of the agent running this probe. That shell had a
+    2-hour wall-clock limit counted from 20:09:26, which includes the 2 h 9 min of hibernation.
+    The limit expired on resume, and the shell and its processes were stopped.
+  - At 22:58 no `python.exe` of the driver or of the arm existed, and the GPU held 0 MiB.
+  - So the driver never took round 1 SINGLE's after stamp, never applied §4's void rule to it,
+    and never saved its samples. `sustain_driver.json` has no entry for `sustain_r1_single`, and
+    the rounds invocation has no `ended`, `outcome` or `not_run`.
+  - That arm's 1-s PDH, 2-s power and 10-s GPU samples were held in the driver's memory and are
+    lost.
+- **Round 1's SINGLE arm is void under §4, on all three of its conditions.** AC read battery
+  (20:49:10), the box was suspended (2 h 9 min), and the arm wrote no `step_plain` point. The
+  driver could not rename its files, so its JSON and log were renamed by hand to §4's name for a
+  void arm, `sustain_r1_single_void.json` / `.log`. Their content is as the arm left it.
+- **Not re-run.** §4 re-runs a void arm in its position once the pre-arm checks hold again. That
+  did not happen, for four reasons:
+  - the driver that would have done it was gone;
+  - the driver cannot resume a sequence part way: its rounds plan always starts at round 0;
+  - at 22:58 the box was on battery, which fails the pre-arm check;
+  - the peer sessions' hold on CUDA, test suites and heavy disk had ended at 21:20.
+
+  No new arm was started, on the controller's instruction. So round 1 lacks its SINGLE arm, and
+  `sustain_r2_single` and `sustain_r2_striped` never ran.
+- **After the stop.** The cache comparison ran on battery, with no arm running (§5.6).
+  `--summarize` was then run by hand, because the driver prints it only at the end of a rounds
+  invocation and it had been stopped. Its output is `sustain_summarize.log`.
+
+### 5.2 The build run (not a round)
+
+`sustain_build_striped` ran from 20:09:28 to 20:14:21, 292.6 s wall.
+
+- **Sharding: 237.617 s** (`meta.shard_seconds`). The log first prints the miss §1 predicted:
+  `Re-sharding layer cache: stripe marker
+  D:\soup-stripe\D___synth__llama-70b-shape-v32k-f4-cba3360a9c80\stripe.json is missing or
+  unreadable.` Model build took 5.800 s.
+- **Placement.** 80 `layer_roots`, exactly `i mod 2` (40 per root), and `stripe_roots
+  ['D:\\soup-stripe']`. Both roots were opened `open_direct`. `direct_io True`, `pinned True`,
+  `read_ahead 3`, `AsyncDiskSource`, staging 2398 MB pinned.
+- **The new D: folder.** `D:\soup-stripe\D___synth__llama-70b-shape-v32k-f4-cba3360a9c80` holds
+  41 entries: 40 odd layers and `stripe.json`. The marker reads `primary_cache`
+  `c:\users\user\.soup\layer-stream-striped\d___synth__llama-70b-shape-v32k-f4`, `position` 1,
+  `n_roots` 2. The old folder `D:\soup-stripe\D___synth__llama-70b-shape-v32k-f4` was not touched.
+- **Its one untimed step read 29.296 s**, with 158 + 3 loads. The gate's build step read 21.538 s.
+  This step is not a round and is not judged.
+- **During the build**, PDH saw C: written at up to 872.8 MB/s and D: at up to 394.3 MB/s. Commit
+  headroom fell to 8.977 GiB at its lowest sample (26.28 GiB at the before stamp, 26.61 GiB at the
+  after stamp).
+
+### 5.3 The timed arms, in the order they ran
+
+| run | round | arm | ran (local) | `E` (early median) | `L` (late median) | `d` = L/E | `step_s_mean` | min-max | tok/s | implied H2D GB/s | `direct_io` / `pinned` | peak alloc GB | SM MHz start->end |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| `sustain_r0_single` | 0 | SINGLE | 20:19:26-20:26:19 | **17.519** | **17.398** | 0.993 | 17.405 | 16.912-17.926 | 29.416 | 4.044 | True / True | 4.378 | 180->1297 |
+| `sustain_r0_striped` | 0 | STRIPED | 20:26:26-20:32:10 | **8.376** | **8.426** | 1.006 | 8.665 | 8.173-13.470 | 59.086 | 8.122 | True / True | 4.378 | 1417->2370 |
+| `sustain_r1_striped` | 1 | STRIPED | 20:32:15-20:38:31 | **9.295** | **8.983** | 0.966 | 9.460 | 8.221-13.546 | 54.125 | 7.440 | True / True | 4.378 | 1410->2482 |
+| `sustain_r1_single_void` | 1 | SINGLE, **void** | 20:38:36 to the hibernation at 20:49:12; stopped at the resume (§5.1) | none | none | none | none | none | none | none | True / True (`meta`) | none | none |
+| `sustain_r2_single` | 2 | SINGLE | **not run** | | | | | | | | | | |
+| `sustain_r2_striped` | 2 | STRIPED | **not run** | | | | | | | | | | |
+
+**What the three completed arms had in common:**
+
+- Every timed step moved 70,378,258,732 bytes (157 + 2 loads). Peak reserved was 4.798 GB.
+- `shard_seconds` was 0.009, 0.017 and 0.014 s, a cache hit each time. The source was
+  `AsyncDiskSource` throughout.
+- The STRIPED arms kept `layer_roots` i mod 2 over `stripe_roots ['D:\\soup-stripe']` at
+  read-ahead 3. The SINGLE arm had no stripe roots, at read-ahead 2.
+- `--summarize` finds no row-2 problem in any of the three.
+
+**The void arm.** Its `meta` reads `direct_io True`, `pinned True`, `AsyncDiskSource`,
+read-ahead 2, no stripe roots, `shard_seconds` 0.007 s. Its `started` stamp is 20:38:52. Compare
+round 0's SINGLE arm: its first timed step began 23 s after `started`, and its 21 timed steps took
+365.5 s. In the void arm, at 20:49:08 (616 s after `started`) the JSON still held no step record.
+So its 22 process steps (one warm-up and 21 timed) had either averaged more than 28.0 s each,
+against 17.405 s in round 0, or the process had stalled. Which one is not on record, because its
+samples were lost (§5.1).
+
+The per-round form the rule reads:
+
+| round | `E` SINGLE | `E` STRIPED | `u_early` | `L` SINGLE | `L` STRIPED | `u_late` |
+|---|---|---|---|---|---|---|
+| 0 | 17.519 | 8.376 | 2.092 | 17.398 | 8.426 | 2.065 |
+| 1 | void, not re-run | 9.295 | none | void, not re-run | 8.983 | none |
+| 2 | not run | not run | none | not run | not run | none |
+
+### 5.4 Every timed step, and the per-drive window rates
+
+`step_s` of every timed step, in order. The early window is steps 1-5 and the late window is the
+last 10 (§1). Each list below is early | middle | late; bold marks the slow steps of §5.7.
+
+- `sustain_r0_single` (21): 17.519, 17.632, 17.320, 17.375, 17.713 | 17.394, 17.346, 17.227,
+  17.279, 17.470, 17.162 | 17.675, 17.314, 16.912, 17.534, 17.393, 17.199, 17.298, 17.403,
+  17.926, 17.418
+- `sustain_r0_striped` (36): 8.293, 8.672, 8.298, 8.376, 8.482 | 8.278, 8.173, 8.193, 8.295,
+  8.360, 8.343, 8.632, 8.256, 8.338, 8.248, 8.447, 8.292, 8.315, 8.275, 8.426, 8.335, 8.731,
+  8.389, 8.381, 8.304, 8.351 | 8.498, 8.282, 8.354, 8.189, 8.309, 8.723, 8.337, **10.886,
+  13.470, 11.421**
+- `sustain_r1_striped` (36): **9.791, 10.292**, 9.295, 8.845, 8.421 | 8.406, 8.511, 8.844, 8.278,
+  8.290, 8.434, 8.657, 8.359, 8.318, 8.261, 8.358, 8.334, 8.314, 9.521, **13.489, 12.874**, 8.365,
+  8.221, 8.359, 8.254, **13.463** | **13.471**, 9.267, 8.699, 8.357, 8.398, 8.688, 9.589,
+  **13.546, 13.536**, 8.442
+
+Each drive's mean read rate over the two windows (§2), and its early/late ratio:
+
+| run | C: early GB/s | C: late GB/s | D: early GB/s | D: late GB/s | C: early/late | D: early/late |
+|---|---|---|---|---|---|---|
+| `sustain_r0_single` | 3.933 | 3.958 | 0.000 | 0.000 | 0.994 | none (not read) |
+| `sustain_r0_striped` | 4.029 | 3.591 | 4.040 | 3.593 | 1.122 | 1.124 |
+| `sustain_r1_striped` | 3.650 | 3.331 | 3.655 | 3.331 | 1.096 | 1.097 |
+
+### 5.5 Losses
+
+The first 21 timed steps of the two arms follow the same optimizer trajectory (§2). The losses
+of every step are in the committed JSONs.
+
+- **Cross-arm, round 0** (SINGLE minus STRIPED, steps 1-21): the absolute difference has median
+  0.006932 and maximum 0.038596 (step 3). On the first timed step it is +0.006480.
+- **Same arm, across rounds** (STRIPED round 0 minus round 1): over steps 1-21, median 0.009902
+  and maximum 0.023760 (step 20); over all 36 steps, median 0.005075. On the first timed step it
+  is +0.004231.
+- **The largest cross-arm difference exceeds the largest same-arm one** (0.038596 against
+  0.023760). In the gate it was the other way round (§5.20 there: 0.017111 inside 0.017391).
+  This record has only one cross-arm pair and one same-arm pair. It is recorded, not judged.
+- The data half of "same bytes" is settled in §5.6.
+
+### 5.6 Same bytes: the two caches compared tensor by tensor
+
+The comparison ran after the stop, 22:59:59-23:02:23, on battery and with no arm running. The
+command was §4's; the script needs no torch and no GPU. Result (`sustain_cache_compare.json`):
+**all equal**.
+
+- 83 files compared: 80 layers, `extras` and the two `large_*` files.
+- 43 of them are on C: and 40 on D:, and the D: files were read from the new
+  `-cba3360a9c80` folder.
+- 2,405 tensors and 36.388 GB, in 144 s (the gate took 132 s).
+- No safetensors file exists in striped root 0 that the single-root cache lacks. `index.json` is
+  not compared.
+
+### 5.7 Box state, the during-arm samples and the per-process capture
+
+**Power, suspend and commit.**
+
+- **AC** at every 2-s sample of the build and of the three completed arms. The battery was
+  **charging** at every stamp: battery flag 8 at the build's before stamp and 9 at every other,
+  rising from 66% before the build to 95% after round 1's STRIPED arm.
+- **No suspend in those arms.** The largest gap between power samples was 2.018-2.030 s.
+- **Commit headroom** was at least 12.083 GiB at every sample of a round arm (8.977 GiB during
+  the build), and 26.85-26.97 GiB at the round arms' before stamps.
+
+**The stamps.** GPU at 0 MiB with no compute apps, ASPM AC index 2, and `soup_cli.__file__` under
+`Soup-sustain\src`, at every stamp. The Python process count read 4 at every stamp except two:
+5 at the build's before stamp and at round 0 SINGLE's after stamp. Which process the fifth was is
+not captured.
+
+**PDH over each whole arm**, process start and teardown included:
+
+| run | C: read GB/s mean / max | D: read GB/s mean / max | C: write MB/s mean / max | D: write MB/s max | pages/s mean |
+|---|---|---|---|---|---|
+| `sustain_r0_single` | 3.674 / 4.614 | 0.000 / 0.000 | 0.53 / 23.40 | 0.00 | 685 |
+| `sustain_r0_striped` | 3.676 / 4.845 | 3.670 / 4.845 | 0.92 / 27.07 | 0.05 | 355 |
+| `sustain_r1_striped` | 3.355 / 4.836 | 3.347 / 4.780 | 3.38 / 45.49 | 0.09 | 825 |
+
+**10-s bins**, aligned to each arm's first timed step, full bins only:
+
+- `sustain_r0_single`: C: read 3.714-4.080 GB/s in all 36 bins (median 3.976). No dip.
+- `sustain_r0_striped`: C: read 3.89-4.17 GB/s and D: 3.93-4.18 GB/s in the first 28 bins. The
+  last three bins (20:31:35-20:32:05) read 2.54, 2.57 and 2.66 GB/s on C:, and 2.48, 2.58 and
+  2.70 GB/s on D:.
+- `sustain_r1_striped`: 3.32-3.60 GB/s per drive in its first three bins. Three dips, on both
+  drives at once and each reaching 2.49 GB/s on both, are listed here with the bin after each:
+  - 20:35:29-20:36:09: C: 2.97, 2.51, 2.52, 3.96 and D: 2.93, 2.49, 2.55, 3.98;
+  - 20:36:29-20:37:09: C: 3.41, 2.49, 2.58, 3.32 and D: 3.37, 2.49, 2.57, 3.36;
+  - 20:37:49-20:38:29: C: 2.84, 2.49, 2.55, 3.62 and D: 2.80, 2.49, 2.55, 3.66.
+
+  Every other bin read 3.84-4.16 GB/s per drive.
+- No bin of any arm fell to sequence 2's level (2.23 GB/s or less, gate §5.12). The lowest was
+  2.48 GB/s (D:, `sustain_r0_striped`).
+
+**The slow steps, step by step.** Each entry gives the step numbers, when they started, `step_s`,
+and C: / D: GB/s over each step:
+
+- `sustain_r0_striped` steps 34-36, from 20:31:31: 10.886, 13.470, 11.421 s. C: 3.10, 2.55, 2.90
+  and D: 3.05, 2.53, 2.95.
+- `sustain_r1_striped` steps 19-21, from 20:35:25: 9.521, 13.489, 12.874 s. C: 3.58, 2.53, 2.63
+  and D: 3.56, 2.53, 2.65.
+- `sustain_r1_striped` steps 26-28, from 20:36:34: 13.463, 13.471, 9.267 s. C: 2.55, 2.52, 3.59
+  and D: 2.54, 2.52, 3.62.
+- `sustain_r1_striped` steps 33-35, from 20:37:44: 9.589, 13.546, 13.536 s. C: 3.52, 2.53, 2.50
+  and D: 3.49, 2.53, 2.52.
+- `sustain_r1_striped` steps 1-4, from 20:32:49: 9.791, 10.292, 9.295, 8.845 s. C: 3.43, 3.32,
+  3.60, 3.89 and D: 3.47, 3.32, 3.54, 3.92. Unlike the other slow steps, these came with high
+  `% Processor Time`: 56.7-69.5% in steps 1-4, against 22.4-33.7% in steps 5 and 9-11 and
+  4.4-12.4% in the rest of the arm. C: was written at 8.7-16.2 MB/s in those four steps.
+
+What those entries share, as measured:
+
+- Every step near 13.5 s (13.463-13.546 s) read 2.50-2.55 GB/s from each drive. That is
+  70.38 GB in 13.46-13.55 s, 5.20-5.23 GB/s for the two drives together.
+- Every STRIPED step not listed above read 3.78-4.21 GB/s per drive.
+- The first slow stretch began 4 min 36 s after round 0 STRIPED's first timed step. In round 1
+  the stretches began 69 and 70 s apart (20:35:25, 20:36:34, 20:37:44).
+- In those stretches (not counting round 1's steps 1-4), `% Processor Time` read 4.4-7.8% and C:
+  writes 0.2-3.9 MB/s, in line with the neighbouring steps.
+- The SINGLE arm, which read C: alone for 6 min 5 s before round 0's STRIPED arm, had no slow
+  step: 16.912-17.926 s, and 3.83-4.06 GB/s per step.
+- **Stated as reasoning, not measured:** in a STRIPED step the reader takes layers from the two
+  drives alternately, so one slow drive would hold back both drives' rates. These counters
+  therefore cannot say which drive, if either, slowed first.
+
+**GPU (10-s `nvidia-smi`).**
+
+- `sustain_r0_single`: SM 180-1702 MHz, 47-71 °C, 3.9-91.3 W.
+- `sustain_r0_striped`: SM 255-2542 MHz, 55-84 °C, up to 124.3 W.
+- `sustain_r1_striped`: SM 270-2527 MHz, 56-85 °C, up to 121.3 W.
+- The throttle-reason field read `0x0000000000000004` or `0x0000000000000400` in every sample of
+  every arm, the SINGLE arm included.
+- The 10 samples taken during the steps of 12.8 s or more read SM 922-1875 MHz, 52.2-87.1 W and
+  67-75 °C. Recorded, not interpreted.
+
+**Top readers, from the after stamps.** No capture failed. No process other than the driver read
+1 GB or more in any arm, so the foreign-reader void never fired. The largest reader per arm:
+
+- build: `chrome.exe` (17648), 834.7 MB, below the threshold;
+- `sustain_r0_single`: `svchost.exe` (16716), 150.9 MB, then `msedgewebview2.exe`, 125.2 MB;
+- `sustain_r0_striped`: `codex.exe`, 133.1 MB;
+- `sustain_r1_striped`: `codex.exe`, 76.9 MB. That arm's list also holds three processes new
+  during it: `MoUsoCoreWorker.exe` (59.9 MB), `svchost.exe` (22280, 46.4 MB) and `audiodg.exe`.
+
+The full lists are in `sustain_box_state.log`. The capture names survivors only: a process that
+started and exited inside an arm is in neither stamp.
+
+**System log, 20:09-20:49.** Before the 20:49:08 sequence (§5.1), the System log holds only:
+
+- Kernel-Power 566 at 20:22:34 (session 142 to 143), during round 0's SINGLE arm.
+- Windows Update events during round 1's STRIPED steps 26-31:
+  - downloads started at 20:36:39, inside step 26, which is in the second slow stretch;
+  - two Store app updates (OpenAI Codex, WhatsApp) each started and failed with 0x80073D02, at
+    20:36:41-20:36:42 and 20:37:30-20:37:31.
+
+  The other two slow stretches have no event.
+- Kernel-General 16 at 20:37:27 (a registry hive's access history).
+- No disk, storage, NTFS, thermal or power-source event before 20:49:10.
+
+### 5.8 Anomalies, as measured
+
+1. **STRIPED read faster than in the gate.**
+   - This sequence: early medians 8.376 and 9.295 s, means 8.665 and 9.460 s, against the gate's
+     sequence-4 means of 9.929-10.050 s. Per drive it read about 3.8-4.2 GB/s in the steps that
+     did not slow, against the gate's 3.15-3.47 GB/s bins.
+   - The SINGLE arm read as in the gate: 17.405 s, against 17.431-17.552 s. So round 0's ratios
+     (`u_early` 2.092, `u_late` 2.065) sit above the gate's 1.746-1.756x.
+   - The code under test is not the gate's. Between the gate's `f798c46e` and `2c6ed087`,
+     `git diff --stat` shows changes to `utils/async_disk_source.py`, `utils/layer_shard.py`,
+     `utils/layer_stream.py`, `utils/layer_stream_runtime.py`, `utils/stripe_roots.py` and
+     `trainer/stream_setup.py`. The striped cache was also rebuilt into a new D: folder.
+     `benchmarks/harness/stream_probe.py` is unchanged between the two commits; `6ee60ce0` then
+     added only the per-step `started_unix`.
+   - Which of these, if any, explains the faster STRIPED steps is not established here.
+2. **Recurring slow steps in both STRIPED arms** (§5.7). They began 4 min 36 s into round 0's
+   STRIPED steps and recurred about every 70 s in round 1, at 13.46-13.55 s a step with both
+   drives at 2.50-2.55 GB/s. The cause is not established. The drives' temperature cannot be read
+   on this box (§3).
+3. **Round 1 STRIPED's first four steps were slow, with high CPU** (56.7-69.5%) and C: writes
+   (§5.7). The new processes in that arm's capture were `MoUsoCoreWorker.exe`, `svchost.exe`
+   (22280) and `audiodg.exe`.
+4. **Round 1's SINGLE arm never finished.** At 20:49:08 it was 616 s past its `started` stamp
+   with no step record (§5.3). Either it averaged more than 28.0 s per process step, or it had
+   stalled. It is void, and its samples are lost.
+5. **The box lost AC and hibernated** at 20:49:10-20:49:12 (Kernel-Power 105 `AcOnline=false`,
+   then 42 `Reason=0`), against §4's "The laptop stays plugged in with the lid open". The driver
+   was then stopped by the agent's 2-hour shell limit, which counted the hibernation (§5.1). That
+   second failure is in this probe's method, not in the box: the sequence could not continue on
+   resume even if AC had returned.
+6. **Activity by another agent of the same session, disclosed by the controller.** That agent was
+   writing a different rule in another worktree (`Soup-r2`). It ran two driver dry-runs and
+   sampler tests between about 20:13 and 20:17, and one `import bitsandbytes` at about 20:31
+   (possibly a brief CUDA context). All of it was read-only, with no GPU work and no large disk
+   reads.
+   - 20:13-20:17 falls in the build's last minute (the build ended at 20:14:21) and in the
+     settle (to 20:19:23), not in a timed arm.
+   - About 20:31 falls in round 0's STRIPED arm. That arm's step 34 began at 20:31:31, and its
+     last three steps (20:31:31-20:32:07) are its only slow ones.
+   - What that arm's records show: its stamps read 4 Python processes before and after. Its
+     per-process capture names nobody above 133.1 MB, and it cannot see a process that started
+     and exited inside the arm. Its CPU samples in those steps read 7.0-7.7%, like its other
+     steps.
+   - The same slow-step shape recurs three times in round 1's STRIPED arm, for which no activity
+     was disclosed.
+   - Nothing was voided for it. §4 voids an arm on battery power, a suspend, no `step_plain`
+     point or a foreign reader of 1 GB or more, and none of these fired in that arm.
+7. **The build's untimed step read 29.296 s**, against the gate build's 21.538 s. It is not
+   judged.
+8. **The battery charged** from 66% to 95% over the build and the three arms, as it did in the
+   gate's sequence 4 (gate §7).
 
 ## 6. Verdict
 
-Pending.
+**NO VERDICT (row 2).** The rule reads three complete rounds, and only round 0 is complete.
+
+| row | inputs | result |
+|---|---|---|
+| 1: any SINGLE arm's `E` outside 15.0-21.5 s | round 0: 17.519 s. Rounds 1 and 2 have no valid SINGLE arm | does not fire |
+| 2: an arm off the path under test, or the protocol stopped | The three completed arms show no problem: `direct_io` / `pinned` True, `AsyncDiskSource`, read-ahead 2 / 3, i mod 2 over `D:\soup-stripe` / no stripe roots, 157 + 2 loads in every timed step, `shard_seconds` 0.009-0.017 s. The protocol stopped: round 1's SINGLE arm is void (AC lost, suspended, no `step_plain` point) and was not re-run, and round 2 did not run. `--summarize`: "no valid arm: ['r1 SINGLE', 'r2 SINGLE', 'r2 STRIPED']; protocol: not finished" | **fires: NO VERDICT** |
+| 3: `u_late` >= 1.595 in every round | none | not reached |
+| 4: `u_late` >= 1.20 in every round | none | not reached |
+| 5: anything else | none | not reached |
+
+**Why row 2 applies to this stop.** Row 2 names two ways the protocol can stop: a position void
+twice, or an expired pre-arm wait. This stop is neither. It is a void that was never re-run,
+because the driver was gone. Its effect is the one the row names, "some round lacks an arm", and
+rows 3-5 read every round. `--summarize` applies it the same way: any outcome other than
+`complete` fires row 2.
+
+**What round 0 alone reads. This is NOT a verdict and cannot stand in for one.**
+
+- `u_early(0)` = 17.519 / 8.376 = 2.092, and `u_late(0)` = 17.398 / 8.426 = 2.065. Taken alone,
+  that is above row 3's 1.595.
+- `d` is 0.993 for SINGLE and 1.006 for STRIPED; neither is above the 1.080 label.
+- Round 0 STRIPED's window rates fell from 4.029 to 3.591 GB/s on C: and from 4.040 to
+  3.593 GB/s on D:. Those early/late ratios, 1.122 and 1.124, are above the 1.10 label, which
+  names drives only in a DEGRADES verdict.
+- Round 0 STRIPED's late median includes its three slow steps (10.886, 13.470, 11.421 s), three
+  of the ten.
+- Round 1's STRIPED arm (`E` 9.295 s, `L` 8.983 s) has no SINGLE partner, so it gives no ratio.
+- The arm that would have tested the rule's second note — a SINGLE arm whose early window starts
+  after 12 minutes of striped reading — is the one that did not finish.
+
+A verdict needs a complete new sequence: a new `--run-prefix`, on AC with the lid open, with the
+driver in a process that no tool time limit can stop part way. Whether and when to run it is the
+owner's call. The cache this sequence built is reusable as is (§5.2, §5.6).
