@@ -8,11 +8,12 @@ drop a ``-1``: it builds ``mask = rank == 0``, so every such pair trained as
 the judge server down, a whole run learned arbitrary labels and finished
 normally.
 
-These tests run the REAL wrapper and the REAL trl trainer on
-``hf-internal-testing/tiny-random-gpt2`` on CPU. The generated tokens are
-captured once and replayed, so two steps that differ only in the judge's ranks
-see identical completions, and the LoRA ``B`` matrices are moved off zero so
-the policy differs from the reference and every pair has its own loss.
+These tests run the REAL wrapper and the REAL trl trainer on a tiny,
+randomly-initialised GPT-2 built locally (``tests/_tiny_hf_models.py``, #1356
+-- no download) on CPU. The generated tokens are captured once and replayed,
+so two steps that differ only in the judge's ranks see identical
+completions, and the LoRA ``B`` matrices are moved off zero so the policy
+differs from the reference and every pair has its own loss.
 """
 
 from __future__ import annotations
@@ -130,51 +131,14 @@ class _Ranked:
         return 0 if len(resp_a) >= len(resp_b) else 1
 
 
-_LOCAL_BASE_DIR: str | None = None
-
-
-def _local_base_model_dir() -> str:
-    """A tiny GPT-2 + tokenizer built locally once per session (no download),
-    standing in for hf-internal-testing/tiny-random-gpt2 -- #1356 found every
-    one of this file's real-trainer tests pulling it from the Hub for nothing
-    these tests check depends on real pretrained weights."""
-    global _LOCAL_BASE_DIR
-    if _LOCAL_BASE_DIR is not None:
-        return _LOCAL_BASE_DIR
-    import tempfile
-
-    from tokenizers import ByteLevelBPETokenizer
-    from transformers import GPT2Config, GPT2LMHeadModel, PreTrainedTokenizerFast
-
-    bpe = ByteLevelBPETokenizer()
-    bpe.train_from_iterator(
-        list(_PROMPTS) + ["the quick brown fox jumps"],
-        vocab_size=300,
-        min_frequency=1,
-        special_tokens=["<|endoftext|>"],
-    )
-    tok = PreTrainedTokenizerFast(
-        tokenizer_object=bpe,
-        eos_token="<|endoftext|>",
-        bos_token="<|endoftext|>",
-        pad_token="<|endoftext|>",
-    )
-    config = GPT2Config(vocab_size=len(tok), n_positions=128, n_embd=32, n_layer=2, n_head=4)
-    model = GPT2LMHeadModel(config)
-    out_dir = tempfile.mkdtemp(prefix="soup-test-tiny-gpt2-")
-    model.save_pretrained(out_dir)
-    tok.save_pretrained(out_dir)
-    _LOCAL_BASE_DIR = out_dir
-    return out_dir
-
-
 def _build(path, monkeypatch, evaluator, *, batch_size=4, n_prompts=4, extra=""):
     """The real wrapper, set up on the tiny model, writing under ``path / "out"``."""
     import soup_cli.trainer.online_dpo as od
     from soup_cli.config.loader import load_config_from_string
+    from tests._tiny_hf_models import tiny_model_dir
 
     monkeypatch.setattr(od, "_ONLINE_DPO_JUDGE_OVERRIDE", evaluator)
-    base_dir = pathlib.Path(_local_base_model_dir()).as_posix()
+    base_dir = pathlib.Path(tiny_model_dir("gpt2")).as_posix()
     cfg = load_config_from_string(
         f"base: {base_dir}\n"
         "task: online_dpo\n"

@@ -25,45 +25,16 @@ from soup_cli.cli import app
 from soup_cli.commands.train import UNSUPPORTED_RESUME_TASKS
 from tests._windows_ci import skip_on_windows_ci
 
-_LOCAL_BASE_DIR: str | None = None
-
 
 def _local_base_model_dir() -> str:
-    """A tiny Llama causal LM + tokenizer built locally once per session (no
-    download), standing in for hf-internal-testing/tiny-random-LlamaForCausalLM
-    -- #1356 found these resume/checkpoint tests pulling it from the Hub for
-    nothing they check depends on real pretrained weights."""
-    global _LOCAL_BASE_DIR
-    if _LOCAL_BASE_DIR is not None:
-        return _LOCAL_BASE_DIR
-    import tempfile
+    """A tiny Llama causal LM + tokenizer built locally (no download),
+    standing in for hf-internal-testing/tiny-random-LlamaForCausalLM -- #1356
+    found these resume/checkpoint tests pulling it from the Hub for nothing
+    they check depends on real pretrained weights. Shared and cached across
+    every file that needs one (tests/_tiny_hf_models.py)."""
+    from tests._tiny_hf_models import tiny_model_dir
 
-    from tokenizers import ByteLevelBPETokenizer
-    from transformers import LlamaConfig, LlamaForCausalLM, PreTrainedTokenizerFast
-
-    bpe = ByteLevelBPETokenizer()
-    bpe.train_from_iterator(
-        ["hi there friend", "hello world", "the quick brown fox"],
-        vocab_size=300,
-        min_frequency=1,
-        special_tokens=["<eos>"],
-    )
-    tok = PreTrainedTokenizerFast(tokenizer_object=bpe, eos_token="<eos>", pad_token="<eos>")
-    config = LlamaConfig(
-        hidden_size=32,
-        intermediate_size=64,
-        num_hidden_layers=2,
-        num_attention_heads=4,
-        num_key_value_heads=2,
-        vocab_size=len(tok),
-        max_position_embeddings=128,
-    )
-    model = LlamaForCausalLM(config)
-    out_dir = tempfile.mkdtemp(prefix="soup-test-tiny-llama-")
-    model.save_pretrained(out_dir)
-    tok.save_pretrained(out_dir)
-    _LOCAL_BASE_DIR = out_dir
-    return out_dir
+    return tiny_model_dir("llama")
 
 
 def _strip_ansi(text: str) -> str:

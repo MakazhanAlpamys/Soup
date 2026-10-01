@@ -38,45 +38,18 @@ from soup_cli.utils.agent_forge import (
 )
 from tests.conftest import strip_ansi
 
-_LOCAL_BASE_DIR: str | None = None
-
 
 def _local_base_model_dir() -> str:
-    """A tiny Llama causal LM + tokenizer built locally once per session (no
-    download), standing in for hf-internal-testing/tiny-random-LlamaForCausalLM
-    -- #1356 found this pulling it from the Hub for a dry-run plan and a
-    tokenizer whose chat_template gets overwritten immediately after load."""
-    global _LOCAL_BASE_DIR
-    if _LOCAL_BASE_DIR is not None:
-        return _LOCAL_BASE_DIR
-    import tempfile
+    """A tiny Llama causal LM + tokenizer built locally (no download),
+    standing in for hf-internal-testing/tiny-random-LlamaForCausalLM -- #1356
+    found this pulling it from the Hub for a dry-run plan and a tokenizer
+    whose chat_template gets overwritten immediately after load. Shared and
+    cached across every file that needs one (tests/_tiny_hf_models.py)."""
+    from tests._tiny_hf_models import tiny_model_dir
 
-    from tokenizers import ByteLevelBPETokenizer
-    from transformers import LlamaConfig, LlamaForCausalLM, PreTrainedTokenizerFast
+    return tiny_model_dir("llama")
 
-    bpe = ByteLevelBPETokenizer()
-    bpe.train_from_iterator(
-        ["hi there friend", "hello world", "the quick brown fox"],
-        vocab_size=300,
-        min_frequency=1,
-        special_tokens=["<eos>"],
-    )
-    tok = PreTrainedTokenizerFast(tokenizer_object=bpe, eos_token="<eos>", pad_token="<eos>")
-    config = LlamaConfig(
-        hidden_size=32,
-        intermediate_size=64,
-        num_hidden_layers=2,
-        num_attention_heads=4,
-        num_key_value_heads=2,
-        vocab_size=len(tok),
-        max_position_embeddings=128,
-    )
-    model = LlamaForCausalLM(config)
-    out_dir = tempfile.mkdtemp(prefix="soup-test-tiny-llama-")
-    model.save_pretrained(out_dir)
-    tok.save_pretrained(out_dir)
-    _LOCAL_BASE_DIR = out_dir
-    return out_dir
+
 _WEATHER_TOOL = {
     "type": "function",
     "function": {

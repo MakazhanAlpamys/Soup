@@ -149,19 +149,12 @@ def _tiny_tokenizer():
     """A byte-level BPE tokenizer trained locally (no download), standing in
     for the SmolLM2 tokenizer that #1356 found these tests pulling from the
     Hub just for len(tok) and a save/reload round-trip -- not its English
-    vocabulary. Mirrors _write_tiny_qwen2's tokenizer in
-    test_issue1241_shrink_per_layer_config.py."""
-    from tokenizers import ByteLevelBPETokenizer
-    from transformers import PreTrainedTokenizerFast
+    vocabulary. ``_tiny_llama`` here takes a variable ``layers`` per test
+    (shrink prunes a specific layer count), so only the tokenizer is shared
+    (tests/_tiny_hf_models.py); the model stays file-local."""
+    from tests._tiny_hf_models import build_tokenizer
 
-    bpe = ByteLevelBPETokenizer()
-    bpe.train_from_iterator(
-        ["hi there friend", "hello world", "the quick brown fox"],
-        vocab_size=300,
-        min_frequency=1,
-        special_tokens=["<eos>"],
-    )
-    return PreTrainedTokenizerFast(tokenizer_object=bpe, eos_token="<eos>", pad_token="<eos>")
+    return build_tokenizer()
 
 
 class TestPrune:
