@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import unicodedata
 from typing import Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator
@@ -199,8 +200,14 @@ class Manifest(BaseModel):
     @field_validator("author")
     @classmethod
     def _clean_author(cls, value: str) -> str:
-        if "\x00" in value or "\n" in value or "\r" in value:
-            raise ValueError("author must not contain null bytes or newlines")
+        # Category Cc is C0 (NUL, TAB, LF, CR, ESC, ...), DEL and C1. An author
+        # handle has no use for any of them, and the field is printed whenever
+        # a can is inspected or run.
+        if any(unicodedata.category(ch) == "Cc" for ch in value):
+            raise ValueError(
+                "author must not contain control characters "
+                "(null bytes, newlines, tabs, ESC, DEL or C1 controls)"
+            )
         return value
 
     @field_validator("created_at")
