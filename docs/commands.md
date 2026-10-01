@@ -347,7 +347,7 @@ soup local-rl status --db <path>              Print interactions / thumbs-up / t
 soup local-rl record --db <path> --prompt <q> --response <r> --thumb up|down  Append thumbs record
 soup local-rl harvest --db <path> -o <pairs.jsonl>  Harvest DPO pairs from thumbs into JSONL
 soup local-rl train --db <path> --model <id> --once [--train-method dpo|kto|orpo] [--min-pairs N] [-o <dir>]  Ad-hoc DPO/KTO/ORPO train from harvested thumbs — live (v0.71.13)
-soup local-rl train --db <path> --model <id> [--scheduler-dir <dir>] [--hour H] [--minute M]  Render a systemd/launchd nightly-train scaffold (no --once) (v0.71.13)
+soup local-rl train --db <path> --model <id> [--scheduler-dir <dir>] [--hour H] [--minute M] [--train-method dpo|kto|orpo] [--min-pairs N] [-o <dir>]  Render a systemd/launchd nightly-train scaffold (no --once) that runs `--once` with the same flags (v0.71.13)
 soup build <manifest.yaml> [--dry-run] [--output-dir <dir>]  dbt-for-SFT DAG: validate + plan + live materialise (v0.69.0; live v0.71.6)
 soup expect <data.jsonl> <suite.yaml>         Expectations suite: PII / token-length / refusal / judge (v0.69.0)
 soup data gen-magpie --base <m> --provider ollama|vllm --target N --output <jsonl> [--base-url <url>] [--quality-filter]  Magpie synthetic generator — live (v0.69.0; live v0.71.6)
