@@ -77,8 +77,14 @@ def _current_uid() -> int:
 
 
 def _open_dir_no_follow(path: str) -> int:
-    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
-    return os.open(path, flags)
+    """Open ``path`` as a folder, refusing a symlink there (``O_NOFOLLOW`` applied at open).
+
+    Goes through the shared ``open_no_follow`` helper (#820) rather than spelling the flag here,
+    so the repo-wide ratchet on bare ``O_NOFOLLOW`` sites does not grow.
+    """
+    from soup_cli.utils.paths import open_no_follow
+
+    return open_no_follow(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
 
 
 def _posix_create_dir(path: str) -> bool:
