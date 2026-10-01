@@ -22,6 +22,7 @@ Validated on SmolLM2-135M (RTX 3050 4 GB). Heavy imports (torch / transformers
 from __future__ import annotations
 
 import json
+import math
 import os
 import stat
 import time
@@ -240,8 +241,6 @@ class UnlearnTrainerWrapper:
                 "retain_set; general capability is unanchored. Supply "
                 "data.retain_set to preserve utility."
             )
-
-        import math
 
         batch_size = tcfg.batch_size
         if batch_size == "auto":

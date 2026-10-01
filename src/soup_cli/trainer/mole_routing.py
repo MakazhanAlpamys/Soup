@@ -17,6 +17,7 @@ project policy — ``python -m soup_cli.cli --help`` must not pull torch.
 from __future__ import annotations
 
 import logging
+import math
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Optional
@@ -426,8 +427,6 @@ class MoleRoutingTrainerWrapper:
             )
             console.print(f"[green]Auto batch size (MoLE):[/] {batch_size}")
         bs = int(batch_size)
-        import math
-
         total_steps = math.ceil(
             len(train_rows) / bs / tcfg.gradient_accumulation_steps
         ) * tcfg.epochs

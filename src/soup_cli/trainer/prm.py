@@ -17,6 +17,7 @@ per project policy — ``python -m soup_cli.cli --help`` must not pull torch.
 from __future__ import annotations
 
 import logging
+import math
 import time
 from functools import lru_cache
 from pathlib import Path
@@ -341,8 +342,6 @@ class PRMTrainerWrapper:
             )
             console.print(f"[green]Auto batch size (PRM):[/] {batch_size}")
         bs = int(batch_size)
-        import math
-
         total_steps = math.ceil(
             len(train_rows) / bs / tcfg.gradient_accumulation_steps
         ) * tcfg.epochs

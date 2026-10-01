@@ -7,6 +7,7 @@ clipped surrogate objectives with a KL penalty against a frozen reference model.
 Full RLHF pipeline:  SFT → Reward Model → PPO
 """
 
+import math
 import os
 import time
 from pathlib import Path
@@ -254,8 +255,6 @@ class PPOTrainerWrapper:
             ppo_kwargs.update(self.fsdp_config)
 
         ppo_params = inspect.signature(ppo_config_cls).parameters
-
-        import math
 
         total_steps = math.ceil(
             len(train_ds) / batch_size / tcfg.gradient_accumulation_steps
