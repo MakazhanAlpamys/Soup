@@ -710,17 +710,21 @@ def _generate_openai(
 
     base_url = api_base or "https://api.openai.com/v1"
 
-    # Validate api_base to prevent SSRF (block non-HTTPS remote URLs)
+    # Validate api_base to prevent SSRF (block non-HTTPS remote URLs and
+    # private / link-local / reserved IP literals; 0.0.0.0 is not loopback)
     if api_base:
         from urllib.parse import urlparse
 
+        from soup_cli.utils.net_guard import LOOPBACK_HOSTS, refuse_private_ip_literal
+
         parsed = urlparse(api_base)
-        is_local = parsed.hostname in ("localhost", "127.0.0.1", "::1", "0.0.0.0")
+        is_local = parsed.hostname in LOOPBACK_HOSTS
         if not is_local and parsed.scheme != "https":
             raise ValueError(
                 f"api_base must use HTTPS for remote APIs (got {parsed.scheme}://). "
                 "HTTP is only allowed for localhost."
             )
+        refuse_private_ip_literal(parsed.hostname, label="api_base")
 
     if generation_prompt is None:
         generation_prompt = _build_generation_prompt(prompt, count, fmt, seed_examples)
@@ -849,21 +853,25 @@ def _generate_server(
 
     base_url = api_base or "http://localhost:8000/v1"
 
-    # Validate api_base to prevent SSRF — only allow http/https, block remote non-HTTPS
+    # Validate api_base to prevent SSRF — only allow http/https, block remote
+    # non-HTTPS and private / link-local / reserved IP literals
     if api_base:
         from urllib.parse import urlparse
+
+        from soup_cli.utils.net_guard import LOOPBACK_HOSTS, refuse_private_ip_literal
 
         parsed = urlparse(api_base)
         if parsed.scheme not in ("http", "https"):
             raise ValueError(
                 f"api_base must use HTTP or HTTPS scheme (got {parsed.scheme}://)"
             )
-        is_local = parsed.hostname in ("localhost", "127.0.0.1", "::1", "0.0.0.0")
+        is_local = parsed.hostname in LOOPBACK_HOSTS
         if not is_local and parsed.scheme != "https":
             raise ValueError(
                 f"api_base must use HTTPS for remote APIs (got {parsed.scheme}://). "
                 "HTTP is only allowed for localhost."
             )
+        refuse_private_ip_literal(parsed.hostname, label="api_base")
 
     # Strip trailing /v1 if present (we add it to the endpoint path)
     base_url = base_url.rstrip("/")

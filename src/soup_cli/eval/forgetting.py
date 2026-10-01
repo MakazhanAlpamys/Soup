@@ -10,6 +10,8 @@ import re
 from dataclasses import dataclass
 from typing import Callable, Literal, Optional, Tuple
 
+from soup_cli.utils.final_answer import iter_boxed_answers
+
 MiniBenchmark = list[dict[str, str]]
 
 
@@ -42,15 +44,15 @@ _CUE_RE = re.compile(
 # Parenthesised choice marker: "(B)" or "B)".
 _PAREN_RE = re.compile(r"(?<![A-Za-z0-9])\(?([A-Ja-j])\)(?![A-Za-z0-9])")
 # LaTeX ``\boxed{C}`` — how a reasoning-tuned model states its final answer.
-# Mirrors ``trainer/rewards._extract_answer``'s boxed regex, but this is an
-# OPTION-LETTER tier and deliberately narrower: it fires only when the box holds
-# a single A–J letter. ``\boxed{4}`` is the model answering with a VALUE, and
+# Read through ``utils.final_answer``'s shared scan instead of a local regex: the
+# box counts as an OPTION LETTER when the scan's normalised content is a single
+# A–J letter, which keeps this tier and the reward parser on one reading of the
+# same box (they diverged once: ``\boxed{B.}`` and ``\boxed{**B**}`` read C here
+# and B there, #1347). The scan also allows whitespace between the command and
+# its brace, so the spaced spelling ``\boxed {A}`` scores — the same #357 defect,
+# one space to the left. ``\boxed{4}`` is the model answering with a VALUE, and
 # reading that as "option 4" would be a wrong credit rather than a repair — the
 # prompt is what has to change there (see ``_MCQ_ANSWER_CUE``). #357.
-# The ``\s*`` after ``\boxed`` matters: LaTeX permits whitespace between the
-# command and its brace and models emit it (``\boxed {A}``), so without it the
-# spaced spelling scores zero — the same #357 defect, one space to the left.
-_BOXED_LETTER_RE = re.compile(r"\\boxed\s*\{\s*([A-Ja-j])\s*\}")
 # Bare standalone UPPERCASE letter that TERMINATES a clause — i.e. followed by
 # end-of-string or sentence punctuation, not by more words. Requiring upper-case
 # skips the lower-case article "a"/"an", and the terminating look-ahead skips a
@@ -121,7 +123,11 @@ def extract_mcq_letter(output: str) -> Optional[str]:
         return None
     output = output[:_MAX_SCORE_OUTPUT]
     latest: Optional[Tuple[int, str]] = None
-    for regex in (_BOXED_LETTER_RE, _CUE_RE, _PAREN_RE):
+    for box in iter_boxed_answers(output):
+        letter = box.answer.upper()
+        if len(letter) == 1 and letter in _MCQ_OPTIONS and (latest is None or box.end > latest[0]):
+            latest = (box.end, letter)
+    for regex in (_CUE_RE, _PAREN_RE):
         for match in regex.finditer(output):
             if latest is None or match.end() > latest[0]:
                 latest = (match.end(), match.group(1))
@@ -310,18 +316,31 @@ MINI_ARITHMETIC: MiniBenchmark = [
     {"question": "What is 10 percent of 200?", "answer": "20"},
     {"question": "What is 16 + 25?", "answer": "41"},
     {"question": "What is 90 divided by 3?", "answer": "30"},
-    {"question": "What is 7 times 6?", "answer": "42"},
-    {"question": "What is 50 + 50?", "answer": "100"},
-    {"question": "What is 13 - 7?", "answer": "6"},
-    {"question": "What is 4 times 25?", "answer": "100"},
-    {"question": "What is 18 + 24?", "answer": "42"},
-    {"question": "What is 64 divided by 8?", "answer": "8"},
-    {"question": "What is 9 times 8?", "answer": "72"},
-    {"question": "What is 1000 - 1?", "answer": "999"},
-    {"question": "What is 3 cubed?", "answer": "27"},
-    {"question": "What is 40 + 60?", "answer": "100"},
-    {"question": "What is 21 divided by 7?", "answer": "3"},
-    {"question": "What is 12 times 12?", "answer": "144"},
+    # #1192 — the 24 single-step rows above put a capable model at 1.000
+    # (Qwen2.5-7B-Instruct, 36/36 in the #1111 gate record),
+    # so the suite could not see a numeracy regression. The rows below are
+    # multi-step or large-operand; no answer appears as a token in its own
+    # question, so echoing the prompt cannot score.
+    {"question": "What is 47 times 38?", "answer": "1786"},
+    {"question": "What is 1234 times 56?", "answer": "69104"},
+    {"question": "What is 7 + 3 times 4 - 6 divided by 2?", "answer": "16"},
+    {"question": "A shirt costs 80 dollars. It is discounted by 25 percent, then the "
+                 "discounted price is raised by 25 percent. What is the final price "
+                 "in dollars?", "answer": "75"},
+    {"question": "What is 2 to the power of 15?", "answer": "32768"},
+    {"question": "What is the remainder when 2024 is divided by 37?", "answer": "26"},
+    {"question": "How many seconds are in 3 days?", "answer": "259200"},
+    {"question": "What is 999 times 999?", "answer": "998001"},
+    {"question": "What is the sum of all the whole numbers from 1 to 250?", "answer": "31375"},
+    {"question": "What is 17 squared minus 13 squared?", "answer": "120"},
+    {"question": "A train leaves at 9:47 and arrives at 14:12 the same day. How many "
+                 "minutes long is the trip?", "answer": "265"},
+    {"question": "What is 15 percent of 15 percent of 4000?", "answer": "90"},
+    {"question": "What is 123456789 divided by 9?", "answer": "13717421"},
+    {"question": "What is the least common multiple of 18, 24 and 40?", "answer": "360"},
+    {"question": "What is 3/8 plus 5/12, as a fraction in lowest terms?", "answer": "19/24"},
+    {"question": "How many times is the digit 7 written when you write out every whole "
+                 "number from 1 to 100?", "answer": "20"},
 ]
 
 MINI_BENCHMARKS: dict[str, MiniBenchmark] = {

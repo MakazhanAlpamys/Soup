@@ -586,7 +586,9 @@ config asked" from "the path was wrong" -- a missing `adapter_config.json`, a
 missing `--config` and a path outside the working directory all exit `1`.
 This follows `soup ship` / `soup shrink` (0 pass / 2 failed gate / 1 error)
 rather than the older `adapters scan`, which predates that convention.
-`unknown` rows exit `0`.
+`unknown` rows exit `0`.  For GRPO runs, any non-zero `nan_skip_fraction`
+reads as `DIVERGED` (exit 2); even a single skipped step out of thousands is
+surfaced so the user can decide whether it matters.
 
 Strings in `adapter_config.json` are untrusted -- an adapter can be downloaded
 -- so record-derived text is stripped of ANSI/OSC control bytes and escaped

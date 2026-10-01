@@ -239,6 +239,18 @@ def export(
         )
         raise typer.Exit(1)
 
+    # --- Resolve and create the destination before any merge/convert work ---
+    # #1445 — a missing output parent used to surface as FileNotFoundError
+    # from mkdtemp AFTER an adapter was merged, and the cleanup then deleted
+    # the merged model. Create the parent up front (what ``_run_convert``
+    # already did for the f16 path) so no finished work is discarded.
+    model_name = Path(model).name
+    if output:
+        output_path = Path(output)
+    else:
+        output_path = Path(model).parent / f"{model_name}.{quant}.gguf"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
     # --- Check if LoRA adapter (needs merge first) ---
     adapter_config_path = model_path / "adapter_config.json"
     is_adapter = adapter_config_path.exists()
@@ -269,12 +281,6 @@ def export(
     _install_convert_deps()
 
     # --- Convert to GGUF ---
-    model_name = Path(model).name
-    if output:
-        output_path = Path(output)
-    else:
-        output_path = Path(model).parent / f"{model_name}.{quant}.gguf"
-
     console.print(
         Panel(
             f"Model:  [bold]{model_path}[/]\n"

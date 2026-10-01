@@ -6,7 +6,10 @@ import json
 import math
 import os
 import re
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
+
+if TYPE_CHECKING:
+    import torch
 
 # A safetensors file starts with a u64 little-endian header length, then a
 # JSON header carrying each tensor's dtype + shape. Reading it costs a few
@@ -95,6 +98,68 @@ def resolve_device_map(device: str):
         return {"": int(local_rank)}
     except (TypeError, ValueError):
         return "auto"
+
+
+def resolve_inference_device_map_and_dtype(
+    device: Optional[str],
+) -> tuple[str | dict, "torch.dtype"]:
+    """Map an inference ``--device`` value to ``from_pretrained`` kwargs (#1443).
+
+    ``infer.py``, ``chat.py`` and ``diff.py`` each accept a ``device`` argument
+    (explicit ``--device`` flag, or auto-detected via :func:`detect_device`)
+    but used to hard-code ``device_map="auto", torch_dtype=torch.float16`` on
+    every ``from_pretrained`` call regardless of it. ``device_map="auto"``
+    lets ``accelerate`` place the model on any visible accelerator, which is
+    exactly wrong when the user asked for the CPU on purpose (to leave VRAM
+    free for a training job, or because the model does not fit on the GPU).
+
+    This lives next to :func:`resolve_device_map` because both decide what a
+    device string becomes for ``device_map=``, but they answer different
+    questions and must not be merged: :func:`resolve_device_map` pins one
+    *rank* of a ``torchrun`` / ``accelerate launch`` training job by reading
+    ``LOCAL_RANK`` / ``WORLD_SIZE`` from the environment. There is no rank
+    here — only the single device the user named or auto-detection picked —
+    so a plain, unindexed accelerator (``"cuda"``) is left as ``"auto"``
+    (harmless with one visible device, and how every trainer in this module
+    already treats that case), while an explicit index (``"cuda:0"``) or
+    ``"mps"`` is pinned directly instead.
+
+    Args:
+        device: ``"cpu"``, ``"cuda"``, ``"cuda:<n>"``, ``"mps"``, ``"mlx"``
+            (any case — MLX has its own load path and never reaches
+            ``from_pretrained`` in normal use, but a caller that lands here
+            anyway must not pass ``"mlx"`` through as a torch device), or
+            ``None``/empty when it was genuinely never resolved. Any other
+            value raises :class:`ValueError` instead of being silently
+            ignored.
+
+    Returns:
+        A ``(device_map, torch_dtype)`` pair to splat into
+        ``from_pretrained(**kwargs)``: ``{"": "cpu"}`` and ``float32`` for
+        CPU/MLX, ``{"": device}`` (lower-cased) and ``float16`` for
+        MPS or an explicitly indexed ``cuda:<n>``, ``"auto"`` and ``float16``
+        for plain ``cuda`` (accelerate may use every visible GPU), or
+        the pre-#1443 ``"auto"``/``float16`` default when ``device`` is
+        unset.
+    """
+    import torch
+
+    if not device:
+        return "auto", torch.float16
+
+    normalized = str(device).strip().lower()
+    if not re.fullmatch(r"cpu|mlx|mps|cuda(:\d+)?", normalized):
+        raise ValueError(
+            f"Unsupported --device {device!r}: use cpu, cuda, cuda:<index> or mps."
+        )
+
+    if normalized in ("cpu", "mlx"):
+        return {"": "cpu"}, torch.float32
+
+    if normalized == "mps" or ":" in normalized:
+        return {"": normalized}, torch.float16
+
+    return "auto", torch.float16
 
 
 def detect_device(backend: Optional[str] = None) -> tuple[str, str]:
@@ -345,18 +410,46 @@ def model_size_from_name(model_name: str) -> float:
         if marker in name_lower:
             return size
 
-    # Longer markers first: "1.7b" contains "7b", so a naive scan would call a
-    # 1.7B model a 7B one (and over-predict its VRAM by 4x).
-    size_markers = [
-        ("70b", 70), ("65b", 65), ("34b", 34), ("33b", 33),
-        ("13b", 13), ("8b", 8), ("3b", 3),
-        ("1.5b", 1.5), ("1.7b", 1.7), ("0.5b", 0.5), ("0.6b", 0.6),
-        ("7b", 7), ("1b", 1),
-    ]
+    # OLMoE names the ACTIVE count before the total ("OLMoE-1B-7B": 1B active,
+    # 6.9B total), so its first size token is not the total (#1198).
+    if "olmoe-1b-7b" in name_lower:
+        return 6.9
 
-    for marker, size in size_markers:
-        if marker in name_lower:
-            return size
+    # MoE models specify expert count and expert size (e.g. Mixtral 8x7B, 8x22B,
+    # or generic NxMb). Handle explicitly before standard billion tokens:
+    # 8x7B has ~46.7B total parameters, 8x22B has ~141.0B total parameters (#1198).
+    moe_match = re.search(r"(?<![a-z0-9.])(\d+)x(\d+(?:\.\d+)?)b(?![a-z0-9])", name_lower)
+    if moe_match:
+        n_exp = int(moe_match.group(1))
+        exp_sz = float(moe_match.group(2))
+        if (n_exp, exp_sz) == (8, 7.0):
+            return 46.7
+        if (n_exp, exp_sz) == (8, 22.0):
+            return 141.0
+        return n_exp * exp_sz
+
+    # Llama 4 names carry the ACTIVE count and the expert count ("17B-16E"), so the
+    # size token is not the total (#1198). Known totals first; otherwise active x
+    # experts, an over-estimate, which is the safe direction for this gate.
+    llama4_totals = {(17.0, 16): 109.0, (17.0, 128): 400.0}
+    active_experts = re.search(
+        r"(?<![a-z0-9.])(\d+(?:\.\d+)?)b-(\d+)e(?![a-z0-9]|[-+]\d)", name_lower
+    )
+    if active_experts:
+        active, experts = float(active_experts.group(1)), int(active_experts.group(2))
+        return llama4_totals.get((active, experts), active * experts)
+
+    # Strip active-parameter tokens with separator spellings (e.g. "-a-22b",
+    # "_act_22b") so total parameters are parsed rather than active parameters
+    # if the active count appears earlier and uses hyphenated separators (#1198).
+    cleaned = re.sub(r"[-_]a(?:ct(?:ive)?)?[-_]?\d+(?:\.\d+)?b(?![a-z0-9])", "", name_lower)
+
+    # Parse total parameter size token in billions (e.g. 72b, 32b, 14b, 405b, 4b, 1.7b).
+    # Uses boundary lookarounds to avoid substring false matches (such as "11b" matching
+    # "1b", "17b" or "27b" matching "7b", or "0.8b" matching "8b") (#1198).
+    b_match = re.search(r"(?<![a-z0-9.])(\d+(?:\.\d+)?)b(?![a-z0-9])", cleaned)
+    if b_match:
+        return float(b_match.group(1))
 
     # Sub-billion checkpoints carry their size in MILLIONS (SmolLM2-135M,
     # SmolVLM-256M, ...). Without this they fell through to the 7B default and
@@ -369,6 +462,20 @@ def model_size_from_name(model_name: str) -> float:
     million = re.search(r"(?<![a-z0-9.])(\d+(?:\.\d+)?)m(?![a-z0-9])", name_lower)
     if million:
         return float(million.group(1)) / 1000.0
+
+    # Common encoder / embedding checkpoints (BGE, E5, GTE, BERT, RoBERTa, MiniLM)
+    # carry -small / -base / -large suffixes rather than "Nb" or "Nm" (#1234).
+    encoder_prefixes = ("bge-", "e5-", "gte-", "bert-", "roberta-", "minilm")
+    if any(p in name_lower for p in encoder_prefixes):
+        if "large" in name_lower:
+            return 0.335
+        if "base" in name_lower:
+            return 0.11
+        if "small" in name_lower:
+            return 0.033
+        if "mini" in name_lower or "tiny" in name_lower:
+            return 0.022
+        return 0.335
 
     return 7.0  # default guess
 

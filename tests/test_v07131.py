@@ -171,16 +171,19 @@ class TestCompareePairMethod:
         monkeypatch.setattr(ev, "_call_llm", lambda prompt: '{"winner": "B"}')
         assert ev.compare_pair("p", "x", "y") == 1
 
-    def test_compare_pair_llm_failure_is_tie(self, monkeypatch):
-        from soup_cli.eval.judge import JudgeEvaluator
+    def test_compare_pair_llm_failure_propagates(self, monkeypatch):
+        # #1447: a failed judge call is not a tie. It used to return -1 here,
+        # which scored a dead judge as a measured 0.5 win-rate downstream.
+        from soup_cli.eval.judge import JudgeEvaluator, JudgeUnavailableError
 
         ev = JudgeEvaluator(provider="ollama", model="m")
 
         def _boom(prompt):
-            raise RuntimeError("network down")
+            raise JudgeUnavailableError("network down", url="http://localhost:11434")
 
         monkeypatch.setattr(ev, "_call_llm", _boom)
-        assert ev.compare_pair("p", "x", "y") == -1
+        with pytest.raises(JudgeUnavailableError):
+            ev.compare_pair("p", "x", "y")
 
 
 # ---------------------------------------------------------------------------
@@ -712,14 +715,17 @@ class TestBuildJudgeOrReward:
 
 class TestOnlineDpoRouting:
     def test_train_routes_online_dpo(self):
-        # A distinct-string `elif cfg.task == ...` branch (cannot be shadowed by
-        # another equality branch) that instantiates the wrapper.
+        # A distinct-string `task == ...` branch (cannot be shadowed by another
+        # equality branch) that instantiates the wrapper. #1213 moved the chain
+        # into the dispatch both commands call, so the branch is read there.
         import inspect
 
         from soup_cli.commands import train as train_cmd
+        from soup_cli.trainer import dispatch as dispatch_mod
 
-        src = inspect.getsource(train_cmd)
-        assert 'elif cfg.task == "online_dpo":' in src
+        assert "build_trainer(" in inspect.getsource(train_cmd)
+        src = inspect.getsource(dispatch_mod)
+        assert 'task == "online_dpo"' in src
         assert "OnlineDPOTrainerWrapper(cfg, **trainer_kwargs)" in src
 
 

@@ -571,6 +571,10 @@ class _RewardHackCallback_body:  # type: ignore[misc, valid-type]  # noqa: N801
             return control
         if not isinstance(logs, dict):
             return control
+        # #1223: an evaluation's log record carries eval_-prefixed metrics about
+        # held-out prompts, not a training step. Skip the whole record.
+        if any(isinstance(key, str) and key.startswith("eval_") for key in logs):
+            return control
         mean = logs.get("reward")
         std = logs.get("reward_std", 0.0)
         if not isinstance(mean, (int, float)) or isinstance(mean, bool):

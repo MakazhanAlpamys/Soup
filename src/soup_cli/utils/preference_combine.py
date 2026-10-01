@@ -215,9 +215,10 @@ def attach_weighted_preference_combine(trainer: object, weights: Mapping[str, fl
        matching ``compute_*_term`` helper.
     3. Combine via :func:`combine_losses` and return the blended scalar.
 
-    When the TRL trainer does not expose the per-batch log-probs (older
-    TRL versions, custom forks), we fall back to the v0.40.1 primary-loss
-    scaling — defence-in-depth so a TRL upgrade does not crash training.
+    When the TRL trainer does not expose the per-batch log-probs (which is every
+    trl 0.29 trainer — #1425), this raises, naming the terms it could not
+    compute. It used to fall back to the v0.40.1 primary-loss scaling, which
+    trained only the highest-weighted loss while reporting a blended number.
 
     Idempotent: re-attaching detects the ``_soup_weighted_combine`` marker.
     """
@@ -231,11 +232,10 @@ def attach_weighted_preference_combine(trainer: object, weights: Mapping[str, fl
 
     def wrapped(model, inputs, return_outputs=False, **kwargs):
         result = original(model, inputs, return_outputs=return_outputs, **kwargs)
-        if return_outputs:
-            primary_loss, outputs = result
-        else:
-            primary_loss = result
-            outputs = None
+        # #1425: the primary loss is no longer a fallback (it is what made a
+        # blend train one loss while reporting several). It is only unpacked
+        # to pass `outputs` through when the caller asked for it.
+        outputs = result[1] if return_outputs else None
 
         # True weighted-sum path: read per-batch logps from inputs OR the
         # trainer's last-batch state.
@@ -315,9 +315,23 @@ def attach_weighted_preference_combine(trainer: object, weights: Mapping[str, fl
             # All requested terms computed — return true weighted sum.
             blended = combine_losses(terms, snapshot)
         else:
-            # Fallback: primary-loss scaling.
-            primary_weight = snapshot.get(_pick_primary(snapshot), 1.0)
-            blended = primary_loss * float(primary_weight)
+            # #1425: trl 0.29 puts no per-sequence log-probs on the batch, so
+            # `terms` is empty on every step. Scaling the primary loss by its
+            # weight trained only the highest-weighted loss and said nothing
+            # about it, while setup had already printed
+            # "0.70·dpo + 0.30·simpo". Refuse instead, naming the terms.
+            missing = sorted(set(snapshot) - set(terms))
+            computed = sorted(terms)
+            raise ValueError(
+                "preference_loss_weights: cannot compute "
+                f"{', '.join(missing)} on this step"
+                + (f" (computed: {', '.join(computed)})" if computed else "")
+                + f". Weights requested: {', '.join(sorted(snapshot))}. The "
+                "underlying trl exposes no per-sequence log-probs on the batch, "
+                "so the blend cannot be evaluated; training would silently use "
+                "the primary loss alone. Remove training.preference_loss_weights "
+                "and set training.preference_loss to the single loss you want."
+            )
         if return_outputs:
             return blended, outputs
         return blended
@@ -360,11 +374,6 @@ def _read_lens(obj, prefix: str):
         return (labels != -100).sum(dim=-1)
     except Exception:  # noqa: BLE001 — best-effort; degrade to no normalisation
         return None
-
-
-def _pick_primary(weights: Mapping[str, float]) -> str:
-    """Return the loss with the highest weight (deterministic on ties)."""
-    return max(sorted(weights), key=lambda k: weights[k])
 
 
 def describe_blend(weights: Optional[Mapping[str, float]]) -> str:

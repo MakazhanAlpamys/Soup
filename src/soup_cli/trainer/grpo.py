@@ -14,6 +14,7 @@ from soup_cli.config.schema import SoupConfig, TrainingConfig
 from soup_cli.data.chat_templates import apply_chat_template_override
 from soup_cli.trainer.loss_summary import summarize_training_loss
 from soup_cli.utils import final_answer
+from soup_cli.utils.eval_schedule import training_eval_kwargs
 from soup_cli.utils.gpu import (
     bf16_fp16_flags,
     estimate_batch_size,
@@ -475,6 +476,25 @@ class GRPOTrainerWrapper:
                 "causing tensor size errors. A CUDA GPU is recommended.[/]"
             )
 
+        # #1223: TRL evaluates num_generations completions per held-out prompt
+        # and refuses an eval batch that does not hold whole groups (a batch of
+        # 3 with 2 generations and gradient accumulation 2 trains, then raised
+        # at setup). Evaluate at the largest multiple of num_generations that
+        # fits in the train batch -- the bump above guarantees at least one.
+        eval_kwargs = training_eval_kwargs(
+            cfg, eval_ds, batch_size=batch_size - batch_size % num_gen
+        )
+        if (
+            eval_kwargs["eval_strategy"] != "no"
+            and eval_kwargs["per_device_eval_batch_size"] != batch_size
+        ):
+            console.print(
+                "[yellow]Note:[/] grpo evaluates at batch "
+                f"{eval_kwargs['per_device_eval_batch_size']}, not the train batch "
+                f"{batch_size}: TRL's evaluation needs whole groups of "
+                f"num_generations={num_gen} completions."
+            )
+
         # --- GRPO config ---
         grpo_kwargs = {
             "output_dir": str(output_dir),
@@ -495,6 +515,7 @@ class GRPOTrainerWrapper:
             "remove_unused_columns": False,
             "deepspeed": self.deepspeed_config,
             **training_seed_kwargs(tcfg),
+            **eval_kwargs,
             **(self.fsdp_config or {}),
             "beta": tcfg.grpo_beta,
             "num_generations": tcfg.num_generations,
@@ -570,6 +591,16 @@ class GRPOTrainerWrapper:
 
         attach_grpo_stability_callback(self.trainer, tcfg)
 
+        # #342 — gradient watchdog (on_pre_optimizer_step) must be always-on.
+        # attach_grpo_stability_callback only fires when stability knobs
+        # are set.  ensure_grpo_stability_callback is a no-op if already
+        # attached, otherwise attaches with defaults (only watchdog fires).
+        from soup_cli.utils.peft_wiring import (
+            ensure_grpo_stability_callback,
+        )
+
+        ensure_grpo_stability_callback(self.trainer)
+
         # v0.71.11 #235/#238/#240 — wire the live RL callbacks (reward-hack,
         # echo-trap, mid-epoch RL checkpoint).
         from soup_cli.utils.peft_wiring import attach_rl_callbacks
@@ -583,7 +614,7 @@ class GRPOTrainerWrapper:
             task="grpo",
         )
 
-        # v0.40.6 #67 — ReLoRA callback (magnitude-prune LoRA every N steps).
+        # v0.40.6 #67 — ReLoRA merge-and-reinitialize restart callback.
         from soup_cli.utils.peft_wiring import (
             attach_curriculum_callback,
             attach_loraplus_optimizer,
@@ -765,9 +796,19 @@ class GRPOTrainerWrapper:
             self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)
         duration = time.time() - start
 
-        # Save final model (LoRA adapter)
-        self.trainer.save_model(self._output_dir)
+        if self.config.training.relora_steps is None:
+            self.trainer.save_model(self._output_dir)
+        else:
+            from soup_cli.utils.peft_wiring import save_model_with_relora
+
+            save_model_with_relora(
+                self.trainer, self._output_dir, self.config.training.relora_steps
+            )
         self.tokenizer.save_pretrained(self._output_dir)
+        # #342 — persist trainer_state.json (including nan_skip_count
+        # from the stability callback) next to adapter_config.json so
+        # ``soup adapters audit`` can read the skipped-step fraction.
+        self.trainer.save_state()
 
         # Extract metrics
         logs = self.trainer.state.log_history

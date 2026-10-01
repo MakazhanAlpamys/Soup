@@ -163,6 +163,11 @@ class UnlearnTrainerWrapper:
 
     def setup(self, dataset: Any = None) -> None:
         """Load policy + (optional) frozen reference, LoRA, and datasets."""
+        # #1445 — refuse an output dir outside cwd or a symlinked one BEFORE
+        # torch / peft are even imported and any model is loaded; the check
+        # in ``train()`` stays as the TOCTOU guard after the run.
+        _validated_output_dir(self.config.output)
+
         import torch
         from peft import get_peft_model
 

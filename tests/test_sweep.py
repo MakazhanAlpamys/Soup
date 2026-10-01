@@ -1,5 +1,6 @@
 """Tests for soup sweep — hyperparameter search."""
 
+from pathlib import Path
 
 import pytest
 
@@ -320,3 +321,29 @@ class TestSweepCLI:
             "--strategy", "bayesian",
         ])
         assert result.exit_code != 0
+
+
+def test_a_failed_arm_prints_its_error_verbatim(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`backend: mlx` arms now reach the MLX wrapper, whose install hint has brackets (#1213)."""
+    import re
+
+    from typer.testing import CliRunner
+
+    import soup_cli.commands.sweep as sweep_mod
+    from soup_cli.cli import app
+
+    def fail(*args, **kwargs):
+        raise ImportError('Install with: pip install "soup-cli[mlx]"')
+
+    monkeypatch.setattr(sweep_mod, "_run_single", fail)
+    config = tmp_path / "soup.yaml"
+    config.write_text("base: some-model\ndata:\n  train: ./d.jsonl\n", encoding="utf-8")
+
+    result = CliRunner().invoke(
+        app, ["sweep", "--config", str(config), "--param", "lr=1e-5", "--yes"]
+    )
+
+    plain = " ".join(re.sub(r"\x1b\[[0-9;]*m", "", result.output).split())
+    assert 'pip install "soup-cli[mlx]"' in plain, plain

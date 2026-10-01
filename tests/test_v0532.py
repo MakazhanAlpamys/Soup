@@ -868,24 +868,31 @@ class TestTrainRouting:
     the class. ``"DistillTrainerWrapper(cfg, **trainer_kwargs)"`` requires the
     actual call expression to be present, which is much harder to satisfy by
     accident.
+
+    #1213 moved this chain out of ``commands/train.py`` into
+    ``trainer/dispatch.py``, which ``soup train`` and ``soup sweep`` both call,
+    so the audit now reads the module that holds the routing and also checks the
+    command still reaches it.
     """
 
     def test_distill_routed(self) -> None:
         from soup_cli.commands import train as train_cmd
+        from soup_cli.trainer import dispatch as dispatch_mod
 
-        src = __import__("inspect").getsource(train_cmd)
-        assert 'cfg.task == "distill"' in src
+        src = __import__("inspect").getsource(dispatch_mod)
+        assert "build_trainer(" in __import__("inspect").getsource(train_cmd)
+        assert 'task == "distill"' in src
         # Require the actual instantiation expression, not just the bare name.
         assert "DistillTrainerWrapper(cfg, **trainer_kwargs)" in src
 
     def test_classifier_family_routed(self) -> None:
         from soup_cli.commands import train as train_cmd
+        from soup_cli.trainer import dispatch as dispatch_mod
 
-        src = __import__("inspect").getsource(train_cmd)
+        src = __import__("inspect").getsource(dispatch_mod)
+        assert "build_trainer(" in __import__("inspect").getsource(train_cmd)
         # Tuple membership in the if-branch is the load-bearing pattern.
-        assert (
-            'cfg.task in ("classifier", "reranker", "cross_encoder")' in src
-        )
+        assert 'task in ("classifier", "reranker", "cross_encoder")' in src
         # Instantiation expression — not just the class name.
         assert "ClassifierTrainerWrapper(cfg, **trainer_kwargs)" in src
 

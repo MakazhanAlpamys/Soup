@@ -18,9 +18,12 @@ def validate_vllm_url(base_url: str) -> None:
     Reuses the same validation as the server provider:
     - Scheme must be http or https
     - HTTP is only allowed for localhost
+    - A private / link-local / reserved IP literal is refused on any scheme
 
     Raises ValueError if validation fails.
     """
+    from soup_cli.utils.net_guard import refuse_private_ip_literal
+
     parsed = urlparse(base_url)
     if parsed.scheme not in ("http", "https"):
         raise ValueError(
@@ -36,6 +39,7 @@ def validate_vllm_url(base_url: str) -> None:
             f"vLLM URL must use HTTPS for remote servers (got {parsed.scheme}://). "
             "HTTP is only allowed for localhost."
         )
+    refuse_private_ip_literal(parsed.hostname, label="vLLM URL")
 
 
 def generate_vllm(

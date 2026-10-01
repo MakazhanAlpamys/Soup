@@ -58,13 +58,15 @@ class TestRecipeCatalog:
         assert len(results) > 0
 
     def test_search_by_size(self):
-        """search_recipes filters by model size."""
-        from soup_cli.recipes.catalog import search_recipes
+        """search_recipes filters by matching size token against recipe name or model id (#1161)."""
+        from soup_cli.recipes.catalog import RECIPES, search_recipes
 
         results = search_recipes(size="7b")
         assert len(results) > 0
+        names_by_recipe = {id(r): n for n, r in RECIPES.items()}
         for recipe in results:
-            assert "7b" in recipe.size.lower() or "7b" in recipe.model.lower()
+            name = names_by_recipe.get(id(recipe), "")
+            assert "7b" in name.lower() or "7b" in recipe.model.lower()
 
     def test_search_no_results(self):
         """search_recipes returns empty list for no matches."""
@@ -108,6 +110,19 @@ class TestRecipeCatalog:
                 f"Recipe '{name}' task mismatch: meta={recipe.task}, yaml={yaml_task}"
             )
 
+    def test_recipe_models_match_yaml_base(self):
+        """Recipe.model matches the base model in the YAML content."""
+        import yaml
+
+        from soup_cli.recipes.catalog import RECIPES
+
+        for name, recipe in RECIPES.items():
+            parsed = yaml.safe_load(recipe.yaml_str)
+            yaml_base = parsed.get("base")
+            assert recipe.model == yaml_base, (
+                f"Recipe '{name}' model mismatch: "
+                f"meta={recipe.model}, yaml={yaml_base}"
+            )
 
 # ---------------------------------------------------------------------------
 # CLI tests
@@ -676,113 +691,173 @@ class TestDeepSeekV4FlashDpoRecipe:
         assert len({RECIPES[n].size for n in variants}) == 1
 
 
-class TestIssue849LargeMoeDpoRecipes:
-    """Regression coverage for the MiniMax M3 and Mistral Large 3 DPO recipes."""
+class TestDeepSeekV4ProDpoRecipe:
+    """Regression coverage for the deepseek-v4-pro-dpo recipe (#850).
 
-    RECIPES = {
-        "minimax-m3-dpo": {
-            "model": "MiniMaxAI/MiniMax-M3",
-            "sft": "minimax-m3-sft",
-            "gradient_accumulation_steps": 16,
-            "size": "428B",
-            "license": "MiniMax Community License",
-        },
-        "mistral-large-3-dpo": {
-            "model": "mistralai/Mistral-Large-3-675B-Instruct-2512",
-            "sft": "mistral-large-3-sft",
-            "gradient_accumulation_steps": 32,
-            "size": "675B",
-            "license": "Apache-2.0",
-        },
-    }
+    DeepSeek-V4-Pro shipped SFT (v0.71.24) but no preference variant. The
+    model id is pinned on ``RecipeMeta.model`` and on the YAML ``base:`` in
+    two separate tests to prevent silent regressions or typos between Pro and Flash.
+    """
 
-    @pytest.mark.parametrize("name,expected", list(RECIPES.items()))
-    def test_recipe_meta_pins_the_model_id(self, name: str, expected: dict) -> None:
-        """Surface 1: pin the catalog metadata without reading the YAML."""
+    RECIPE = "deepseek-v4-pro-dpo"
+    MODEL = "deepseek-ai/DeepSeek-V4-Pro"
+
+    def test_recipe_meta_pins_the_model_id(self) -> None:
+        """Surface 1: the catalog metadata, read without touching the YAML."""
         from soup_cli.recipes.catalog import get_recipe
 
-        recipe = get_recipe(name)
-        assert recipe is not None, f"{name} is missing from the catalog"
-        assert recipe.model == expected["model"]
+        recipe = get_recipe(self.RECIPE)
+        assert recipe is not None, f"{self.RECIPE} is missing from the catalog"
+        assert recipe.model == self.MODEL
         assert recipe.task == "dpo"
-        assert recipe.size == expected["size"]
-        assert expected["license"] in recipe.description
 
-    @pytest.mark.parametrize("name,expected", list(RECIPES.items()))
-    def test_yaml_base_pins_the_model_id(self, name: str, expected: dict) -> None:
-        """Surface 2: pin the YAML base independently of ``RecipeMeta.model``."""
+    def test_yaml_base_pins_the_model_id(self) -> None:
+        """Surface 2: the YAML body, parsed directly rather than via ``.model``."""
         import yaml
 
         from soup_cli.recipes.catalog import get_recipe
 
-        recipe = get_recipe(name)
+        recipe = get_recipe(self.RECIPE)
         assert recipe is not None
         parsed = yaml.safe_load(recipe.yaml_str)
-        assert parsed["base"] == expected["model"]
+        assert parsed["base"] == self.MODEL
         assert parsed["task"] == "dpo"
 
-    @pytest.mark.parametrize("name,expected", list(RECIPES.items()))
-    def test_recipe_loads_with_expected_dpo_moe_shape(
-        self, name: str, expected: dict
-    ) -> None:
+    def test_recipe_loads_with_expected_dpo_moe_shape(self) -> None:
+        """The loaded config, not the source text."""
         from soup_cli.config.loader import load_config_from_string
         from soup_cli.recipes.catalog import get_recipe
 
-        recipe = get_recipe(name)
+        recipe = get_recipe(self.RECIPE)
         assert recipe is not None
         config = load_config_from_string(recipe.yaml_str)
 
-        assert config.base == expected["model"]
+        assert config.base == self.MODEL
         assert config.task == "dpo"
-        assert config.data.train == "./data/preference_train.jsonl"
         assert config.data.format == "dpo"
         assert config.data.max_length == 4096
-        assert config.training.epochs == 1
         assert config.training.lr == 5e-6
         assert config.training.batch_size == 1
-        assert (
-            config.training.gradient_accumulation_steps
-            == expected["gradient_accumulation_steps"]
-        )
+        assert config.training.gradient_accumulation_steps == 32
         assert config.training.lora.r == 32
         assert config.training.lora.alpha == 64
-        assert config.training.quantization == "4bit"
+        assert config.training.lora.dropout == 0.0
         assert config.training.moe_lora is True
         assert config.training.gradient_checkpointing is True
-        # These equal schema defaults, so deleting either is an equivalent mutation.
+        # Schema default survivors
         assert config.training.dpo_beta == 0.1
+        assert config.training.epochs == 1
         assert config.training.moe_aux_loss_coeff == 0.01
 
-    @pytest.mark.parametrize("name,expected", list(RECIPES.items()))
-    def test_dpo_recipe_matches_its_sft_sibling(self, name: str, expected: dict) -> None:
-        from soup_cli.recipes.catalog import get_recipe
-
-        dpo = get_recipe(name)
-        sft = get_recipe(expected["sft"])
-        assert dpo is not None and sft is not None
-        assert dpo.model == sft.model
-        assert dpo.size == sft.size
-        assert dpo.task == "dpo"
-        assert sft.task == "sft"
-
-    @pytest.mark.parametrize("name,expected", list(RECIPES.items()))
     def test_show_and_use_recipe(
         self,
-        name: str,
-        expected: dict,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        show_result = runner.invoke(app, ["recipes", "show", name])
+        """The CLI path a user actually takes, run rather than asserted about."""
+        show_result = runner.invoke(app, ["recipes", "show", self.RECIPE])
         assert show_result.exit_code == 0
-        assert expected["model"] in strip_ansi(show_result.output)
+        assert self.MODEL in strip_ansi(show_result.output)
 
         monkeypatch.chdir(tmp_path)
-        use_result = runner.invoke(app, ["recipes", "use", name, "--yes"])
+        use_result = runner.invoke(app, ["recipes", "use", self.RECIPE, "--yes"])
         assert use_result.exit_code == 0
         written = (tmp_path / "soup.yaml").read_text(encoding="utf-8")
-        assert expected["model"] in written
+        assert self.MODEL in written
         assert "task: dpo" in written
+
+    def test_v4_pro_task_variants_are_three_distinct_entries(self) -> None:
+        """The unregister direction, and the shared ``size`` the family declares."""
+        from soup_cli.recipes.catalog import RECIPES
+
+        variants = {
+            "deepseek-v4-pro-sft": "sft",
+            self.RECIPE: "dpo",
+            "deepseek-v4-pro-grpo": "grpo",
+        }
+        for name, task in variants.items():
+            assert name in RECIPES, f"{name} is missing from the catalog"
+            assert RECIPES[name].model == self.MODEL
+            assert RECIPES[name].task == task
+        assert len({RECIPES[n].task for n in variants}) == 3
+        assert len({RECIPES[n].size for n in variants}) == 1
+
+
+class TestDeepSeekV4ProGrpoRecipe:
+    """Regression coverage for the deepseek-v4-pro-grpo recipe (#850).
+
+    DeepSeek-V4-Pro shipped SFT (v0.71.24) but no reasoning variant. The
+    model id is pinned on ``RecipeMeta.model`` and on the YAML ``base:`` in
+    two separate tests.
+    """
+
+    RECIPE = "deepseek-v4-pro-grpo"
+    MODEL = "deepseek-ai/DeepSeek-V4-Pro"
+
+    def test_recipe_meta_pins_the_model_id(self) -> None:
+        """Surface 1: the catalog metadata, read without touching the YAML."""
+        from soup_cli.recipes.catalog import get_recipe
+
+        recipe = get_recipe(self.RECIPE)
+        assert recipe is not None, f"{self.RECIPE} is missing from the catalog"
+        assert recipe.model == self.MODEL
+        assert recipe.task == "grpo"
+
+    def test_yaml_base_pins_the_model_id(self) -> None:
+        """Surface 2: the YAML body, parsed directly rather than via ``.model``."""
+        import yaml
+
+        from soup_cli.recipes.catalog import get_recipe
+
+        recipe = get_recipe(self.RECIPE)
+        assert recipe is not None
+        parsed = yaml.safe_load(recipe.yaml_str)
+        assert parsed["base"] == self.MODEL
+        assert parsed["task"] == "grpo"
+
+    def test_recipe_loads_with_expected_grpo_moe_shape(self) -> None:
+        """The loaded config, not the source text."""
+        from soup_cli.config.loader import load_config_from_string
+        from soup_cli.recipes.catalog import get_recipe
+
+        recipe = get_recipe(self.RECIPE)
+        assert recipe is not None
+        config = load_config_from_string(recipe.yaml_str)
+
+        assert config.base == self.MODEL
+        assert config.task == "grpo"
+        assert config.data.max_length == 8192
+        assert config.training.lr == 1e-5
+        assert config.training.batch_size == 1
+        assert config.training.gradient_accumulation_steps == 16
+        assert config.training.lora.r == 32
+        assert config.training.lora.alpha == 64
+        assert config.training.lora.dropout == 0.0
+        assert config.training.moe_lora is True
+        assert config.training.gradient_checkpointing is True
+        # Schema default survivors
+        assert config.training.grpo_beta == 0.1
+        assert config.training.epochs == 3
+        assert config.training.num_generations == 4
+        assert config.training.reward_fn == "accuracy"
+        assert config.training.moe_aux_loss_coeff == 0.01
+
+    def test_show_and_use_recipe(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The CLI path a user actually takes, run rather than asserted about."""
+        show_result = runner.invoke(app, ["recipes", "show", self.RECIPE])
+        assert show_result.exit_code == 0
+        assert self.MODEL in strip_ansi(show_result.output)
+
+        monkeypatch.chdir(tmp_path)
+        use_result = runner.invoke(app, ["recipes", "use", self.RECIPE, "--yes"])
+        assert use_result.exit_code == 0
+        written = (tmp_path / "soup.yaml").read_text(encoding="utf-8")
+        assert self.MODEL in written
+        assert "task: grpo" in written
 
 
 class TestIssue271SmolLM3Recipe:
@@ -1732,6 +1807,10 @@ class TestV025NewRecipes:
         Task-variant for #275 / #846 added 2 (qwen3.6-35b-a3b-dpo, qwen3.6-35b-a3b-grpo) -> 174.
         Issue #845 added 2 (qwen3.6-27b-dpo, qwen3.6-27b-grpo) -> 176.
         Issue #825 retires the unusable Falcon-E BitNet training recipe -> 175.
+        PR #1112 removes sesame-csm-tts -> 174.
+        Issue #850 added 2 (deepseek-v4-pro-dpo, deepseek-v4-pro-grpo) -> 176.
+        PR #1113 removes spark-tts -> 173.
+        Issue #1145 removed 3 (mistral-large-3-sft, mistral-large-3-dpo, minimax-m3-dpo) -> 170.
         """
         from soup_cli.recipes.catalog import RECIPES
         from tests.recipe_count import EXPECTED_RECIPE_COUNT, recipe_count_hint
