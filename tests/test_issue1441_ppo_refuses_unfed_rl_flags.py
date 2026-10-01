@@ -132,3 +132,113 @@ class TestTheFlagScan:
         )
         with pytest.raises(ValueError, match="reward_hack_detector"):
             refuse_unfed_rl_flags(cfg.training, is_experimental=True)
+
+
+class TestSetupRefusesBeforeLoadingAnything:
+    """The call site, not just the helper (#1441 review).
+
+    Every other test here calls `refuse_unfed_rl_flags` directly, so replacing
+    the one line in `setup()` with `pass` left the file green. This drives
+    `PPOTrainerWrapper.setup` with the loaders stubbed, and asserts nothing was
+    loaded: the refusal has to land before the model, the reward model or the
+    tokenizer.
+    """
+
+    _FLAGS = {
+        "reward_hack_detector": "  reward_hack_detector: info_rm\n",
+        "reward_hack_mitigation": (
+            "  reward_hack_detector: info_rm\n  reward_hack_mitigation: kl_control\n"
+        ),
+        "echo_trap_enabled": "  echo_trap_enabled: true\n",
+    }
+
+    @pytest.mark.parametrize("flag", sorted(_FLAGS))
+    def test_setup_refuses_before_loading_anything(self, flag, tmp_path, monkeypatch):
+        import os
+
+        # `peft` and `trl` are in this list on purpose: this environment's
+        # transformers/torchvision mismatch breaks `trl.PPOConfig` and
+        # `peft`, so without them the test ERRORS instead of skipping. On a
+        # working stack all five import and the test runs (~23 s).
+        for module in ("torch", "transformers", "peft", "trl", "datasets"):
+            pytest.importorskip(module)
+        os.environ.setdefault("TRL_EXPERIMENTAL_SILENCE", "1")
+
+        from soup_cli.config.loader import load_config_from_string
+        from soup_cli.trainer import ppo
+
+        loaded: list[str] = []
+        monkeypatch.setattr(
+            ppo.PPOTrainerWrapper, "_setup_reward",
+            lambda self, *a: loaded.append("reward"),
+        )
+        monkeypatch.setattr(
+            ppo.PPOTrainerWrapper, "_setup_transformers",
+            lambda self, *a: loaded.append("policy"),
+        )
+        monkeypatch.chdir(tmp_path)
+        cfg = load_config_from_string(
+            "base: ./tiny\ntask: ppo\nbackend: transformers\n"
+            "data:\n  train: train.jsonl\n  max_length: 64\n"
+            "training:\n  epochs: 1\n  batch_size: 2\n  gradient_accumulation_steps: 1\n"
+            "  quantization: none\n  reward_model: ./rm\n"
+            "  lora:\n    r: 4\n    alpha: 8\n"
+            + self._FLAGS[flag]
+            + "output: ./out\n"
+        )
+        wrapper = ppo.PPOTrainerWrapper(cfg, device="cpu")
+        rows = [{"messages": [{"role": "user", "content": "hi"}]}] * 4
+        with pytest.raises(ValueError, match=flag):
+            wrapper.setup({"train": rows})
+        assert loaded == [], loaded
+
+    def test_a_plain_ppo_setup_is_not_refused_by_the_call_site(
+        self, tmp_path, monkeypatch,
+    ):
+        """The control: the same path with no flags must get past the refusal.
+
+        It still fails later in this environment (no model on disk), so this
+        asserts only that the refusal is not what stops it.
+        """
+        for module in ("torch", "transformers", "peft", "trl", "datasets"):
+            pytest.importorskip(module)
+
+        from soup_cli.config.loader import load_config_from_string
+        from soup_cli.trainer import ppo
+
+        monkeypatch.chdir(tmp_path)
+        cfg = load_config_from_string(
+            "base: ./tiny\ntask: ppo\nbackend: transformers\n"
+            "data:\n  train: train.jsonl\n  max_length: 64\n"
+            "training:\n  epochs: 1\n  batch_size: 2\n  gradient_accumulation_steps: 1\n"
+            "  quantization: none\n  reward_model: ./rm\n"
+            "output: ./out\n"
+        )
+        wrapper = ppo.PPOTrainerWrapper(cfg, device="cpu")
+        rows = [{"messages": [{"role": "user", "content": "hi"}]}] * 4
+        try:
+            wrapper.setup({"train": rows})
+        except Exception as exc:  # noqa: BLE001 — anything but the refusal
+            assert "cannot use" not in str(exc), exc
+
+
+class TestTheRefusalCoversExactlyTheFlagsThatMakeABuffer:
+    """`_unsupported_rl_flags` re-states `rl_callbacks_need_buffer`; if a fourth
+    flag ever starts a buffer, the refusal must not silently miss it (#1441)."""
+
+    @pytest.mark.parametrize(
+        "overrides",
+        [
+            {},
+            {"reward_hack_detector": "info_rm"},
+            {"reward_hack_mitigation": "log_only"},
+            {"echo_trap_enabled": True},
+            {"reward_hack_halt": True},
+        ],
+    )
+    def test_the_refusal_and_the_buffer_predicate_agree(self, overrides):
+        from soup_cli.trainer.ppo import _unsupported_rl_flags
+        from soup_cli.utils.peft_wiring import rl_callbacks_need_buffer
+
+        tcfg = _tcfg(**overrides)
+        assert bool(_unsupported_rl_flags(tcfg)) == rl_callbacks_need_buffer(tcfg)

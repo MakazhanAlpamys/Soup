@@ -350,7 +350,7 @@ soup data persona-mix --prompts <jsonl> --n N --output <jsonl>  Persona-Hub dive
 soup data brain-rot <data.jsonl> [--strict]   Brain-rot detector — arXiv 2510.13928 (v0.69.0)
 soup iterative-dpo --base-model <m> --reward-model <rm> --prompts <p.jsonl> --output-dir <out> --rounds N --pairs-per-round N [--plan-only]  Iterative DPO loop driver — LIVE sample→score→pair→train (v0.70.0; live v0.71.11)
 soup train --reward-hack-detector info_rm|rm_ensemble [--reward-hack-halt]  Reward-hacking detector for GRPO — LIVE callback (v0.70.0; live v0.71.11)
-soup train --reward-hack-mitigation off|log_only|kl_control|pid_lagrangian  Closed-loop reward-hacking auto-mitigation (detect → raise KL/β → rollback → early-stop); GRPO/PPO, requires --reward-hack-detector; PPO BETA (v0.71.26)
+soup train --reward-hack-mitigation off|log_only|kl_control|pid_lagrangian  Closed-loop reward-hacking auto-mitigation (detect → raise KL/β → rollback → early-stop); GRPO only, requires --reward-hack-detector; refused on task: ppo (v0.71.26)
 soup train --config soup.yaml  # training.uld_strategy: wasserstein_aligned  Cross-tokenizer ULD on task='distill' (different tokenizers) — LIVE (v0.71.18)
 soup train --config soup.yaml  # training.minillm_enabled: true [minillm_teacher_mix_ratio 0.3]  MiniLLM reverse-KL distillation, config-only — LIVE; offline mix 0 rejected (v0.70.0; live v0.71.11; #692, #979)
 soup train --config grpo.yaml  # training.rl_checkpoint_save_every_steps: N [rl_checkpoint_keep_last: N; rl_checkpoint_include_optimizer: true]  Mid-epoch checkpoint for GRPO/PPO — LIVE (v0.70.0; live v0.71.11)

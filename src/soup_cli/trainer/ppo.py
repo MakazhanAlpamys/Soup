@@ -158,8 +158,6 @@ class PPOTrainerWrapper:
 
     def setup(self, dataset: dict):
         """Load model, tokenizer, reward model/fn, apply LoRA, create PPO trainer."""
-        from datasets import Dataset
-
         # Import PPOTrainer/PPOConfig — trl >=0.28 moved to trl.experimental
         ppo_trainer_cls, ppo_config_cls, is_experimental = _import_ppo_classes()
 
@@ -171,10 +169,14 @@ class PPOTrainerWrapper:
         cfg = self.config
         tcfg = cfg.training
 
-        # #1441 — refuse before the model, reward model or tokenizer is loaded.
-        # These callbacks read a signal buffer that the experimental PPOTrainer
-        # leaves empty, so a run with them is announced and then inert.
+        # #1441 — refuse before anything is loaded, including `datasets` and the
+        # model. These callbacks read a signal buffer the experimental
+        # PPOTrainer leaves empty, so a run with them is announced and inert.
         refuse_unfed_rl_flags(tcfg, is_experimental=is_experimental)
+
+        # Deferred below the refusal: a config that cannot run at all should say
+        # which flag stopped it, not fail on an unrelated import first.
+        from datasets import Dataset
 
         # #353: seed before the model and any adapter are built.
         apply_training_seed(tcfg)

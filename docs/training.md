@@ -433,7 +433,7 @@ tokenizer-specific rather than vocabulary-agnostic.
 
 ### Closed-loop reward-hacking auto-mitigation (v0.71.26)
 
-The detectors above *halt*; `training.reward_hack_mitigation` (or the `--reward-hack-mitigation` flag) makes the trainer *self-correct* mid-run. It requires `reward_hack_detector` on a `grpo`/`ppo` transformers run, and has four modes:
+The detectors above *halt*; `training.reward_hack_mitigation` (or the `--reward-hack-mitigation` flag) makes the trainer *self-correct* mid-run. It requires `reward_hack_detector` on a `grpo` transformers run, and has four modes:
 
 - **`log_only`** — observe only. Appends a per-step `mitigation_log.jsonl` under the run's output dir (the InfoRM/ensemble drop, the OK/WARN/HACK verdict, reward mean/std, completion-length trend, repetition) and provably never mutates β. Run this first to *see* hacking before you let a controller act on it.
 - **`kl_control`** — a reversible **bang-bang + hysteresis** controller. When a multi-signal vote (`reward_hack_signals`: the detector drop + `length_trend` + `repetition`) stays above `reward_hack_trip_band` for `reward_hack_dwell_steps`, it multiplies β by `reward_hack_kl_gain` (clamped to `[reward_hack_beta_floor > 0, reward_hack_beta_ceil]`, never crossing 0); after `reward_hack_release_patience` below-band steps it relaxes β back toward the floor. Dwell + release-patience stop it flapping. β is written to **both** `trainer.beta` and `trainer.args.beta` so it takes effect on stock GRPO *and* Soup's GRPO variants (and `trainer.args.kl_coef` on PPO).
