@@ -179,6 +179,38 @@ def test_unlearn_default_auto_reaches_real_training(tiny_model, monkeypatch, met
     assert wrapper.train()["total_steps"] == 5
 
 
+def test_unlearn_auto_stays_one_on_a_large_card(tiny_model, monkeypatch):
+    """``batch_size: auto`` means 1 on unlearn whatever the card reports.
+
+    Without a GPU (CPU boxes, every CI runner) the memory estimator itself
+    answers 1, so the test above cannot tell the ruling from a revert to
+    ``estimate_batch_size``. Report an 80 GB card, check that the estimator
+    then answers more than 1, and only then assert the ruling.
+    """
+    from soup_cli.trainer import unlearn
+    from soup_cli.utils import gpu
+
+    def large_card(*args, **kwargs):
+        return {"memory_total": "80.0 GB", "memory_total_bytes": 80 * 1024**3, "gpu_count": 1}
+
+    monkeypatch.setattr(gpu, "get_gpu_info", large_card)
+    # A revert that imported the helper at module level would bind its own name.
+    monkeypatch.setattr(unlearn, "get_gpu_info", large_card, raising=False)
+    estimate = gpu.estimate_batch_size(
+        model_params_b=gpu.model_size_from_name(str(tiny_model)),
+        seq_length=64,
+        gpu_memory_bytes=gpu.get_gpu_info()["memory_total_bytes"],
+        quantization="none",
+        lora_r=2,
+    )
+    assert estimate > 1, "the mocked card no longer separates the ruling from the estimator"
+
+    wrapper = _unlearn_wrapper(tiny_model, batch_size="auto")
+    assert wrapper._batch_size == 1
+    # 5 forget rows, one epoch, accumulation 2: three updates, not one.
+    assert wrapper._max_updates == 3
+
+
 @pytest.mark.parametrize(("batch_size", "accumulation"), [(1, 1), (1, 4), (2, 4)])
 def test_unlearn_reports_unscaled_loss_and_example_count(tiny_model, batch_size, accumulation):
     import torch
