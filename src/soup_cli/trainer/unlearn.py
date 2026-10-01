@@ -329,6 +329,9 @@ class UnlearnTrainerWrapper:
         self.model.save_pretrained(output_dir)
         self.tokenizer.save_pretrained(output_dir)
         duration = time.monotonic() - started
+        hours = int(duration // 3600)
+        minutes = int((duration % 3600) // 60)
+        duration_str = f"{hours}h {minutes}m" if hours > 0 else f"{minutes}m"
         console.print(
             f"[green]Unlearn done:[/] {step} steps, "
             f"loss {initial_loss} -> {final_loss}, saved {output_dir}"
@@ -342,6 +345,7 @@ class UnlearnTrainerWrapper:
         return {
             **loss_summary,
             "total_steps": step,
+            "duration": duration_str,
             "duration_secs": duration,
             "output_dir": output_dir,
         }

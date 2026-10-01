@@ -73,6 +73,21 @@ def _nondefault_unwired_training_settings(training_config) -> list[str]:
 UNSUPPORTED_RESUME_TASKS: frozenset[str] = frozenset({"unlearn"})
 
 
+def _completion_duration_display(result: dict) -> str:
+    """Prefer a trainer's pre-formatted ``duration``; fall back to
+    ``duration_secs`` so a wrapper that forgets the string key cannot
+    crash a finished run in the completion panel (#1529)."""
+    display = result.get("duration")
+    if isinstance(display, str) and display:
+        return display
+    secs = result.get("duration_secs")
+    if isinstance(secs, (int, float)):
+        hours = int(secs // 3600)
+        minutes = int((secs % 3600) // 60)
+        return f"{hours}h {minutes}m" if hours > 0 else f"{minutes}m"
+    return "unknown"
+
+
 def _format_training_complete_loss(result: dict) -> str:
     """Render only a loss comparison that the trainer actually measured."""
     summary_kind = result.get("loss_summary_kind")
@@ -1812,7 +1827,7 @@ def train(
     console.print(
         Panel(
             f"{_format_training_complete_loss(result)}\n"
-            f"Duration: [bold]{result['duration']}[/]\n"
+            f"Duration: [bold]{_completion_duration_display(result)}[/]\n"
             f"Output: [bold]{result['output_dir']}[/]\n"
             f"Run ID: [bold]{run_id}[/]\n\n"
             f"Quick test:  [bold]soup chat --model {result['output_dir']}[/]\n"
