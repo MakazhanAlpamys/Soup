@@ -759,6 +759,9 @@ def run_steps(
         torch.cuda.synchronize()
         if index == warmup:
             torch.cuda.reset_peak_memory_stats()
+        # Wall-clock start, read outside the timed region: the sustained two-drive probe lines
+        # each step up with its driver's 1-s drive counters. perf_counter stays the step timer.
+        started_unix = time.time()
         wall_start = time.perf_counter()
         out = model(input_ids=ids, labels=ids)
         out.loss.backward()
@@ -771,6 +774,7 @@ def run_steps(
             records.append(
                 {
                     "step_s": wall,
+                    "started_unix": started_unix,
                     "loss": finite(float(out.loss.detach())),
                     "layer_loads": pool.loads - loads_before,
                     "large_loads": (large.loads - large_before) if large is not None else 0,
