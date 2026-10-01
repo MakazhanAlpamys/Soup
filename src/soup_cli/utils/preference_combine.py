@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import logging
 import math
-from typing import TYPE_CHECKING, Dict, Mapping, Optional
+from typing import TYPE_CHECKING, Any, Dict, Mapping, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -237,12 +237,17 @@ def attach_weighted_preference_combine(trainer: object, weights: Mapping[str, fl
         # to pass `outputs` through when the caller asked for it.
         outputs = result[1] if return_outputs else None
 
-        # True weighted-sum path: read per-batch logps from inputs OR the
-        # trainer's last-batch state.
-        pol_chosen = _read_logps(inputs, "policy_chosen_logps")
+        # True weighted-sum path: the per-batch logps, else the ones captured
+        # from the primary trainer's own forward pass (#1425).
+        captured = getattr(trainer, "_soup_policy_logps", None) or {}
+        pol_chosen = captured.get("policy_chosen_logps")
+        if pol_chosen is None:
+            pol_chosen = _read_logps(inputs, "policy_chosen_logps")
         if pol_chosen is None:
             pol_chosen = _read_logps(inputs, "chosen_logps")
-        pol_rejected = _read_logps(inputs, "policy_rejected_logps")
+        pol_rejected = captured.get("policy_rejected_logps")
+        if pol_rejected is None:
+            pol_rejected = _read_logps(inputs, "policy_rejected_logps")
         if pol_rejected is None:
             pol_rejected = _read_logps(inputs, "rejected_logps")
         ref_chosen = _read_logps(inputs, "reference_chosen_logps")
@@ -251,6 +256,13 @@ def attach_weighted_preference_combine(trainer: object, weights: Mapping[str, fl
         ref_rejected = _read_logps(inputs, "reference_rejected_logps")
         if ref_rejected is None:
             ref_rejected = _read_logps(inputs, "ref_rejected_logps")
+        # Lengths come from the capture when it ran, else from the batch.
+        chosen_lens = captured.get("chosen_lens")
+        if chosen_lens is None:
+            chosen_lens = _read_lens(inputs, "chosen")
+        rejected_lens = captured.get("rejected_lens")
+        if rejected_lens is None:
+            rejected_lens = _read_lens(inputs, "rejected")
 
         terms: dict = {}
         if pol_chosen is not None and pol_rejected is not None:
@@ -286,7 +298,9 @@ def attach_weighted_preference_combine(trainer: object, weights: Mapping[str, fl
                             float(gamma_attr) if gamma_attr is not None else 1.0
                         )
                         terms["simpo"] = compute_simpo_term(
-                            pol_chosen, pol_rejected, beta, gamma
+                            pol_chosen, pol_rejected, beta, gamma,
+                            chosen_lens=chosen_lens,
+                            rejected_lens=rejected_lens,
                         )
                     elif name == "orpo":
                         alpha_attr = getattr(trainer, "orpo_alpha", None)
@@ -298,8 +312,8 @@ def attach_weighted_preference_combine(trainer: object, weights: Mapping[str, fl
                         # exp() and the odds-ratio correction degenerates.
                         terms["orpo"] = compute_orpo_term(
                             pol_chosen, pol_rejected, alpha,
-                            chosen_lens=_read_lens(inputs, "chosen"),
-                            rejected_lens=_read_lens(inputs, "rejected"),
+                            chosen_lens=chosen_lens,
+                            rejected_lens=rejected_lens,
                         )
                     elif name == "bco":
                         # BCO is data-format-incompatible — already rejected
@@ -339,6 +353,80 @@ def attach_weighted_preference_combine(trainer: object, weights: Mapping[str, fl
     wrapped._soup_weighted_combine = True  # type: ignore[attr-defined]
     trainer.compute_loss = wrapped  # type: ignore[assignment]
     return True
+
+
+def attach_policy_logp_capture(trainer: object) -> bool:
+    """Record the policy log-probs trl already computes (#1425).
+
+    trl 0.29's CPO (the SimPO path) and ORPO trainers compute per-sequence
+    chosen/rejected log-probs inside ``concatenated_forward`` and hand them
+    straight back to ``get_batch_loss_metrics``; nothing puts them where a
+    weighted blend can read them, which is why every blend on trl 0.29 fell
+    through to the primary loss alone. trl's DPO/IPO trainers compute theirs
+    inline in ``compute_loss`` and publish only means, so they have no such
+    hook and return ``False`` here — their blends keep refusing.
+
+    The captured values are converted to **summed** log-probs using the batch's
+    own per-side ``chosen_labels`` / ``rejected_labels``, because trl averages
+    them for ``simpo``/``ipo`` and the kernels in this module take sums plus
+    lengths. Deriving the lengths rather than trusting trl's averaging flag
+    means one code path either way: ``average x length`` is the sum.
+
+    Returns True when the capture is in place.
+    """
+    if not hasattr(trainer, "concatenated_forward"):
+        return False
+    original = trainer.concatenated_forward
+    if getattr(original, "_soup_logp_capture", False):
+        return True
+
+    def capturing(model, batch, *args, **kwargs):
+        out = original(model, batch, *args, **kwargs)
+        try:
+            chosen_logps, rejected_logps = out[0], out[1]
+        except (TypeError, IndexError):  # pragma: no cover — trl shape drift
+            return out
+        _record_policy_logps(trainer, batch, chosen_logps, rejected_logps)
+        return out
+
+    capturing._soup_logp_capture = True
+    trainer.concatenated_forward = capturing
+    return True
+
+
+def _response_lengths(batch: Any, side: str) -> Any:
+    """Per-example response token count: everything not masked with ``-100``."""
+    labels = batch.get(f"{side}_labels") if hasattr(batch, "get") else None
+    if labels is None:
+        return None
+    try:
+        return (labels != -100).sum(dim=-1)
+    except (AttributeError, TypeError):  # pragma: no cover — non-tensor labels
+        return None
+
+
+def _record_policy_logps(trainer, batch, chosen_logps, rejected_logps) -> None:
+    """Store summed policy log-probs and the lengths that produced them."""
+    chosen_lens = _response_lengths(batch, "chosen")
+    rejected_lens = _response_lengths(batch, "rejected")
+    if chosen_lens is None or rejected_lens is None:
+        # No per-side labels: keep what trl gave us and say we did not normalise.
+        trainer._soup_policy_logps = {
+            "policy_chosen_logps": chosen_logps,
+            "policy_rejected_logps": rejected_logps,
+            "chosen_lens": None,
+            "rejected_lens": None,
+        }
+        return
+    # trl averaged; the kernels take sums, so put the length back in.
+    trainer._soup_policy_logps = {
+        "policy_chosen_logps": chosen_logps * chosen_lens.to(chosen_logps.dtype),
+        "policy_rejected_logps": rejected_logps * rejected_lens.to(
+            rejected_logps.dtype,
+        ),
+        "chosen_lens": chosen_lens,
+        "rejected_lens": rejected_lens,
+    }
 
 
 def _read_logps(obj, name: str):

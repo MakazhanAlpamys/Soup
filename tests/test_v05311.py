@@ -937,6 +937,208 @@ class TestTrueWeightedCombine:
         assert "cannot compute dpo on this step (computed: simpo)" in message, message
 
 
+class TestTheCaptureReadsTrlOwnLogProbs:
+    """#1425 — the blend must run on the log-probs trl already computed.
+
+    The fake trainer below has trl 0.29 CPO's shape: `concatenated_forward`
+    returns per-sequence log-probs and the batch carries per-side `*_labels`.
+    trl averages those log-probs for simpo/ipo; the kernels here take sums
+    plus lengths, so the capture puts the length back in and the kernel
+    divides it out again. The net must equal trl's own value.
+    """
+
+    @staticmethod
+    def _cpo(chosen_avg, rejected_avg, chosen_len, rejected_len, prompt=2):
+        import torch
+
+        class _Cpo:
+            loss_type = "simpo"
+            beta = 0.1
+            simpo_gamma = 0.5
+            orpo_alpha = 1.0
+
+            def concatenated_forward(self, model, batch, *a, **k):
+                return (
+                    torch.tensor(chosen_avg),
+                    torch.tensor(rejected_avg),
+                    None,
+                    None,
+                    torch.tensor(0.0),
+                )
+
+            def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
+                # The primary loss the blend replaces; its value must not
+                # survive into the result.
+                return torch.tensor(99.0)
+
+        # Tensors, like trl's real batch: the capture reads response lengths off
+        # these, and a list of ints would silently take the no-labels path.
+        batch = {
+            "chosen_labels": torch.tensor(
+                [[-100] * prompt + list(range(chosen_len)) for _ in range(2)],
+            ),
+            "rejected_labels": torch.tensor(
+                [[-100] * prompt + list(range(rejected_len)) for _ in range(2)],
+            ),
+        }
+        return _Cpo(), batch
+
+    def test_a_cpo_style_trainer_produces_the_weighted_sum(self):
+        import torch
+
+        from soup_cli.utils.preference_combine import (
+            attach_policy_logp_capture,
+            attach_weighted_preference_combine,
+            compute_orpo_term,
+            compute_simpo_term,
+        )
+
+        trainer, batch = self._cpo([-0.5, -0.5], [-1.0, -1.0], 4, 4)
+        assert attach_policy_logp_capture(trainer) is True
+        attach_weighted_preference_combine(trainer, {"simpo": 0.7, "orpo": 0.3})
+        trainer.concatenated_forward(None, batch)  # the capture runs here
+
+        out = float(trainer.compute_loss(model=None, inputs=batch))
+        assert out != pytest.approx(99.0)
+
+        # trl gave -0.5 / -1.0 averaged over 4 tokens, i.e. sums of -2 / -4.
+        lens = torch.tensor([4, 4])
+        expected = 0.7 * float(
+            compute_simpo_term(
+                torch.tensor([-2.0, -2.0]), torch.tensor([-4.0, -4.0]), 0.1, 0.5,
+                chosen_lens=lens, rejected_lens=lens,
+            ),
+        ) + 0.3 * float(
+            compute_orpo_term(
+                torch.tensor([-2.0, -2.0]), torch.tensor([-4.0, -4.0]), 1.0,
+                chosen_lens=lens, rejected_lens=lens,
+            ),
+        )
+        assert out == pytest.approx(expected, rel=1e-4), (out, expected)
+
+    def test_the_sum_reproduces_trls_own_averaged_value(self):
+        """The round trip through sums must be a no-op: trl's averages and ours
+        must give the same SimPO term."""
+        import torch
+
+        from soup_cli.utils.preference_combine import (
+            _record_policy_logps,
+            compute_simpo_term,
+        )
+
+        trainer = object.__new__(type("T", (), {}))
+        chosen_avg = torch.tensor([-0.4, -0.6])
+        rejected_avg = torch.tensor([-0.9, -1.1])
+        # Padded to one width, as a collator emits; the per-row count of
+        # non -100 entries is still 5 and 3.
+        batch = {
+            "chosen_labels": torch.tensor([
+                [-100, -100] + list(range(5)),
+                [-100, -100] + list(range(3)) + [-100, -100],
+            ]),
+            "rejected_labels": torch.tensor([
+                [-100, -100] + list(range(7)),
+                [-100, -100] + list(range(2)) + [-100] * 5,
+            ]),
+        }
+        _record_policy_logps(trainer, batch, chosen_avg, rejected_avg)
+        stored = trainer._soup_policy_logps
+        ours = compute_simpo_term(
+            stored["policy_chosen_logps"], stored["policy_rejected_logps"], 0.1, 0.5,
+            chosen_lens=stored["chosen_lens"], rejected_lens=stored["rejected_lens"],
+        )
+        # trl's own SimPO loss works directly on the averages it produced, with
+        # no lengths: it already normalised. Dividing them again here (as an
+        # earlier version of this control did) is not trl's formula.
+        theirs = compute_simpo_term(chosen_avg, rejected_avg, 0.1, 0.5)
+        assert float(ours) == pytest.approx(float(theirs), rel=1e-6)
+
+    def test_changing_only_the_secondary_loss_changes_the_loss(self):
+        """The second open box on #1425: same primary, different secondary."""
+        from soup_cli.utils.preference_combine import (
+            attach_policy_logp_capture,
+            attach_weighted_preference_combine,
+        )
+
+        def blended(weights):
+            trainer, batch = self._cpo([-0.5, -0.5], [-1.0, -1.0], 4, 4)
+            attach_policy_logp_capture(trainer)
+            attach_weighted_preference_combine(trainer, weights)
+            trainer.concatenated_forward(None, batch)
+            return float(trainer.compute_loss(model=None, inputs=batch))
+
+        assert blended({"simpo": 0.6, "orpo": 0.4}) != pytest.approx(
+            blended({"simpo": 0.7, "orpo": 0.3}), rel=1e-9
+        )
+
+    def test_a_dpo_primary_has_no_hook_and_still_refuses(self):
+        import torch
+
+        from soup_cli.utils.preference_combine import (
+            attach_policy_logp_capture,
+            attach_weighted_preference_combine,
+        )
+
+        class _Dpo:
+            beta = 0.1
+
+            def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
+                return torch.tensor(2.0)
+
+        trainer = _Dpo()
+        assert attach_policy_logp_capture(trainer) is False
+        attach_weighted_preference_combine(trainer, {"dpo": 0.7, "simpo": 0.3})
+        with pytest.raises(ValueError, match="cannot compute"):
+            trainer.compute_loss(model=None, inputs={})
+
+    def test_attaching_twice_is_a_no_op(self):
+        from soup_cli.utils.preference_combine import attach_policy_logp_capture
+
+        trainer, _ = self._cpo([-0.5, -0.5], [-1.0, -1.0], 4, 4)
+        assert attach_policy_logp_capture(trainer) is True
+        first = trainer.concatenated_forward
+        assert attach_policy_logp_capture(trainer) is True
+        assert trainer.concatenated_forward is first
+
+    def test_a_batch_without_per_side_labels_keeps_trls_values(self):
+        """No labels means no lengths; the capture must not invent any."""
+        import torch
+
+        from soup_cli.utils.preference_combine import _record_policy_logps
+
+        trainer = object.__new__(type("T", (), {}))
+        chosen_avg = torch.tensor([-0.5, -0.5])
+        rejected_avg = torch.tensor([-1.0, -1.0])
+        _record_policy_logps(
+            trainer, {"concatenated_labels": None}, chosen_avg, rejected_avg,
+        )
+        stored = trainer._soup_policy_logps
+        assert stored["chosen_lens"] is None
+        assert stored["policy_chosen_logps"] is chosen_avg
+
+    def test_the_installed_cpo_still_returns_its_own_logps(self):
+        """Pin the hook this capture wraps (trl 0.29, read from source)."""
+        from pathlib import Path
+
+        import trl
+
+        candidates = [
+            Path(trl.__file__).parent / "experimental" / "cpo" / "cpo_trainer.py",
+            Path(trl.__file__).parent / "trainer" / "cpo_trainer.py",
+        ]
+        sources = [p.read_text(encoding="utf-8") for p in candidates if p.is_file()]
+        assert sources, "trl ships no cpo_trainer.py to pin the capture against"
+        source = "\n".join(sources)
+        assert "def concatenated_forward(" in source, (
+            "trl's CPO no longer has concatenated_forward, so #1425's capture "
+            "has no hook and a blend falls back to refusing"
+        )
+        assert "chosen_logps" in source and "rejected_logps" in source, (
+            "trl's CPO concatenated_forward no longer returns per-side log-probs; "
+            "re-derive #1425's capture against the new shape"
+        )
+
+
 class TestOnARealTrlTrainer:
     """The stub trainer above is why this passed: it is the only way the wrapper
     sees log-probs. On a real trl 0.29 trainer the batch carries none, so a blend
