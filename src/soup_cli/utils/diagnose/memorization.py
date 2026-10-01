@@ -46,9 +46,7 @@ def split_prefix(
     return _split_with_resolved(text, fraction, tok)
 
 
-def _split_with_resolved(
-    text: str, fraction: float, tok: Optional[object]
-) -> tuple[str, str]:
+def _split_with_resolved(text: str, fraction: float, tok: Optional[object]) -> tuple[str, str]:
     """Core split given an ALREADY-resolved tokenizer (or None for whitespace).
 
     Separated so :func:`score_memorization` can resolve the tokenizer ONCE and
@@ -88,8 +86,8 @@ def score_memorization(
     not per row) instead of whitespace words — catching BPE-level memorization
     that whitespace tokenisation misses. The live ``soup diagnose`` wiring of
     ``--tokenizer`` lands with the live probe runner (#165). Overlap uses
-    completion precision against the suffix, so the live generation cap does
-    not make longer rows harder to flag.
+    clipped completion-bigram precision against the suffix, so the live
+    generation cap does not make longer rows harder to flag.
     """
     if not isinstance(training_rows, Sequence):
         raise TypeError("training_rows must be a sequence of dicts")
@@ -105,7 +103,8 @@ def score_memorization(
             if len(sub) >= 2:
                 return list(zip(sub[:-1], sub[1:]))
             return sub
-        return tokenize(value)
+        words = tokenize(value)
+        return list(zip(words[:-1], words[1:])) if len(words) >= 2 else words
 
     echoes = []
     scanned = 0

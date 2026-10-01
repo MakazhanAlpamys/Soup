@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import random
+from collections import Counter
 from pathlib import Path
 from typing import Optional
 
@@ -10,34 +12,40 @@ import pytest
 
 from soup_cli.utils.diagnose.memorization import score_memorization, split_prefix
 
-_LIVE_GENERATION_BUDGET = 64
+_LIVE_GENERATION_WORDS = 48
+_LIVE_GENERATION_TOKENS = 64
 _ROW_LENGTHS = (60, 100, 150, 300, 1000)
+_SYLLABLES = (
+    "ka",
+    "lo",
+    "mi",
+    "ren",
+    "tu",
+    "sha",
+    "vo",
+    "del",
+    "pin",
+    "zar",
+    "qui",
+    "bel",
+)
+_VOCAB = [a + b + c for a in _SYLLABLES for b in _SYLLABLES for c in _SYLLABLES]
+_WEIGHTS = [1.0 / (rank + 1) ** 0.8 for rank in range(len(_VOCAB))]
 
 
-class _WordTokenizer:
-    """Small reversible word tokenizer for the tokenizer-aware probe path."""
-
-    def __init__(self) -> None:
-        self._token_to_id: dict[str, int] = {}
-        self._id_to_token: dict[int, str] = {}
+class _CharTokenizer:
+    """Small reversible tokenizer distinct from whitespace tokenization."""
 
     def encode(self, text: str, add_special_tokens: bool = False) -> list[int]:
         del add_special_tokens
-        ids = []
-        for token in text.split():
-            if token not in self._token_to_id:
-                token_id = len(self._token_to_id) + 1
-                self._token_to_id[token] = token_id
-                self._id_to_token[token_id] = token
-            ids.append(self._token_to_id[token])
-        return ids
+        return [ord(char) for char in text]
 
     def decode(self, ids: list[int], skip_special_tokens: bool = True) -> str:
         del skip_special_tokens
-        return " ".join(self._id_to_token[token_id] for token_id in ids)
+        return "".join(chr(token_id) for token_id in ids)
 
     def convert_ids_to_tokens(self, ids: list[int]) -> list[str]:
-        return [self._id_to_token[token_id] for token_id in ids]
+        return [chr(token_id) for token_id in ids]
 
 
 def _training_text(word_count: int, *, stem: str = "term") -> str:
@@ -47,18 +55,31 @@ def _training_text(word_count: int, *, stem: str = "term") -> str:
 def _capped_continuation(
     text: str,
     *,
-    tokenizer: Optional[_WordTokenizer] = None,
+    tokenizer: Optional[_CharTokenizer] = None,
 ) -> tuple[str, str]:
     prefix, suffix = split_prefix(text, tokenizer=tokenizer)
     if tokenizer is None:
-        completion = " ".join(suffix.split()[:_LIVE_GENERATION_BUDGET])
+        completion = " ".join(suffix.split()[:_LIVE_GENERATION_WORDS])
     else:
         suffix_ids = tokenizer.encode(suffix, add_special_tokens=False)
         completion = tokenizer.decode(
-            suffix_ids[:_LIVE_GENERATION_BUDGET],
+            suffix_ids[:_LIVE_GENERATION_TOKENS],
             skip_special_tokens=True,
         )
     return prefix, completion
+
+
+def _natural_text(word_count: int, seed: int) -> str:
+    return " ".join(random.Random(seed).choices(_VOCAB, weights=_WEIGHTS, k=word_count))
+
+
+def _flagged(text: str, completion: str) -> bool:
+    prefix, _ = split_prefix(text)
+    score = score_memorization(
+        [{"text": text}],
+        lambda prompt: completion if prompt == prefix else "",
+    )
+    return score.verdict == "MAJOR"
 
 
 @pytest.mark.parametrize("word_count", _ROW_LENGTHS)
@@ -79,7 +100,7 @@ def test_capped_verbatim_continuation_flags_every_row_length(word_count: int) ->
 def test_tokenizer_capped_verbatim_continuation_flags_every_row_length(
     word_count: int,
 ) -> None:
-    tokenizer = _WordTokenizer()
+    tokenizer = _CharTokenizer()
     text = _training_text(word_count)
     prefix, completion = _capped_continuation(text, tokenizer=tokenizer)
 
@@ -93,13 +114,28 @@ def test_tokenizer_capped_verbatim_continuation_flags_every_row_length(
     assert "echo_rate=1.000" in score.evidence
 
 
+def test_tokenizer_path_detects_subword_echo_whitespace_misses() -> None:
+    tokenizer = _CharTokenizer()
+    text = "x" * 400
+    prefix, completion = _capped_continuation(text, tokenizer=tokenizer)
+
+    score = score_memorization(
+        [{"text": text}],
+        lambda prompt: completion if prompt == prefix else "",
+        tokenizer=tokenizer,
+    )
+
+    assert score.verdict == "MAJOR"
+    assert "tokenizer_aware=True" in score.evidence
+
+
 @pytest.mark.parametrize("word_count", _ROW_LENGTHS)
 @pytest.mark.parametrize("tokenizer_aware", [False, True])
 def test_same_length_unrelated_continuation_stays_ok(
     word_count: int,
     tokenizer_aware: bool,
 ) -> None:
-    tokenizer = _WordTokenizer() if tokenizer_aware else None
+    tokenizer = _CharTokenizer() if tokenizer_aware else None
     text = _training_text(word_count)
     prefix, completion = _capped_continuation(text, tokenizer=tokenizer)
     completion_length = len(completion.split())
@@ -119,7 +155,7 @@ def test_repeated_suffix_word_does_not_count_as_verbatim_echo() -> None:
     text = _training_text(300)
     prefix, suffix = split_prefix(text)
     repeated_word = suffix.split()[0]
-    repeated_completion = " ".join([repeated_word] * _LIVE_GENERATION_BUDGET)
+    repeated_completion = " ".join([repeated_word] * _LIVE_GENERATION_WORDS)
 
     score = score_memorization(
         [{"text": text}],
@@ -128,6 +164,40 @@ def test_repeated_suffix_word_does_not_count_as_verbatim_echo() -> None:
 
     assert score.verdict == "OK"
     assert "echo_rate=0.000" in score.evidence
+
+
+@pytest.mark.parametrize("word_count", (300, 1000, 2000, 4000))
+def test_verbatim_with_repeated_words_is_flagged(word_count: int) -> None:
+    text = _natural_text(word_count, seed=1)
+    _, suffix = split_prefix(text)
+
+    assert _flagged(text, " ".join(suffix.split()[:_LIVE_GENERATION_WORDS]))
+
+
+@pytest.mark.parametrize("word_count", (300, 1000, 2000, 4000))
+def test_unrelated_text_from_the_same_vocabulary_is_not_flagged(
+    word_count: int,
+) -> None:
+    text = _natural_text(word_count, seed=1)
+    unrelated = " ".join(_natural_text(_LIVE_GENERATION_WORDS, seed=2).split())
+
+    assert not _flagged(text, unrelated)
+
+
+@pytest.mark.parametrize("word_count", (1000, 4000))
+def test_repetition_loop_is_not_memorization(word_count: int) -> None:
+    text = _natural_text(word_count, seed=1)
+    _, suffix = split_prefix(text)
+    common = Counter(suffix.split()).most_common(1)[0][0]
+
+    assert not _flagged(text, " ".join([common] * _LIVE_GENERATION_WORDS))
+
+
+def test_one_word_completion_is_not_memorization() -> None:
+    text = _natural_text(1000, seed=1)
+    _, suffix = split_prefix(text)
+
+    assert not _flagged(text, suffix.split()[0])
 
 
 def test_run_live_diagnose_flags_regurgitation_on_250_word_rows(
