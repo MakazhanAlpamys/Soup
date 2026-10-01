@@ -97,6 +97,8 @@ concurrency:
 
 jobs:
   lint:
+    # xdist experiment: the variable is unset, so only the two test cells run
+    if: vars.XDIST_TRIAL_ALL_JOBS == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -142,6 +144,8 @@ jobs:
           "${RUNNER_TEMP}/actionlint" -color
 
   type-check:
+    # xdist experiment: the variable is unset, so only the two test cells run
+    if: vars.XDIST_TRIAL_ALL_JOBS == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     # Non-blocking type-check baseline. The codebase adopts annotations
@@ -161,6 +165,8 @@ jobs:
           mypy || echo "::warning title=mypy::Type issues reported (non-blocking baseline — see the log above)"
 
   mlx-smoke:
+    # xdist experiment: the variable is unset, so only the two test cells run
+    if: vars.XDIST_TRIAL_ALL_JOBS == 'true'
     # #394: prove the documented standalone install on an Apple Silicon runner.
     # Keep this separate from the main matrix because `.[dev]` deliberately
     # installs the PyTorch/TRL stack and would hide an accidental MLX dependency.
@@ -186,6 +192,8 @@ jobs:
         # with a constant 0.0 left the suite green (#1018 review).
         run: pytest -o addopts= -q tests/test_rewind_mlx.py
   torchao-contract:
+    # xdist experiment: the variable is unset, so only the two test cells run
+    if: vars.XDIST_TRIAL_ALL_JOBS == 'true'
     # #826: every torchao class Soup names is resolved against the REAL package
     # here. The 3x3 matrix cannot do it -- `torchao` is not in `[dev]`, so those
     # cells skip these tests, which is how three names torchao never exported
@@ -217,6 +225,8 @@ jobs:
             tests/test_issue835_fp8_gate.py \
             tests/test_v07121.py
   pytorch-smoke:
+    # xdist experiment: the variable is unset, so only the two test cells run
+    if: vars.XDIST_TRIAL_ALL_JOBS == 'true'
     # #596: exercise the real PyTorch SFT + DPO training pipeline on every PR.
     # Keep this separate from the 3x3 matrix so the expensive model-backed
     # smoke tests run once, not nine times.
@@ -276,6 +286,8 @@ jobs:
   # trl 0.29 / PEFT 0.20 support stack and Plotext 6.0.0 so pip cannot silently
   # upgrade the cell, then assert every pinned compatibility boundary.
   transformers-floor:
+    # xdist experiment: the variable is unset, so only the two test cells run
+    if: vars.XDIST_TRIAL_ALL_JOBS == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
@@ -354,6 +366,12 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
         python-version: ["3.10", "3.11", "3.12"]
+        xdist: ["auto", "logical"]
+        exclude:
+          - os: windows-latest
+          - os: macos-latest
+          - python-version: "3.10"
+          - python-version: "3.11"
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
     env:
@@ -397,6 +415,8 @@ jobs:
           restore-keys: hf-${{ runner.os }}-
       - name: Install dependencies
         run: pip install -e ".[dev]"
+      - name: Install pytest-xdist (experiment cell)
+        run: pip install pytest-xdist
       - name: Warm HF Hub cache (models the tests load)
         # Pre-download the models the unit tests load, with retries, so a
         # transient HF Hub 429 (Too Many Requests) on a single matrix cell does
@@ -487,13 +507,18 @@ jobs:
         # healthy Windows cells were not allowed to save what they had. The
         # losers of the resulting race log "unable to reserve cache" and move
         # on, which is far cheaper than an OS that never gets a cache.
-        if: always() && steps.warm.outputs.warmed == 'all' && steps.hf-cache.outputs.cache-hit != 'true'
+        # xdist experiment: the variable is unset, so this PR never saves a cache
+        if: vars.XDIST_TRIAL_SAVE_CACHE == 'true'
         uses: actions/cache/save@v4
         with:
           path: ${{ runner.temp }}/hf-cache
           key: hf-${{ runner.os }}-${{ hashFiles('.github/workflows/ci.yml') }}
       - name: Run unit tests with coverage
-        run: pytest tests/ -v --tb=short --junitxml=report.xml --cov=soup_cli --cov-report=xml:coverage.xml --cov-report=term-missing:skip-covered
+        # Every xdist worker must collect parametrized ids in the same order;
+        # three tests parametrize over a frozenset (#1380).
+        env:
+          PYTHONHASHSEED: "0"
+        run: pytest tests/ -v --tb=short --junitxml=report.xml --cov=soup_cli --cov-report=xml:coverage.xml --cov-report=term-missing:skip-covered -n ${{ matrix.xdist }} --dist loadfile
       - name: Upload coverage to Codecov
         if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.11'
         uses: codecov/codecov-action@v4
