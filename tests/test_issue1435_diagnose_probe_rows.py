@@ -340,6 +340,31 @@ class TestReasons:
             evidence = report.scores[mode].evidence
             assert "plaintext" in evidence and "image" not in evidence
 
+    def test_no_answer_rows_can_be_the_dominant_cause(self, tmp_path, monkeypatch):
+        long_row = {"prompt": "x" * 9000, "completion": "done"}
+        rows = [long_row] + [{"prompt": f"only a prompt {i}"} for i in range(11)]
+        report, _ = _run_live(tmp_path, monkeypatch, rows, _gens())
+        for mode in SKIPPABLE:
+            evidence = report.scores[mode].evidence
+            assert "no prompt/answer pair" in evidence and "8192" not in evidence
+
+    def test_no_answer_beats_a_lone_plaintext_row(self, tmp_path, monkeypatch):
+        rows = [{"text": _words("t0")}] + [
+            {"messages": [{"role": "user", "content": f"question {i}"}]} for i in range(11)
+        ]
+        report, _ = _run_live(tmp_path, monkeypatch, rows, _gens())
+        for mode in SKIPPABLE:
+            evidence = report.scores[mode].evidence
+            assert "no prompt/answer pair" in evidence and "plaintext" not in evidence
+
+    def test_unreadable_rows_beat_a_lone_media_row_for_memorization(
+        self, tmp_path, monkeypatch
+    ):
+        rows = [dict(_sharegpt(0), image="i.jpg")] + [{"foo": f"bar {i}"} for i in range(11)]
+        report, _ = _run_live(tmp_path, monkeypatch, rows, _gens())
+        evidence = report.scores["memorization"].evidence
+        assert "no row has text" in evidence and "image" not in evidence
+
     def test_mixed_media_kinds_are_named_together(self, tmp_path, monkeypatch):
         rows = [dict(_sharegpt(i), image=f"i{i}.jpg") for i in range(6)] + [
             {"audio": f"a{i}.wav", "messages": [
