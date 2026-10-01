@@ -78,6 +78,12 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--layers", type=int, default=None, help="override the layer count")
     parser.add_argument(
+        "--intermediate",
+        type=int,
+        default=None,
+        help="override the MLP intermediate size",
+    )
+    parser.add_argument(
         "--vocab",
         type=int,
         default=None,
@@ -187,6 +193,8 @@ def main() -> int:
     shape = dict(SHAPES[args.shape])
     if args.layers is not None:
         shape["layers"] = int(args.layers)
+    if args.intermediate is not None:
+        shape["intermediate"] = int(args.intermediate)
     if args.vocab is not None:
         shape["vocab"] = int(args.vocab)
     out = Path(args.out)
