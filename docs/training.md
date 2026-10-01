@@ -442,7 +442,9 @@ soup train --config soup.yaml
 # Cross-tokenizer distillation for DIFFERENT tokenizers, e.g. Llama -> Mistral,
 # no shared vocab needed (v0.71.18). Aligns student/teacher token sequences
 # over decoded character spans, so you can distill a GPT-2 BPE student from a
-# Llama SentencePiece teacher.
+# Llama SentencePiece teacher. A student token with no teacher counterpart
+# (a byte-fallback piece, an empty piece, a student-only special token) has
+# no target and is left out of the loss.
 #   training:
 #     uld_strategy: wasserstein_aligned
 
