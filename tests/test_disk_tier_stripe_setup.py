@@ -96,6 +96,21 @@ class TestTheDiskPreflight:
                 shard_path=str(tmp_path / "cache"), stripe_writes=((full, 5),),
             )
 
+    def test_a_full_stripe_volume_names_the_stripe_variable(self, tmp_path, monkeypatch):
+        """Final review Minor 6: the remedy named only the primary cache variables."""
+        monkeypatch.setattr(stream_setup, "console", _console()[0])
+        full = str(tmp_path / "stripe")
+        monkeypatch.setattr(
+            stream_setup, "_disk_volume",
+            lambda path: (2, 0) if path == full else (1, 10**15),
+        )
+        with pytest.raises(ValueError, match="SOUP_LAYER_STREAM_STRIPE_DIRS"):
+            stream_setup._render_stream_disk_preflight(
+                source_bytes=1, materialized_copy_bytes=0, materialize_bytes=0,
+                materialized_path=str(tmp_path), shard_bytes=10, shard_write_bytes=5,
+                shard_path=str(tmp_path / "cache"), stripe_writes=((full, 5),),
+            )
+
     def test_the_additional_writes_line_counts_every_stripe(self, tmp_path, monkeypatch):
         """A striped cache writes to several drives; the headline figure must add them up."""
         recorder = io.StringIO()

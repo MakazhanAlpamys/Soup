@@ -156,3 +156,19 @@ class TestTheCacheCheck:
         out, roots = _cache(tmp_path, striped=True)
         index, reason = _inspect(out, (roots[0].upper() + "\\",))
         assert index is not None, reason
+
+
+def test_a_reused_index_is_built_from_the_requested_roots_not_its_own_spelling(tmp_path):
+    """Security LOW-5: the roots compare after normpath, which collapses `x/..` lexically while
+    the kernel resolves it physically. A reused index must carry the roots the caller
+    validated, so every later path is built from those."""
+    out, roots = _cache(tmp_path, striped=True)
+    path = os.path.join(out, "index.json")
+    with open(path, encoding="utf-8") as handle:
+        payload = json.load(handle)
+    payload["stripe_roots"] = [os.path.join(roots[0], "not-there", "..")]
+    with open(path, "w", encoding="utf-8") as handle:
+        json.dump(payload, handle)
+    index, reason = _inspect(out, roots)
+    assert index is not None, reason
+    assert index.stripe_roots == roots

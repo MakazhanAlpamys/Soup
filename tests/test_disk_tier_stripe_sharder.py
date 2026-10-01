@@ -175,3 +175,30 @@ def test_a_stale_copy_that_will_not_delete_still_returns_the_committed_index(lay
     assert index.layer_roots == (0, 1, 0)
     assert any(stale_path in line and "Could not delete" in line for line in said), said
     assert read_shard_index(out).layer_roots == (0, 1, 0)
+
+
+def test_a_full_stripe_drive_names_the_root_and_the_variable(layout, monkeypatch):
+    """Final review Minor 8: ENOSPC on the second drive mid-shard was a bare OSError naming
+    neither the stripe root nor the variable. The old index stays the commit point."""
+    import soup_cli.utils.layer_shard as layer_shard_mod
+    from soup_cli.utils.layer_shard import read_shard_index
+    from soup_cli.utils.stripe_roots import STRIPE_DIRS_ENV
+
+    src, out, stripe = layout
+    shard_checkpoint(src, out, dtype="float32")
+    folder = _folder(out, stripe)
+    real_save = layer_shard_mod._atomic_save
+
+    def full_drive(blob, path):
+        if os.path.normcase(os.path.dirname(path)) == os.path.normcase(folder):
+            raise OSError(28, "No space left on device")
+        return real_save(blob, path)
+
+    monkeypatch.setattr(layer_shard_mod, "_atomic_save", full_drive)
+    with pytest.raises(OSError) as caught:
+        shard_checkpoint(src, out, dtype="float32", stripe_roots=(stripe,))
+    message = str(caught.value)
+    assert caught.value.errno == 28, message
+    assert STRIPE_DIRS_ENV in message and os.path.realpath(stripe) in message, message
+    assert "No space left" in message, message
+    assert read_shard_index(out).layer_roots == ()

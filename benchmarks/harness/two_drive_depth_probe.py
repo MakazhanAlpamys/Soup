@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """R3' of the read-rate track: does the reader's per-layer barrier cost one drive throughput?
 
-``AsyncDiskSource._read_layer`` hands a layer's K ranges to K workers and blocks until every
-range has landed before the next layer is dispatched, so exactly one layer is in flight and
-the workers that finish early idle on the slowest range's tail. This reads one drive with the
-SAME K workers and the same ranges two ways, interleaved: depth 1 (the reader today: dispatch a
-span, wait for all of it) and depth 2 (the next span's ranges are queued behind the current
-one's, so a worker that frees up starts on it at once). The number of requests outstanding
-never exceeds K in either arm; only the barrier differs. Both arms run through one function,
-``read_pipelined``, so the code path differs by the depth argument alone.
+``AsyncDiskSource._read_layer`` (before R4) handed a layer's K ranges to K workers and blocked
+until every range had landed before the next layer was dispatched, so exactly one layer was in
+flight and the workers that finished early idled on the slowest range's tail. This reads one
+drive with the SAME K workers and the same ranges two ways, interleaved: depth 1 (the reader
+before R4: dispatch a span, wait for all of it) and depth 2 (the next span's ranges are queued
+behind the current one's, so a worker that frees up starts on it at once). The number of
+requests outstanding never exceeds K in either arm; only the barrier differs. Both arms run
+through one function, ``read_pipelined``, so the code path differs by the depth argument alone.
 
 The decision rule is in ``benchmarks/probe-rtx5070-two-drive-read.md`` (section R3'),
 committed before this ran. Refuses to run on battery, like every other arm of that record.

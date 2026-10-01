@@ -62,6 +62,42 @@ class TestOneEntry:
         with pytest.raises(StripeRootError, match="existing directory"):
             validate_stripe_root(str(tmp_path / "gone"), primary_root=primary)
 
+    def test_a_missing_folder_names_both_ways_out(self, layout, tmp_path):
+        """Final review Recommendation 5: reconnect it, or drop it and re-shard to one root."""
+        primary, _ = layout
+        with pytest.raises(StripeRootError, match="unset") as caught:
+            validate_stripe_root(str(tmp_path / "gone"), primary_root=primary)
+        assert "Reconnect" in str(caught.value)
+
+    @pytest.mark.parametrize("char", ["\x7f", "\x85", "\x9b"], ids=["DEL", "NEL", "CSI"])
+    def test_del_and_c1_control_characters_are_refused(self, layout, char):
+        """Security LOW-6: C0 alone left DEL and C1 (0x9B is a one-byte CSI) through."""
+        primary, stripe = layout
+        with pytest.raises(StripeRootError, match="control characters"):
+            validate_stripe_root(stripe + char, primary_root=primary)
+
+    @pytest.mark.skipif(os.name != "nt", reason="Windows drive-relative spelling")
+    def test_a_path_without_a_drive_is_refused_on_windows(self, layout):
+        """Security LOW-6: os.path.isabs on a path that starts with a separator but names no
+        drive is True on 3.10-3.12, and the recorded root would then depend on the drive of
+        the current directory."""
+        primary, stripe = layout
+        no_drive = os.path.splitdrive(os.path.realpath(stripe))[1]
+        with pytest.raises(StripeRootError, match="must name a drive letter or a UNC share"):
+            validate_stripe_root(no_drive, primary_root=primary)
+
+    @pytest.mark.skipif(os.name != "nt", reason="Windows device-namespace paths")
+    @pytest.mark.parametrize("prefix", ["\\\\?\\", "\\\\.\\"], ids=["question", "dot"])
+    def test_a_device_namespace_spelling_is_refused(self, layout, prefix):
+        """Security LOW-1: realpath keeps a device-namespace prefix and the overlap rule then
+        compares it with the primary as a different drive, so a folder INSIDE the primary
+        passed."""
+        primary, _ = layout
+        inner = os.path.join(primary, "inner")
+        os.mkdir(inner)
+        with pytest.raises(StripeRootError, match="device-namespace path is not accepted"):
+            validate_stripe_root(prefix + os.path.realpath(inner), primary_root=primary)
+
     def test_a_folder_inside_the_primary_root_is_refused(self, layout):
         primary, _ = layout
         inner = os.path.join(primary, "inner")

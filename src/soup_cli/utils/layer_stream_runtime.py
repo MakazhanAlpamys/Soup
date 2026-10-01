@@ -758,12 +758,23 @@ class RamSource:
     def layer_specs_from_paths(
         cls, paths: Sequence[str]
     ) -> list[Dict[str, Tuple[Tuple[int, ...], str]]]:
+        """Every decoder layer's spec, one shard path per layer, wherever each file lives.
+
+        The form the setup and ``install_streaming`` use, with ``layer_paths(shard_dir,
+        index)``: on a striped cache (R4) the layers sit on several roots.
+        """
         return [cls.spec_from_path(path) for path in paths]
 
     @classmethod
     def layer_specs_from_shards(
         cls, shard_dir: str, n_layers: int
     ) -> list[Dict[str, Tuple[Tuple[int, ...], str]]]:
+        """The ONE-root form: every layer under ``shard_dir``. Wrong for a striped cache.
+
+        Kept for one-root callers (tests, the #974 harnesses). The setup goes through
+        :meth:`layer_specs_from_paths` with ``layer_paths(shard_dir, index)``, which knows
+        which root holds each layer.
+        """
         return [cls.spec_from_shard(shard_dir, idx) for idx in range(n_layers)]
 
     @staticmethod

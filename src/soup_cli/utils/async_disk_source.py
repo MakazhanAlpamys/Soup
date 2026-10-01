@@ -315,7 +315,7 @@ class _RangeReaders:
             thread.join(timeout=max(0.0, deadline - time.monotonic()))
 
 
-@dataclass
+@dataclass(eq=False)
 class _PendingRead:
     """A layer read one drive is doing: claimed under the lock, submitted outside it."""
 
@@ -580,7 +580,6 @@ class AsyncDiskSource:
             else:
                 self._open_of[root] = open_direct
         self.direct_io = all(opener is not self._open_buffered for opener in self._open_of.values())
-        self._open = self._open_of[self._roots[0]]
         # One drive keeps the historical worker names (`soup-layer-range-<n>`), which the
         # #974 and #1056 tests match on; a striped source names each drive's pool apart, so a
         # stack dump says which drive a worker serves.

@@ -345,7 +345,14 @@ def _effective_read_ahead(tcfg: Any, n_roots: int, console: Any) -> ReadAheadDec
 
 
 def _stripe_write_shares(total: int, n_roots: int) -> list[int]:
-    """The shard estimate split evenly across roots, summing to it (layers alternate)."""
+    """The shard estimate split evenly across roots, summing to it (layers alternate).
+
+    APPROXIMATE, and biased against root 0: root 0 also holds ``extras.safetensors``, the
+    ``large_*`` embedding/head files and, when the layer count does not divide by the roots,
+    the odd layer, so it is under-charged and the stripe drives over-charged by about that
+    much (~1-3% of the store on a 70B). An exact split needs the per-root placement and the
+    large tensors' stored sizes, which the estimate does not have here.
+    """
     base, extra = divmod(int(total), n_roots)
     return [base + (1 if position < extra else 0) for position in range(n_roots)]
 
@@ -408,12 +415,21 @@ def _render_stream_disk_preflight(
         lines.append(f"Free on target volume ({labels}): {free / 1e9:.2f} GB")
         if required > free:
             console.print(Panel("\n".join(lines), title="Layer streaming disk pre-flight"))
+            from soup_cli.utils.stripe_roots import STRIPE_DIRS_ENV
+
+            # R4: a full stripe drive is fixed through the stripe variable, which the
+            # containment policy does not cover — name it when a stripe write is on this volume.
+            remedy = "SOUP_SPECTRUM_CACHE_DIR / SOUP_LAYER_STREAM_CACHE_DIR at a larger contained"
+            if any(label.startswith("layer-shard stripe") for label in labels_by_device[device]):
+                remedy = (
+                    "SOUP_SPECTRUM_CACHE_DIR / SOUP_LAYER_STREAM_CACHE_DIR / "
+                    f"{STRIPE_DIRS_ENV} at a larger"
+                )
             raise ValueError(
                 f"layer streaming needs {required / 1e9:.2f} GB of additional "
                 f"disk space for {labels}, but only {free / 1e9:.2f} GB is free. "
                 f"Refusing before copying or sharding. Free disk space, point "
-                f"SOUP_SPECTRUM_CACHE_DIR / SOUP_LAYER_STREAM_CACHE_DIR at a "
-                f"larger contained volume, or choose a smaller base."
+                f"{remedy} volume, or choose a smaller base."
             )
     console.print(Panel("\n".join(lines), title="Layer streaming disk pre-flight"))
 

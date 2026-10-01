@@ -31,6 +31,7 @@ import re
 import tempfile
 from collections import OrderedDict
 from dataclasses import asdict, dataclass, field
+from dataclasses import replace as dataclass_replace
 from typing import (
     Any,
     Callable,
@@ -1023,6 +1024,9 @@ def inspect_shard_cache(
             f"stripe roots changed ({', '.join(index.stripe_roots) or 'none'} -> "
             f"{', '.join(stripe_roots) or 'none'})"
         )
+    # Equal as folders is not equal as strings (normpath collapses `x/..` lexically, the kernel
+    # does not), so from here on every path is built from the roots the CALLER validated.
+    index = dataclass_replace(index, stripe_roots=tuple(stripe_roots))
     from soup_cli.utils.stripe_roots import primary_cache_identity, stripe_folder_problem
 
     dirs = stripe_dirs(out_dir, index.stripe_roots)
@@ -1199,6 +1203,7 @@ def shard_checkpoint(
     resolved_out = _validate_out_dir(out_dir)
 
     from soup_cli.utils.stripe_roots import (
+        STRIPE_DIRS_ENV,
         layer_roots_for,
         primary_cache_identity,
         secure_stripe_folder,
@@ -1615,7 +1620,20 @@ def shard_checkpoint(
                     )
                 shared_specs.setdefault(name, spec)
             root = layer_roots[idx] if layer_roots else 0
-            _atomic_save(blob, layer_shard_path(shard_dirs[root], idx))
+            try:
+                _atomic_save(blob, layer_shard_path(shard_dirs[root], idx))
+            except OSError as exc:
+                if not root:
+                    raise
+                # A full or vanished second drive: say which root and which variable. The
+                # index on disk is still the old one, so nothing it names was touched.
+                raise OSError(
+                    exc.errno,
+                    f"writing decoder layer {idx} to the stripe root {stripe[root - 1]} (from "
+                    f"{STRIPE_DIRS_ENV}) failed: {exc}. The existing cache index is unchanged. "
+                    f"Free space on that drive, or name another folder in {STRIPE_DIRS_ENV} "
+                    f"(unset it to shard to one root).",
+                ) from exc
             if root:
                 # A copy of this layer from an earlier one-root layout is now stale. It is
                 # Soup's own file inside the contained primary root, so it WILL go — but not

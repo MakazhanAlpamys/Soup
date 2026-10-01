@@ -32,6 +32,9 @@ STRIPE_DIRS_ENV = "SOUP_LAYER_STREAM_STRIPE_DIRS"
 #: primary root plus this many extra roots is the most the depth can serve.
 MAX_STRIPE_DIRS = MAX_STREAM_READ_AHEAD - 2
 
+#: Windows device-namespace spellings (``\\?\C:\...``, ``\\.\C:\...``), refused by name.
+_DEVICE_NAMESPACE_PREFIXES = ("\\\\?\\", "\\\\.\\")
+
 
 class StripeRootError(ValueError):
     """A stripe root that breaks a rule; the message names the entry and the rule."""
@@ -138,18 +141,31 @@ def validate_stripe_root(entry: str, *, primary_root: str, accepted: Sequence[st
     ~9 s disk-kind probe a second time.
     """
     where = f"{STRIPE_DIRS_ENV} entry {entry!r}"
-    if any(ord(ch) < 0x20 for ch in entry):
+    # C0, DEL and C1: 0x9B alone is a complete CSI introducer on some terminals.
+    if any(ord(ch) < 0x20 or 0x7F <= ord(ch) <= 0x9F for ch in entry):
         raise StripeRootError(f"{where}: contains control characters")
+    if os.name == "nt" and entry.replace("/", "\\").startswith(_DEVICE_NAMESPACE_PREFIXES):
+        # realpath keeps such a prefix, and the overlap rule would then compare it with the
+        # primary as if it were another drive — a folder inside the primary passed.
+        raise StripeRootError(
+            f"{where}: a device-namespace path is not accepted; name the folder by its drive "
+            f"letter or UNC share"
+        )
     expanded = os.path.expanduser(entry)
     if not os.path.isabs(expanded):
         raise StripeRootError(f"{where}: must be an absolute path")
+    if os.name == "nt" and not os.path.splitdrive(expanded)[0]:
+        # isabs() accepts a path that starts with a separator but names no drive; the folder
+        # it means would then depend on the drive of the current directory.
+        raise StripeRootError(f"{where}: must name a drive letter or a UNC share")
     if os.path.islink(expanded):
         raise StripeRootError(f"{where}: must not be a symlink")
     if not os.path.isdir(expanded):
         raise StripeRootError(
             f"{where}: must be an existing directory. Soup creates only its per-model folder "
             f"inside a stripe root, never the root itself, so a drive that is not mounted "
-            f"cannot be mistaken for an empty one."
+            f"cannot be mistaken for an empty one. Reconnect the drive, or remove this entry "
+            f"(unset {STRIPE_DIRS_ENV} to re-shard to one root)."
         )
     resolved = os.path.realpath(expanded)
     primary = os.path.realpath(os.path.expanduser(primary_root))
