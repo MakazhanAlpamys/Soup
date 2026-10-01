@@ -68,6 +68,34 @@ def soup_callback_kwargs(
     return kwargs
 
 
+def build_soup_trainer_callback(
+    display: TrainingDisplay,
+    *,
+    config: Any,
+    tracker: Optional[object] = None,
+    run_id: str = "",
+    batch_size: Optional[int] = None,
+    output_dir: Optional[str] = None,
+) -> Any:
+    """Build a trainer callback with shared training and evaluation config."""
+    training_config = config.training
+    callback_cls = globals().get("SoupTrainerCallback")
+    if callback_cls is None:
+        callback_cls = __getattr__("SoupTrainerCallback")
+
+    return callback_cls(
+        display=display,
+        tracker=tracker,
+        run_id=run_id,
+        eval_config=getattr(config, "eval", None),
+        **soup_callback_kwargs(
+            training_config,
+            batch_size=batch_size,
+            output_dir=output_dir,
+        ),
+    )
+
+
 def _get_trainer_callback_base():
     """Lazy-resolve ``transformers.TrainerCallback``."""
     try:

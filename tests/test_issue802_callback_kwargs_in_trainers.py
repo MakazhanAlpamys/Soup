@@ -13,7 +13,11 @@ from unittest.mock import MagicMock
 import pytest
 
 from soup_cli.config.schema import SoupConfig, TrainingConfig
-from soup_cli.monitoring.callback import SoupTrainerCallback, soup_callback_kwargs
+from soup_cli.monitoring.callback import (
+    SoupTrainerCallback,
+    build_soup_trainer_callback,
+    soup_callback_kwargs,
+)
 
 TRAINER_DIR = Path(__file__).resolve().parent.parent / "src" / "soup_cli" / "trainer"
 
@@ -49,14 +53,14 @@ UNSUPPORTED_CALLBACK_TRAINERS = {
 
 
 class TestTrainerCallbackKwargsUsage:
-    """Verify that all 16 trainers instantiate SoupTrainerCallback using
-    **soup_callback_kwargs(...) and track self._batch_size.
-    """
+    """Verify that all 16 trainers use the shared callback builder."""
 
     def test_all_expected_trainers_exist(self) -> None:
         for filename in EXPECTED_CALLBACK_TRAINERS | UNSUPPORTED_CALLBACK_TRAINERS:
             filepath = TRAINER_DIR / filename
-            assert filepath.is_file(), f"Trainer file {filename} does not exist in {TRAINER_DIR}"
+            assert filepath.is_file(), (
+                f"Trainer file {filename} does not exist in {TRAINER_DIR}"
+            )
 
     def test_ast_scan_trainer_callback_kwargs_unification(self) -> None:
         discovered_callback_trainers: set[str] = set()
@@ -64,30 +68,94 @@ class TestTrainerCallbackKwargsUsage:
         for py_file in sorted(TRAINER_DIR.glob("*.py")):
             if py_file.name == "__init__.py":
                 continue
+
             content = py_file.read_text(encoding="utf-8")
-            if "SoupTrainerCallback(" in content:
-                discovered_callback_trainers.add(py_file.name)
+            tree = ast.parse(content, filename=str(py_file))
 
-                # Must import soup_callback_kwargs
-                assert "soup_callback_kwargs" in content, (
-                    f"{py_file.name} references SoupTrainerCallback but lacks "
-                    "soup_callback_kwargs import"
-                )
+            builder_calls = []
+            direct_callback_calls = []
 
-                # Must pass **soup_callback_kwargs(...)
-                assert "**soup_callback_kwargs(" in content, (
-                    f"{py_file.name} does not pass **soup_callback_kwargs(...) to "
-                    "SoupTrainerCallback"
-                )
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Call):
+                    continue
 
-                # Must record self._batch_size in setup() or class
-                assert "self._batch_size" in content, (
-                    f"{py_file.name} does not track self._batch_size"
-                )
+                func_name = ast.unparse(node.func)
+
+                if func_name == "build_soup_trainer_callback":
+                    builder_calls.append(node)
+                elif func_name == "SoupTrainerCallback":
+                    direct_callback_calls.append(node)
+
+            # Direct callback construction is forbidden in every trainer.
+            assert not direct_callback_calls, (
+                f"{py_file.name} directly instantiates SoupTrainerCallback; "
+                "use build_soup_trainer_callback instead"
+            )
+
+            if not builder_calls:
+                continue
+
+            discovered_callback_trainers.add(py_file.name)
+
+            # Each supported trainer must have exactly one shared builder call.
+            assert len(builder_calls) == 1, (
+                f"{py_file.name} must have exactly one "
+                "build_soup_trainer_callback call"
+            )
+
+            builder = builder_calls[0]
+            keywords = {kw.arg: kw.value for kw in builder.keywords if kw.arg}
+
+            assert "config" in keywords, (
+                f"{py_file.name} does not pass config to "
+                "build_soup_trainer_callback"
+            )
+            assert ast.unparse(keywords["config"]) == "self.config", (
+                f"{py_file.name} must pass config=self.config"
+            )
+
+            assert "batch_size" in keywords, (
+                f"{py_file.name} does not pass batch_size to "
+                "build_soup_trainer_callback"
+            )
+            assert ast.unparse(keywords["batch_size"]) == "self._batch_size", (
+                f"{py_file.name} must pass batch_size=self._batch_size"
+            )
 
         assert discovered_callback_trainers == EXPECTED_CALLBACK_TRAINERS, (
-            f"Expected {EXPECTED_CALLBACK_TRAINERS}, but found {discovered_callback_trainers}"
+            f"Expected {EXPECTED_CALLBACK_TRAINERS}, "
+            f"but found {discovered_callback_trainers}"
         )
+
+class TestBuildSoupTrainerCallback:
+    """Tests for the shared trainer callback builder."""
+
+    def test_passes_eval_config_to_callback(self) -> None:
+        config = SoupConfig(
+            base="sshleifer/tiny-gpt2",
+            task="grpo",
+            data={"train": "train.jsonl", "format": "chatml"},
+            eval={
+                "auto_eval": True,
+                "benchmarks": ["mmlu"],
+                "custom_tasks": "custom.jsonl",
+            },
+        )
+        display = MagicMock()
+
+        callback = build_soup_trainer_callback(
+            display,
+            config=config,
+            tracker=MagicMock(),
+            run_id="test-run",
+            batch_size=4,
+            output_dir="/tmp/output",
+        )
+
+        assert callback.eval_config is config.eval
+        assert callback.run_id == "test-run"
+        assert callback.output_dir == "/tmp/output"
+
 
     def test_unsupported_trainers_do_not_instantiate_callback(self) -> None:
         for filename in UNSUPPORTED_CALLBACK_TRAINERS:
@@ -400,3 +468,35 @@ class TestTrainerWrapperBehaviouralCallbackWiring:
         assert cb._spike_recovery_enabled is True
         assert cb._grad_accum_enabled is True
         assert cb._grad_accum_batch == 8
+
+    def test_grpo_wrapper_train_wires_eval_config(
+        self, tmp_path: Path
+    ) -> None:
+        from soup_cli.trainer.grpo import GRPOTrainerWrapper
+        wrapper = object.__new__(GRPOTrainerWrapper)
+        wrapper.config = SoupConfig(
+            base="sshleifer/tiny-gpt2",
+            task="grpo",
+            data={"train": "train.jsonl", "format": "chatml"},
+            eval={
+                "auto_eval": True,
+                "benchmarks": ["mmlu"],
+            },
+        )
+        wrapper._batch_size = 4
+        wrapper._output_dir = str(tmp_path)
+        wrapper.tokenizer = MagicMock()
+        mock_trainer = MagicMock()
+        mock_trainer.state.log_history = []
+        wrapper.trainer = mock_trainer
+        captured_callbacks: list[object] = []
+        mock_trainer.add_callback.side_effect = captured_callbacks.append
+        wrapper.train(display=MagicMock())
+        soup_cbs = [
+            cb for cb in captured_callbacks if isinstance(cb, SoupTrainerCallback)
+        ]
+        assert len(soup_cbs) == 1
+        cb = soup_cbs[0]
+        assert cb.eval_config is wrapper.config.eval
+        assert cb.eval_config.auto_eval is True
+        assert cb.eval_config.benchmarks == ["mmlu"]

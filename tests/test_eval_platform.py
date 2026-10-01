@@ -965,6 +965,31 @@ class TestCallbackAutoEval:
             callback._run_auto_eval()
             mock_bench.assert_called_once()
 
+    def test_auto_eval_failure_does_not_raise(self, capsys):
+        from soup_cli.config.schema import EvalConfig
+        from soup_cli.monitoring.callback import SoupTrainerCallback
+
+        display = MagicMock()
+        eval_config = EvalConfig(
+            auto_eval=True,
+            benchmarks=["mmlu"],
+        )
+        callback = SoupTrainerCallback(
+            display=display,
+            eval_config=eval_config,
+            output_dir="/tmp/model",
+            run_id="test_run",
+        )
+
+        with patch(
+            "soup_cli.commands.eval.benchmark",
+            side_effect=RuntimeError("evaluation failed"),
+        ):
+            callback._run_auto_eval()
+
+        captured = capsys.readouterr()
+        assert "Auto-eval benchmark failed" in captured.out
+
 
 # ═══════════════════════════════════════════════════════════
 # CLI — eval subcommands
