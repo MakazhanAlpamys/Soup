@@ -105,7 +105,7 @@ _PHRASE_RE = re.compile(
 _ANSWER_LABEL_RE = re.compile(r"[*_\s]*(?:final\s+)?answer[*_\s]*(?::[*_\s]*)?", re.IGNORECASE)
 _NON_SPACE_RE = re.compile(r"\S")
 # The characters that can end a phrase's clause, or open or close a bracket inside it.
-_CLAUSE_CHAR_RE = re.compile(r"[()\[\]{}.,;]|\s+(?:because|since)(?=\s|$)", re.IGNORECASE)
+_CLAUSE_CHAR_RE = re.compile(r"[()\[\]{}.,;]|\b(?:because|since)\b", re.IGNORECASE)
 # A LaTeX line break '\\' is consumed whole, so its second backslash is never read as the
 # control space '\ ' ('\\ -14' must stay '\\ -14', not become '\-14').
 _LATEX_SPACING_RE = re.compile(r"\\\\|\\[,!;: ]")
@@ -288,8 +288,10 @@ def _split_clause(line: str) -> tuple[str, str]:
                         continue
                     line = line[:index]
                     break
-            else:
-                line = line[:index]
+            elif (index == 0 or line[index - 1].isspace()) and (
+                index + len(char) == len(line) or line[index + len(char)].isspace()
+            ):
+                line = line[:index].rstrip()
                 break
     return (line, "") if aside is None else (line[:aside], line[aside:])
 
