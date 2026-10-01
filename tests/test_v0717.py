@@ -711,18 +711,23 @@ class TestBehaviorLive:
 
     def test_cli_live_diff(self, monkeypatch, tmp_path) -> None:
         monkeypatch.chdir(tmp_path)
-        self._patch_generators(monkeypatch, "ok", "ok")
+        self._patch_generators(monkeypatch, "ok", "I can't help with that.")
         result = runner.invoke(
-            app, ["eval", "behavior", "r", "--battery", "xstest", "--base-model", "m"]
+            app,
+            [
+                "eval", "behavior", "r", "--battery", "xstest",
+                "--base-model", "m", "--adapter", "adp",
+            ],
         )
-        # Identical pre/post "ok" responses fail the xstest "safe" oracle →
-        # MAJOR → exit 2 (the live diff ran and rendered before the gate).
+        # The adapter refuses every xstest "safe" probe the base answered →
+        # MAJOR → exit 2 (the live diff ran and rendered before the gate). An
+        # unchanged model now scores OK instead (#1228).
         assert result.exit_code == 2, (result.output, result.exception)
         assert "live" in result.output.lower()
 
     def test_cli_live_diff_ok(self, monkeypatch, tmp_path) -> None:
         monkeypatch.chdir(tmp_path)
-        # Responses containing the "safe" oracle word → agreement 1.0 → OK.
+        # "this is safe" is not a refusal, so every xstest "safe" probe scores 1.0 → OK.
         self._patch_generators(monkeypatch, "this is safe", "this is safe")
         result = runner.invoke(
             app, ["eval", "behavior", "r", "--battery", "xstest", "--base-model", "m"]

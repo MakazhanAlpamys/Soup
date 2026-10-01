@@ -11,7 +11,7 @@ import os
 
 import pytest
 
-from tests.conftest import cuda_available
+from tests.conftest import accelerator_device, mps_is_the_accelerator
 
 
 # ==========================================================================
@@ -770,7 +770,7 @@ class TestShardGuards:
         with pytest.raises(ValueError, match="decoder layer"):
             shard_checkpoint(str(src), str(tmp_path / "out"), dtype="float32")
 
-    @pytest.mark.skipif(os.name == "nt", reason="POSIX symlink semantics")
+    @pytest.mark.requires_symlink
     def test_symlinked_source_shard_is_skipped(self, tmp_path):
         """Mirrors spectrum_scan._discover_safetensors."""
         import torch
@@ -1226,25 +1226,6 @@ class TestStreamBufferBounds:
 # The four classes below are SILENT failures: if any regresses, training still
 # runs and still converges. That is exactly why they are tests, not comments.
 # ==========================================================================
-
-def _mps_is_the_accelerator():
-    """True on an Apple-Silicon runner with no CUDA.
-
-    transformers picks `mps` as its default device there, while this suite
-    builds the streamed model on `cpu` — the two then disagree and any real
-    training step raises "found at least two devices". Most historical step
-    tests therefore stay on CPU; dedicated MPS controls exercise the hardware
-    path explicitly.
-    """
-    try:
-        import torch
-
-        if cuda_available():
-            return False
-        backend = getattr(torch.backends, "mps", None)
-        return bool(backend is not None and backend.is_available())
-    except Exception:
-        return False
 
 
 def _tiny_llama_dir(tmp_path, n_layers=2, tie=True):
@@ -1739,7 +1720,7 @@ class TestStreamedForwardParityCpu:
             assert torch.equal(two(input_ids=ids).logits, three(input_ids=ids).logits)
 
 
-@pytest.mark.skipif(not _mps_is_the_accelerator(), reason="needs Apple Silicon MPS")
+@pytest.mark.skipif(not mps_is_the_accelerator(), reason="needs Apple Silicon MPS")
 class TestStreamedLargeLayerParityMps:
     def test_untied_logits_match_resident(self, tmp_path):
         """Supplementary #324 hardware control; the required CI oracle is CPU."""
@@ -2370,7 +2351,7 @@ class TestShardWriteContainment:
         with pytest.raises(ValueError, match="under"):
             shard_checkpoint(src, outside, dtype="float32")
 
-    @pytest.mark.skipif(os.name == "nt", reason="POSIX symlink semantics")
+    @pytest.mark.requires_symlink
     def test_symlinked_ancestor_is_resolved_not_followed_blindly(self, tmp_path):
         from soup_cli.utils.layer_shard import shard_checkpoint
 
@@ -2495,10 +2476,10 @@ class TestStreamingEndToEndSetup:
                 for _ in range(4)
             ]
         }
-        # Use the REAL device: TrainingArguments picks cuda when it is
+        # Use the REAL device: TrainingArguments picks cuda or mps when one is
         # available, so forcing the model to cpu here would only produce a
         # device mismatch that no user would ever hit.
-        device = "cuda" if cuda_available() else "cpu"
+        device = accelerator_device()
         return SFTTrainerWrapper(cfg, device=device), dataset
 
     def test_setup_builds_a_real_trl_trainer(self, tmp_path, monkeypatch):
@@ -2514,10 +2495,6 @@ class TestStreamingEndToEndSetup:
         wrapper.setup(dataset)
         assert wrapper.trainer.args.gradient_checkpointing is False
 
-    @pytest.mark.skipif(
-        _mps_is_the_accelerator(),
-        reason="MPS is untested in v0.72.0 (measured on CUDA + CPU only)",
-    )
     def test_one_training_step_actually_runs(self, tmp_path, monkeypatch):
         """Forward + backward + optimizer step through the streamed layers."""
         wrapper, dataset = self._wrapper(tmp_path, monkeypatch)

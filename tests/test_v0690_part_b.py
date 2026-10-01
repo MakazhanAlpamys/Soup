@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import dataclasses
 import os
-import sys
 from pathlib import Path
 
 import pytest
@@ -495,7 +494,7 @@ class TestLoadSuiteYaml:
         with pytest.raises(ValueError, match="cwd"):
             expectations.load_suite_yaml(str(outside / "s.yaml"))
 
-    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX symlink")
+    @pytest.mark.requires_symlink
     def test_symlink_rejected(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.chdir(tmp_path)
         target = _write(tmp_path / "real.yaml", "expectations:\n  - name: expect_no_pii\n")

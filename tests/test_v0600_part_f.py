@@ -310,7 +310,7 @@ class TestSecurityReviewFixes:
         text = src.read_text(encoding="utf-8")
         assert "tarfile.data_filter" in text
 
-    @pytest.mark.skipif(os.name == "nt", reason="POSIX symlink semantics")
+    @pytest.mark.requires_symlink
     def test_build_rejects_symlink_at_output(self, tmp_path, monkeypatch):
         """Pre-placed symlink at plan.output is rejected (TOCTOU defence)."""
         monkeypatch.chdir(tmp_path)

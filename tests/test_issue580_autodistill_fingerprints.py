@@ -143,6 +143,28 @@ def test_teacher_weight_hashing_uses_bounded_streaming_reads(tmp_path, monkeypat
     assert set(read_sizes) == {4}
 
 
+def test_teacher_weight_hashing_does_not_retain_shard_bytes(tmp_path, monkeypatch):
+    """#1341: bounded reads alone don't stop the chunks being kept and joined."""
+    import soup_cli.autodistill.fingerprints as fingerprints
+
+    plan, teacher_root, _, _, _ = _local_plan(tmp_path)
+    weights_path = teacher_root / "model.safetensors"
+    original_stream_file = fingerprints._stream_file
+    retained: dict[Path, bytes] = {}
+
+    def recording_stream_file(path, *, retain_bytes):
+        size, digest, data = original_stream_file(path, retain_bytes=retain_bytes)
+        retained[Path(path)] = data
+        return size, digest, data
+
+    monkeypatch.setattr(fingerprints, "_HASH_CHUNK_BYTES", 4)
+    monkeypatch.setattr(fingerprints, "_stream_file", recording_stream_file)
+
+    verify_teacher_fingerprint(plan, teacher_root=teacher_root)
+
+    assert retained[weights_path] == b""
+
+
 def test_tokenizer_requires_exact_files_template_and_renderer(tmp_path):
     plan, _, tokenizer_root, _, template = _local_plan(tmp_path)
     with pytest.raises(ArtifactCorruptionError, match="chat template"):
@@ -173,6 +195,7 @@ def test_dataset_verifies_source_bytes_normalized_hash_and_rows(tmp_path):
         verify_dataset_fingerprint(plan, dataset_root=dataset_root)
 
 
+@pytest.mark.requires_symlink
 def test_fingerprint_verifier_rejects_symlinked_files(tmp_path):
     plan, teacher_root, _, _, _ = _local_plan(tmp_path)
     weights = teacher_root / "model.safetensors"

@@ -21,6 +21,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from tests.conftest import strip_ansi
+
 
 # ---------------------------------------------------------------------------
 # Task A1 — expression parser
@@ -299,7 +301,7 @@ class TestReadAdapterBase:
         d.mkdir()
         assert read_adapter_base("ad") is None
 
-    @pytest.mark.skipif(os.name == "nt", reason="symlink needs admin on Windows")
+    @pytest.mark.requires_symlink
     def test_symlinked_config_rejected(self, tmp_path, monkeypatch):
         from soup_cli.utils.adapter_arithmetic import read_adapter_base
 
@@ -508,7 +510,7 @@ class TestArithmeticCli:
             tmp_path,
         )
         assert res.exit_code == 1
-        assert "name=path" in res.output
+        assert "name=path" in strip_ansi(res.output)
 
     def test_output_outside_cwd_exit_1(self, tmp_path):
         a = _make_adapter(tmp_path / "coder", "meta/x", {"w": self._rng_tensor((8, 16), 10)})
@@ -677,7 +679,7 @@ training:
             ("  loraplus_lr_ratio: 4.0\n", "loraplus_lr_ratio"),
             ("  unfrozen_parameters: ['model.layers.0.mlp']\n", "unfrozen_parameters"),
             ("  expand_layers: 2\n", "expand_layers"),
-            ("  freeze_trainable_layers: 3\n", "freeze_trainable_layers"),
+            ("  expand_layers: 2\n  freeze_trainable_layers: 2\n", "freeze_trainable_layers"),
         ],
     )
     def test_mutual_exclusion(self, extra, kw):

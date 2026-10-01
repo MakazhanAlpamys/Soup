@@ -459,11 +459,10 @@ def test_load_jsonl_rows_skips_malformed(tmp_path):
     assert len(rows) == 2
 
 
+@pytest.mark.requires_symlink
 def test_load_jsonl_rows_symlink_rejected(tmp_path):
     from soup_cli.utils.data_score import load_jsonl_rows
 
-    if os.name == "nt":
-        pytest.skip("symlink test POSIX-only")
     os.chdir(tmp_path)
     real = tmp_path / "real.jsonl"
     real.write_text('{"x":1}', encoding="utf-8")

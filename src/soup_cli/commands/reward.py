@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import tempfile
 from dataclasses import asdict
 from typing import NoReturn, Optional
 
@@ -185,18 +186,40 @@ def synth(
         except (ValueError, OSError) as exc:
             _fail(str(exc))
 
-    # Write, then LOAD it back through the real reward-loader path (round-trip
-    # validation) and calibrate the loaded callable.
-    atomic_write_text(result.source, output)
+    # Never touch ``output`` until the candidate has been loaded back and
+    # calibrated: write it to a fresh temp sibling instead, and os.replace
+    # that sibling onto ``output`` only once calibration accepts it. A
+    # refusal, a calibration error, or a crash (Ctrl-C / SIGKILL) at any
+    # point before that final os.replace leaves ``output`` byte-identical to
+    # what it was — there is nothing to restore, because nothing at
+    # ``output`` was ever moved or overwritten.
+    parent = os.path.dirname(os.path.abspath(output)) or "."
+    os.makedirs(parent, exist_ok=True)
+    try:
+        fd, candidate_path = tempfile.mkstemp(
+            prefix=".soup.reward-candidate.", suffix=".py", dir=parent
+        )
+    except OSError as exc:
+        _fail(f"could not create candidate verifier: {exc}")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(result.source)
+    except OSError as exc:
+        _cleanup(candidate_path)
+        _fail(f"could not write candidate verifier: {exc}")
+
+    # LOAD the candidate back through the real reward-loader path (round-trip
+    # validation, from its own temp path — ``output`` is untouched) and
+    # calibrate the loaded callable.
     try:
         from soup_cli.trainer.rewards import load_reward_fn
-        reward_fn = load_reward_fn(output)
+        reward_fn = load_reward_fn(candidate_path)
         golds = rs.extract_golds(rows, field=field)
         negatives = rs.perturb_negatives(golds, result.kind)
         report = rs.calibrate(reward_fn, golds, negatives, kind=result.kind,
                               min_discrimination=min_discrimination)
-    except Exception as exc:  # noqa: BLE001 — clean up the partial artifact
-        _cleanup(output)
+    except Exception as exc:  # noqa: BLE001 — clean up the candidate only
+        _cleanup(candidate_path)
         _fail(f"calibration failed: {exc}")
 
     # Write the diagnostic report (path already validated up front) for BOTH the
@@ -209,20 +232,35 @@ def synth(
             console.print(f"[yellow]Warning: could not write report: {escape(str(exc))}[/]")
 
     if report.refused:
-        _cleanup(output)
+        _cleanup(candidate_path)
         console.print(Panel(
             escape(report.reason),
             title="[bold red]verifier refused (not emitted)[/]", border_style="red"))
         raise typer.Exit(2)
 
+    # Accepted: atomically swap the calibrated candidate onto ``output`` —
+    # the only moment the previous verifier, if any, is replaced. Guard this
+    # too: a failure here (disk full, a lock held on ``output``) must not
+    # leave the candidate orphaned or crash with a raw traceback.
+    try:
+        enforce_under_cwd_and_no_symlink(output, "output path")
+        os.replace(candidate_path, output)
+    except (OSError, ValueError) as exc:
+        _cleanup(candidate_path)
+        _fail(f"could not replace '{output}': {exc}")
+
     console.print(_render_report_panel(report, result.kind, output))
     raise typer.Exit(0)
 
 
-def _cleanup(path: str) -> None:
-    """Remove a just-written artifact; best-effort (never masks the real error)."""
+def _cleanup(candidate_path: str) -> None:
+    """Best-effort removal of a candidate verifier that was refused or failed
+    calibration. ``output`` was never touched, so there is nothing to restore
+    — only the temp candidate needs to go. Never masks the real error (a
+    failed calibration / refusal) that is about to be reported.
+    """
     try:
-        os.remove(path)
+        os.remove(candidate_path)
     except OSError:
         pass
 

@@ -21,8 +21,11 @@ import ast
 import importlib.util
 import json
 import re
+import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
@@ -31,12 +34,18 @@ _HARNESS = _REPO_ROOT / "benchmarks" / "harness" / "issue361_nf4_throughput.py"
 
 
 def _load_harness():
-    spec = importlib.util.spec_from_file_location("issue361_nf4_throughput", _HARNESS)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
+    # The harness imports its sibling ``source_provenance`` (#1387), as it does
+    # when run as a script from benchmarks/harness.
+    sys.path.insert(0, str(_HARNESS.parent))
+    try:
+        spec = importlib.util.spec_from_file_location("issue361_nf4_throughput", _HARNESS)
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+        return module
+    finally:
+        sys.path.remove(str(_HARNESS.parent))
 
 
 _harness = _load_harness()
@@ -172,7 +181,7 @@ class TestTheRowNamesItsTree:
 
     def test_source_sha_is_a_commit_or_an_honest_unknown(self) -> None:
         sha = _harness._source_sha()
-        assert sha == "unknown" or re.fullmatch(r"[0-9a-f]{40}", sha)
+        assert sha == "unknown" or re.fullmatch(r"[0-9a-f]{40}(-dirty)?", sha)
 
     def test_the_versions_blob_carries_it(self) -> None:
         assert _harness._versions()["commit"] == _harness._source_sha()
@@ -181,6 +190,37 @@ class TestTheRowNamesItsTree:
         text = _HARNESS.read_text(encoding="utf-8")
         assert "source commit:" in text
         assert '"versions": versions' in text
+
+    @pytest.mark.parametrize("status", ["", " M src/soup_cli/changed.py\n"])
+    def test_source_sha_uses_imported_package_tree_and_marks_dirty(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, status: str
+    ) -> None:
+        import soup_cli
+
+        package_file = soup_cli.__file__
+        assert package_file is not None
+        package_dir = Path(package_file).resolve().parent
+        expected_sha = "a" * 40
+        calls: list[tuple[list[str], Path]] = []
+
+        def fake_run(command: list[str], *, cwd: Path, **kwargs: object) -> Any:
+            calls.append((command, cwd))
+            if command == ["git", "rev-parse", "--show-toplevel"]:
+                return SimpleNamespace(stdout=f"{tmp_path}\n")
+            if command == ["git", "rev-parse", "HEAD"]:
+                return SimpleNamespace(stdout=f"{expected_sha}\n")
+            return SimpleNamespace(stdout=status)
+
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr(subprocess, "run", fake_run)
+
+        assert _harness._source_sha() == expected_sha + ("-dirty" if status else "")
+        assert calls == [
+            (["git", "rev-parse", "--show-toplevel"], package_dir),
+            (["git", "ls-files", "--error-unmatch", str(Path(package_file).resolve())], tmp_path),
+            (["git", "rev-parse", "HEAD"], tmp_path),
+            (["git", "status", "--porcelain", "--untracked-files=normal"], tmp_path),
+        ]
 
 
 class TestNumeratorConvention:
@@ -370,7 +410,13 @@ class TestThePinGuardIsWired:
 class TestGateRecordCarriesThePendingLabel:
     """The gate file is the row's future home: it must keep saying the
     headline predates the #331 repair and name this harness as the protocol,
-    so a number pasted there before the card run has something to contradict."""
+    so a number pasted there before the card run has something to contradict.
+
+    The reservation is satisfied as of 2026-09-19 — the run date, recovered
+    from `row-361.json`'s file time — so this class now pins
+    the pre-registration as history: the pending wording stays verbatim
+    (marked satisfied) beside the measured row rather than being rewritten.
+    """
 
     def test_the_pending_label_and_harness_pointer_are_present(self) -> None:
         gate = _REPO_ROOT / "benchmarks" / "gate-v0.72.2-nf4.md"

@@ -18,6 +18,7 @@ import yaml
 from pydantic import BaseModel, Field, field_validator
 
 from soup_cli import __version__
+from soup_cli.eval.results import newest_eval_rows
 from soup_cli.utils.paths import atomic_write_text, is_under_cwd
 
 logger = logging.getLogger(__name__)
@@ -62,7 +63,7 @@ class GateTask(BaseModel):
     tasks: Optional[str] = Field(
         default=None, description="JSONL file of custom eval tasks",
     )
-    scorer: Optional[Literal["exact", "contains", "regex", "semantic"]] = Field(
+    scorer: Optional[Literal["exact", "contains", "answer", "regex", "semantic"]] = Field(
         default=None, description="Scorer for type=custom",
     )
     # type=judge
@@ -265,21 +266,20 @@ def _emit_baseline_warning(
     logger.warning("%s", message)
 
 
-def _registry_provenance(rows: list[dict]) -> Optional[dict[str, object]]:
-    """Best-effort stamp from eval_results ``details_json`` rows."""
-    for row in rows:
-        raw = row.get("details_json")
-        if not raw:
-            continue
-        try:
-            details = json.loads(raw) if isinstance(raw, str) else raw
-        except (TypeError, ValueError, json.JSONDecodeError):
-            continue
-        if not isinstance(details, Mapping):
-            continue
-        prov = details.get(_BASELINE_PROVENANCE_KEY)
-        if isinstance(prov, Mapping):
-            return dict(prov)
+def _row_provenance(row: Mapping[str, object]) -> Optional[dict[str, object]]:
+    """Best-effort stamp from one eval_results row's ``details_json``."""
+    raw = row.get("details_json")
+    if not raw:
+        return None
+    try:
+        details = json.loads(raw) if isinstance(raw, str) else raw
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return None
+    if not isinstance(details, Mapping):
+        return None
+    prov = details.get(_BASELINE_PROVENANCE_KEY)
+    if isinstance(prov, Mapping):
+        return dict(prov)
     return None
 
 
@@ -298,8 +298,10 @@ def resolve_baseline(
 
     Provenance is checked on read. A correctly stamped baseline matching the
     running scorer revision is silent. An unstamped (pre-existing) baseline
-    warns exactly once naming unknown provenance. A stamp whose
-    ``scorer_revision`` disagrees warns about the mismatch.
+    warns about unknown provenance, and a stamp whose ``scorer_revision``
+    disagrees warns about the mismatch. A file baseline warns at most once;
+    a registry baseline warns once per distinct problem and names the
+    affected benchmarks.
     """
     if not spec:
         return {}
@@ -317,16 +319,25 @@ def resolve_baseline(
                     f"registry baseline not found: {ref} (use `soup registry list`)"
                 )
             rows = store.get_eval_results(entry_id)
-        scores = {
-            row.get("benchmark", ""): float(row.get("score", 0.0))
-            for row in rows
-            if row.get("benchmark") and row.get("score") is not None
+        newest = {
+            row["benchmark"]: row
+            for row in newest_eval_rows(rows)
         }
+        scores = {name: float(row["score"]) for name, row in newest.items()}
         # Registry rows predate the stamp (or carry it inside details_json).
-        provenance = _registry_provenance(rows)
-        message = _provenance_warning(provenance)
-        if message is not None and scores:
-            _emit_baseline_warning(message, warn=warn)
+        # Checked per benchmark: re-measuring one benchmark says nothing about
+        # the scale of another that was not re-measured. Benchmarks sharing a
+        # problem share one warning, which names them.
+        stale: dict[str, list[str]] = {}
+        for name, row in newest.items():
+            message = _provenance_warning(_row_provenance(row))
+            if message is not None:
+                stale.setdefault(message, []).append(name)
+        for message, names in stale.items():
+            _emit_baseline_warning(
+                f"{message} Affected benchmark(s): {', '.join(sorted(names))}.",
+                warn=warn,
+            )
         return scores
 
     # Filesystem path
@@ -523,7 +534,7 @@ def _run_custom_task(
     """Run a type=custom task and return its aggregate score in [0, 1]."""
     from dataclasses import replace
 
-    from soup_cli.eval.custom import load_eval_tasks, score_task
+    from soup_cli.eval.custom import load_eval_tasks, require_single_answer, score_task
 
     if not task.tasks:
         raise ValueError(f"task '{task.name}' is type=custom but 'tasks' is missing")
@@ -531,6 +542,9 @@ def _run_custom_task(
     if not tasks:
         return 0.0
     # Override scoring if the suite specified one (EvalTask.scoring field)
+    if task.scorer == "answer":
+        for row, eval_task in enumerate(tasks, start=1):
+            require_single_answer(eval_task.expected, f"task '{task.name}' row {row}")
     if task.scorer is not None:
         tasks = [replace(t, scoring=task.scorer) for t in tasks]
     total = 0.0

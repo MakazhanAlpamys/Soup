@@ -59,6 +59,7 @@ def test_regular_hf_cache_weights_are_used_in_place(tmp_path, monkeypatch) -> No
     assert plans[0].materialize_bytes == 0
 
 
+@pytest.mark.requires_symlink
 def test_refusal_callback_runs_before_a_symlinked_snapshot_is_copied(
     tmp_path,
     monkeypatch,
@@ -93,6 +94,7 @@ def test_refusal_callback_runs_before_a_symlinked_snapshot_is_copied(
     assert calls == [None], "the materializing download happened before pre-flight"
 
 
+@pytest.mark.requires_symlink
 def test_hf_blob_metadata_reuses_an_existing_materialized_copy(
     tmp_path,
     monkeypatch,
@@ -132,6 +134,7 @@ def test_hf_blob_metadata_reuses_an_existing_materialized_copy(
     assert plan.source_files[0][2] == (materialized / "model.safetensors").stat().st_mtime_ns
 
 
+@pytest.mark.requires_symlink
 def test_spectrum_override_remains_contained_and_is_used(tmp_path, monkeypatch) -> None:
     from soup_cli.utils import hubs
     from soup_cli.utils.spectrum_scan import plan_model_weights

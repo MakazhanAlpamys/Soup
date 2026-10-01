@@ -160,6 +160,16 @@ class TestDecisionEngine:
         spacious = decide_peft(data_size=200_000, model_size_b=8.0, vram_gb=80.0)
         assert spacious["use_dora"] is True
 
+    @pytest.mark.parametrize("quant", ["gptq", "awq", "aqlm", "eetq"])
+    def test_decide_peft_no_dora_on_prequantized(self, quant):
+        """peft cannot apply DoRA to these layers; bnb / none keep it (#1466)."""
+        from soup_cli.autopilot.decisions import decide_peft
+
+        kwargs = {"data_size": 200_000, "model_size_b": 8.0, "vram_gb": 80.0}
+        assert decide_peft(**kwargs, quantization=quant)["use_dora"] is False
+        assert decide_peft(**kwargs, quantization="4bit")["use_dora"] is True
+        assert decide_peft(**kwargs, quantization="none")["use_dora"] is True
+
     def test_decide_lr_scales_with_rank(self):
         from soup_cli.autopilot.decisions import decide_lr
 
@@ -186,11 +196,18 @@ class TestDecisionEngine:
         result = decide_max_length(p95_tokens=20000, model_context=4096)
         assert result == 4096
 
-    def test_decide_performance_flags_ampere(self):
-        from soup_cli.autopilot.decisions import decide_performance_flags
+    def test_decide_performance_flags_ampere(self, monkeypatch):
+        from soup_cli.autopilot import decisions
 
-        flags = decide_performance_flags(gpu_name="rtx4090", compute_capability=8.9)
+        # #1212 — the flags are install-aware: Ampere+ alone is not enough,
+        # the packages must also be present (patched here; CI has neither).
+        monkeypatch.setattr(decisions, "check_liger_available", lambda: True)
+        monkeypatch.setattr(
+            decisions, "check_flash_attn_available", lambda: "flash_attention_2"
+        )
+        flags = decisions.decide_performance_flags(gpu_name="rtx4090", compute_capability=8.9)
         assert flags["use_flash_attn"] is True
+        assert flags["use_liger"] is True
 
     def test_decide_performance_flags_old_gpu(self):
         from soup_cli.autopilot.decisions import decide_performance_flags
@@ -272,6 +289,31 @@ class TestBuildConfig:
         assert cfg.base == "meta-llama/Llama-3.1-8B-Instruct"
         assert cfg.task == "sft"
         assert cfg.training.quantization in ("4bit", "8bit", "none")
+
+    @pytest.mark.parametrize(
+        "model, expected",
+        [
+            ("TheBloke/Mistral-7B-Instruct-v0.2-GPTQ", "gptq"),
+            ("TheBloke/Mistral-7B-Instruct-v0.2-AWQ", "awq"),
+        ],
+    )
+    def test_build_soup_config_no_dora_on_prequantized_base(self, tmp_path, model, expected):
+        """peft refuses DoRA on GPTQ / AWQ / AQLM / EETQ layers (#1466)."""
+        from soup_cli.autopilot.generate_config import build_soup_config
+
+        data_file = tmp_path / "big.jsonl"
+        data_file.write_text(
+            "".join(
+                json.dumps({"instruction": f"q{i}", "output": f"a{i}"}) + "\n"
+                for i in range(100_001)
+            ),
+            encoding="utf-8",
+        )
+        cfg = build_soup_config(
+            model=model, data_path=str(data_file), goal="chat", vram_gb=24.0,
+        )
+        assert cfg.training.quantization == expected
+        assert cfg.training.lora.use_dora is False
 
     def test_write_yaml(self, tmp_path):
         from soup_cli.autopilot.generate_config import build_soup_config, write_yaml
@@ -397,3 +439,4 @@ class TestGPUBudgetParsing:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+

@@ -949,10 +949,7 @@ def test_load_recipe_yaml_rejects_null_byte_path(tmp_path, monkeypatch):
         load_recipe_yaml("a\x00b.yaml")
 
 
-import sys  # noqa: E402  -- keep imports tight for symlink-test guard
-
-
-@pytest.mark.skipif(sys.platform == "win32", reason="symlinks need privilege on Windows")
+@pytest.mark.requires_symlink
 def test_load_recipe_yaml_rejects_symlink(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     target = tmp_path / "real.yaml"

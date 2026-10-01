@@ -208,7 +208,7 @@ def test_write_lock_outside_cwd_rejected(tmp_path, monkeypatch):
         write_lock(lock, str(outside))
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="POSIX symlinks")
+@pytest.mark.requires_symlink
 def test_write_lock_symlink_rejected(tmp_path, monkeypatch):
     from soup_cli.utils.env_lock import EnvLock, write_lock
 

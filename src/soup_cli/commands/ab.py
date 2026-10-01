@@ -12,6 +12,8 @@ from rich.table import Table
 
 from soup_cli.commands._webhook_cli import emit_webhooks, validate_webhook_flags
 from soup_cli.utils.ab_test import (
+    HIGHER_IS_BETTER,
+    PRIOR_SCALE_ROWS,
     MsprtConfig,
     run_msprt,
     validate_metric_name,
@@ -29,10 +31,19 @@ def ab(
         help="Metric: latency | judge_score | retry_rate.",
     ),
     alpha: float = typer.Option(
-        0.05, "--alpha", help="Type-I error (false positive) rate (0, 1).",
+        0.05, "--alpha",
+        help=(
+            "Type-I error (false positive) rate (0, 1) of the two-sided test, kept for a "
+            "test re-run after every new row, at any number of rows."
+        ),
     ),
     beta: float = typer.Option(
-        0.20, "--beta", help="Type-II error (false negative) rate (0, 1).",
+        0.20, "--beta",
+        help=(
+            "Type-II error (false negative) rate (0, 1). Not the power: a power "
+            "of 0.95 is --beta 0.05. alpha + beta must stay below 1, or the "
+            "test accepts H0 on no evidence either way."
+        ),
     ),
     effect_size: float = typer.Option(
         0.1, "--effect-size",
@@ -81,8 +92,12 @@ def ab(
         console.print(f"[red]{escape(str(exc))}[/]")
         raise typer.Exit(1) from exc
 
+    # The test is two-sided (#1227): a reject_h0 carries the direction, read
+    # through the metric's polarity, and only a worse treatment is a rollback.
+    worse = verdict.direction == "worse"
+    polarity = "higher is better" if HIGHER_IS_BETTER[canonical] else "lower is better"
     decision_colour = {
-        "reject_h0": "green",
+        "reject_h0": "red" if worse else "green",
         "accept_h0": "yellow",
         "continue": "cyan",
     }[verdict.decision]
@@ -91,6 +106,8 @@ def ab(
     table.add_column("Field")
     table.add_column("Value")
     table.add_row("decision", f"[bold]{verdict.decision}[/]")
+    table.add_row("direction", verdict.direction or "n/a")
+    table.add_row("prior_scale", f"first {PRIOR_SCALE_ROWS} rows per arm")
     table.add_row("log_likelihood_ratio", f"{verdict.log_likelihood_ratio:.4f}")
     table.add_row("n_control", str(verdict.n_control))
     table.add_row("n_treatment", str(verdict.n_treatment))
@@ -98,11 +115,21 @@ def ab(
     table.add_row("mean_treatment", f"{verdict.mean_treatment:.4f}")
     console.print(table)
 
-    if verdict.decision == "reject_h0":
+    if verdict.decision == "reject_h0" and worse:
         console.print(
             Panel(
-                "[green]Significant difference detected. Promote / rollback "
-                "via `soup loop canary` (v0.58).[/]",
+                "[red]Significant difference detected: the treatment is worse than "
+                f"control on {escape(canonical)} ({polarity}). Recommend rollback: "
+                "keep serving the control.[/]",
+                border_style="red",
+            )
+        )
+    elif verdict.decision == "reject_h0":
+        console.print(
+            Panel(
+                "[green]Significant difference detected: the treatment is better than "
+                f"control on {escape(canonical)} ({polarity}). Promote via "
+                "`soup loop canary` (v0.58).[/]",
                 border_style="green",
             )
         )
@@ -112,6 +139,16 @@ def ab(
                 "[yellow]No significant difference. Treatment is not "
                 "distinguishable from control at the configured effect size.[/]",
                 border_style="yellow",
+            )
+        )
+    elif min(verdict.n_control, verdict.n_treatment) < PRIOR_SCALE_ROWS + 2:
+        console.print(
+            Panel(
+                f"[cyan]Not enough rows yet: the first {PRIOR_SCALE_ROWS} rows of each arm "
+                "set the scale of --effect-size, and the test needs 2 more per arm after "
+                f"them (control has {verdict.n_control}, treatment {verdict.n_treatment}). "
+                "Collect more samples and re-run.[/]",
+                border_style="cyan",
             )
         )
     else:
@@ -132,6 +169,7 @@ def ab(
                 "command": "ab",
                 "metric": canonical,
                 "decision": verdict.decision,
+                "direction": verdict.direction,
                 "log_likelihood_ratio": verdict.log_likelihood_ratio,
                 "n_control": verdict.n_control,
                 "n_treatment": verdict.n_treatment,

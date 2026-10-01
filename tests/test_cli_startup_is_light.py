@@ -205,6 +205,7 @@ def test_light_command_invocation_stays_light(argv: list[str]):
         "soup_cli.utils.rl_checkpoint",
         "soup_cli.utils.relora",
         "soup_cli.utils.lisa",
+        "soup_cli.utils.dpo_variants",
         "soup_cli.monitoring.hf_push",
         "soup_cli.monitoring.curriculum_callback",
         "soup_cli.monitoring.grpo_stability_callback",

@@ -13,6 +13,7 @@ from typer.testing import CliRunner
 from soup_cli.cli import app
 from soup_cli.utils import ingest_pull
 from soup_cli.utils.ingest_pull import LangfuseCredentials, PullError, _error_detail
+from tests.conftest import strip_ansi
 
 HOSTILE = b"err \x1b[2J\x1b[31mFAKE ERROR\x07\x00 tail"
 
@@ -43,7 +44,7 @@ def test_pull_error_body_renders_inert(monkeypatch, tmp_path) -> None:
     assert "\x1b[2J" not in result.output
     assert "\x00" not in result.output
     assert "\x07" not in result.output
-    assert "HTTP 500" in result.output
+    assert "HTTP 500" in strip_ansi(result.output)
     assert "FAKE ERROR" in result.output
 
 

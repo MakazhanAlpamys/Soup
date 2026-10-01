@@ -15,14 +15,14 @@ v0.71.21 #141 lifts the two ``apply_*`` stubs to live, BETA hw-gated code:
 
 * :func:`apply_fp8_attention` converts the attention-projection linears to
   torchao ``Float8Linear`` training modules (the shared FP8 gate, SM >= 8.9; #835).
-* :func:`apply_nvfp4` routes the model through torchao's ``NVFP4Config``
-  quantisation (Blackwell gate — SM 10.0 datacenter B100/B200/GB200 or
+* :func:`apply_nvfp4` routes the model through torchao's
+  ``NVFP4TrainingConfig`` (Blackwell gate — SM 10.0 datacenter B100/B200/GB200 or
   SM 12.0 consumer RTX 50-series).
 
 Both raise friendly ``RuntimeError`` on missing hardware / torchao instead
-of silently no-opping; the trainer-side wiring in
-``utils/v028_features.apply_v028_speed_memory`` degrades those to yellow
-advisories so a training kick-off never crashes on instrumentation.
+of silently no-opping. ``utils/v028_features.apply_v028_speed_memory`` lets
+every ``apply_fp8_attention`` error stop the run (#835, #1152); only
+``apply_nvfp4``'s are still degraded to yellow advisories.
 """
 
 from __future__ import annotations
@@ -46,6 +46,9 @@ _ATTENTION_PROJ_NAMES: frozenset[str] = frozenset({
 # datacenter) and SM 12.0 (RTX 50-series consumer). Anything >= 10 is
 # Blackwell-family; Hopper is SM 9.x.
 _BLACKWELL_MIN_CC_MAJOR = 10
+
+#: Shared diagnostic explanation for precision feature incompatibility with Unsloth (#1124).
+UNSLOTH_PRECISION_INCOMPATIBLE_REASON: str = "unsloth uses its own fused kernels"
 
 
 def is_attention_projection(fqn: object) -> bool:
@@ -136,6 +139,11 @@ def validate_fp8_attention_compat(
         raise ValueError(
             "fp8_attention=true is not supported on backend=mlx"
         )
+    if backend == "unsloth":
+        raise ValueError(
+            "fp8_attention=true is not supported on backend=unsloth "
+            f"({UNSLOTH_PRECISION_INCOMPATIBLE_REASON})"
+        )
 
 
 def validate_nvfp4_compat(
@@ -163,6 +171,11 @@ def validate_nvfp4_compat(
         raise ValueError(
             "nvfp4=true is not supported on backend=mlx "
             "(NVFP4 is CUDA-only — requires Blackwell)"
+        )
+    if backend == "unsloth":
+        raise ValueError(
+            "nvfp4=true is not supported on backend=unsloth "
+            f"({UNSLOTH_PRECISION_INCOMPATIBLE_REASON})"
         )
     if modality != "text":
         raise ValueError(
@@ -227,8 +240,10 @@ def apply_fp8_attention(model: object, *, recipe: str = "tensorwise") -> int:
         TypeError: ``model`` is None or ``recipe`` is not a string.
         ValueError: ``recipe`` is empty, or the model has no attention
             projections at all (silent-no-op footgun).
-        RuntimeError: torchao is missing or the GPU fails the FP8 gate
-            (BETA hw gate — friendly message, never a silent no-op).
+        FP8HardwareUnsupportedError: the GPU fails the FP8 gate.
+        FP8DependencyMissingError: torchao's float8 recipe is not installed
+            (#835 ruling: the run stops, it does not train without FP8).
+        RuntimeError: the conversion failed partway.
     """
     if model is None:
         raise TypeError("model must not be None")
@@ -255,10 +270,7 @@ def apply_fp8_attention(model: object, *, recipe: str = "tensorwise") -> int:
     # (review fix: an NGC container with TE but no torchao must hit the
     # friendly gate, not an uncaught ImportError below).
     if not _torchao_available():
-        raise RuntimeError(
-            "fp8_attention requires torchao's float8 recipe "
-            "(pip install 'torchao>=0.5.0')."
-        )
+        raise fp8.FP8DependencyMissingError(f"fp8_attention: {fp8.FP8_TORCHAO_MISSING}")
 
     import torch.nn as nn
 
@@ -283,9 +295,8 @@ def apply_fp8_attention(model: object, *, recipe: str = "tensorwise") -> int:
             from torchao.float8 import convert_to_float8_training
             from torchao.float8.config import Float8LinearConfig
         except ImportError as exc:
-            raise RuntimeError(
-                "fp8_attention requires torchao's float8 recipe "
-                "(pip install 'torchao>=0.5.0')."
+            raise fp8.FP8DependencyMissingError(
+                f"fp8_attention: {fp8.FP8_TORCHAO_MISSING}"
             ) from exc
 
         pending_set = frozenset(pending)
@@ -305,13 +316,28 @@ def apply_fp8_attention(model: object, *, recipe: str = "tensorwise") -> int:
     return len(already_converted) + len(pending)
 
 
+def is_nvfp4_software_supported() -> bool:
+    """Return True when the installed torchao exposes NVFP4 training support."""
+    try:
+        from soup_cli.utils.torchao_compat import resolve_torchao_class
+
+        resolve_torchao_class("NVFP4Training")
+        resolve_torchao_class("quantize_")
+    except Exception:  # noqa: BLE001 — diagnostic probe must not crash
+        return False
+
+    return True
+
+
 def apply_nvfp4(model: object) -> int:
     """Quantise ``model`` with torchao's NVFP4 scheme (Blackwell-only).
 
-    Live since v0.71.21 (#141). Routes through the same
-    ``torchao.quantization.NVFP4Config`` surface as the v0.53.1
-    ``soup export --format torchao`` path, gated on a Blackwell GPU
-    (SM 10.0 datacenter / SM 12.0 consumer).
+    Live since v0.71.21 (#141). Routes through torchao's
+    ``NVFP4TrainingConfig``, gated on a Blackwell GPU (SM 10.0 datacenter /
+    SM 12.0 consumer). Deliberately NOT the config the v0.53.1
+    ``soup export --format torchao`` path uses: that one is post-training
+    weight quantization, while this flag promises quantised training.
+    ``soup_cli/utils/torchao_compat.py`` holds both, and where each lives.
 
     Returns:
         The number of ``nn.Linear`` modules torchao targeted (advisory
@@ -319,8 +345,8 @@ def apply_nvfp4(model: object) -> int:
 
     Raises:
         TypeError: ``model`` is None.
-        RuntimeError: non-Blackwell GPU, torchao missing, or the installed
-            torchao does not expose ``NVFP4Config``.
+        RuntimeError: non-Blackwell GPU, torchao missing, or no candidate
+            module in ``torchao_compat`` defines ``NVFP4TrainingConfig``.
     """
     if model is None:
         raise TypeError("model must not be None")
@@ -329,17 +355,15 @@ def apply_nvfp4(model: object) -> int:
             "NVFP4 requires a Blackwell GPU (B100/B200/GB200 at SM 10.0 or "
             "RTX 50-series at SM 12.0); no Blackwell device detected."
         )
-    try:
-        from torchao import quantization as ao_q
-    except ImportError as exc:
-        raise RuntimeError(
-            "NVFP4 requires torchao (pip install 'torchao>=0.7.0')."
-        ) from exc
-    if not hasattr(ao_q, "NVFP4Config") or not hasattr(ao_q, "quantize_"):
-        raise RuntimeError(
-            "torchao does not expose NVFP4Config / quantize_; upgrade "
-            "torchao (pip install -U torchao)."
-        )
+    # #826: torchao never exported NVFP4Config. The class that does what this
+    # flag promises is NVFP4TrainingConfig, whose docstring says it "replaces
+    # nn.Linear modules with NVFP4Linear, which quantizes all three GEMMs
+    # (forward and backward) to NVFP4" -- the inference configs beside it are
+    # post-training weight quantization, which is not what training.nvfp4 means.
+    from soup_cli.utils.torchao_compat import resolve_torchao_class
+
+    training_config = resolve_torchao_class("NVFP4Training")
+    quantize_ = resolve_torchao_class("quantize_")
 
     import torch.nn as nn
 
@@ -348,7 +372,7 @@ def apply_nvfp4(model: object) -> int:
         if isinstance(module, nn.Linear)
     )
     try:
-        ao_q.quantize_(model, ao_q.NVFP4Config())
+        quantize_(model, training_config())
     except Exception as exc:  # noqa: BLE001 — in-place mutation honesty
         raise RuntimeError(
             "NVFP4 quantisation failed partway — the model may be "

@@ -6,6 +6,8 @@ These tests mock MLX entirely so they run on CI (Linux / Windows / macOS).
 
 import pytest
 
+from tests.conftest import strip_ansi
+
 # ---------------------------------------------------------------------------
 # MLX detection
 # ---------------------------------------------------------------------------
@@ -404,7 +406,7 @@ class TestMLXDoctor:
 
         assert result.exit_code == 0
         assert "MLX" in result.output
-        assert 'pip install "soup-cli[mlx]"' in result.output
+        assert 'pip install "soup-cli[mlx]"' in strip_ansi(result.output)
 
     def test_doctor_command_omits_mlx_panel_off_apple_silicon(self, monkeypatch):
         """`soup doctor` stays quiet about MLX on non-Apple platforms."""

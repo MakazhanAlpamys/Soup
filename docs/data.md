@@ -104,12 +104,15 @@ soup data clean raw_data.jsonl --strip-boilerplate --repair-code --repair-json -
 ### Cleaning Rules & Defaults:
 - **Default (Safe & Non-Destructive):**
   1. **Control Characters & Whitespace:** Strips C0 controls (`\x00-\x1f`), zero-width spaces (`\u200b-\u200d`, `\ufeff`), and normalizes CRLF/CR to Unix LF.
-  2. **Empty & Degenerate Turns:** Drops rows where the assistant turn is empty or shorter than `--min-tokens`.
+  2. **Empty & Degenerate Turns:** Drops rows where the assistant turn is empty or shorter than `--min-tokens`. A turn that carries tool calls is exempt: its payload is the calls, and `"content": ""` is what the tool-calling format writes on a call-only turn.
 - **Opt-In Heuristic Repairs (Flags):**
   1. `--strip-boilerplate`: Strips canned preambles (*"Certainly! As an AI language model..."*) and sign-offs (*"I hope this helps!"*) across multiple passes.
   2. `--repair-code`: Auto-closes unclosed triple backtick (```` ``` ````) code fences in assistant completions.
   3. `--repair-json`: Unwraps markdown code blocks from JSON arguments and repairs trailing commas in tool calls.
   4. `--prune-echo`: Drops rows where the assistant merely repeats the user prompt verbatim.
+  5. `--drop-invalid-json`: Drops rows with a tool call whose arguments still do not parse as JSON (after `--repair-json`, when both are set).
+
+  `--repair-json` and `--drop-invalid-json` read every call the tool-calling loader reads: the row's top-level `tool_calls` and each assistant turn's `tool_calls`, in the documented `{"function": {"name": ..., "arguments": ...}}` shape or flat. Arguments given as a JSON object are left as they are.
 
 Supports all standard formats: `chatml`, `alpaca`, `sharegpt`, `dpo`, `kto`, and `tool-calling`.
 
@@ -154,6 +157,26 @@ soup data canary insert train.jsonl -o canaried.jsonl --count 16 --manifest secr
 # 2. train on canaried.jsonl as usual, then:
 soup data canary check --manifest secrets.json --base ./my-model --adapter ./lora
 ```
+
+`insert` writes the canaries in the dataset's own format, so the loader keeps them:
+`--format auto` (the default) detects it from the first row, as `data.format: auto`
+does. Alpaca, sharegpt and chatml are supported, each with the carrier as the prompt
+and the secret as the trained response. Every other format is refused: dpo, kto and
+embedding have no single supervised response, plaintext trains on raw text rather
+than the chat turn `check` scores, tool-calling puts a tool-schema system turn
+before the prompt, which `check` does not render, and the multimodal formats need a
+real image or audio file per row. `-o` takes `.jsonl`, or `.json` for a JSON array.
+
+`insert` spreads the canaries through the file rather than appending them: the file is
+cut into one equal stretch per canary, and each canary goes to a random row of its own
+stretch (`--seed` fixes the rows). The dataset's own rows keep their order. The
+loader holds out the file's last rows as validation (`data.val_split`, 0.1 by default),
+and a canary there is never trained on, so appending put every canary out of reach
+from 135 rows on. Spread, a held-out tail of
+`data.val_split` holds about that share of them: `insert` prints how many of them the
+default split trains on, and the manifest records each canary's row in the written file
+(`"row"`, counted from 0) and the file's row count (`"rows"`). Set `data.val_split: 0`
+for a run where every canary must be trained on.
 
 `check` measures the model's loss on each inserted secret and ranks it against
 never-inserted **controls** drawn from the same secret space and sharing the same
@@ -208,6 +231,9 @@ expectations:
   - {name: expect_no_refusal_pattern}
 EOF
 soup expect data.jsonl suite.yaml   # exit 2 on suite failure
+# Inspects ChatML, ShareGPT, DPO (chosen/rejected), KTO (completion), Alpaca,
+# and sentence embedding formats. Fails closed if any row yields zero extractable text.
+# Malformed or non-object lines and files with no checkable rows are refused with exit 3.
 
 # Magpie synthetic data — chat-template-prefix harvest (live, v0.71.6)
 soup data gen-magpie --base meta-llama/Llama-3.1-8B-Instruct \
@@ -454,7 +480,9 @@ soup data generate --prompt "..." --template qa --context document.txt
 # Preference data (DPO/KTO/ORPO)
 soup data generate --prompt "..." --template preference --pref-task dpo
 
-# Chain-of-thought reasoning (GRPO)
+# Chain-of-thought reasoning (GRPO). `math` rows end with `#### <number>`, so the
+# `accuracy` / `verifiable` math rewards can read the gold; `logic` / `code` rows
+# end with an `Answer: <answer>` line.
 soup data generate --prompt "..." --template reasoning --domain math
 ```
 
@@ -499,6 +527,8 @@ soup data augment ./data/train.jsonl --strategy rephrase --count 2 \
 
 Works with any provider supported by `soup data generate` (OpenAI, Ollama, vLLM, local server). `--model` and `--base-url` select a specific local model/endpoint; the Ollama/vLLM paths are loopback-only (SSRF-hardened). `--count` is capped at 10; `--lang` and `--styles` each capped at 10 entries × 32 chars.
 
+A provider call that fails (transport error, non-200 status, malformed response) or returns an empty reply never becomes a row: that variant is dropped. The summary reports `N of M provider calls failed` with the first error, and the command exits 1 without writing the output file when no call produced a usable row.
+
 
 ## Trace-to-Preference
 
@@ -509,20 +539,50 @@ Harvest DPO / KTO-ready preference pairs from your production inference logs —
 soup data from-traces --logs ./logs/langchain.jsonl \
   --format langchain --signal thumbs_up --output prefs.jsonl
 
-# OpenAI API logs + regeneration signal (second response wins)
+# OpenAI API logs + regeneration signal (last response wins). The signal is
+# `regenerations`; `regeneration` is refused by the CLI (#1440).
 soup data from-traces --logs ./logs/openai.jsonl \
-  --format openai --signal regeneration --output prefs.jsonl
+  --format openai --signal regenerations --output prefs.jsonl
 
-# Soup-serve logs + user-edit signal (edited response wins over original)
-soup data from-traces --logs ./logs/soup-serve.jsonl \
-  --format soup_serve --signal user_edit --output prefs.jsonl
+# Soup-serve logs + user-edit signal (edited response wins over original).
+# `--logs` is a DIRECTORY of *.jsonl: the soup-serve parser reads a directory,
+# and returns nothing for a single file (#1440).
+soup data from-traces --logs ./traces \
+  --format soup-serve --signal user_edit --output prefs.jsonl
 
 # Preview generated pairs before training
 soup data review prefs.jsonl --sample 10
 ```
 
-**Supported log formats:** `langchain`, `openai`, `soup_serve`
-**Supported signals:** `thumbs_up` (rating-based), `regeneration` (latest wins), `user_edit` (edited wins)
+**Supported log formats:** `langchain`, `openai`, `soup-serve`
+**Supported signals:** `thumbs_up` (rating-based), `regenerations` (latest wins), `user_edit` (edited wins)
+
+**The `soup-serve` record shape.** The parser reads a top-level `signal` in the
+canonical vocabulary, falling back to a nested `feedback.rating` (`up` / `down`)
+for older logs:
+
+```json
+{"prompt": "Q", "output": "Good", "signal": "thumbs_up"}
+{"prompt": "Q", "output": "Bad",  "signal": "thumbs_down"}
+{"prompt": "Q", "output": "Raw",  "signal": "user_edit", "edited_output": "Polished"}
+```
+
+Who writes what:
+
+- `soup ingest` is a producer. It writes `thumbs_up`, `thumbs_down` or `none`, under
+  the field name `trace_id` rather than `id`, so its output feeds this command
+  directly.
+- `user_edit` and `regenerated` rows come from **your own** pipeline. `signal:
+  user_edit` has to accompany the edit field: a record with `edited_output` but no
+  `signal` reads as "no trace carried a signal". The edit itself is read from
+  `edited_output`, `edited_response`, or a nested `feedback.edited_output`.
+- `soup serve --trace-log` records carry **no signal yet** (`ts`, `prompt`,
+  `response`, `latency_ms`, `tokens`), so a harvest of that directory reports the
+  diagnostic below rather than a silent 0.
+
+When traces are read but none pair, the command prints how many it read, which
+signal it wanted and which signals were present, instead of reporting a normal
+write of 0 pairs.
 
 Trace files are capped at 100,000 lines to prevent OOM on production logs. A PII warning panel appears on every run — redact sensitive fields before harvesting.
 
@@ -546,6 +606,8 @@ soup migrate --from llamafactory config.yaml --dry-run
 ```
 
 Automatically maps model, LoRA, training params, quantization, and task type. Warns about unsupported features.
+
+An axolotl `rl:` value with no Soup task (for example `rl: ebft`) stops the migration: `soup migrate` exits 1 and names the value instead of writing a `task: sft` config.
 
 
 ## Data Formats
@@ -598,6 +660,15 @@ Or use `.txt` files directly (one document per line).
 {"anchor": "What is Python?", "positive": "Python is a programming language."}
 {"anchor": "What is Python?", "positive": "A programming language.", "negative": "A type of snake."}
 ```
+
+With `embedding_loss: contrastive` (the default), each row's negatives are the other rows' positives in the same batch, so a batch needs at least two rows: `batch_size: 1` is refused at config load, `batch_size: auto` resolves to at least 2, and the last partial batch of each epoch is dropped. This also applies when `triplet` falls back to contrastive because the rows have no `negative`. Use `triplet` with a `negative` on every row, or `cosine`, to train at batch size 1.
+
+**Cross-Encoder (paired sequence classification - `data.format: cross_encoder`):**
+```json
+{"text_a": "What is Python?", "text_b": "Python is a programming language.", "label": 1}
+{"question": "What is Python?", "answer": "Python is a programming language.", "label": 1}
+```
+Reads paired text columns (`text_a`/`text_b` or `question`/`answer`) carrying a `label` field. Gated strictly to `task: cross_encoder` (`format: auto` resolves to `cross_encoder` for this task) to preserve global format detection for other tasks.
 
 **Audio (speech + conversation):**
 ```json
@@ -666,7 +737,7 @@ data:
     - dolma.jsonl
     - wikipedia.jsonl
   interleave: { strategy: probs, probs: [0.7, 0.3] }   # also: concat / under / over
-  eval_on_each_dataset: true
+  # eval_on_each_dataset: true                         # staged; refused as of v0.77 — #808
 ```
 
 `data.train` as a list requires `data.interleave` (and vice versa). `training.packing` /
@@ -758,16 +829,54 @@ that still reflects the original, un-rebalanced skew, not the mixture train now 
 data:
   add_new_tokens: ["<reasoning>", "</reasoning>"]
   new_special_tokens: ["<|tool_call|>"]
-  resize_vocab: true
-  mask_history: true
-  split_thinking: true            # Qwen3-style <think> reasoning-block masking
-  image_min_pixels: 256
-  image_max_pixels: 4096
-  image_resize_algorithm: bicubic
-  video_fps: 24
-  video_maxlen: 32
-  video_dir: ./videos
+  mask_history: true              # train only on the LAST assistant turn
+  # Staged fields below warn in v0.76 and are refused as of v0.77 (#808):
+  # resize_vocab: true
+  # split_thinking: true            # Qwen3-style <think> reasoning-block masking
+  # image_min_pixels: 256
+  # image_max_pixels: 4096
+  # image_resize_algorithm: bicubic
+  # video_fps: 24
+  # video_maxlen: 32
+  # video_dir: ./videos
 ```
+
+`mask_history: true` keeps only the **last** assistant turn in the loss: every
+earlier assistant turn is masked alongside the user and system turns the
+assistant-only path already excludes. It never adds tokens to the loss.
+
+It only means something for a **multi-turn chat shape** — `chatml`, `sharegpt`
+and the other message-list formats — where turns exist to mask. A single-turn
+conversation trains identically with it on or off, and a flat format such as
+`alpaca` or `plaintext` has no turns at all.
+
+It requires `train_on_responses_only: true`, which is the path that marks
+assistant spans; with `false` every token trains, including the history this
+field asks to exclude, so the combination is refused at config load. That also
+rules out `train_on_messages_with_train_field`, which is itself exclusive with
+`train_on_responses_only`: the per-message `train` field and `mask_history` can
+never both decide a run.
+
+On text SFT it is honoured by the transformers and unsloth backends, which run
+the same `SFTTrainerWrapper.setup()` row builder, and `task: distill` honours it
+too, since distill builds every row that way. On `task: sft` with
+`modality: vision` or `audio` it is accepted but not applied: those rows are
+built by the vision and audio preparers, which never read it (#1156).
+
+**`backend: mlx` ignores it:** MLX SFT builds its own mask and supervises every
+assistant turn, so the same config trains the last turn on transformers and every
+turn on MLX. `soup train` says so on its "MLX backend ignores:" line, and
+`soup doctor --config` reports it.
+
+**Multimodal vision and audio ignore it:** For `modality: vision` and `modality: audio`,
+every text token is supervised. Soup's vision collator masks only padding and image
+tokens, and the audio path only padding. Assistant-only masking would have to locate the
+assistant spans after the processor expands the image or audio tokens, which neither path
+does yet. Soup declares this gap rather
+than attempting unverified label restructuring, so both `mask_history` and `train_on_responses_only`
+are unread on vision and audio modalities, every text token trains, and `soup doctor --config`
+reports them as ignored.
+
 
 **AOT preprocessing:**
 
@@ -838,6 +947,17 @@ such as a missing file or an undetectable format, and code `2` when a non-empty
 dataset has no usable rows or falls below `--min-valid-fraction`. A partially valid
 dataset still exits with code `0` when no minimum is specified.
 
+Training loads a dataset through the same converters, and a row they reject is
+dropped rather than stopping the run, so one bad line does not abort a load. The
+drop is reported: `soup train`, and every other command that loads a dataset,
+prints `Warning: N of M rows dropped` with the first row's index and the
+converter's reason. For a local file it also prints the `soup data validate`
+command that lists them all. The
+count agrees with `soup data validate` for the same file. Before #1181 the rows
+were dropped without a word. If a load ends with zero training rows, `soup train`
+stops with exit 1 before loading the model, `--dry-run` included, naming the format
+the rows were read as and the first row's drop reason (#1217).
+
 
 ## Demo Datasets (`soup data demo`)
 
@@ -888,7 +1008,7 @@ soup data forge \
 
 Three tasks supported: `sft` (Q&A pairs), `preference` (chosen/rejected), `tool` (tool-call hypotheses). Active learning prunes rows whose judge reply is too close to the source chunk (low Jaccard distance), keeping only uncertain / informative samples. The provenance manifest is a separate JSON file mapping every row id to `{source_doc, judge_id, chunk_id, filter_score}` so you have a complete audit trail for compliance.
 
-Document discovery is one level deep over `.txt` / `.md` / `.json` / `.jsonl`; dotfiles + symlinked directories are skipped. All paths are cwd-contained, all writes are atomic via staged-tempfile + `os.replace`, and write targets are rejected if they're symlinks. **Judge providers are live**: `--judge-provider ollama` (localhost-only), `--judge-provider anthropic` (env-only API key), `--judge-provider vllm` (scheme-validated). Per-call judge exceptions logged at DEBUG.
+Document discovery is one level deep over `.txt` / `.md` / `.json` / `.jsonl`; dotfiles + symlinked directories are skipped. All paths are cwd-contained, all writes are atomic via staged-tempfile + `os.replace`, and write targets are rejected if they're symlinks. **Judge providers are live**: `--judge-provider ollama` (localhost-only), `--judge-provider anthropic` (env-only API key), `--judge-provider vllm` (scheme-validated). A judge call that fails (transport error, non-200 status, malformed response) or returns an empty reply never becomes a row, whatever `--uncertainty-threshold` is. The summary reports `N of M judge calls failed` with the first error, and the command exits 1 without writing files when no usable row was produced.
 
 **Alternative teacher hubs (v0.71.5).** `--hub modelscope|modelers` pre-fetches the `--teacher` from that hub when the teacher is a routable repo id (`owner/name`); `--hub hf` (default) is a no-op and leaves the teacher as a provenance label. If `--hub` is non-HF but `--teacher` is not a repo id (e.g. the default `local-judge`), Soup prints a loud yellow warning rather than silently dropping the flag.
 
@@ -984,7 +1104,7 @@ Pass `--live --base-yaml soup.yaml` to score each candidate with a short `soup t
 ## AOT Tokenization with `soup data preprocess`
 
 Pre-tokenize your dataset once and cache Arrow shards keyed by
-`(dataset, tokenizer, max_length, format)`:
+`(dataset, tokenizer, max_length, format, chat_template, loss-mask mode, task)`:
 
 ```bash
 soup data preprocess soup.yaml --output ./tokenized_cache
@@ -994,6 +1114,72 @@ SFT and Pretrain trainers short-circuit at schema validation when
 `format: pre_tokenized` + `tokenized_path: ./tokenized_cache` is set, eliminating
 the per-epoch tokenization tax. Cache keys ensure resume safety; partial runs pick
 up from the last completed shard.
+
+Rows are rendered with `data.chat_template` when it is set, the same as live
+training. The `pre_tokenized` training config must name the same template, since
+training saves the tokenizer with it; a different one is refused with
+`cache hash mismatch`. A cache written before the template joined the key is
+refused the same way: re-run `soup data preprocess` to rebuild it.
+
+A row the command cannot tokenize stops it, and nothing is written. For pretrain
+that is a text row the tokenizer rejects (a lone surrogate, for example), which
+live pretraining refuses too; an empty `text` row is dropped by the loader on both
+paths. That covers a conversation the template rejects (for example
+`Conversation roles must alternate` on a Llama-2- or Gemma-style template), an
+empty `messages` list, a row the template renders as empty text, and a tokenizer
+error. The message numbers the row from 1, as live training does, counting the
+rows that survived loading, and quotes the start of its first message (or of a
+pretrain row's text), which is what finds it when an earlier row was dropped or
+the files were interleaved. Live training stops on a rejected conversation, an
+empty one and an empty render too, so a cache that skipped them would train on
+fewer rows than the same `soup.yaml` run live. Before #1180 they were dropped
+without a word, and the command exited 0. Fix or remove the row and re-run. A
+tokenizer with no chat template is reported once, before any row, and points at
+`data.chat_template`. The rows are checked when the command builds a cache: if one
+with the same key already exists it stops at `Target already exists` (exit 0)
+without reading them, so rebuild a cache written before this change with `--yes`.
+
+Cached rows carry a `labels` column masked exactly as the equivalent live run
+would mask it (`data.train_on_responses_only` /
+`data.train_on_messages_with_train_field`, plus `data.mask_history` and
+`training.train_on_eot`). That mask mode is part of the cache key too, so a cache
+built under one masking setting is refused — with the same
+`cache hash mismatch` error — when loaded under a different one. Caches written
+before this fix (tokenizer schema `v5` and earlier) have no `labels` and are
+rejected; re-run `soup data preprocess`. With `task: sft`, a `pre_tokenized`
+dataset you built yourself must carry its own `labels` column (`-100` on every
+token not to train on); a train or validation split without one is refused
+rather than trained on every token. `task: pretrain` has no such check: a
+dataset without `labels` trains on every token, because TRL's collator copies
+`input_ids` into `labels`. That is the pretraining objective, and a
+`soup data preprocess` cache built for `task: pretrain` records the same labels.
+
+The full key, as `PREPROCESS_KEY_FIELDS` in `src/soup_cli/utils/data_pipeline.py`
+declares it:
+
+| Key input | Config fields |
+|---|---|
+| dataset | `data.train`, `data.interleave`, `data.val_split`, `data.replay`, `data.replay_ratio`, `data.replay_seed`, `data.streaming`, `data.buffer_size`, `data.image_dir`, `data.audio_dir` |
+| tokenizer | `base` |
+| max_length | `data.max_length` |
+| format | `data.format` (the source format preprocess read, recorded in `metadata.json`) |
+| chat_template | `data.chat_template`, resolved to the Jinja it renders |
+| loss-mask mode | `data.train_on_responses_only`, `data.train_on_messages_with_train_field`, `data.mask_history`, `training.train_on_eot` |
+| task | `task` |
+
+The dataset input covers every setting that decides which rows are cached: only
+the train split is cached, replay rows are mixed into it first, and the streaming
+loaders choose rows and their order. Every other `data` field is listed in
+`NOT_PREPROCESS_KEY_FIELDS` with the reason it cannot change a cached row, and a
+new field must be added to one of the two tables. Caches written before this
+(tokenizer schema `v6` and earlier) are refused; re-run `soup data preprocess`.
+
+The `pre_tokenized` training config must keep `data.val_split`, `data.replay`,
+`data.replay_ratio`, `data.replay_seed`, `data.streaming`, `data.buffer_size`,
+`data.image_dir` and `data.audio_dir` as they were when the cache was built, as it
+must keep the chat template. A cache built under different values is refused, and
+the message names the fields that changed. A cache written before this keying
+says so instead of showing two bare hashes.
 
 
 ## Data Recipe DAG Runner (`soup data recipe --execute`)
@@ -1014,14 +1200,20 @@ command prints a warning whenever this mode is active.
 
 Live provider-call failures are counted: if every attempted call for an `llm_text`
 or `judge` node fails, the command names the endpoint and exits 1. Partial failures
-keep usable rows and report their count in the completion summary, while a provider
-that legitimately returns an empty completion still counts as a successful call.
+keep usable rows and report their count in the completion summary, while an `llm_text`
+provider that legitimately returns an empty completion still counts as a successful call.
+A live `judge` node reads the first word of each reply: `OK` keeps the row, `REJECT`
+or `NOT OK` drops it, and a reply with neither, an empty one included, is dropped and
+counted as a failed call.
 
 Six node kinds now run live: **seed** (JSONL load), **llm_text** (LLM generation via
 Ollama, Anthropic, or vLLM), **code** (execution via RLVR sandbox), **judge** (binary scoring),
 **validator** (regex or JSON schema), **sampler** (deterministic selection). Checkpoint
 written per node; resume rehydrates from per-node sidecars. Failed rows logged with
 redacted reasons (paths stripped, capped at 256 chars).
+Regex validator nodes reject structurally unsafe patterns before matching rows;
+the error identifies the node's `config.regex` field. Simple alternations remain
+valid.
 
 
 ## Fine-tune Doctor (`soup data doctor`)
@@ -1048,6 +1240,11 @@ turn), `unknown_roles`, and `truncation_risk` (p95 rendered length vs
 `data.max_length`). `--train-on-responses-only` / `--train-on-messages-with-train-field`
 select the same masking strategy `soup train` would use, so the report and
 `--show-mask` preview can never disagree about what's actually trained.
+`--mask-history` (default off, matching `data.mask_history`) narrows the
+assistant-only mask to the **last** assistant turn, exactly like the
+soup.yaml flag of the same name; it is refused with
+`--no-train-on-responses-only` or `--train-on-messages-with-train-field`,
+the same combinations `soup.yaml` refuses.
 
 
 ## Preference-Data Linter (`soup data lint`)

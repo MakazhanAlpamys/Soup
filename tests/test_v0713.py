@@ -304,7 +304,7 @@ class TestTopDomains:
         domains = {d for d, _ in out}
         assert domains == {"example.com", "other.org"}
 
-    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX symlink semantics")
+    @pytest.mark.requires_symlink
     def test_load_from_jsonl_symlink_returns_empty(self, tmp_path, monkeypatch):
         from soup_cli.utils.annex_xi import load_top_domains_from_jsonl
 
@@ -891,7 +891,7 @@ class TestReviewFollowups:
         with pytest.raises(TypeError):
             atomic_write_bytes("not-bytes", "x.pdf")
 
-    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX symlink semantics")
+    @pytest.mark.requires_symlink
     def test_atomic_write_bytes_rejects_symlink_target(self, tmp_path, monkeypatch):
         from soup_cli.utils.paths import atomic_write_bytes
 

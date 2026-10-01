@@ -273,7 +273,7 @@ class TestScanAdapterFromDisk:
         with pytest.raises((FileNotFoundError, RuntimeError)):
             scan_adapter(str(empty))
 
-    @pytest.mark.skipif(os.name == "nt", reason="POSIX symlink semantics")
+    @pytest.mark.requires_symlink
     def test_scan_adapter_symlink_rejected(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         real = tmp_path / "real"

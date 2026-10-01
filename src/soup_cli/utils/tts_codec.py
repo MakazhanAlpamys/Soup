@@ -1,4 +1,4 @@
-"""v0.71.22 #265-partial — live-codec TTS audio encoding (Orpheus via SNAC).
+"""#265 — live-codec TTS audio encoding (Orpheus/SNAC + Llasa/XCodec2).
 
 Lifts the v0.71.20 ``data.format='audio'`` hardware gate into a real
 encode-at-train-time path. Rows shaped ``{"audio": <path>, "messages": [...]}``
@@ -8,7 +8,7 @@ assistant turn, after which training proceeds through the validated
 pre-encoded SFT cross-entropy path.
 
 The generic pipeline (``encode_tts_dataset`` → ``encode_tts_row`` →
-per-family encoder) is family-agnostic; v0.71.22 ships ONE validated encoder:
+per-family encoder) is family-agnostic. It now has codec-string encoders for:
 
 * **Orpheus / SNAC** (``pip install snac``) — 24 kHz SNAC produces 3
   codebooks at a 1/2/4 frame ratio; Orpheus interleaves them 7 tokens per
@@ -17,12 +17,17 @@ per-family encoder) is family-agnostic; v0.71.22 ships ONE validated encoder:
   Orpheus id layout: ``id = 128256 + N = 128266 + code + slot*4096`` on the
   Orpheus tokenizer, whose ``<custom_token_i>`` maps to ``128256 + i``).
 
-The other four families (sesame_csm / llasa / spark / oute) keep their
-per-family codec dep gate; their encoders are tracked in #265 and raise a
-friendly ``RuntimeError`` pointing at the offline pre-encode workflow.
+* **Llasa / XCodec2** — 16 kHz XCodec2 ids are rendered as Llasa speech
+  tokens between its native speech-generation boundary tokens.
+
+Spark and Oute raw-audio live encoding is deliberately refused on this path
+because their current upstream stacks are incompatible with Soup. Sesame CSM
+is also refused: current CSM training uses 32 Mimi codebooks plus text as
+parallel multimodal frames, which cannot be represented faithfully by replacing
+a text assistant turn.
 
 Security / robustness:
-- Heavy imports (numpy / soundfile / torch / snac) are lazy — module import
+- Heavy imports (numpy / soundfile / torch / snac / transformers) are lazy — module import
   stays light for the CLI hot path.
 - Audio paths: null-byte rejection, symlink rejection (``os.lstat``,
   defence-in-depth — the loader already containment-checks under
@@ -39,7 +44,7 @@ import os
 import stat
 from typing import Any, Callable, Optional
 
-from soup_cli.utils.tts import tts_codec_package, validate_tts_family
+from soup_cli.utils.tts import validate_tts_family
 
 # SNAC checkpoint for the Orpheus family (24 kHz, 3 codebooks).
 SNAC_MODEL_ID = "hubertsiuzdak/snac_24khz"
@@ -52,7 +57,7 @@ ORPHEUS_CODEBOOK_SIZE = 4096
 _ORPHEUS_FRAME_SLOTS = 7
 
 # Families whose live-codec encoder is implemented AND validated.
-LIVE_CODEC_FAMILIES: frozenset[str] = frozenset({"orpheus"})
+LIVE_CODEC_FAMILIES: frozenset[str] = frozenset({"orpheus", "llasa"})
 
 _MAX_AUDIO_SECONDS = 600.0  # 10 min cap — defends against runaway encodes
 # Byte cap (~600 s of 24 kHz stereo float32 + headroom) — rejected before any
@@ -63,6 +68,11 @@ _MAX_AUDIO_BYTES = 512 * 1024 * 1024
 # assumption — the live-codec trainer encode path runs on one thread, so this
 # unbounded, unguarded cache is intentional (no eviction / no lock needed).
 _SNAC_CACHE: dict[str, Any] = {}
+_XCODEC2_CACHE: dict[str, Any] = {}
+
+XCODEC2_MODEL_ID = "HKUSTAudio/xcodec2-hf"
+XCODEC2_SAMPLE_RATE = 16_000
+XCODEC2_CODEBOOK_SIZE = 65_536
 
 
 # ---------------------------------------------------------------------------
@@ -229,7 +239,7 @@ def _get_snac_model(device: Optional[str] = None):
             "TTS family 'orpheus' live-codec training requires the 'snac' "
             "package (audio codec). Install it with `pip install snac`, or "
             "pre-encode your audio to codec tokens offline and train with "
-            "data.format=chat."
+            "data.format=chatml."
         ) from exc
     model = SNAC.from_pretrained(SNAC_MODEL_ID).eval().to(dev)
     _SNAC_CACHE[dev] = model
@@ -264,16 +274,153 @@ def encode_audio_orpheus(
     )
 
 
+def llasa_codes_to_string(codes) -> str:
+    """Render XCodec2 ids in Llasa's native speech-token envelope."""
+    values = list(codes)
+    if not values:
+        raise ValueError("Llasa XCodec2 code list must be non-empty")
+    rendered = []
+    for code in values:
+        if isinstance(code, bool) or not isinstance(code, int):
+            raise TypeError("Llasa XCodec2 codes must be non-bool ints")
+        if not (0 <= code < XCODEC2_CODEBOOK_SIZE):
+            raise ValueError(
+                f"Llasa XCodec2 code {code} out of range "
+                f"[0, {XCODEC2_CODEBOOK_SIZE})"
+            )
+        rendered.append(f"<|s_{code}|>")
+    return (
+        "<|SPEECH_GENERATION_START|>"
+        + "".join(rendered)
+        + "<|SPEECH_GENERATION_END|>"
+    )
+
+
+def _get_xcodec2_components(device: Optional[str] = None):
+    """Load Transformers-native XCodec2 lazily at Soup's dependency floor."""
+    dev = device or "cpu"
+    cached = _XCODEC2_CACHE.get(dev)
+    if cached is not None:
+        return cached
+    try:
+        from transformers import AutoFeatureExtractor, Xcodec2Model
+    except ImportError as exc:
+        raise RuntimeError(
+            "Llasa live-codec requires Transformers with native XCodec2 support "
+            "(Soup requires transformers>=5.16.1). Upgrade the train extra rather "
+            "than installing the legacy xcodec2 package, which pins an old Torch."
+        ) from exc
+    extractor = AutoFeatureExtractor.from_pretrained(XCODEC2_MODEL_ID)
+    model = Xcodec2Model.from_pretrained(XCODEC2_MODEL_ID).eval().to(dev)
+    _XCODEC2_CACHE[dev] = (model, extractor)
+    return model, extractor
+
+
+def clear_xcodec2_cache(device: Optional[str] = None) -> None:
+    """Release the cached XCodec2 model after dataset encoding (#1112 review)."""
+    dev = device or "cpu"
+    _XCODEC2_CACHE.pop(dev, None)
+
+    # The live-codec pass runs before the base model/trainer is materialised.
+    # Do not keep a ~2.5 GB fp32 XCodec2 checkpoint resident for the entire run.
+    import gc
+
+    gc.collect()
+    if str(dev).startswith("cuda"):
+        try:
+            import torch
+        except ImportError:  # pragma: no cover - train extra always has torch
+            return
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+
+def encode_audio_llasa(
+    path: str,
+    *,
+    xcodec2_model: Optional[Any] = None,
+    feature_extractor: Optional[Any] = None,
+    device: Optional[str] = None,
+) -> str:
+    """Encode 16 kHz speech with Transformers-native XCodec2."""
+    audio = load_audio_mono(path, target_sr=XCODEC2_SAMPLE_RATE)
+    import torch
+
+    if (xcodec2_model is None) != (feature_extractor is None):
+        raise ValueError("xcodec2_model and feature_extractor must be provided together")
+    if xcodec2_model is None:
+        model, extractor = _get_xcodec2_components(device)
+    else:
+        model, extractor = xcodec2_model, feature_extractor
+
+    inputs = extractor(
+        audio=audio,
+        sampling_rate=XCODEC2_SAMPLE_RATE,
+        return_tensors="pt",
+    )
+    if device:
+        inputs = {
+            key: value.to(device) if hasattr(value, "to") else value
+            for key, value in inputs.items()
+        }
+    with torch.inference_mode():
+        encoded = model.encode(**inputs)
+    codes = encoded.audio_codes
+    values = [int(v) for v in codes.reshape(-1).detach().cpu().tolist()]
+    return llasa_codes_to_string(values)
+
+
+def csm_live_codec_error() -> RuntimeError:
+    return RuntimeError(
+        "TTS family 'sesame_csm' cannot use Soup's codec-string SFT "
+        "live-codec path: CSM trains 32 Mimi codebooks plus text as parallel "
+        "multimodal frames, not audio ids embedded in a text assistant turn. "
+        "Use the model's native CSM/AutoProcessor training path; Soup needs a "
+        "dedicated CSM trainer before either data.format=audio or pre-encoded "
+        "data.format=chatml can be supported safely."
+    )
+
+
+def incompatible_live_codec_error(family: str) -> RuntimeError:
+    """Explain upstream packaging/objective blockers for #265 families."""
+    canonical = validate_tts_family(family)
+    if canonical == "spark":
+        return RuntimeError(
+            "TTS family 'spark' has no installable 'sparktts' PyPI package. "
+            "The official Spark-TTS source pins torch==2.5.1, torchaudio==2.5.1 "
+            "and transformers==4.46.2, which conflicts with Soup's supported "
+            "training stack (#265). Refusing raw-audio live encoding instead of "
+            "suggesting a nonexistent install or downgrading the environment. "
+            "Pre-encode with the official Spark-TTS environment and train with "
+            "data.format=chatml until a compatible native codec integration lands."
+        )
+    if canonical == "oute":
+        return RuntimeError(
+            "TTS family 'oute' live-codec preparation cannot safely depend on "
+            "the current outetts package: its published metadata pins "
+            "transformers==4.52.3 while Soup requires transformers>=5.16.1. "
+            "Oute v0.3 training also needs transcript/word alignment plus audio "
+            "codes, not a bare WAV-to-token substitution (#265). Refusing raw-audio "
+            "live encoding rather than silently downgrading Transformers or "
+            "training the wrong target. Use an upstream Oute environment to "
+            "pre-encode training examples and train with data.format=chatml "
+            "until a compatible native path lands."
+        )
+    return RuntimeError(
+        f"TTS family {canonical!r} has no incompatible-live-codec contract"
+    )
+
+
 def tts_encoder_for_family(
     family: str, *, device: Optional[str] = None
 ) -> Callable[[str], str]:
     """Return the live audio→codec-string encoder for ``family``.
 
-    Only the families in :data:`LIVE_CODEC_FAMILIES` have a validated
-    encoder (v0.71.22 ships Orpheus/SNAC). The remaining families raise a
-    friendly ``RuntimeError`` naming the offline workflow — their encoders
-    are tracked in #265 (the per-family codec dep gate fires earlier, at
-    trainer setup).
+    Only the families in :data:`LIVE_CODEC_FAMILIES` have a codec-string
+    encoder. Orpheus uses SNAC and Llasa uses XCodec2. Spark/Oute raw-audio
+    encoding is refused for upstream-stack incompatibility; Sesame CSM is
+    refused because its parallel Mimi-codebook objective needs a dedicated
+    multimodal trainer rather than this text-SFT adapter.
     """
     canonical = validate_tts_family(family)
     if canonical == "orpheus":
@@ -282,13 +429,17 @@ def tts_encoder_for_family(
             return encode_audio_orpheus(path, device=device)
 
         return _encode
-    pkg = tts_codec_package(canonical)
-    raise RuntimeError(
-        f"Live-codec encoding for TTS family '{canonical}' is not yet "
-        f"implemented (v0.71.22 ships the Orpheus/SNAC encoder; the "
-        f"'{canonical}' encoder via {pkg!r} is tracked in #265). Pre-encode "
-        "your audio to codec tokens offline and train with data.format=chat."
-    )
+    if canonical == "llasa":
+
+        def _encode(path: str) -> str:
+            return encode_audio_llasa(path, device=device)
+
+        return _encode
+    if canonical == "sesame_csm":
+        raise csm_live_codec_error()
+    if canonical in {"spark", "oute"}:
+        raise incompatible_live_codec_error(canonical)
+    raise AssertionError(f"unhandled TTS family after validation: {canonical!r}")
 
 
 # ---------------------------------------------------------------------------

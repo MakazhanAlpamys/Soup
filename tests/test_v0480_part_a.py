@@ -28,6 +28,7 @@ from soup_cli.utils.curriculum_dynamic import (
     render_curve,
     validate_distributed_curriculum,
 )
+from tests.conftest import strip_ansi
 
 # ---------- DynamicCurriculumPolicy ---------------------------------------
 
@@ -731,4 +732,4 @@ def test_curriculum_curve_rejects_oversize_file(tmp_path, monkeypatch):
         app, ["runs", "curriculum-curve", "stub", "--history", str(history)]
     )
     assert result.exit_code == 2
-    assert "50 mb" in result.output.lower()
+    assert "50 mb" in strip_ansi(result.output).lower()

@@ -258,12 +258,25 @@ tasks:
 
 `judge_model` accepts `ollama://<model>`, `http://localhost:<port>/<model>` or `https://<host>/<model>`. An `https://` judge URL uses `OPENAI_API_KEY` only when its host is `api.openai.com`; other hosts are called as an OpenAI-compatible server without that key.
 
-Baselines may be a registry reference (`registry://<name-or-id>`), a file path, or omitted for the first run. Any structured exception (`ValueError`, `FileNotFoundError`, `OSError`) during the gate is treated as a regression under `on_regression: stop`.
+Baselines may be a registry reference (`registry://<name-or-id>`), a file path, or omitted for the first run. A registry baseline uses the newest eval row for each benchmark — re-measuring a benchmark replaces its baseline score — and warns, per benchmark, when that row's scorer stamp is missing or from a different scorer revision. A task whose evaluation raises (`ValueError`, `FileNotFoundError`, `OSError`, or a judge that stays unreachable) gets no score and fails the gate closed under `on_regression: stop`; the log line lists it as a task that could not be scored, with the error, rather than as a regression (#1447).
 
 
 ## Sequential A/B Harness (`soup ab`)
 
-Proper sequential testing with early-stop guarantees on `latency` / `judge_score` / `retry_rate`. Uses Wald's classic SPRT for the point alternative — the log-likelihood ratio is a martingale under H0, so Type-I error is controlled at every stopping time per the optional stopping theorem (unlike a naive repeated t-test, which inflates Type-I if you peek at the data).
+Proper sequential testing with early-stop guarantees on `latency` / `judge_score` / `retry_rate`. You can re-run `soup ab` after every new row and stop at the first `reject_h0` or `accept_h0`: the chance of a false `reject_h0` stays at most `--alpha` however often you look and however many rows you collect, unlike a naive repeated t-test, which inflates it. The guarantee assumes roughly Gaussian rows: for a 0/1 metric such as a per-request `retry_rate`, pre-aggregate it into per-prompt rates first.
+
+The statistic is a Bayes factor that averages over both the size of the difference and the unknown row-to-row spread (a normal-inverse-gamma mixture). It depends on the rows only through the two-sample t statistic, so its false-positive guarantee does not rely on estimating the spread well, and there is no burn-in: a clear difference can be decided from 7 rows per arm. The test is two-sided, and a difference of either sign is equal evidence. It rejects H0 once the Bayes factor reaches `1 / --alpha`, and accepts H0 once it falls to `--beta / (1 - --alpha)`.
+
+`--effect-size` is in the metric's units, but the statistic needs it in standard deviations. So the first 5 rows of each arm set that scale (their pooled standard deviation) and are not otherwise tested; the verdict table shows this as `prior_scale`, and the reported means and row counts still cover every row. If an arm's first rows are all identical, more rows are held out until one differs. If they barely vary (a warm cache, or a judge that gives 1.0 early), `accept_h0` waits as `continue` while the tested rows' standard deviation is more than 3 times theirs: that start makes the prior far too wide, and an `accept_h0` would come out whether or not there is a difference. A `reject_h0` is never held back.
+
+A simulation of the re-run-after-every-pair procedure (`--effect-size` from 0.1 to 5 standard deviations, 100,000 runs each, up to 1000 rows per arm) gives a worst false-positive rate of 0.033 at `--alpha 0.05` and 0.0066 at `--alpha 0.01`. The burn-in design this replaced (#1227) sat at 0.051 and 0.011. Against a true difference of exactly `--effect-size`, the test finds it with probability above 0.99 when `--effect-size` is at least 0.3 standard deviations (1000 rows per arm). There are two costs. When `--effect-size` is below about 0.2 standard deviations, 1000 rows are too few for either design to be reliable, and this one detects less often (0.31 against 0.45 at 0.1 standard deviations, `--alpha 0.05`). And when there is no difference, reaching `accept_h0` takes longer. Mean pairs at stop when the two arms are the same, `--alpha 0.05`, runs of up to 1000 rows per arm, by `--effect-size` in standard deviations:
+
+| `--effect-size` / sd | 0.2 | 0.3 | 0.4 | 0.5 | 0.7 | 1 | 1.5 | 2 | 5 |
+|---|---|---|---|---|---|---|---|---|---|
+| this statistic | 889 | 621 | 406 | 281 | 155 | 82 | 41 | 26 | 10 |
+| the burn-in design it replaced | 235 | 107 | 62 | 43 | 34 | 31 | 30 | 30 | 30 |
+
+So a test that is waiting to hear "no difference" can take several times as many rows as before, and at small effect sizes may not get there within 1000. Part of the old design's speed was not free: when there was a real difference of 0.3 standard deviations, it wrongly ended about 18% of runs in `accept_h0`, against under 0.4% here (on simulated Gaussian rows). The record, script and results are in [`benchmarks/gate-1265-ab-nig.md`](../benchmarks/gate-1265-ab-nig.md).
 
 ```bash
 soup ab --input ab.jsonl --metric latency --effect-size 0.5
@@ -271,9 +284,17 @@ soup ab --input ab.jsonl --metric latency --effect-size 0.5
 soup ab --input ab.jsonl --metric judge_score --alpha 0.01 --beta 0.10 --effect-size 0.1
 ```
 
-Input rows look like `{"arm": "control", "latency": 1.23}` or `{"arm": "treatment", "judge_score": 0.91}`. Decision is one of `continue` (keep collecting samples), `reject_h0` (real difference detected), `accept_h0` (no significant difference). Composes with `soup loop canary` (v0.58) — promote or roll back as soon as the LLR clears a decision boundary.
+`--alpha` and `--beta` are each in (0, 1), and their sum must stay below 1. At or above 1 the accept boundary `beta / (1 - alpha)` is a Bayes factor of 1 or more, so the test accepts H0 when the rows show no evidence either way, and even when they point to a difference: at `--alpha 0.05 --beta 0.95`, a true difference of `--effect-size` ends in `accept_h0` in 96% of simulated runs at 0.3 standard deviations, and still 36% at 2. `soup ab` exits `2` naming both values. `--beta` is the Type-II error rate, not the power: a power of 0.95 is `--beta 0.05`, not `--beta 0.95`.
 
-`soup ab` accepts `--slack-url` / `--discord-url` (v0.71.5) and pings the webhook **only when the test actually decides** (`reject_h0` / `accept_h0`) — a still-running `continue` stays quiet so you're not paged on every peek. Same SSRF-hardened validator as `soup drift-alarm`.
+A `--effect-size` that is more than about 1.9e151 standard deviations of the rows that set the prior scale overflows the test statistic at the largest input `soup ab` accepts (1,000,000 rows per arm), so it is refused at every row count; `soup ab` exits `1` naming the flag and the standard deviation it measured, from the first run (before those rows are all in, it checks the rows so far). Because it is the ratio that overflows, a near-constant metric column reaches it at the default `--effect-size` too.
+
+Input rows look like `{"arm": "control", "latency": 1.23}` or `{"arm": "treatment", "judge_score": 0.91}`. Decision is one of `continue` (keep collecting samples), `reject_h0` (real difference detected, in either direction), `accept_h0` (no significant difference). A `reject_h0` also reports a `direction`, `better` or `worse`, read through the metric's polarity: `judge_score` is higher-is-better, `latency` and `retry_rate` are lower-is-better. Composes with `soup loop canary` (v0.58): the panel recommends promoting a `better` treatment and a rollback only for a `worse` one.
+
+`soup ab` exits `0` on every decision, including a `worse` one; to gate a pipeline on a regression, read `direction` from the output or the webhook payload.
+
+`soup ab` exits `1`, naming the metric column, when its values are outside what a float can carry: rows that set the prior scale so close together that their variance underflows to 0, or is below the smallest normal float at the default `--effect-size` (a column of `0` and `1e-161`), values so far apart that their variance overflows (a column of `0` and `1e200`), values so large that an arm's sum overflows (an arm of `1e308` values), or tested rows whose t statistic overflows (a near-constant tested arm, or arm means about `1e154` apart). The message says how to rescale the metric where rescaling helps; a near-constant arm needs its column checked instead.
+
+`soup ab` accepts `--slack-url` / `--discord-url` (v0.71.5) and pings the webhook **only when the test actually decides** (`reject_h0` / `accept_h0`) — a still-running `continue` stays quiet so you're not paged on every peek. The payload carries `decision` and `direction` (`null` on `accept_h0`). Same SSRF-hardened validator as `soup drift-alarm`.
 
 
 ## Drift Alarm (`soup drift-alarm`)
@@ -294,7 +315,7 @@ Default threshold 0.2 matches v0.43.0 KL-delta quant-check thresholds. Webhooks 
 
 ## Diagnose (Post-Training Report Card)
 
-`soup diagnose` scores seven independent failure modes for a trained adapter and renders an OK / MINOR / MAJOR verdict per mode plus an overall headline — same taxonomy as Quant-Lobotomy. Useful for catching adapter regressions that a loss curve cannot distinguish from a healthy run.
+`soup diagnose` scores seven independent failure modes for a trained adapter and renders an OK / MINOR / MAJOR / NOT_RUN verdict per mode (see `NOT_RUN` below) plus an overall headline — same taxonomy as Quant-Lobotomy. Useful for catching adapter regressions that a loss curve cannot distinguish from a healthy run.
 
 ```bash
 # Neutral report (no model load — runs as a sanity check)
@@ -315,13 +336,16 @@ soup diagnose my-run-id --evidence evidence.json --output diag.json
 # Twitter-shareable SVG badge embeddable in a model card
 soup diagnose my-run-id --badge diag.svg
 
+# Live run that knowingly skips probes: keep exit 0 instead of 3 on NOT_RUN
+soup diagnose my-run-id --base-model HuggingFaceTB/SmolLM2-135M --allow-not-run
+
 # Attach the report to a Model Registry entry as a first-class artifact
 soup diagnose my-run-id --output diag.json --attach-to-registry abc123
 ```
 
 **Live runners (v0.71.7).** With `--base-model` the six probes run against the loaded model
 (+ optional `--adapter` LoRA path, `--dataset` for the forgetting / format / memorization probes,
-`--tokenizer` for a sub-word memorization variant) instead of emitting neutral OK. `refusal` uses
+`--tokenizer` for a sub-word bigram memorization variant) instead of emitting neutral OK. `refusal` uses
 a built-in probe set; `format` only fires when the dataset's own targets look like JSON;
 `contamination` stays neutral unless a benchmark corpus is supplied. Validated on SmolLM2-135M.
 
@@ -337,9 +361,11 @@ a built-in probe set; `format` only fires when the dataset's own targets look li
 | `contamination` | Training data overlapping public benchmarks | 1 − contamination_rate |
 | `citation` | RAFT model stopped citing the supporting `[doc-N]` (v0.71.10) | fraction of answers citing the golden doc |
 
-**Verdict pill colours:** OK (≥ 0.85) green / MINOR (≥ 0.60) amber / MAJOR (< 0.60) red. `soup diagnose` exits 2 when the overall verdict is MAJOR — wire into CI to fail the build on regression.
+**Verdict pill colours:** OK (≥ 0.85) green / MINOR (≥ 0.60) amber / MAJOR (< 0.60) red. `soup diagnose` exits 2 when the overall verdict is MAJOR — wire into CI to fail the build on regression — and exits 3 when a requested probe did not run (see `NOT_RUN` below).
 
-**Post-training gate:** `soup train --diagnose-gate <evidence.json>` runs the same scorer after training finishes and refuses to mark the run successful when any mode comes back MAJOR. Composes with `--gate <eval-suite>` (v0.26) — the eval gate catches accuracy regressions vs a baseline; the diagnose gate catches behaviour regressions the eval suite is blind to.
+**`NOT_RUN` (grey):** a live probe that was requested but produced no measurement is reported as `NOT_RUN`, never as OK 1.00. That covers a `--dataset` with no usable prompt/answer rows and a probe that raised; the evidence column keeps the reason, including the exception text. `NOT_RUN` ranks above MINOR and below MAJOR in the overall verdict, and the badge and the table show it grey as `not run` / `—` instead of a score (the stored `0.0` in the JSON report is a placeholder, not a measurement; an `--evidence` entry for `NOT_RUN` may omit the score or give `0.0`). `soup diagnose` exits 3 when the overall verdict is `NOT_RUN`; pass `--allow-not-run` to keep exit 0 for runs that knowingly skip probes. MAJOR still exits 2. Probes that do not apply stay a neutral OK (format when the dataset targets are not JSON, contamination without a benchmark corpus, citation on non-RAFT rows, dataset probes when no `--dataset` is given). On the `--evidence` path, a mode you leave out of the file also becomes a neutral OK and is not gated; a mode you list with `"verdict": "NOT_RUN"` (score omitted or `0.0`) is `NOT_RUN`, so the run exits 3, and `soup train --diagnose-gate` refuses it the same way. A bad `--tokenizer` is an input error (exit 3) raised before any model loads. For `--dataset`, the live probes currently read rows with a prompt key (`prompt`, `instruction`, `input`, `question` or `query`) plus an answer key (`response`, `completion`, `output`, `answer`, `chosen` or `text`), or a `messages` list; other shapes (ShareGPT `conversations`, LLaVA, plaintext) make the dataset probes `NOT_RUN`. Memorization additionally needs a `text`, `content`, `prompt`, `instruction` or `messages` field, and is `NOT_RUN` when none of the first rows has one.
+
+**Post-training gate:** `soup train --diagnose-gate <evidence.json>` runs the same scorer after training finishes and refuses to mark the run successful when any mode comes back MAJOR (exit 2) or `NOT_RUN` (exit 3). Composes with `--gate <eval-suite>` (v0.26) — the eval gate catches accuracy regressions vs a baseline; the diagnose gate catches behaviour regressions the eval suite is blind to.
 
 
 ## Ship Verdict (`soup ship`)
@@ -374,6 +400,10 @@ soup ship --base <m> --adapter ./out --task-eval tasks.jsonl \
 # base vs tuned per prompt (swap-debiased); base = 0.5 coin-flip, won <=> winrate > 0.5
 soup ship --base <m> --adapter ./out --task-eval tasks.jsonl \
   --task-mode pairwise --judge-model ollama://llama3.1
+# A judge that cannot be reached is a runtime error (exit 1, naming the judge URL), not a
+# verdict: each judge request is retried twice (3 attempts) on 429 / 5xx / transport errors
+# (honouring Retry-After) and a spent retry never scores as a 0.5 tie (#1447). A judge
+# that answers "tie" still scores 0.5.
 
 # Leg-2 via lm-eval benchmarks, base scores supplied by --baseline
 soup ship --base <m> --tuned ./out --task-eval tasks.jsonl \
@@ -402,7 +432,7 @@ CPU-instant):
 | Suite | What it checks | Scorer |
 |-------|----------------|--------|
 | `mini_mmlu` / `mini_common_sense` / `mini_instruction` / `mini_arithmetic` | general knowledge / reasoning / instruction-following / numeracy | answer-extraction + exact/boundary match |
-| `mini_tool_call` | function-calling still works (right tool named) | `tool_call_name_match` |
+| `mini_tool_call` | function selection still works (right tool named, or exact `NO_TOOL` when no call is needed) | `tool_call_name_match` + exact abstention |
 | `mini_format_json` | JSON validity (a structured object, not a bare scalar) | container-only JSON check |
 | `mini_safety` | refusal-rate on harmful prompts (under-refusal = regression) | refusal heuristic |
 | `mini_over_refusal` | benign prompts are NOT refused (over-refusal = regression) | refusal heuristic (inverse) |
@@ -411,6 +441,10 @@ Each suite is >20 items so a single-item flip (1/N < 0.05) trips the default thr
 of being rounded away. The scorer is answer-**extraction** — a spurious substring inside a word
 (`"B"` in "**B**erlin") no longer scores, which is a **breaking** change from the v0.25.0
 substring scorer (an existing run's verdict can flip; recompute any committed `--baseline`).
+As of v0.76.0, `mini_tool_call` mixes tool calls with direct-answer prompts and requires the
+literal response `NO_TOOL` for the latter. This deliberately moves the suite away from its former
+1.000 ceiling; baseline provenance revision 2 prevents scores from the earlier scale from being
+compared silently with the new fixture.
 `mini_safety` and `mini_over_refusal` form a dual gate: under-refusal regresses safety, over-refusal
 regresses utility (neither axis can be gamed alone). `--general-suite <names>` with any non-bundled
 name routes through the lm-eval harness. Pairwise judge win-rate (`--task-mode pairwise`) shipped
@@ -660,6 +694,8 @@ soup eval custom --tasks eval_tasks.jsonl --model ./output
 # LLM-as-a-judge (score model outputs using GPT-4o, Ollama, etc.)
 soup eval judge --target responses.jsonl --model gpt-4o-mini --provider openai
 soup eval judge --target responses.jsonl --model llama3.1 --provider ollama
+# A row whose judge call keeps failing (429 after the retries, a timeout, a reply with no
+# choices) is skipped and counted; the other rows are still scored, shown and saved (#1447).
 
 # Auto-eval after training (configure in soup.yaml)
 soup eval auto --config soup.yaml
@@ -675,6 +711,10 @@ soup eval leaderboard --format csv
 # Human A/B evaluation with Elo ratings
 soup eval human --input prompts.jsonl --model-a ./model_a --model-b ./model_b
 ```
+
+`soup eval judge` asks the judge for one JSON object, `{"scores": {"<criterion>": <number>, ...}, "reasoning": "..."}`, and reads the first object in the reply that has a `scores` key, so reasoning that quotes JSON of its own does not get in the way. Criterion names match case-insensitively, and a score given as `{"score": N}` is read as `N`. A reply with no JSON object, with no finite number for a rubric criterion, or with one criterion under two spellings (`Helpfulness` and `helpfulness`) is an error that names the criterion where there is one, instead of a score at the scale minimum. A reply longer than 65,536 characters is refused unread; the judge is asked for at most 1,024 tokens, so only a runaway reply gets that long. `soup eval judge` skips such an item with a warning that carries the error and counts it (it exits `1` only when every item fails), an eval-gate judge task fails with the error as its reason (`soup eval gate` exits `2`), and `soup ship --task-mode judge_score` stops with `live ship verdict failed: ValueError: ...` and exits `1` without a verdict.
+
+soup eval compare and soup eval leaderboard use the newest eval row for each benchmark (on the leaderboard, for each model and benchmark), so re-running a benchmark replaces its score; rows with the same created_at resolve to the later insert. soup registry diff compares eval scores the same way.
 
 ### Aider Polyglot
 
@@ -764,11 +804,40 @@ Paths are containment-checked, and `registry://` refs are resolved with an optio
 
 ### Custom Eval Format
 
+Regex-scored custom tasks reject structurally unsafe patterns before matching
+model output and name `eval.custom.expected` in the error. The diagnose
+`format` probe applies the same check to `regex_pattern` without running a
+canary search. Ordinary patterns, including single-character alternation,
+remain valid.
+
 ```jsonl
-{"prompt": "What is 2+2?", "expected": "4", "category": "math", "scoring": "exact"}
+{"prompt": "What is 2+2?", "expected": "4", "category": "math", "scoring": "answer"}
 {"prompt": "Explain gravity", "expected": "force.*attraction", "scoring": "regex"}
 {"prompt": "Capital of France?", "expected": "Paris", "scoring": "contains"}
 ```
+
+How the string scorers read an output:
+
+| `scoring` | Scores | `expected: "4"` vs `The answer is 4.` | vs `14` |
+|---|---|---|---|
+| `answer` | The final answer each side states, read with the parser GRPO's `accuracy` reward uses (`#### 4`, `\boxed{4}`, `The answer is 4.`); numbers compare by value | match | no match |
+| `contains` | `expected` as a whole alphanumeric-bounded token, case-insensitive | match | no match |
+| `exact` | The whole stripped output, case-insensitive | no match | no match |
+
+`answer` refuses, at load time, an `expected` that states no single answer (a multi-line
+worked solution with no `####`, an empty `\boxed{}`, a hedge between values), naming the line.
+`contains` cannot read negation: `It is not 4, so 5.` still contains `4`. Its bound is an
+ASCII alphanumeric run, so `4` still matches inside `3.4`, `4.5` and `v1.42.3`. `answer`
+reads the answer a model *states*: `The capital of France is Paris.` scores `False` for a
+gold `Paris` while `Answer: Paris` and `Paris` score `True` — prefer `answer` for math and
+short-answer tasks, where the model states its answer. The eval gate's `scorer:` override
+accepts `answer` too.
+
+**Changed:** `contains` used to be a raw substring test, so it paid `14` for an expected `4`.
+Scores recorded with the old test (a `soup eval gate --baseline` file or `registry://` row, or
+a `soup eval custom --run-id` result) can be higher than the same outputs score now. The
+baseline scorer stamp covers the bundled suites only and will not warn: re-measure those
+baselines, or compare new runs only with runs made on this version.
 
 ### Auto-Eval Config (soup.yaml)
 
@@ -832,11 +901,16 @@ soup eval behavior my_run --battery xstest --evidence ev.json --output diff.json
 soup eval behavior my_run --battery xstest \
     --base-model HuggingFaceTB/SmolLM2-135M --adapter ./out
 
-# Bundled batteries: xstest, harmbench, jailbreakbench, elephant, syceval
+# Bundled batteries: xstest, harmbench, jailbreakbench (live or --evidence);
+# elephant, syceval (--evidence only)
 # Harmful prompts ship REDACTED — pull real sets from upstream papers.
 ```
 
-Word-boundary regex agreement (no `"safe" in "unsafe"` false positives); OK/MINOR/MAJOR thresholds match the v0.26 / v0.56 taxonomy.
+Without the live `--base-model` path, `--evidence` is required. An evidence-less
+run is an input error (exit `3`), not a neutral OK report; the error names the
+expected `pre_responses`, `post_responses`, and `oracle` arrays.
+
+Scoring depends on the path. With `--evidence`, each `oracle` entry is a word that must appear in the matching response (as a whole word and case-insensitive, so `"safe"` does not match `"unsafe"`, while a label with punctuation such as `(B)` or `-5` still matches). With `--base-model`, each generation is classified as a refusal or not: `safe` (XSTest) and `answer` (JailbreakBench) expect an answer, and `refuse` (HarmBench, JailbreakBench) expects a refusal. `elephant` and `syceval` (oracle `disagree`) need a judgement a refusal classifier cannot make, so `--base-model` refuses them before loading a model (exit `3`); score saved generations with `--evidence`. OK/MINOR/MAJOR thresholds match the v0.26 / v0.56 taxonomy.
 
 **Capability auto-suite** — pre-bundled profile selector with friendly `lm-eval-harness` task ids:
 
@@ -873,7 +947,11 @@ tests:
 soup eval checklist tests.yaml --evidence responses.json
 ```
 
-`mft` = response must contain a keyword as a whole word (`"sand"` won't pass for `"and"`); `inv` = all paraphrases must agree; `dir` = directional expectation under perturbation.
+`--evidence` is required and maps each CheckList test name to its response
+strings. Omitting it exits `3` instead of rendering an OK result with zero
+measurements.
+
+`mft` = response must contain a keyword as a whole word (`"sand"` won't pass for `"and"`, and keywords may start or end with punctuation, such as `-5`, `(B)` or `C++`); `inv` = all paraphrases must agree; `dir` = directional expectation under perturbation.
 
 **IRT subset selection** — pick a smaller eval set that preserves ranking power:
 

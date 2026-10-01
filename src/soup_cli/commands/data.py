@@ -7,7 +7,7 @@ import ntpath
 import os
 import random
 from pathlib import Path
-from typing import Optional
+from typing import NoReturn, Optional
 
 import typer
 from rich.console import Console
@@ -19,6 +19,7 @@ from soup_cli.utils.embed import DEFAULT_EMBED_MODEL, embed_texts
 from soup_cli.utils.exit_codes import EXIT_GATE_FAILED, EXIT_USAGE_ERROR, GateCommand
 from soup_cli.utils.paths import is_under_cwd
 from soup_cli.utils.semdedup import DedupReport, greedy_semdedup
+from soup_cli.utils.terminal import for_terminal
 
 console = Console()
 
@@ -1224,17 +1225,32 @@ def _hf_dataset_info(dataset_id: str) -> dict:
     }
 
 
+def _datasets_major_version() -> int | None:
+    """Return the installed ``datasets`` package's major version, or None if unreadable."""
+    import re
+
+    try:
+        import datasets
+    except ImportError:
+        return None
+
+    match = re.match(r"(\d+)", str(getattr(datasets, "__version__", "")))
+    return int(match.group(1)) if match else None
+
+
 def _hf_download_dataset(
     dataset_id: str,
     split: str = "train",
     samples: int | None = None,
+    trust_remote_code: bool = False,
 ) -> list[dict]:
     """Download a dataset from HuggingFace Hub and return as list of dicts."""
     from datasets import load_dataset
 
     try:
         ds = load_dataset(
-            dataset_id, split=split, streaming=True, trust_remote_code=False,
+            dataset_id, split=split, streaming=True,
+            trust_remote_code=trust_remote_code,
         )
     except Exception as exc:
         raise ValueError(f"Failed to load dataset {dataset_id}: {exc}") from exc
@@ -1520,20 +1536,34 @@ def download_dataset(
             )
             raise typer.Exit(1)
 
-    from rich.panel import Panel
+    if trust_remote_code:
+        datasets_major = _datasets_major_version()
+        if datasets_major is not None and datasets_major >= 4:
+            console.print(
+                "[red]--trust-remote-code is refused: the installed "
+                f"datasets package (v{datasets_major}.x) dropped "
+                "trust_remote_code support upstream, so it would be silently "
+                "ignored rather than doing what you asked. Install "
+                "datasets<4 if this dataset needs its remote loading "
+                "script, or drop --trust-remote-code if it doesn't.[/]"
+            )
+            raise typer.Exit(1)
 
-    console.print(Panel(
-        "[bold yellow]Warning:[/] Downloading this dataset may execute a "
-        "remote dataset loading script from HuggingFace Hub.\n\n"
-        "Only download datasets from sources you trust.",
-        title="Remote Code Warning",
-        border_style="yellow",
-    ))
+        from rich.panel import Panel
+
+        console.print(Panel(
+            "[bold yellow]Warning:[/] Downloading this dataset may execute a "
+            "remote dataset loading script from HuggingFace Hub.\n\n"
+            "Only download datasets from sources you trust.",
+            title="Remote Code Warning",
+            border_style="yellow",
+        ))
     console.print(f"[dim]Downloading {dataset_id} (split={split})...[/]")
 
     try:
         data = _hf_download_dataset(
             dataset_id, split=split, samples=samples,
+            trust_remote_code=trust_remote_code,
         )
     except ValueError as exc:
         console.print(f"[red]{exc}[/]")
@@ -1695,6 +1725,10 @@ def augment_data(
         console.print(f"[red]{exc}[/]")
         raise typer.Exit(2) from exc
 
+    from soup_cli.utils.data_forge import ForgeJudgeStats
+
+    stats = ForgeJudgeStats()
+
     max_entries = 10
     max_entry_len = 32
 
@@ -1718,17 +1752,38 @@ def augment_data(
             target_langs = _bounded_list(lang, "lang")
             augmented = augment_fn(
                 data, provider=provider_instance,
-                languages=target_langs or None,
+                languages=target_langs or None, stats=stats,
             )
         elif strategy == "style":
             target_styles = _bounded_list(styles, "styles")
             augmented = augment_fn(
                 data, provider=provider_instance, styles=target_styles or None,
+                stats=stats,
             )
         else:
-            augmented = augment_fn(data, provider=provider_instance, count=count)
+            augmented = augment_fn(
+                data, provider=provider_instance, count=count, stats=stats,
+            )
     except ValueError as exc:
         console.print(f"[red]{exc}[/]")
+        raise typer.Exit(1)
+
+    failure_summary = ""
+    if stats.failures:
+        from soup_cli.utils.recipe_run import _provider_endpoint_label
+
+        endpoint = _provider_endpoint_label(provider, base_url or None)
+        failure_summary = (
+            f"{stats.failures} of {stats.calls} provider calls failed for "
+            f"--provider {provider} ({endpoint}); first error: {stats.first_error}"
+        )
+
+    if not augmented and stats.failures:
+        from rich.markup import escape
+
+        console.print(
+            f"[red]No usable rows produced:[/] {escape(failure_summary)}"
+        )
         raise typer.Exit(1)
 
     # Optional dedup
@@ -1753,11 +1808,21 @@ def augment_data(
     )
     written = atomic_write_text(payload, output_path, field="--output")
 
-    console.print(
-        f"[green]Augmentation complete:[/] {len(data)} → {len(final_rows)} "
-        f"({strategy} via {provider})\n"
-        f"  Output: {written}"
-    )
+    if stats.failures:
+        from rich.markup import escape
+
+        console.print(
+            f"[yellow]Augmentation complete with provider failures:[/] "
+            f"{len(data)} → {len(final_rows)} ({strategy} via {provider})\n"
+            f"  Output: {written}"
+        )
+        console.print(f"[yellow]Warning:[/] {escape(failure_summary)}")
+    else:
+        console.print(
+            f"[green]Augmentation complete:[/] {len(data)} → {len(final_rows)} "
+            f"({strategy} via {provider})\n"
+            f"  Output: {written}"
+        )
 
 
 class _AugmentProvider:
@@ -1811,6 +1876,7 @@ def _load_augment_provider(
         canonical,
         model=model or _AUGMENT_DEFAULT_MODELS[canonical],
         base_url=base_url or None,
+        raise_on_error=True,
     )
     return _AugmentProvider(fn)
 
@@ -2033,7 +2099,31 @@ def from_traces_cmd(
         else:  # openai
             trace_iter = parse_openai(events)
 
-    pairs = list(build_pairs(trace_iter, signal=signal))
+    trace_list = list(trace_iter)
+    pairs = list(build_pairs(trace_list, signal=signal))
+    if not pairs and trace_list:
+        # #1440: reading traces that match no pair mode used to print a normal
+        # green "Wrote 0 preference pair(s)" and exit 0, so an empty output file
+        # read as a completed harvest. Name what was read and what was wanted.
+        signals = sorted({t.signal for t in trace_list if t.signal != "none"})
+        console.print(
+            f"[yellow]Read {len(trace_list)} trace(s) but built no pairs for "
+            f"--signal {signal}. "
+            + (
+                f"Signals present: {', '.join(signals)}. "
+                if signals
+                else "No trace carried a signal. "
+            )
+            # The top-level `signal` is a soup-serve-parser fact. The openai and
+            # langchain parsers key on `choices` / `feedback` and never read it,
+            # so naming it there would be advice the reader cannot act on.
+            + (
+                "Check the record shape: `soup ingest` writes a top-level "
+                "`signal`, and `feedback.rating` is still read as a fallback.[/]"
+                if format == "soup-serve"
+                else "Check the record shape against the format's parser.[/]"
+            )
+        )
 
     if judge:
         # v0.40.3 (#33 (a)) — LLM-judge confidence filter.
@@ -2357,6 +2447,80 @@ def _cache_key_dataset_path(cfg) -> str:
     return preprocess_dataset_key_input(cfg.data)
 
 
+def _refuse_row(idx: int, row, reason: str) -> NoReturn:
+    """Stop ``soup data preprocess`` on a chat row it cannot tokenize (#1180).
+
+    Numbers the row from 1, as the live SFT path does (``trainer/sft.py``), among
+    the rows that survived loading, and quotes the start of its first message so
+    it can be found even where that number is not the file's line. Every part of
+    the message comes from the dataset, so it goes through ``for_terminal``: a
+    role holding ``\\x1b[2J`` would otherwise clear the user's screen.
+    """
+    preview = label = ""
+    messages = row.get("messages") if isinstance(row, dict) else None
+    text = (row.get("text") or row.get("content")) if isinstance(row, dict) else None
+    if isinstance(messages, list) and messages and isinstance(messages[0], dict):
+        first = messages[0]
+        role = str(first.get("role"))[:30]
+        label, preview = "first message", f"{role!r}: {str(first.get('content', ''))[:60]!r}"
+    elif isinstance(text, str):
+        # A pretrain row has raw text, not messages.
+        label, preview = "text", f"{text[:60]!r}"
+    console.print(
+        f"[red]Train row {idx + 1} cannot be tokenized:[/] {for_terminal(reason)}"
+        + (f"\n  {label}: {for_terminal(preview)}" if preview else "")
+    )
+    console.print(
+        "Nothing was written. Fix or remove the row and re-run; the cache must hold "
+        "every row the training path would train on."
+    )
+    raise typer.Exit(1)
+
+
+def _mask_labels_for_cache_row(
+    messages, tokenizer, mask_mode: str, max_length: int, input_ids: list
+) -> list:
+    """Loss mask for one cached chat row, from the live path's own builders (#1054).
+
+    ``mask_mode`` comes from ``preprocess_mask_mode``, which mirrors
+    ``data.sft_format.build_format_row``'s selection — so a cache and the
+    equivalent live run mask the same tokens. Every flag that reaches the live
+    builder has to be read back out of the mode string here: dropping one caches
+    a different mask under a key that says otherwise, which is #1054 again.
+
+    Suffixes are matched with ``in``, not ``endswith`` — with both suffixes
+    present the mode is ``responses_only+eot+mask_history``, and ``endswith``
+    would silently drop the EOT from every such cache.
+
+    The builders tokenize through ``add_special_tokens=False`` while this path is
+    pinned to the rendered template's own tokenization, so their mask is aligned
+    back onto ``input_ids`` rather than replacing it (``align_labels_to_ids``).
+    """
+    from soup_cli.data.loss_mask import (
+        align_labels_to_ids,
+        build_assistant_only_labels,
+        build_per_message_train_labels,
+    )
+
+    if mask_mode == "full":
+        return list(input_ids)
+    if mask_mode == "train_field":
+        built = build_per_message_train_labels(
+            messages, tokenizer, max_length=max_length
+        )
+    else:
+        built = build_assistant_only_labels(
+            messages,
+            tokenizer,
+            max_length=max_length,
+            include_eot="+eot" in mask_mode,
+            mask_history="+mask_history" in mask_mode,
+        )
+    return align_labels_to_ids(
+        built["input_ids"], built["labels"], input_ids
+    )
+
+
 @app.command(name="preprocess")
 def preprocess_dataset(
     config_path: str = typer.Argument(
@@ -2382,7 +2546,11 @@ def preprocess_dataset(
     import json as _json
 
     from soup_cli.config.loader import load_config
-    from soup_cli.utils.data_pipeline import make_preprocess_cache_key
+    from soup_cli.data.chat_templates import resolve_chat_template
+    from soup_cli.utils.data_pipeline import (
+        make_preprocess_cache_key,
+        preprocess_mask_mode,
+    )
     from soup_cli.utils.paths import is_under_cwd
 
     cfg_real = os.path.realpath(config_path)
@@ -2404,19 +2572,30 @@ def preprocess_dataset(
         raise typer.Exit(1)
 
     dataset_path = _cache_key_dataset_path(cfg)
+    # #1067: render with data.chat_template, as the live path does, and key on it.
+    try:
+        chat_template = resolve_chat_template(cfg.data.chat_template)
+    except KeyError as exc:
+        console.print(f"[red]Invalid data.chat_template:[/] {for_terminal(exc.args[0])}")
+        raise typer.Exit(1) from exc
     train_display = (
         ", ".join(cfg.data.train) if isinstance(cfg.data.train, list) else cfg.data.train
     )
+    mask_mode = preprocess_mask_mode(cfg.data, getattr(cfg, "training", None))
     cache_key = make_preprocess_cache_key(
         dataset_path=dataset_path,
         tokenizer_name=cfg.base,
         max_length=cfg.data.max_length,
         format_name=cfg.data.format,
+        chat_template=chat_template,
+        mask_mode=mask_mode,
+        task=cfg.task,
     )
     target = Path(out_real) / cache_key
     console.print(f"[cyan]Dataset:[/] {train_display}")
     console.print(f"[cyan]Tokenizer:[/] {cfg.base}")
     console.print(f"[cyan]max_length:[/] {cfg.data.max_length}")
+    console.print(f"[cyan]Loss mask:[/] {mask_mode}")
     console.print(f"[cyan]Cache key:[/] {cache_key}")
     console.print(f"[cyan]Target:[/] {target}")
 
@@ -2450,6 +2629,8 @@ def preprocess_dataset(
     tokenizer = AutoTokenizer.from_pretrained(
         cfg.base, trust_remote_code=False
     )
+    if chat_template is not None:
+        tokenizer.chat_template = chat_template
 
     try:
         dataset = load_dataset(cfg.data)
@@ -2460,6 +2641,24 @@ def preprocess_dataset(
     raw_rows = dataset.get("train", []) if isinstance(dataset, dict) else []
     max_length = int(cfg.data.max_length)
     is_pretrain = cfg.task == "pretrain"
+
+    # #876: measured once, not per row -- how many leading BOS the tokenizer's
+    # post-processor prepends, so the chat path can keep only the template's own.
+    bos_added_by_post_processor = None
+    if not is_pretrain:
+        from soup_cli.data.loss_mask import post_processor_leading_bos_count
+
+        bos_added_by_post_processor = post_processor_leading_bos_count(tokenizer)
+
+    if not is_pretrain and not getattr(tokenizer, "chat_template", None):
+        # #1180 review: a whole-dataset problem, reported once rather than blamed
+        # on the first row -- removing a row cannot fix it.
+        console.print(
+            f"[red]The tokenizer for {for_terminal(cfg.base)} has no chat_template,[/] "
+            "so no chat row can be rendered. Set data.chat_template, or use a base "
+            "whose tokenizer ships one. Nothing was written."
+        )
+        raise typer.Exit(1)
 
     rendered_rows: list[dict] = []
     for idx, row in enumerate(raw_rows):
@@ -2478,17 +2677,20 @@ def preprocess_dataset(
             if not text:
                 continue
         else:
+            # #1180: a chat row that cannot be rendered stops the command, as the
+            # live training path stops on it. Skipping it wrote a smaller dataset
+            # than the one configured, exited 0, and the cached run trained on it.
             messages = row.get("messages") if isinstance(row, dict) else None
-            if not messages or not getattr(tokenizer, "chat_template", None):
-                continue
+            if not messages:
+                _refuse_row(idx, row, "it has no messages")
             try:
                 text = tokenizer.apply_chat_template(
                     messages, tokenize=False, add_generation_prompt=False
                 )
-            except Exception:  # noqa: BLE001 — tokenizer template errors vary
-                continue
+            except Exception as exc:  # noqa: BLE001 — tokenizer template errors vary
+                _refuse_row(idx, row, f"{type(exc).__name__}: {exc}")
             if not isinstance(text, str) or not text:
-                continue
+                _refuse_row(idx, row, "the chat template rendered it as empty text")
         try:
             tokens = tokenizer(
                 text,
@@ -2503,22 +2705,39 @@ def preprocess_dataset(
                 # here; #791 then applies TRL's training EOS rule below, both only
                 # for the chat path.
             )
-        except Exception:  # noqa: BLE001 — tokenizer errors vary
-            continue
+        except Exception as exc:  # noqa: BLE001 — tokenizer errors vary
+            # Pretrain too (#1182 review, round 3): live pretraining stops on a row
+            # the tokenizer rejects -- TRL's map has no per-row skip -- so skipping
+            # it here cached fewer rows than the live run trains on.
+            _refuse_row(idx, row, f"{type(exc).__name__}: {exc}")
         input_ids = tokens["input_ids"]
         attention_mask = tokens.get("attention_mask", [1] * len(input_ids))
         if not is_pretrain:
-            # #785/#788: the chat template already renders the BOS; ``main``'s
-            # add_special_tokens=True prepends a second one. Drop only that one
-            # duplicated leading BOS. Pretrain feeds raw document text with no
-            # template BOS, so nothing to drop.
+            # #785/#788/#876: add_special_tokens=True prepends the post-processor's
+            # BOS, which the live path (add_special_tokens=False) never trains on.
+            # Keep only the BOS the template itself renders: one for a
+            # ``{{ bos_token }}`` template (#785's doubled case), zero for a
+            # ``data.chat_template`` preset (#876). Pretrain feeds raw document
+            # text with no template, so it keeps ``main``'s encoding untouched.
             from soup_cli.data.loss_mask import (
                 append_training_eos,
-                strip_doubled_leading_bos,
+                strip_post_processor_leading_bos,
             )
 
-            input_ids, attention_mask = strip_doubled_leading_bos(
-                tokenizer, input_ids, attention_mask
+            # Decide "was this row truncated" BEFORE removing a BOS. Afterwards a
+            # row cut to the budget reads as one token short of it, and the EOS
+            # check below would hand it a stop token the live path (append, then
+            # truncate) does not have. Only the exact-fit length is ambiguous, so
+            # only that row is re-measured without truncation.
+            truncated = False
+            if len(input_ids) >= max_length:
+                try:
+                    full = tokenizer(text, truncation=False, verbose=False)
+                    truncated = len(full["input_ids"]) > max_length
+                except Exception:  # noqa: BLE001 — tokenizer errors vary
+                    truncated = True
+            input_ids, attention_mask = strip_post_processor_leading_bos(
+                tokenizer, input_ids, attention_mask, bos_added_by_post_processor
             )
             # #791: the live training path appends ``eos_token`` (TRL 0.29.1's
             # ``add_eos``, ``sft_trainer.py:1026-1038``) to every chat row that
@@ -2533,14 +2752,27 @@ def preprocess_dataset(
             # ``max_length`` was truncated, and the live path (append-then-truncate)
             # keeps no trailing EOS there either, so matching it means not pushing
             # the row past the budget.
-            if len(input_ids) < max_length:
+            if not truncated and len(input_ids) < max_length:
                 with_eos = append_training_eos(tokenizer, input_ids)
                 if len(with_eos) != len(input_ids):
                     input_ids = with_eos
                     attention_mask = attention_mask + [1]
+            # #1054: without a ``labels`` column TRL's collator falls back to
+            # ``labels = input_ids`` and the cached run trains on the prompt
+            # too, silently diverging from the equivalent live chatml run. Build
+            # the mask with the very helpers the live path uses, then align it
+            # onto this path's ids, which are left exactly as the tokenization
+            # above produced them — only ``labels`` is new here.
+            labels = _mask_labels_for_cache_row(
+                messages, tokenizer, mask_mode, max_length, input_ids
+            )
+        else:
+            # Pretrain trains on every token by design — no masking.
+            labels = list(input_ids)
         rendered_rows.append(
             {
                 "input_ids": input_ids,
+                "labels": labels,
                 "attention_mask": attention_mask,
             }
         )
@@ -2573,6 +2805,7 @@ def preprocess_dataset(
         raise
 
     from soup_cli import __version__ as _soup_version
+    from soup_cli.utils.data_pipeline import _PREPROCESS_TOKENIZE_SCHEMA
 
     metadata = {
         "cache_key": cache_key,
@@ -2580,7 +2813,13 @@ def preprocess_dataset(
         "tokenizer_name": cfg.base,
         "max_length": max_length,
         "format": cfg.data.format,
+        "chat_template": cfg.data.chat_template,
+        "mask_mode": mask_mode,
         "task": cfg.task,
+        # #1272: what the gate needs to say why a cache is refused -- the key
+        # generation, and the row-set inputs so it can name the fields that differ.
+        "key_schema": _PREPROCESS_TOKENIZE_SCHEMA,
+        "dataset_key": json.loads(dataset_path),
         "soup_version": _soup_version,
     }
     metadata_path = target / "metadata.json"

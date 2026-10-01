@@ -285,8 +285,11 @@ class TestEveryConversationalTrainerIsWired:
 
         monkeypatch.setattr(wrapper_class, "_setup_transformers", fake_setup)
         wrapper = wrapper_class(cfg, device="cpu")
+        # #1391: PPO refuses a train set smaller than one rollout batch
+        # (batch_size 2 x gradient_accumulation_steps 4) before loading anything.
+        rows = [{"prompt": "hi"}] * 8 if task == "ppo" else []
         with pytest.raises(StopAfterTemplateError):
-            wrapper.setup({"train": []})
+            wrapper.setup({"train": rows})
         assert wrapper.tokenizer.chat_template == marker, task
 
     def test_online_dpo_override_beats_fallback_on_a_loaded_tokenizer(self, tmp_path):

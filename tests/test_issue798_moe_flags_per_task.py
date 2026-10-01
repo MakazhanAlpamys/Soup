@@ -214,13 +214,21 @@ class TestMoeLoraReachesTheExpertFfns:
         assert experts, f"{task}: no expert module carries an adapter: {adapted}"
 
     @pytest.mark.parametrize("task", _MOE_TASKS)
-    def test_without_the_flag_the_attach_fails_on_this_model(self, task, monkeypatch):
-        """The control the ruling asked for, and it is stronger than expected: on a
-        fused-expert Qwen3-MoE, ``target_modules: auto`` (what all 15 recipes use)
-        resolves to None, and peft refuses. So these recipes could not attach LoRA
-        at all, rather than quietly training attention-only."""
-        with pytest.raises(ValueError, match="target_modules"):
-            _attach_lora(task, monkeypatch, moe_lora=False, expect_failure=True)
+    def test_without_the_flag_no_expert_is_adapted(self, task, monkeypatch):
+        """The control the ruling asked for: ``moe_lora`` is what reaches the experts.
+
+        Until #1070 this asserted the attach FAILED -- on a fused-expert Qwen3-MoE,
+        ``target_modules: auto`` resolved to None and peft refused. #1102 maps
+        ``qwen3_moe``'s attention projections, so ``auto`` now attaches, and it
+        attaches attention-only. That keeps the control's point rather than
+        dropping it: the experts are adapted only when ``moe_lora`` asks for them,
+        and the companion test above proves it does."""
+        adapted = _adapted(_attach_lora(task, monkeypatch, moe_lora=False))
+
+        assert adapted, f"{task}: target_modules: auto attached nothing"
+        assert not [n for n in adapted if "experts" in n], (
+            f"{task}: experts adapted without moe_lora: {adapted}"
+        )
 
     @pytest.mark.parametrize("task", _MOE_TASKS)
     def test_a_non_moe_base_is_untouched_by_the_flag(self, task, monkeypatch):
@@ -335,7 +343,7 @@ class TestShippedConfigs:
             load_config_from_string(recipe.yaml_str), name
 
     def test_the_moe_recipes_are_the_ones_this_issue_names(self):
-        """15, not the 8 the issue estimated: 8 dpo + 7 grpo."""
+        """17: 9 dpo + 8 grpo (including deepseek-v4-pro-dpo and deepseek-v4-pro-grpo)."""
         import yaml
 
         from soup_cli.recipes.catalog import RECIPES
@@ -346,7 +354,9 @@ class TestShippedConfigs:
             training = cfg.get("training") or {}
             if training.get("moe_lora") and cfg.get("task") in _MOE_TASKS:
                 tasks.append(cfg["task"])
-        assert sorted(tasks) == ["dpo"] * 8 + ["grpo"] * 7, sorted(tasks)
+        # #1145 removed mistral-large-3-dpo (its repo has no config.json) and
+        # minimax-m3-dpo (DPO cannot build its VL wrapper): 9 -> 7 dpo.
+        assert sorted(tasks) == ["dpo"] * 7 + ["grpo"] * 8, sorted(tasks)
 
 
 
@@ -646,16 +656,17 @@ class TestPerArchitectureCoverage:
         assert bool(experts) is self.EXPECTED[arch], (arch, experts)
 
     def test_the_uncovered_families_are_named_in_the_docs(self):
-        """MiniMax gets zero expert adapters, so `minimax-m3-sft` and
-        `minimax-m3-dpo` still train attention-only after this PR. That has to be
-        written down where a user looks, not only in a test."""
+        """MiniMax gets zero expert adapters, so `minimax-m3-sft` trains
+        attention-only. That has to be written down where a user looks, not only
+        in a test. (`minimax-m3-dpo` was removed in #1145: DPO cannot build the
+        `minimax_m3_vl` wrapper.)"""
         from pathlib import Path
 
         docs = (Path(__file__).resolve().parents[1]
                 / "docs" / "performance-and-quantization.md").read_text(encoding="utf-8")
         lowered = docs.lower()
-        assert "minimax-m3-sft" in lowered and "minimax-m3-dpo" in lowered, (
-            "the two recipes the wiring does not reach must be named in the docs"
+        assert "minimax-m3-sft" in lowered, (
+            "the recipe the wiring does not reach must be named in the docs"
         )
         assert "attention-only" in lowered, "and what they do instead"
 
@@ -729,4 +740,6 @@ class TestEveryMoeRecipeCanAttach:
             1 for r in RECIPES.values()
             if (yaml.safe_load(r.yaml_str).get("training") or {}).get("moe_lora")
         )
-        assert counted >= 31, counted
+        # 33 until #1145 removed mistral-large-3-sft/-dpo and minimax-m3-dpo, and took
+        # moe_lora off minimax-m3-sft (SFT's vision path never reads it).
+        assert counted >= 29, counted

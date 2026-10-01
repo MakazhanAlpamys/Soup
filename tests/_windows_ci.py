@@ -1,10 +1,18 @@
 """THE ``windows-latest`` illegal-instruction guard (#382). One definition.
 
-Imported by every test file that reaches a real ``trainer.train()``. It lives
-here rather than in one of those files because the guard has now been needed in
-four of them, and this repo has been bitten three times by a predicate that was
-copied instead of shared (#372, #392, #424). ``test_windows_ci_guard_is_not_
+Imported by the test files whose real ``trainer.train()`` still crashes that
+fleet: today only the two NF4 tests in ``test_v07202.py``. It lives here rather
+than in that file because the guard has been needed in four files over time, and
+this repo has been bitten three times by a predicate that was copied instead of
+shared (#372, #392, #424). ``test_windows_ci_guard_is_not_
 duplicated`` fails if a second copy appears.
+
+Before reaching for the skip, look at the crash frame. When it is a CPU bf16 or
+fp16 matmul (a real step under CPU autocast; trl's configs default to
+``bf16=True`` even with ``use_cpu=True``), request the ``aten_half_matmuls``
+fixture from ``tests/conftest.py`` instead. Its half-precision matmuls then run
+on ATen's precompiled kernels, not oneDNN's or MKL's run-time dispatched ones, its
+attention runs in fp32, and the test keeps running on every cell.
 """
 
 from __future__ import annotations
@@ -18,11 +26,14 @@ import pytest
 def _windows_ci() -> bool:
     """True on a GitHub ``windows-latest`` runner, false on a Windows dev box.
 
-    #382 — part of GitHub's ``windows-latest`` fleet lacks an instruction the
-    bitsandbytes wheel emits, so the first test that reaches a real
-    ``trainer.train()`` dies with ``Windows fatal exception: code 0xc000001d``
-    (ILLEGAL_INSTRUCTION): a faulthandler dump, no Python exception, and a dead
-    interpreter. Occurrences so far span py3.10, py3.11 and py3.12, so it tracks
+    #382 — part of GitHub's ``windows-latest`` fleet dies with ``Windows fatal
+    exception: code 0xc000001d`` (ILLEGAL_INSTRUCTION) in some real training
+    steps: a faulthandler dump, no Python exception, and a dead interpreter. Two
+    causes are known. For the two NF4 tests in ``test_v07202.py`` it is an
+    instruction the bitsandbytes wheel emits, and those tests still use this skip.
+    For the others it was the first CPU bf16/fp16 matmul in oneDNN or MKL (#1314),
+    which the ``aten_half_matmuls`` fixture avoids, so they request the fixture
+    instead. Occurrences so far span py3.10, py3.11 and py3.12, so it tracks
     the runner CPU rather than the interpreter; the control is that ``1715261``
     is the crashing tree ``7c9a931`` plus one line of markdown and came back
     green on the same pool.

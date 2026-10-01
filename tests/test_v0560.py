@@ -505,7 +505,7 @@ class TestRunner:
         with pytest.raises(ValueError, match="cwd"):
             write_report(report, outside)
 
-    @pytest.mark.skipif(os.name == "nt", reason="POSIX symlink semantics")
+    @pytest.mark.requires_symlink
     def test_write_report_symlink_rejected(self, tmp_path: Path) -> None:
         os.chdir(tmp_path)
         target = tmp_path / "real.json"
@@ -709,6 +709,91 @@ class TestTrainDiagnoseGate:
         from soup_cli.commands.train import _run_diagnose_gate
         _run_diagnose_gate(str(evidence), "run1", "base", "adapter")
 
+    def test_run_diagnose_gate_helper_not_run_exits_3(self, tmp_path: Path) -> None:
+        import typer
+
+        # #1435: an unmeasured mode must not pass the gate.
+        os.chdir(tmp_path)
+        evidence = tmp_path / "ev.json"
+        evidence.write_text(
+            json.dumps(
+                {
+                    "scores": {
+                        "format": {
+                            "score": 0.0,
+                            "verdict": "NOT_RUN",
+                            "evidence": "probe not run (no rows)",
+                        }
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+        from soup_cli.commands.train import _run_diagnose_gate
+
+        with pytest.raises(typer.Exit) as excinfo:
+            _run_diagnose_gate(str(evidence), "run1", "base", "adapter")
+        assert excinfo.value.exit_code == 3
+
+    def test_run_diagnose_gate_major_beats_not_run(self, tmp_path: Path) -> None:
+        import typer
+
+        os.chdir(tmp_path)
+        evidence = tmp_path / "ev.json"
+        evidence.write_text(
+            json.dumps(
+                {
+                    "scores": {
+                        "format": {"verdict": "NOT_RUN", "evidence": "never ran"},
+                        "refusal": {"score": 0.1, "verdict": "MAJOR", "evidence": "worse"},
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+        from soup_cli.commands.train import _run_diagnose_gate
+
+        with pytest.raises(typer.Exit) as excinfo:
+            _run_diagnose_gate(str(evidence), "run1", "base", "adapter")
+        assert excinfo.value.exit_code == 2
+
+    @pytest.mark.parametrize("verdict", ["NOT_RUN", "MAJOR"])
+    def test_run_diagnose_gate_escapes_evidence_markup(
+        self, tmp_path: Path, verdict: str
+    ) -> None:
+        import typer
+
+        os.chdir(tmp_path)
+        evidence = tmp_path / "ev.json"
+        score = 0.0 if verdict == "NOT_RUN" else 0.1
+        evidence.write_text(
+            json.dumps(
+                {"scores": {"format": {"score": score, "verdict": verdict,
+                                       "evidence": "[/bad] [red]x"}}}
+            ),
+            encoding="utf-8",
+        )
+        from soup_cli.commands.train import _run_diagnose_gate
+
+        # An unescaped "[/bad]" would raise rich.errors.MarkupError, not typer.Exit.
+        with pytest.raises(typer.Exit):
+            _run_diagnose_gate(str(evidence), "run1", "base", "adapter")
+
+    @pytest.mark.parametrize("bad_score", [None, True, "0.5"])
+    def test_run_diagnose_gate_rejects_non_numeric_score(
+        self, tmp_path: Path, bad_score: object
+    ) -> None:
+        os.chdir(tmp_path)
+        evidence = tmp_path / "ev.json"
+        evidence.write_text(
+            json.dumps({"scores": {"format": {"score": bad_score, "verdict": "OK"}}}),
+            encoding="utf-8",
+        )
+        from soup_cli.commands.train import _run_diagnose_gate
+
+        with pytest.raises(ValueError, match="must be a number"):
+            _run_diagnose_gate(str(evidence), "run1", "base", "adapter")
+
     def test_diagnose_gate_skips_nonzero_local_rank(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from soup_cli.commands.train import _should_run_diagnose_gate_on_rank
 
@@ -837,7 +922,7 @@ class TestReviewFixCoverage:
         assert "tempfile.mkstemp" in source
         assert "os.replace" in source
 
-    @pytest.mark.skipif(os.name == "nt", reason="POSIX symlink semantics")
+    @pytest.mark.requires_symlink
     def test_badge_symlink_rejected(self, tmp_path: Path) -> None:
         os.chdir(tmp_path)
         target = tmp_path / "real.svg"
@@ -880,19 +965,20 @@ class TestReviewFixCoverage:
             with pytest.raises(ValueError, match="exceeds 16 MiB"):
                 _run_diagnose_gate(str(ev), "run1", "base", "adapter")
 
-    # security-review MEDIUM — ReDoS probe in matches_regex.
+    # Issue #1137 — structural validation replaces the runtime ReDoS probe.
     def test_matches_regex_invalid_pattern_rejected(self) -> None:
-        # Invalid regex syntax → False (probe wrapped in try/except).
+        # Invalid regex syntax remains a non-match.
         assert not matches_regex("abc", "(?:")
         # Sane patterns still pass.
         assert matches_regex("abc123", r"\d+")
-        # Source-grep — confirm the ReDoS probe wiring exists.
+        # Source-grep — confirm the structural guard replaced the risky probe.
         source = (
             _PROJECT_ROOT / "src" / "soup_cli" / "utils" / "diagnose" / "format.py"
         ).read_text(
             encoding="utf-8"
         )
-        assert 'compiled.search("a" * 128)' in source
+        assert 'check_config_regex(pattern, "diagnose.regex_pattern")' in source
+        assert 'compiled.search("a" * 128)' not in source
 
     # security-review MEDIUM — looks_like_refusal caps input length.
     def test_refusal_input_capped(self) -> None:

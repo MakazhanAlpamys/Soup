@@ -207,7 +207,10 @@ def _stub_eval_internals(monkeypatch):
     import soup_cli.commands.eval as ce
     import soup_cli.eval.custom as ec
 
-    monkeypatch.setattr(ec, "_create_default_generator", lambda path: (lambda p: "4"))
+    monkeypatch.setattr(
+        ec, "_create_default_generator",
+        lambda path, trust_remote_code=False: (lambda p: "4"),
+    )
     monkeypatch.setattr(ce, "_save_custom_results", lambda *a, **k: None)
 
 

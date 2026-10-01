@@ -6,7 +6,6 @@ import dataclasses
 import json
 import math
 import os
-import sys
 from pathlib import Path
 
 import pytest
@@ -379,7 +378,7 @@ class TestBrainRotCli:
         )
         assert result.exit_code != 0
 
-    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX symlink")
+    @pytest.mark.requires_symlink
     def test_symlink_rejected(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

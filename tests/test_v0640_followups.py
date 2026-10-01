@@ -20,7 +20,6 @@ Covers wave-1 review-fix gaps:
 from __future__ import annotations
 
 import os
-import sys
 from pathlib import Path
 
 import pytest
@@ -30,7 +29,7 @@ import pytest
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="POSIX symlinks")
+@pytest.mark.requires_symlink
 def test_plan_yaml_symlink_rejected(tmp_path, monkeypatch):
     from soup_cli.commands.plan import _load_yaml_config
 
@@ -66,7 +65,7 @@ def test_plan_yaml_null_byte_rejected(tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="POSIX symlinks")
+@pytest.mark.requires_symlink
 def test_tunability_load_report_symlink_rejected(tmp_path, monkeypatch):
     from soup_cli.utils.tunability import load_report
 
@@ -106,7 +105,7 @@ def test_tunability_load_report_containment_before_existence(tmp_path, monkeypat
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="POSIX symlinks")
+@pytest.mark.requires_symlink
 def test_env_read_lock_symlink_rejected(tmp_path, monkeypatch):
     from soup_cli.utils.env_lock import read_lock
 
@@ -141,7 +140,7 @@ def test_env_read_lock_outside_cwd_before_existence(tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="POSIX symlinks")
+@pytest.mark.requires_symlink
 def test_terraform_read_state_symlink_rejected(tmp_path, monkeypatch):
     from soup_cli.utils.terraform_plan import read_state
 
@@ -199,7 +198,7 @@ def test_compute_dataset_sha_outside_cwd_returns_zero(tmp_path, monkeypatch):
     assert sha == "0" * 64
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="POSIX symlinks")
+@pytest.mark.requires_symlink
 def test_compute_dataset_sha_symlink_rejected(tmp_path, monkeypatch):
     from soup_cli.utils.terraform_plan import compute_dataset_sha
 

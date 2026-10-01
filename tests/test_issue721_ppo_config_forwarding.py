@@ -10,6 +10,7 @@ import pytest
 
 from soup_cli.trainer._trl_compat import kl_penalty_kwargs
 from soup_cli.trainer.ppo import _effective_ppo_setting, _set_ppo_training_kwargs
+from tests.conftest import strip_ansi
 
 
 def _config_accepting(*fields: str) -> type:
@@ -199,12 +200,13 @@ def test_setup_passes_current_schedule_to_trainer(tmp_path, capsys) -> None:
         patch.object(wrapper, "_get_or_create_reward_model", return_value=MagicMock()),
         patch.object(wrapper, "_create_value_model", return_value=MagicMock()),
     ):
-        wrapper.setup({"train": [{"prompt": "Q?", "answer": "A"}]})
+        # #1391: one rollout batch is batch_size (1 here) x gradient_accumulation_steps (4)
+        wrapper.setup({"train": [{"prompt": "Q?", "answer": "A"}] * 4})
 
     assert wrapper.trainer.args.num_train_epochs == 7
     assert wrapper.trainer.args.num_ppo_epochs == 2
     assert wrapper.trainer.args.kl_coef == 0.7
-    schedule = capsys.readouterr().out
+    schedule = strip_ansi(capsys.readouterr().out)
     assert "train epochs=7" in schedule
     assert "PPO epochs=2" in schedule
     assert "KL coefficient=0.7" in schedule

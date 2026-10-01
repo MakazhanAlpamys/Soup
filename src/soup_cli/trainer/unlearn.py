@@ -166,6 +166,11 @@ class UnlearnTrainerWrapper:
 
     def setup(self, dataset: Any = None) -> None:
         """Load policy + (optional) frozen reference, LoRA, and datasets."""
+        # #1445 — refuse an output dir outside cwd or a symlinked one BEFORE
+        # torch / peft are even imported and any model is loaded; the check
+        # in ``train()`` stays as the TOCTOU guard after the run.
+        _validated_output_dir(self.config.output)
+
         from peft import get_peft_model
 
         from soup_cli.utils.live_eval import load_model_and_tokenizer
@@ -192,7 +197,13 @@ class UnlearnTrainerWrapper:
             resolve_lora_target_modules,
         )
 
-        target_modules = resolve_lora_target_modules(self.model, tcfg.lora.target_modules)
+        target_modules = resolve_lora_target_modules(self.model, tcfg.lora.target_modules, console)
+        # #1151: moe_lora picks the expert-FFN targets; see sft.py.
+        from soup_cli.utils.moe import resolve_moe_lora_targets
+
+        target_modules = resolve_moe_lora_targets(
+            self.model, tcfg, target_modules, console
+        )
         lora_cfg = build_lora_config(
             tcfg.lora,
             target_modules=target_modules,

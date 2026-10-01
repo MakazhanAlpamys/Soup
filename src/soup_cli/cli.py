@@ -133,7 +133,7 @@ app.command()(sweep.sweep)
 app.command(name="diff")(diff.diff)
 app.command()(infer.infer)
 app.command()(profile.profile)
-app.command()(bench.bench)
+app.add_typer(bench.app, name="bench")
 app.command()(doctor_cmd.doctor)
 app.command()(quickstart_cmd.quickstart)
 app.command()(ui.ui)
@@ -355,8 +355,9 @@ from soup_cli.commands import ab as _ab_cmd  # noqa: E402
 app.command(
     name="ab",
     help=(
-        "mSPRT sequential A/B harness on latency / judge_score / retry_rate "
-        "with early-stop guarantees (v0.63.0)."
+        "Two-sided mSPRT sequential A/B harness on latency / judge_score / retry_rate: "
+        "reports whether the treatment is better or worse, valid under re-running after "
+        "every new row (v0.63.0)."
     ),
 )(_ab_cmd.ab)
 
@@ -648,7 +649,7 @@ def version(
                 except ImportError:
                     pass
 
-        console.print(json.dumps(info), highlight=False)
+        typer.echo(json.dumps(info))
         return
 
     if not full:

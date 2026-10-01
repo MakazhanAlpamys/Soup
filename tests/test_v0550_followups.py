@@ -22,7 +22,6 @@ tdd-guide:
 from __future__ import annotations
 
 import dataclasses
-import os
 import types as _types
 from pathlib import Path
 
@@ -52,9 +51,6 @@ from soup_cli.utils.eval_lock_coverage import (
     compute_coverage,
     lock_suite,
 )
-
-POSIX_ONLY = pytest.mark.skipif(os.name == "nt", reason="POSIX-only symlink test")
-
 
 # ---------------------------------------------------------------------------
 # MappingProxyType / frozenset immutability
@@ -149,7 +145,7 @@ class TestGateThresholdsValidation:
 # Atomic-write symlink rejection on every surface (POSIX)
 # ---------------------------------------------------------------------------
 
-@POSIX_ONLY
+@pytest.mark.requires_symlink
 class TestSymlinkAtomicWriteRejection:
     def test_write_eval_design_rejects_symlink_target(
         self, tmp_path, monkeypatch,

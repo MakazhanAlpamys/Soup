@@ -2,7 +2,11 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    # `release/**` is here so a release branch gets the matrix on the exact
+    # tree that will be tagged. A pull request builds the MERGE of head and
+    # main, which for a release cut from an older tag is not the tree that
+    # ships, so a PR run cannot stand in for this one.
+    branches: [main, 'release/**']
   pull_request:
     branches: [main]
 
@@ -29,8 +33,21 @@ on:
 # a row now leave results for the third only. That is a signal the review rule
 # already discards -- merge requires green on the CURRENT head -- which is why
 # it is the right thing to trade.
+#
+# 2026-09-28: pushes to `main` now share ONE group, keyed 'main-push'. Measured
+# that morning: 24 of 70 queued runs were full matrices for main commits (about
+# 15 merges plus credit commits in a day), each alone in its per-commit group,
+# so main's own history consumed roughly a third of the queue while every
+# merged change had already passed the matrix on its pull request. In the shared
+# group a RUNNING main run still finishes (cancel-in-progress stays PR-only), and
+# a newer push supersedes only the PENDING one, so main carries at most one
+# running and one pending run and the newest commit always gets a result.
+# What this costs: intermediate main commits may show 'cancelled' instead of a
+# result, so a breakage is bisected over a range rather than read off one
+# commit. `release/**` keeps the per-commit key, because the release checklist
+# needs a green matrix on the exact commit being tagged.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || (github.ref == 'refs/heads/main' && 'main-push' || github.sha) }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # Bound every job explicitly.
@@ -168,6 +185,37 @@ jobs:
         # execute them. Without this step, replacing the whole MLX per-row loss
         # with a constant 0.0 left the suite green (#1018 review).
         run: pytest -o addopts= -q tests/test_rewind_mlx.py
+  torchao-contract:
+    # #826: every torchao class Soup names is resolved against the REAL package
+    # here. The 3x3 matrix cannot do it -- `torchao` is not in `[dev]`, so those
+    # cells skip these tests, which is how three names torchao never exported
+    # (NVFP4Config, Int8DynActInt4Config, Float8DynActFloat8Config) survived
+    # behind a stub and a MagicMock.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install the QAT extra (torchao) beside the dev stack
+        # One spec with both extras: `-e ".[dev]" ".[qat]"` asks pip for
+        # soup-cli twice, once editable and once not, and resolution fails.
+        run: pip install -e ".[dev,qat]" "torch>=2.6.0"
+      - name: Prove torchao is actually importable, so the tests do not skip
+        run: python -c "import torchao; print(torchao.__version__)"
+      - name: Resolve every torchao class Soup asks for
+        # test_v07121.py runs here too, and not only in the matrix: it is the
+        # suite that fakes torchao, so with the real package installed it is
+        # the one that catches a resolver which answers from a cached
+        # `torchao.*` submodule after the root import has been made to fail.
+        # That exact regression shipped in this PR's first push and was found
+        # by hand; running both files in one job is what makes it a CI failure
+        # next time.
+        run: |
+          pytest -o addopts= -q \
+            tests/test_issue826_torchao_class_names.py \
+            tests/test_issue835_fp8_gate.py \
+            tests/test_v07121.py
   pytorch-smoke:
     # #596: exercise the real PyTorch SFT + DPO training pipeline on every PR.
     # Keep this separate from the 3x3 matrix so the expensive model-backed
@@ -239,7 +287,7 @@ jobs:
         with:
           python-version: "3.11"
       - name: Install with Transformers floor constraints
-        run: pip install -e ".[dev]" -c .github/constraints/transformers-floor.txt
+        run: pip install -e ".[dev,audio]" -c .github/constraints/transformers-floor.txt
       - name: Verify constrained dependency graph
         run: python -m pip check
       - name: Assert installed versions match floor constraints
@@ -259,7 +307,7 @@ jobs:
           )
           expected = dict(pairs)
           assert len(expected) == len(pairs), "duplicate package pin in floor constraints"
-          for name in ("torch", "transformers", "trl", "peft", "plotext"):
+          for name in ("torch", "torchaudio", "transformers", "trl", "peft", "plotext"):
               assert name in expected, f"floor constraints missing exact {name} pin"
               want = expected[name]
               got = md.version(name)
@@ -298,6 +346,7 @@ jobs:
           tests/test_plotext_compat.py
           tests/test_bugfixes.py::TestDiffModelLoading
           tests/test_issue636_torch_floor.py
+          tests/test_issue265_xcodec2_audio_contract.py
 
   test:
     strategy:
@@ -319,6 +368,13 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
+      # The Web UI escaping tests run `safe_html.js` under node, and skip when
+      # node is absent. Runner images happen to ship one, so the skip would be
+      # silent: pin it, or the only tests that execute the real escaping logic
+      # can disappear without anything turning red.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
       - name: Pin the HF cache to a deterministic path
         # Set here and not in the job-level `env:` block: the `runner` context
         # is not available there (only github / needs / strategy / matrix /
@@ -445,7 +501,7 @@ jobs:
           files: coverage.xml
           fail_ci_if_error: false
       - name: Update test count badge
-        if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.11' && github.ref == 'refs/heads/main' && github.event_name == 'push'
+        if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.11' && github.ref == 'refs/heads/main' && github.event_name == 'push' && github.repository == 'MakazhanAlpamys/Soup'
         run: |
           TESTS=$(python -c "
           import xml.etree.ElementTree as ET

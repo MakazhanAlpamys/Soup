@@ -35,7 +35,7 @@ def _cached_snapshot(tmp_path: Path) -> tuple[Path, Path, Path]:
     return snapshot, weight, config
 
 
-@pytest.mark.skipif(os.name == "nt", reason="standard HF cache uses POSIX symlinks")
+@pytest.mark.requires_symlink
 def test_complete_cached_snapshot_materializes_without_a_second_hub_call(
     tmp_path,
     monkeypatch,
@@ -84,7 +84,7 @@ def test_complete_cached_snapshot_materializes_without_a_second_hub_call(
     assert index.n_layers == 1
 
 
-@pytest.mark.skipif(os.name == "nt", reason="standard HF cache uses POSIX symlinks")
+@pytest.mark.requires_symlink
 def test_resolved_commit_is_carried_by_the_materialization_plan(
     tmp_path,
     monkeypatch,
@@ -109,7 +109,7 @@ def test_resolved_commit_is_carried_by_the_materialization_plan(
         materialize_model_weights(replace(plan, source_revision=None))
 
 
-@pytest.mark.skipif(os.name == "nt", reason="standard HF cache uses POSIX symlinks")
+@pytest.mark.requires_symlink
 def test_missing_blob_fails_without_publishing_a_partial_copy(
     tmp_path,
     monkeypatch,
@@ -134,7 +134,7 @@ def test_missing_blob_fails_without_publishing_a_partial_copy(
     assert not os.path.lexists(plan.weights_dir)
 
 
-@pytest.mark.skipif(os.name == "nt", reason="standard HF cache uses POSIX symlinks")
+@pytest.mark.requires_symlink
 def test_snapshot_symlink_cannot_escape_the_hf_blob_store(tmp_path, monkeypatch) -> None:
     from soup_cli.utils import hubs
     from soup_cli.utils.spectrum_scan import materialize_model_weights, plan_model_weights
@@ -158,7 +158,7 @@ def test_snapshot_symlink_cannot_escape_the_hf_blob_store(tmp_path, monkeypatch)
     assert not os.path.lexists(plan.weights_dir)
 
 
-@pytest.mark.skipif(os.name == "nt", reason="control requires a POSIX symlink")
+@pytest.mark.requires_symlink
 def test_materialized_target_symlink_cannot_redirect_cache_replacement(
     tmp_path,
     monkeypatch,

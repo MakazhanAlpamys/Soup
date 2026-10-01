@@ -23,12 +23,15 @@ import json
 import logging
 import os
 from dataclasses import dataclass
-from typing import Any, Callable, List, Mapping, Optional
+from typing import TYPE_CHECKING, Any, Callable, List, Mapping, Optional
 
 from soup_cli.utils.paths import (
     atomic_write_text,
     enforce_under_cwd_and_no_symlink,
 )
+
+if TYPE_CHECKING:
+    from soup_cli.utils.data_forge import ForgeJudgeStats
 
 _LOG = logging.getLogger("soup.distill_prompt")
 
@@ -211,6 +214,7 @@ def _build_provider_fn(
         model=model,
         base_url=base_url,
         temperature=temperature,
+        raise_on_error=True,
     )
 
 
@@ -223,6 +227,7 @@ def prepare_distill_dataset(
     max_rows: Optional[int] = None,
     teacher_fn: "Optional[Callable[[str], Mapping[str, Any]]]" = None,
     student_fn: "Optional[Callable[[str], Mapping[str, Any]]]" = None,
+    stats: "Optional[ForgeJudgeStats]" = None,
 ) -> int:
     """Prepare a distillation dataset from prompt-heavy traces (v0.71.13 #226).
 
@@ -245,12 +250,20 @@ def prepare_distill_dataset(
     number of teacher calls — a prompt whose teacher reply is empty still
     consumes a call without producing a row).
     """
+    from soup_cli.utils.data_forge import (
+        ForgeJudgeStats,
+        ProviderCallError,
+        _describe_judge_error,
+    )
+
     if not isinstance(plan, DistillPromptPlan):
         raise TypeError("plan must be DistillPromptPlan")
     if max_rows is not None and (
         isinstance(max_rows, bool) or not isinstance(max_rows, int) or max_rows < 1
     ):
         raise ValueError("max_rows must be a positive int or None")
+    if stats is None:
+        stats = ForgeJudgeStats()
 
     teacher = teacher_fn
     if teacher is None:
@@ -271,13 +284,16 @@ def prepare_distill_dataset(
         prompt = extract_prompt(row)
         if prompt is None:
             continue
+        stats.calls += 1
         try:
             t_reply = teacher(prompt)
         except Exception as exc:  # noqa: BLE001 — provider error variety
             _LOG.debug("teacher call failed: %s", exc)
+            stats.record_failure(_describe_judge_error(exc))
             continue
         t_text = t_reply.get("text") if isinstance(t_reply, Mapping) else None
         if not isinstance(t_text, str) or not t_text.strip():
+            stats.record_failure("teacher returned an empty reply")
             continue
 
         if plan.strategy in ("sft", "kl"):
@@ -293,13 +309,16 @@ def prepare_distill_dataset(
                 )
             )
         else:  # preference
+            stats.calls += 1
             try:
                 s_reply = student(prompt) if student is not None else None
             except Exception as exc:  # noqa: BLE001
                 _LOG.debug("student call failed: %s", exc)
+                stats.record_failure(_describe_judge_error(exc))
                 continue
             s_text = s_reply.get("text") if isinstance(s_reply, Mapping) else None
             if not isinstance(s_text, str) or not s_text.strip():
+                stats.record_failure("student returned an empty reply")
                 continue
             out_lines.append(
                 json.dumps(
@@ -307,6 +326,17 @@ def prepare_distill_dataset(
                     ensure_ascii=False,
                 )
             )
+
+    if not out_lines and stats.failures:
+        # #1274: a teacher/student that produced nothing usable must fail
+        # loudly rather than write an empty dataset (mirrors #1221 forge).
+        from soup_cli.utils.recipe_run import _provider_endpoint_label
+
+        endpoint = _provider_endpoint_label(provider, base_url)
+        raise ProviderCallError(
+            f"{stats.failures} of {stats.calls} provider calls failed for "
+            f"--provider {provider} ({endpoint}); first error: {stats.first_error}"
+        )
 
     text = "\n".join(out_lines) + ("\n" if out_lines else "")
     atomic_write_text(text, plan.output_path, field="output_path")

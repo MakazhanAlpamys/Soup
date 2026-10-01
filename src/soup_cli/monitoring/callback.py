@@ -78,6 +78,27 @@ def _get_trainer_callback_base():
         return object
 
 
+def _gate_failure_summary(result) -> str:
+    """Name what failed the gate: regressions, and tasks that could not be scored.
+
+    A task with ``error`` set never ran to a score (a judge that was down, a
+    missing prompts file); it fails the gate closed, but it is not a regression
+    and the log must not call it one (#1447).
+    """
+    failed = [r for r in result.task_results if not r.passed]
+    unscored = [r for r in failed if r.error]
+    regressed = len(failed) - len(unscored)
+    parts = []
+    if regressed or not unscored:
+        parts.append(f"{regressed} task(s) regressed")
+    if unscored:
+        parts.append(
+            f"{len(unscored)} task(s) could not be scored: "
+            + "; ".join(f"{r.name}: {r.error}" for r in unscored)
+        )
+    return ", ".join(parts)
+
+
 class _SoupTrainerCallback_body:  # noqa: N801
     """Bridges HF Trainer events to Soup's Rich live display and experiment tracker."""
 
@@ -110,9 +131,16 @@ class _SoupTrainerCallback_body:  # noqa: N801
         # step. It has runtime/throughput fields but no loss/LR/grad norm. Keep
         # the last real values so that event cannot reset the dashboards and
         # tracker to synthetic zeroes (#541).
-        self._last_loss = 0.0
+        #: None until a loss is logged, not 0.0: a training log can arrive
+        #: without one (an Online DPO window in which the judge ranked no pair,
+        #: #1225). A stored 0.0 would be the run's lowest loss to `soup runs
+        #: clean` and `soup runs replay`, and would switch off `soup why`'s
+        #: plateau and divergence checks.
+        self._last_loss: Optional[float] = None
         self._last_lr = 0.0
-        self._last_grad_norm = 0.0
+        # A missing norm is not a measured zero. Keep the last measured value
+        # only for the live panel; persisted metrics use the current log.
+        self._last_grad_norm: Optional[float] = None
         #: None until an evaluation runs. Not 0.0 -- an unmeasured
         #: validation loss must not read as a measured one.
         self._last_val_loss = None
@@ -256,7 +284,8 @@ class _SoupTrainerCallback_body:  # noqa: N801
             self._last_val_loss = logs["eval_loss"]
         loss = self._last_loss
         lr = self._last_lr
-        grad_norm = self._last_grad_norm
+        display_grad_norm = self._last_grad_norm
+        measured_grad_norm = logs.get("grad_norm")
         # Two different values on purpose, and the distinction is the whole
         # point of the column existing.
         #
@@ -280,7 +309,7 @@ class _SoupTrainerCallback_body:  # noqa: N801
             loss=loss,
             val_loss=display_val_loss,
             lr=lr,
-            grad_norm=grad_norm,
+            grad_norm=display_grad_norm,
             speed=speed,
             gpu_mem=gpu_mem,
         )
@@ -306,7 +335,11 @@ class _SoupTrainerCallback_body:  # noqa: N801
                         else None
                     ),
                     lr=float(lr) if lr is not None else None,
-                    grad_norm=float(grad_norm) if grad_norm is not None else None,
+                    grad_norm=(
+                        float(measured_grad_norm)
+                        if measured_grad_norm is not None
+                        else None
+                    ),
                 )
             )
         except Exception:
@@ -335,8 +368,10 @@ class _SoupTrainerCallback_body:  # noqa: N801
             except Exception:
                 pass
 
-        # Loss watchdog — detect loss spikes and auto-stop
-        if self._watchdog_enabled and not self._watchdog_fired and "loss" in logs:
+        # Loss watchdog — detect loss spikes and auto-stop. A log whose loss is
+        # None measured nothing (#1225): skip it, rather than compare None
+        # before the first loss or re-count the carried one after it.
+        if self._watchdog_enabled and not self._watchdog_fired and logs.get("loss") is not None:
             if loss > self._watchdog_threshold:
                 self._watchdog_counter += 1
                 if self._watchdog_counter >= self._watchdog_patience:
@@ -389,7 +424,7 @@ class _SoupTrainerCallback_body:  # noqa: N801
                 loss=loss,
                 val_loss=measured_val_loss,
                 lr=lr,
-                grad_norm=grad_norm,
+                grad_norm=measured_grad_norm,
                 speed=speed,
                 gpu_mem=gpu_mem,
             )
@@ -519,13 +554,13 @@ class _SoupTrainerCallback_body:  # noqa: N801
             if on_reg == "stop":
                 control.should_training_stop = True
                 logger.warning(
-                    "eval gate FAILED (%d task(s) regressed); stopping training",
-                    sum(1 for r in result.task_results if not r.passed),
+                    "eval gate FAILED (%s); stopping training",
+                    _gate_failure_summary(result),
                 )
             elif on_reg == "warn":
                 logger.warning(
-                    "eval gate FAILED (%d task(s) regressed); continuing per policy",
-                    sum(1 for r in result.task_results if not r.passed),
+                    "eval gate FAILED (%s); continuing per policy",
+                    _gate_failure_summary(result),
                 )
             # on_reg == "continue": silent per user policy
 
@@ -564,6 +599,7 @@ class _SoupTrainerCallback_body:  # noqa: N801
                     batch_size=8,
                     run_id=self.run_id,
                     device=None,
+                    trust_remote_code=False,
                 )
             except Exception as exc:
                 logger.exception("Auto-eval benchmark failed")
@@ -580,6 +616,7 @@ class _SoupTrainerCallback_body:  # noqa: N801
                     run_id=self.run_id,
                     attach_to_registry=None,
                     output=None,
+                    trust_remote_code=False,
                 )
             except Exception as exc:
                 logger.exception("Auto-eval custom failed")

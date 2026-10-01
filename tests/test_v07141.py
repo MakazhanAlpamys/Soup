@@ -410,6 +410,7 @@ class TestHardening:
         assert r.exit_code == 1, (r.output, repr(r.exception))
         assert "under cwd" in r.output.lower()
 
+    @pytest.mark.requires_symlink
     def test_symlinked_target_rejected(self, tmp_path, monkeypatch):
         # A symlinked .py target must be refused by enforce_under_cwd_and_no_symlink
         # (a symlink could point outside cwd). POSIX-only — Windows symlink creation
@@ -417,9 +418,6 @@ class TestHardening:
         monkeypatch.chdir(tmp_path)
         real = _write(tmp_path, "real.py", _ROBUST_VERIFIER)
         link = tmp_path / "link.py"
-        try:
-            link.symlink_to(real)
-        except (OSError, NotImplementedError):
-            pytest.skip("symlink creation not permitted on this platform")
+        link.symlink_to(real)
         r = runner.invoke(soup_app, ["reward", "stress", link.name])
         assert r.exit_code == 1, (r.output, repr(r.exception))

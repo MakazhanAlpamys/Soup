@@ -419,6 +419,35 @@ class TestDistillUtils:
                 task="distill", backend="mlx", teacher_model="t/model",
             )
 
+    def test_validate_distill_compat_unsloth(self):
+        from soup_cli.utils.distill import validate_distill_compat
+
+        # Pin the reason and the supported backend, not just the word "unsloth",
+        # so a refusal that drops the explanation or the transformers pointer
+        # still fails this test.
+        with pytest.raises(
+            ValueError, match=r"backend=unsloth: .*Use backend=transformers"
+        ):
+            validate_distill_compat(
+                task="distill", backend="unsloth", teacher_model="t/model",
+            )
+
+    def test_soup_config_refuses_distill_on_unsloth(self):
+        from pydantic import ValidationError
+
+        from soup_cli.config.schema import SoupConfig
+
+        with pytest.raises(
+            ValidationError, match=r"backend=unsloth: .*Use backend=transformers"
+        ):
+            SoupConfig(
+                base="s/model",
+                task="distill",
+                backend="unsloth",
+                data={"train": "./d.jsonl"},
+                training={"teacher_model": "t/model"},
+            )
+
     def test_build_distill_trainer_lifted_in_v0532(self):
         """v0.52.0 shipped as a NotImplementedError stub; v0.53.2 #133 lifts it
         to a live factory returning DistillTrainerWrapper. The argless call
@@ -670,13 +699,14 @@ class TestEbftGdpoUtils:
 
 
 class TestEbftGdpoSchema:
-    def test_ebft_happy(self):
-        cfg = load_config_from_string(
-            "base: x\ntask: sft\ndata: {train: ./d.jsonl}\n"
-            "training: {ebft_variant: structured, ebft_temperature: 1.0}\n"
-        )
-        assert cfg.training.ebft_variant == "structured"
-        assert cfg.training.ebft_temperature == 1.0
+    def test_ebft_refused_until_it_is_a_distinct_objective(self):
+        # #1230 — loaded before: the term had no causal shift (it rewarded
+        # copying the input) and, shifted, it duplicates the cross-entropy.
+        with pytest.raises(ValueError, match="#1230"):
+            load_config_from_string(
+                "base: x\ntask: sft\ndata: {train: ./d.jsonl}\n"
+                "training: {ebft_variant: structured, ebft_temperature: 1.0}\n"
+            )
 
     def test_ebft_temp_requires_variant(self):
         yaml = (
@@ -687,11 +717,13 @@ class TestEbftGdpoSchema:
             load_config_from_string(yaml)
 
     def test_ebft_on_dpo_rejected(self):
+        # The #1230 refusal comes before the task gate; the gate itself is
+        # tested directly in TestEbftGdpoUtils.test_validate_ebft_compat_dpo_rejected.
         yaml = (
             "base: x\ntask: dpo\ndata: {train: ./d.jsonl}\n"
             "training: {ebft_variant: strided}\n"
         )
-        with pytest.raises(Exception, match="sft"):
+        with pytest.raises(Exception, match="#1230"):
             load_config_from_string(yaml)
 
     def test_gdpo_dpo_happy(self):
@@ -914,9 +946,7 @@ class TestModuleSurface:
 class TestV0520Recipes:
     NEW_RECIPES = (
         "orpheus-tts-sft",
-        "sesame-csm-tts",
         "llasa-tts",
-        "spark-tts",
         "oute-tts",
     )
 
@@ -931,9 +961,7 @@ class TestV0520Recipes:
     @pytest.mark.parametrize(
         "name,expected_family", [
             ("orpheus-tts-sft", "orpheus"),
-            ("sesame-csm-tts", "sesame_csm"),
             ("llasa-tts", "llasa"),
-            ("spark-tts", "spark"),
             ("oute-tts", "oute"),
         ],
     )
@@ -953,9 +981,9 @@ class TestV0520Recipes:
     def test_total_catalog_size_grew(self):
         from soup_cli.recipes.catalog import RECIPES
 
-        # v0.51.0 shipped 106; five TTS recipes remain from v0.52.0.
+        # v0.51.0 shipped 106; four runnable TTS recipes remain from v0.52.0.
         # #825 retires the unusable Falcon-E BitNet training recipe.
-        assert len(RECIPES) >= 111
+        assert len(RECIPES) >= 110
 
 
 class TestTddReviewGaps:
@@ -1064,8 +1092,7 @@ class TestTddReviewGaps:
         from soup_cli.recipes.catalog import RECIPES
 
         new = (
-            "orpheus-tts-sft", "sesame-csm-tts", "llasa-tts",
-            "spark-tts", "oute-tts",
+            "orpheus-tts-sft", "llasa-tts", "oute-tts",
         )
         for name in new:
             base = RECIPES[name].model

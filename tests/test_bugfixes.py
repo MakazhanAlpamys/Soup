@@ -6,6 +6,7 @@ from unittest.mock import patch
 import pytest
 
 from soup_cli.config.schema import SoupConfig
+from tests.conftest import strip_ansi
 
 # --- BUG-001: Windows UnicodeEncodeError (no Unicode arrows/dashes in output) ---
 
@@ -142,7 +143,10 @@ class TestDiffModelLoading:
         from soup_cli.commands.diff import _load_model
 
         source = inspect.getsource(_load_model)
-        assert "torch_dtype=torch.float16" in source
+        # #1443 resolves the value per --device instead of hard-coding
+        # float16, but both from_pretrained calls must still use the
+        # `torch_dtype=` spelling the floor Transformers version requires.
+        assert source.count("torch_dtype=torch_dtype") == 2
         # Substring-safe: torch_dtype=... contains the letters dtype=
         bare = source.replace("torch_dtype=", "")
         assert "dtype=" not in bare
@@ -470,6 +474,21 @@ class TestPPODatasetCompat:
         # doesn't accept it (uses "args" path but no train_dataset param)
         assert wrapper._dataset_in_constructor is False
 
+        # #1391: the late assignment in _train_builtin hands over token columns only
+        class _StopError(Exception):
+            pass
+
+        def _stop(*args, **kwargs):
+            raise _StopError
+
+        wrapper.trainer.train_dataset = None
+        wrapper.trainer.model = MagicMock()
+        wrapper.trainer.args = MagicMock(fp16=False, bf16=False)
+        wrapper.trainer.train = _stop
+        with pytest.raises(_StopError):
+            wrapper._train_builtin(None, None, None, None)
+        assert wrapper.trainer.train_dataset.column_names == ["input_ids", "attention_mask"]
+
     def test_ppo_dataset_in_constructor_when_accepted(self):
         """_dataset_in_constructor should be True when train_dataset is accepted."""
         from unittest.mock import MagicMock
@@ -485,11 +504,13 @@ class TestPPODatasetCompat:
         wrapper = PPOTrainerWrapper(cfg, device="cpu")
 
         # Real class whose __init__ DOES accept train_dataset
+        captured = {}
+
         class FakePPOTrainer:
             def __init__(self, *, model=None, args=None,
                          processing_class=None, train_dataset=None,
                          reward_funcs=None):
-                pass
+                captured["train_dataset"] = train_dataset
 
         class FakePPOConfig:
             def __init__(self, **kwargs):
@@ -521,6 +542,8 @@ class TestPPODatasetCompat:
             wrapper.setup(dataset)
 
         assert wrapper._dataset_in_constructor is True
+        # #1391: trl pads every column it is given, so only token columns go in
+        assert captured["train_dataset"].column_names == ["input_ids", "attention_mask"]
 
 
 # --- BUG-007: PPO trl >=0.28 experimental API missing positional args (v0.10.6) ---
@@ -569,7 +592,8 @@ class TestPPOExperimentalSetup:
         )
         wrapper = PPOTrainerWrapper(cfg, device="cpu")
 
-        dataset = {"train": [{"prompt": "What is 2+2?", "answer": "4"}]}
+        # #1391: one rollout batch is batch_size (1 here) x gradient_accumulation_steps (4)
+        dataset = {"train": [{"prompt": "What is 2+2?", "answer": "4"}] * 4}
 
         # Track what args PPOTrainer receives
         captured_kwargs = {}
@@ -732,7 +756,11 @@ class TestGRPOCPUMinNewTokens:
 
         class FakeGRPOTrainer:
             def __init__(self, **kwargs):
-                pass
+                # A real trl.GRPOTrainer is a transformers.Trainer subclass and
+                # binds its model/args kwargs as self.model / self.args in
+                # __init__; the LoRA+ attach reads both, so the double must too.
+                self.model = kwargs.get("model")
+                self.args = kwargs.get("args")
 
         with mock_patch("soup_cli.trainer.grpo.GRPOTrainerWrapper._setup_transformers"), \
              mock_patch("trl.GRPOConfig", FakeGRPOConfig), \
@@ -781,7 +809,11 @@ class TestGRPOCPUMinNewTokens:
 
         class FakeGRPOTrainer:
             def __init__(self, **kwargs):
-                pass
+                # A real trl.GRPOTrainer is a transformers.Trainer subclass and
+                # binds its model/args kwargs as self.model / self.args in
+                # __init__; the LoRA+ attach reads both, so the double must too.
+                self.model = kwargs.get("model")
+                self.args = kwargs.get("args")
 
         with mock_patch("soup_cli.trainer.grpo.GRPOTrainerWrapper._setup_transformers"), \
              mock_patch("trl.GRPOConfig", FakeGRPOConfig), \
@@ -936,7 +968,8 @@ class TestPPOResumeCheckpoint:
             def __init__(self, **kwargs):
                 pass
 
-        dataset = {"train": [{"prompt": "Q?", "answer": "A"}]}
+        # #1391: one rollout batch is batch_size (1 here) x gradient_accumulation_steps (4)
+        dataset = {"train": [{"prompt": "Q?", "answer": "A"}] * 4}
 
         with mock_patch("soup_cli.trainer.ppo.PPOTrainerWrapper._setup_reward"), \
              mock_patch("soup_cli.trainer.ppo.PPOTrainerWrapper._setup_transformers"), \
@@ -1126,7 +1159,7 @@ class TestValidateAutoDetect:
         result = runner.invoke(app, ["data", "validate", str(filepath)])
         assert result.exit_code == 0
         assert "Auto-detected format: alpaca" in result.output
-        assert "2/2 rows valid" in result.output
+        assert "2/2 rows valid" in strip_ansi(result.output)
 
     def test_validate_plaintext_auto_detect(self, tmp_path):
         """Plaintext data should be auto-detected without --format flag."""
@@ -1146,7 +1179,7 @@ class TestValidateAutoDetect:
         result = runner.invoke(app, ["data", "validate", str(filepath)])
         assert result.exit_code == 0
         assert "Auto-detected format: plaintext" in result.output
-        assert "2/2 rows valid" in result.output
+        assert "2/2 rows valid" in strip_ansi(result.output)
 
     def test_validate_explicit_format_still_works(self, tmp_path):
         """Explicit --format flag should override auto-detection."""
@@ -1170,7 +1203,7 @@ class TestValidateAutoDetect:
         )
         assert result.exit_code == 0
         assert "Auto-detected" not in result.output
-        assert "1/1 rows valid" in result.output
+        assert "1/1 rows valid" in strip_ansi(result.output)
 
     def test_validate_dpo_auto_detect(self, tmp_path):
         """DPO data should be auto-detected."""

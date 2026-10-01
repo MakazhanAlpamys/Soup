@@ -26,6 +26,7 @@ logger = logging.getLogger(__name__)
 console = Console()
 
 
+
 def _validate_adapter_name(name: str) -> bool:
     """Validate adapter name: alphanumeric + hyphens only."""
     if not name:
@@ -99,7 +100,13 @@ def serve(
     device: Optional[str] = typer.Option(
         None,
         "--device",
-        help="Device: cuda, mps, cpu. Auto-detected if not set.",
+        help=(
+            "Device: cuda, cuda:<index>, mps or cpu. Auto-detected if not set. "
+            "With the transformers backend, cpu loads on the CPU in float32 "
+            "(unless --kv-cache-type bf16/f16 picks the dtype); cuda:<index> "
+            "and mps are pinned to that device; cuda uses device_map=auto, "
+            "all in float16."
+        ),
     ),
     max_tokens_default: int = typer.Option(
         512,
@@ -453,6 +460,18 @@ def serve(
                 "(or optimum-quanto)."
             )
             raise typer.Exit(code=2)
+
+    if device:
+        from rich.markup import escape as _rich_escape
+
+        from soup_cli.utils.gpu import resolve_inference_device_map_and_dtype
+
+        device = device.strip().lower()
+        try:
+            resolve_inference_device_map_and_dtype(device)
+        except ValueError as exc:
+            console.print(f"[red]--device:[/] {_rich_escape(str(exc))}")
+            raise typer.Exit(code=2) from exc
 
     # v0.53.10 #152 — pre-fetch base from a non-HF hub before serve starts.
     if hub and hub != "hf":
@@ -1343,16 +1362,23 @@ def _load_model(
     """Load model and tokenizer.
 
     ``kv_cache_dtype`` (v0.71.14 #140) selects the model compute dtype so the
-    transformers DynamicCache runs in it: ``"bfloat16"`` → bf16, else the
-    default float16. The bf16/f16 ``kv_cache_type`` values map here; q8_0 uses
+    transformers DynamicCache runs in it: ``"bfloat16"`` → bf16, ``"float16"``
+    → fp16, else the default (float16; float32 on ``device="cpu"``). The
+    bf16/f16 ``kv_cache_type`` values map here; q8_0 uses
     a quantized cache via generate kwargs and leaves the model dtype unchanged.
     """
     import torch
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
-    load_dtype = (
-        torch.bfloat16 if kv_cache_dtype == "bfloat16" else torch.float16
-    )
+    from soup_cli.utils.gpu import resolve_inference_device_map_and_dtype
+
+    device_map, default_dtype = resolve_inference_device_map_and_dtype(device)
+    if kv_cache_dtype == "bfloat16":
+        load_dtype = torch.bfloat16
+    elif kv_cache_dtype == "float16":
+        load_dtype = torch.float16
+    else:
+        load_dtype = default_dtype
 
     console.print("[dim]Loading tokenizer...[/]")
     tokenizer = AutoTokenizer.from_pretrained(
@@ -1368,7 +1394,7 @@ def _load_model(
         base = AutoModelForCausalLM.from_pretrained(
             base_model,
             trust_remote_code=trust_remote_code,
-            device_map="auto",
+            device_map=device_map,
             torch_dtype=load_dtype,
         )
         console.print(f"[dim]Loading LoRA adapter: {model_path}...[/]")
@@ -1378,7 +1404,7 @@ def _load_model(
         model_obj = AutoModelForCausalLM.from_pretrained(
             model_path,
             trust_remote_code=trust_remote_code,
-            device_map="auto",
+            device_map=device_map,
             torch_dtype=load_dtype,
         )
 
@@ -1452,9 +1478,10 @@ def _load_draft_model(speculative_model: str, device: str):
     import os
     import re
 
-    import torch
     from rich.markup import escape
     from transformers import AutoModelForCausalLM
+
+    from soup_cli.utils.gpu import resolve_inference_device_map_and_dtype
 
     # SSRF protection: block URL-based model paths
     if re.match(r'^https?://', speculative_model):
@@ -1473,11 +1500,12 @@ def _load_draft_model(speculative_model: str, device: str):
 
         assert_safe_top_level_weights(speculative_model)
 
+    device_map, dtype = resolve_inference_device_map_and_dtype(device)
     console.print(f"[dim]Loading draft model: {escape(speculative_model)}...[/]")
     draft = AutoModelForCausalLM.from_pretrained(
         speculative_model,
-        device_map="auto" if device != "cpu" else "cpu",
-        torch_dtype=torch.float16 if device != "cpu" else torch.float32,
+        device_map=device_map,
+        torch_dtype=dtype,
     )
     draft.eval()
     return draft
@@ -1655,11 +1683,30 @@ def _create_app(
     from pydantic import BaseModel as PydanticBaseModel
     from pydantic import Field
 
-    from soup_cli.utils.local_request_guard import check_local_request
+    from soup_cli.utils.local_request_guard import (
+        check_browser_origin,
+        check_local_request,
+    )
 
     def _check_local_request(request: Request) -> None:
         """Refuse tool / state-changing calls whose Host or Origin names another site."""
         refusal = check_local_request(
+            host, request.headers.get("host"), request.headers.get("origin")
+        )
+        if refusal is not None:
+            status_code, detail = refusal
+            raise HTTPException(status_code=status_code, detail=detail)
+
+    def _check_browser_origin(request: Request) -> None:
+        """Refuse a cross-site BROWSER request to a generation / adapter-listing route.
+
+        CORS stops such a page reading the response, not sending the request:
+        a ``text/plain`` body is a simple request, so it is never preflighted,
+        and Starlette parses it as JSON anyway. Origin only — these routes are
+        the ones a reverse proxy fronts under its own hostname, so a Host check
+        would refuse every proxied deployment for no added protection.
+        """
+        refusal = check_browser_origin(
             host, request.headers.get("host"), request.headers.get("origin")
         )
         if refusal is not None:
@@ -1687,10 +1734,20 @@ def _create_app(
 
     app = FastAPI(title="Soup Inference Server", version="1.0.0")
 
-    # Loopback-only CORS: CORS limits which browser pages can read responses;
-    # the Host/Origin guard on tool and adapter routes is what refuses
-    # requests from other sites. Loopback origins cover the curl / same-host
-    # IDE extension cases.
+    # Loopback-only CORS, and three layers behind it:
+    #   * CORS limits which browser pages may READ a response. It does not stop
+    #     one being SENT: a `text/plain` body is a simple request, so it is
+    #     never preflighted, and Starlette parses it as JSON regardless.
+    #   * `_check_browser_origin` (Origin only) refuses cross-site BROWSER
+    #     requests to the generation routes and the adapter listing, so a page
+    #     the operator merely visits cannot burn GPU time or enumerate loaded
+    #     adapters. No Origin means no browser, so a proxy / curl / SDK passes.
+    #   * `_check_local_request` (Host AND Origin) covers the tool, thumbs and
+    #     adapter-mutation routes, which no reverse proxy needs to rename.
+    # None of the three covers a non-browser client, which sends no Origin at
+    # all and can name the bind address in Host — for those, on a non-loopback
+    # bind, the bearer token checked by `_check_tool_auth` is the only thing
+    # protecting these routes.
     app.add_middleware(
         CORSMiddleware,
         allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$",
@@ -1758,9 +1815,10 @@ def _create_app(
         """Dashboard + Prometheus-style JSON scrape."""
         return metrics.snapshot()
 
-    @app.get("/v1/adapters")
-    def list_adapters():
+    @app.get("/v1/adapters", dependencies=[Depends(_check_browser_origin)])
+    def list_adapters(authorization: Optional[str] = Header(default=None)):
         """List loaded LoRA adapters (names only, no paths for security)."""
+        _check_tool_auth(authorization)
         current = _active_snapshot()
         return {
             "adapters": [
@@ -1771,8 +1829,14 @@ def _create_app(
         }
 
     @app.post("/v1/adapters/activate/{name}", dependencies=[Depends(_check_local_request)])
-    def activate_adapter(name: str = FPath(..., pattern=r"^[a-zA-Z0-9][a-zA-Z0-9\-]*$")):
+    def activate_adapter(
+        name: str = FPath(..., pattern=r"^[a-zA-Z0-9][a-zA-Z0-9\-]*$"),
+        authorization: Optional[str] = Header(default=None),
+    ):
         """Hot-swap the active adapter. Name must be in the loaded map."""
+        # Before the 404s: an unauthenticated caller must not learn which
+        # adapter names are loaded by reading "unknown adapter" off a probe.
+        _check_tool_auth(authorization)
         if not _adapter_map:
             raise HTTPException(
                 status_code=404, detail="No adapters loaded."
@@ -1787,8 +1851,9 @@ def _create_app(
         return {"active": name, "status": "ok"}
 
     @app.post("/v1/adapters/deactivate", dependencies=[Depends(_check_local_request)])
-    def deactivate_adapter():
+    def deactivate_adapter(authorization: Optional[str] = Header(default=None)):
         """Return to base model (clear active adapter)."""
+        _check_tool_auth(authorization)
         with active_lock:
             active_state["active"] = None
         return {"active": None, "status": "ok"}
@@ -1806,7 +1871,7 @@ def _create_app(
             ],
         }
 
-    @app.post("/v1/chat/completions")
+    @app.post("/v1/chat/completions", dependencies=[Depends(_check_browser_origin)])
     def chat_completions(
         request: ChatCompletionRequest,
         x_user_id: Optional[str] = Header(default=None, alias="X-User-Id"),
@@ -1983,7 +2048,7 @@ def _create_app(
     # Reuses the v0.45.0 utils/anthropic_messages converter + the existing
     # chat_completions handler. Live on transformers backend only this
     # release (vLLM /v1/messages tracked for v0.53.7).
-    @app.post("/v1/messages")
+    @app.post("/v1/messages", dependencies=[Depends(_check_browser_origin)])
     def anthropic_messages(payload: dict) -> dict:
         from soup_cli.utils.anthropic_messages import (
             from_anthropic,

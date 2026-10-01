@@ -18,6 +18,7 @@ from soup_cli.utils.exit_codes import (
     EXIT_USAGE_ERROR,
     GateCommand,
 )
+from soup_cli.utils.terminal import for_terminal
 
 console = Console()
 
@@ -76,6 +77,14 @@ def benchmark(
         None, "--device",
         help="Device: cuda, mps, cpu. Auto-detected if not set.",
     ),
+    trust_remote_code: bool = typer.Option(
+        False,
+        "--trust-remote-code",
+        help=(
+            "Allow loading models that ship custom Python via auto_map. "
+            "Default deny (v0.36.0). Only enable if you trust the source."
+        ),
+    ),
 ):
     """Evaluate on standard benchmarks (wraps lm-evaluation-harness)."""
     model_path = Path(model)
@@ -106,6 +115,12 @@ def benchmark(
             model_arg = f"pretrained={model_path}"
     else:
         model_arg = f"pretrained={model_path}"
+
+    if trust_remote_code:
+        # Appended only from the resolved --trust-remote-code flag, never
+        # from adapter_config.json: _reject_lm_eval_injection above already
+        # refused a base_model_name_or_path smuggling its own ','/'=' pair.
+        model_arg = f"{model_arg},trust_remote_code=True"
 
     benchmark_list = [b.strip() for b in benchmarks.split(",")]
     console.print(f"[dim]Evaluating on: {', '.join(benchmark_list)}[/]")
@@ -335,6 +350,14 @@ def custom(
             "--attach-to-registry (v0.40.1 / G10)."
         ),
     ),
+    trust_remote_code: bool = typer.Option(
+        False,
+        "--trust-remote-code",
+        help=(
+            "Allow loading models that ship custom Python via auto_map. "
+            "Default deny (v0.36.0). Only enable if you trust the source."
+        ),
+    ),
 ):
     """Run custom evaluation tasks from a JSONL file."""
     from soup_cli.eval.custom import load_eval_tasks
@@ -378,7 +401,9 @@ def custom(
     from soup_cli.eval.custom import _create_default_generator, score_task
 
     console.print("[dim]Loading model...[/]")
-    generate_fn = _create_default_generator(str(model_path))
+    generate_fn = _create_default_generator(
+        str(model_path), trust_remote_code=trust_remote_code,
+    )
 
     with progress:
         task_bar = progress.add_task(
@@ -476,6 +501,7 @@ def judge(
     """Evaluate model outputs using LLM-as-a-judge."""
     from soup_cli.eval.judge import (
         JudgeEvaluator,
+        JudgeUnavailableError,
         load_rubric,
         validate_judge_api_base,
     )
@@ -568,10 +594,10 @@ def judge(
                     category=item.get("category", "default"),
                 )
                 judge_scores.append(score)
-            except (ValueError, OSError, KeyError) as exc:
+            except (ValueError, OSError, KeyError, JudgeUnavailableError) as exc:
                 skipped_count += 1
                 console.print(
-                    f"[yellow]Warning: judge failed for prompt: {exc}[/]"
+                    f"[yellow]Warning: judge failed for prompt: {for_terminal(exc)}[/]"
                 )
             progress.advance(task_bar)
 
@@ -691,6 +717,7 @@ def auto(
                 batch_size=8,
                 run_id=None,
                 device=None,
+                trust_remote_code=trust_remote_code,
             )
         except (typer.Exit, SystemExit):
             # benchmark() signals failure with typer.Exit (a RuntimeError, NOT
@@ -714,6 +741,7 @@ def auto(
                 run_id=None,
                 attach_to_registry=None,
                 output=None,
+                trust_remote_code=trust_remote_code,
             )
         except SystemExit:
             console.print("[yellow]Custom eval skipped (see above).[/]")
@@ -820,7 +848,10 @@ def leaderboard(
 
     if fmt in ("json", "csv"):
         output = export_leaderboard(lb, fmt=fmt)
-        console.print(output)
+        # Machine-readable JSON/CSV: raw stdout, not console.print — Rich folds
+        # rows/lines at the console width and parses ``[...]`` as markup when
+        # piped, corrupting the output (issue #1468).
+        typer.echo(output)
         return
 
     # Table format
@@ -1221,7 +1252,7 @@ def gate_cmd(
     try:
         baseline_scores = resolve_baseline(
             baseline,
-            warn=lambda msg: console.print(f"[yellow]Warning:[/] {msg}"),
+            warn=lambda msg: console.print(f"[yellow]Warning:[/] {for_terminal(msg)}"),
         )
     except (FileNotFoundError, ValueError) as exc:
         console.print(f"[red]Cannot resolve baseline:[/] {exc}")
@@ -1355,7 +1386,7 @@ def quant_check_cmd(
                 "Supported: directories containing safetensors / HuggingFace "
                 "model files or registry:// refs.[/]"
             )
-            raise typer.Exit(3)
+            raise typer.Exit(EXIT_USAGE_ERROR)
 
     before_path = Path(resolved_before)
     after_path = Path(resolved_after)
@@ -1380,7 +1411,7 @@ def quant_check_cmd(
                 f"[red]Failed to load --before model ({resolved_before}): {exc} "
                 "(pass --allow-stub to score with deterministic stubs instead)[/]"
             )
-            raise typer.Exit(1) from exc
+            raise typer.Exit(EXIT_RUNTIME_ERROR) from exc
         if fmt != "json":
             console.print(
                 f"[yellow]Failed to load --before model ({exc}); using deterministic stub.[/]"
@@ -1396,7 +1427,7 @@ def quant_check_cmd(
                 f"[red]Failed to load --after model ({resolved_after}): {exc} "
                 "(pass --allow-stub to score with deterministic stubs instead)[/]"
             )
-            raise typer.Exit(1) from exc
+            raise typer.Exit(EXIT_RUNTIME_ERROR) from exc
         if fmt != "json":
             console.print(
                 f"[yellow]Failed to load --after model ({exc}); using deterministic stub.[/]"

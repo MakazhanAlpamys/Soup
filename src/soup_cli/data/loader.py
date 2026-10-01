@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from rich.console import Console
@@ -10,7 +11,7 @@ from rich.console import Console
 from soup_cli.config.schema import DataConfig
 from soup_cli.data.formats import (
     detect_format,
-    format_to_messages,
+    format_to_messages_with_reason,
     is_audio_format,
     is_vision_format,
 )
@@ -122,11 +123,26 @@ def _load_csv(path: Path) -> list[dict]:
 
 def _load_parquet(path: Path) -> list[dict]:
     try:
-        import pandas as pd
+        import pyarrow.parquet as pq
     except ImportError:
-        raise ImportError("Install pandas to read parquet files: pip install pandas pyarrow")
-    df = pd.read_parquet(path)
-    return df.to_dict(orient="records")
+        raise ImportError("Install pyarrow to read parquet files: pip install pyarrow")
+
+    table = pq.read_table(path)
+
+    # pandas stores an unnamed, non-default index (after df.sample() or a filter)
+    # as a hidden __index_level_N__ column; pd.read_parquet restored it as the index.
+    pandas_meta = table.schema.pandas_metadata or {}
+    hidden = {
+        name
+        for name in pandas_meta.get("index_columns", [])
+        if isinstance(name, str) and name.startswith("__index_level_")
+    }
+
+    if hidden:
+        table = table.select(
+            [name for name in table.column_names if name not in hidden]
+        )
+    return table.to_pylist()
 
 
 def _load_txt(path: Path) -> list[dict]:
@@ -153,11 +169,65 @@ def _load_txt(path: Path) -> list[dict]:
     return [{"text": line} for line in lines]
 
 
+@dataclass(frozen=True)
+class LoadOutcome:
+    """What the most recent :func:`load_dataset` call converted (#1217).
+
+    ``fmt`` is the format the rows were converted as (resolved, never
+    ``"auto"``); ``first_drop`` is ``(format, row index, reason, source)`` for
+    the first row a converter dropped. ``soup train`` reads it to say why a
+    load ended with zero training rows instead of printing "Ready to train".
+
+    Frozen, and replaced (never mutated) as a load progresses, so a caller
+    holding one keeps a snapshot that no later load can change.
+    """
+
+    fmt: str | None = None
+    first_drop: tuple[str, int, str, str | None] | None = None
+
+
+_last_load = LoadOutcome()
+
+
+def last_load_outcome() -> LoadOutcome:
+    """The :class:`LoadOutcome` of the most recent :func:`load_dataset` call."""
+    return _last_load
+
+
+# Tasks that require source columns preserved across dataset format normalisation (#1219).
+# GRPO uses raw columns for custom reward functions (answer, expected, etc.).
+# The classifier family (classifier, reranker, cross_encoder) uses source columns
+# to retain label, paired text (text_a, text_b, question, answer), and metadata.
+PRESERVE_SOURCE_TASKS: frozenset[str] = frozenset({
+    "grpo",
+    "classifier",
+    "reranker",
+    "cross_encoder",
+})
+
+
+def task_preserves_source_columns(task: str) -> bool:
+    """Return whether task requires source dataset columns to be preserved."""
+    return task in PRESERVE_SOURCE_TASKS
+
+
+def data_config_for_task(data_config: DataConfig, task: str) -> DataConfig:
+    """Resolve ``format: auto`` for task: cross_encoder (#1219).
+
+    ``detect_format`` cannot see the task, and ``{question, answer}`` is also
+    GSM8K's shape, so pair rows are recognised only when the task reads them.
+    """
+    if task == "cross_encoder" and data_config.format == "auto":
+        return data_config.model_copy(update={"format": "cross_encoder"})
+    return data_config
+
+
 def _format_rows(
     raw_data: list[dict],
     fmt: str,
     *,
     preserve_source_columns: bool = False,
+    source: str | None = None,
 ) -> list[dict]:
     """Normalize rows, optionally retaining columns used by GRPO rewards.
 
@@ -169,14 +239,58 @@ def _format_rows(
     unchanged for every other task.
     """
     formatted: list[dict] = []
-    for raw_row in raw_data:
-        normalized = format_to_messages(raw_row, fmt)
+    dropped = 0
+    first_drop: tuple[int, str] | None = None
+    for index, raw_row in enumerate(raw_data):
+        # #1181: the same drop decision as format_to_messages, plus the reason,
+        # so a dropped row is counted and named instead of vanishing.
+        normalized, reason = format_to_messages_with_reason(raw_row, fmt)
         if normalized is None:
+            dropped += 1
+            if first_drop is None:
+                first_drop = (index, reason or "")
             continue
         if preserve_source_columns:
             normalized = {**raw_row, **normalized}
         formatted.append(normalized)
+    global _last_load
+    if dropped and first_drop is not None:
+        _report_dropped_rows(dropped, len(raw_data), fmt, first_drop, source)
+        if _last_load.first_drop is None:
+            _last_load = replace(
+                _last_load, first_drop=(fmt, first_drop[0], first_drop[1], source)
+            )
+    if _last_load.fmt is None:
+        _last_load = replace(_last_load, fmt=fmt)
     return formatted
+
+
+def _report_dropped_rows(
+    dropped: int,
+    total: int,
+    fmt: str,
+    first_drop: tuple[int, str],
+    source: str | None,
+) -> None:
+    """One warning for the rows the format converter dropped (#1181).
+
+    The drop is the loader's documented contract (one bad line must not abort a
+    load); the silence was the defect. Same shape as the media paths' "rows
+    skipped" lines, with the first row's index and the converter's own reason.
+    """
+    from rich.markup import escape
+
+    index, reason = first_drop
+    message = (
+        f"[yellow]Warning: {dropped} of {total} rows dropped: they do not convert "
+        f"as {escape(repr(fmt))}. First: row {index}: {escape(reason)}.[/]"
+    )
+    if source:
+        message += (
+            f"\n  List them all with: soup data validate {escape(source)} --format "
+            f"{escape(fmt)}"
+        )
+    console.print(message)
 
 
 def _load_replay_rows(
@@ -213,6 +327,7 @@ def _load_replay_rows(
         raw,
         fmt,
         preserve_source_columns=preserve_source_columns,
+        source=str(replay_path),
     )
 
     if is_vision_format(fmt):
@@ -289,7 +404,7 @@ def _classify_train_entry(value: str) -> str:
     """Classify one data.train list entry for interleave dispatch (#459).
 
     Returns ``'remote'`` / ``'hub'`` / ``'local'``. Mirrors the identical
-    classification inline in SoupConfig._validate_interleave_compat — kept
+    classification in schema._classify_data_train_entry — kept
     as two copies of the same three-line rule (suffix-in-SUPPORTED_EXTENSIONS
     check + "://"-in-entry check) rather than one shared function, since
     schema.py must stay import-light (no torch-adjacent deps) and loader.py
@@ -337,6 +452,9 @@ def load_dataset(
       consistently whenever data.train is a list, so this branch only has
       to pick which loader — not re-validate the shape.
     """
+    global _last_load
+    _last_load = LoadOutcome()
+
     train_path = data_config.train
 
     if isinstance(train_path, list):
@@ -388,6 +506,7 @@ def load_dataset(
         raw_data,
         fmt,
         preserve_source_columns=preserve_source_columns,
+        source=str(path),
     )
 
     # Validate image paths for vision formats
@@ -433,6 +552,7 @@ def _load_one_local_dataset(
         raw_data,
         fmt,
         preserve_source_columns=preserve_source_columns,
+        source=str(path),
     )
 
     if is_vision_format(fmt):

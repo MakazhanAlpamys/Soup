@@ -10,8 +10,6 @@ import math
 
 import pytest
 
-from tests._windows_ci import skip_on_windows_ci
-
 # Skip the whole module when torch is unavailable — the math kernels are
 # torch-based by design.
 torch = pytest.importorskip("torch")
@@ -599,11 +597,20 @@ class TestGRPOTrainerVariantFactory:
         inputs = {
             "per_token_logps": torch.zeros(2, 4),
             "old_per_token_logps": torch.zeros(2, 4),
+            # #1232: beta 0.1 needs the reference trl puts in the batch whenever
+            # beta != 0. Without it the kernel refuses, the #159 fallback runs,
+            # and the fake's 99.0 comes back -- which this test used to accept.
+            "ref_per_token_logps": torch.zeros(2, 4),
             "advantages": torch.tensor([1.0, -1.0]),
         }
         # Variant kernel should compute a real (non-99.0) loss.
         result = trainer.compute_loss(model=None, inputs=inputs)
         assert isinstance(result, torch.Tensor)
+        assert not trainer._soup_fallback_warned, "fell back to the base loss"
+        assert float(result) != 99.0
+        # gspo at ratio 1 with advantages +1 / -1 is 0, and a reference equal
+        # to the policy adds exactly 0 KL.
+        assert float(result) == 0.0
 
     def test_variant_falls_back_on_missing_inputs(self):
         """When TRL renames inputs, fall back to original loss (defence-in-depth)."""
@@ -746,8 +753,7 @@ class TestGRPOVariantRuntimeContract:
         # rft computes NLL on positive advantages whereas gspo uses centered ratio
         assert losses["rft"] != losses["gspo"]
 
-    @skip_on_windows_ci
-    def test_real_trl_grpotrainer_end_to_end_step(self, tmp_path):
+    def test_real_trl_grpotrainer_end_to_end_step(self, tmp_path, aten_half_matmuls):
         """End-to-end single step with real trl.GRPOTrainer and tiny model."""
         from datasets import Dataset
         from transformers import AutoTokenizer, GPT2Config, GPT2LMHeadModel
@@ -1030,6 +1036,9 @@ class TestReviewFixCoverage:
         inputs = {
             "per_token_logps": torch.zeros(2, 4),
             "old_per_token_logps": torch.zeros(2, 4),
+            # #1232: the reference trl supplies whenever beta != 0; without it
+            # the kernel refuses and the fake's (99.0, {"fake": True}) returns.
+            "ref_per_token_logps": torch.zeros(2, 4),
             "advantages": torch.tensor([1.0, -1.0]),
         }
         result = trainer.compute_loss(
@@ -1040,8 +1049,11 @@ class TestReviewFixCoverage:
         # forward pass.
         assert isinstance(result, tuple)
         assert len(result) == 2
-        loss, _outputs = result
+        loss, outputs = result
         assert isinstance(loss, torch.Tensor)
+        assert not trainer._soup_fallback_warned, "fell back to the base loss"
+        assert outputs is None, outputs
+        assert float(loss) == 0.0
 
     # --- HIGH: source-grep regression — callback wired into grpo.py ---
 

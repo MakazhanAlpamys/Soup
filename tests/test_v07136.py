@@ -1525,9 +1525,7 @@ class TestCanaryManifest:
         with pytest.raises(ValueError, match="too many canaries"):
             load_manifest("big.json")
 
-    @pytest.mark.skipif(
-        not hasattr(__import__("os"), "symlink"), reason="POSIX only"
-    )
+    @pytest.mark.requires_symlink
     def test_symlinked_manifest_rejected(self, tmp_path, monkeypatch):
         import os
 
@@ -1536,10 +1534,7 @@ class TestCanaryManifest:
         monkeypatch.chdir(tmp_path)
         real = tmp_path / "real.json"
         real.write_text('{"canaries": []}', encoding="utf-8")
-        try:
-            os.symlink(real, tmp_path / "link.json")
-        except (OSError, NotImplementedError):
-            pytest.skip("symlink unavailable")
+        os.symlink(real, tmp_path / "link.json")
         with pytest.raises(ValueError):
             load_manifest("link.json")
 

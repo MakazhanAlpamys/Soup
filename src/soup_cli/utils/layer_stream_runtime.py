@@ -175,6 +175,200 @@ def rebuild_params4bit(key: str, buffers: Mapping[str, Any], spec: Any, codes: M
     )
 
 
+_CHECKPOINT_VISIBLE_NF4_FUNCTION = None
+
+
+def _checkpoint_visible_nf4_function():
+    """Lazy custom autograd Function whose saved state is visible to checkpoint (#842)."""
+    global _CHECKPOINT_VISIBLE_NF4_FUNCTION
+    if _CHECKPOINT_VISIBLE_NF4_FUNCTION is not None:
+        return _CHECKPOINT_VISIBLE_NF4_FUNCTION
+
+    import bitsandbytes.functional as bnb_functional
+    import torch
+
+    class CheckpointVisibleNF4Matmul(torch.autograd.Function):
+        @staticmethod
+        @torch.amp.custom_fwd(device_type="cuda")
+        def forward(
+            ctx,
+            x,
+            packed,
+            absmax,
+            state2_absmax,
+            state2_code,
+            offset,
+            bias,
+            shape,
+            weight_dtype,
+            blocksize,
+            quant_type,
+            nested,
+            state2_blocksize,
+        ):
+            # #331/#842: every tensor the backward needs goes through
+            # save_for_backward. Non-reentrant checkpoint can therefore discard
+            # these references and recreate them after the streaming slot has
+            # been refilled with the correct layer during recompute.
+            ctx.save_for_backward(packed, absmax, state2_absmax, state2_code, offset)
+            ctx.shape = tuple(int(dim) for dim in shape)
+            ctx.weight_dtype = weight_dtype
+            ctx.blocksize = int(blocksize)
+            ctx.quant_type = str(quant_type)
+            ctx.nested = bool(nested)
+            ctx.state2_blocksize = int(state2_blocksize)
+            ctx.bias_dtype = None if bias is None else bias.dtype
+            ctx.owner_check = getattr(packed, "_soup_stream_owner_check", None)
+
+            if ctx.nested:
+                return torch.ops.bitsandbytes.gemm_4bit.default(
+                    x,
+                    packed,
+                    ctx.shape,
+                    state2_absmax,
+                    ctx.blocksize,
+                    ctx.quant_type,
+                    bias=bias,
+                    absmax_8bit=absmax,
+                    absmax_code=state2_code,
+                    absmax_offset=offset,
+                )
+            return torch.ops.bitsandbytes.gemm_4bit.default(
+                x, packed, ctx.shape, absmax, ctx.blocksize, ctx.quant_type, bias=bias
+            )
+
+        @staticmethod
+        @torch.amp.custom_bwd(device_type="cuda")
+        def backward(ctx, grad_output):
+            # Recompute must have reloaded this layer into its slot, and the
+            # one-ahead prefetcher must not recycle that slot before its
+            # backward finishes. A deeper lookahead would otherwise make the
+            # aliases below silently describe another layer (#842).
+            if ctx.owner_check is not None:
+                ctx.owner_check()
+            packed, absmax, state2_absmax, state2_code, offset = ctx.saved_tensors
+            state2 = None
+            q_offset = None
+            if ctx.nested:
+                state2 = bnb_functional.QuantState(
+                    absmax=state2_absmax,
+                    code=state2_code,
+                    blocksize=ctx.state2_blocksize,
+                    dtype=torch.float32,
+                )
+                q_offset = offset
+            quant_state = bnb_functional.QuantState(
+                absmax=absmax,
+                shape=torch.Size(ctx.shape),
+                dtype=ctx.weight_dtype,
+                blocksize=ctx.blocksize,
+                quant_type=ctx.quant_type,
+                offset=q_offset,
+                state2=state2,
+            )
+            # bitsandbytes 0.50.x exposes a fused forward GEMM but no transposed
+            # 4-bit GEMM for dX. Keep this fallback explicit: it is correct and
+            # checkpoint-visible, but #842 remains open until this dense
+            # dequantisation is replaced by a real transposed kernel.
+            grad_x = None
+            if ctx.needs_input_grad[0]:
+                weight = bnb_functional.dequantize_4bit(packed, quant_state).to(
+                    grad_output.dtype
+                )
+                grad_x = torch.matmul(grad_output, weight)
+            grad_bias = None
+            if ctx.needs_input_grad[6] and ctx.bias_dtype is not None:
+                grad_bias = grad_output.reshape(-1, grad_output.shape[-1]).sum(
+                    dim=0, dtype=ctx.bias_dtype
+                )
+            return (
+                grad_x,
+                None,
+                None,
+                None,
+                None,
+                None,
+                grad_bias,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+
+    _CHECKPOINT_VISIBLE_NF4_FUNCTION = CheckpointVisibleNF4Matmul
+    return CheckpointVisibleNF4Matmul
+
+
+def checkpoint_visible_nf4_linear(
+    x: Any, packed: Any, quant_state: Any, bias: Any = None
+) -> Any:
+    """Fused NF4 forward with checkpoint-visible packed state (#842)."""
+    empty = packed.new_empty((0,))
+    state2_absmax = empty
+    state2_code = empty
+    offset = empty
+    state2_blocksize = 0
+    if quant_state.nested:
+        state2_absmax = quant_state.state2.absmax
+        state2_code = quant_state.state2.code
+        offset = quant_state.offset
+        state2_blocksize = int(quant_state.state2.blocksize)
+    return _checkpoint_visible_nf4_function().apply(
+        x,
+        packed,
+        quant_state.absmax,
+        state2_absmax,
+        state2_code,
+        offset,
+        bias,
+        tuple(quant_state.shape),
+        quant_state.dtype,
+        int(quant_state.blocksize),
+        str(quant_state.quant_type),
+        bool(quant_state.nested),
+        state2_blocksize,
+    )
+
+
+def _can_use_checkpoint_visible_nf4_gemm(x: Any, quant_state: Any) -> bool:
+    """Match bitsandbytes' own decision to use its custom 4-bit CUDA GEMM.
+
+    The private dispatch names are intentionally read from bitsandbytes rather
+    than copying a card-specific M window. If those private names move, prefer
+    the checkpoint-visible Function: it remains exact, though potentially
+    slower, and the compatibility test makes the upstream change visible.
+    """
+    if getattr(getattr(x, "device", None), "type", None) != "cuda":
+        return False
+    if bool(getattr(quant_state, "nested", False)):
+        state2 = getattr(quant_state, "state2", None)
+        if state2 is None or int(getattr(state2, "blocksize", 0)) != 256:
+            return False
+    try:
+        import torch
+
+        torch.ops.bitsandbytes.gemm_4bit.default
+    except (ImportError, AttributeError, RuntimeError):
+        return False
+    try:
+        from bitsandbytes.backends.cuda import ops as bnb_cuda_ops
+
+        custom_max_m = bnb_cuda_ops._gemm_4bit_custom_max_m
+        use_custom_fn = bnb_cuda_ops._gemm_4bit_use_custom_fn
+    except (ImportError, AttributeError, RuntimeError):
+        return True
+
+    k = int(x.shape[-1])
+    m = int(x.numel() // k)
+    n = int(quant_state.shape[0])
+    blocksize = int(quant_state.blocksize)
+    if m > int(custom_max_m) or k % blocksize != 0:
+        return False
+    return bool(use_custom_fn(x.device.index, x.dtype, m, n, k))
+
+
 def install_dequant_forward(module: Any) -> int:
     """#331 — keep a STREAMED NF4 weight out of ``bitsandbytes``' ``MatMul4Bit``.
 
@@ -195,17 +389,21 @@ def install_dequant_forward(module: Any) -> int:
     forward-to-backward span, so any copy keeps one layer alive for that span and
     costs O(model). On real 32B, peak VRAM 4 220 -> 19 720 MiB.
 
-    So the weight never enters that autograd Function. It is dequantised inside the
-    checkpointed region and multiplied natively; ``F.linear`` saves the dequantised
-    tensor through the ordinary mechanism, which checkpointing DOES discard and
-    recompute, and the transient lives only inside the recomputed block — O(window).
+    The streamed weight still never enters bitsandbytes' ``MatMul4Bit`` Function.
+    When bitsandbytes' own CUDA dispatch selects its custom 4-bit GEMM, #842 routes
+    that same operation through Soup's autograd Function: packed bytes and every
+    quantisation tensor go through ``save_for_backward``, so non-reentrant
+    checkpointing can discard and recompute them after the pool refills the correct
+    layer. Whenever bitsandbytes selects its dequantise + linear fallback, Soup
+    keeps the v0.73.0 path rather than paying a third dequantisation in backward.
+    Missing private dispatch symbols fail toward the Function: exact but possibly
+    slower, never toward an alias-unsafe ``MatMul4Bit``.
 
-    This changes the computation path used by the patched NF4 module. With
-    bitsandbytes 0.50.2, the native fused ``MatMul4Bit`` path and explicit
-    ``dequantize_4bit`` + ``F.linear`` can differ depending on the CUDA
-    architecture and projection shape. The dequantise + linear path is retained
-    for correctness under checkpointing (#331); this path choice is not assumed
-    to be numerically free.
+    The #842 Function is deliberately only the first half of the intended kernel.
+    bitsandbytes exposes a fused forward GEMM but no transposed 4-bit GEMM for
+    ``grad_x = grad_y @ W``; its backward also dequantises. Soup therefore keeps
+    that dense-dequant backward explicitly until a transposed kernel exists. Do
+    not claim the full #842 throughput ceiling from the fused-forward path alone.
 
     Returns the number of modules patched, so a caller can assert it patched
     something. Zero would mean the model carries no 4-bit linears at all.
@@ -233,8 +431,16 @@ def install_dequant_forward(module: Any) -> int:
         if bias is not None:
             bias = bias.to(x.dtype)
 
-        # THE repair: dequantise here, inside whatever checkpointed region this
-        # forward is running in, and let F.linear save the dense weight properly.
+        # Match bnb's own private dispatch. Only the custom-GEMM arm needs
+        # Soup's Function; on bnb's dequant+linear arm the old path below has
+        # identical arithmetic and avoids an extra backward dequantisation.
+        if _can_use_checkpoint_visible_nf4_gemm(x, quant_state):
+            return checkpoint_visible_nf4_linear(
+                x, self.weight, quant_state, bias
+            ).to(inp_dtype)
+
+        # Compatibility path: dequantise inside the checkpointed region and let
+        # F.linear save the dense weight properly.
         weight = dequantize_4bit(self.weight, quant_state).to(x.dtype)
         return functional.linear(x, weight, bias).to(inp_dtype)
 
@@ -982,6 +1188,8 @@ class StreamPrefetcher:
         n_layers: int,
         stream: Any = None,
         tail_prefetch: Any = None,
+        backward_tail_prefetch: Any = None,
+        head_prefetch_layer: Optional[int] = None,
     ):
         self.pool = pool
         self.source = source
@@ -992,12 +1200,50 @@ class StreamPrefetcher:
         self.primes = 0
         self.tail_prefetch = tail_prefetch
         self.tail_prefetched = False
+        # #1174 part 2 — which decoder layer's forward issues `tail_prefetch`, the
+        # head's load into the shared slot. `None` is the original timing, the
+        # last layer, where the copy has only that one layer's compute to hide
+        # behind. A smaller index issues it earlier in the forward: the
+        # embedding's bytes in the slot are dead once the lookup has run, and
+        # the lookup precedes layer 0's `advance`, so layer 0 is the earliest
+        # point. It is a property, so a harness can flip it between steps and
+        # run both timings in one process, and an assignment is checked the same
+        # way the constructor argument is.
+        self.head_prefetch_layer = head_prefetch_layer
+        # #975 — the embedding's `_prime`-time load pays a full head-sized H2D
+        # copy with nothing to overlap it against, because it fires right as
+        # the next step's forward starts and is needed almost immediately.
+        # This callback lets the caller issue that SAME load earlier, once
+        # layer 0's backward recompute confirms this step's decoder walk is
+        # done, so it can overlap with whatever backward work is still ahead
+        # (the embedding's own backward, optimiser bookkeeping) instead of
+        # blocking the next step's first op.
+        self.backward_tail_prefetch = backward_tail_prefetch
+        self.backward_tail_prefetched = False
+
+    @property
+    def head_prefetch_layer(self) -> Optional[int]:
+        return self._head_prefetch_layer
+
+    @head_prefetch_layer.setter
+    def head_prefetch_layer(self, value: Optional[int]) -> None:
+        # `bool` is an `int`, so `True` would otherwise pass as layer 1. A bad
+        # value assigned later would only surface at the head's forward as
+        # "large-layer scheduler bug: slot holds ...", which names the wrong cause.
+        if value is not None and (
+            isinstance(value, bool) or not isinstance(value, int) or not 0 <= value < self.n_layers
+        ):
+            raise ValueError(
+                f"head_prefetch_layer must be None or in [0, {self.n_layers}), got {value!r}"
+            )
+        self._head_prefetch_layer = value
 
     def prime(self) -> None:
         """Start of a forward pass: layer 0, walking upward."""
         self.prev = None
         self.direction = 1
         self.primes += 1
+        self.backward_tail_prefetched = False
         self.tail_prefetched = False
         self.pool.load_async(0, self.source, self.stream)
 
@@ -1014,14 +1260,51 @@ class StreamPrefetcher:
         nxt = idx + self.direction
         if 0 <= nxt < self.n_layers and self.pool.owner[self.pool.slot_for(nxt)] != nxt:
             self.pool.load_async(nxt, self.source, self.stream)
+        head_layer = self.head_prefetch_layer
+        if head_layer is None:
+            head_layer = self.n_layers - 1
         if (
             self.direction == 1
-            and idx == self.n_layers - 1
+            and idx == head_layer
             and not self.tail_prefetched
             and self.tail_prefetch is not None
         ):
+            # The refill of the shared slot with the head. It is ordered after
+            # the embedding lookup (queued on the compute stream, reading the
+            # slot) by the `wait_stream` in `LargeLayerBufferPool.load_async`,
+            # the same guard the backward-tail refill below relies on.
             self.tail_prefetch()
             self.tail_prefetched = True
+        # #975 — layer 0 reached going backward is the last decoder recompute
+        # of this step's backward pass, so this refills the shared slot with
+        # the embedding while the backward is still running. Two separate
+        # things make that safe, and only the second protects the GPU:
+        #
+        # * CPU side: `lm_head`'s backward Node sits between the loss and every
+        #   decoder layer, so the autograd engine has already dispatched it, and
+        #   the saved-tensor version check happens at dispatch. The embedding's
+        #   own backward reads indices, never the weight values, so it never
+        #   checks this slot's version at all.
+        # * GPU side: when the CPU reaches layer 0, the head's backward GEMM can
+        #   still be queued on the compute stream, reading this slot. What
+        #   orders the refill after it is `stream.wait_stream(torch.cuda.
+        #   current_stream())` in `LargeLayerBufferPool.load_async`, which makes
+        #   the copy stream wait for everything already enqueued on the compute
+        #   stream. Without that wait the refill can overwrite bytes the head's
+        #   backward has not read yet, and the gradients come out silently
+        #   wrong. Keep it if `load_async` is touched.
+        #
+        # `_prime()` still issues this same load unconditionally at the next
+        # step's start — this only makes that call a same-owner no-op on the
+        # hot path, by getting there first with time to overlap.
+        if (
+            self.direction == -1
+            and idx == 0
+            and not self.backward_tail_prefetched
+            and self.backward_tail_prefetch is not None
+        ):
+            self.backward_tail_prefetch()
+            self.backward_tail_prefetched = True
 
 
 # ==========================================================================
@@ -1054,6 +1337,13 @@ def _build_streamed_layer_class():
             self.use_checkpoint = bool(use_checkpoint)
             self.quant_specs = dict(quant_specs or {})
             self.codes = dict(codes or {})
+            # #841 — each wrapper returns to the same pool slot on every visit.
+            # Cache the tensor/Params4bit substitution views for that slot rather
+            # than reconstructing Python wrappers and QuantState objects on every
+            # forward and checkpoint recompute. The views share storage with the
+            # pool tensors, so later layer loads update their contents in place.
+            self._cached_substitution_buffers = None
+            self._cached_substitution_weights = None
             # v0.72.5 (#331) — a streamed NF4 weight must not reach MatMul4Bit,
             # which captures it outside save_for_backward and so aliases the pool
             # across the checkpoint boundary. See install_dequant_forward.
@@ -1278,19 +1568,41 @@ def _build_streamed_layer_class():
             # Weights arrive with requires_grad=False, so autograd allocates no
             # grad buffers for them — but W STAYS IN THE GRAPH for W^T . dL/dy,
             # which is how the lower adapters receive gradient at all.
-            if not self.quant_specs:
-                return {meta: buffers[ckpt] for meta, ckpt in self.name_map.items()}
-            # NF4: a Params4bit VIEW is rebuilt over the pooled buffer on every
-            # call (plan P3). The packed bytes are never copied or re-quantised
-            # — only the small Python wrapper is reconstructed.
+            #
+            # #841 — a wrapper revisits the same pool-slot mapping every forward
+            # and checkpoint recompute. Only the tensors' CONTENTS change when a
+            # layer is loaded. Reuse the mapping and Params4bit/QuantState views
+            # while the mapping object is identical; rebuilding them is pure
+            # Python/object churn and does not create fresher storage.
+            if (
+                self._cached_substitution_buffers is buffers
+                and self._cached_substitution_weights is not None
+            ):
+                return self._cached_substitution_weights
+
             weights = {}
             for meta, ckpt in self.name_map.items():
                 spec = self.quant_specs.get(ckpt)
                 if spec is None:
                     weights[meta] = buffers[ckpt]
                 else:
-                    weights[meta] = rebuild_params4bit(ckpt, buffers, spec, self.codes)
+                    weight = rebuild_params4bit(ckpt, buffers, spec, self.codes)
+                    weight._soup_stream_owner_check = self._assert_nf4_slot_owner
+                    weights[meta] = weight
+            self._cached_substitution_buffers = buffers
+            self._cached_substitution_weights = weights
             return weights
+
+        def _assert_nf4_slot_owner(self) -> None:
+            slot = self.pool.slot_for(self.idx)
+            owner = self.pool.owner[slot]
+            if owner != self.idx:
+                raise RuntimeError(
+                    "streamed NF4 backward found a recycled weight slot: "
+                    f"slot {slot} holds layer {owner}, expected layer {self.idx}. "
+                    "The prefetch lookahead exceeded the checkpoint-visible "
+                    "alias lifetime."
+                )
 
         def _body(self, hidden_states: Any, *args: Any, **kwargs: Any) -> Any:
             buffers = self.pool.wait(self.idx)
@@ -1348,18 +1660,33 @@ def _large_layer_weight_param_name(inner: Any) -> str:
     return "weight"
 
 
+def _unwrap_tuner_base(module: Any) -> Any:
+    """The real module under any peft tuner wrapper (#1012 wraps a LoRA target)."""
+    seen = 0
+    while hasattr(module, "base_layer") and seen < 8:
+        module = module.base_layer
+        seen += 1
+    return module
+
+
 def _build_streamed_large_layer_class():
+    import torch
     import torch.nn as nn
     from torch.func import functional_call
 
     class StreamedLargeLayer(nn.Module):
         """Embedding or output projection backed by the shared large slot."""
 
-        def __init__(self, inner: Any, key: str, pool: Any):
+        def __init__(
+            self, inner: Any, key: str, pool: Any, refill_before_backward: bool = False
+        ):
             super().__init__()
             self.inner = inner
             self.key = str(key)
             self.pool = pool
+            # #1049 -- set by the trainers whose loss runs a second forward before
+            # the step's backward (see `_needs_a_private_weight`).
+            self.refill_before_backward = bool(refill_before_backward)
             self._register_load_state_dict_pre_hook(self._redirect_canonical_weight)
             self._weight_param_name = _large_layer_weight_param_name(inner)
 
@@ -1472,12 +1799,47 @@ def _build_streamed_large_layer_class():
                 return getattr(inner, name)
 
         def forward(self, *args: Any, **kwargs: Any) -> Any:
+            weight = self.pool.wait(self.key)
+            if torch.is_grad_enabled() and self._needs_a_private_weight():
+                # #1049 -- embed_tokens and an untied lm_head SHARE one slot, and
+                # `wait` returns a view of it, so the next `load_async` refills the
+                # bytes autograd is holding. The projection saves its weight to build
+                # `grad wrt x`, so a second forward in the same step -- the reference
+                # pass of a preference loss -- bumped that tensor's version and the
+                # policy backward died with "modified by an inplace operation".
+                # Hand autograd a private copy: one head-sized allocation, alive only
+                # while the graph is, and only when a second forward can refill the
+                # slot before the backward. The VRAM pre-flight charges it.
+                weight = weight.clone()
             return functional_call(
                 self.inner,
-                {self._weight_param_name: self.pool.wait(self.key)},
+                {self._weight_param_name: weight},
                 args,
                 kwargs,
             )
+
+        def _needs_a_private_weight(self) -> bool:
+            """True when this layer's weight can be refilled while autograd holds it.
+
+            Three things have to be true. The loss must run a second forward
+            before the step's backward -- the reference pass of a preference
+            loss. SFT, ORPO and SimPO run one forward per step, and nothing
+            refills the slot between it and its backward, so they never need the
+            copy (``refill_before_backward``, set by the trainer). The slot must
+            be SHARED: a tied checkpoint streams no large key, so its buffer is never
+            refilled within a step. And the weight must be one autograd can save,
+            which an embedding's is not -- ``embedding_backward`` works from the
+            indices and the vocabulary size, never from the weight values, so
+            nothing holds those bytes past the lookup. That leaves the
+            projection, i.e. the untied ``lm_head``, and keeps the cost at one
+            head-sized copy rather than two.
+            """
+            if not self.refill_before_backward:
+                return False
+            specs = getattr(self.pool, "specs", None)
+            if specs is None or len(specs) <= 1:
+                return False
+            return not isinstance(_unwrap_tuner_base(self.inner), nn.Embedding)
 
     return StreamedLargeLayer
 
@@ -2185,6 +2547,91 @@ def assert_trainable_adapters_materialized(model: Any) -> None:
     )
 
 
+#: The file every PEFT adapter save writes, final and ``checkpoint-*`` alike.
+_ADAPTER_WEIGHTS_FILE = "adapter_model.safetensors"
+
+#: The child segment of ``StreamedDecoderLayer``. A saved key carrying it is the
+#: v0.72.0 spelling of an adapter that reloads as zero tensors.
+_WRAPPER_KEY_SEGMENT = ".inner."
+
+
+def assert_streamed_adapter_saved(model: Any, output_dir: str) -> None:
+    """Refuse a streamed save that wrote an adapter which reloads as nothing.
+
+    #1011 — twice a streamed LoRA run has reported success and written an
+    ``adapter_model.safetensors`` that held nothing loadable: v0.72.0's
+    ``.inner.`` keys, and #1005's 40-byte, 0-tensor file under peft 0.21. Both
+    times the only signal was a ``UserWarning`` at some later load, after the
+    GPU hours were spent. :func:`assert_trainable_adapters_materialized` asks
+    "will this train?" before training; this asks "did anything get written?"
+    after each save, by reading back the file's header (keys only, no tensor
+    data).
+
+    The reference is the model's own trainable ``lora_*`` parameters, one saved
+    key each, not a bare ``> 0``. There is no legitimately empty streamed save:
+    streaming always trains a LoRA adapter, and its trainable tensors exist from
+    construction, so a save before the first optimizer step still writes all of
+    them. Non-``lora_`` keys (``modules_to_save``) are not counted on either
+    side.
+    """
+    path = os.path.join(output_dir, _ADAPTER_WEIGHTS_FILE)
+    expected = sum(
+        1 for name, param in model.named_parameters() if param.requires_grad and "lora_" in name
+    )
+    if not os.path.isfile(path):
+        raise RuntimeError(
+            f"the streamed run saved no {_ADAPTER_WEIGHTS_FILE} in {output_dir}; "
+            f"expected {expected} LoRA tensors. Refusing to report a run whose "
+            "adapter was not written."
+        )
+
+    from safetensors import safe_open
+
+    with safe_open(path, framework="pt") as handle:
+        keys = list(handle.keys())
+    wrapped = [key for key in keys if _WRAPPER_KEY_SEGMENT in key]
+    if wrapped:
+        raise RuntimeError(
+            f"{path} carries the streaming wrapper's '{_WRAPPER_KEY_SEGMENT}' segment "
+            f"in {len(wrapped)} keys (first: {wrapped[0]}). Those keys match no "
+            "module of a normal model, so the adapter would reload as zero tensors."
+        )
+    saved = sum(1 for key in keys if "lora_" in key)
+    if saved == 0 or saved != expected:
+        raise RuntimeError(
+            f"{path} holds {saved} LoRA tensors, but the streamed model trained "
+            f"{expected}. The adapter on disk does not hold the adapter that was "
+            "trained, and would reload as "
+            + ("zero tensors." if saved == 0 else "a partial adapter.")
+        )
+
+
+def build_streamed_save_guard_callback() -> Any:
+    """Return a callback that runs :func:`assert_streamed_adapter_saved` on
+    every ``checkpoint-*`` the Trainer writes.
+
+    The HF Trainer writes periodic checkpoints through the same ``save_model``
+    as the final save, so #1005's empty file appeared in every ``save_steps``
+    checkpoint too. The final save dispatches no ``on_save``, which is why the
+    trainers also call the check after it. Built here rather than at module
+    scope so importing this module stays free of transformers.
+    """
+    from transformers import TrainerCallback
+
+    class StreamedSaveGuardCallback(TrainerCallback):
+        def on_save(self, args, state, control, model=None, **kwargs) -> None:
+            # the same rank condition save_model gates its write on
+            if not getattr(args, "should_save", True) or model is None:
+                return
+            step = int(getattr(state, "global_step", 0) or 0)
+            output_dir = getattr(args, "output_dir", None)
+            if step <= 0 or not output_dir:
+                return
+            assert_streamed_adapter_saved(model, os.path.join(output_dir, f"checkpoint-{step}"))
+
+    return StreamedSaveGuardCallback()
+
+
 def materialize_meta_adapter_copy(
     model: Any, *, source_adapter: str = "default", target_adapter: str = "ref"
 ) -> int:
@@ -2342,8 +2789,14 @@ def install_streaming(
     codes: Optional[Mapping[str, Any]] = None,
     tier: str = "ram",
     read_ahead: int = DEFAULT_STREAM_READ_AHEAD,
+    refill_before_backward: bool = False,
 ) -> StreamRuntime:
-    """Wrap every decoder layer and wire the buffer pool + prefetch scheduler."""
+    """Wrap every decoder layer and wire the buffer pool + prefetch scheduler.
+
+    ``refill_before_backward`` says the loss runs a second forward before each
+    step's backward; an untied output head then hands autograd a private copy
+    of its weight (#1049).
+    """
     import torch
 
     from soup_cli.utils.layer_shard import (
@@ -2475,12 +2928,20 @@ def install_streaming(
         if large_pool is not None and output_key is not None:
             large_pool.load_async(output_key, source, stream)
 
+    def _prefetch_embed() -> None:
+        if large_pool is not None and embed_key is not None:
+            large_pool.load_async(embed_key, source, stream)
+
     prefetcher = StreamPrefetcher(
         pool,
         source,
         n_layers,
         stream,
         tail_prefetch=_prefetch_output if large_pool is not None else None,
+        backward_tail_prefetch=_prefetch_embed if large_pool is not None else None,
+        # #1174 part 2: the head's load right after the embedding lookup. Set
+        # `prefetcher.head_prefetch_layer = None` to restore the last-layer timing.
+        head_prefetch_layer=0 if large_pool is not None else None,
     )
 
     layer_cls = _streamed_layer_class()
@@ -2525,18 +2986,29 @@ def install_streaming(
             # is read, not run. Kept for the architecture that does share it.
             if embed_key != output_key:
                 raise ValueError("one module cannot represent two untied large-layer weights")
-            shared = large_cls(input_module, embed_key, large_pool)
+            shared = large_cls(
+                input_module, embed_key, large_pool, refill_before_backward=refill_before_backward
+            )
             if not _replace_module_references(model, input_module, shared):
                 raise RuntimeError("could not install the streamed tied embedding module")
         else:
-            streamed_input = large_cls(input_module, embed_key, large_pool)
-            streamed_output = large_cls(output_module, output_key, large_pool)
+            streamed_input = large_cls(
+                input_module, embed_key, large_pool, refill_before_backward=refill_before_backward
+            )
+            streamed_output = large_cls(
+                output_module, output_key, large_pool, refill_before_backward=refill_before_backward
+            )
             if not _replace_module_references(model, input_module, streamed_input):
                 raise RuntimeError("could not install the streamed input embedding")
             if not _replace_module_references(model, output_module, streamed_output):
                 raise RuntimeError("could not install the streamed output head")
 
     def _prime(*_args: Any, **_kwargs: Any) -> None:
+        # #975 — the backward-tail prefetch above already loads this for every
+        # step but the first, so `load_async`'s own-owner check makes this a
+        # no-op on the hot path. Kept unconditional: it is the only load for
+        # step 0, and for any forward that follows a backward that never
+        # reached layer 0.
         if large_pool is not None and embed_key is not None:
             large_pool.load_async(embed_key, source, stream)
         prefetcher.prime()
@@ -2862,6 +3334,7 @@ def build_streamed_model(
     read_ahead: int = DEFAULT_STREAM_READ_AHEAD,
     weights_dir: Optional[str] = None,
     ngram_source: str = "disk",
+    refill_before_backward: bool = False,
 ) -> Tuple[Any, StreamRuntime]:
     """Meta skeleton -> extras -> LoRA -> streaming. No resident base load."""
     from peft import get_peft_model
@@ -2908,6 +3381,7 @@ def build_streamed_model(
             codes=extras.codes,
             tier=tier,
             read_ahead=read_ahead,
+            refill_before_backward=refill_before_backward,
         )
     except BaseException:
         for external in external_sources:
