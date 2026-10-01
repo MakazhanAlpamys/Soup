@@ -102,6 +102,25 @@ class TestCompileRefusesBeforeRunningTheOptimizer:
         assert result.exit_code == 0, (result.output, repr(result.exception))
         assert (Path.cwd() / "ok_out.py").read_text(encoding="utf-8") == "COMPILED"
 
+    def test_a_write_time_refusal_exits_2_not_1(self, tmp_path, monkeypatch):
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+        from soup_cli.commands import compile_cmd as compile_mod
+
+        _compile_project(tmp_path, monkeypatch)
+        _stub_optimizer(monkeypatch, [])
+
+        def refuse(*args, **kwargs):
+            raise ValueError("output_path must not be a symlink (TOCTOU defence)")
+
+        monkeypatch.setattr(compile_mod, "atomic_write_text", refuse)
+        result = CliRunner().invoke(
+            app, ["compile", "prog.py", "--eval", "suite.jsonl", "-o", "ok_out.py"]
+        )
+        assert result.exit_code == 2, (result.output, repr(result.exception))
+        assert "TOCTOU" in result.output
+
 
 # ---------------------------------------------------------------------------
 # GGUF export into a missing parent directory
@@ -153,11 +172,13 @@ class TestQuantisedExportIntoAMissingDirectory:
 
         from soup_cli.cli import app
 
+        monkeypatch.chdir(tmp_path)
         adapter = _adapter_dir(tmp_path)
         merges: list = []
         _stub_export_backend(monkeypatch, tmp_path, merges)
 
-        out = Path.cwd() / "new_dir" / "model.gguf"
+        out = tmp_path / "new_dir" / "model.gguf"
+        assert not out.parent.exists()  # the parent really is missing
         result = CliRunner().invoke(
             app,
             ["export", "--model", str(adapter), "--quant", "q4_k_m",
@@ -166,7 +187,7 @@ class TestQuantisedExportIntoAMissingDirectory:
 
         assert result.exit_code == 0, (result.output, repr(result.exception))
         assert merges, "the merge ran"
-        assert out.exists() and out.read_bytes() == b"GGUF"
+        assert out.read_bytes() == b"GGUF"
 
     def test_control_an_existing_directory_still_exports(
         self, tmp_path, monkeypatch
@@ -175,11 +196,12 @@ class TestQuantisedExportIntoAMissingDirectory:
 
         from soup_cli.cli import app
 
+        monkeypatch.chdir(tmp_path)
         adapter = _adapter_dir(tmp_path)
         merges: list = []
         _stub_export_backend(monkeypatch, tmp_path, merges)
 
-        out = Path.cwd() / "model.gguf"
+        out = tmp_path / "model.gguf"
         result = CliRunner().invoke(
             app,
             ["export", "--model", str(adapter), "--quant", "q4_k_m",
