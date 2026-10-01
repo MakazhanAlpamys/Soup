@@ -13,6 +13,8 @@ from rich.console import Console
 from rich.markup import escape
 from rich.panel import Panel
 
+from soup_cli.utils.terminal import for_terminal
+
 console = Console()
 
 SUPPORTED_FORMATS = (
@@ -404,7 +406,7 @@ def _merge_adapter(
         requires_remote_code=requires,
     )
 
-    console.print(f"[dim]Loading base model: {base_model}...[/]")
+    console.print(f"[dim]Loading base model: {for_terminal(base_model)}...[/]")
     model = AutoModelForCausalLM.from_pretrained(
         base_model,
         torch_dtype=torch.float16,

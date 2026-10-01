@@ -23,6 +23,7 @@ from soup_cli.utils.gpu import (
 )
 from soup_cli.utils.mixed_precision import align_trainable_dtype_for_fp16
 from soup_cli.utils.seeding import apply_training_seed, training_seed_kwargs
+from soup_cli.utils.terminal import for_terminal
 
 logger = logging.getLogger(__name__)
 
@@ -2004,7 +2005,10 @@ class SFTTrainerWrapper(StreamingSetupMixin):
                 try:
                     image = PILImage.open(image_path).convert("RGB")
                 except (FileNotFoundError, OSError):
-                    console.print(f"[yellow]Warning: cannot open image: {image_path}[/]")
+                    console.print(
+                        "[yellow]Warning: cannot open image: "
+                        f"{for_terminal(image_path)}[/]"
+                    )
 
             result = {"images": []}
             if image is not None:
@@ -2137,7 +2141,10 @@ class SFTTrainerWrapper(StreamingSetupMixin):
                         audio_path, sr=16000, mono=True,
                     )
                 except (FileNotFoundError, OSError):
-                    console.print(f"[yellow]Warning: cannot open audio: {audio_path}[/]")
+                    console.print(
+                        "[yellow]Warning: cannot open audio: "
+                        f"{for_terminal(audio_path)}[/]"
+                    )
 
             messages = example["messages"]
             if hasattr(self.processor, "apply_chat_template"):

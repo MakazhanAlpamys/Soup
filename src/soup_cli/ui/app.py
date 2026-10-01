@@ -644,6 +644,7 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
 
             # Validate config before writing to disk
             from soup_cli.config.loader import load_config_from_string
+            from soup_cli.utils.terminal import strip_control
 
             try:
                 load_config_from_string(req.config_yaml)
@@ -651,12 +652,14 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
                 # The loader's own message names the field and the suggestion;
                 # an unknown key now refuses here (#879), so this is where a
                 # Web UI user learns which key. Rendered through escapeHtml().
-                logger.warning("Invalid training config: %s", exc)
+                # The log line goes to the server's terminal, so the key's
+                # control characters are stripped there.
+                logger.warning("Invalid training config: %s", strip_control(exc))
                 raise HTTPException(
                     status_code=400, detail=f"Invalid training configuration: {exc}"
                 )
             except Exception as exc:
-                logger.warning("Invalid training config: %s", exc)
+                logger.warning("Invalid training config: %s", strip_control(exc))
                 raise HTTPException(
                     status_code=400, detail="Invalid training configuration"
                 )
@@ -998,6 +1001,7 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
         import yaml
 
         from soup_cli.config.loader import load_config_from_string
+        from soup_cli.utils.terminal import strip_control
 
         # Build YAML from form values
         config_dict = {}
@@ -1013,10 +1017,10 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
             load_config_from_string(yaml_str)
             return {"yaml": yaml_str}
         except ValueError as exc:
-            logger.warning("Config form validation error: %s", exc)
+            logger.warning("Config form validation error: %s", strip_control(exc))
             return {"error": f"Invalid configuration: {exc}"}
         except TypeError as exc:
-            logger.warning("Config form validation error: %s", exc)
+            logger.warning("Config form validation error: %s", strip_control(exc))
             return {"error": "Invalid configuration"}
 
     # --- Chat Proxy ---
