@@ -145,6 +145,25 @@ def _tiny_llama(layers: int = 6, vocab_size: int = 128):
     return LlamaForCausalLM(cfg)
 
 
+def _tiny_tokenizer():
+    """A byte-level BPE tokenizer trained locally (no download), standing in
+    for the SmolLM2 tokenizer that #1356 found these tests pulling from the
+    Hub just for len(tok) and a save/reload round-trip -- not its English
+    vocabulary. Mirrors _write_tiny_qwen2's tokenizer in
+    test_issue1241_shrink_per_layer_config.py."""
+    from tokenizers import ByteLevelBPETokenizer
+    from transformers import PreTrainedTokenizerFast
+
+    bpe = ByteLevelBPETokenizer()
+    bpe.train_from_iterator(
+        ["hi there friend", "hello world", "the quick brown fox"],
+        vocab_size=300,
+        min_frequency=1,
+        special_tokens=["<eos>"],
+    )
+    return PreTrainedTokenizerFast(tokenizer_object=bpe, eos_token="<eos>", pad_token="<eos>")
+
+
 class TestPrune:
     def test_arch_detected(self):
         from soup_cli.utils.shrink import shrink_arch_of
@@ -440,9 +459,7 @@ class TestImportance:
 # ---------------------------------------------------------------------------
 def _write_tiny_model(dir_path, layers: int = 6):
     """Save a tiny CPU Llama + tokenizer to ``dir_path`` for CLI smoke."""
-    from transformers import AutoTokenizer
-
-    tok = AutoTokenizer.from_pretrained("HuggingFaceTB/SmolLM2-135M-Instruct")
+    tok = _tiny_tokenizer()
     m = _tiny_llama(layers, vocab_size=len(tok))
     m.save_pretrained(str(dir_path))
     tok.save_pretrained(str(dir_path))
@@ -563,13 +580,13 @@ class TestShrinkCli:
 
     def test_reject_unsupported_arch(self, tmp_path, monkeypatch):
         """A GPT-NeoX-family tiny model is a friendly reject (arch allowlist)."""
-        from transformers import AutoTokenizer, GPTNeoXConfig, GPTNeoXForCausalLM
+        from transformers import GPTNeoXConfig, GPTNeoXForCausalLM
         from typer.testing import CliRunner
 
         from soup_cli.cli import app
 
         monkeypatch.chdir(tmp_path)
-        tok = AutoTokenizer.from_pretrained("HuggingFaceTB/SmolLM2-135M-Instruct")
+        tok = _tiny_tokenizer()
         cfg = GPTNeoXConfig(
             hidden_size=32, intermediate_size=64, num_hidden_layers=6,
             num_attention_heads=4, vocab_size=len(tok), max_position_embeddings=512,
@@ -804,13 +821,13 @@ class TestReviewFixes:
         """_fuse_adapter merges a LoRA adapter back into the base (atomic swap),
         so the shipped dir is a single dense model (no adapter_config.json)."""
         from peft import LoraConfig, TaskType, get_peft_model
-        from transformers import AutoModelForCausalLM, AutoTokenizer
+        from transformers import AutoModelForCausalLM
 
         from soup_cli.commands.shrink import _fuse_adapter
 
         monkeypatch.chdir(tmp_path)  # base_dir must stay under cwd (containment)
         base_dir = tmp_path / "base"
-        tok = AutoTokenizer.from_pretrained("HuggingFaceTB/SmolLM2-135M-Instruct")
+        tok = _tiny_tokenizer()
         _tiny_llama(4, vocab_size=len(tok)).save_pretrained(str(base_dir))
         tok.save_pretrained(str(base_dir))
 

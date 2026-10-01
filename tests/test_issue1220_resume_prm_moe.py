@@ -25,7 +25,45 @@ from soup_cli.cli import app
 from soup_cli.commands.train import UNSUPPORTED_RESUME_TASKS
 from tests._windows_ci import skip_on_windows_ci
 
-TINY_MODEL = "hf-internal-testing/tiny-random-LlamaForCausalLM"
+_LOCAL_BASE_DIR: str | None = None
+
+
+def _local_base_model_dir() -> str:
+    """A tiny Llama causal LM + tokenizer built locally once per session (no
+    download), standing in for hf-internal-testing/tiny-random-LlamaForCausalLM
+    -- #1356 found these resume/checkpoint tests pulling it from the Hub for
+    nothing they check depends on real pretrained weights."""
+    global _LOCAL_BASE_DIR
+    if _LOCAL_BASE_DIR is not None:
+        return _LOCAL_BASE_DIR
+    import tempfile
+
+    from tokenizers import ByteLevelBPETokenizer
+    from transformers import LlamaConfig, LlamaForCausalLM, PreTrainedTokenizerFast
+
+    bpe = ByteLevelBPETokenizer()
+    bpe.train_from_iterator(
+        ["hi there friend", "hello world", "the quick brown fox"],
+        vocab_size=300,
+        min_frequency=1,
+        special_tokens=["<eos>"],
+    )
+    tok = PreTrainedTokenizerFast(tokenizer_object=bpe, eos_token="<eos>", pad_token="<eos>")
+    config = LlamaConfig(
+        hidden_size=32,
+        intermediate_size=64,
+        num_hidden_layers=2,
+        num_attention_heads=4,
+        num_key_value_heads=2,
+        vocab_size=len(tok),
+        max_position_embeddings=128,
+    )
+    model = LlamaForCausalLM(config)
+    out_dir = tempfile.mkdtemp(prefix="soup-test-tiny-llama-")
+    model.save_pretrained(out_dir)
+    tok.save_pretrained(out_dir)
+    _LOCAL_BASE_DIR = out_dir
+    return out_dir
 
 
 def _strip_ansi(text: str) -> str:
@@ -172,7 +210,7 @@ class TestResumeRefusalForUnsupportedTasks:
         train_data.write_text(json.dumps({"prompt": "forget me", "response": "done"}) + "\n")
 
         config_path.write_text(
-            f"base: {TINY_MODEL}\n"
+            f"base: {Path(_local_base_model_dir()).as_posix()}\n"
             "task: unlearn\n"
             f"data: {{train: {train_data.as_posix()}, forget_set: {train_data.as_posix()},"
             " format: chatml, val_split: 0.0}\n"
@@ -194,7 +232,7 @@ class TestResumeRefusalForUnsupportedTasks:
         train_data.write_text(json.dumps({"prompt": "forget me", "response": "done"}) + "\n")
 
         config_path.write_text(
-            f"base: {TINY_MODEL}\n"
+            f"base: {Path(_local_base_model_dir()).as_posix()}\n"
             "task: unlearn\n"
             f"data: {{train: {train_data.as_posix()}, forget_set: {train_data.as_posix()},"
             " format: chatml, val_split: 0.0}\n"
@@ -242,7 +280,7 @@ class TestPRMResume:
         out_dir = tmp_path / "out_prm"
         cfg_path = tmp_path / "prm.yaml"
         cfg_path.write_text(
-            f"base: {TINY_MODEL}\n"
+            f"base: {Path(_local_base_model_dir()).as_posix()}\n"
             "task: prm\n"
             f"data: {{train: {prm_data.as_posix()}, format: prm, val_split: 0.0, max_length: 64}}\n"
             "training: {\n"
@@ -330,7 +368,7 @@ class TestMoleRoutingResume:
         monkeypatch.setattr(mole_routing, "_save_mole_gate", recording_save_gate)
 
         # Create two tiny task LoRA adapters
-        base_model = AutoModelForCausalLM.from_pretrained(TINY_MODEL)
+        base_model = AutoModelForCausalLM.from_pretrained(_local_base_model_dir())
         lora_cfg = LoraConfig(r=4, lora_alpha=8, target_modules=["q_proj", "v_proj"])
         peft_m = get_peft_model(base_model, lora_cfg)
         adapter_a = tmp_path / "adapter_a"
@@ -355,7 +393,7 @@ class TestMoleRoutingResume:
         cfg_path = tmp_path / "mole.yaml"
         c_posix = chat_data.as_posix()
         cfg_data = (
-            f"base: {TINY_MODEL}\n"
+            f"base: {Path(_local_base_model_dir()).as_posix()}\n"
             "task: moe_lora_routing\n"
             f"data: {{train: {c_posix}, format: chatml, val_split: 0.0, max_length: 64}}\n"
             "training: {\n"

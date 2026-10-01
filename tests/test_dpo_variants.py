@@ -22,6 +22,44 @@ from pydantic import ValidationError
 
 from soup_cli.config.schema import SoupConfig
 
+_LOCAL_BASE_DIR: str | None = None
+
+
+def _local_base_model_dir() -> str:
+    """A tiny GPT-2 + tokenizer built locally once per session (no download),
+    standing in for sshleifer/tiny-gpt2 -- #1356 found these real-trainer
+    tests pulling it from the Hub for nothing they check depends on real
+    pretrained weights."""
+    global _LOCAL_BASE_DIR
+    if _LOCAL_BASE_DIR is not None:
+        return _LOCAL_BASE_DIR
+    import tempfile
+
+    from tokenizers import ByteLevelBPETokenizer
+    from transformers import GPT2Config, GPT2LMHeadModel, PreTrainedTokenizerFast
+
+    bpe = ByteLevelBPETokenizer()
+    bpe.train_from_iterator(
+        [f"Q{i}? A{i} good. A{i} bad." for i in range(4)],
+        vocab_size=300,
+        min_frequency=1,
+        special_tokens=["<|endoftext|>"],
+    )
+    tok = PreTrainedTokenizerFast(
+        tokenizer_object=bpe,
+        eos_token="<|endoftext|>",
+        bos_token="<|endoftext|>",
+        pad_token="<|endoftext|>",
+    )
+    config = GPT2Config(vocab_size=len(tok), n_positions=128, n_embd=32, n_layer=2, n_head=4)
+    model = GPT2LMHeadModel(config)
+    out_dir = tempfile.mkdtemp(prefix="soup-test-tiny-gpt2-")
+    model.save_pretrained(out_dir)
+    tok.save_pretrained(out_dir)
+    _LOCAL_BASE_DIR = out_dir
+    return out_dir
+
+
 # ─── Schema bounds ──────────────────────────────────────────────────────────
 
 
@@ -611,8 +649,9 @@ class TestRealTrainerBetaSchedule:
             for i in range(4)
         ]
         out_dir = (tmp_path / f"out_dpo_{sched}").as_posix()
+        base_dir = Path(_local_base_model_dir()).as_posix()
         cfg = load_config_from_string(f"""
-base: sshleifer/tiny-gpt2
+base: {base_dir}
 task: dpo
 data:
   train: x.jsonl
@@ -648,7 +687,7 @@ def _run_schedule(tmp_path, task, training):
         {"prompt": f"Q{i}?", "chosen": f"A{i} good.", "rejected": f"A{i} bad."} for i in range(4)
     ]
     cfg = load_config_from_string(
-        "base: sshleifer/tiny-gpt2\n"
+        f"base: {Path(_local_base_model_dir()).as_posix()}\n"
         f"task: {task}\n"
         "data:\n  train: x.jsonl\n  max_length: 64\n"
         "training:\n  epochs: 2\n  batch_size: 2\n  quantization: none\n  lr: 1e-4\n"

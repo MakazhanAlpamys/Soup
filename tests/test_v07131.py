@@ -19,6 +19,45 @@ def _plain(text: str) -> str:
     """Return ANSI-stripped, whitespace-collapsed CLI output."""
     return " ".join(_ANSI_RE.sub("", text).split())
 
+
+_LOCAL_BASE_DIR: str | None = None
+
+
+def _local_base_model_dir() -> str:
+    """A tiny GPT-2 + tokenizer built locally once per session (no download),
+    standing in for hf-internal-testing/tiny-random-gpt2 -- #1356 found the
+    one test here that actually calls wrapper.setup() (building a real
+    trainer) pulling it from the Hub for nothing that test checks depends on
+    real pretrained weights."""
+    global _LOCAL_BASE_DIR
+    if _LOCAL_BASE_DIR is not None:
+        return _LOCAL_BASE_DIR
+    import tempfile
+
+    from tokenizers import ByteLevelBPETokenizer
+    from transformers import GPT2Config, GPT2LMHeadModel, PreTrainedTokenizerFast
+
+    bpe = ByteLevelBPETokenizer()
+    bpe.train_from_iterator(
+        ["hi there friend", "hello world", "the quick brown fox"],
+        vocab_size=300,
+        min_frequency=1,
+        special_tokens=["<|endoftext|>"],
+    )
+    tok = PreTrainedTokenizerFast(
+        tokenizer_object=bpe,
+        eos_token="<|endoftext|>",
+        bos_token="<|endoftext|>",
+        pad_token="<|endoftext|>",
+    )
+    config = GPT2Config(vocab_size=len(tok), n_positions=128, n_embd=32, n_layer=2, n_head=4)
+    model = GPT2LMHeadModel(config)
+    out_dir = tempfile.mkdtemp(prefix="soup-test-tiny-gpt2-")
+    model.save_pretrained(out_dir)
+    tok.save_pretrained(out_dir)
+    _LOCAL_BASE_DIR = out_dir
+    return out_dir
+
 # ---------------------------------------------------------------------------
 # Shared test doubles
 # ---------------------------------------------------------------------------
@@ -598,12 +637,14 @@ class TestOnlineDpoWrapper:
         # Parametrized over trl version by the wrapper itself: the seam evaluator
         # is adapted to judge= (trl 0.19.x) or reward_funcs= (trl 1.x). Builds a
         # real trainer on either.
+        from pathlib import Path
+
         import soup_cli.trainer.online_dpo as od
         from soup_cli.config.loader import load_config_from_string
         from soup_cli.trainer.online_dpo import OnlineDPOTrainerWrapper
 
         cfg = load_config_from_string(
-            "base: hf-internal-testing/tiny-random-gpt2\ntask: online_dpo\n"
+            f"base: {Path(_local_base_model_dir()).as_posix()}\ntask: online_dpo\n"
             "data:\n  train: x.jsonl\n  max_length: 64\n"
             "training:\n  online_dpo_judge: \"ollama://m\"\n"
             "  epochs: 1\n  batch_size: 2\n  online_dpo_max_new_tokens: 8\n"

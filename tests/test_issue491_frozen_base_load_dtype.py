@@ -23,6 +23,43 @@ import pytest
 
 from soup_cli.config.schema import SoupConfig
 
+_LOCAL_BASE_DIR: str | None = None
+
+
+def _local_base_model_dir() -> str:
+    """A tiny GPT-2 + tokenizer built locally once per session (no download),
+    standing in for hf-internal-testing/tiny-random-gpt2 -- #1356 found this
+    real-model test pulling it from the Hub for nothing it checks depends on
+    real pretrained weights."""
+    global _LOCAL_BASE_DIR
+    if _LOCAL_BASE_DIR is not None:
+        return _LOCAL_BASE_DIR
+    import tempfile
+
+    from tokenizers import ByteLevelBPETokenizer
+    from transformers import GPT2Config, GPT2LMHeadModel, PreTrainedTokenizerFast
+
+    bpe = ByteLevelBPETokenizer()
+    bpe.train_from_iterator(
+        ["hi there friend", "hello world", "the quick brown fox"],
+        vocab_size=300,
+        min_frequency=1,
+        special_tokens=["<|endoftext|>"],
+    )
+    tok = PreTrainedTokenizerFast(
+        tokenizer_object=bpe,
+        eos_token="<|endoftext|>",
+        bos_token="<|endoftext|>",
+        pad_token="<|endoftext|>",
+    )
+    config = GPT2Config(vocab_size=len(tok), n_positions=128, n_embd=32, n_layer=2, n_head=4)
+    model = GPT2LMHeadModel(config)
+    out_dir = tempfile.mkdtemp(prefix="soup-test-tiny-gpt2-")
+    model.save_pretrained(out_dir)
+    tok.save_pretrained(out_dir)
+    _LOCAL_BASE_DIR = out_dir
+    return out_dir
+
 
 class _FakeCuda:
     """Stands in for ``torch.cuda`` (mirrors tests/test_issue385_stream_dtype.py's
@@ -193,7 +230,7 @@ class TestRewardModelHeadUpcastToFp32:
         from soup_cli.trainer.reward_model import RewardModelTrainerWrapper
 
         cfg = SoupConfig(
-            base="hf-internal-testing/tiny-random-gpt2",
+            base=_local_base_model_dir(),
             task="reward_model",
             data={"train": "./data.jsonl"},
             training={"quantization": "none"},

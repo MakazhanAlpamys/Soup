@@ -38,7 +38,45 @@ from soup_cli.utils.agent_forge import (
 )
 from tests.conftest import strip_ansi
 
-_BASE = "hf-internal-testing/tiny-random-LlamaForCausalLM"
+_LOCAL_BASE_DIR: str | None = None
+
+
+def _local_base_model_dir() -> str:
+    """A tiny Llama causal LM + tokenizer built locally once per session (no
+    download), standing in for hf-internal-testing/tiny-random-LlamaForCausalLM
+    -- #1356 found this pulling it from the Hub for a dry-run plan and a
+    tokenizer whose chat_template gets overwritten immediately after load."""
+    global _LOCAL_BASE_DIR
+    if _LOCAL_BASE_DIR is not None:
+        return _LOCAL_BASE_DIR
+    import tempfile
+
+    from tokenizers import ByteLevelBPETokenizer
+    from transformers import LlamaConfig, LlamaForCausalLM, PreTrainedTokenizerFast
+
+    bpe = ByteLevelBPETokenizer()
+    bpe.train_from_iterator(
+        ["hi there friend", "hello world", "the quick brown fox"],
+        vocab_size=300,
+        min_frequency=1,
+        special_tokens=["<eos>"],
+    )
+    tok = PreTrainedTokenizerFast(tokenizer_object=bpe, eos_token="<eos>", pad_token="<eos>")
+    config = LlamaConfig(
+        hidden_size=32,
+        intermediate_size=64,
+        num_hidden_layers=2,
+        num_attention_heads=4,
+        num_key_value_heads=2,
+        vocab_size=len(tok),
+        max_position_embeddings=128,
+    )
+    model = LlamaForCausalLM(config)
+    out_dir = tempfile.mkdtemp(prefix="soup-test-tiny-llama-")
+    model.save_pretrained(out_dir)
+    tok.save_pretrained(out_dir)
+    _LOCAL_BASE_DIR = out_dir
+    return out_dir
 _WEATHER_TOOL = {
     "type": "function",
     "function": {
@@ -127,11 +165,12 @@ def test_the_printed_recipe_dry_runs_with_the_synthesised_rows(tmp_path, monkeyp
         encoding="utf-8",
     )
     runner = CliRunner()
-    planned = runner.invoke(app, ["agent", "train", "--spec", "openapi.yaml", "--base", _BASE])
+    base = Path(_local_base_model_dir()).as_posix()
+    planned = runner.invoke(app, ["agent", "train", "--spec", "openapi.yaml", "--base", base])
     assert planned.exit_code == 0, planned.output
     assert "format: tool-calling" in planned.output
     Path("agent_train.yaml").write_text(
-        f"base: {_BASE}\ntask: sft\ndata:\n  train: agent_dataset.jsonl\n"
+        f"base: {base}\ntask: sft\ndata:\n  train: agent_dataset.jsonl\n"
         "  format: tool-calling\n  val_split: 0.0\n"
         "training:\n  epochs: 3\n  lr: 2.0e-5\n  batch_size: auto\n"
         "output: ./agent_train_output\n",
@@ -458,7 +497,7 @@ def test_the_trajectory_renders_in_source_order_through_arrow():
 
     from soup_cli.data.sft_format import build_format_row
 
-    tokenizer = AutoTokenizer.from_pretrained(_BASE)
+    tokenizer = AutoTokenizer.from_pretrained(_local_base_model_dir())
     tokenizer.chat_template = _LLAMA_STYLE_TEMPLATE
     data_cfg = SimpleNamespace(
         chat_template=None,
