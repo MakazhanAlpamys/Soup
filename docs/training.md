@@ -838,10 +838,14 @@ training:
     simpo: 0.4
 ```
 
-The combine wrapper reads policy + reference summed log-probs from the inner
-TRL trainer's per-batch inputs and computes a true weighted sum via the
-in-tree `compute_dpo_term` / `compute_simpo_term` / `compute_orpo_term` /
-`compute_ipo_term` kernels. BCO cannot be mixed with paired losses (data
+The combine wrapper computes a weighted sum via the in-tree
+`compute_dpo_term` / `compute_simpo_term` / `compute_orpo_term` /
+`compute_ipo_term` kernels. **On trl 0.29 no preference trainer puts the
+per-sequence log-probs those kernels need on the batch**, so a blend currently
+stops at the first step and names the terms it could not compute. Until the
+wrapper reads the logits from the trainer's own forward pass, do not configure
+`preference_loss_weights`: remove it and set `training.preference_loss` to the
+single loss you want. BCO cannot be mixed with paired losses (data
 format incompatible — rejected at config load).
 
 
@@ -1152,11 +1156,11 @@ training:
   preference_loss_weights: {dpo: 0.7, bco: 0.3}
 ```
 
-Schema validates 2–5 entries summing to 1. Live runtime weighted-loss
-combination is wired in v0.40.1; v0.40.0 fails fast with an actionable
-`NotImplementedError` if you actually try to train (same stub-then-live
-pattern as v0.27.0 MII / v0.37.0 multipack / v0.38.0 quant menu /
-v0.39.0 ReLoRA).
+Schema validates 2–5 entries summing to 1, and rejects `bco` mixed with a
+paired loss at config load. The runtime blend is **not** live on trl 0.29: the
+config loads, then training stops at the first step naming the terms it could
+not compute (see [Weighted Multi-Objective Preference Loss](#weighted-multi-objective-preference-loss)).
+Set `training.preference_loss` for a single loss.
 
 
 ## GRPO Training (Reasoning)

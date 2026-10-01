@@ -934,8 +934,91 @@ class TestTrueWeightedCombine:
         with pytest.raises(ValueError) as excinfo:
             trainer.compute_loss(model=None, inputs=inputs)
         message = str(excinfo.value)
-        assert "cannot compute dpo" in message, message
-        assert "computed: simpo" in message, message
+        # Pinned whole, not "cannot compute dpo": that substring also occurs in
+        # "cannot compute dpo, simpo", so a mutation that named every requested
+        # term as missing would survive a looser assertion (#1425 review).
+        assert "cannot compute dpo on this step (computed: simpo)" in message, message
+
+
+class TestOnARealTrlTrainer:
+    """The stub trainer above is why this passed: it is the only way the wrapper
+    sees log-probs. On a real trl 0.29 trainer the batch carries none, so a blend
+    must stop instead of training the primary loss alone (#1425 review).
+
+    On `main` these fail, because training completes: the loss is
+    `0.7 * DPO` and the run reports success.
+    """
+
+    _WORDS = [
+        "<pad>", "<s>", "</s>", "<unk>", "what", "is", "one", "plus", "?",
+        "two", "three", "hello", "there", "hi", "no",
+    ]
+
+    def _tiny_model_dir(self, tmp_path):
+        """A random-init 2-layer Llama plus a WordLevel tokenizer (#1425 repro)."""
+        try:
+            from soup_cli.trainer._trl_compat import resolve_trl_symbol
+
+            resolve_trl_symbol("DPOConfig")
+        except Exception as exc:  # noqa: BLE001 — a broken trl is not a failure
+            pytest.skip(f"this environment cannot import a trl DPO config: {exc}")
+
+        import torch
+        from tokenizers import Tokenizer, models, pre_tokenizers
+        from transformers import (
+            LlamaConfig,
+            LlamaForCausalLM,
+            PreTrainedTokenizerFast,
+        )
+
+        base = tmp_path / "tiny"
+        words = list(self._WORDS)
+        raw = Tokenizer(
+            models.WordLevel(vocab={w: i for i, w in enumerate(words)}, unk_token="<unk>"),
+        )
+        raw.pre_tokenizer = pre_tokenizers.Whitespace()
+        tok = PreTrainedTokenizerFast(
+            tokenizer_object=raw, bos_token="<s>", eos_token="</s>",
+            pad_token="<pad>", unk_token="<unk>",
+        )
+        torch.manual_seed(0)
+        LlamaForCausalLM(LlamaConfig(
+            vocab_size=len(words), hidden_size=32, intermediate_size=64,
+            num_hidden_layers=2, num_attention_heads=2, num_key_value_heads=2,
+            pad_token_id=0, bos_token_id=1, eos_token_id=2,
+        )).save_pretrained(base)
+        tok.save_pretrained(base)
+        return base
+
+    @pytest.mark.parametrize(
+        "weights", ["{dpo: 0.7, simpo: 0.3}", "{simpo: 0.6, dpo: 0.4}"],
+    )
+    def test_a_blend_on_a_real_trainer_refuses_instead_of_training_one_loss(
+        self, tmp_path, monkeypatch, weights,
+    ):
+        from soup_cli.config.loader import load_config_from_string
+        from soup_cli.trainer.preference import PreferenceTrainerWrapper
+
+        monkeypatch.chdir(tmp_path)
+        base = self._tiny_model_dir(tmp_path)
+        cfg = load_config_from_string(
+            f"base: {base.as_posix()}\ntask: preference\n"
+            "data: {train: ./unused.jsonl, format: dpo, max_length: 64}\n"
+            "training:\n  epochs: 1\n  batch_size: 2\n  quantization: none\n"
+            f"  preference_loss_weights: {weights}\n"
+            "  lora: {r: 4, alpha: 8, dropout: 0.0}\noutput: ./out\n"
+        )
+        rows = [
+            {"prompt": "what is one plus one ?", "chosen": "two", "rejected": "three"},
+            {"prompt": "hello there", "chosen": "hi", "rejected": "no"},
+        ] * 2
+        wrapper = PreferenceTrainerWrapper(cfg, device="cpu")
+        wrapper.setup({"train": rows})
+        with pytest.raises(ValueError, match="cannot compute") as excinfo:
+            wrapper.train()
+        message = str(excinfo.value)
+        assert "dpo" in message and "simpo" in message, message
+        assert "preference_loss_weights" in message, message
 
 
 # ---------------------------------------------------------------------------

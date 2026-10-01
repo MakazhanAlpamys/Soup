@@ -330,8 +330,7 @@ def attach_weighted_preference_combine(trainer: object, weights: Mapping[str, fl
                 "underlying trl exposes no per-sequence log-probs on the batch, "
                 "so the blend cannot be evaluated; training would silently use "
                 "the primary loss alone. Remove training.preference_loss_weights "
-                "to train one loss, or set training.preference_loss to the loss "
-                "you want."
+                "and set training.preference_loss to the single loss you want."
             )
         if return_outputs:
             return blended, outputs
