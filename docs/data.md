@@ -527,21 +527,32 @@ soup data review prefs.jsonl --sample 10
 **Supported log formats:** `langchain`, `openai`, `soup-serve`
 **Supported signals:** `thumbs_up` (rating-based), `regenerations` (latest wins), `user_edit` (edited wins)
 
-**The `soup-serve` record shape.** `soup ingest` is the producer, and it writes
-a top-level `signal` in the canonical vocabulary, so its output feeds this
-command directly:
+**The `soup-serve` record shape.** The parser reads a top-level `signal` in the
+canonical vocabulary, falling back to a nested `feedback.rating` (`up` / `down`)
+for older logs:
 
 ```json
-{"id": "1", "prompt": "Q", "output": "Good", "signal": "thumbs_up"}
-{"id": "2", "prompt": "Q", "output": "Bad",  "signal": "thumbs_down"}
-{"id": "3", "prompt": "Q", "output": "Raw",  "signal": "user_edit", "edited_output": "Polished"}
+{"prompt": "Q", "output": "Good", "signal": "thumbs_up"}
+{"prompt": "Q", "output": "Bad",  "signal": "thumbs_down"}
+{"prompt": "Q", "output": "Raw",  "signal": "user_edit", "edited_output": "Polished"}
 ```
 
-`--signal user_edit` reads the edit from `edited_output`, `edited_response`, or
-a nested `feedback.edited_output`. A nested `feedback.rating` (`up` / `down`) is
-still read as a fallback for older logs. When traces are read but none pair, the
-command prints how many it read, which signal it wanted and which signals were
-present, instead of reporting a normal write of 0 pairs.
+Who writes what:
+
+- `soup ingest` is a producer. It writes `thumbs_up`, `thumbs_down` or `none`, under
+  the field name `trace_id` rather than `id`, so its output feeds this command
+  directly.
+- `user_edit` and `regenerated` rows come from **your own** pipeline. `signal:
+  user_edit` has to accompany the edit field: a record with `edited_output` but no
+  `signal` reads as "no trace carried a signal". The edit itself is read from
+  `edited_output`, `edited_response`, or a nested `feedback.edited_output`.
+- `soup serve --trace-log` records carry **no signal yet** (`ts`, `prompt`,
+  `response`, `latency_ms`, `tokens`), so a harvest of that directory reports the
+  diagnostic below rather than a silent 0.
+
+When traces are read but none pair, the command prints how many it read, which
+signal it wanted and which signals were present, instead of reporting a normal
+write of 0 pairs.
 
 Trace files are capped at 100,000 lines to prevent OOM on production logs. A PII warning panel appears on every run — redact sensitive fields before harvesting.
 

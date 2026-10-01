@@ -251,6 +251,76 @@ def test_an_empty_directory_is_not_reported_as_a_failed_harvest(tmp_path, monkey
     assert "built no pairs" not in text, text
 
 
+def test_a_serve_trace_log_with_no_signal_says_no_trace_carried_one(tmp_path, monkeypatch):
+    """`soup serve --trace-log` records ts/prompt/response/latency_ms/tokens only."""
+    from soup_cli.cli import app
+
+    runner = _runner(tmp_path, monkeypatch)
+    _write_jsonl(
+        tmp_path / "serve" / "t.jsonl",
+        [
+            {"ts": 1, "prompt": "Q", "response": "A", "latency_ms": 12, "tokens": 3},
+            {"ts": 2, "prompt": "Q2", "response": "B", "latency_ms": 9, "tokens": 2},
+        ],
+    )
+    result = runner.invoke(app, [
+        "data", "from-traces", "--logs", "serve", "--format", "soup-serve",
+        "--signal", "thumbs_up", "-o", "prefs.jsonl",
+    ])
+    text = " ".join(strip_ansi(result.output).split())
+    assert "Read 2 trace(s) but built no pairs for --signal thumbs_up" in text, text
+    assert "No trace carried a signal" in text, text
+    assert "Signals present" not in text, text
+
+
+def test_the_present_signals_list_never_names_none(tmp_path, monkeypatch):
+    from soup_cli.cli import app
+
+    runner = _runner(tmp_path, monkeypatch)
+    _write_jsonl(
+        tmp_path / "traces" / "t.jsonl",
+        [
+            {"id": "1", "prompt": "Q", "response": "A", "signal": "thumbs_up"},
+            {"id": "2", "prompt": "Q2", "response": "B"},
+        ],
+    )
+    result = runner.invoke(app, [
+        "data", "from-traces", "--logs", "traces", "--format", "soup-serve",
+        "--signal", "user_edit", "-o", "prefs.jsonl",
+    ])
+    text = " ".join(strip_ansi(result.output).split())
+    assert "Signals present: thumbs_up." in text, text
+
+
+def test_a_canonical_top_level_signal_beats_a_conflicting_feedback_rating(
+    tmp_path, monkeypatch,
+):
+    """Documented precedence: the top-level `signal` wins; feedback.rating is a fallback."""
+    from soup_cli.data.traces import parse_soup_serve
+
+    _runner(tmp_path, monkeypatch)
+    _write_jsonl(
+        tmp_path / "traces" / "t.jsonl",
+        [{"id": "1", "prompt": "Q", "response": "A",
+          "signal": "thumbs_up", "feedback": {"rating": "down"}}],
+    )
+    assert [t.signal for t in parse_soup_serve("traces")] == ["thumbs_up"]
+
+
+def test_a_whitespace_only_edit_is_not_an_edit(tmp_path, monkeypatch):
+    from soup_cli.data.traces import build_pairs, parse_soup_serve
+
+    _runner(tmp_path, monkeypatch)
+    _write_jsonl(
+        tmp_path / "edits" / "t.jsonl",
+        [{"id": "5", "prompt": "Q", "response": "Raw",
+          "signal": "user_edit", "edited_output": "   "}],
+    )
+    traces = list(parse_soup_serve("edits"))
+    assert traces[0].edited_output is None, traces
+    assert list(build_pairs(traces, signal="user_edit")) == []
+
+
 def test_the_issue_reproducer_runs_offline_in_a_fresh_cwd():
     """The issue's snippet, run in a temp dir that is left behind."""
     from soup_cli.cli import app

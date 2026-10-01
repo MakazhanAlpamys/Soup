@@ -2049,8 +2049,15 @@ def from_traces_cmd(
                 if signals
                 else "No trace carried a signal. "
             )
-            + "Check the record shape: `soup ingest` writes a top-level "
-            "`signal`, and `feedback.rating` is still read as a fallback.[/]"
+            # The top-level `signal` is a soup-serve-parser fact. The openai and
+            # langchain parsers key on `choices` / `feedback` and never read it,
+            # so naming it there would be advice the reader cannot act on.
+            + (
+                "Check the record shape: `soup ingest` writes a top-level "
+                "`signal`, and `feedback.rating` is still read as a fallback.[/]"
+                if format == "soup-serve"
+                else "Check the record shape against the format's parser.[/]"
+            )
         )
 
     if judge:
