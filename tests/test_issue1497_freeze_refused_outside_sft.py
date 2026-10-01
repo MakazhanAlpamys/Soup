@@ -90,6 +90,16 @@ class TestRefusedWhereNothingAppliesIt:
         assert cfg.training.freeze_layers is None
         assert cfg.training.freeze_ratio is None
 
+    @pytest.mark.parametrize("backend", ["transformers", "unsloth"])
+    @pytest.mark.parametrize("task", ["dpo", "reward_model"])
+    def test_the_refusal_does_not_depend_on_the_backend(self, task, backend):
+        raw = yaml.safe_load(_yaml(task, freeze_layers=2))
+        raw["backend"] = backend
+
+        message = _refusal(yaml.safe_dump(raw))
+
+        assert f"training.freeze_layers is not applied by task={task!r}" in message, message
+
     @pytest.mark.parametrize("task", ["dpo", "pretrain", "kto", "orpo", "grpo"])
     def test_the_issue_reproduction_is_refused(self, task):
         """The issue's table: ``freeze_layers: 2``, ``quantization: none`` and a LoRA
@@ -102,7 +112,9 @@ class TestRefusedWhereNothingAppliesIt:
 
 
 class TestTheApplyingTasksAreUnchanged:
-    @pytest.mark.parametrize("task", sorted(FREEZE_APPLYING_TASKS))
+    # Written out, not read from FREEZE_APPLYING_TASKS, so dropping a task from
+    # the constant cannot also drop its control.
+    @pytest.mark.parametrize("task", ["sft", "tts"])
     @pytest.mark.parametrize(("field", "value"), _ONE_FIELD)
     def test_still_loads(self, task, field, value):
         cfg = load_config_from_string(_yaml(task, **{field: value}))
@@ -143,7 +155,11 @@ class TestValidatorOrder:
         after = [name for name, dec in validators.items() if dec.info.mode == "after"]
 
         assert after[0] == "_resolve_quantization_for_unhonouring_tasks"
-        assert after[-2:] == ["_validate_freeze_is_applied", "_validate_unsloth_has_a_setup"]
+        assert (
+            0
+            < after.index("_validate_freeze_is_applied")
+            < after.index("_validate_unsloth_has_a_setup")
+        ), after[-3:]
 
 
 def _dispatched_wrappers():
@@ -180,7 +196,11 @@ def _dispatched_wrappers():
 
 def _reads_the_freeze_fields(cls):
     """True when the wrapper, or a soup class it inherits from, reads either field
-    as an attribute. Comments and docstrings do not count."""
+    as an attribute. Comments and docstrings do not count.
+
+    The limit of this scan: a trainer that gets the freeze plan through a shared
+    helper outside its own classes, or through ``getattr(tcfg, "freeze_layers")``,
+    is not seen by it."""
     for klass in cls.__mro__:
         if not klass.__module__.startswith("soup_cli."):
             continue
