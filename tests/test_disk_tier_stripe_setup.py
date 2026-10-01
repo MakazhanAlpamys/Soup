@@ -115,8 +115,8 @@ class TestTheDiskPreflight:
         """A striped cache writes to several drives; the headline figure must add them up."""
         recorder = io.StringIO()
         monkeypatch.setattr(
-        stream_setup, "console", Console(file=recorder, width=200, color_system=None)
-    )
+            stream_setup, "console", Console(file=recorder, width=200, color_system=None)
+        )
         monkeypatch.setattr(stream_setup, "_disk_volume", lambda path: (hash(path), 10**15))
         stream_setup._render_stream_disk_preflight(
             source_bytes=0, materialized_copy_bytes=0, materialize_bytes=0,

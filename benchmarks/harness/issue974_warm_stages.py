@@ -110,11 +110,13 @@ def _install_async_timers(source: Any, pools: List[Any], clock: StageClock) -> N
     # One bracket per LAYER read, on the instance: `_run` looks `_read_layer` up
     # on `self`, so this sees the whole K-range read as one number rather than
     # K overlapping per-range times summed to more than the wall clock.
-    pools = getattr(source, "_pools", {})
-    if len(pools) > 1:
+    # `pools` (the parameter) is the list of LayerBufferPools, whose events the drain
+    # timer below replaces; `readers` is the source's per-drive reader dict.
+    readers = getattr(source, "_pools", {})
+    if len(readers) > 1:
         raise SystemExit(
             "issue974_warm_stages.py times ONE drive's reads; this source is striped over "
-            f"{len(pools)} drives (R4), and waiting inside the bracket would serialise them"
+            f"{len(readers)} drives (R4), and waiting inside the bracket would serialise them"
         )
     real_read_layer = source._read_layer
 
@@ -127,7 +129,7 @@ def _install_async_timers(source: Any, pools: List[Any], clock: StageClock) -> N
             # outside its lock, restores the pre-R4 blocking read this stage measures: a
             # failed range still raises out of `_read_layer`, as `_RangeReaders.run` did.
             if outcomes is not None:
-                pools[source._root_of[idx]].wait(outcomes)
+                readers[source._root_of[idx]].wait(outcomes)
             return outcomes
         finally:
             clock.add("reader_read", time.perf_counter() - started)

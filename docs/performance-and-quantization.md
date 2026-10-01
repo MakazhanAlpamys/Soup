@@ -830,7 +830,9 @@ the account running Soup (mode 0700 on POSIX; on Windows a protected ACL for tha
 SYSTEM, replacing the inherited one, which on a data drive typically lets every signed-in
 account modify files), checked again on every reuse, and never followed if it is a link or
 junction; a folder Soup cannot make private refuses the run by name. Soup never deletes anything
-inside a stripe folder.
+inside a stripe folder. Soup makes only its own folder owner-only, so also make the stripe ROOT
+itself writable only by your own account (on a default Windows data drive other accounts can
+modify it).
 
 It costs one more layer of host staging per extra drive: `stream_read_ahead` defaults to N + 1.
 A configured value of 2 counts as the default and is raised the same way; any other value is

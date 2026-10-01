@@ -260,8 +260,57 @@ def _sddl_aces(sddl):
 
 
 def _trustees(path):
-    """Who the DACL of ``path`` names: SIDs, or SDDL aliases such as SY."""
+    """Who the DACL of ``path`` names: SIDs, or SDDL aliases such as SY and LA."""
     return {ace.rsplit(";", 1)[1] for ace in _sddl_aces(owner_only_dir._win_dacl_sddl(path))}
+
+
+def _win_sid_api():
+    """advapi32 prototypes for the SID comparison below, on a private handle (test-side only)."""
+    import ctypes
+    from ctypes import wintypes
+
+    advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    advapi32.ConvertStringSidToSidW.argtypes = [
+        wintypes.LPCWSTR, ctypes.POINTER(ctypes.c_void_p)
+    ]
+    advapi32.ConvertStringSidToSidW.restype = wintypes.BOOL
+    advapi32.EqualSid.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+    advapi32.EqualSid.restype = wintypes.BOOL
+    kernel32.LocalFree.argtypes = [ctypes.c_void_p]
+    kernel32.LocalFree.restype = ctypes.c_void_p
+    return ctypes, advapi32, kernel32
+
+
+def _win_same_sid(left, right):
+    """True when two trustee strings name the same account, whatever their spelling.
+
+    The SDDL a DACL is rendered to writes well-known SIDs as aliases (SYSTEM as ``SY``, the
+    RID-500 built-in Administrator as ``LA``), so ``S-1-5-21-...-500`` and ``LA`` are one
+    trustee that no string comparison can match. ``ConvertStringSidToSidW`` accepts both
+    spellings and ``EqualSid`` compares the binary SIDs."""
+    ctypes, advapi32, kernel32 = _win_sid_api()
+    sids = []
+    try:
+        for text in (left, right):
+            pointer = ctypes.c_void_p()
+            if not advapi32.ConvertStringSidToSidW(text, ctypes.byref(pointer)):
+                raise OSError(ctypes.get_last_error(), f"not a SID or SDDL alias: {text!r}")
+            sids.append(pointer)
+        return bool(advapi32.EqualSid(sids[0], sids[1]))
+    finally:
+        for pointer in sids:
+            kernel32.LocalFree(pointer)
+
+
+def _assert_only_owner_and_system(trustees, where):
+    """Every trustee is the current user or SYSTEM, and the current user is among them."""
+    me = owner_only_dir._win_current_user_sid()
+    strangers = sorted(
+        t for t in trustees if not (_win_same_sid(t, me) or _win_same_sid(t, "SY"))
+    )
+    assert not strangers, (strangers, where)
+    assert any(_win_same_sid(t, me) for t in trustees), (sorted(trustees), where)
 
 
 @pytest.mark.skipif(WINDOWS, reason="POSIX mode bits")
@@ -302,13 +351,36 @@ class TestOwnerOnlyOnPosix:
 
 @pytest.mark.skipif(not WINDOWS, reason="Windows ACLs")
 class TestOwnerOnlyOnWindows:
+    def test_the_sid_comparison_reads_aliases_and_rejects_strangers(self):
+        """The helper the DACL assertions stand on: a SID and its alias are one trustee."""
+        assert _win_same_sid("SY", "S-1-5-18")
+        assert _win_same_sid("S-1-5-32-544", "BA")  # the built-in Administrators group
+        assert _win_same_sid("S-1-5-18", "S-1-5-18")
+        assert not _win_same_sid("SY", "BA")
+        assert not _win_same_sid("SY", owner_only_dir._win_current_user_sid())
+
+    def test_the_rid_500_account_is_read_through_its_la_alias(self, monkeypatch):
+        """A CI account that is the built-in Administrator (RID 500) has its own SID rendered
+        as ``LA`` by the SDDL a DACL is read back as; that is still the current user."""
+        me = owner_only_dir._win_current_user_sid()
+        rid_500 = me.rsplit("-", 1)[0] + "-500"
+        if not _win_same_sid("LA", rid_500):
+            pytest.skip("LA is not this account's domain RID-500 here (a domain-joined box)")
+        monkeypatch.setattr(owner_only_dir, "_win_current_user_sid", lambda: rid_500)
+        _assert_only_owner_and_system({"LA", "SY"}, "RID 500 as LA")
+
+    def test_an_alias_form_of_the_current_user_passes_and_a_stranger_does_not(self, monkeypatch):
+        monkeypatch.setattr(owner_only_dir, "_win_current_user_sid", lambda: "S-1-5-32-544")
+        _assert_only_owner_and_system({"BA", "SY"}, "alias form")
+        with pytest.raises(AssertionError):
+            _assert_only_owner_and_system({"BA", "SY", "AU"}, "a stranger")
+        with pytest.raises(AssertionError):
+            _assert_only_owner_and_system({"SY"}, "the owner missing")
+
     def _assert_owner_only(self, path):
         sddl = owner_only_dir._win_dacl_sddl(path)
         assert sddl.startswith("D:P"), sddl  # protected: nothing inherited from the drive
-        allowed = {owner_only_dir._win_current_user_sid(), "SY"}
-        trustees = {ace.rsplit(";", 1)[1] for ace in _sddl_aces(sddl)}
-        assert trustees <= allowed | {"S-1-5-18"}, sddl
-        assert owner_only_dir._win_current_user_sid() in trustees, sddl
+        _assert_only_owner_and_system(_trustees(path), sddl)
         assert all(ace.startswith("A;") for ace in _sddl_aces(sddl)), sddl
 
     def test_a_new_folder_carries_a_protected_owner_only_dacl(self, layout):
@@ -317,8 +389,8 @@ class TestOwnerOnlyOnWindows:
         folder = _folder(out, stripe)
         self._assert_owner_only(folder)
         # Files Soup writes there inherit it: nothing but the owner and SYSTEM.
-        trustees = _trustees(layer_paths(out, _idx(out))[1])
-        assert trustees <= {owner_only_dir._win_current_user_sid(), "SY", "S-1-5-18"}, trustees
+        shard = layer_paths(out, _idx(out))[1]
+        _assert_only_owner_and_system(_trustees(shard), shard)
 
     def test_a_reused_folder_and_what_it_holds_are_restricted_again(self, layout):
         """A folder made by plain mkdir inherits the root's ACL (on a data drive that grants
@@ -333,8 +405,7 @@ class TestOwnerOnlyOnWindows:
         assert not owner_only_dir._win_dacl_sddl(folder).startswith("D:P")
         shard_checkpoint(src, out, dtype="float32", stripe_roots=(stripe,))
         self._assert_owner_only(folder)
-        trustees = _trustees(child)
-        assert trustees <= {owner_only_dir._win_current_user_sid(), "SY", "S-1-5-18"}, trustees
+        _assert_only_owner_and_system(_trustees(child), child)
 
     def test_a_folder_owned_by_another_account_is_refused_by_name(self, layout, monkeypatch):
         src, out, stripe = layout
