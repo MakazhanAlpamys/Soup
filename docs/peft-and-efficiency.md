@@ -517,6 +517,8 @@ training:
 
 Works with and without LoRA. When used with LoRA, LoRA is applied only to unfrozen layers.
 
+Only `task: sft` and `task: tts` apply these two fields. On any other task the config is refused at load, naming the field and the task, since that trainer would ignore them and train every layer: use `task: sft`, or remove the key.
+
 ## LISA — Layerwise Importance Sampling (v0.71.34)
 
 LISA (Layerwise Importance Sampled AdamW, [arXiv:2403.17919](https://arxiv.org/abs/2403.17919)) targets full-fine-tuning quality at LoRA-like memory. **Measured at 7B+, it delivers the first half and not the second** — see [what it actually costs](#what-lisa-actually-costs-measured-at-3b-and-8b) below before choosing it over LoRA. Instead of picking layers once (that's Spectrum's static `unfrozen_parameters`), LISA re-samples a small random set of decoder layers **every N steps** and freezes the rest; the input embeddings, the LM head, and the final norm stay trainable throughout by default (set `lisa_train_embeddings: false` to freeze that group too — see [the memory trade-off](#reclaiming-the-always-on-overhead-lisa_train_embeddings) below).
