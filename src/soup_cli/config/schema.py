@@ -4685,6 +4685,10 @@ _QUANTIZATION_UNHONOURED_TASKS = frozenset({
 #: ``sft.py`` and ``pretrain.py``. Everywhere else the field was accepted and
 #: never applied.
 _MOE_EXPERT_KNOB_TASKS = frozenset({"sft", "tts"})
+#: #1497 — the tasks whose trainer calls ``freeze_model_layers``: sft.py's
+#: ``_setup_transformers``, which ``tts`` inherits. Every other wrapper ignores
+#: ``freeze_layers`` / ``freeze_ratio``, so they are refused there at load.
+FREEZE_LAYER_TASKS: frozenset[str] = frozenset({"sft", "tts"})
 _MOE_AUX_LOSS_TASKS = frozenset({"sft", "tts", "pretrain"})
 
 #: #1264 — the tasks whose trainer has an unsloth setup: a ``_setup_unsloth`` on
@@ -7840,6 +7844,26 @@ class SoupConfig(BaseModel):
                 "cache). Set data.val_split above 0, or remove training.eval_steps "
                 "(#1223)"
             )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_freeze_reaches_a_trainer(self) -> "SoupConfig":
+        """#1497 — ``freeze_layers`` / ``freeze_ratio`` loaded on every task, but
+        only :data:`FREEZE_LAYER_TASKS` apply them: anywhere else the run trained
+        at full depth with no message. Refuse them there, naming the field, the
+        task and the fix. Before ``_validate_unsloth_has_a_setup``, which #1372
+        pins last, since this refusal holds on every backend."""
+        if self.task in FREEZE_LAYER_TASKS:
+            return self
+        for field in ("freeze_layers", "freeze_ratio"):
+            value = getattr(self.training, field)
+            if value is not None:
+                raise ValueError(
+                    f"training.{field}={value!r} is not applied by task={self.task!r}: "
+                    f"only {sorted(FREEZE_LAYER_TASKS)} freeze layers, so this run "
+                    "would train every layer. Use task: sft, or remove "
+                    f"training.{field}."
+                )
         return self
 
     @model_validator(mode="after")
