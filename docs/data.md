@@ -997,7 +997,11 @@ soup data decontaminate --input training.jsonl --benchmarks mmlu,gsm8k,humaneval
 contains allowlisted labels only and now requires that file; names alone do not
 download or bundle benchmark corpora. This is a breaking refusal for the formerly
 silent `data score -b ...` path (#1448). Use `--benchmark-file` with or without
-labels. Its JSONL is bounded and cwd-contained by the shared loader, with strict
+labels. With a file, labels are **validated only**: they do not select or filter
+its rows, and the command prints a note saying so. All supplied file texts enter
+the same comparison corpus, so omitting labels or changing one valid label to
+another does not change the removal count. The file's JSONL is bounded and
+cwd-contained by the shared loader, with strict
 parsing: malformed/non-object rows, empty files and rows without usable 8-gram
 text are refused before the scorecard is printed. Text comes from `text`,
 `content`, or `messages[].content`, via the shared extractor. The fixed 8-gram

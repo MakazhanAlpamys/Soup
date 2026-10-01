@@ -48,7 +48,10 @@ def score(
     input: str = typer.Option(..., "--input", "-i", help="JSONL input under cwd."),
     benchmarks: Optional[str] = typer.Option(
         None, "--benchmarks", "-b",
-        help="Benchmark labels (e.g. mmlu,gsm8k); requires --benchmark-file, corpora not bundled.",
+        help=(
+            "Benchmark labels (e.g. mmlu,gsm8k), validated only; they do not select or filter "
+            "--benchmark-file texts. Requires --benchmark-file; corpora are not bundled."
+        ),
     ),
     benchmark_file: Optional[str] = typer.Option(
         None, "--benchmark-file",
@@ -99,6 +102,13 @@ def score(
         except (TypeError, ValueError, FileNotFoundError, OSError) as exc:
             _exit(f"--benchmark-file: {exc}")
         console.print(f"[cyan]Loaded {len(benchmark_texts)} operator-supplied benchmark texts[/]")
+        if bench_list:
+            console.print(
+                "[yellow]Note:[/] "
+                f"--benchmarks labels ({', '.join(bench_list)}) are validated only; "
+                "they do not select or filter comparison texts. "
+                "All --benchmark-file texts are compared."
+            )
 
     try:
         report = compute_scorecard(

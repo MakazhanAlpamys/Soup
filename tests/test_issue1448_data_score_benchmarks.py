@@ -113,6 +113,35 @@ def test_unknown_label_still_fails_with_a_corpus(score_input, tmp_path):
     assert "unknown benchmark" in _plain(result)
 
 
+def test_help_explains_labels_do_not_select_comparison_texts():
+    result = CliRunner().invoke(app, ["data", "score", "--help"])
+    assert result.exit_code == 0, result.output
+    output = _plain(result)
+    assert "validated only" in output
+    assert "do not select or filter" in output
+
+
+@pytest.mark.parametrize("label", ["gsm8k", "mmlu"])
+def test_labels_with_file_report_validation_only_without_selecting_texts(
+    score_input, tmp_path, label
+):
+    bench = _file(tmp_path, [{"text": CORPUS}])
+    result = _score(score_input, "-b", label, "--benchmark-file", str(bench))
+    assert result.exit_code == 0, result.output
+    output = _plain(result)
+    assert f"--benchmarks labels ({label}) are validated only" in output
+    assert "do not select or filter" in output
+    assert re.search(r"Decontaminated\s+1", output)
+
+
+def test_file_without_labels_does_not_print_a_label_note(score_input, tmp_path):
+    bench = _file(tmp_path, [{"text": CORPUS}])
+    result = _score(score_input, "--benchmark-file", str(bench))
+    assert result.exit_code == 0, result.output
+    assert "validated only" not in _plain(result)
+    assert re.search(r"Decontaminated\s+1", _plain(result))
+
+
 @pytest.mark.parametrize("bad_row", ["not-json", "[]", '{"number": 42}'])
 def test_partially_unusable_corpus_cannot_report_a_clean_result(score_input, tmp_path, bad_row):
     bench = _file(tmp_path, [{"text": CORPUS}])
