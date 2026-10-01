@@ -821,7 +821,7 @@ How the string scorers read an output:
 | `scoring` | Scores | `expected: "4"` vs `The answer is 4.` | vs `14` |
 |---|---|---|---|
 | `answer` | The final answer each side states, read with the parser GRPO's `accuracy` reward uses (`#### 4`, `\boxed{4}`, `The answer is 4.`); numbers compare by value | match | no match |
-| `contains` | `expected` as a whole alphanumeric-bounded token, case-insensitive | match | no match |
+| `contains` | `expected` as a whole alphanumeric-bounded token, case-insensitive via `str.lower()` on both sides (so `istanbul` does not match `İstanbul`, nor `s` match `ſ`) | match | no match |
 | `exact` | The whole stripped output, case-insensitive | no match | no match |
 
 `answer` refuses, at load time, an `expected` that states no single answer (a multi-line
