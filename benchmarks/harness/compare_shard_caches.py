@@ -66,10 +66,17 @@ def tensor_digests(path: str) -> Dict[str, Dict[str, Any]]:
 def file_pairs(single: str, striped: str) -> List[Tuple[str, str, str]]:
     with open(os.path.join(striped, "index.json"), encoding="utf-8") as handle:
         index = json.load(handle)
-    # Mirrors soup_cli.utils.layer_shard.stripe_dirs: root 0 is the --shards folder, stripe
-    # root k holds a per-model folder named like it.
+    # Root 0 is the --shards folder; stripe root k holds this cache's own folder, named by
+    # soup_cli.utils.stripe_roots.stripe_folder_name (slug + hash of the primary cache's
+    # realpath, R4 fix wave). A cache sharded before that change used the bare slug — the
+    # gate's caches did — so that spelling is the fallback when the new one is absent.
+    from soup_cli.utils.stripe_roots import stripe_folder_name
+
     slug = os.path.basename(os.path.normpath(striped))
-    roots = [striped] + [os.path.join(root, slug) for root in index.get("stripe_roots") or []]
+    roots = [striped]
+    for root in index.get("stripe_roots") or []:
+        folder = os.path.join(root, stripe_folder_name(striped))
+        roots.append(folder if os.path.isdir(folder) else os.path.join(root, slug))
     layer_roots = list(index.get("layer_roots") or [])
     pairs: List[Tuple[str, str, str]] = []
     for name in sorted(os.listdir(single)):

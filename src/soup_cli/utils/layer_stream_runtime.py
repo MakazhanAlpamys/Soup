@@ -2867,7 +2867,7 @@ def install_streaming(
             "no meta decoder weights found — the base was materialised, which "
             "defeats layer streaming entirely"
         )
-    _require_stripe_folders(index)
+    _require_stripe_folders(shard_dir, index)
     decoder_paths = layer_paths(shard_dir, index)
     layer_specs = RamSource.layer_specs_from_paths(decoder_paths)
     large_specs = large_layer_specs(shard_dir, index)
@@ -3176,22 +3176,39 @@ def _recover_before_refusing(console: Any) -> None:
         logger.warning("page-lock recovery failed before the refusal: %r", exc)
 
 
-def _require_stripe_folders(index: Any) -> None:
-    """A striped cache whose stripe folder is gone: refuse by name, not FileNotFoundError."""
-    from soup_cli.utils.stripe_roots import STRIPE_DIRS_ENV
+def _require_stripe_folders(shard_dir: str, index: Any) -> None:
+    """Every stripe folder a striped cache reads from is there and is a real folder.
+
+    Refused by name before any header is read: a missing root (an unmounted drive), a missing
+    per-model folder under a present root, and a link or junction at the folder, which would
+    send every read somewhere the cache check never looked.
+    """
+    from soup_cli.utils.layer_shard import stripe_dirs
+    from soup_cli.utils.stripe_roots import STRIPE_DIRS_ENV, stripe_folder_problem
 
     placement = tuple(getattr(index, "layer_roots", ()) or ())
-    for position, root in enumerate(tuple(getattr(index, "stripe_roots", ()) or ()), start=1):
-        if os.path.isdir(root):
-            continue
+    roots = tuple(getattr(index, "stripe_roots", ()) or ())
+    folders = stripe_dirs(shard_dir, roots)[1:]
+    for position, (root, folder) in enumerate(zip(roots, folders), start=1):
         layers = [idx for idx, owner in enumerate(placement) if owner == position]
         shown = f"{layers[:8]}{' ...' if len(layers) > 8 else ''}"
-        raise RuntimeError(
-            f"layer streaming's cache keeps decoder layers {shown} on the stripe root {root} "
-            f"(from {STRIPE_DIRS_ENV}), and that folder is not there — a drive that is not "
-            f"mounted, or a drive letter that changed. Reconnect it, or unset "
-            f"{STRIPE_DIRS_ENV} and let Soup re-shard to one root."
-        )
+        if not os.path.isdir(root):
+            raise RuntimeError(
+                f"layer streaming's cache keeps decoder layers {shown} on the stripe root "
+                f"{root} (from {STRIPE_DIRS_ENV}), and that folder is not there — a drive "
+                f"that is not mounted, or a drive letter that changed. Reconnect it, or unset "
+                f"{STRIPE_DIRS_ENV} and let Soup re-shard to one root."
+            )
+        problem = stripe_folder_problem(folder, root)
+        if problem is not None:
+            raise RuntimeError(f"layer streaming's cache: {problem}.")
+        if not os.path.isdir(folder):
+            raise RuntimeError(
+                f"layer streaming's cache keeps decoder layers {shown} in {folder} (on a "
+                f"{STRIPE_DIRS_ENV} root), and that folder is gone although its root is there. "
+                f"Let Soup re-shard (the cache check will rebuild it), or unset "
+                f"{STRIPE_DIRS_ENV} to re-shard to one root."
+            )
 
 
 def _build_source(

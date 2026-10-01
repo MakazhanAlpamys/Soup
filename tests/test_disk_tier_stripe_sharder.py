@@ -13,8 +13,9 @@ from soup_cli.utils.layer_shard import (  # noqa: E402
     layer_paths,
     layer_shard_path,
     shard_checkpoint,
+    stripe_dirs,
 )
-from soup_cli.utils.stripe_roots import StripeRootError  # noqa: E402
+from soup_cli.utils.stripe_roots import StripeRootError, primary_cache_identity  # noqa: E402
 
 
 def _weights(tmp_path, n_layers=3):
@@ -33,6 +34,11 @@ def _weights(tmp_path, n_layers=3):
     return str(src)
 
 
+def _folder(out, stripe):
+    """This primary cache's own folder inside the stripe root (slug + hash, fix wave B)."""
+    return stripe_dirs(out, (os.path.realpath(stripe),))[1]
+
+
 @pytest.fixture
 def layout(tmp_path):
     stripe = tmp_path / "stripe"
@@ -46,7 +52,7 @@ def test_odd_layers_land_on_the_stripe_root_and_even_ones_stay(layout):
     assert index.layer_roots == (0, 1, 0)
     assert index.stripe_roots == (os.path.realpath(stripe),)
     assert os.path.exists(layer_shard_path(out, 0))
-    assert os.path.exists(layer_shard_path(os.path.join(stripe, "model"), 1))
+    assert os.path.exists(layer_shard_path(_folder(out, stripe), 1))
     assert not os.path.exists(layer_shard_path(out, 1))
     assert os.path.exists(layer_shard_path(out, 2))
 
@@ -69,16 +75,17 @@ def test_the_marker_describes_this_cache(layout):
 
     src, out, stripe = layout
     index = shard_checkpoint(src, out, dtype="float32", stripe_roots=(stripe,))
-    with open(os.path.join(stripe, "model", "stripe.json"), encoding="utf-8") as handle:
+    with open(os.path.join(_folder(out, stripe), "stripe.json"), encoding="utf-8") as handle:
         assert json.load(handle) == {
             "source_fingerprint": index.source_fingerprint, "position": 1, "n_roots": 2,
+            "primary_cache": primary_cache_identity(out),
         }
 
 
 def test_an_unchanged_layout_is_reused_without_rewriting(layout):
     src, out, stripe = layout
     shard_checkpoint(src, out, dtype="float32", stripe_roots=(stripe,))
-    moved = layer_shard_path(os.path.join(stripe, "model"), 1)
+    moved = layer_shard_path(_folder(out, stripe), 1)
     before = os.stat(moved).st_mtime_ns
     said = []
     shard_checkpoint(src, out, dtype="float32", stripe_roots=(stripe,), notify=said.append)
@@ -102,7 +109,7 @@ def test_turning_striping_off_names_the_abandoned_folder(layout):
     said = []
     index = shard_checkpoint(src, out, dtype="float32", notify=said.append)
     assert index.layer_roots == () and os.path.exists(layer_shard_path(out, 1))
-    folder = os.path.join(os.path.realpath(stripe), "model")
+    folder = _folder(out, stripe)
     assert any(folder in line and "Delete it" in line for line in said), said
 
 

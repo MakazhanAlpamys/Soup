@@ -12,7 +12,9 @@ Why it exists, measured: ``benchmarks/probe-rtx5070-two-drive-read.md`` — two 
 No top-level torch: imported on the setup path only.
 """
 
+import hashlib
 import os
+import stat
 from dataclasses import dataclass
 from typing import Callable, List, Mapping, Optional, Sequence, Tuple
 
@@ -208,3 +210,91 @@ def layer_roots_for(n_layers: int, n_roots: int) -> Tuple[int, ...]:
     if n_roots == 1:
         return ()
     return tuple(idx % n_roots for idx in range(n_layers))
+
+
+# -- the per-model folder inside a stripe root ------------------------------------------------
+def primary_cache_identity(shard_dir: str) -> str:
+    """The primary cache a stripe folder belongs to: its realpath, case-folded on Windows."""
+    return os.path.normcase(os.path.realpath(os.path.abspath(os.path.expanduser(shard_dir))))
+
+
+def stripe_folder_name(shard_dir: str) -> str:
+    """The folder a stripe root holds for the primary cache at ``shard_dir``.
+
+    The model slug plus 12 hex of a hash of the primary cache's realpath. Two primary caches of
+    one base (per user, or per ``SOUP_LAYER_STREAM_CACHE_DIR``, or with different dtypes) that
+    share one stripe root therefore never share a folder, so neither can read the other's layer
+    files as its own or overwrite them on a re-shard. The slug keeps the folder recognisable.
+    """
+    slug = os.path.basename(os.path.normpath(shard_dir))
+    digest = hashlib.sha256(os.fsencode(primary_cache_identity(shard_dir))).hexdigest()[:12]
+    return f"{slug}-{digest}"
+
+
+def _is_link(info: os.stat_result) -> bool:
+    """A symlink, or on Windows any reparse point: a junction does not report S_ISLNK (and
+    ``os.path.islink`` misses it before 3.12), but it redirects exactly as a symlink does."""
+    if stat.S_ISLNK(info.st_mode):
+        return True
+    reparse = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+    return os.name == "nt" and bool(getattr(info, "st_file_attributes", 0) & reparse)
+
+
+def stripe_folder_problem(folder: str, root: str) -> Optional[str]:
+    """Why ``folder`` must not be read, written or deleted in, or ``None``.
+
+    ``root`` is the VALIDATED stripe root (a realpath) and ``folder`` its per-model child. A
+    missing folder is not a problem here — the caller creates it or reports it. A link or
+    junction at the folder is, and so is a folder whose realpath is not ``root``'s child: that
+    catches a root swapped for a link after it was validated, which lstat on the folder cannot.
+    """
+    try:
+        info = os.lstat(folder)
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        return f"the stripe folder {folder} cannot be inspected ({exc})"
+    if _is_link(info):
+        return (
+            f"the stripe folder {folder} is a link or junction. Soup reads and writes only a "
+            f"real folder it made inside a {STRIPE_DIRS_ENV} entry, so it will not follow one; "
+            f"remove the link (Soup never deletes inside a stripe root) or name another folder"
+        )
+    if not stat.S_ISDIR(info.st_mode):
+        return f"the stripe folder {folder} exists and is not a folder"
+    expected = os.path.join(root, os.path.basename(folder))
+    actual = os.path.realpath(folder)
+    if os.path.normcase(actual) != os.path.normcase(expected):
+        return (
+            f"the stripe folder {folder} resolves to {actual}, not to a folder inside its "
+            f"stripe root {root}; a link somewhere on that path changed after it was checked"
+        )
+    return None
+
+
+def secure_stripe_folder(folder: str, root: str) -> None:
+    """Make ``folder`` (inside the validated ``root``) Soup's own before anything touches it.
+
+    Refuses a link or junction; then creates the folder owner-only, or verifies that an
+    existing one belongs to this account (and nobody else can write it) and restricts it
+    again. Files there are trusted between runs as the owner-only primary cache's are, so a
+    folder that cannot be made private refuses the run by name rather than being used.
+    """
+    from soup_cli.utils import owner_only_dir
+
+    problem = stripe_folder_problem(folder, root)
+    if problem is not None:
+        raise StripeRootError(f"{STRIPE_DIRS_ENV}: {problem}.")
+    try:
+        owner_only_dir.ensure_owner_only_dir(folder)
+    except OSError as exc:
+        raise StripeRootError(
+            f"{STRIPE_DIRS_ENV}: the stripe folder {folder} cannot be made private to the "
+            f"account running Soup: {exc}. Its layer files are trusted between runs, as the "
+            f"owner-only primary cache's are, so Soup refuses rather than use a folder another "
+            f"account could change. Remove it (Soup never deletes inside a stripe root) or "
+            f"point {STRIPE_DIRS_ENV} at a folder this account owns."
+        ) from exc
+    problem = stripe_folder_problem(folder, root)
+    if problem is not None:
+        raise StripeRootError(f"{STRIPE_DIRS_ENV}: {problem}.")

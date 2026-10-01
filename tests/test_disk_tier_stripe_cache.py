@@ -16,6 +16,7 @@ from soup_cli.utils.layer_shard import (
     read_shard_index,
     stripe_dirs,
 )
+from soup_cli.utils.stripe_roots import primary_cache_identity, stripe_folder_name
 
 FP = "f" * 64
 
@@ -43,7 +44,10 @@ def _cache(tmp_path, *, striped):
         open(path, "wb").close()
     open(extras_shard_path(str(out)), "wb").close()
     for position, directory in enumerate(dirs[1:], start=1):
-        _write_stripe_marker(directory, fingerprint=FP, position=position, n_roots=len(dirs))
+        _write_stripe_marker(
+            directory, fingerprint=FP, position=position, n_roots=len(dirs),
+            primary=primary_cache_identity(str(out)),
+        )
     _atomic_write_index(index, str(out))
     return str(out), roots
 
@@ -94,13 +98,13 @@ class TestLayerPaths:
         out = str(tmp_path / "model")
         assert layer_paths(out, _index()) == [layer_shard_path(out, idx) for idx in range(3)]
 
-    def test_striped_layers_live_in_a_slug_folder_on_their_root(self, tmp_path):
+    def test_striped_layers_live_in_this_caches_folder_on_their_root(self, tmp_path):
         out = str(tmp_path / "cache" / "model")
         stripe = str(tmp_path / "stripe")
         paths = layer_paths(out, _index(stripe_roots=(stripe,), layer_roots=(0, 1, 0)))
         assert paths == [
             layer_shard_path(out, 0),
-            layer_shard_path(os.path.join(stripe, "model"), 1),
+            layer_shard_path(os.path.join(stripe, stripe_folder_name(out)), 1),
             layer_shard_path(out, 2),
         ]
 
@@ -118,21 +122,24 @@ class TestTheCacheCheck:
 
     def test_a_missing_marker_invalidates_naming_it(self, tmp_path):
         out, roots = _cache(tmp_path, striped=True)
-        marker = os.path.join(roots[0], "model", "stripe.json")
+        marker = os.path.join(stripe_dirs(out, roots)[1], "stripe.json")
         os.remove(marker)
         index, reason = _inspect(out, roots)
         assert index is None and marker in reason
 
     def test_a_marker_from_another_cache_invalidates(self, tmp_path):
         out, roots = _cache(tmp_path, striped=True)
-        folder = os.path.join(roots[0], "model")
-        _write_stripe_marker(folder, fingerprint="0" * 64, position=1, n_roots=2)
+        folder = stripe_dirs(out, roots)[1]
+        _write_stripe_marker(
+            folder, fingerprint="0" * 64, position=1, n_roots=2,
+            primary=primary_cache_identity(out),
+        )
         index, reason = _inspect(out, roots)
         assert index is None and "another cache" in reason
 
     def test_a_missing_layer_on_the_stripe_root_is_named_by_full_path(self, tmp_path):
         out, roots = _cache(tmp_path, striped=True)
-        gone = layer_shard_path(os.path.join(roots[0], "model"), 1)
+        gone = layer_shard_path(stripe_dirs(out, roots)[1], 1)
         os.remove(gone)
         index, reason = _inspect(out, roots)
         assert index is None and gone in reason
