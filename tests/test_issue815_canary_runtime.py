@@ -438,3 +438,28 @@ def test_failing_live_canary_stream_requests_reach_the_rollout_stats(
     assert stats.canary_ok == 0
     assert stats.stable_ok == observed.count(None)
     assert stats.stable_major == 0
+
+
+def test_an_empty_public_adapter_field_keeps_the_manual_activation(tmp_path, monkeypatch):
+    """An empty public adapter field must preserve the manual activation."""
+    monkeypatch.chdir(tmp_path)
+    client, observed = _serve_with_canary(
+        monkeypatch,
+        tmp_path / ".soup" / "loop.yaml",
+        tmp_path / ".soup" / "canary-stats.json",
+        adapters=("chat",),
+    )
+    assert client.post("/v1/adapters/activate/chat").status_code == 200
+
+    for stream in (False, True):
+        response = client.post(
+            "/v1/chat/completions",
+            json={
+                "messages": [{"role": "user", "content": "hello"}],
+                "adapter": "",
+                "stream": stream,
+            },
+        )
+        assert response.status_code == 200
+
+    assert observed == ["chat", "chat"]
