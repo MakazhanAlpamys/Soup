@@ -805,18 +805,41 @@ the run refuses before either write when that volume lacks free space. Override 
 roots with `SOUP_SPECTRUM_CACHE_DIR` and `SOUP_LAYER_STREAM_CACHE_DIR`; both retain Soup's
 home/cwd/tmp containment policy.
 
-**Two or more NVMe drives.** On the disk tier the step waits on the read, and one drive is the
-ceiling. Set `SOUP_LAYER_STREAM_STRIPE_DIRS` to extra folders on OTHER NVMe drives
-(`os.pathsep`-separated: `;` on Windows, `:` elsewhere) and the layer cache is striped over them:
-decoder layer `i` lives on drive `i mod N`, and the reader keeps one layer in flight per drive.
-Each folder must already exist, sit on a different volume from the primary cache root and from
-every other entry, and classify as NVMe (`training.stream_disk_kind` overrides a wrong probe);
-anything else refuses the run and names the entry. The bytes are exactly the ones the single-drive
-cache holds, so striping changes the speed, not the result. It costs one more layer of host staging
-per extra drive (`stream_read_ahead` defaults to drives + 1). Changing the list re-shards the cache;
-unsetting it re-shards to one drive and names the folder left behind. Measured on two PM9B1 drives:
-7.65-9.15 GB/s together against ~4 for one ([record](../benchmarks/probe-rtx5070-two-drive-read.md));
-on a cold 70B-shaped NF4 store at seq 512 the training step went from 17.4 s to 9.97 s, 1.75x
+**Two or more NVMe drives.** On a cold store larger than RAM the disk-tier step can wait on the
+read (measured for a 70B-shaped store), and then one drive is the ceiling. Set
+`SOUP_LAYER_STREAM_STRIPE_DIRS` to extra folders on OTHER NVMe drives (`os.pathsep`-separated:
+`;` on Windows, `:` elsewhere) and the layer cache is striped over N roots, where N is the primary
+cache root plus the folders listed: decoder layer `i` lives on root `i mod N`, the index, the
+extras and the embedding/head files stay on the primary root, and the reader keeps one layer in
+flight per drive. The cache is laid out this way whichever tier the run picks; only the disk tier
+reads the drives in parallel. Every entry is checked, and any failure refuses the run and names
+the entry and the rule: it must be an absolute path (on Windows, with a drive letter or UNC share;
+no `\\?\` or `\\.\` spelling, no control characters), already exist as a folder (a drive that is
+not mounted is never mistaken for an empty one), not be a symlink, not lie inside or contain the
+primary cache root or another entry, sit on a different volume from the primary root and from
+every other entry, and classify as NVMe (`training.stream_disk_kind` overrides a wrong probe); the
+list holds at most 6 folders. The bytes are exactly the ones the single-drive cache holds, so
+striping changes the speed, not the result.
+
+Stripe folders are outside the home/cwd/tmp containment the primary cache has, by design — a
+second drive is never under `$HOME`. What that containment gave is enforced directly instead.
+Inside each entry Soup writes only its own folder, named after the model plus a hash of the
+primary cache's path, so two primary caches (two users, or two `SOUP_LAYER_STREAM_CACHE_DIR`
+values) sharing one stripe drive never touch each other's files. That folder is made private to
+the account running Soup (mode 0700 on POSIX; on Windows a protected ACL for that account and
+SYSTEM, replacing the inherited one, which on a data drive typically lets every signed-in
+account modify files), checked again on every reuse, and never followed if it is a link or
+junction; a folder Soup cannot make private refuses the run by name. Soup never deletes anything
+inside a stripe folder.
+
+It costs one more layer of host staging per extra drive: `stream_read_ahead` defaults to N + 1.
+A configured value of 2 counts as the default and is raised the same way; any other value is
+kept as set (with a warning if it leaves drives idle), and a refusal that asks for a lower depth
+names a value that is not raised back up. Changing the list re-shards the cache; unsetting it
+re-shards to one root and names the folder left behind. Measured on two PM9B1 drives, with no
+formal verdict: 7.65-9.15 GB/s together against ~4 for one
+([record](../benchmarks/probe-rtx5070-two-drive-read.md)). Gated: on a cold 70B-shaped NF4 store
+at seq 512 the training step went from 17.4 s to 9.97 s, 1.75x
 ([gate](../benchmarks/gate-two-drive-striping.md)).
 
 Hugging Face snapshots normally expose symlinks into their blob cache, which the sharder

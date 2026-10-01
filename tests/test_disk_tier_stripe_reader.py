@@ -294,3 +294,27 @@ def test_submit_calls_on_done_once_per_job_after_its_outcome_is_set():
         pool.close()
     assert sorted(finished) == [1, 2]
     assert len(calls) == 2 and all(count >= 1 for count in calls)
+
+
+def test_on_done_sees_the_outcome_already_published():
+    """The reader's no-lost-wake-up property rests on this order: the worker sets `done` and
+    only then calls the reader's wake-up. Swapped, `_wake` can fire before the read is
+    visible, the reader finds nothing to publish and sleeps out its 1 s poll — per layer. The
+    test above only shows the callback runs after the WORK; this pins it to after `done`."""
+    pool = _RangeReaders(1)
+    release = threading.Event()
+    holder, seen = [], []
+    try:
+        outcomes = pool.submit(
+            [lambda: release.wait(5)],
+            on_done=lambda: seen.append(holder[0].done.is_set()),
+        )
+        holder.append(outcomes[0])
+        release.set()
+        pool.wait(outcomes)
+        deadline = time.monotonic() + 5
+        while not seen and time.monotonic() < deadline:
+            time.sleep(0.01)
+    finally:
+        pool.close()
+    assert seen == [True]

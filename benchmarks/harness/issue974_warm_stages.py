@@ -11,10 +11,16 @@ host wall-clock timers around each stage, per step:
   async arm   consumer_wait  time the compute thread spends blocked in
                              ``AsyncDiskSource.get`` (a hit costs microseconds,
                              so this is the miss time)
-              reader_read    time the reader thread spends inside ``_read_layer``
-                             (one call per layer: since #974 the data section
-                             read as K direct-I/O ranges into the slot's region;
-                             before it, the per-tensor ``read_into`` loop)
+              reader_read    time from ``_read_layer``'s call until every range of
+                             that layer has landed (one bracket per layer: since
+                             #974 the data section read as K direct-I/O ranges
+                             into the slot's region; before it, the per-tensor
+                             ``read_into`` loop). Since R4 ``_read_layer`` only
+                             DISPATCHES the ranges, so the bracket waits on them
+                             inside itself, which is the blocking read this stage
+                             measured before R4. One-drive sources only: on a
+                             striped source that wait would serialise the drives,
+                             so the harness refuses one.
               reader_drain   time the reader spends in ``draining.synchronize()``
                              before it may refill a slot (the H2D copy out of
                              that slot draining)
@@ -104,12 +110,25 @@ def _install_async_timers(source: Any, pools: List[Any], clock: StageClock) -> N
     # One bracket per LAYER read, on the instance: `_run` looks `_read_layer` up
     # on `self`, so this sees the whole K-range read as one number rather than
     # K overlapping per-range times summed to more than the wall clock.
+    pools = getattr(source, "_pools", {})
+    if len(pools) > 1:
+        raise SystemExit(
+            "issue974_warm_stages.py times ONE drive's reads; this source is striped over "
+            f"{len(pools)} drives (R4), and waiting inside the bracket would serialise them"
+        )
     real_read_layer = source._read_layer
 
     def read_layer(idx, region):
         started = time.perf_counter()
         try:
-            return real_read_layer(idx, region)
+            outcomes = real_read_layer(idx, region)
+            # Since R4 `_read_layer` only dispatches the ranges (a completion callback
+            # wakes the reader to publish them). Waiting here, on the reader thread and
+            # outside its lock, restores the pre-R4 blocking read this stage measures: a
+            # failed range still raises out of `_read_layer`, as `_RangeReaders.run` did.
+            if outcomes is not None:
+                pools[source._root_of[idx]].wait(outcomes)
+            return outcomes
         finally:
             clock.add("reader_read", time.perf_counter() - started)
 

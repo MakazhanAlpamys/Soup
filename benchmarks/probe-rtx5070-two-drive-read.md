@@ -15,7 +15,11 @@ the bytes are read exactly the way gate-974 read them.
 
 # Probe — does the second NVMe add read bandwidth? (disk-tier read rate, R1)
 
-**Status: decision rule committed 2026-09-28, BEFORE the run. Results pending.**
+**Status: decision rule committed 2026-09-28, BEFORE the run. NO FORMAL VERDICT: the rule's
+validity row fired in all three runs (§5), and D1, D2 and R3' are ambiguous by their own rules.
+The two-drive read rate it records is a measurement, not a verdict. Striping (R4) was gated on
+its own, on the training step: [`gate-two-drive-striping.md`](gate-two-drive-striping.md).**
+*(Status line updated 2026-10-01; until then it read "Results pending".)*
 
 ---
 
@@ -394,7 +398,12 @@ anything in any round, and gained ~10% in two.
 
 ## 6. Verdict
 
-*Pending.*
+**No formal verdict.** R1's validity row fired in all three runs (§5, runs 1-3), and the rule
+is not edited to give one; D1, D2 and R3' are ambiguous by their own rules. What the record
+establishes without a verdict is stated under "What the day's record adds up to" above. The
+decision to build striping on that evidence was the owner's (2026-09-28, §5 run 3), with its
+own gate on the real training step: [`gate-two-drive-striping.md`](gate-two-drive-striping.md).
+*(Updated 2026-10-01; until then this section read "Pending".)*
 
 ## 7. What this does NOT measure
 

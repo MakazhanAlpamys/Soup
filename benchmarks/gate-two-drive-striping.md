@@ -844,3 +844,21 @@ Not decided here: whether a new, complete sequence runs. The driver has no
 resume, so a verdict needs all six arms again, under the same §1 commands and
 the same §2 and §4. It would be published beside this attempt, which stays as
 measured.
+
+## 7. Notes added after the final review (2026-10-01)
+
+Added after the verdict, at the final code review's request. Neither note changes §2, §4, a
+measured number or §6.4.
+
+- **The battery level at the start of sequence 4.** Before sequence 3 the working notes kept
+  beside this gate set an extra start condition, not part of §2 or §4: start only at a battery
+  level of at least 95% (sequence 2 had run while charging, 68-84%). It was not applied to
+  sequence 4, which started on AC, charging at 69%, and ran charging at 71-89% (§5.17, §5.21).
+  Neither this record nor those notes recorded the condition being lifted; this note records
+  that it was not applied. §4's void conditions (battery power, a suspend, no `step_plain` point) held on every
+  arm of sequence 4.
+- **The two arms differ in read-ahead depth** (SINGLE 2, STRIPED 3; §1), and no SINGLE arm ran
+  at depth 3. Why the confound is expected to be small, stated as reasoning and not as a
+  measurement: the reader keeps at most one read in flight per drive, so a third staging slot
+  on a one-drive cache adds no read concurrency; it can only hold a finished layer ahead of the
+  consumer. A SINGLE arm at depth 3 would settle it.
