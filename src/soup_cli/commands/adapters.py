@@ -763,7 +763,7 @@ def arithmetic(
         name, path = name.strip(), path.strip()
         if not name_re.match(name):
             console.print(
-                f"[red]Invalid adapter name {escape(name)!r} "
+                f"[red]Invalid adapter name {for_terminal(repr(name))} "
                 "(use [A-Za-z0-9_.-]).[/]"
             )
             raise typer.Exit(1)
