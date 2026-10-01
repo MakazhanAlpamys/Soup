@@ -132,3 +132,113 @@ def test_mlx_doctor_table_has_no_loraplus_row():
     # A refused-at-load field must not appear in the doctor table (#958).
     names = {entry.field for entry in _MLX_SFT}
     assert "training.loraplus_lr_ratio" not in names
+
+
+# --------------------------------------------------------------------------
+# More paths to the same refusal, and the controls around it
+# --------------------------------------------------------------------------
+
+_REFUSAL = "training.loraplus_lr_ratio is not implemented on backend='mlx'"
+
+
+@pytest.mark.parametrize("ratio", ["16", "1.0", "0.5", "2"])
+def test_every_ratio_is_refused_on_mlx(ratio):
+    """The refusal is about the backend, not the size of the ratio."""
+    text = _MLX_LORAPLUS.replace("loraplus_lr_ratio: 16", f"loraplus_lr_ratio: {ratio}")
+    with pytest.raises(ValueError) as excinfo:
+        load_config_from_string(text)
+    assert _REFUSAL in _plain(str(excinfo.value))
+
+
+def test_direct_construction_is_refused_too():
+    """``soup sweep``, ``soup rewind`` and autopilot build ``SoupConfig`` directly,
+    without going through the YAML loader."""
+    from soup_cli.config.schema import SoupConfig
+
+    with pytest.raises(ValueError) as excinfo:
+        SoupConfig(
+            base="mlx-community/Qwen2.5-0.5B-Instruct-4bit",
+            task="sft",
+            backend="mlx",
+            data={"train": "t.jsonl"},
+            training={"loraplus_lr_ratio": 16.0},
+        )
+    assert _REFUSAL in _plain(str(excinfo.value))
+
+
+def test_an_explicit_null_ratio_still_loads_on_mlx():
+    cfg = load_config_from_string(
+        _MLX_LORAPLUS.replace("loraplus_lr_ratio: 16", "loraplus_lr_ratio: null")
+    )
+    assert cfg.backend == "mlx"
+    assert cfg.training.loraplus_lr_ratio is None
+
+
+@pytest.mark.parametrize("backend", ["transformers", "unsloth"])
+@pytest.mark.parametrize("task, data_format", [("pretrain", "plaintext"), ("dpo", "dpo")])
+def test_the_wired_backends_keep_the_ratio_beyond_sft(backend, task, data_format):
+    """#1080 wired LoRA+ after the backend branch of these trainers too, so the
+    refusal must stay on mlx and not spread to the other backends' tasks."""
+    text = (
+        _transformers_variant(backend)
+        .replace("task: sft", f"task: {task}")
+        .replace("format: alpaca", f"format: {data_format}")
+    )
+    cfg = load_config_from_string(text)
+    assert cfg.backend == backend
+    assert cfg.task == task
+    assert cfg.training.loraplus_lr_ratio == pytest.approx(16.0)
+
+
+def _write_runnable_config(tmp_path: Path) -> Path:
+    train = tmp_path / "train.jsonl"
+    train.write_text('{"instruction": "q", "output": "a"}\n' * 4, encoding="utf-8")
+    path = tmp_path / "soup.yaml"
+    path.write_text(
+        _MLX_LORAPLUS.replace("./data/train.jsonl", train.as_posix()).replace(
+            "./output", (tmp_path / "out").as_posix()
+        ),
+        encoding="utf-8",
+    )
+    return path
+
+
+def test_plain_soup_train_stops_at_config_load(tmp_path, monkeypatch):
+    """Not only ``--dry-run``: a real ``soup train`` must stop before the data or
+    the model is touched."""
+    monkeypatch.setenv("HF_HUB_OFFLINE", "1")
+    monkeypatch.chdir(tmp_path)
+    config = _write_runnable_config(tmp_path)
+
+    result = CliRunner().invoke(app, ["train", "--config", str(config)])
+
+    output = _plain(result.output)
+    assert result.exit_code == 1, (result.output, repr(result.exception))
+    assert _REFUSAL in output, output
+    for later_line in ("Config valid.", "Ready to train", "Data OK", "Training Setup"):
+        assert later_line not in output, (later_line, output)
+
+
+def test_soup_doctor_config_reports_the_config_as_unloadable(tmp_path, capsys):
+    """``soup doctor --config`` printed its all-clear for this config before
+    #1324; an unloadable config is exit 2."""
+    import typer
+
+    from soup_cli.commands.doctor import doctor
+
+    config = _write_runnable_config(tmp_path)
+
+    with pytest.raises(typer.Exit) as excinfo:
+        doctor(nccl=False, disk=False, config=str(config))
+
+    assert excinfo.value.exit_code == 2
+    assert _REFUSAL in _plain(capsys.readouterr().out)
+
+
+def test_the_loraplus_docs_state_the_mlx_refusal_and_the_unsloth_wiring():
+    root = Path(__file__).resolve().parents[1]
+    text = (root / "docs" / "peft-and-efficiency.md").read_text(encoding="utf-8")
+    section = text.split("## LoRA+ (Differentiated Learning Rates)", 1)[1]
+    flat = " ".join(section.split("\n## ", 1)[0].split())
+    assert "Also refused on the `mlx` backend (#1324)" in flat, flat
+    assert "`backend: unsloth` gets the same LoRA+ optimizer as `transformers`" in flat, flat
