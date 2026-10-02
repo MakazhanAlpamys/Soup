@@ -812,6 +812,14 @@ copy. The layer shards remain under `~/.soup/layer-stream/`. Their index records
 filename, size, and `mtime_ns`, so a necessary re-shard says which component changed instead
 of silently spending minutes rebuilding the cache.
 
+`base:` may also be a local path to a Hugging Face cache snapshot
+(`.../models--org--name/snapshots/<commit>`). Soup copies it to regular files in the same
+Spectrum cache slot as the Hub id `org/name` and reuses that copy while the commit and blob
+ids match. A directory whose `.safetensors` files are symlinks but which is not such a
+snapshot (including a regular directory that also holds an alias symlink to a shard) is
+refused with a message naming the accepted layouts: pass the Hub id, the snapshot directory,
+or a directory of regular files.
+
 This materialisation also works with `HF_HUB_OFFLINE=1` when the standard Hugging Face
 snapshot is complete. Soup pins the commit resolved by the initial cache lookup and copies
 only verified snapshot files from that commit's blob store; it does not perform a second Hub

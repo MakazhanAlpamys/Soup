@@ -78,3 +78,16 @@ def test_symlinked_weights_outside_a_snapshot_layout_are_refused(tmp_path, monke
 
     with pytest.raises(ValueError, match="symlinked .safetensors files outside"):
         plan_model_weights(str(plain))
+
+
+@pytest.mark.requires_symlink
+def test_snapshot_outside_an_hf_cache_name_keeps_a_path_derived_slot(tmp_path, monkeypatch) -> None:
+    from soup_cli.utils.spectrum_scan import model_slug, plan_model_weights
+
+    snapshot = _snapshot(tmp_path, repo="my-model-cache")
+    monkeypatch.setenv("SOUP_SPECTRUM_CACHE_DIR", str(tmp_path / "soup-cache"))
+
+    plan = plan_model_weights(str(snapshot))
+
+    assert Path(plan.weights_dir).name == model_slug(str(snapshot))
+    assert Path(plan.weights_dir).name != "org__model"
