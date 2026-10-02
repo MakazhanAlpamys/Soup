@@ -369,7 +369,7 @@ soup bom emit \
   --base-model meta-llama/Llama-3.1-8B \
   --base-sha aaaa...64hex \
   --config-sha bbbb...64hex \
-  --task sft --license apache-2.0 \
+  --task sft --license Apache-2.0 \
   --format both --output bom
 # writes bom.cdx.json + bom.spdx.json
 ```

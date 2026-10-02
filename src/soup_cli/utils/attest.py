@@ -80,6 +80,7 @@ class AttestationStatement:
 
 
 _MAX_INVOCATION_ID_LEN = 256
+_MAX_INVOCATION_LEN = 4096
 
 
 def build_slsa_provenance(s: AttestationStatement) -> dict[str, Any]:
@@ -97,10 +98,16 @@ def build_slsa_provenance(s: AttestationStatement) -> dict[str, Any]:
     invocation_id = str(s.invocation.get("invocation_id", ""))[:_MAX_INVOCATION_ID_LEN]
     started_on = str(s.invocation.get("started_on", s.created_at))[:64]
     finished_on = str(s.invocation.get("finished_on", s.created_at))[:64]
+    external_parameters: dict[str, Any] = {"stage": s.stage}
+    # #1446: the free-form invocation marker (`soup attest emit --invocation`) is an
+    # external parameter of the build in SLSA v1 terms; it used to be dropped.
+    command = str(s.invocation.get("command", "") or "")[:_MAX_INVOCATION_LEN]
+    if command:
+        external_parameters["invocation"] = command
     return {
         "buildDefinition": {
             "buildType": "https://soup.local/build/v1",
-            "externalParameters": {"stage": s.stage},
+            "externalParameters": external_parameters,
             "internalParameters": {},
             "resolvedDependencies": materials_resolved,
         },
