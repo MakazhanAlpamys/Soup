@@ -381,19 +381,20 @@ def _read_asr_rows(path: Path) -> list[dict]:
 def _resolve_asr_audio(audio: str, base_dir: Path) -> str:
     """Resolve a row's audio path against ``base_dir`` with containment.
 
-    Rejects UNC / network paths and anything that resolves outside
+    Rejects UNC / network / device paths (the same check the training loader
+    runs) and anything that resolves outside
     ``base_dir`` (realpath + commonpath) — the infer path is fed JSONL the
     operator may not have authored (the training path already enforces this
     via ``_validate_audio_files``). Raises ``ValueError`` on rejection.
     """
-    from soup_cli.utils.paths import is_under
+    from soup_cli.utils.paths import is_network_or_device_path, is_under
 
     if "\x00" in audio:
         raise ValueError("audio path must not contain null bytes")
     # UNC (\\host\share) / network (//host) paths trigger outbound SMB on
     # Windows — reject before any filesystem touch.
-    if audio.startswith(("\\\\", "//")):
-        raise ValueError("audio path must not be a UNC / network path")
+    if is_network_or_device_path(audio):
+        raise ValueError("audio path must not be a UNC / network / device path")
     candidate = Path(audio)
     if not candidate.is_absolute():
         candidate = base_dir / candidate

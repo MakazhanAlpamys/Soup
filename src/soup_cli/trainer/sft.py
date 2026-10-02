@@ -1996,6 +1996,8 @@ class SFTTrainerWrapper(StreamingSetupMixin):
         """Keep messages + PIL images raw for processor-aware collation."""
         from datasets import Dataset
 
+        from soup_cli.utils.paths import require_regular_file
+
         def load_and_format_vision(example):
             from PIL import Image as PILImage
 
@@ -2003,6 +2005,10 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             image = None
             if image_path:
                 try:
+                    # Open a file name only when it is a regular file: a FIFO
+                    # or a device would stall the reader.
+                    if isinstance(image_path, (str, bytes, os.PathLike)):
+                        require_regular_file(os.fsdecode(image_path))
                     image = PILImage.open(image_path).convert("RGB")
                 except (FileNotFoundError, OSError):
                     console.print(
@@ -2121,6 +2127,8 @@ class SFTTrainerWrapper(StreamingSetupMixin):
         """Prepare dataset for audio fine-tuning with audio loading."""
         from datasets import Dataset
 
+        from soup_cli.utils.paths import require_regular_file
+
         try:
             import librosa  # noqa: F401
         except ImportError:
@@ -2137,6 +2145,9 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             sampling_rate = 16000
             if audio_path:
                 try:
+                    # Same rule as the vision path: only a regular file is read.
+                    if isinstance(audio_path, (str, bytes, os.PathLike)):
+                        require_regular_file(os.fsdecode(audio_path))
                     audio_array, sampling_rate = librosa.load(
                         audio_path, sr=16000, mono=True,
                     )
