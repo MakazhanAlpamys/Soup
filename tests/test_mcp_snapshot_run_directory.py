@@ -10,6 +10,7 @@ a link. Ordinary planning writes the same bytes as before.
 
 from __future__ import annotations
 
+import errno
 import os
 import stat
 from pathlib import Path
@@ -199,6 +200,32 @@ class TestALinkThatAppearsWhileTheSnapshotIsCreated:
         assert created
         snapshot = _runs(tmp_path) / RUN_ID / "config.yaml"
         assert snapshot.read_text(encoding="utf-8") == other
+
+
+class TestAnyOtherWriteFailure:
+    def test_is_reported_by_type_without_a_path(self, tmp_path, monkeypatch):
+        manager = _manager(tmp_path, monkeypatch)
+        full_disk = str(tmp_path / ".soup" / "mcp-runs" / RUN_ID / "config.yaml")
+
+        def no_space(*args, **kwargs):
+            raise OSError(errno.ENOSPC, "No space left on device", full_disk)
+
+        monkeypatch.setattr(execution_module, "open_no_follow", no_space)
+        expected = "cannot plan: could not write the config snapshot (OSError)"
+
+        with pytest.raises(ExecutionError) as excinfo:
+            manager.snapshot_config(RUN_ID, CONTENT)
+        assert str(excinfo.value) == expected
+        assert str(tmp_path) not in str(excinfo.value)
+
+        monkeypatch.setattr(manager, "allocate_run_id", lambda: RUN_ID + "b")
+        handler = None
+        for tool in build_registry(allow_mutating=True, allow_execute=True, execution=manager):
+            if tool.name == "train_start":
+                handler = tool.handler
+        with pytest.raises(McpToolError) as tool_error:
+            handler({"config": "soup.yaml"})
+        assert str(tool_error.value) == expected
 
 
 class TestTheRunIdIsOnePathComponent:
