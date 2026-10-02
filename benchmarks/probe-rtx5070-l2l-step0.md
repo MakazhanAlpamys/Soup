@@ -21,7 +21,13 @@ per block). It reuses stream_probe.py's build(), Instruments, gpu_facts and Sink
 
 # Probe — does layer-major micro-batching (L2L) work on the shipped streamed runtime? (L2L step 0)
 
-**Status: rule committed 2026-10-01, BEFORE the run. Results pending.**
+**Status: rule committed 2026-10-02 (`7a2127c1`), BEFORE the run. Amended once before any
+F1/F2 run (this commit): V2 compares the loads and bytes per step of L2L at k = 1 with the
+shipped step instead of their times, and I6 reports the time ratio. Reason: a smoke run on
+`HuggingFaceTB/SmolLM2-135M` (not a fixture) showed L2L at k = 1 10-20% FASTER than the
+shipped step with identical loads (57/step), identical bytes and bit-identical gradients:
+the ±5% time band would have voided G2-G4 for a difference that is not a harness error.
+Results pending.**
 
 ---
 
@@ -145,8 +151,10 @@ batch-1 arms are the same-session control.
 **Validity — when a row fails, the gates that depend on it have NO VERDICT; reported as measured:**
 
 - **V1.** `runtime.source.direct_io` is True in blocks 2-4.
-- **V2.** L2L at k = 1 is within ±5% of P1 (arm A) and of P1B (arm B). This shows the harness
-  measures the shipped step. G2-G4 depend on it.
+- **V2.** L2L at k = 1 moves exactly the work of the shipped batch-1 step, in arm A and in
+  arm B: layer + large loads per step within 0.5 and bytes moved per step within 1 MB of P1 /
+  P1B. This shows the harness measures the shipped step's reads; G1 shows its arithmetic.
+  G2-G4 depend on it. *(Amended before any F1/F2 run — see the status line.)*
 - **V3.** At each block's start:
   - free physical memory ≥ the block's largest pinned activation bytes + 4 GB;
   - before the model is built, `nvidia-smi` reports ≤ 500 MiB in use, and its compute-apps list
@@ -179,6 +187,8 @@ C:'s own 3.5-4.7 GB/s spread. Every gate here is relative, within one session.
   this ratio". Stamps: unbuffered open, bytes written and read per step = 40 x 16 x 8 MiB.
 - **I5.** Per k: step time, tok/s, peak allocated/reserved, loads/step, bytes/step, implied
   GB/s, activation bytes (pinned/spilled), time blocked on the store.
+- **I6.** L2L at k = 1 against the shipped step, time ratio per arm (A, B). L2L's backward
+  runs each layer once without the checkpoint wrapper, so a ratio below 1 is expected.
 
 **Predictions, written before the run** (§21 of `probe-rtx5070-what-bounds-streaming.md`:
 B(S) = 1.24 s + 0.0101 s x S; read ≈ 17.1 s per step):
