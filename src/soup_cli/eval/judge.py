@@ -180,7 +180,7 @@ def validate_judge_api_base(api_base: Optional[str]) -> None:
     if api_base is None:
         return
 
-    from soup_cli.utils.net_guard import refuse_private_ip_literal
+    from soup_cli.utils.net_guard import LOOPBACK_HOSTS, refuse_private_ip_literal
 
     parsed = urlparse(api_base)
     if parsed.scheme not in ("http", "https"):
@@ -192,7 +192,7 @@ def validate_judge_api_base(api_base: Optional[str]) -> None:
     # Block non-HTTPS for remote URLs (allow HTTP only for localhost)
     if parsed.scheme == "http":
         hostname = parsed.hostname or ""
-        if hostname not in ("localhost", "127.0.0.1", "::1"):
+        if hostname not in LOOPBACK_HOSTS:
             raise ValueError(
                 "HTTP is only allowed for localhost. "
                 "Use HTTPS for remote URLs."

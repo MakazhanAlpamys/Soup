@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from soup_cli import __version__
 from soup_cli.eval.results import newest_eval_rows
+from soup_cli.utils.net_guard import LOOPBACK_HOSTS
 from soup_cli.utils.paths import atomic_write_text, is_under_cwd
 
 logger = logging.getLogger(__name__)
@@ -106,7 +107,7 @@ class GateTask(BaseModel):
             refuse_private_ip_literal(parsed.hostname, label="judge_model URL")
             return value
 
-        if (parsed.scheme == "http" and parsed.hostname in {"localhost", "127.0.0.1"}):
+        if parsed.scheme == "http" and parsed.hostname in LOOPBACK_HOSTS:
             return value
 
         raise ValueError(
@@ -425,7 +426,7 @@ def _parse_judge_url(judge_model: str) -> tuple[str, str, Optional[str]]:
             default_provider = "server"
     elif (
         parsed.scheme == "http"
-        and parsed.hostname in ("localhost", "127.0.0.1")
+        and parsed.hostname in LOOPBACK_HOSTS
     ):
         default_provider = "server"
     else:
