@@ -893,6 +893,27 @@ text = render_onboarding_yaml({
 Five-question wizard input → fully-validated `soup.yaml`. Literal allowlists on `task` (`sft` / `dpo` / `kto` / `orpo` / `simpo` / `ipo` / `bco` / `preference`) and `quantization` (`4bit` / `8bit` / `none`); `epochs ∈ [1, 10]`; `output` cwd-contained; null-byte rejection on every string.
 
 
+## Interactive Setup Wizard (soup wizard)
+
+Launch guided recipe creation that automatically detects local hardware, parses your training
+data, and selects calibrated hyperparameters:
+
+```bash
+soup wizard [--output soup.yaml]
+# or
+soup init --wizard
+```
+
+What the wizard does:
+- **Probes hardware**: Detects available NVIDIA CUDA GPUs, Apple Silicon MPS, or CPU fallbacks.
+- **Inspects dataset**: Automatically detects format (`chatml`, `dpo`, `alpaca`, `sharegpt`),
+  counts rows, and calculates average token length.
+- **Autopilot hyperparameters**: Determines optimal task, precision (`4-bit QLoRA` vs `float16`),
+  LoRA rank/alpha, batch size, and learning rate.
+- **Outputs verified YAML**: Validates output through the Pydantic `SoupConfig` schema and renders
+  a Rich summary table before saving.
+
+
 ## Standalone Sweep Config
 
 `--config` stays the base `soup.yaml` to train against; `--sweep-config` points at a
