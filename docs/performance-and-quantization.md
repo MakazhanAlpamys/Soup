@@ -503,7 +503,7 @@ The base is quantised **once, offline**, one tensor at a time, and cached. The s
 
 Correctness is not a tradeoff here either: a streamed NF4 run is **bit-exact** against a *resident* NF4 run (the same quantised bytes through the same bitsandbytes kernels), and that is a regression test, not a one-off measurement.
 
-**Scope of that comparison.** The resident control is a plain NF4 model *without* PEFT's `prepare_model_for_kbit_training`. The default resident 4-bit/8-bit SFT path calls it (`trainer/sft.py`), and it casts every non-quantised parameter to float32 — `embed_tokens`, the norms and an untied `lm_head` (checked on `trl-internal-testing/tiny-Qwen2ForCausalLM-2.5`: all bfloat16 before, all float32 after). Streaming keeps those tensors in the store dtype (bf16), so a default resident run and a streamed run start from a different numerical setup even with identical quantised blocks. One measured case, with an NF4 Qwen3-8B, one 73-token text and a forward pass at step 0: the resident control without the upcast equals streaming bit for bit, while the default resident path differs (max |Δlogit| 0.52, mean 0.054). It is one forward on one text: it says nothing about backward, resume or the whole training trajectory, and the LoRA `A` initialisation also differs by construction (streaming materialises the adapters from a seeded CPU generator, `materialize_meta_adapters`; the resident path uses PEFT's own initialisation from the global RNG).
+**Scope of that comparison.** The resident control is a plain NF4 model *without* PEFT's `prepare_model_for_kbit_training`. The default resident 4-bit/8-bit SFT path calls it (`trainer/sft.py`), and it casts every non-quantised parameter to float32 — `embed_tokens`, the norms and an untied `lm_head` (checked on `trl-internal-testing/tiny-Qwen2ForCausalLM-2.5`: all bfloat16 before, all float32 after). Streaming keeps those tensors in the store dtype (bf16 on Ampere and newer, fp16 before), so a default resident run and a streamed run start from a different numerical setup even with identical quantised blocks. One contributor-reported case (`Qwen/Qwen3-8B` at `b968826d`, RTX 4070 SUPER, bitsandbytes 0.50.2, transformers 5.17.0, peft 0.21.1, torch 2.14.0+cu126; not part of the benchmark record), with an NF4 Qwen3-8B, one 73-token text and a forward pass at step 0: the resident control without the upcast equals streaming bit for bit, while the default resident path differs (max |Δlogit| 0.52, mean 0.054). It is one forward on one text: it says nothing about backward, resume or the whole training trajectory, and the LoRA `A` initialisation also differs by construction (streaming materialises the adapters from a seeded CPU generator, `materialize_meta_adapters`; the resident path uses PEFT's own initialisation from the global RNG).
 
 **Measured numbers (RTX 3050 Laptop 4 GB, Windows 11, LoRA, batch 1, 50 steps after 10 warmup):**
 
@@ -700,7 +700,7 @@ output: ./output
 **Performance notes:**
 - 1.43× slower than resident training, measured at 0.5B (the only size on the reference box where a resident baseline genuinely fits in 4 GB and is therefore a fair comparison).
 - The 1.5B runs sit at ~97% GPU utilisation, i.e. compute-bound: with a page-locked store the layer loads hide almost completely behind compute. The 3B run's 79.3% is **not** a model-size effect — it is the cost of the pageable-store fallback on that particular box.
-- Correctness is not a tradeoff: streamed and resident forward passes were verified **bit-exact**, and a 100-step streamed loss curve matched resident exactly. Streaming substitutes the same weight bytes into the same kernels.
+- Correctness is not a tradeoff: streamed and resident forward passes were verified **bit-exact**, and a 100-step streamed loss curve matched resident exactly. Streaming substitutes the same weight bytes into the same kernels. (The resident control is the plain NF4 one described in the scope note under *Correctness* above.)
 
 > **v0.72.0 adapters are unloadable — re-run them on v0.72.1.** In v0.72.0 a streamed run saved every adapter tensor under a key carrying an extra `.inner.` segment, so `soup merge`, `soup serve`, `soup chat` and `PeftModel.from_pretrained` loaded **zero** tensors and silently returned the untuned base (PEFT emitted only a `UserWarning`). The training itself was correct — only the saved file was affected. Check with:
 >
@@ -771,7 +771,7 @@ byte-identical between the SFT and DPO arms.
 the same way DPO does, so it gets the same treatment. ORPO and SimPO genuinely are
 reference-free. All four are verified **bit-exact** against a resident run of the same
 loss on a tied checkpoint; on an untied one, that check covers `dpo`
-(`tests/test_issue1049_untied_streamed_preference.py`).
+(`tests/test_issue1049_untied_streamed_preference.py`). Same resident-control scope as the note under *Correctness* above.
 
 **The cost is time, not memory.** DPO runs the layer stack three times per step (policy
 forward, reference forward, checkpoint recompute) against SFT's two — measured **1.52×**
