@@ -199,7 +199,7 @@ _BYTES_PER_PARAM_BY_QUANT = {
     "awq": 0.55,
     "aqlm": 0.5,
     "eetq": 1.0,
-    "mxfp4": 0.55,
+    "mxfp4": 2.0,   # #1466: loaded with Mxfp4Config(dequantize=True), so bf16
 }
 
 # Optimiser-state bytes per trainable parameter. AdamW = 8 (m + v fp32),
