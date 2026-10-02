@@ -9,6 +9,7 @@ suspend watch, and the rule's verdict logic.
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 import threading
 import time
@@ -457,3 +458,183 @@ def test_snapshot_restore_round_trip(sched, streamed):
     for name, param in sched.lora_parameters(model).items():
         assert torch.equal(param.detach(), snap[name])
         assert param.grad is None
+
+
+# --------------------------------------------------------------------------
+# l2l_rule
+# --------------------------------------------------------------------------
+@pytest.fixture()
+def rule():
+    return _load("l2l_rule")
+
+
+def _cmp(equal=True, zero=()):
+    return {"tensors": 4, "unequal": [] if equal else ["x"], "max_abs": 0.0 if equal else 1e-3,
+            "worst": [], "all_zero": list(zero), "equal": equal}
+
+
+def _corr(fixture, *, a_vs_a=True, l2l=True, det=False, error=None):
+    rec = {"kind": "correctness", "fixture": fixture, "k": 2, "deterministic": det,
+           "a_vs_a": _cmp(a_vs_a), "a_vs_a_losses_equal": a_vs_a,
+           "l2l": _cmp(l2l), "l2l_losses_equal": l2l}
+    if error:
+        rec["deterministic_error"] = error
+    return {"meta": {}, "records": [rec]}
+
+
+def _arm(mode, arm, k, rnd, step_s, *, peak=4.4, void=False, variant=None, skipped=None):
+    return {"kind": "arm", "mode": mode, "arm": arm, "k": k, "round": rnd, "variant": variant,
+            "step_s_mean": step_s, "tokens_per_step": 512 * k, "peak_alloc_gb": peak,
+            "suspend": {"void": void}, "store": None, "skipped": skipped}
+
+
+def _timing(**over):
+    """Predicted-shape numbers that pass every gate."""
+    times = {("plain", "A", 1): 17.1, ("plain", "B", 1): 6.43,
+             ("l2l", "A", 1): 17.2, ("l2l", "B", 1): 6.5,
+             ("l2l", "A", 16): 104.0, ("l2l", "B", 16): 103.0,
+             ("l2l", "C", 4): 26.0, ("l2l", "D", 4): 20.0,
+             ("l2l", "A", 4): 26.5, ("l2l", "B", 4): 26.0}
+    times.update(over.pop("times", {}))
+    records = []
+    for (mode, arm, k), step_s in times.items():
+        for rnd in (0, 1):
+            records.append(_arm(mode, arm, k, rnd, step_s,
+                                peak=over.get("peak16", 4.6) if k == 16 else 4.4))
+    for patch in over.pop("patch", []):
+        patch(records)
+    meta = {"direct_io": over.get("direct_io", True), "v3": {"ok": over.get("v3", True)}}
+    return {"meta": meta, "records": records}
+
+
+def _write(tmp_path, timing=None, f1=None, f2=None, f1_det=None, spill=None):
+    files = {"timing.json": timing or _timing(),
+             "correctness_f1.json": f1 or _corr("F1"),
+             "correctness_f2.json": f2 or _corr("F2")}
+    if f1_det:
+        files["correctness_f1_det.json"] = f1_det
+    if spill:
+        files["spill.json"] = spill
+    for name, payload in files.items():
+        (tmp_path / name).write_text(json.dumps(payload), encoding="utf-8")
+    return str(tmp_path)
+
+
+def test_all_gates_pass(rule, tmp_path):
+    out = rule.evaluate(_write(tmp_path))
+    assert [out["gates"][g]["status"] for g in ("G1", "G2", "G3", "G4")] == ["pass"] * 4
+    assert out["verdict"] == "BUILD STEP 1"
+
+
+def test_g2_fails_when_the_read_does_not_hide(rule, tmp_path):
+    timing = _timing(times={("l2l", "A", 16): 140.0})  # T_A = 0.74 x T_B
+    out = rule.evaluate(_write(tmp_path, timing=timing))
+    assert out["gates"]["G2"]["status"] == "fail"
+    assert out["verdict"].startswith("STOP")
+
+
+def test_g4_fails_when_vram_grows(rule, tmp_path):
+    out = rule.evaluate(_write(tmp_path, timing=_timing(peak16=5.0)))
+    assert out["gates"]["G4"]["status"] == "fail"
+
+
+def test_round_spread_over_5pct_removes_the_gates_using_that_arm(rule, tmp_path):
+    def widen(records):
+        for rec in records:
+            if (rec["mode"], rec["arm"], rec["k"], rec["round"]) == ("l2l", "A", 16, 1):
+                rec["step_s_mean"] = 104.0 * 1.12
+    out = rule.evaluate(_write(tmp_path, timing=_timing(patch=[widen])))
+    for gate in ("G2", "G3", "G4"):
+        assert out["gates"][gate]["status"] == "no verdict", gate
+    assert out["verdict"].startswith("NO VERDICT")
+
+
+def test_suspend_void_on_b16_removes_g2_only(rule, tmp_path):
+    def void(records):
+        for rec in records:
+            if (rec["mode"], rec["arm"], rec["k"]) == ("l2l", "B", 16):
+                rec["suspend"]["void"] = True
+    out = rule.evaluate(_write(tmp_path, timing=_timing(patch=[void])))
+    assert out["gates"]["G2"]["status"] == "no verdict"
+    assert out["gates"]["G3"]["status"] == "pass"
+    assert out["gates"]["G4"]["status"] == "pass"
+
+
+def test_v2_off_by_7pct_removes_every_timing_gate(rule, tmp_path):
+    out = rule.evaluate(_write(tmp_path, timing=_timing(times={("l2l", "A", 1): 18.3})))
+    assert out["validity"]["V2"]["ok"] is False
+    for gate in ("G2", "G3", "G4"):
+        assert out["gates"][gate]["status"] == "no verdict"
+
+
+def test_direct_io_off_removes_every_timing_gate(rule, tmp_path):
+    out = rule.evaluate(_write(tmp_path, timing=_timing(direct_io=False)))
+    assert out["validity"]["V1"]["ok"] is False
+    assert out["gates"]["G2"]["status"] == "no verdict"
+
+
+def test_skipped_k16_removes_g2_to_g4(rule, tmp_path):
+    def skip(records):
+        for rec in records:
+            if rec["k"] == 16:
+                rec["skipped"] = "V3: free 12.0 GB < need 10.7 + 4.0 GB"
+                rec["step_s_mean"] = None
+    out = rule.evaluate(_write(tmp_path, timing=_timing(patch=[skip])))
+    for gate in ("G2", "G3", "G4"):
+        assert out["gates"][gate]["status"] == "no verdict"
+
+
+def test_g1_uses_the_deterministic_rerun_when_a_vs_a_is_inexact(rule, tmp_path):
+    out = rule.evaluate(_write(tmp_path, f1=_corr("F1", a_vs_a=False, l2l=False),
+                               f1_det=_corr("F1", det=True)))
+    assert out["gates"]["G1"]["status"] == "pass"
+
+
+def test_g1_no_verdict_when_even_deterministic_is_inexact(rule, tmp_path):
+    out = rule.evaluate(_write(tmp_path, f1=_corr("F1", a_vs_a=False),
+                               f1_det=_corr("F1", a_vs_a=False, det=True)))
+    assert out["gates"]["G1"]["status"] == "no verdict"
+
+
+def test_g1_fails_when_l2l_differs_with_exact_a_vs_a(rule, tmp_path):
+    out = rule.evaluate(_write(tmp_path, f2=_corr("F2", l2l=False)))
+    assert out["gates"]["G1"]["status"] == "fail"
+
+
+def test_g1_fails_on_an_all_zero_gradient(rule, tmp_path):
+    f1 = _corr("F1")
+    f1["records"][0]["a_vs_a"]["all_zero"] = ["lora_A.x"]
+    out = rule.evaluate(_write(tmp_path, f1=f1))
+    assert out["gates"]["G1"]["status"] == "fail"
+
+
+def test_spill_ratio_is_informational(rule, tmp_path):
+    spill = {"meta": {"direct_io": True}, "records": [
+        _arm("l2l", "A", 16, 0, 104.0, variant="pinned"),
+        _arm("l2l", "A", 16, 1, 104.0, variant="pinned"),
+        _arm("l2l", "A", 16, 0, 106.0, variant="spill"),
+        _arm("l2l", "A", 16, 1, 106.0, variant="spill"),
+    ]}
+    out = rule.evaluate(_write(tmp_path, spill=spill))
+    assert out["info"]["I4"]["ratio"] == pytest.approx(104.0 / 106.0)
+    assert out["verdict"] == "BUILD STEP 1"
+
+def test_foreign_reader_on_a16_removes_g2_to_g4(rule, tmp_path):
+    def heavy(records):
+        for rec in records:
+            if (rec["mode"], rec["arm"], rec["k"], rec["round"]) == ("l2l", "A", 16, 0):
+                rec["foreign_readers"] = [
+                    {"pid": 4, "name": "SearchIndexer.exe", "read_bytes": 4_940_000_000}
+                ]
+    out = rule.evaluate(_write(tmp_path, timing=_timing(patch=[heavy])))
+    for gate in ("G2", "G3", "G4"):
+        assert out["gates"][gate]["status"] == "no verdict", gate
+    assert "SearchIndexer.exe" in out["gates"]["G2"]["detail"]
+
+
+def test_unknown_foreign_readers_do_not_void(rule, tmp_path):
+    def unknown(records):
+        for rec in records:
+            rec["foreign_readers"] = None
+    out = rule.evaluate(_write(tmp_path, timing=_timing(patch=[unknown])))
+    assert out["verdict"] == "BUILD STEP 1"
