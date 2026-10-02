@@ -16,6 +16,7 @@ from typer.testing import CliRunner
 
 from soup_cli.trainer.rewards import math_verify_reward
 from soup_cli.utils import reward_synth as rs
+from tests.conftest import strip_ansi
 
 # (gold, correct completion) -- the table in #1350.
 _PAIRS = [
@@ -168,7 +169,7 @@ def test_a_refused_synthesis_names_its_rejected_references(tmp_path, monkeypatch
         app, ["synth", "refs.jsonl", "--kind", "json_schema", "-o", "reward.py"]
     )
     assert res.exit_code == 2, (res.output, repr(res.exception))
-    out = " ".join(res.output.split())
+    out = " ".join(strip_ansi(res.output).split())
     assert "not json at all" in out and "also bad" in out and "nope" in out
 
 
@@ -200,7 +201,7 @@ def test_a_refused_synthesis_caps_the_rejected_listing(tmp_path, monkeypatch):
         ],
     )
     assert res.exit_code == 2, (res.output, repr(res.exception))
-    out = " ".join(res.output.split())
+    out = " ".join(strip_ansi(res.output).split())
     assert "bad-00" in out and "bad-09" in out
     assert "bad-10" not in out and "bad-11" not in out
     assert "+2 more (see --output-report)" in out
