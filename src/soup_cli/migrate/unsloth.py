@@ -223,6 +223,12 @@ def migrate_unsloth(notebook_path: Path) -> Dict[str, Any]:
     if task == "cpo":
         # TRL's CPOTrainer is SimPO only under loss_type="simpo"; its other losses
         # (sigmoid, hinge, ipo over CPO's reference-free objective) have no Soup task.
+        if cpo_loss_type is _UNREAD:
+            raise ValueError(
+                "No Soup task matches CPOTrainer: its loss_type could not be read statically "
+                "(args= is not a CPOConfig(...) call at module level, or uses **kwargs); "
+                "only loss_type='simpo' migrates, to task: simpo."
+            )
         if cpo_loss_type != "simpo":
             raise ValueError(
                 f"No Soup task matches CPOTrainer with loss_type={cpo_loss_type!r} "
@@ -230,9 +236,13 @@ def migrate_unsloth(notebook_path: Path) -> Dict[str, Any]:
             )
         task = "simpo"
     if task == "online_dpo":
+        # The schema requires a judge or a reward model, and TRL's judge is a Python
+        # object with no string form, so a placeholder is written the way data.train is.
+        training_params.setdefault("online_dpo_judge", _ONLINE_DPO_JUDGE_PLACEHOLDER)
         warnings.append(
-            "OnlineDPOTrainer's judge / reward model is not carried over: set exactly one "
-            "of training.online_dpo_judge or training.reward_model in soup.yaml."
+            "OnlineDPOTrainer's judge / reward model is not carried over: "
+            f"training.online_dpo_judge is a placeholder ({_ONLINE_DPO_JUDGE_PLACEHOLDER}); "
+            "set it to your judge, or replace it with training.reward_model."
         )
 
     # Build result
@@ -289,17 +299,26 @@ def migrate_unsloth(notebook_path: Path) -> Dict[str, Any]:
     return result
 
 
+class _UnreadType:
+    """Marker: the trainer takes an ``args=`` that static reading cannot resolve."""
+
+
+_UNREAD = _UnreadType()
+_ONLINE_DPO_JUDGE_PLACEHOLDER = "ollama://REPLACE-ME"
+
+
 def _cpo_loss_type(
     trainer_call: ast.Call,
     trainer_kwargs: Dict[str, Any],
     scope: Dict[str, Any],
     call_assignments: Dict[str, List[ast.Call]],
-) -> Optional[str]:
+) -> Any:
     """The ``loss_type`` that governs *this* ``CPOTrainer``: on the call itself, else on
     the ``CPOConfig`` passed as ``args=``, inline or through a name whose latest
-    assignment precedes the trainer call. A ``CPOConfig`` elsewhere in the notebook,
-    or one bound to the name only after the trainer ran, does not count. ``None``
-    means unresolved or omitted, which is TRL's default (``sigmoid``)."""
+    module-level assignment precedes the trainer call. A ``CPOConfig`` elsewhere in
+    the notebook, or one bound to the name only after the trainer ran, does not
+    count. ``None`` means omitted (TRL's default, ``sigmoid``); ``_UNREAD`` means an
+    ``args=`` was passed that cannot be read statically."""
     if "loss_type" in trainer_kwargs:
         return trainer_kwargs["loss_type"]
     for kw in trainer_call.keywords:
@@ -312,8 +331,11 @@ def _cpo_loss_type(
                 if call.lineno < trainer_call.lineno
             ]
             config = preceding[-1] if preceding else None
-        if isinstance(config, ast.Call) and _get_func_name(config) == "CPOConfig":
-            return _extract_kwargs(config, scope=scope).get("loss_type")
+        if not (isinstance(config, ast.Call) and _get_func_name(config) == "CPOConfig"):
+            return _UNREAD
+        if any(k.arg is None for k in config.keywords):  # CPOConfig(**kw)
+            return _UNREAD
+        return _extract_kwargs(config, scope=scope).get("loss_type")
     return None
 
 

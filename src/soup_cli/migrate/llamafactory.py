@@ -67,6 +67,11 @@ def migrate_llamafactory(config_path: Path) -> Dict[str, Any]:
     # reads pref_loss only there).
     pref_loss = raw.get("pref_loss")
     if stage == "dpo" and pref_loss is not None:
+        if not isinstance(pref_loss, str):
+            raise ValueError(
+                f"LLaMA-Factory pref_loss must name one loss as a string, got "
+                f"{type(pref_loss).__name__}: {pref_loss!r}."
+            )
         if pref_loss not in _PREF_LOSS_MAP:
             supported = ", ".join(sorted(_PREF_LOSS_MAP))
             raise ValueError(

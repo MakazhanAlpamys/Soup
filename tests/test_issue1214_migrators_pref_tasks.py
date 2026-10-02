@@ -69,6 +69,25 @@ class TestLlamaFactoryPrefLoss:
         assert _loaded_task(result) == soup_task
         assert result["data"]["format"] == "dpo"
 
+    def test_a_pref_loss_that_is_not_a_string_is_refused_not_a_traceback(
+        self, tmp_path: Path
+    ) -> None:
+        with pytest.raises(ValueError, match="pref_loss"):
+            _lf(tmp_path, "pref_loss: [hinge]\n")
+
+    @pytest.mark.parametrize("pref_loss", ["orpo", "simpo"])
+    def test_pref_loss_under_another_stage_keeps_that_stage_task(
+        self, tmp_path: Path, pref_loss: str
+    ) -> None:
+        # Changed behaviour, listed in the fragment: main overrode `stage: sft` to orpo /
+        # simpo; LLaMA-Factory reads pref_loss only in its dpo stage.
+        cfg = tmp_path / "lf.yaml"
+        cfg.write_text(
+            _LF_BASE.replace("stage: dpo", "stage: sft") + f"pref_loss: {pref_loss}\n",
+            encoding="utf-8",
+        )
+        assert _loaded_task(migrate_llamafactory(cfg)) == "sft"
+
     @pytest.mark.parametrize("pref_loss", ["hinge", "kto_pair", "bogus"])
     def test_a_pref_loss_without_a_soup_task_is_refused_by_name(
         self, tmp_path: Path, pref_loss: str
@@ -141,11 +160,15 @@ _TRAINERS = [
     ("GRPOTrainer", "GRPOConfig", "", "grpo"),
     ("KTOTrainer", "KTOConfig", "", "kto"),
     ("ORPOTrainer", "ORPOConfig", "", "orpo"),
+    ("PPOTrainer", "PPOConfig", "", "ppo"),
     ("RewardTrainer", "RewardConfig", "", "reward_model"),
     ("BCOTrainer", "BCOConfig", "", "bco"),
     ("OnlineDPOTrainer", "OnlineDPOConfig", "", "online_dpo"),
     ("CPOTrainer", "CPOConfig", "loss_type='simpo', ", "simpo"),
 ]
+# The data.format each task is written with; everything else is `auto`.
+_FORMATS = {"dpo": "dpo", "orpo": "dpo", "simpo": "dpo", "reward_model": "dpo", "bco": "dpo",
+            "kto": "kto"}
 
 
 class TestUnslothTrainerClasses:
@@ -161,15 +184,13 @@ class TestUnslothTrainerClasses:
         )
         result = _unsloth(tmp_path, cell)
         assert result["task"] == soup_task
+        assert result["data"]["format"] == _FORMATS.get(soup_task, "auto")
         assert result["training"]["batch_size"] == 2
         assert result["training"]["epochs"] == 3
         assert result["training"]["lr"] == 2e-4
         assert result["output"] == "outputs"
 
-    @pytest.mark.parametrize(
-        "trainer,config,loss_kwarg,soup_task",
-        [row for row in _TRAINERS if row[3] not in ("online_dpo",)],
-    )
+    @pytest.mark.parametrize("trainer,config,loss_kwarg,soup_task", _TRAINERS)
     def test_the_migrated_config_loads_with_that_task(
         self, tmp_path: Path, trainer: str, config: str, loss_kwarg: str, soup_task: str
     ) -> None:
@@ -198,23 +219,43 @@ class TestUnslothTrainerClasses:
         assert result["task"] == soup_task
         assert result["training"]["batch_size"] == 2
 
-    def test_online_dpo_loads_once_a_judge_is_set_and_warns_that_none_was_carried(
-        self, tmp_path: Path
-    ) -> None:
+    def test_online_dpo_writes_a_placeholder_judge_and_says_so(self, tmp_path: Path) -> None:
+        # The schema needs a judge or a reward model and TRL's judge is a Python object,
+        # so the migrator writes a placeholder the way it writes data.train.
         cell = (
             "from trl import OnlineDPOTrainer, OnlineDPOConfig\n"
             "trainer = OnlineDPOTrainer(model=model, judge=judge, train_dataset=dataset,\n"
             "    args=OnlineDPOConfig(per_device_train_batch_size=2))\n"
         )
         result = _unsloth(tmp_path, cell)
-        assert result["task"] == "online_dpo"
-        assert any("judge" in w for w in result["_warnings"])
-        result["training"]["online_dpo_judge"] = "ollama://llama3.1"
+        assert result["training"]["online_dpo_judge"] == "ollama://REPLACE-ME"
+        assert any("online_dpo_judge" in w and "placeholder" in w for w in result["_warnings"])
         assert _loaded_task(result) == "online_dpo"
 
-    @pytest.mark.parametrize("loss_kwarg", ["", "loss_type='sigmoid', ", "loss_type='hinge', "])
-    def test_cpo_without_the_simpo_loss_is_refused_by_name(
-        self, tmp_path: Path, loss_kwarg: str
+    def test_cli_online_dpo_notebook_produces_a_loadable_config(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        cell = (
+            "from trl import OnlineDPOTrainer, OnlineDPOConfig\n"
+            "trainer = OnlineDPOTrainer(model=model, judge=judge, train_dataset=dataset,\n"
+            "    args=OnlineDPOConfig(per_device_train_batch_size=2))\n"
+        )
+        (tmp_path / "nb.ipynb").write_text(json.dumps(_notebook(cell)), encoding="utf-8")
+        result = CliRunner().invoke(
+            app, ["migrate", "--from", "unsloth", "nb.ipynb", "-o", "soup.yaml"]
+        )
+        assert result.exit_code == 0, result.output
+        assert "online_dpo_judge" in _plain(result.output)
+        written = (tmp_path / "soup.yaml").read_text(encoding="utf-8")
+        assert load_config_from_string(written).task == "online_dpo"
+
+    @pytest.mark.parametrize(
+        "loss_kwarg,expected",
+        [("", None), ("loss_type='sigmoid', ", "sigmoid"), ("loss_type='hinge', ", "hinge")],
+    )
+    def test_cpo_without_the_simpo_loss_is_refused_naming_the_value(
+        self, tmp_path: Path, loss_kwarg: str, expected
     ) -> None:
         cell = (
             "from trl import CPOTrainer, CPOConfig\n"
@@ -223,7 +264,35 @@ class TestUnslothTrainerClasses:
         )
         with pytest.raises(ValueError, match="CPOTrainer") as info:
             _unsloth(tmp_path, cell)
+        assert f"loss_type={expected!r}" in str(info.value)
         assert "simpo" in str(info.value)
+
+    @pytest.mark.parametrize(
+        "args_expr",
+        ["cfgs.cpo", "make_config()", "CPOConfig(**kw)", "later_name"],
+        ids=["attribute", "factory call", "double-star kwargs", "name bound only later"],
+    )
+    def test_an_args_that_cannot_be_read_statically_is_refused_saying_so(
+        self, tmp_path: Path, args_expr: str
+    ) -> None:
+        cell = (
+            "from trl import CPOTrainer, CPOConfig\n"
+            f"trainer = CPOTrainer(model=model, train_dataset=dataset, args={args_expr})\n"
+            "later_name = CPOConfig(loss_type='simpo')\n"
+        )
+        with pytest.raises(ValueError, match="could not be read statically"):
+            _unsloth(tmp_path, cell)
+
+    def test_a_later_sft_config_call_now_decides_the_task(self, tmp_path: Path) -> None:
+        # Changed behaviour, listed in the fragment: SFTConfig is in the config table,
+        # so the last *Config call in the notebook decides, as it already did for the
+        # other config classes.
+        cell = (
+            "from trl import GRPOTrainer, GRPOConfig, SFTTrainer, SFTConfig\n"
+            "t1 = GRPOTrainer(model=model, train_dataset=dataset, args=GRPOConfig())\n"
+            "t2 = SFTTrainer(model=model, train_dataset=dataset, args=SFTConfig())\n"
+        )
+        assert _unsloth(tmp_path, cell)["task"] == "sft"
 
     def test_an_unrelated_cpo_config_elsewhere_does_not_decide_the_trainer(
         self, tmp_path: Path
