@@ -11,10 +11,12 @@ from rich.panel import Panel
 from rich.table import Table
 
 from soup_cli.commands._webhook_cli import emit_webhooks, validate_webhook_flags
+from soup_cli.config.deprecation import deadline_clause
 from soup_cli.utils.ab_test import (
     HIGHER_IS_BETTER,
     PRIOR_SCALE_ROWS,
     MsprtConfig,
+    retired_beta_message,
     run_msprt,
     validate_metric_name,
 )
@@ -33,16 +35,17 @@ def ab(
     alpha: float = typer.Option(
         0.05, "--alpha",
         help=(
-            "Type-I error (false positive) rate (0, 1) of the two-sided test, kept for a "
-            "test re-run after every new row, at any number of rows."
+            "Error rate (0, 1) of both verdicts, kept for a test re-run after every "
+            "new row, at any number of rows: with no difference the test ends in "
+            "reject_h0, and with a true difference of --effect-size or more in "
+            "accept_h0, each in at most this share of runs."
         ),
     ),
-    beta: float = typer.Option(
-        0.20, "--beta",
+    beta: Optional[float] = typer.Option(
+        None, "--beta",
         help=(
-            "Type-II error (false negative) rate (0, 1). Not the power: a power "
-            "of 0.95 is --beta 0.05. alpha + beta must stay below 1, or the "
-            "test accepts H0 on no evidence either way."
+            "Retired (#1418): ignored, with a warning. --alpha now bounds wrong "
+            "accept_h0 verdicts too."
         ),
     ),
     effect_size: float = typer.Option(
@@ -75,9 +78,17 @@ def ab(
         slack_url, discord_url, console=console
     )
 
+    # #1418: --beta is retired. Say so rather than drop it silently, and do not
+    # pass it on (MsprtConfig would warn a second time).
+    if beta is not None:
+        console.print(
+            "[yellow]Warning: "
+            f"{escape(retired_beta_message('--beta', '--alpha'))} {deadline_clause()}[/]"
+        )
+
     try:
         cfg = MsprtConfig(
-            metric=canonical, alpha=alpha, beta=beta, effect_size=effect_size,
+            metric=canonical, alpha=alpha, effect_size=effect_size,
         )
     except (TypeError, ValueError) as exc:
         console.print(f"[red]{escape(str(exc))}[/]")
@@ -136,8 +147,9 @@ def ab(
     elif verdict.decision == "accept_h0":
         console.print(
             Panel(
-                "[yellow]No significant difference. Treatment is not "
-                "distinguishable from control at the configured effect size.[/]",
+                "[yellow]No significant difference: any difference between treatment "
+                f"and control on {escape(canonical)} is smaller than --effect-size "
+                f"{cfg.effect_size:g}, at confidence {1.0 - cfg.alpha:g}.[/]",
                 border_style="yellow",
             )
         )
