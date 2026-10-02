@@ -13,6 +13,12 @@ on:
     # matrix when a maintainer adds `ci:full` (see the comment above the `plan`
     # job); it stays a plain pull_request run -- never pull_request_target.
     types: [opened, synchronize, reopened, ready_for_review, labeled]
+  # The full matrix on `main`, once a night: a push to `main` itself runs only the
+  # quick set (see the comment above the `plan` job). `workflow_dispatch` lets a
+  # maintainer start the same full run by hand.
+  schedule:
+    - cron: '23 3 * * *'
+  workflow_dispatch:
 
 # Supersede, do not queue.
 #
@@ -38,7 +44,15 @@ on:
 # already discards -- merge requires green on the CURRENT head -- which is why
 # it is the right thing to trade.
 #
-# 2026-09-28: pushes to `main` now share ONE group, keyed 'main-push'. Measured
+# 2026-10-01: every push is alone in its own group again -- keyed on the event and
+# the commit -- because a push to `main` now runs only the QUICK set (about three
+# jobs, not fifteen). The shared 'main-push' group below traded a result per commit
+# for runner capacity; with a cheap per-commit run and the full matrix once a night
+# the same capacity buys a green or red mark on every `main` commit, where the
+# shared group left 'cancelled' on all but the last of a burst of merges (seen
+# 2026-10-01: 22 merges in two hours, red crosses on every commit but two).
+#
+# 2026-09-28 (superseded by the paragraph above): pushes to `main` shared ONE group, keyed 'main-push'. Measured
 # that morning: 24 of 70 queued runs were full matrices for main commits (about
 # 15 merges plus credit commits in a day), each alone in its per-commit group,
 # so main's own history consumed roughly a third of the queue while every
@@ -56,7 +70,7 @@ concurrency:
   # the pull request, and no later push cancels it. Adding `ci:full` keys on the
   # ref like every other pull-request event, so the full run supersedes the quick
   # one. The whole policy is in the comment above the `plan` job.
-  group: ${{ github.workflow }}-${{ github.event.action == 'labeled' && github.event.label.name != 'ci:full' && format('labeled-{0}', github.run_id) || github.event_name == 'pull_request' && github.ref || (github.ref == 'refs/heads/main' && 'main-push' || github.sha) }}
+  group: ${{ github.workflow }}-${{ github.event.action == 'labeled' && github.event.label.name != 'ci:full' && format('labeled-{0}', github.run_id) || github.event_name == 'pull_request' && github.ref || format('{0}-{1}', github.event_name, github.sha) }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # Bound every job explicitly.
@@ -116,9 +130,11 @@ jobs:
   # So `plan` picks one of three matrices, and every job except `lint` follows it:
   #
   #   push to release/**               RELEASE: all nine test cells + the five gated jobs
-  #   push to main, or a pull          FULL: seven test cells (no Windows or macOS
-  #     request labelled ci:full         on 3.11) + the five gated jobs
-  #   any other pull request run       QUICK: lint + test (ubuntu-latest, 3.12)
+  #   nightly run on main, a manual    FULL: seven test cells (no Windows or macOS
+  #     dispatch, or a pull request      on 3.11) + the five gated jobs
+  #     labelled ci:full
+  #   push to main, any other pull     QUICK: lint + test (ubuntu-latest, 3.12)
+  #     request run
   #
   # 3.11 runs on ubuntu in every full run, and on Windows and macOS only for
   # release/**, where the release checklist needs every cell green on the tagged
@@ -193,7 +209,7 @@ jobs:
         id: decide
         env:
           RELEASE: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/heads/release/') }}
-          FULL: ${{ github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'ci:full') }}
+          FULL: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && startsWith(github.ref, 'refs/heads/release/')) || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'ci:full')) }}
         run: |
           set -euo pipefail
           if [ "$RELEASE" = "true" ]; then
@@ -205,7 +221,7 @@ jobs:
           else
             full=false
             matrix="$QUICK_MATRIX"
-            echo "::notice title=Quick CI run::lint and test (ubuntu-latest, 3.12) only. The other required test cells and the smoke jobs run when a maintainer adds the ci:full label."
+            echo "::notice title=Quick CI run::lint and test (ubuntu-latest, 3.12) only. A pull request gets the other required test cells and the smoke jobs when a maintainer adds the ci:full label; main gets the full matrix every night."
           fi
           {
             echo "full=$full"
@@ -630,7 +646,7 @@ jobs:
           files: coverage.xml
           fail_ci_if_error: false
       - name: Update test count badge
-        if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.11' && github.ref == 'refs/heads/main' && github.event_name == 'push' && github.repository == 'MakazhanAlpamys/Soup'
+        if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.11' && github.ref == 'refs/heads/main' && github.event_name == 'schedule' && github.repository == 'MakazhanAlpamys/Soup'
         run: |
           TESTS=$(python -c "
           import xml.etree.ElementTree as ET
