@@ -30,11 +30,12 @@ the metric's polarity in `HIGHER_IS_BETTER`. Record:
 benchmarks/gate-1265-ab-nig.md.
 
 Since #1418 it accepts H0 from the same mixture read the other way: the
-differences it does not reject at level beta form an always-valid confidence
+differences it does not reject at level alpha form an always-valid confidence
 sequence for the difference, and `accept_h0` comes once that sequence lies
 inside (-effect_size, +effect_size). By the same Ville argument, a difference of
-effect_size or more ends in `accept_h0` in at most a beta share of runs, however
-often the operator looks. Record: benchmarks/gate-1418-ab-cs-accept.md.
+effect_size or more ends in `accept_h0` in at most an alpha share of runs,
+however often the operator looks, so alpha bounds both wrong verdicts and beta
+is retired. Record: benchmarks/gate-1418-ab-cs-accept.md.
 
 Two known limitations:
 1. Single metric per pass — multi-metric correction (Bonferroni / Holm)
@@ -54,6 +55,7 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Mapping, Sequence
 
+from soup_cli.config.deprecation import warn_deprecated_value
 from soup_cli.utils.paths import is_under_cwd
 
 SUPPORTED_METRICS: frozenset[str] = frozenset(
@@ -73,11 +75,28 @@ HIGHER_IS_BETTER: Mapping[str, bool] = MappingProxyType(
 # benchmarks/gate-1265-ab-nig.md; changing it means re-running that sweep.
 PRIOR_SCALE_ROWS = 5
 # accept_h0 is held at continue while the tested rows' pooled standard deviation
-# is more than this many times the held-out rows' (#1265 review). With a
-# saturated start the prior scale is far too small and nearly every run accepted
-# H0, with or without a real difference; on Gaussian rows the two spreads agree
-# and no verdict changes. Only accepts are held back, so Type-I is untouched.
+# is more than this many times the held-out rows' (#1265 review). It was added
+# because, with a saturated start, the prior scale was far too small and #1265's
+# Bayes-factor accept boundary was crossed whether or not there was a real
+# difference. #1418's confidence sequence covers at its level for any prior
+# scale fixed before the tested rows, so it does not need the hold for its
+# guarantee; whether the hold stays is #1524's question, and until then it is
+# unchanged. On Gaussian rows the two spreads agree and it changes no verdict.
+# Only accepts are held back, so Type-I is untouched.
 ACCEPT_HOLD_SPREAD_RATIO = 3.0
+
+def retired_beta_message(beta: str = "beta", alpha: str = "alpha") -> str:
+    """What a passed ``beta`` is told (#1418), before the deadline clause.
+
+    The CLI passes its flag names, ``--beta`` and ``--alpha``.
+    """
+    return (
+        f"{beta} no longer does anything (#1418): soup ab now accepts H0 once the "
+        f"confidence sequence for the difference at level {alpha} lies inside "
+        f"+-effect_size, so {alpha} bounds both a wrong reject_h0 and a wrong "
+        f"accept_h0. Remove {beta}; to make accept_h0 stricter, lower {alpha}."
+    )
+
 
 # #1339 - the largest standardised effect whose square is still a float.
 MAX_STANDARDISED_EFFECT = math.sqrt(sys.float_info.max)
@@ -151,8 +170,8 @@ class MsprtConfig:
     """Parameters for an mSPRT pass."""
 
     metric: str
-    alpha: float = 0.05  # Type-I error rate
-    beta: float = 0.20  # Type-II error rate
+    alpha: float = 0.05  # bounds both wrong reject_h0 and wrong accept_h0 (#1418)
+    beta: float | None = None  # retired in #1418: ignored, with a warning
     effect_size: float = 0.1  # Minimum detectable difference in means
 
     def __post_init__(self) -> None:
@@ -160,22 +179,13 @@ class MsprtConfig:
         # cannot smuggle through a non-canonical metric.
         object.__setattr__(self, "metric", validate_metric_name(self.metric))
         object.__setattr__(self, "alpha", _require_unit_open(self.alpha, field="alpha"))
-        object.__setattr__(self, "beta", _require_unit_open(self.beta, field="beta"))
-        # #1339 - each rate is in (0, 1) on its own, but at alpha + beta >= 1
-        # the pair asks for nothing a coin could not deliver: rejecting with
-        # probability alpha without reading a row already accepts a real
-        # difference in only 1 - alpha <= beta of runs. Since #1418 beta is the
-        # share of runs a difference of effect_size may end in accept_h0, so a
-        # power typed as beta (alpha 0.05 / beta 0.95) would let 95% of them.
-        if self.alpha + self.beta >= 1.0:
-            raise ValueError(
-                f"alpha + beta must be < 1.0, got alpha={self.alpha} + "
-                f"beta={self.beta} = {self.alpha + self.beta}. At or above 1.0 "
-                "a coin flip that never reads the rows meets both rates, so "
-                "the test may accept H0 on no evidence either way, or even "
-                "evidence of a difference. beta is the Type-II error rate, not "
-                "the power: a power of 0.95 is beta 0.05."
-            )
+        # #1418 retired beta: accept_h0 now comes from a confidence sequence at
+        # level alpha, so alpha bounds both wrong verdicts and there is no
+        # Type-II rate left to set. A beta that is passed is not used, and it
+        # says so rather than being dropped silently. #1339's alpha + beta < 1
+        # check guarded the old accept boundary and went with it.
+        if self.beta is not None:
+            warn_deprecated_value(retired_beta_message())
         object.__setattr__(
             self,
             "effect_size",
@@ -466,8 +476,10 @@ def msprt_step(
       direction; ``direction`` says whether the treatment is ``better`` or
       ``worse`` than control, by the metric's polarity
     - ``accept_h0``: any difference is smaller than ``effect_size``: the
-      confidence sequence at coverage 1 - ``beta`` lies inside
-      (-``effect_size``, +``effect_size``)
+      confidence sequence at coverage 1 - ``alpha`` lies inside
+      (-``effect_size``, +``effect_size``). ``log_likelihood_ratio`` is still
+      the Bayes factor against "no difference", so on an accept it can be
+      anything below ``log(1 / alpha)``, positive included
 
     ``mean_control`` / ``mean_treatment`` and the row counts cover every row;
     the statistic and the direction use the rows after the held-out ones.
@@ -542,14 +554,14 @@ def msprt_step(
         n_treatment=len(rest_t),
         pooled_variance=pooled_variance,
         prior_variance=prior_variance,
-        level=config.beta,
+        level=config.alpha,
     )
     if abs(diff) + half_width < config.effect_size:
         # Held-out rows far tighter than the tested ones (a warm cache, a judge
-        # that saturates early) make the prior far too wide, and the Bayes
-        # factor then favours H0 whether or not there is a difference. Hold the
-        # accept back until the spreads agree; a reject is never held back, so
-        # the Type-I bound is unchanged.
+        # that saturates early): hold the accept back until the spreads agree,
+        # as #1265 shipped it. Why it is still here, and what decides whether
+        # it stays, is at ACCEPT_HOLD_SPREAD_RATIO. A reject is never held
+        # back, so the Type-I bound is unchanged.
         held_out_sd = config.effect_size / standardised_effect
         if math.sqrt(pooled_variance) > ACCEPT_HOLD_SPREAD_RATIO * held_out_sd:
             return verdict(llr)
@@ -617,6 +629,7 @@ __all__ = [
     "PRIOR_SCALE_ROWS",
     "SUPPORTED_METRICS",
     "msprt_step",
+    "retired_beta_message",
     "run_msprt",
     "validate_metric_name",
 ]
