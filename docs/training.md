@@ -1419,7 +1419,23 @@ References are a JSONL where each row's gold answer is in an `answer` field (ove
 `--field`) or the last assistant turn of a `messages` list. `--min-discrimination` sets how
 strongly the verifier must separate references from perturbed negatives before it's emitted.
 v1 is deterministic families only — a `\boxed{}`/`####` marker helps the numeric verifier, and
-completions are prompted to mark their answer (standard RLVR practice).
+completions are prompted to mark their answer (standard RLVR practice). The numeric verifier
+reads both the gold and the completion with the parser the built-in `math` / `accuracy` rewards
+use (`soup_cli.utils.final_answer`), so `#### 1,000`, `\boxed {42}` and a `6*7=42\n#### 42` gold
+score the same under both; references written `1,000` count as numeric. The calibration report
+names every reference the emitted verifier rejects (`rejected_references` in `--output-report`).
+
+**Changed:** a `reward.py` synthesized before this version pulled the last number with a local
+regex; ones synthesized now read both sides with the shared answer parser, so `1,000`-style
+golds and `The answer is …` completions score where they scored 0 before — regenerate old
+verifiers before comparing runs. Regeneration also stops paying some completions the old regex
+paid: a `####` or `\boxed{}` answer carrying units, `%` or a non-dollar currency symbol or
+code (`#### 42 apples`, `\boxed{42\%}`, `#### €42`, `#### 42 USD`), a hedged or justified answer phrase (`The answer is either 41 or
+42`, `The answer is 42 because 6*7=42`), and a completion whose last `\boxed{}` is wrong after
+a right first one now score 0 — matching the built-ins. A bare `42%` or `The answer is 42%.`
+still pays, as under the built-ins; only marker-delimited answers refuse suffixes. The emitted
+file imports `soup_cli`, so it runs where Soup is installed rather than being fully
+self-contained.
 
 ### Stress-test a verifier for gameability (`soup reward stress`)
 
