@@ -593,7 +593,7 @@ Soup shows friendly error messages by default (2-3 lines with a fix suggestion).
 soup --verbose train --config soup.yaml
 
 # Works with any command
-soup --verbose eval --model ./output --benchmarks mmlu
+soup --verbose eval benchmark --model ./output --benchmarks mmlu
 ```
 
 > **Note:** `--verbose` is a global flag — it must go **before** the command name, not after.
@@ -721,7 +721,7 @@ zero telemetry network requests.
 You can also explicitly disable telemetry for a specific invocation using the `--no-telemetry` flag:
 
 ```bash
-soup train --config soup.yaml --no-telemetry
+soup --no-telemetry train --config soup.yaml
 ```
 
 When enabled, telemetry performs a synchronous fire-and-forget HTTP POST with a 1-second connect and read timeout (DNS resolution excluded) on command exit. The anonymous identifier is stored at `~/.soup/telemetry_id`; deleting `~/.soup/telemetry_id` regenerates it on the next opt-in. See [Privacy Policy](#privacy-policy) for details.

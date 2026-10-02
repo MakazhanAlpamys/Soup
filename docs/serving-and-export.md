@@ -404,7 +404,7 @@ forward pass; on a small target it is frequently a *slowdown*.
 
 ```bash
 # Transformers backend — uses HF assisted generation
-soup serve --model ./output --speculative-decoding small-draft-model --spec-tokens 5
+soup serve --model ./output --speculative-decoding small-draft-model --num-speculative-tokens 5
 
 # vLLM backend — uses vLLM native speculative decoding
 soup serve --model ./output --backend vllm --speculative-decoding small-draft-model
