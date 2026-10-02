@@ -215,6 +215,7 @@ class TestTheProbeIsActuallyWiredIntoSetup:
         with pytest.raises(ValueError) as exc:
             wrapper._run_stream_vram_probe(object(), self._plan(int(3.0 * GB), 4 * GB))
         assert "ran out of VRAM" in str(exc.value)
+        assert "1 model row x seq 4096" in str(exc.value)
         assert wrapper.closed == 1
 
     def test_a_probe_that_raised_mid_step_refuses_rather_than_falling_back(

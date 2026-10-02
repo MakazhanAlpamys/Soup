@@ -20,9 +20,13 @@ NO top-level torch: this module is imported by five trainer modules.
 """
 
 import contextlib
+import copy
 import math
 import os
+import random
 import shutil
+import sys
+import types
 from dataclasses import dataclass
 
 from rich.console import Console
@@ -281,6 +285,170 @@ class _ProbePlan:
     vocab_size: int
     predicted_bytes: int
     available_bytes: int
+    task: str = "sft"
+    batch_size: int = 1
+
+
+_PROBE_FULL_SEQUENCE_KEYS = (
+    "input_ids",
+    "chosen_input_ids",
+    "rejected_input_ids",
+    "completion_input_ids",
+    "KL_completion_input_ids",
+)
+
+
+def _resize_probe_tensor(value, *, length: int, fill_from_last: bool):
+    """Resize one rank-2 token tensor to the configured probe length (#840)."""
+    import torch
+
+    if not isinstance(value, torch.Tensor) or value.ndim != 2:
+        return value
+    current = int(value.shape[1])
+    if current == length:
+        return value
+    if current > length:
+        raise ValueError(
+            "preference VRAM probe received a sequence of length "
+            f"{current}, above the configured data.max_length={length}; refusing "
+            "to truncate a real trainer batch because that would under-measure "
+            "the training step"
+        )
+    if current == 0:
+        raise ValueError("cannot extend an empty preference-probe token sequence")
+    pad = length - current
+    if fill_from_last:
+        tail = value[:, -1:].expand(-1, pad)
+    else:
+        tail = torch.ones((value.shape[0], pad), dtype=value.dtype, device=value.device)
+    return torch.cat((value, tail), dim=1)
+
+
+def _stretch_preference_probe_batch(batch: dict, *, seq_len: int) -> dict:
+    """Make the real TRL batch occupy the configured sequence budget (#840).
+
+    The probe executes trainer.compute_loss, so TRL supplies the real log-prob
+    reduction, reference forward and KTO KL forward. Only complete model
+    sequences are extended; prompt-only and answer-only helper fields stay
+    untouched.
+    """
+    if seq_len < 1:
+        raise ValueError(f"seq_len must be >= 1; got {seq_len}")
+    out = dict(batch)
+    seen = 0
+    for ids_key in _PROBE_FULL_SEQUENCE_KEYS:
+        ids = batch.get(ids_key)
+        if ids is None or not hasattr(ids, "ndim") or ids.ndim != 2:
+            continue
+        seen += 1
+        resized_ids = _resize_probe_tensor(ids, length=seq_len, fill_from_last=True)
+        out[ids_key] = resized_ids
+        stem = ids_key[: -len("input_ids")]
+        attention_key = stem + "attention_mask"
+        if attention_key in batch:
+            out[attention_key] = _resize_probe_tensor(
+                batch[attention_key], length=seq_len, fill_from_last=False
+            )
+        labels_key = stem + "labels"
+        if labels_key in batch:
+            labels = _resize_probe_tensor(
+                batch[labels_key], length=seq_len, fill_from_last=True
+            )
+            if labels.shape == resized_ids.shape:
+                original = min(int(batch[labels_key].shape[1]), seq_len)
+                if original < seq_len:
+                    labels = labels.clone()
+                    labels[:, original:] = resized_ids[:, original:]
+            out[labels_key] = labels
+        if ids_key == "input_ids" and "completion_mask" in batch:
+            out["completion_mask"] = _resize_probe_tensor(
+                batch["completion_mask"], length=seq_len, fill_from_last=False
+            )
+    if not seen:
+        raise ValueError(
+            "preference VRAM probe found no complete token sequence in the TRL batch"
+        )
+    return out
+
+
+def _preference_probe_rows(batch: dict) -> int:
+    """Return the model-row count represented by one prepared TRL batch."""
+    if (ids := batch.get("input_ids")) is not None and getattr(ids, "ndim", 0) == 2:
+        return int(ids.shape[0])
+    pair = [batch.get("chosen_input_ids"), batch.get("rejected_input_ids")]
+    if all(value is not None and getattr(value, "ndim", 0) == 2 for value in pair):
+        return sum(int(value.shape[0]) for value in pair)
+    ids = batch.get("completion_input_ids")
+    if ids is not None and getattr(ids, "ndim", 0) == 2:
+        return int(ids.shape[0])
+    raise ValueError("preference VRAM probe could not determine the TRL batch row count")
+
+
+@contextlib.contextmanager
+def _trainer_forward_for_probe(trainer, model):
+    """Temporarily install the AMP forward that Accelerate prepares for training."""
+    accelerator = getattr(trainer, "accelerator", None)
+    if accelerator is None or not getattr(accelerator, "native_amp", False):
+        yield
+        return
+
+    from accelerate.utils.modeling import get_mixed_precision_context_manager
+    from accelerate.utils.operations import convert_outputs_to_fp32
+
+    had_instance_forward = "forward" in vars(model)
+    instance_forward = vars(model).get("forward")
+    original_forward = model.forward
+    autocast_context = get_mixed_precision_context_manager(
+        accelerator.native_amp, accelerator.autocast_handler
+    )
+    if hasattr(original_forward, "__func__"):
+        new_forward = autocast_context(original_forward.__func__)
+        model.forward = types.MethodType(new_forward, model)
+        model.forward = types.MethodType(
+            convert_outputs_to_fp32(model.forward.__func__), model
+        )
+    else:
+        model.forward = convert_outputs_to_fp32(autocast_context(original_forward))
+    try:
+        yield
+    finally:
+        if had_instance_forward:
+            model.forward = instance_forward
+        elif "forward" in vars(model):
+            delattr(model, "forward")
+
+
+@contextlib.contextmanager
+def _preserve_preference_probe_state(trainer):
+    """Keep a pre-flight loss call out of training metrics and random streams."""
+    import torch
+
+    mutable = ("_metrics", "_stored_metrics", "_total_train_tokens")
+    present = set(vars(trainer))
+    snapshots = {
+        name: copy.deepcopy(vars(trainer)[name])
+        for name in mutable
+        if name in present
+    }
+    python_rng = random.getstate()
+    torch_rng = torch.random.get_rng_state()
+    cuda_rng = torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None
+    numpy = sys.modules.get("numpy")
+    numpy_rng = None if numpy is None else numpy.random.get_state()
+    try:
+        yield
+    finally:
+        for name in mutable:
+            if name in snapshots:
+                setattr(trainer, name, snapshots[name])
+            elif name in vars(trainer):
+                delattr(trainer, name)
+        random.setstate(python_rng)
+        torch.random.set_rng_state(torch_rng)
+        if cuda_rng is not None:
+            torch.cuda.set_rng_state_all(cuda_rng)
+        if numpy_rng is not None:
+            numpy.random.set_state(numpy_rng)
 
 
 def _existing_disk_anchor(path: str) -> str:
@@ -975,7 +1143,14 @@ class StreamingSetupMixin:
         self.model = model
         self._stream_runtime = runtime
         if probe_plan is not None:
-            self._run_stream_vram_probe(model, probe_plan)
+            if cfg.task == "sft":
+                self._run_stream_vram_probe(model, probe_plan)
+            else:
+                # #840 — preference losses must be measured through the real
+                # TRL trainer, which does not exist until after this shared
+                # streaming setup returns. Carry the exact pre-flight plan
+                # forward so the post-trainer probe measures the same shape.
+                self._pending_stream_vram_probe = probe_plan
         stats = runtime.stats()
         source_line = _stream_source_line(stats)
         large_runtime_buffer = stats.get("large_buffer_bytes", 0)
@@ -1237,6 +1412,8 @@ class StreamingSetupMixin:
         plan = None
         if tcfg.stream_vram_probe:
             plan = _ProbePlan(
+                task=str(getattr(cfg, "task", "sft")),
+                batch_size=int(batch),
                 rows=rows,
                 seq_len=seq_len,
                 vocab_size=vocab,
@@ -1252,7 +1429,6 @@ class StreamingSetupMixin:
         released first: it holds the pinned RAM store, and `setup()` raising is
         outside the ExitStack that `_training_context` installs around training.
         """
-        from soup_cli.utils.layer_stream import decide_measured_fit
         from soup_cli.utils.layer_stream_runtime import measure_step_peak_bytes
 
         try:
@@ -1272,11 +1448,78 @@ class StreamingSetupMixin:
             # when a second caller appears.
             self._close_stream_runtime()
             raise
+        self._finish_stream_vram_probe(peak, plan)
+
+    def _run_pending_stream_vram_probe(self) -> None:
+        """Measure a preference loss after its real TRL trainer exists (#840)."""
+        plan = getattr(self, "_pending_stream_vram_probe", None)
+        if plan is None:
+            return
+        self._pending_stream_vram_probe = None
+        try:
+            with _preserve_preference_probe_state(self.trainer):
+                batch = next(iter(self.trainer.get_train_dataloader()))
+                batch = _stretch_preference_probe_batch(batch, seq_len=plan.seq_len)
+                measured_rows = _preference_probe_rows(batch)
+                if measured_rows != plan.rows:
+                    raise ValueError(
+                        "preference VRAM probe expected "
+                        f"{plan.rows} model rows but the real TRL batch produced "
+                        f"{measured_rows}; refusing to under-measure a partial batch"
+                    )
+                model_device = next(
+                    param.device for param in self.model.parameters() if not param.is_meta
+                )
+                batch = {
+                    key: (value.to(model_device) if hasattr(value, "to") else value)
+                    for key, value in batch.items()
+                }
+
+                from soup_cli.utils.layer_stream_runtime import (
+                    measure_loss_step_peak_bytes,
+                )
+
+                was_training = self.model.training
+                self.model.train()
+                try:
+                    with _trainer_forward_for_probe(self.trainer, self.model):
+                        peak = measure_loss_step_peak_bytes(
+                            self.model,
+                            step=lambda: self.trainer.compute_loss(self.model, batch),
+                            rows=plan.rows,
+                            seq_len=plan.seq_len,
+                            device=str(self.device),
+                        )
+                finally:
+                    self.model.train(was_training)
+        except Exception:
+            self._close_stream_runtime()
+            raise
+        self._finish_stream_vram_probe(peak, plan)
+
+    def _assert_no_pending_stream_vram_probe(self) -> None:
+        """Fail closed if setup did not consume a deferred preference probe."""
+        plan = getattr(self, "_pending_stream_vram_probe", None)
+        if plan is None:
+            return
+        self._close_stream_runtime()
+        raise RuntimeError(
+            "training.stream_vram_probe was requested, but the deferred "
+            f"{plan.task} probe was not consumed during setup; refusing to start "
+            "training without the measured VRAM gate"
+        )
+
+    def _finish_stream_vram_probe(self, peak, plan: _ProbePlan) -> None:
+        """Apply the one measured-fit policy shared by SFT and preferences."""
+        from soup_cli.utils.layer_stream import decide_measured_fit
+
+        model_rows = f"{plan.rows} model row{'s' if plan.rows != 1 else ''}"
+
+        # The instrument has three distinct non-success outcomes. ``None`` means
+        # the platform could not run it and prediction remains authoritative;
+        # ``failed`` means the step raised; ``oom`` means CUDA exhausted memory.
+        # The latter two refuse because the context or fit is no longer known.
         if peak is None:
-            # Instrument failure, not a verdict. Fall back to the formula so the
-            # run is never left with no gate at all — but if the formula had
-            # already refused, honour that refusal rather than proceeding on
-            # the strength of a probe that did not happen.
             console.print(
                 "[yellow]The measured VRAM probe could not run; falling back to "
                 "the predicted budget.[/]"
@@ -1284,36 +1527,29 @@ class StreamingSetupMixin:
             if plan.predicted_bytes > plan.available_bytes:
                 self._close_stream_runtime()
                 raise ValueError(
-                    f"a streaming step is predicted to need "
-                    f"{plan.predicted_bytes / 1e9:.2f} GB of VRAM but only "
-                    f"{plan.available_bytes / 1e9:.2f} GB is free, and the "
-                    f"measured probe that could have overruled that prediction "
-                    f"failed to run. Lower training.batch_size or "
-                    f"data.max_length."
+                    f"a streaming step is predicted to need {plan.predicted_bytes / 1e9:.2f} GB "
+                    f"of VRAM but only {plan.available_bytes / 1e9:.2f} GB is free, and the "
+                    "measured probe that could have overruled that prediction failed to run. "
+                    "Lower training.batch_size or data.max_length."
                 )
             return
         if peak.failed:
-            # The probe ran a real CUDA op and it raised. The fit is unknown and
-            # the context may be unusable, so this refuses rather than falling
-            # back to the prediction: "the arithmetic was happy" is not a reason
-            # to keep driving a device that just failed.
             self._close_stream_runtime()
             raise ValueError(
                 f"the measured VRAM probe raised {peak.error} while running one "
-                f"step at batch {plan.rows} x seq {plan.seq_len}. The fit could "
-                f"not be established and the CUDA context may no longer be "
-                f"usable, so this run is refused rather than continued on the "
-                f"predicted budget ({plan.predicted_bytes / 1e9:.2f} GB). Re-run "
-                f"without training.stream_vram_probe to use the prediction."
+                f"{plan.task} step at {model_rows} x seq {plan.seq_len}. The fit "
+                "could not be established and the CUDA context may no longer be usable, so "
+                f"this run is refused rather than continued on the predicted budget "
+                f"({plan.predicted_bytes / 1e9:.2f} GB). Re-run without "
+                "training.stream_vram_probe to use the prediction."
             )
         if peak.oom:
             self._close_stream_runtime()
             raise ValueError(
-                f"a streaming step at batch {plan.rows} x seq {plan.seq_len} ran "
-                f"out of VRAM while being measured (predicted "
-                f"{plan.predicted_bytes / 1e9:.2f} GB, "
-                f"{plan.available_bytes / 1e9:.2f} GB free). Lower "
-                f"training.batch_size or data.max_length."
+                f"one {plan.task} streaming step at {model_rows} x seq "
+                f"{plan.seq_len} ran out of VRAM while being measured (predicted "
+                f"{plan.predicted_bytes / 1e9:.2f} GB, {plan.available_bytes / 1e9:.2f} GB "
+                "free). Lower training.batch_size or data.max_length."
             )
         fit = decide_measured_fit(
             measured_bytes=peak.peak_bytes,
@@ -1321,9 +1557,9 @@ class StreamingSetupMixin:
             available_bytes=plan.available_bytes,
         )
         console.print(
-            f"[dim]measured peak {peak.peak_bytes / 1e9:.2f} GB "
-            f"({peak.reserved_bytes / 1e9:.2f} GB reserved) in "
-            f"{peak.seconds:.2f} s at batch {plan.rows} x seq {plan.seq_len}; "
+            f"[dim]measured {plan.task} peak {peak.peak_bytes / 1e9:.2f} GB "
+            f"({peak.reserved_bytes / 1e9:.2f} GB reserved) in {peak.seconds:.2f} s at "
+            f"batch {plan.batch_size} ({model_rows}) x seq {plan.seq_len}; "
             f"predicted {plan.predicted_bytes / 1e9:.2f} GB[/]"
         )
         if not fit.fits:
