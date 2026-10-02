@@ -5145,6 +5145,29 @@ class SoupConfig(BaseModel):
         return self
 
     @model_validator(mode="after")
+    def _validate_dora_quantization(self) -> "SoupConfig":
+        """#1466 - refuse DoRA on a base whose peft LoRA layer has no DoRA variant.
+
+        Without this the config loads and peft raises only when the adapter is
+        attached, after the checkpoint download and the model load.
+        """
+        from soup_cli.utils.quant_menu import DORA_UNSUPPORTED_FORMATS
+
+        if self.backend == "mlx":
+            return self  # mlx refuses these formats itself, DoRA or not
+        quant = self.training.quantization
+        if self.training.lora.use_dora and quant in DORA_UNSUPPORTED_FORMATS:
+            raise ValueError(
+                f"training.lora.use_dora=True is not supported with "
+                f"training.quantization={quant!r}: peft cannot apply DoRA to "
+                f"{', '.join(sorted(DORA_UNSUPPORTED_FORMATS))} layers and raises "
+                "when the adapter is attached, after the model has loaded. Set "
+                "use_dora: false to train plain LoRA on this base, or use a "
+                "4bit / 8bit / hqq:Nbit / unquantised base to keep DoRA."
+            )
+        return self
+
+    @model_validator(mode="after")
     def _validate_chat_template_supported_tasks(self) -> "SoupConfig":
         """Reject chat-template overrides on trainers that never render chat."""
         unsupported = {

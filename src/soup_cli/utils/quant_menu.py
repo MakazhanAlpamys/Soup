@@ -32,6 +32,11 @@ PREQUANTIZED_FORMATS: frozenset[str] = frozenset(
     {"gptq", "awq", "aqlm", "eetq", "mxfp4", "fp8"}
 )
 
+# peft's LoRA layers for these formats raise "<Layer> does not support DoRA yet"
+# when the adapter is attached, after the model load. bitsandbytes, HQQ and
+# unquantised layers have a DoRA variant. Read by Autopilot and the schema (#1466).
+DORA_UNSUPPORTED_FORMATS: frozenset[str] = frozenset({"gptq", "awq", "aqlm", "eetq"})
+
 
 def is_quant_menu_format(quantization: str) -> bool:
     """True for v0.38.0 quant-menu values — seven formats total: HQQ at any

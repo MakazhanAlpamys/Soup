@@ -9,6 +9,7 @@ from typing import Any, Literal, Mapping, Optional
 
 from soup_cli.utils.flash_attn import check_flash_attn_available
 from soup_cli.utils.liger import check_liger_available
+from soup_cli.utils.quant_menu import DORA_UNSUPPORTED_FORMATS
 
 GOAL_TO_TASK: dict[str, str] = {
     "chat": "sft",
@@ -278,7 +279,7 @@ def decide_peft(
         rank = 32
     alpha = rank * 2
     use_dora = data_size > 100_000 and vram_gb >= 2.0 * model_size_b
-    if quantization in ("gptq", "awq", "aqlm", "eetq"):
+    if quantization in DORA_UNSUPPORTED_FORMATS:
         use_dora = False
     return {
         "r": rank,
