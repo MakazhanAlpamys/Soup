@@ -37,6 +37,7 @@ Security:
 from __future__ import annotations
 
 import math
+import re
 from typing import TYPE_CHECKING, Any, Union
 
 if TYPE_CHECKING:  # pragma: no cover — type-only, keeps the module torch-free
@@ -397,6 +398,17 @@ def build_prm_reward_fn(
                 f"directory; got {prm_path!r}"
             )
         prm_path = os.path.realpath(prm_path)
+    elif _HUB_ID_RE.match(prm_path):
+        # #1466: a Hub id used to pass here and die at the first reward call, because
+        # the head is read from a directory. Download it now, before training starts.
+        prm_path = _download_prm_snapshot(prm_path)
+    else:
+        raise ValueError(
+            f"prm_reward {prm_path!r} is neither an existing directory nor a Hub repo id "
+            "(org/name, optionally @revision)."
+        )
+    # Refuse a checkpoint without a reward head here, before the model loads (#1466).
+    load_reward_head_weights(prm_path)
 
     resolved_trust = _resolve_trust(prm_path, trust_remote_code, console)
     # Announce that the PRM reward is active AND replaces the configured
@@ -414,6 +426,32 @@ def build_prm_reward_fn(
         device=device,
         trust_remote_code=resolved_trust,
     )
+
+
+# org/name[@revision]; each segment starts alphanumerically, so a relative path such as
+# ./my-prm or ../x is never mistaken for a repo id.
+_HUB_ID_RE = re.compile(r"^[A-Za-z0-9][\w.-]*/[A-Za-z0-9][\w.-]*(@[\w./-]+)?$")
+# Weights, tokenizer files, and the custom-code modules a trust_remote_code base needs
+# (inert unless the trust probe says to execute them); never *.bin / *.pt.
+_PRM_SNAPSHOT_PATTERNS = ("*.safetensors", "*.json", "*.txt", "*.model", "*.tiktoken", "*.py")
+
+
+def _download_prm_snapshot(spec: str) -> str:
+    """Local snapshot of a Hub PRM, ``org/name`` or ``org/name@revision``: weights and
+    tokenizer files only. A failure is a refusal that names the repo, not a traceback."""
+    from huggingface_hub import snapshot_download
+
+    repo_id, _, revision = spec.partition("@")
+    try:
+        return snapshot_download(
+            repo_id=repo_id,
+            revision=revision or None,
+            allow_patterns=list(_PRM_SNAPSHOT_PATTERNS),
+        )
+    except Exception as exc:  # noqa: BLE001 - every Hub / network error is one refusal
+        raise ValueError(
+            f"prm_reward {spec!r}: could not download the PRM from the Hub ({exc})"
+        ) from exc
 
 
 def _resolve_trust(base: str, requested: bool, console: Any) -> bool:
