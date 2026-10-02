@@ -125,10 +125,15 @@ def migrate_unsloth(notebook_path: Path) -> Dict[str, Any]:
     for name in ambiguous:
         assignments.pop(name, None)
 
-    # Walk AST to extract function call arguments
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
-            continue
+    # Visit every call in source order. ast.walk is breadth-first (by nesting depth),
+    # which let a module-level `cfg = GRPOConfig(...)` be visited after an inline
+    # `SFTTrainer(args=SFTConfig(...))` written earlier, so the SFT warm-up stage won
+    # (#1560 review): the shape of Unsloth's GRPO notebooks.
+    calls = sorted(
+        (n for n in ast.walk(tree) if isinstance(n, ast.Call)),
+        key=lambda n: (n.lineno, n.col_offset),
+    )
+    for node in calls:
 
         func_name = _get_func_name(node)
         if func_name is None:

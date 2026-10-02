@@ -72,7 +72,7 @@ class TestLlamaFactoryPrefLoss:
     def test_a_pref_loss_that_is_not_a_string_is_refused_not_a_traceback(
         self, tmp_path: Path
     ) -> None:
-        with pytest.raises(ValueError, match="pref_loss"):
+        with pytest.raises(ValueError, match=r"pref_loss.*list.*hinge"):
             _lf(tmp_path, "pref_loss: [hinge]\n")
 
     @pytest.mark.parametrize("pref_loss", ["orpo", "simpo"])
@@ -230,6 +230,7 @@ class TestUnslothTrainerClasses:
         result = _unsloth(tmp_path, cell)
         assert result["training"]["online_dpo_judge"] == "ollama://REPLACE-ME"
         assert any("online_dpo_judge" in w and "placeholder" in w for w in result["_warnings"])
+        assert any("training.reward_model" in w for w in result["_warnings"])
         assert _loaded_task(result) == "online_dpo"
 
     def test_cli_online_dpo_notebook_produces_a_loadable_config(
@@ -282,6 +283,24 @@ class TestUnslothTrainerClasses:
         )
         with pytest.raises(ValueError, match="could not be read statically"):
             _unsloth(tmp_path, cell)
+
+    def test_the_last_stage_in_source_order_decides_not_the_deepest_call(
+        self, tmp_path: Path
+    ) -> None:
+        # An SFT warm-up with an inline SFTConfig, then GRPO with its config bound to a
+        # name (the shape of Unsloth's GRPO notebooks). ast.walk is breadth-first, so the
+        # nested SFTConfig used to be visited after the module-level GRPOConfig.
+        cell = (
+            "from trl import SFTTrainer, SFTConfig, GRPOTrainer, GRPOConfig\n"
+            "t1 = SFTTrainer(model=model, train_dataset=ds,\n"
+            "    args=SFTConfig(per_device_train_batch_size=1, learning_rate=2e-4))\n"
+            "cfg = GRPOConfig(per_device_train_batch_size=4, learning_rate=5e-6)\n"
+            "t2 = GRPOTrainer(model=model, reward_funcs=[f], args=cfg)\n"
+        )
+        result = _unsloth(tmp_path, cell)
+        assert result["task"] == "grpo"
+        assert result["training"]["lr"] == 5e-6
+        assert result["training"]["batch_size"] == 4
 
     def test_a_later_sft_config_call_now_decides_the_task(self, tmp_path: Path) -> None:
         # Changed behaviour, listed in the fragment: SFTConfig is in the config table,
