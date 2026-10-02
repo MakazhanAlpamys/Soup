@@ -842,7 +842,12 @@ re-shards to one root and names the folder left behind. Measured on two PM9B1 dr
 formal verdict: 7.65-9.15 GB/s together against ~4 for one
 ([record](../benchmarks/probe-rtx5070-two-drive-read.md)). Gated: on a cold 70B-shaped NF4 store
 at seq 512 the training step went from 17.4 s to 9.97 s, 1.75x
-([gate](../benchmarks/gate-two-drive-striping.md)).
+([gate](../benchmarks/gate-two-drive-striping.md)). That is a burst from a rested box. Under
+sustained back-to-back reading both drives of this laptop throttle to about 2.5 GB/s each, and
+the late-window speed-up measured 1.28x and 1.41x; a single drive throttles later and less
+([sustained probe](../benchmarks/probe-rtx5070-two-drive-sustained.md),
+[per-drive check](../benchmarks/probe-rtx5070-drive-throttle.md); neither has a formal verdict
+yet). Plan a long run on roughly 1.3-1.4x, and on drives with good cooling.
 
 Hugging Face snapshots normally expose symlinks into their blob cache, which the sharder
 deliberately does not follow. Soup materialises those weights under its Spectrum cache. If the
