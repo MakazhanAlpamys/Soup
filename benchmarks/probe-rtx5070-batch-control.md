@@ -29,11 +29,12 @@ arm.
 
 # Probe — does a bigger batch ride free under the cold disk-tier read? (R2, the batch control)
 
-**Status: rule committed 2026-10-01, BEFORE the run. Results pending.** No arm has run. The
-only executions so far are two `--dry-run`s of the driver into a scratch folder (stamps, the
-cache check, a 4-s sampler self-test, the plan; no arm), a synthetic check of the rule code on
-fake arm files, and a mocked run of the driver's arm flow (fake arm processes that only write
-JSON). None of them wrote anything under `results/`.
+**Status: rule committed 2026-10-01, BEFORE the run. Attempt 1 (2026-10-01 23:35) ended in NO
+VERDICT, see §5; no round arm was judged, so the rule's rows 3-6 have not been applied to any
+number.** Before the run the only executions were two `--dry-run`s of the driver into a scratch
+folder (stamps, the cache check, a 4-s sampler self-test, the plan; no arm), a synthetic check
+of the rule code on fake arm files, and a mocked run of the driver's arm flow (fake arm
+processes that only write JSON). None of them wrote anything under `results/`.
 
 ---
 
@@ -471,7 +472,57 @@ stay as measured. The results to commit are everything under
 
 ## 5. Results
 
-Pending.
+### 5.1 Attempt 1 — 2026-10-01 23:35, `batch_control_probe.py --plan all`, NO VERDICT
+
+Run from `5a4df9be` (the rule commit; `src/` and `benchmarks/harness/` clean, `soup_cli.__file__`
+under `Soup-r2\src`), with `--run-prefix batch`. AC online and charging at the first stamp
+(73%, 19.15 GB available RAM, commit 29.91 of 60.91 GB, GPU 0 MiB, no compute apps); the four
+other Claude sessions on the box had acknowledged a hold for 23:35-00:20 and were idle. Both
+caches were a hit (SINGLE and STRIPED), so the build arm was one cold step.
+
+| position | arm | wall | `step_s` (3 timed steps) | judged |
+|---|---|---|---|---|
+| build | STRIPED b1, 1 step, 0 warm-up | 52.4 s | 23.44 | never (build arm) |
+| 0, try 1 | SINGLE b1 | 173.2 s | 31.44 / 32.77 / 33.95 (mean 32.722) | VOID: foreign reader `SearchIndexer.exe` 4.94 GB |
+| 0, try 2 | SINGLE b1 | 52,762.8 s | 18.22 / 30.08 / 31.42 (mean 26.575) | VOID: AC values seen `[0, 1]`; suspended, 52,599 s between two power samples |
+
+The second void is a stop by the rule's own text (§4: "A second void in the same position stops
+the sequence, and row 2 gives no verdict"). The 11 later positions did not run. `--summarize`
+reads: `NO VERDICT (row 2): the arms did not measure the rule` (no valid round arm on record; row 1
+does not fire on the two void arms' own steps, which the rule does not read). Every file of the
+attempt is kept under `results/probe-rtx5070/batch-control/` as measured, the two void arms under
+their `_void` / `_void2` names. The sequence has no resume; attempt 2 runs whole with a new
+`--run-prefix`.
+
+**What happened, as far as the files say.**
+
+- *The suspend.* The laptop went to sleep seconds after try 2 started (23:44:32) and woke at
+  14:23:55 on 2026-10-02, on battery (AC 0, 79%). The Python process survived the sleep, so
+  the arm finished and the driver stamped it. The cause of the sleep is not in the files; the box
+  state log shows only the AC flip. Nothing of the driver can prevent it.
+- *The slow first arm.* Try 1's three steps were 31.4-34.0 s, each with 157 + 2 loads, against
+  17.4 s for the same arm in the gate (§1). Compute was not the cause: in the same process the
+  read-free floor (`B_nocopy_r0`) ran 6.658 s (mean of 3; §21: 6.425 s). The step is the read:
+  70,378,258,732 B in 31-34 s, and the 1-s PDH counters put C:'s read rate at **a steady
+  2.0-2.2 GB/s through all three steps** (per-step means 2.17 / 2.11 / 2.03 GB/s; the C: bytes
+  read inside each step window, 69.6 / 67.4 / 69.1 GB, are the step's own), against ~4.1 GB/s
+  averaged in §21. D: read 0.
+- *The indexer is not shown to be the cause.* `SearchIndexer.exe` read 4,940 MB and wrote 643 MB
+  in the arm (it read 258 MB during the build arm and 523 MB in the whole of try 2). Its share
+  of C:'s traffic in the arm is about 1.8% (4.94 GB of the 275.0 GB the 1-s PDH counters summed
+  for C:), and the C: rate did not move in bursts. Its small reads could still have cost latency; the files cannot say. What its reads
+  were of (the layer cache, the many worktrees on this profile, anything else) is not recorded
+  anywhere: the per-process counters carry bytes, not paths.
+- *A pattern inside try 2.* 18.22 s for its first step, which is inside the gate's band for this
+  arm, then 30.08 and 31.42 s: the rate halved during the arm, and the arm began after a 14.6-h
+  idle. One arm is not a pattern; it is the reason attempt 2 reads C:'s per-step rate before
+  anything else. The two void arms' power and clock samples (32.5 W / 795 MHz median in try 1) are
+  in `batch_driver.json`, and are not judged.
+
+**Not concluded:** why C: read at half rate; that the indexer, the drive's temperature (not
+readable without elevation on this box), a power state or something else is the cause. The
+rule's row 1 (a SINGLE batch-1 step outside 15.0-21.5 s) is exactly the check that would fire on
+this, and attempt 2 is bound by it as written.
 
 ## 6. Verdict
 
