@@ -1033,6 +1033,11 @@ training:
 {"image": "chart.png", "conversations": [{"from": "human", "value": "<image>\nWhat does this show?"}, {"from": "gpt", "value": "Quarterly revenue."}]}
 ```
 
+A relative `image` path resolves against `data.image_dir`, or against the data file's
+directory when it is unset. A Hub dataset or a remote URI has no data file directory, so set
+`data.image_dir` when its rows hold image paths; see
+[Data Pipeline Pro](data.md#data-pipeline-pro).
+
 `soup data inspect` automatically shows image statistics (count, formats, missing files) for vision datasets.
 
 
