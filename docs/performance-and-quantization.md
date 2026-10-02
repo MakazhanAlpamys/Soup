@@ -817,7 +817,8 @@ snapshot is complete. Soup pins the commit resolved by the initial cache lookup 
 only verified snapshot files from that commit's blob store; it does not perform a second Hub
 metadata request for the regular-file directory. A missing blob or an escaping symlink aborts
 before the destination is published, rather than leaving a partial checkpoint that the sharder
-could consume.
+could consume. With huggingface_hub 1.32 or later, links into its marked cache-wide store
+(`<cache>/blobs`) are followed too, and any other target is still refused.
 
 
 ## Correctness First (v0.36.0)

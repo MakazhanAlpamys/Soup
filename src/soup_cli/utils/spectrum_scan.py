@@ -649,12 +649,22 @@ def _hf_shared_blob_root(repo_root: str) -> Optional[str]:
 
     Per-repo ``blobs/<etag>`` entries of Xet downloads are relative symlinks into
     it; huggingface_hub writes the ``.huggingface-shared-blobs`` marker file.
+    Like huggingface_hub's ``is_shared_blobs_dir``, neither the directory nor the
+    marker may be a link: a linked store points somewhere else.
     """
-    store = os.path.realpath(os.path.join(os.path.dirname(repo_root), "blobs"))
+    store = os.path.join(os.path.dirname(repo_root), "blobs")
     marker = os.path.join(store, ".huggingface-shared-blobs")
-    if os.path.isfile(marker) and not os.path.islink(marker):
-        return store
-    return None
+    try:
+        store_stat = os.lstat(store)
+        marker_stat = os.lstat(marker)
+    except OSError:
+        return None
+    if not stat.S_ISDIR(store_stat.st_mode) or not stat.S_ISREG(marker_stat.st_mode):
+        return None
+    reparse = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+    if getattr(store_stat, "st_file_attributes", 0) & reparse:
+        return None
+    return os.path.realpath(store)
 
 
 def _hf_snapshot_revision(source_dir: str) -> Optional[str]:

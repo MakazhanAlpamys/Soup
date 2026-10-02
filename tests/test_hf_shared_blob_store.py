@@ -119,3 +119,59 @@ def test_link_leaving_both_stores_is_still_refused(tmp_path, monkeypatch) -> Non
         materialize_model_weights(plan)
 
     assert not os.path.lexists(plan.weights_dir)
+
+
+def _snapshot_with_store(tmp_path: Path, store: Path) -> Path:
+    import torch
+    from safetensors.torch import save_file
+
+    repo = tmp_path / "hub" / "models--org--model"
+    blobs = repo / "blobs"
+    snapshot = repo / "snapshots" / COMMIT
+    for directory in (blobs, snapshot, store / XET_HASH[:2]):
+        directory.mkdir(parents=True, exist_ok=True)
+    save_file(
+        {"model.layers.0.self_attn.q_proj.weight": torch.eye(2)},
+        str(store / XET_HASH[:2] / XET_HASH),
+    )
+    (blobs / ETAG).symlink_to(Path("../../blobs") / XET_HASH[:2] / XET_HASH)
+    (snapshot / "model.safetensors").symlink_to(Path("../../blobs") / ETAG)
+    return snapshot
+
+
+def _plan(monkeypatch, tmp_path: Path, snapshot: Path):
+    from soup_cli.utils.spectrum_scan import plan_model_weights
+
+    _use_snapshot(monkeypatch, tmp_path, snapshot)
+    return plan_model_weights("org/model")
+
+
+@pytest.mark.requires_symlink
+def test_symlinked_marker_is_not_trusted(tmp_path, monkeypatch) -> None:
+    from soup_cli.utils.spectrum_scan import materialize_model_weights
+
+    store = tmp_path / "hub" / "blobs"
+    snapshot = _snapshot_with_store(tmp_path, store)
+    real_marker = tmp_path / "elsewhere-marker"
+    real_marker.write_text("1\n", encoding="utf-8")
+    (store / ".huggingface-shared-blobs").symlink_to(real_marker)
+    plan = _plan(monkeypatch, tmp_path, snapshot)
+
+    with pytest.raises(ValueError, match="outside the Hugging Face blob store"):
+        materialize_model_weights(plan)
+    assert not os.path.lexists(plan.weights_dir)
+
+
+@pytest.mark.requires_symlink
+def test_symlinked_store_directory_is_not_trusted(tmp_path, monkeypatch) -> None:
+    from soup_cli.utils.spectrum_scan import materialize_model_weights
+
+    outside = tmp_path / "outside-store"
+    snapshot = _snapshot_with_store(tmp_path, outside)
+    (outside / ".huggingface-shared-blobs").write_text("1\n", encoding="utf-8")
+    (tmp_path / "hub" / "blobs").symlink_to(outside, target_is_directory=True)
+    plan = _plan(monkeypatch, tmp_path, snapshot)
+
+    with pytest.raises(ValueError, match="outside the Hugging Face blob store"):
+        materialize_model_weights(plan)
+    assert not os.path.lexists(plan.weights_dir)
