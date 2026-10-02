@@ -219,10 +219,13 @@ class PreferenceTrainerWrapper:
                         # such hook, and its blend still refuses.
                         from soup_cli.utils.preference_combine import (
                             attach_policy_logp_capture,
+                            blend_loss_params,
                         )
 
                         attach_policy_logp_capture(inner_trainer)
-                        attach_weighted_preference_combine(inner_trainer, weights)
+                        attach_weighted_preference_combine(
+                            inner_trainer, weights, blend_loss_params(self.config)
+                        )
                     except (TypeError, ValueError) as exc:
                         # Schema validates weights at config load; runtime
                         # rejection should be loud — but fall through to the

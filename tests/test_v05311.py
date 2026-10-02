@@ -995,7 +995,14 @@ class TestTheCaptureReadsTrlOwnLogProbs:
 
         trainer, batch = self._cpo([-0.5, -0.5], [-1.0, -1.0], 4, 4)
         assert attach_policy_logp_capture(trainer) is True
-        attach_weighted_preference_combine(trainer, {"simpo": 0.7, "orpo": 0.3})
+        # Params as `PreferenceTrainerWrapper.setup` supplies them (#1425 review):
+        # the trainer's own attributes are no longer read, so a test that wants a
+        # specific objective has to name it here.
+        attach_weighted_preference_combine(
+            trainer,
+            {"simpo": 0.7, "orpo": 0.3},
+            {"simpo": {"beta": 0.1, "gamma": 0.5}, "orpo": {"alpha": 1.0}},
+        )
         trainer.concatenated_forward(None, batch)  # the capture runs here
 
         out = float(trainer.compute_loss(model=None, inputs=batch))
@@ -1069,6 +1076,69 @@ class TestTheCaptureReadsTrlOwnLogProbs:
 
         assert blended({"simpo": 0.6, "orpo": 0.4}) != pytest.approx(
             blended({"simpo": 0.7, "orpo": 0.3}), rel=1e-9
+        )
+
+    def test_the_blend_does_not_read_parameters_off_the_trainer(self):
+        """Config wins over the trainer's attributes (#1425 review).
+
+        The trainer is whichever loss has the larger weight, so `getattr` here
+        made the same weights in a different YAML order train a different
+        objective. Changing the trainer's attributes must change nothing now.
+        """
+        from soup_cli.utils.preference_combine import (
+            attach_policy_logp_capture,
+            attach_weighted_preference_combine,
+        )
+
+        def blended(overrides=None):
+            trainer, batch = self._cpo([-0.5, -0.5], [-1.0, -1.0], 4, 4)
+            for attr, value in (overrides or {}).items():
+                setattr(trainer, attr, value)
+            attach_policy_logp_capture(trainer)
+            attach_weighted_preference_combine(
+                trainer,
+                {"simpo": 0.5, "orpo": 0.5},
+                {"simpo": {"beta": 0.1, "gamma": 0.5}, "orpo": {"alpha": 0.1}},
+            )
+            trainer.concatenated_forward(None, batch)
+            return float(trainer.compute_loss(model=None, inputs=batch))
+
+        baseline = blended()
+        # Every attribute the old code read off the trainer, made hostile.
+        for overrides in (
+            {"beta": 7.0},
+            {"simpo_gamma": 9.0},
+            {"orpo_alpha": 4.0},
+            {"beta": 7.0, "simpo_gamma": 9.0, "orpo_alpha": 4.0},
+        ):
+            assert blended(overrides) == pytest.approx(baseline, rel=1e-9), overrides
+
+    def test_the_blend_reads_each_loss_parameters_from_the_config(self):
+        """`params` is what reaches each kernel, so the secondary loss's own
+        field moves the blend even when it is not the primary."""
+        from soup_cli.utils.preference_combine import (
+            attach_policy_logp_capture,
+            attach_weighted_preference_combine,
+        )
+
+        def blended(params):
+            trainer, batch = self._cpo([-0.5, -0.5], [-1.0, -1.0], 4, 4)
+            attach_policy_logp_capture(trainer)
+            attach_weighted_preference_combine(
+                trainer, {"simpo": 0.5, "orpo": 0.5}, params
+            )
+            trainer.concatenated_forward(None, batch)
+            return float(trainer.compute_loss(model=None, inputs=batch))
+
+        base = {"simpo": {"beta": 0.1, "gamma": 0.5}, "orpo": {"alpha": 0.1}}
+        assert blended({**base, "orpo": {"alpha": 0.9}}) != pytest.approx(
+            blended(base), rel=1e-9
+        )
+        assert blended({**base, "simpo": {"beta": 0.1, "gamma": 3.0}}) != pytest.approx(
+            blended(base), rel=1e-9
+        )
+        assert blended({**base, "simpo": {"beta": 0.5, "gamma": 0.5}}) != pytest.approx(
+            blended(base), rel=1e-9
         )
 
     def test_a_dpo_primary_has_no_hook_and_still_refuses(self):
@@ -1218,6 +1288,171 @@ class TestOnARealTrlTrainer:
         message = str(excinfo.value)
         assert "dpo" in message and "simpo" in message, message
         assert "preference_loss_weights" in message, message
+
+    def test_a_reference_free_blend_on_a_real_trainer_is_the_weighted_sum(
+        self, tmp_path, monkeypatch,
+    ):
+        """Pin the `attach_policy_logp_capture` call in `setup()` (#1425 review).
+
+        Every other blend test attaches the capture itself on a fake trainer, so
+        deleting the one line in `PreferenceTrainerWrapper.setup` that installs
+        it left them all green while no real blend would compute anything.
+        """
+        from soup_cli.config.loader import load_config_from_string
+        from soup_cli.trainer.preference import PreferenceTrainerWrapper
+        from soup_cli.utils.preference_combine import compute_orpo_term
+
+        monkeypatch.chdir(tmp_path)
+        base = self._tiny_model_dir(tmp_path)
+        cfg = load_config_from_string(
+            f"base: {base.as_posix()}\ntask: preference\n"
+            "data: {train: ./unused.jsonl, format: dpo, max_length: 64}\n"
+            "training:\n  epochs: 1\n  batch_size: 2\n  quantization: none\n"
+            "  preference_loss_weights: {simpo: 0.7, orpo: 0.3}\n"
+            "  lora: {r: 4, alpha: 8, dropout: 0.0}\noutput: ./out\n"
+        )
+        rows = [
+            {"prompt": "what is one plus one ?", "chosen": "two",
+             "rejected": "one plus one is three"},
+            {"prompt": "hello there", "chosen": "hi there hello", "rejected": "no"},
+        ]
+        wrapper = PreferenceTrainerWrapper(cfg, device="cpu")
+        wrapper.setup({"train": rows})
+        trainer = wrapper.trainer
+        batch = trainer._prepare_inputs(next(iter(trainer.get_train_dataloader())))
+
+        blended = trainer.compute_loss(trainer.model, batch)
+        # trl's own, unwrapped forward on the same batch.
+        chosen, rejected = type(trainer).concatenated_forward(
+            trainer, trainer.model, batch,
+        )[:2]
+        simpo = trainer.cpo_loss(chosen, rejected)[0].mean()
+        orpo = compute_orpo_term(chosen, rejected, 1.0)
+        assert float(blended) == pytest.approx(float(0.7 * simpo + 0.3 * orpo), rel=1e-6)
+        blended.backward()
+        assert any(
+            p.grad is not None and float(p.grad.abs().sum()) > 0
+            for p in trainer.model.parameters() if p.requires_grad
+        )
+        wrapper.train()  # completes instead of stopping at step 0
+
+    @pytest.mark.parametrize(
+        ("weights", "field", "low", "high"),
+        [
+            ("{simpo: 0.7, orpo: 0.3}", "orpo_beta", 0.1, 0.9),
+            ("{orpo: 0.7, simpo: 0.3}", "simpo_gamma", 0.5, 3.0),
+        ],
+    )
+    def test_the_secondary_loss_reads_its_own_config_field(
+        self, tmp_path, monkeypatch, weights, field, low, high,
+    ):
+        """A blend's secondary term must honour its own field, not the
+        primary trainer's attributes (#1425 review)."""
+        from soup_cli.config.loader import load_config_from_string
+        from soup_cli.trainer.preference import PreferenceTrainerWrapper
+
+        losses = []
+        for i, value in enumerate((low, high)):
+            sub = tmp_path / f"r{i}"
+            sub.mkdir()
+            monkeypatch.chdir(sub)
+            base = self._tiny_model_dir(sub)
+            cfg = load_config_from_string(
+                f"base: {base.as_posix()}\ntask: preference\n"
+                "data: {train: ./unused.jsonl, format: dpo, max_length: 64}\n"
+                "training:\n  epochs: 1\n  batch_size: 2\n  quantization: none\n"
+                f"  preference_loss_weights: {weights}\n  {field}: {value}\n"
+                "  lora: {r: 4, alpha: 8, dropout: 0.0}\noutput: ./out\n"
+            )
+            wrapper = PreferenceTrainerWrapper(cfg, device="cpu")
+            wrapper.setup({"train": [
+                {"prompt": "what is one plus one ?", "chosen": "two",
+                 "rejected": "one plus one is three"},
+                {"prompt": "hello there", "chosen": "hi there hello", "rejected": "no"},
+            ]})
+            trainer = wrapper.trainer
+            batch = trainer._prepare_inputs(next(iter(trainer.get_train_dataloader())))
+            losses.append(float(trainer.compute_loss(trainer.model, batch)))
+        assert losses[0] != pytest.approx(losses[1], rel=1e-9), (field, losses)
+
+    def test_setup_installs_the_capture_and_the_blend(self, tmp_path, monkeypatch):
+        """The two wrappers `setup()` must install, without building a trainer.
+
+        The real-trainer test above skips wherever trl's config cannot import,
+        and every other blend test attaches the capture itself — so deleting
+        `attach_policy_logp_capture(inner_trainer)` from `setup()` left the
+        whole file green while no real blend could compute anything (#1425
+        review). Injecting a fake inner trainer exercises the call site itself.
+        """
+        from soup_cli.config.loader import load_config_from_string
+        from soup_cli.trainer.preference import PreferenceTrainerWrapper
+
+        class _FakeInner:
+            class trainer:  # noqa: N801 — stands in for the trl trainer
+                beta = 7.0
+                simpo_gamma = 9.0
+
+                def concatenated_forward(self, model, batch, *a, **k):
+                    raise AssertionError("not called here")
+
+                def compute_loss(self, model, inputs, return_outputs=False, **kw):
+                    raise AssertionError("not called here")
+
+            def setup(self, dataset):
+                self.dataset = dataset
+
+        monkeypatch.chdir(tmp_path)
+        cfg = load_config_from_string(
+            "base: ./unused\ntask: preference\n"
+            "data: {train: ./unused.jsonl, format: dpo, max_length: 64}\n"
+            "training:\n  epochs: 1\n  batch_size: 2\n  quantization: none\n"
+            "  preference_loss_weights: {simpo: 0.7, orpo: 0.3}\n"
+            "  orpo_beta: 0.9\n"
+            "  lora: {r: 4, alpha: 8, dropout: 0.0}\noutput: ./out\n"
+        )
+        wrapper = PreferenceTrainerWrapper(cfg, device="cpu")
+        inner = _FakeInner()
+        wrapper._inner = inner
+        wrapper.setup({"train": []})
+
+        trainer = inner.trainer
+        assert getattr(trainer.concatenated_forward, "_soup_logp_capture", False), (
+            "setup() no longer installs the log-prob capture, so a real blend "
+            "computes nothing and falls through to refusing"
+        )
+        assert getattr(trainer.compute_loss, "_soup_weighted_combine", False), (
+            "setup() no longer installs the weighted blend"
+        )
+
+        # And the params it hands the blend come from the config, not the
+        # trainer's hostile `beta = 7.0` / `simpo_gamma = 9.0` above.
+        from soup_cli.utils.preference_combine import blend_loss_params
+
+        params = blend_loss_params(cfg)
+        assert params["orpo"]["alpha"] == 0.9, params
+        assert params["simpo"]["gamma"] == cfg.training.simpo_gamma, params
+        assert params["simpo"]["beta"] != 7.0, params
+
+    def test_the_default_beta_matches_the_one_the_wrappers_build(self):
+        """`DEFAULT_BETA` stands in for trl's config default, because no Soup
+        wrapper sets beta explicitly. If trl moves it, this blend's scale moves
+        silently — so pin the number against trl itself."""
+        from soup_cli.trainer._trl_compat import resolve_trl_symbol
+        from soup_cli.utils.preference_combine import DEFAULT_BETA
+
+        try:
+            cpo_config_cls = resolve_trl_symbol("CPOConfig", "trl.experimental.cpo")
+        except Exception as exc:  # noqa: BLE001 — a broken trl is not a failure
+            pytest.skip(f"this environment cannot import a trl CPO config: {exc}")
+
+        fields = {f.name for f in cpo_config_cls.__dataclass_fields__.values()}
+        if "beta" not in fields:
+            pytest.skip("trl's CPOConfig no longer names a beta")
+        assert cpo_config_cls(beta=DEFAULT_BETA).beta == DEFAULT_BETA
+        assert DEFAULT_BETA == 0.1, (
+            "trl's CPOConfig beta default moved; re-derive DEFAULT_BETA and the "
+            "blend's scale from the new value"
+        )
 
 
 # ---------------------------------------------------------------------------

@@ -938,13 +938,30 @@ training:
 
 The combine wrapper computes a weighted sum via the in-tree
 `compute_dpo_term` / `compute_simpo_term` / `compute_orpo_term` /
-`compute_ipo_term` kernels. **On trl 0.29 no preference trainer puts the
-per-sequence log-probs those kernels need on the batch**, so a blend currently
-stops at the first step and names the terms it could not compute. Until the
-wrapper reads the logits from the trainer's own forward pass, do not configure
-`preference_loss_weights`: remove it and set `training.preference_loss` to the
-single loss you want. BCO cannot be mixed with paired losses (data
-format incompatible — rejected at config load).
+`compute_ipo_term` kernels. On trl 0.29 it reads the per-sequence log-probs
+those kernels need out of the primary trainer's own forward pass
+(`concatenated_forward`), so which blends train depends on which trainer is
+built:
+
+| Blend | Result on trl 0.29 |
+| --- | --- |
+| `simpo` + `orpo` | Trains. The CPO (SimPO) and ORPO trainers both return their per-sequence log-probs. |
+| anything naming `dpo` or `ipo` | Stops at the first step and names the terms. Those trainers compute log-probs inline and publish only means, so there is no hook to read — and they need a frozen reference model this path does not build. |
+| `bco` mixed with anything | Rejected at config load (data format incompatible). |
+
+**What a term is.** In a blend, `simpo` and `orpo` are their *preference terms
+only* — the margin / odds-ratio objective — without the likelihood (NLL) term
+the standalone `preference_loss: simpo` / `preference_loss: orpo` runs carry. A
+`{simpo: 1.0}` blend is therefore not the same number as a `preference_loss:
+simpo` run, and `training.cpo_alpha` does not affect it. Use
+`training.preference_loss` when you want the full standalone loss. Each term
+does honour its own config field: `training.simpo_gamma` for SimPO,
+`training.orpo_beta` for ORPO, whichever loss has the larger weight or not.
+
+**Evaluation.** With `val_split` set, trl's `prediction_step` calls
+`get_batch_loss_metrics` directly, so the eval loss is the primary loss's own
+trl loss — not the blend's value. Training and evaluation therefore report
+different numbers for the same batch.
 
 
 ## MoE Model Support
@@ -1252,9 +1269,10 @@ training:
 ```
 
 Schema validates 2–5 entries summing to 1, and rejects `bco` mixed with a
-paired loss at config load. The runtime blend is **not** live on trl 0.29: the
-config loads, then training stops at the first step naming the terms it could
-not compute (see [Weighted Multi-Objective Preference Loss](#weighted-multi-objective-preference-loss)).
+paired loss at config load. On trl 0.29 a `simpo` + `orpo` blend trains; any
+blend naming `dpo` or `ipo` stops at the first step naming the terms it could
+not compute, because those trainers publish no per-sequence log-probs to read
+(see [Weighted Multi-Objective Preference Loss](#weighted-multi-objective-preference-loss)).
 Set `training.preference_loss` for a single loss.
 
 

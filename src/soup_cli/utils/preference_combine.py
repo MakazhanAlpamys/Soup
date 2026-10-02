@@ -37,6 +37,22 @@ REF_MODEL_LOSSES: frozenset = frozenset({"dpo", "ipo"})
 REF_FREE_LOSSES: frozenset = frozenset({"simpo", "orpo"})
 UNPAIRED_LOSSES: frozenset = frozenset({"bco"})
 
+#: The beta every Soup preference wrapper builds with. Soup has no ``beta``
+#: schema field — ``simpo.py`` leaves CPOConfig's own default in place and
+#: ``dpo.py`` likewise — so this is the value trl's `CPOConfig` / `DPOTrainer`
+#: carry, NOT ``training.orpo_beta`` (``orpo.py:211`` uses that one). Reading
+#: beta off the primary trainer made the blend's objective depend on which loss
+#: happened to be named first (#1425 review); ``tests/test_v05311.py`` pins this
+#: constant against trl so a default change cannot drift silently.
+DEFAULT_BETA: float = 0.1
+
+#: Fallbacks for the two knobs `params` may omit. These mirror the schema
+#: defaults (`schema.py`: `simpo_gamma=0.5`, `orpo_beta=0.1`) so a blend
+#: attached without a config — an existing test harness, say — lands on the
+#: same objective the standalone loss would use.
+DEFAULT_SIMPO_GAMMA: float = 0.5
+DEFAULT_ORPO_ALPHA: float = 0.1
+
 
 def validate_weight_compat(weights: Mapping[str, float]) -> None:
     """Enforce the BCO-incompatible-with-paired rule at runtime.
@@ -138,9 +154,14 @@ def compute_orpo_term(
     """Reference-free odds-ratio preference loss (ORPO).
 
     Uses the response-log-prob formulation ``-log σ(log(p_w) - log(p_l) +
-    log(1-p_l) - log(1-p_w))`` scaled by ``alpha``. Approximates the full
-    ORPO loss without the SFT term — caller is expected to mix in SFT via
-    its own weight if desired.
+    log(1-p_l) - log(1-p_w))`` scaled by ``alpha``.
+
+    This is the odds-ratio term only: it leaves out the NLL term that a
+    standalone ``preference_loss: orpo`` run adds (trl computes that NLL over
+    prompt plus response, ``orpo_trainer.py``). A blend of ``simpo`` and
+    ``orpo`` therefore trains neither loss's likelihood term — see the
+    "Weighted Multi-Objective Preference Loss" section in ``docs/training.md``
+    and #1425.
 
     ``pol_chosen`` / ``pol_rejected`` are *summed* sequence log-probs. On a real
     sequence the summed log-prob is ≈ −45, so ``exp()`` underflows to 0 and the
@@ -201,7 +222,40 @@ def combine_losses(
     return out
 
 
-def attach_weighted_preference_combine(trainer: object, weights: Mapping[str, float]) -> bool:
+def blend_loss_params(cfg) -> dict:
+    """Each blended loss's own hyperparameters, read from the config (#1425).
+
+    The blend used to take ``beta`` / ``simpo_gamma`` / ``orpo_alpha`` off the
+    primary trainer, which is whichever loss has the larger weight — so
+    ``orpo_beta`` fed SimPO's beta on an ORPO-primary blend, ORPO's alpha was
+    always ``1.0`` because no trainer has an ``orpo_alpha`` attribute, and the
+    same weights written in a different YAML order trained a different
+    objective. Config is the only place these are unambiguous.
+
+    ``training.orpo_beta`` is ORPO's odds-ratio weight, so it becomes ORPO's
+    ``alpha`` here; ``training.simpo_gamma`` is SimPO's margin. Beta has no
+    schema field — every Soup wrapper leaves trl's default in place — so it
+    comes from :data:`DEFAULT_BETA` rather than off a trainer.
+    """
+    tcfg = getattr(cfg, "training", None)
+    if tcfg is None:  # defensive — a config always has `training`
+        return {}
+    return {
+        "dpo": {"beta": DEFAULT_BETA},
+        "ipo": {"beta": DEFAULT_BETA},
+        "simpo": {
+            "beta": DEFAULT_BETA,
+            "gamma": float(getattr(tcfg, "simpo_gamma", DEFAULT_SIMPO_GAMMA)),
+        },
+        "orpo": {"alpha": float(getattr(tcfg, "orpo_beta", DEFAULT_ORPO_ALPHA))},
+    }
+
+
+def attach_weighted_preference_combine(
+    trainer: object,
+    weights: Mapping[str, float],
+    params: Optional[Mapping[str, Mapping[str, float]]] = None,
+) -> bool:
     """v0.53.11 #68 — wrap inner trainer's ``compute_loss`` for TRUE weighted blend.
 
     Replaces the v0.40.1 primary-loss approximation with a per-batch
@@ -220,6 +274,14 @@ def attach_weighted_preference_combine(trainer: object, weights: Mapping[str, fl
     compute. It used to fall back to the v0.40.1 primary-loss scaling, which
     trained only the highest-weighted loss while reporting a blended number.
 
+    ``params`` supplies each loss's own hyperparameters, keyed by loss name
+    (``{"simpo": {"beta": ..., "gamma": ...}, "orpo": {"alpha": ...}}``). It
+    must come from the config, not from the trainer: the trainer is whichever
+    loss has the larger weight, so reading ``beta`` / ``simpo_gamma`` off it
+    made the same weights in a different YAML order train a different
+    objective (#1425 review). Anything not supplied falls back to
+    :data:`DEFAULT_BETA`.
+
     Idempotent: re-attaching detects the ``_soup_weighted_combine`` marker.
     """
     validate_weight_compat(weights)
@@ -229,6 +291,7 @@ def attach_weighted_preference_combine(trainer: object, weights: Mapping[str, fl
     if getattr(original, "_soup_weighted_combine", False):
         return True
     snapshot = dict(weights)
+    loss_params: Dict[str, Mapping[str, float]] = {k: dict(v) for k, v in (params or {}).items()}
 
     def wrapped(model, inputs, return_outputs=False, **kwargs):
         result = original(model, inputs, return_outputs=return_outputs, **kwargs)
@@ -266,13 +329,12 @@ def attach_weighted_preference_combine(trainer: object, weights: Mapping[str, fl
 
         terms: dict = {}
         if pol_chosen is not None and pol_rejected is not None:
-            # v0.53.11 review fix (security HIGH) — explicit None check
-            # before float(). The previous `or 0.1` idiom triggered tensor
-            # truth-value evaluation when TRL stored these as zero-element
-            # tensors instead of Python floats.
-            beta_attr = getattr(trainer, "beta", None)
-            beta = float(beta_attr) if beta_attr is not None else 0.1
+            # #1425 review: every hyperparameter comes from `params` (the
+            # config), never from the primary trainer. The trainer is whichever
+            # loss has the larger weight, so `getattr` here made {simpo: 0.5,
+            # orpo: 0.5} and {orpo: 0.5, simpo: 0.5} train different objectives.
             for name in snapshot:
+                cfg_for_loss = loss_params.get(name, {})
                 try:
                     if name == "dpo":
                         if ref_chosen is None or ref_rejected is None:
@@ -281,7 +343,11 @@ def attach_weighted_preference_combine(trainer: object, weights: Mapping[str, fl
                             )
                             continue
                         terms["dpo"] = compute_dpo_term(
-                            pol_chosen, pol_rejected, ref_chosen, ref_rejected, beta
+                            pol_chosen,
+                            pol_rejected,
+                            ref_chosen,
+                            ref_rejected,
+                            float(cfg_for_loss.get("beta", DEFAULT_BETA)),
                         )
                     elif name == "ipo":
                         if ref_chosen is None or ref_rejected is None:
@@ -290,28 +356,29 @@ def attach_weighted_preference_combine(trainer: object, weights: Mapping[str, fl
                             )
                             continue
                         terms["ipo"] = compute_ipo_term(
-                            pol_chosen, pol_rejected, ref_chosen, ref_rejected, beta
+                            pol_chosen,
+                            pol_rejected,
+                            ref_chosen,
+                            ref_rejected,
+                            float(cfg_for_loss.get("beta", DEFAULT_BETA)),
                         )
                     elif name == "simpo":
-                        gamma_attr = getattr(trainer, "simpo_gamma", None)
-                        gamma = (
-                            float(gamma_attr) if gamma_attr is not None else 1.0
-                        )
                         terms["simpo"] = compute_simpo_term(
-                            pol_chosen, pol_rejected, beta, gamma,
+                            pol_chosen,
+                            pol_rejected,
+                            float(cfg_for_loss.get("beta", DEFAULT_BETA)),
+                            float(cfg_for_loss.get("gamma", DEFAULT_SIMPO_GAMMA)),
                             chosen_lens=chosen_lens,
                             rejected_lens=rejected_lens,
                         )
                     elif name == "orpo":
-                        alpha_attr = getattr(trainer, "orpo_alpha", None)
-                        alpha = (
-                            float(alpha_attr) if alpha_attr is not None else 1.0
-                        )
-                        # Length-normalise when the batch carries response
-                        # lengths/labels — otherwise summed log-probs underflow
-                        # exp() and the odds-ratio correction degenerates.
+                        # `orpo_beta` is ORPO's odds-ratio weight; `orpo_alpha`
+                        # never existed on any trainer, so the term used 1.0
+                        # regardless of the config.
                         terms["orpo"] = compute_orpo_term(
-                            pol_chosen, pol_rejected, alpha,
+                            pol_chosen,
+                            pol_rejected,
+                            float(cfg_for_loss.get("alpha", DEFAULT_ORPO_ALPHA)),
                             chosen_lens=chosen_lens,
                             rejected_lens=rejected_lens,
                         )
@@ -367,10 +434,15 @@ def attach_policy_logp_capture(trainer: object) -> bool:
     hook and return ``False`` here — their blends keep refusing.
 
     The captured values are converted to **summed** log-probs using the batch's
-    own per-side ``chosen_labels`` / ``rejected_labels``, because trl averages
-    them for ``simpo``/``ipo`` and the kernels in this module take sums plus
-    lengths. Deriving the lengths rather than trusting trl's averaging flag
-    means one code path either way: ``average x length`` is the sum.
+    own per-side ``chosen_labels`` / ``rejected_labels``, because the kernels in
+    this module take sums plus lengths. Whether trl handed over sums or averages
+    is not inspected: deriving the lengths and multiplying back gives the sum
+    either way. That multiply-back is only correct for the paths where trl
+    averaged — ``cpo_trainer.py`` averages for ``loss_type`` ``ipo``/``simpo``,
+    and ``orpo_trainer.py`` always averages. Soup's SimPO wrapper always builds
+    ``loss_type="simpo"``, so the averaging path is the live one today; a future
+    wrapper using ``sigmoid`` or ``hinge`` would return sums and this would
+    double-count the lengths.
 
     Returns True when the capture is in place.
     """
@@ -384,7 +456,10 @@ def attach_policy_logp_capture(trainer: object) -> bool:
         out = original(model, batch, *args, **kwargs)
         try:
             chosen_logps, rejected_logps = out[0], out[1]
-        except (TypeError, IndexError):  # pragma: no cover — trl shape drift
+        except (TypeError, IndexError, KeyError):  # pragma: no cover — trl shape drift
+            # IndexError/TypeError: not a sequence (or too short). KeyError: a
+            # dict-shaped return, which older trl DPOTrainers used — let it fall
+            # through to the blend's refusal rather than raise out of a forward.
             return out
         _record_policy_logps(trainer, batch, chosen_logps, rejected_logps)
         return out
