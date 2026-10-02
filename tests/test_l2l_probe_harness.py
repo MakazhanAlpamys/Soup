@@ -289,3 +289,171 @@ def test_process_read_bytes_sees_this_process(box):
         pytest.skip("psutil is not installed")
     assert os.getpid() in snapshot
     assert snapshot[os.getpid()]["read"] >= 0
+
+
+# --------------------------------------------------------------------------
+# l2l_schedule — bit-exact against gradient accumulation, on the SHIPPED runtime
+# --------------------------------------------------------------------------
+SEQ = 8
+
+
+@pytest.fixture()
+def sched():
+    return _load("l2l_schedule")
+
+
+@pytest.fixture()
+def streamed(tmp_path):
+    """A tiny untied Llama through shard_checkpoint + build_streamed_model on CPU.
+
+    Untied, so the embed/head share the streamed large slot exactly as the 70B
+    fixture's do; three layers, so the zig-zag turnaround and the backward
+    prefetch both run.
+    """
+    pytest.importorskip("peft")
+    from peft import LoraConfig, TaskType
+
+    from soup_cli.utils.layer_shard import shard_checkpoint
+    from soup_cli.utils.layer_stream_runtime import build_streamed_model
+    from tests.test_v07204 import _tiny_llama_dir
+
+    weights, _model, _config = _tiny_llama_dir(tmp_path, n_layers=3, tie=False)
+    shards = str(tmp_path / "shards")
+    index = shard_checkpoint(weights, shards, dtype="float32", arch="llama")
+    lora = LoraConfig(
+        r=4, lora_alpha=8, lora_dropout=0.0, bias="none",
+        target_modules=["q_proj", "k_proj", "v_proj", "o_proj"], task_type=TaskType.CAUSAL_LM,
+    )
+    model, runtime = build_streamed_model(
+        model_id=weights, shard_dir=shards, index=index, lora_config=lora,
+        device="cpu", dtype="float32", buffers=2, pin=False, seed=3,
+    )
+    yield model, runtime
+    runtime.close()
+
+
+def _micro_batches(k, vocab=64, seed=17):
+    import torch
+
+    gen = torch.Generator().manual_seed(seed)
+    return [torch.randint(0, vocab, (1, SEQ), generator=gen) for _ in range(k)]
+
+
+def _cpu_store(acts, k, n_layers=3, hidden=64):
+    import torch
+
+    return acts.ActivationStore(
+        n_layers=n_layers, k=k, chunk_shape=(1, SEQ, hidden), dtype=torch.float32,
+        device="cpu", pin=False,
+    )
+
+
+@pytest.mark.parametrize("k", [1, 2, 3])
+def test_l2l_equals_gradient_accumulation_bit_for_bit(sched, acts, streamed, k):
+    model, runtime = streamed
+    sched.make_non_vacuous(model)
+    mbs = _micro_batches(k)
+    sched.zero_grads(model)
+    ga_losses = sched.ga_step(model, mbs)
+    ga = sched.collect_grads(model)
+
+    call = sched.capture_layer_call(model, mbs[0])
+    step = sched.L2LStep(model, runtime, call)
+    sched.zero_grads(model)
+    l2l_losses = step.run(mbs, _cpu_store(acts, k))
+    l2l = sched.collect_grads(model)
+
+    result = sched.compare(ga, l2l)
+    assert result["tensors"] == 3 * 4 * 2  # 3 layers x q/k/v/o x A/B
+    assert result["all_zero"] == []
+    assert result["equal"], result
+    assert sched.losses_equal(ga_losses, l2l_losses)
+
+
+def test_the_divisor_matters(sched, acts, streamed):
+    """Mutation guard: dividing by one micro-batch's tokens instead of all k must differ."""
+    model, runtime = streamed
+    sched.make_non_vacuous(model)
+    mbs = _micro_batches(2)
+    sched.zero_grads(model)
+    sched.ga_step(model, mbs)
+    ga = sched.collect_grads(model)
+    step = sched.L2LStep(model, runtime, sched.capture_layer_call(model, mbs[0]))
+    sched.zero_grads(model)
+    step.run(mbs, _cpu_store(acts, 2), n_items=SEQ - 1)
+    assert not sched.compare(ga, sched.collect_grads(model))["equal"]
+
+
+def test_losses_are_compared_per_position(sched, acts, streamed):
+    """Mutation guard: the same micro-batches in another order must not pass."""
+    model, runtime = streamed
+    mbs = _micro_batches(2)
+    sched.zero_grads(model)
+    ga_losses = sched.ga_step(model, mbs)
+    step = sched.L2LStep(model, runtime, sched.capture_layer_call(model, mbs[0]))
+    sched.zero_grads(model)
+    swapped = step.run(list(reversed(mbs)), _cpu_store(acts, 2))
+    assert not sched.losses_equal(ga_losses, swapped)
+
+
+def test_one_prime_and_the_loads_of_one_micro_batch(sched, acts, streamed):
+    """`prime` loads layer 0 unconditionally and `advance` skips owned slots, so a
+    step's load count depends on what the previous walk left in the slots. Both
+    measured steps therefore follow the same forward-only walk."""
+    model, runtime = streamed
+    mbs = _micro_batches(3)
+    step = sched.L2LStep(model, runtime, sched.capture_layer_call(model, mbs[0]))
+    sched.zero_grads(model)
+    loads = runtime.pool.loads
+    sched.ga_step(model, mbs[:1])
+    ga_loads = runtime.pool.loads - loads
+    sched.capture_layer_call(model, mbs[0])
+    sched.zero_grads(model)
+    loads, primes = runtime.pool.loads, runtime.prefetcher.primes
+    step.run(mbs, _cpu_store(acts, 3))
+    assert runtime.prefetcher.primes - primes == 1
+    assert runtime.pool.loads - loads == ga_loads
+
+
+def test_checkpoint_flags_are_restored(sched, acts, streamed):
+    model, runtime = streamed
+    mbs = _micro_batches(2)
+    step = sched.L2LStep(model, runtime, sched.capture_layer_call(model, mbs[0]))
+    step.run(mbs, _cpu_store(acts, 2))
+    assert all(layer.use_checkpoint for layer in step.layers)
+
+
+def test_capture_drops_num_items_and_keeps_rotary(sched, streamed):
+    model, _runtime = streamed
+    call = sched.capture_layer_call(model, _micro_batches(1)[0])
+    assert "num_items_in_batch" not in call.kwargs
+    assert call.kwargs.get("position_embeddings") is not None
+
+
+def test_run_refuses_more_micro_batches_than_the_store_holds(sched, acts, streamed):
+    model, runtime = streamed
+    mbs = _micro_batches(3)
+    step = sched.L2LStep(model, runtime, sched.capture_layer_call(model, mbs[0]))
+    with pytest.raises(ValueError, match="3 micro-batches.*holds 2"):
+        step.run(mbs, _cpu_store(acts, 2))
+    with pytest.raises(ValueError, match="at least one"):
+        step.run([], _cpu_store(acts, 2))
+
+
+def test_missing_prime_hook_is_refused(sched, streamed):
+    model, runtime = streamed
+    runtime.hook.remove()
+    with pytest.raises(RuntimeError, match="prime hook"):
+        sched.L2LStep(model, runtime, sched.LayerCall(args=(), kwargs={}))
+
+
+def test_snapshot_restore_round_trip(sched, streamed):
+    import torch
+
+    model, _runtime = streamed
+    snap = sched.snapshot_adapters(model)
+    sched.make_non_vacuous(model, seed=99)
+    sched.restore_adapters(model, snap)
+    for name, param in sched.lora_parameters(model).items():
+        assert torch.equal(param.detach(), snap[name])
+        assert param.grad is None
