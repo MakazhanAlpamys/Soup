@@ -17,7 +17,7 @@ from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
 
-from soup_cli.utils.exit_codes import EXIT_GATE_FAILED, EXIT_USAGE_ERROR
+from soup_cli.utils.exit_codes import EXIT_GATE_FAILED, EXIT_RUNTIME_ERROR, EXIT_USAGE_ERROR
 
 console = Console()
 
@@ -114,14 +114,29 @@ def expect_cmd(
         except (ValueError, TypeError) as exc:
             console.print(f"[red]{escape(str(exc))}[/]")
             raise typer.Exit(EXIT_USAGE_ERROR) from exc
+        if not any(
+            e.name == "expect_chosen_preferred_over_rejected_by_judge"
+            for e in spec.expectations
+        ):
+            console.print(
+                "[yellow]note: --judge was specified, but the suite contains "
+                "no judge expectation[/]"
+            )
 
     try:
         report = run_suite(rows, spec, judge_fn=cli_judge_fn)
     except (TypeError, ValueError) as exc:
         console.print(f"[red]{escape(str(exc))}[/]")
         raise typer.Exit(EXIT_USAGE_ERROR) from exc
+    except Exception as exc:
+        from soup_cli.eval.judge import JudgeUnavailableError
 
-    table = Table(title=f"soup expect - {escape(data)}")
+        if isinstance(exc, JudgeUnavailableError):
+            console.print(f"[red]{escape(str(exc))}[/]")
+            raise typer.Exit(EXIT_RUNTIME_ERROR) from exc
+        raise
+
+    table = Table(title=f"soup expect — {escape(data)}")
     table.add_column("Expectation")
     table.add_column("Passed")
     table.add_column("Rows")
@@ -135,6 +150,11 @@ def expect_cmd(
             str(result.num_violations),
         )
     console.print(table)
+
+    for result in report.results:
+        if result.passed and result.details:
+            for d in result.details:
+                console.print(f"[yellow]{escape(d)}[/]")
 
     if not report.passed:
         for result in report.results:

@@ -24,7 +24,8 @@ from soup_cli.utils.expectations import (
 def _plain(text: str) -> str:
     import re
 
-    return re.sub(r"\x1b\[[0-9;?]*[A-Za-z]", "", text)
+    cleaned = re.sub(r"\x1b\[[0-9;?]*[A-Za-z]", "", text)
+    return " ".join(cleaned.split())
 
 
 def _write_prefs(tmp_path: Path, rows: list[dict]) -> Path:
@@ -284,4 +285,108 @@ class TestCliExpectJudge:
             app, ["expect", str(data), str(suite), "--judge", "ftp://bad-url"]
         )
         assert result.exit_code == 3
-        assert "unsupported scheme" in result.output
+        assert "unsupported scheme" in _plain(result.output)
+
+    def test_suite_judge_arg_is_used_at_run_time(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        _write_prefs(tmp_path, CLEAN_ROWS)
+        _write_suite(
+            tmp_path,
+            "expectations:\n"
+            "  - name: expect_chosen_preferred_over_rejected_by_judge\n"
+            "    args: {judge: 'ollama://llama3.1', threshold: 0.7}\n",
+        )
+        calls = []
+
+        def fake_compare(self, prompt, resp_a, resp_b):
+            calls.append((self.provider, self.model))
+            return 0 if resp_a in ("4", "Paris") else 1
+
+        monkeypatch.setattr("soup_cli.eval.judge.JudgeEvaluator.compare_pair", fake_compare)
+        result = CliRunner().invoke(app, ["expect", "prefs.jsonl", "suite.yaml"])
+        assert result.exit_code == 0, (result.output, repr(result.exception))
+        assert calls == [("ollama", "llama3.1")] * 4  # 2 rows, both orders
+
+    def test_advisory_pass_says_no_judge_ran(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        _write_prefs(tmp_path, CLEAN_ROWS)
+        _write_suite(
+            tmp_path,
+            "expectations:\n"
+            "  - name: expect_chosen_preferred_over_rejected_by_judge\n"
+            "    args: {advisory: true}\n",
+        )
+        result = CliRunner().invoke(app, ["expect", "prefs.jsonl", "suite.yaml"])
+        assert result.exit_code == 0, (result.output, repr(result.exception))
+        assert "advisory" in " ".join(_plain(result.output).split()).lower()
+
+    @pytest.mark.parametrize("value", ["'false'", "'no'", "1"])
+    def test_non_bool_advisory_refused_at_load(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, value: str
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        _write_prefs(tmp_path, CLEAN_ROWS)
+        _write_suite(
+            tmp_path,
+            "expectations:\n"
+            "  - name: expect_chosen_preferred_over_rejected_by_judge\n"
+            f"    args: {{advisory: {value}}}\n",
+        )
+        result = CliRunner().invoke(app, ["expect", "prefs.jsonl", "suite.yaml"])
+        assert result.exit_code == 3, (result.output, repr(result.exception))
+        assert "advisory must be a boolean" in " ".join(_plain(result.output).split())
+
+    def test_cli_judge_takes_precedence_over_suite_judge(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        _write_prefs(tmp_path, CLEAN_ROWS)
+        _write_suite(
+            tmp_path,
+            "expectations:\n"
+            "  - name: expect_chosen_preferred_over_rejected_by_judge\n"
+            "    args: {judge: 'ollama://suite-model', threshold: 0.7}\n",
+        )
+        calls = []
+
+        def fake_compare(self, prompt, resp_a, resp_b):
+            calls.append((self.provider, self.model))
+            return 0 if resp_a in ("4", "Paris") else 1
+
+        monkeypatch.setattr("soup_cli.eval.judge.JudgeEvaluator.compare_pair", fake_compare)
+        result = CliRunner().invoke(
+            app,
+            ["expect", "prefs.jsonl", "suite.yaml", "--judge", "ollama://cli-model"],
+        )
+        assert result.exit_code == 0, (result.output, repr(result.exception))
+        assert calls == [("ollama", "cli-model")] * 4
+
+    def test_unreachable_judge_exits_1_without_evaluating_remaining_rows(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        _write_prefs(tmp_path, CLEAN_ROWS)
+        _write_suite(
+            tmp_path,
+            "expectations:\n"
+            "  - name: expect_chosen_preferred_over_rejected_by_judge\n"
+            "    args: {judge: 'ollama://llama3.1', threshold: 0.7}\n",
+        )
+        from soup_cli.eval.judge import JudgeUnavailableError
+
+        call_count = 0
+
+        def dead_judge(self, prompt, resp_a, resp_b):
+            nonlocal call_count
+            call_count += 1
+            raise JudgeUnavailableError("connection refused", url="http://localhost:11434")
+
+        monkeypatch.setattr("soup_cli.eval.judge.JudgeEvaluator.compare_pair", dead_judge)
+        result = CliRunner().invoke(app, ["expect", "prefs.jsonl", "suite.yaml"])
+        assert result.exit_code == 1, (result.output, repr(result.exception))
+        assert call_count == 1
+        assert "judge unavailable" in _plain(result.output).lower()

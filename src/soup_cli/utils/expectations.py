@@ -764,7 +764,11 @@ def expect_chosen_preferred_over_rejected_by_judge(
         else:
             try:
                 raw = judge_fn(row)
-            except Exception:  # noqa: BLE001 - one bad row mustn't crash the suite
+            except Exception as exc:  # noqa: BLE001 - one bad row mustn't crash the suite
+                from soup_cli.eval.judge import JudgeUnavailableError
+
+                if isinstance(exc, JudgeUnavailableError):
+                    raise
                 num_violations += 1
                 if len(details) < _MAX_DETAILS_PER_RESULT:
                     details.append(
@@ -792,6 +796,8 @@ def expect_chosen_preferred_over_rejected_by_judge(
                         f"rows[{index}]: judge score {score:.3f} < {t:.3f}"
                     )
                 )
+    if judge_fn is None and advisory and not details:
+        details.append(f"advisory: no judge ran; {len(materialised)} rows not scored")
     return ExpectationResult(
         name="expect_chosen_preferred_over_rejected_by_judge",
         passed=num_violations == 0,
@@ -968,7 +974,7 @@ def _dispatch_expectation(
             rows,
             judge_fn=effective_judge,
             threshold=args["threshold"],
-            advisory=bool(args.get("advisory", False)),
+            advisory=args["advisory"],
         )
     raise ValueError(f"unhandled expectation: {name!r}")  # pragma: no cover
 
