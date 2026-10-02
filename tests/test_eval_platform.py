@@ -2,6 +2,7 @@
 
 import json
 import re
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -927,70 +928,170 @@ class TestEvalConfig:
 
 
 # ═══════════════════════════════════════════════════════════
-# Callback — Auto-eval hook
+# Auto-eval after training
 # ═══════════════════════════════════════════════════════════
 
+def _tiny_llama_dir(root: Path) -> str:
+    import torch
+    from safetensors.torch import save_file
+    from tokenizers import Tokenizer, models, pre_tokenizers
+    from transformers import LlamaConfig, LlamaForCausalLM, PreTrainedTokenizerFast
 
-class TestCallbackAutoEval:
-    def test_auto_eval_not_called_without_config(self):
-        from soup_cli.monitoring.callback import SoupTrainerCallback
-        display = MagicMock()
-        callback = SoupTrainerCallback(display=display)
-        callback._run_auto_eval()  # Should be a no-op
+    torch.manual_seed(7)
+    config = LlamaConfig(
+        vocab_size=64, hidden_size=64, intermediate_size=128, num_hidden_layers=2,
+        num_attention_heads=4, num_key_value_heads=2, tie_word_embeddings=True,
+        max_position_embeddings=128,
+    )
+    model = LlamaForCausalLM(config).to(torch.float32).eval()
+    weights = root / "model"
+    weights.mkdir(parents=True, exist_ok=True)
+    state = {k: v.contiguous() for k, v in model.state_dict().items()}
+    state.pop("lm_head.weight", None)
+    save_file(state, str(weights / "model.safetensors"))
+    config.save_pretrained(str(weights))
+    words = {"<unk>": 0, "<s>": 1, "</s>": 2, "<pad>": 3}
+    for word in ("hello", "world", "hi", "good", "answer", "bad"):
+        words[word] = len(words)
+    tok = Tokenizer(models.WordLevel(vocab=words, unk_token="<unk>"))
+    tok.pre_tokenizer = pre_tokenizers.Whitespace()
+    PreTrainedTokenizerFast(
+        tokenizer_object=tok, unk_token="<unk>", bos_token="<s>", eos_token="</s>",
+        pad_token="<pad>",
+    ).save_pretrained(str(weights))
+    return str(weights)
 
+
+def _write_project(tmp_path: Path, auto_eval: bool, seed: int = 1) -> None:
+    weights = str(tmp_path / "model")
+    if not (tmp_path / "model" / "model.safetensors").exists():
+        weights = _tiny_llama_dir(tmp_path)
+    row = {"messages": [{"role": "user", "content": "hi"},
+                        {"role": "assistant", "content": "good answer"}]}
+    (tmp_path / "chat.jsonl").write_text(
+        "\n".join(json.dumps(row) for _ in range(8)) + "\n", encoding="utf-8"
+    )
+    (tmp_path / "soup.yaml").write_text(
+        f"base: {json.dumps(weights)}\n"
+        "task: sft\n"
+        "data:\n  train: chat.jsonl\n  format: chatml\n  chat_template: chatml\n"
+        "  max_length: 64\n"
+        "training:\n  epochs: 1\n  batch_size: 2\n  logging_steps: 1\n"
+        f"  quantization: none\n  seed: {seed}\n"
+        "  lora:\n    r: 4\n    alpha: 8\n    target_modules: [q_proj, v_proj]\n"
+        f"eval:\n  auto_eval: {'true' if auto_eval else 'false'}\n  benchmarks: [mmlu]\n"
+        "output: ./out\n",
+        encoding="utf-8",
+    )
+
+
+def _record_benchmark(monkeypatch) -> list[dict]:
+    import soup_cli.commands.eval as eval_cmd
+
+    seen: list[dict] = []
+
+    def fake_benchmark(**kwargs):
+        model = Path(kwargs["model"])
+        adapter = model / "adapter_model.safetensors"
+        seen.append({
+            "model": str(model),
+            "adapter_bytes": adapter.read_bytes() if adapter.exists() else None,
+        })
+
+    monkeypatch.setattr(eval_cmd, "benchmark", fake_benchmark)
+    return seen
+
+
+class TestAutoEvalAfterTraining:
     def test_auto_eval_not_called_when_disabled(self):
+        from soup_cli.commands.train import _run_auto_eval_after_training
         from soup_cli.config.schema import EvalConfig
-        from soup_cli.monitoring.callback import SoupTrainerCallback
-        display = MagicMock()
+
         eval_config = EvalConfig(auto_eval=False)
-        callback = SoupTrainerCallback(
-            display=display, eval_config=eval_config,
-        )
-        callback._run_auto_eval()  # Should be a no-op
 
-    def test_auto_eval_called_when_enabled(self):
-        from soup_cli.config.schema import EvalConfig
-        from soup_cli.monitoring.callback import SoupTrainerCallback
-        display = MagicMock()
-        eval_config = EvalConfig(
-            auto_eval=True, benchmarks=["mmlu"],
-        )
-        callback = SoupTrainerCallback(
-            display=display,
-            eval_config=eval_config,
-            output_dir="/tmp/model",
-            run_id="test_run",
-        )
         with patch("soup_cli.commands.eval.benchmark") as mock_bench:
-            callback._run_auto_eval()
-            mock_bench.assert_called_once()
+            _run_auto_eval_after_training(
+                eval_config,
+                "/tmp/model",
+                "test_run",
+            )
 
-    def test_auto_eval_failure_does_not_raise(self, capsys):
+        mock_bench.assert_not_called()
+
+    def test_auto_eval_uses_saved_output_dir(self):
+        from soup_cli.commands.train import _run_auto_eval_after_training
         from soup_cli.config.schema import EvalConfig
-        from soup_cli.monitoring.callback import SoupTrainerCallback
 
-        display = MagicMock()
+        eval_config = EvalConfig(
+            auto_eval=True,
+            benchmarks=["mmlu", "gsm8k"],
+        )
+
+        with patch("soup_cli.commands.eval.benchmark") as mock_bench:
+            _run_auto_eval_after_training(
+                eval_config,
+                "/tmp/saved-adapter",
+                "test_run",
+            )
+
+        mock_bench.assert_called_once()
+        assert mock_bench.call_args.kwargs["model"] == "/tmp/saved-adapter"
+        assert mock_bench.call_args.kwargs["benchmarks"] == "mmlu,gsm8k"
+        assert mock_bench.call_args.kwargs["run_id"] == "test_run"
+
+    def test_auto_eval_failure_does_not_fail_training(self):
+        from soup_cli.commands.train import _run_auto_eval_after_training
+        from soup_cli.config.schema import EvalConfig
+
         eval_config = EvalConfig(
             auto_eval=True,
             benchmarks=["mmlu"],
         )
-        callback = SoupTrainerCallback(
-            display=display,
-            eval_config=eval_config,
-            output_dir="/tmp/model",
-            run_id="test_run",
-        )
 
         with patch(
             "soup_cli.commands.eval.benchmark",
-            side_effect=RuntimeError("evaluation failed"),
+            side_effect=RuntimeError("benchmark exploded"),
         ):
-            callback._run_auto_eval()
+            _run_auto_eval_after_training(
+                eval_config,
+                "/tmp/saved-adapter",
+                "test_run",
+            )
 
-        captured = capsys.readouterr()
-        assert "Auto-eval benchmark failed" in captured.out
+    def test_auto_eval_runs_on_the_adapter_this_run_saved(
+        self, tmp_path, monkeypatch
+    ):
+        pytest.importorskip("trl")
+        monkeypatch.chdir(tmp_path)
+        seen = _record_benchmark(monkeypatch)
+
+        # The second run reuses ./out, where run 1's adapter sits; a different seed
+        # makes the two adapters differ byte for byte.
+        for seed in (1, 2):
+            _write_project(tmp_path, auto_eval=True, seed=seed)
+            result = CliRunner().invoke(app, ["train", "--config", "soup.yaml", "--yes"])
+            assert result.exit_code == 0, (result.output, repr(result.exception))
+            saved = (tmp_path / "out" / "adapter_model.safetensors").read_bytes()
+            assert seen, "auto_eval: true ran no evaluation"
+            assert seen[-1]["adapter_bytes"] is not None, (
+                "the evaluation ran before the adapter was saved"
+            )
+            assert seen[-1]["adapter_bytes"] == saved, (
+                "the evaluation scored a different adapter than the one this run saved"
+            )
+        assert len(seen) == 2
 
 
+    def test_auto_eval_false_runs_nothing(
+        self, tmp_path, monkeypatch
+    ):
+        pytest.importorskip("trl")
+        monkeypatch.chdir(tmp_path)
+        _write_project(tmp_path, auto_eval=False)
+        seen = _record_benchmark(monkeypatch)
+        result = CliRunner().invoke(app, ["train", "--config", "soup.yaml", "--yes"])
+        assert result.exit_code == 0, (result.output, repr(result.exception))
+        assert seen == []
 # ═══════════════════════════════════════════════════════════
 # CLI — eval subcommands
 # ═══════════════════════════════════════════════════════════

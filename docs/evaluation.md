@@ -821,6 +821,15 @@ eval:
     provider: openai
 ```
 
+When `eval.auto_eval: true`, Soup runs the configured evaluation once after `soup train` finishes and the trained model/adapter has been saved. The evaluation uses the output artifact produced by that training run.
+
+- `benchmarks` runs the configured `lm-eval-harness` benchmarks. Install the benchmark dependencies required by your environment before enabling them.
+- `custom_tasks` runs the configured custom evaluation tasks against the trained model.
+- `judge` is not part of auto-evaluation; configure and run judge evaluation separately.
+- Auto-evaluation keeps `trust_remote_code` disabled.
+- If auto-evaluation fails, Soup reports the failure but does not fail an otherwise successful training run.
+- Auto-evaluation can take a significant amount of time. For example, MMLU evaluates multiple subtasks.
+
 
 ## Tunability Probe (`soup tunability`)
 

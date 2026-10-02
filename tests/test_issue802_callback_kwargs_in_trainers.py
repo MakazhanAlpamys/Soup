@@ -12,7 +12,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from soup_cli.config.schema import SoupConfig, TrainingConfig
+from soup_cli.config.schema import EvalGateConfig, SoupConfig, TrainingConfig
 from soup_cli.monitoring.callback import (
     SoupTrainerCallback,
     build_soup_trainer_callback,
@@ -83,7 +83,13 @@ class TestTrainerCallbackKwargsUsage:
 
                 if func_name == "build_soup_trainer_callback":
                     builder_calls.append(node)
-                elif func_name == "SoupTrainerCallback":
+                elif (
+                    func_name == "SoupTrainerCallback"
+                    or (
+                        isinstance(node.func, ast.Attribute)
+                        and node.func.attr == "SoupTrainerCallback"
+                    )
+                ):
                     direct_callback_calls.append(node)
 
             # Direct callback construction is forbidden in every trainer.
@@ -196,6 +202,14 @@ class TestSoupCallbackKwargsHelper:
         assert kwargs["grad_accum_current_steps"] == 4
         assert kwargs["grad_accum_current_batch"] == 1
         assert kwargs["eval_gate_config"] is None
+        eval_gate = EvalGateConfig(
+            enabled=False,
+            suite="evals/gate.yaml",
+        )
+        tcfg_with_gate = TrainingConfig(eval_gate=eval_gate)
+        kwargs_with_gate = soup_callback_kwargs(tcfg_with_gate)
+
+        assert kwargs_with_gate["eval_gate_config"] is eval_gate
         assert "output_dir" not in kwargs
 
         # When tcfg has no gradient_accumulation_steps attribute
