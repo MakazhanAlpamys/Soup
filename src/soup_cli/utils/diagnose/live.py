@@ -108,7 +108,7 @@ class _ProbeInputs:
 
     pairs: List[Tuple[str, str]]  # (prompt, target), prompt within MAX_PROMPT_CHARS
     memo_rows: List[Mapping[str, object]]  # rows handed to the memorization probe
-    unreadable: int  # rows that yielded neither a pair nor text
+    unreadable: int  # no usable pair or text, or a prompt with a NUL byte
     too_long: int  # pairs dropped because the prompt exceeds MAX_PROMPT_CHARS
     plaintext: int  # plaintext rows (no prompt/answer split by design)
     media_rows: int  # vision/audio rows skipped: the probes are text-only
@@ -163,6 +163,13 @@ def _pair_for_row(row: object) -> Optional[Tuple[str, str]]:
     if not isinstance(row, Mapping):
         return None
     _fmt, converted = _convert_row(row)
+    return _pair_with_fallback(row, converted)
+
+
+def _pair_with_fallback(
+    row: Mapping, converted: Optional[Mapping]
+) -> Optional[Tuple[str, str]]:
+    """Pair from an already-converted row, falling back to the flat-key lookup."""
     pair = _pair_from_converted(converted) if converted else None
     if pair is None:
         prompt, target = _row_input(row), _row_output(row)
@@ -207,10 +214,7 @@ def _analyse_rows(rows: Sequence[Mapping[str, object]]) -> _ProbeInputs:
             media_rows += 1
             media_kinds.add("image" if is_vision_format(fmt) else "audio")
             continue
-        pair = _pair_from_converted(converted) if converted else None
-        if pair is None:
-            flat_prompt, flat_target = _row_input(row), _row_output(row)
-            pair = (flat_prompt, flat_target) if flat_prompt and flat_target else None
+        pair = _pair_with_fallback(row, converted)
         text_row = _memo_row(row, converted, pair)
         if fmt == "plaintext":
             plaintext += 1
@@ -224,6 +228,8 @@ def _analyse_rows(rows: Sequence[Mapping[str, object]]) -> _ProbeInputs:
         if pair is not None:
             if len(pair[0]) > MAX_PROMPT_CHARS:
                 too_long += 1
+            elif "\x00" in pair[0]:
+                unreadable += 1  # require_prompts rejects NUL bytes; skip the row, keep the probe
             else:
                 pairs.append(pair)
     media = " or ".join(sorted(media_kinds))
