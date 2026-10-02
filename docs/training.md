@@ -719,17 +719,20 @@ masking it out. Both are gated to the SFT-family of tasks.
 
 ## EBFT / GDPO Loss Variants
 
-Generalised DPO (`gdpo_variant: standard | length_normalized | margin`) loads for
-`task: dpo` and `task: preference`, but on the trl versions Soup supports (0.29 and
-later) it is not applied: the run trains exactly as it would without the field, and
-nothing says so ([#1309](https://github.com/MakazhanAlpamys/Soup/issues/1309)).
-The config shape:
+**`training.gdpo_variant` is refused at config load**
+([#1309](https://github.com/MakazhanAlpamys/Soup/issues/1309)). This breaks configs
+that set `standard`, `length_normalized`, or `margin`: previously they loaded but
+silently trained the default loss, because supported TRL versions (0.29 and later)
+do not expose the `DPOTrainer.dpo_loss` hook. Every non-null value is refused;
+unset and null still load. No shipped recipe, template or example sets the field.
+
+Remove `gdpo_variant` to train plain `task: dpo` for `standard`. For
+`length_normalized`, `task: simpo` is the nearest objective, **not an identical
+replacement**. `margin` has no equivalent. Plain DPO, without a GDPO setting:
 
 ```yaml
-# DPO with GDPO length_normalized
 task: dpo
 training:
-  gdpo_variant: length_normalized
   dpo_beta: 0.1
 ```
 
@@ -1894,7 +1897,15 @@ The cross-validator rejects `task='distill'` without `teacher_model`, and reject
 
 ## EBFT + GDPO (BETA, v0.52.0)
 
-Generalized DPO lands as `training.gdpo_variant ∈ {standard, length_normalized, margin}` — gated to `task ∈ {dpo, preference}`; on trl 0.29 and later it is not applied ([#1309](https://github.com/MakazhanAlpamys/Soup/issues/1309)). Energy-Based Fine-Tuning (`training.ebft_variant ∈ {structured, strided}` + `training.ebft_temperature`) is refused at config load ([#1230](https://github.com/MakazhanAlpamys/Soup/issues/1230)): its term had no causal shift, so it rewarded copying the input, and shifted it would duplicate the cross-entropy. See [EBFT / GDPO Loss Variants](#ebft--gdpo-loss-variants).
+Both fields are refused at config load. `training.gdpo_variant` silently did
+nothing on supported TRL versions because the DPO loss hook no longer exists
+([#1309](https://github.com/MakazhanAlpamys/Soup/issues/1309)); remove it and use
+plain DPO for `standard`, or SimPO as the nearest (not identical) objective for
+`length_normalized`. `margin` has no equivalent. Energy-Based Fine-Tuning
+(`training.ebft_variant` + `training.ebft_temperature`) remains refused
+([#1230](https://github.com/MakazhanAlpamys/Soup/issues/1230)): its term had no
+causal shift, so it rewarded copying the input, and shifted it would duplicate
+the cross-entropy. See [EBFT / GDPO Loss Variants](#ebft--gdpo-loss-variants).
 
 
 ## gpt-oss `reasoning_effort` + `train_on_eot` (v0.52.0)

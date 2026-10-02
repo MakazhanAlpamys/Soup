@@ -613,12 +613,13 @@ class TestAttachGdpoComputeLoss:
         tcfg = type("Tcfg", (), {"gdpo_variant": None})()
         assert attach_gdpo_compute_loss(trainer, tcfg) is False
 
-    def test_no_op_when_trainer_lacks_dpo_loss(self) -> None:
+    def test_refuses_when_trainer_lacks_dpo_loss(self) -> None:
         from soup_cli.utils.ebft_gdpo import attach_gdpo_compute_loss
 
         trainer = object()
         tcfg = type("Tcfg", (), {"gdpo_variant": "standard"})()
-        assert attach_gdpo_compute_loss(trainer, tcfg) is False
+        with pytest.raises(ValueError, match="dpo_loss.*#1309"):
+            attach_gdpo_compute_loss(trainer, tcfg)
 
     def test_wraps_and_returns_trl_shape(self) -> None:
         torch = _torch_or_skip()
