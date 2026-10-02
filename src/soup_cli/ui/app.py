@@ -1051,7 +1051,7 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
 
         from fastapi.responses import StreamingResponse
 
-        from soup_cli.utils.net_guard import refuse_private_ip_literal
+        from soup_cli.utils.net_guard import UNSPECIFIED_HOST_HINT, refuse_private_ip_literal
 
         # Validate messages
         if not req.messages:
@@ -1077,6 +1077,10 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
                     is_local = addr.is_loopback
                 except ValueError:
                     is_local = False
+            if not is_local and host == "0.0.0.0":
+                raise HTTPException(
+                    status_code=400, detail=f"endpoint {UNSPECIFIED_HOST_HINT}"
+                )
             if not is_local:
                 raise HTTPException(
                     status_code=400,
