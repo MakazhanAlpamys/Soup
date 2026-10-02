@@ -614,6 +614,17 @@ Automatically maps model, LoRA, training params, quantization, and task type. Wa
 
 An axolotl `rl:` value with no Soup task (for example `rl: ebft`) stops the migration: `soup migrate` exits 1 and names the value instead of writing a `task: sft` config.
 
+The same rule holds for the other two sources. A LLaMA-Factory `stage: dpo` with
+a `pref_loss` that has no Soup task (`hinge`, `kto_pair`, anything else) stops
+the migration with exit 1 naming the value; `ipo` migrates to `task: ipo`, and
+`pref_loss` is read only under `stage: dpo`, as LLaMA-Factory does. In an Unsloth
+notebook `RewardTrainer` migrates to `reward_model`, `BCOTrainer` to `bco`,
+`OnlineDPOTrainer` to `online_dpo` (with a placeholder `training.online_dpo_judge`
+to replace), and `CPOTrainer` to `simpo` only when `loss_type="simpo"` is set on
+its own call or its `args=` config; any other CPO loss, or an `args=` that cannot
+be read statically, stops the migration naming the value. `SFTConfig` and the
+other TRL `*Config` classes are read for hyperparameters.
+
 
 ## Data Formats
 

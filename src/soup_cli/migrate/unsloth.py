@@ -8,7 +8,8 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-# Trainer class → Soup task mapping
+# Trainer class → Soup task mapping. #1214: "cpo" is provisional; CPOTrainer
+# migrates to simpo only with loss_type="simpo" and is refused otherwise.
 _TRAINER_MAP = {
     "SFTTrainer": "sft",
     "DPOTrainer": "dpo",
@@ -16,15 +17,25 @@ _TRAINER_MAP = {
     "KTOTrainer": "kto",
     "ORPOTrainer": "orpo",
     "PPOTrainer": "ppo",
+    "RewardTrainer": "reward_model",
+    "BCOTrainer": "bco",
+    "OnlineDPOTrainer": "online_dpo",
+    "CPOTrainer": "cpo",
 }
 
-# Trainer config class → Soup task mapping
+# Trainer config class → Soup task mapping (and the hyperparameter table: a
+# call to any of these is read like TrainingArguments).
 _CONFIG_MAP = {
+    "SFTConfig": "sft",
     "DPOConfig": "dpo",
     "GRPOConfig": "grpo",
     "KTOConfig": "kto",
     "ORPOConfig": "orpo",
     "PPOConfig": "ppo",
+    "RewardConfig": "reward_model",
+    "BCOConfig": "bco",
+    "OnlineDPOConfig": "online_dpo",
+    "CPOConfig": "cpo",
 }
 
 # Task → default data format
@@ -34,7 +45,11 @@ _TASK_FORMAT_MAP = {
     "grpo": "auto",
     "kto": "kto",
     "orpo": "dpo",
+    "simpo": "dpo",
     "ppo": "auto",
+    "reward_model": "dpo",
+    "bco": "dpo",
+    "online_dpo": "auto",
 }
 
 
@@ -85,11 +100,17 @@ def migrate_unsloth(notebook_path: Path) -> Dict[str, Any]:
     lora_params: Dict[str, Any] = {}
     training_params: Dict[str, Any] = {}
     task = "sft"
+    cpo_loss_type: Optional[str] = None
     output_dir = "./output"
 
     # Collect variable assignments from notebook code (module-level only, in source order)
     assignments: Dict[str, Any] = {}
     ambiguous: set = set()
+    # name -> every module-level binding of it, in source order, so a trainer call can
+    # be resolved to the latest binding that precedes it (cells run top to bottom). Any
+    # value counts, not only calls: a later `cfg = something_else` must shadow an earlier
+    # `cfg = CPOConfig(...)`, and then the loss cannot be read.
+    name_bindings: Dict[str, List[ast.AST]] = {}
     for stmt in tree.body:
         if not isinstance(stmt, ast.Assign):
             continue
@@ -97,6 +118,7 @@ def migrate_unsloth(notebook_path: Path) -> Dict[str, Any]:
         for target in stmt.targets:
             if not isinstance(target, ast.Name):
                 continue
+            name_bindings.setdefault(target.id, []).append(stmt.value)
             if val is _SENTINEL or assignments.get(target.id, val) != val:
                 ambiguous.add(target.id)
             else:
@@ -104,10 +126,15 @@ def migrate_unsloth(notebook_path: Path) -> Dict[str, Any]:
     for name in ambiguous:
         assignments.pop(name, None)
 
-    # Walk AST to extract function call arguments
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
-            continue
+    # Visit every call in source order. ast.walk is breadth-first (by nesting depth),
+    # which let a module-level `cfg = GRPOConfig(...)` be visited after an inline
+    # `SFTTrainer(args=SFTConfig(...))` written earlier, so the SFT warm-up stage won
+    # (#1560 review): the shape of Unsloth's GRPO notebooks.
+    calls = sorted(
+        (n for n in ast.walk(tree) if isinstance(n, ast.Call)),
+        key=lambda n: (n.lineno, n.col_offset),
+    )
+    for node in calls:
 
         func_name = _get_func_name(node)
         if func_name is None:
@@ -160,6 +187,8 @@ def migrate_unsloth(notebook_path: Path) -> Dict[str, Any]:
             # SFTTrainer(...), DPOTrainer(...), etc.
             task = _TRAINER_MAP[func_name]
             kwargs = _extract_kwargs(node, scope=assignments)
+            if func_name == "CPOTrainer":
+                cpo_loss_type = _cpo_loss_type(node, kwargs, assignments, name_bindings)
             if kwargs.get("packing"):
                 warnings.append(
                     "packing=True is not supported in Soup. "
@@ -196,6 +225,31 @@ def migrate_unsloth(notebook_path: Path) -> Dict[str, Any]:
 
     if base is None:
         raise ValueError("No FastLanguageModel.from_pretrained() call found in notebook")
+
+    if task == "cpo":
+        # TRL's CPOTrainer is SimPO only under loss_type="simpo"; its other losses
+        # (sigmoid, hinge, ipo over CPO's reference-free objective) have no Soup task.
+        if cpo_loss_type is _UNREAD:
+            raise ValueError(
+                "No Soup task matches CPOTrainer: its loss_type could not be read statically "
+                "(args= is not a CPOConfig(...) call at module level, or uses **kwargs); "
+                "only loss_type='simpo' migrates, to task: simpo."
+            )
+        if cpo_loss_type != "simpo":
+            raise ValueError(
+                f"No Soup task matches CPOTrainer with loss_type={cpo_loss_type!r} "
+                "(TRL's default is 'sigmoid'); only loss_type='simpo' migrates, to task: simpo."
+            )
+        task = "simpo"
+    if task == "online_dpo":
+        # The schema requires a judge or a reward model, and TRL's judge is a Python
+        # object with no string form, so a placeholder is written the way data.train is.
+        training_params.setdefault("online_dpo_judge", _ONLINE_DPO_JUDGE_PLACEHOLDER)
+        warnings.append(
+            "OnlineDPOTrainer's judge / reward model is not carried over: "
+            f"training.online_dpo_judge is a placeholder ({_ONLINE_DPO_JUDGE_PLACEHOLDER}); "
+            "set it to your judge, or replace it with training.reward_model."
+        )
 
     # Build result
     data_format = _TASK_FORMAT_MAP.get(task, "auto")
@@ -249,6 +303,49 @@ def migrate_unsloth(notebook_path: Path) -> Dict[str, Any]:
     }
 
     return result
+
+
+class _UnreadType:
+    """Marker: the trainer takes an ``args=`` that static reading cannot resolve."""
+
+
+_UNREAD = _UnreadType()
+_ONLINE_DPO_JUDGE_PLACEHOLDER = "ollama://REPLACE-ME"
+
+
+def _cpo_loss_type(
+    trainer_call: ast.Call,
+    trainer_kwargs: Dict[str, Any],
+    scope: Dict[str, Any],
+    name_bindings: Dict[str, List[ast.AST]],
+) -> Any:
+    """The ``loss_type`` that governs *this* ``CPOTrainer``: on the call itself, else on
+    the ``CPOConfig`` passed as its config, ``args=`` or the second positional argument
+    (TRL's ``CPOTrainer(model, args, ...)``), inline or through a name whose latest
+    module-level binding precedes the trainer call. A ``CPOConfig`` elsewhere in the
+    notebook, or one bound to the name only after the trainer ran, does not count.
+    ``None`` means omitted (TRL's default, ``sigmoid``); ``_UNREAD`` means a config was
+    passed that cannot be read statically."""
+    if "loss_type" in trainer_kwargs:
+        return trainer_kwargs["loss_type"]
+    config: Optional[ast.AST] = next(
+        (kw.value for kw in trainer_call.keywords if kw.arg == "args"), None
+    )
+    if config is None and len(trainer_call.args) >= 2:
+        config = trainer_call.args[1]
+    if config is None:
+        return None
+    if isinstance(config, ast.Name):
+        preceding = [
+            value for value in name_bindings.get(config.id, [])
+            if value.lineno < trainer_call.lineno
+        ]
+        config = preceding[-1] if preceding else None
+    if not (isinstance(config, ast.Call) and _get_func_name(config) == "CPOConfig"):
+        return _UNREAD
+    if any(k.arg is None for k in config.keywords):  # CPOConfig(**kw)
+        return _UNREAD
+    return _extract_kwargs(config, scope=scope).get("loss_type")
 
 
 def _get_func_name(node: ast.Call) -> Optional[str]:
