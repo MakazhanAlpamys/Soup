@@ -1203,7 +1203,7 @@ class TrainingConfig(BaseModel):
             "gptq / awq (load pre-quantized checkpoint, train LoRA on top), "
             "hqq:Nbit (HQQ 1-8 bit, N in {1..6, 8}), "
             "aqlm (extreme 2-bit), eetq (8-bit fast), "
-            "mxfp4 (BNB 4-bit MXFP4 quant_type), "
+            "mxfp4 (MXFP4 pre-quantized base, dequantized on load), "
             "fp8 (load FP8 checkpoint with dequantize-on-load), "
             "bitnet_1.58 (reserved until BitNet trainer routing is available)."
         ),
@@ -4031,17 +4031,16 @@ class TrainingConfig(BaseModel):
 
     @model_validator(mode="after")
     def _validate_bnb_quant_storage_only_with_4bit(self) -> "TrainingConfig":
-        """v0.38.0 Part G — bnb_4bit_quant_storage applies only to BNB 4-bit
-        and MXFP4 (which is a BNB 4-bit variant). Setting it on any other
-        format is a silent no-op — fail fast.
+        """v0.38.0 Part G — bnb_4bit_quant_storage applies only to BNB 4-bit.
+        Setting it on any other format is a silent no-op — fail fast. MXFP4
+        is transformers' own format, not a BNB 4-bit variant (#1466).
         """
         if self.bnb_4bit_quant_storage is None:
             return self
-        if self.quantization not in ("4bit", "mxfp4"):
+        if self.quantization != "4bit":
             raise ValueError(
                 f"bnb_4bit_quant_storage={self.bnb_4bit_quant_storage!r} "
-                f"requires quantization in {{'4bit', 'mxfp4'}}, got "
-                f"{self.quantization!r}."
+                f"requires quantization '4bit', got {self.quantization!r}."
             )
         return self
 
