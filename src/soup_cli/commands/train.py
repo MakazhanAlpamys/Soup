@@ -87,6 +87,29 @@ def _format_training_complete_loss(result: dict) -> str:
     return f"Loss: [bold]{result['initial_loss']:.4f} -> {result['final_loss']:.4f}[/]{label}"
 
 
+def _format_duration_display(result: dict) -> str:
+    """Duration line for the completion panel (#1529).
+
+    Every trainer wrapper returns both a pre-formatted ``duration`` string and
+    the raw ``duration_secs`` — except unlearn, which until #1529 returned only
+    the seconds, so the panel's ``result['duration']`` raised ``KeyError``
+    AFTER the adapter was saved and the run was otherwise complete. Read the
+    string when present and fall back to formatting the seconds (``unknown``
+    when both are missing — a measured ``0m`` stays ``0m``, but an absent
+    measurement should not read as a zero) so no wrapper can lose a finished
+    run's summary.
+    """
+    duration = result.get("duration")
+    if duration:
+        return duration
+    duration_secs = result.get("duration_secs")
+    if duration_secs is None:
+        return "unknown"
+    hours = int(duration_secs // 3600)
+    minutes = int((duration_secs % 3600) // 60)
+    return f"{hours}h {minutes}m" if hours > 0 else f"{minutes}m"
+
+
 def _train_sample_count(dcfg, dataset) -> int:
     """Rows training will actually consume (#1054).
 
@@ -1812,7 +1835,7 @@ def train(
     console.print(
         Panel(
             f"{_format_training_complete_loss(result)}\n"
-            f"Duration: [bold]{result['duration']}[/]\n"
+            f"Duration: [bold]{_format_duration_display(result)}[/]\n"
             f"Output: [bold]{result['output_dir']}[/]\n"
             f"Run ID: [bold]{run_id}[/]\n\n"
             f"Quick test:  [bold]soup chat --model {result['output_dir']}[/]\n"
