@@ -15,9 +15,10 @@ An answer is stated explicitly in one of three forms:
 3. ``answer is`` / ``answer:`` in any case, with markdown emphasis allowed around the word
    (``**Answer**:``) and the answer allowed on the next line: the last such phrase, up to the end
    of its clause. The clause ends at a line end, at ``". "``, ``", "`` or ``"; "`` outside
-   brackets, or at a connective such as ``because`` or ``since``, except that a comma or
-   semicolon followed by a number continues a list (``41, 42 or 43``). A ``" ("`` aside belongs
-   to the clause but not to the answer: ``42 (i.e. 42.0)`` answers ``42``.
+   brackets, or at the connective ``because`` or ``since`` (case-insensitive, requiring whitespace
+   on both sides; not ``as``), except that a comma or semicolon followed by a number continues
+   a list (``41, 42 or 43``). A ``" ("`` aside belongs to the clause but not to the answer:
+   ``42 (i.e. 42.0)`` answers ``42``.
 
 A box outranks a phrase. A ``####`` line outranks both, unless one of them comes after it: then
 the ``####`` line was a markdown heading, or an answer the text went on to correct. Any later
@@ -267,7 +268,8 @@ def _split_clause(line: str) -> tuple[str, str]:
     """Split the text after an answer phrase into its clause's ``(answer, aside)``.
 
     The clause ends at ". ", ", " or "; " outside brackets, unless a number follows the comma
-    or semicolon ("41, 42 or 43" is one clause), or at a connective such as "because" or "since".
+    or semicolon ("41, 42 or 43" is one clause), or at the connective "because" or "since"
+    (case-insensitive, requiring whitespace on both sides; not "as").
     A " (" aside is in the clause, not the answer.
     """
     line = line.lstrip()
@@ -288,7 +290,7 @@ def _split_clause(line: str) -> tuple[str, str]:
                         continue
                     line = line[:index]
                     break
-            elif (index == 0 or line[index - 1].isspace()) and (
+            elif (index > 0 and line[index - 1].isspace()) and (
                 index + len(char) == len(line) or line[index + len(char)].isspace()
             ):
                 line = line[:index].rstrip()

@@ -53,6 +53,8 @@ WHITESPACE_RUNS = {
     "since-spaces": lambda k: "The answer is 42 since" + " " * k + "x",
     "because-tokens": lambda k: "The answer is 42 " + "because " * k + "x",
     "since-tokens": lambda k: "The answer is 42 " + "since " * k + "x",
+    "paren-because-tokens": lambda k: "The answer is 42 (" + "because " * k + "x",
+    "glued-because": lambda k: "The answer is 42 " + "x-because " * k + "x",
 }
 
 _SCALE_N = 1_000

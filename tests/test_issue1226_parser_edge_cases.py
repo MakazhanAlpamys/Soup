@@ -3,9 +3,10 @@ r"""Edge cases of the #1226 final-answer parser, found while reviewing the fix.
 1. **A time or a ratio is one value.** "3:45" and "1:1,000" are one answer, like "4/5", so an
    answer phrase that states one is compared as text instead of being read as a hedge between
    its numbers (or, for "3:45pm", as the value 3).
-2. **A justification inside the answer clause is a hedge.** This pins the ruling in
-   ``test_issue1226_reward_gold_parsing.py``: every stand-alone number in the clause counts. A
-   comma or a period before the justification ends the clause.
+2. **Parenthetical justifications hedge the answer clause, while connectives end it.** Parenthetical
+   justifications belong to the clause and make it a hedge if numbers conflict. The justification
+   connectives "because" or "since" (case-insensitive, requiring whitespace on both sides), or
+   punctuation, end the clause before the justification.
 3. **A later answer phrase supersedes a "####" line**, chatter included ("I hope this answer is
    helpful!"): it cannot be told apart from a heading followed by its answer.
 4. **A "####" heading is not a gold.** A reference whose "####" line is not a number and has more
@@ -116,7 +117,7 @@ class TestATimeOrARatioIsOneValue:
 
 
 # ===========================================================================
-# 2. a justification inside the answer clause is a hedge (the ruling)
+# 2. parenthetical justifications hedge, while connectives end the clause
 # ===========================================================================
 
 # (completion, every number in its clause). Parenthetical justifications belong to the clause
@@ -172,6 +173,52 @@ class TestAJustificationInsideTheClause:
         completion = "The answer is 41 because 6*7=42."
         assert parse_completion(completion).number == Decimal(41)
         assert _scores(completion, "42") == (0.0, 0.0)
+
+
+class TestTheConnectiveBoundaryItself:
+    @pytest.mark.parametrize(
+        "connective", ["because", "Because", "BECAUSE", "bEcAuSe", "since", "Since", "SINCE"]
+    )
+    def test_any_case_ends_the_clause(self, connective):
+        completion = f"The answer is 42 {connective} 6*7=42."
+        assert parse_completion(completion).number == Decimal(42)
+        assert _scores(completion, "42") == (1.0, 1.0)
+
+    @pytest.mark.parametrize("separator", ["\t", "\u00a0", "  ", "\n"])
+    def test_any_whitespace_on_both_sides(self, separator):
+        completion = f"The answer is 42{separator}because{separator}6*7=42."
+        assert parse_completion(completion).number == Decimal(42)
+        assert _scores(completion, "42") == (1.0, 1.0)
+
+    @pytest.mark.parametrize(
+        "completion",
+        [
+            "The answer is 42 because-6*7=42.",  # glued to what follows
+            "The answer is 42 because6*7=42.",
+            "The answer is 42-because 6*7=42.",  # glued to what came before
+            "The answer is 42 sincerely 6*7=42.",  # a longer word
+            "The answer is 42 (which is right since 6*7=42).",  # inside a bracket: an aside
+        ],
+    )
+    def test_only_a_stand_alone_connective_outside_brackets_ends_the_clause(self, completion):
+        # Without a cut the clause keeps 6 and 7 next to 42: still a hedge, as before the rule.
+        assert parse_completion(completion) is None
+        assert _scores(completion, "42") == (0.0, 0.0)
+
+    def test_the_connective_is_not_part_of_a_text_answer(self):
+        completion = "The answer is Paris because it is the capital."
+        assert parse_completion(completion).text == "Paris"
+        assert _scores(completion, "Paris") == (1.0, 1.0)
+
+
+class TestAnAnswerThatBeginsWithAConnective:
+    """The connective ends a clause that has an answer in it; it never empties one."""
+
+    @pytest.mark.parametrize(
+        "gold", ["Answer: Because it rains.", "Answer: since 1990", "The answer is Since then."]
+    )
+    def test_a_text_gold_that_starts_with_one_is_still_a_gold(self, gold):
+        assert parse_reference(gold) is not None
 
 
 # ===========================================================================

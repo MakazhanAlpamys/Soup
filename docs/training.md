@@ -1298,9 +1298,10 @@ answer is, in this order of precedence:
 2. the content of the last `\boxed{}` (a space before the brace and nested braces such as
    `\boxed{\frac{1}{2}}` are fine);
 3. what follows the last `The answer is` or `Answer:` (also `**Answer**:`, and the answer may be
-   on the next line), up to the end of its clause: a `. `, `, ` or `; ` outside brackets, or a
-   connective such as `because` or `since`. A comma or semicolon that a number follows continues
-   a list instead (`41, 42 or 43`), and a parenthetical aside belongs to the clause. So `The answer is Washington, D.C.`
+   on the next line), up to the end of its clause: a `. `, `, ` or `; ` outside brackets, or at
+   the connective `because` or `since` (case-insensitive, requiring whitespace on both sides; not `as`).
+   A comma or semicolon that a number follows continues a list instead (`41, 42 or 43`), and a
+   parenthetical aside belongs to the clause. So `The answer is Washington, D.C.`
    reads `Washington`, `The answer is 42 (six times seven).` reads `42`, and `The answer is (3, 4).`
    reads `(3, 4)`.
 
