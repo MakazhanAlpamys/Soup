@@ -15,7 +15,8 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-V2_TOL = 0.05
+V2_LOADS = 0.5
+V2_BYTES = 1e6
 V4_TOL = 0.05
 G2_RATIO = 0.8
 G3_RATIO = 1.3
@@ -68,6 +69,9 @@ def arm_value(rows: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
         "spread": spread,
         "tok_s": measured[0]["tokens_per_step"] / value,
         "peak": max(rec["peak_alloc_gb"] for rec in measured),
+        "loads": sum(rec.get("layer_loads_per_step", 0.0) + rec.get("large_loads_per_step", 0.0)
+                     for rec in measured) / 2,
+        "bytes": sum(rec.get("bytes_moved_per_step", 0.0) for rec in measured) / 2,
     }
 
 
@@ -126,16 +130,18 @@ def evaluate(results_dir: str) -> Dict[str, Any]:
     v1 = {"ok": meta.get("direct_io") is True, "detail": f"direct_io={meta.get('direct_io')}"}
     v3 = {"ok": bool((meta.get("v3") or {}).get("ok")), "detail": str(meta.get("v3"))}
 
-    def within(left: Tuple[str, str, int], right: Tuple[str, str, int]) -> Optional[float]:
-        a, b = arms[left], arms[right]
-        if not (a["valid"] and b["valid"]):
-            return None
-        return abs(a["value"] - b["value"]) / b["value"]
+    def same_work(arm: str) -> Tuple[bool, str]:
+        """V2: L2L at k=1 moves exactly the shipped batch-1 step's loads and bytes."""
+        l2l, plain = arms[("l2l", arm, 1)], arms[("plain", arm, 1)]
+        if not (l2l["valid"] and plain["valid"]):
+            return False, f"{arm}: an arm is invalid"
+        ok = (abs(l2l["loads"] - plain["loads"]) <= V2_LOADS
+              and abs(l2l["bytes"] - plain["bytes"]) <= V2_BYTES)
+        return ok, (f"{arm}: loads {l2l['loads']:.1f} vs {plain['loads']:.1f}, "
+                    f"bytes {l2l['bytes'] / 1e9:.3f} vs {plain['bytes'] / 1e9:.3f} GB")
 
-    off_a = within(("l2l", "A", 1), ("plain", "A", 1))
-    off_b = within(("l2l", "B", 1), ("plain", "B", 1))
-    v2_ok = off_a is not None and off_b is not None and off_a <= V2_TOL and off_b <= V2_TOL
-    v2 = {"ok": v2_ok, "detail": f"A off {off_a}, B off {off_b}"}
+    (ok_a, detail_a), (ok_b, detail_b) = same_work("A"), same_work("B")
+    v2 = {"ok": ok_a and ok_b, "detail": f"{detail_a}; {detail_b}"}
     global_ok = v1["ok"] and v2["ok"] and v3["ok"]
     global_why = [name for name, row in (("V1", v1), ("V2", v2), ("V3", v3)) if not row["ok"]]
 
@@ -158,6 +164,13 @@ def evaluate(results_dir: str) -> Dict[str, Any]:
     gates = {"G1": g1, "G2": g2, "G3": g3, "G4": g4}
 
     info: Dict[str, Any] = {}
+    ratios = {}
+    for arm in ("A", "B"):
+        l2l, plain = arms[("l2l", arm, 1)], arms[("plain", arm, 1)]
+        if l2l["valid"] and plain["valid"]:
+            ratios[arm.lower()] = l2l["value"] / plain["value"]
+    if ratios:
+        info["I6"] = ratios
     b4, d4, c4, a4 = (arms[("l2l", x, 4)] for x in ("B", "D", "C", "A"))
     if b4["valid"] and d4["valid"]:
         c_over_a = c4["value"] / a4["value"] if c4["valid"] and a4["valid"] else None
@@ -204,7 +217,7 @@ def main(argv: Sequence[str]) -> int:
         tok = f"{row['tok_s']:.1f}" if row["tok_s"] else "-"
         peak = f"{row['peak']:.3f}" if row["peak"] else "-"
         print(f"| {name} | {row['valid']} | {value} | {tok} | {peak} | {'; '.join(row['why'])} |")
-    for key in ("I2", "I3", "I4"):
+    for key in ("I2", "I3", "I4", "I6"):
         if key in out["info"]:
             print(f"\n{key}: {out['info'][key]}")
     print(f"\n**Verdict: {out['verdict']}**")

@@ -482,9 +482,12 @@ def _corr(fixture, *, a_vs_a=True, l2l=True, det=False, error=None):
     return {"meta": {}, "records": [rec]}
 
 
-def _arm(mode, arm, k, rnd, step_s, *, peak=4.4, void=False, variant=None, skipped=None):
+def _arm(mode, arm, k, rnd, step_s, *, peak=4.4, void=False, variant=None, skipped=None,
+         loads=157.0):
     return {"kind": "arm", "mode": mode, "arm": arm, "k": k, "round": rnd, "variant": variant,
             "step_s_mean": step_s, "tokens_per_step": 512 * k, "peak_alloc_gb": peak,
+            "layer_loads_per_step": loads, "large_loads_per_step": 2.0,
+            "bytes_moved_per_step": loads * 441e6 + 2 * 525e6,
             "suspend": {"void": void}, "store": None, "skipped": skipped}
 
 
@@ -560,8 +563,22 @@ def test_suspend_void_on_b16_removes_g2_only(rule, tmp_path):
     assert out["gates"]["G4"]["status"] == "pass"
 
 
-def test_v2_off_by_7pct_removes_every_timing_gate(rule, tmp_path):
-    out = rule.evaluate(_write(tmp_path, timing=_timing(times={("l2l", "A", 1): 18.3})))
+def test_v2_judges_the_work_not_the_time(rule, tmp_path):
+    """L2L at k=1 skips the checkpoint machinery, so it may be faster than the
+    shipped step with the same reads and the same arithmetic (smoke, SmolLM2:
+    10-20%). V2 compares loads and bytes per step; the time ratio is I6."""
+    out = rule.evaluate(_write(tmp_path, timing=_timing(times={("l2l", "B", 1): 5.5})))
+    assert out["validity"]["V2"]["ok"] is True
+    assert out["info"]["I6"]["b"] == pytest.approx(5.5 / 6.43)
+    assert out["verdict"] == "BUILD STEP 1"
+
+
+def test_v2_fails_when_l2l_k1_loads_differ_from_the_shipped_step(rule, tmp_path):
+    def fewer(records):
+        for rec in records:
+            if (rec["mode"], rec["k"]) == ("l2l", 1):
+                rec["layer_loads_per_step"] = 80.0
+    out = rule.evaluate(_write(tmp_path, timing=_timing(patch=[fewer])))
     assert out["validity"]["V2"]["ok"] is False
     for gate in ("G2", "G3", "G4"):
         assert out["gates"][gate]["status"] == "no verdict"
@@ -638,3 +655,73 @@ def test_unknown_foreign_readers_do_not_void(rule, tmp_path):
             rec["foreign_readers"] = None
     out = rule.evaluate(_write(tmp_path, timing=_timing(patch=[unknown])))
     assert out["verdict"] == "BUILD STEP 1"
+
+
+# --------------------------------------------------------------------------
+# l2l_probe — pure planning helpers (the GPU paths run in Task 7)
+# --------------------------------------------------------------------------
+@pytest.fixture()
+def probe():
+    return _load("l2l_probe")
+
+
+def test_timing_plan_interleaves_and_alternates(probe):
+    plan = probe.plan_timing_arms([1, 2, 16], rounds=2, cd_k=4)
+    r0 = [row for row in plan if row[0] == 0]
+    r1 = [row for row in plan if row[0] == 1]
+    assert r0[:2] == [(0, "plain", "A", 1), (0, "plain", "B", 1)]
+    assert r1[:2] == [(1, "plain", "B", 1), (1, "plain", "A", 1)]
+    assert [row[3] for row in r0 if row[1] == "l2l" and row[2] in "AB"] == [1, 1, 2, 2, 16, 16]
+    assert [row[3] for row in r1 if row[1] == "l2l" and row[2] in "AB"] == [16, 16, 2, 2, 1, 1]
+    assert [row[2] for row in r0 if row[1] == "l2l" and row[3] == 2] == ["A", "B"]
+    assert [row[2] for row in r1 if row[1] == "l2l" and row[3] == 2] == ["B", "A"]
+    assert r0[-2:] == [(0, "l2l", "C", 4), (0, "l2l", "D", 4)]
+    assert r1[-2:] == [(1, "l2l", "D", 4), (1, "l2l", "C", 4)]
+
+
+def test_spill_plan_alternates(probe):
+    assert probe.plan_spill_arms(2) == [(0, "pinned"), (0, "spill"), (1, "spill"), (1, "pinned")]
+
+
+def test_spill_layers_for_the_70b_shape(probe):
+    assert probe.spill_layers_for(80, 16, 8) == 40
+    assert probe.spill_layers_for(80, 8, 8) == 0
+    with pytest.raises(ValueError):
+        probe.spill_layers_for(80, 16, 0)
+
+
+def test_store_allocation_failure_becomes_a_skipped_arm(probe, monkeypatch):
+    import torch
+
+    calls = []
+
+    def boom(**_kwargs):
+        raise RuntimeError("CUDA error: out of memory")
+
+    monkeypatch.setattr(probe.l2l_activations, "ActivationStore", boom)
+    monkeypatch.setattr(probe, "_drain", lambda: calls.append("drained"))
+    store, reason = probe.allocate_store(
+        n_layers=4, k=2, chunk_shape=(1, 8, 64), dtype=torch.float32, device="cpu", pin=False
+    )
+    assert store is None
+    assert "out of memory" in reason
+    assert calls == ["drained"]
+
+def test_observe_attaches_stamps_watch_and_foreign_readers(probe, monkeypatch):
+    snaps = iter([
+        {1: {"name": "a.exe", "read": 0}},
+        {1: {"name": "a.exe", "read": 2_000_000_000}},
+    ])
+    monkeypatch.setattr(probe.l2l_box, "process_read_bytes", lambda: next(snaps))
+    monkeypatch.setattr(probe.l2l_box, "box_stamp", lambda: {"unix": 0.0})
+    result = probe.observe(lambda: {"step_s_mean": 1.0}, interval=0.01)
+    assert result["step_s_mean"] == 1.0
+    assert result["suspend"]["samples"] >= 2
+    assert result["box_before"] == {"unix": 0.0} and result["box_after"] == {"unix": 0.0}
+    assert result["foreign_readers"] == [{"pid": 1, "name": "a.exe", "read_bytes": 2_000_000_000}]
+
+
+def test_observe_stops_the_watch_when_the_body_raises(probe):
+    with pytest.raises(ValueError, match="boom"):
+        probe.observe(lambda: (_ for _ in ()).throw(ValueError("boom")), interval=0.01)
+    assert not any(t.name == "l2l-suspend-watch" for t in threading.enumerate())
