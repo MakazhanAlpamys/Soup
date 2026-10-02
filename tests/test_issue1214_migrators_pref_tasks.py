@@ -361,6 +361,51 @@ class TestUnslothTrainerClasses:
         )
         assert _unsloth(tmp_path, cell)["task"] == "simpo"
 
+    @pytest.mark.parametrize("rebinding", ["other_cfg", "cfgs.cpo", "None"])
+    def test_a_config_name_rebound_to_a_non_call_cannot_be_read(
+        self, tmp_path: Path, rebinding: str
+    ) -> None:
+        # CodeRabbit on round 2: the latest binding before the trainer is a name, an
+        # attribute or a constant, not the earlier CPOConfig, so the loss cannot be read
+        # and the trainer is refused. Recording only call bindings would miss this.
+        cell = (
+            "from trl import CPOTrainer, CPOConfig\n"
+            "cfg = CPOConfig(loss_type='simpo')\n"
+            f"cfg = {rebinding}\n"
+            "trainer = CPOTrainer(model=model, train_dataset=dataset, args=cfg)\n"
+        )
+        with pytest.raises(ValueError, match="could not be read statically"):
+            _unsloth(tmp_path, cell)
+
+    @pytest.mark.parametrize(
+        "config_expr,expected",
+        [
+            ("CPOConfig(loss_type='simpo', per_device_train_batch_size=2)", "simpo"),
+            ("cfg", "simpo"),
+        ],
+        ids=["inline", "by name"],
+    )
+    def test_the_config_as_second_positional_argument_counts(
+        self, tmp_path: Path, config_expr: str, expected: str
+    ) -> None:
+        # TRL's signature is CPOTrainer(model, args, ...); a notebook may pass it positionally.
+        cell = (
+            "from trl import CPOTrainer, CPOConfig\n"
+            "cfg = CPOConfig(loss_type='simpo', per_device_train_batch_size=2)\n"
+            f"trainer = CPOTrainer(model, {config_expr}, train_dataset=dataset)\n"
+        )
+        result = _unsloth(tmp_path, cell)
+        assert result["task"] == expected and result["training"]["batch_size"] == 2
+
+    def test_the_config_as_second_positional_without_simpo_is_refused(self, tmp_path: Path) -> None:
+        cell = (
+            "from trl import CPOTrainer, CPOConfig\n"
+            "trainer = CPOTrainer(model, CPOConfig(per_device_train_batch_size=2),\n"
+            "    train_dataset=d)\n"
+        )
+        with pytest.raises(ValueError, match="loss_type=None"):
+            _unsloth(tmp_path, cell)
+
     def test_cpo_loss_type_on_the_trainer_call_counts_too(self, tmp_path: Path) -> None:
         cell = (
             "from trl import CPOTrainer\n"

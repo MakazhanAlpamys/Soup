@@ -106,9 +106,11 @@ def migrate_unsloth(notebook_path: Path) -> Dict[str, Any]:
     # Collect variable assignments from notebook code (module-level only, in source order)
     assignments: Dict[str, Any] = {}
     ambiguous: set = set()
-    # name -> every module-level `name = SomeCall(...)`, in source order, so a trainer
-    # call can be bound to the assignment that precedes it (cells run top to bottom).
-    call_assignments: Dict[str, List[ast.Call]] = {}
+    # name -> every module-level binding of it, in source order, so a trainer call can
+    # be resolved to the latest binding that precedes it (cells run top to bottom). Any
+    # value counts, not only calls: a later `cfg = something_else` must shadow an earlier
+    # `cfg = CPOConfig(...)`, and then the loss cannot be read.
+    name_bindings: Dict[str, List[ast.AST]] = {}
     for stmt in tree.body:
         if not isinstance(stmt, ast.Assign):
             continue
@@ -116,8 +118,7 @@ def migrate_unsloth(notebook_path: Path) -> Dict[str, Any]:
         for target in stmt.targets:
             if not isinstance(target, ast.Name):
                 continue
-            if isinstance(stmt.value, ast.Call):
-                call_assignments.setdefault(target.id, []).append(stmt.value)
+            name_bindings.setdefault(target.id, []).append(stmt.value)
             if val is _SENTINEL or assignments.get(target.id, val) != val:
                 ambiguous.add(target.id)
             else:
@@ -187,7 +188,7 @@ def migrate_unsloth(notebook_path: Path) -> Dict[str, Any]:
             task = _TRAINER_MAP[func_name]
             kwargs = _extract_kwargs(node, scope=assignments)
             if func_name == "CPOTrainer":
-                cpo_loss_type = _cpo_loss_type(node, kwargs, assignments, call_assignments)
+                cpo_loss_type = _cpo_loss_type(node, kwargs, assignments, name_bindings)
             if kwargs.get("packing"):
                 warnings.append(
                     "packing=True is not supported in Soup. "
@@ -316,32 +317,35 @@ def _cpo_loss_type(
     trainer_call: ast.Call,
     trainer_kwargs: Dict[str, Any],
     scope: Dict[str, Any],
-    call_assignments: Dict[str, List[ast.Call]],
+    name_bindings: Dict[str, List[ast.AST]],
 ) -> Any:
     """The ``loss_type`` that governs *this* ``CPOTrainer``: on the call itself, else on
-    the ``CPOConfig`` passed as ``args=``, inline or through a name whose latest
-    module-level assignment precedes the trainer call. A ``CPOConfig`` elsewhere in
-    the notebook, or one bound to the name only after the trainer ran, does not
-    count. ``None`` means omitted (TRL's default, ``sigmoid``); ``_UNREAD`` means an
-    ``args=`` was passed that cannot be read statically."""
+    the ``CPOConfig`` passed as its config, ``args=`` or the second positional argument
+    (TRL's ``CPOTrainer(model, args, ...)``), inline or through a name whose latest
+    module-level binding precedes the trainer call. A ``CPOConfig`` elsewhere in the
+    notebook, or one bound to the name only after the trainer ran, does not count.
+    ``None`` means omitted (TRL's default, ``sigmoid``); ``_UNREAD`` means a config was
+    passed that cannot be read statically."""
     if "loss_type" in trainer_kwargs:
         return trainer_kwargs["loss_type"]
-    for kw in trainer_call.keywords:
-        if kw.arg != "args":
-            continue
-        config = kw.value
-        if isinstance(config, ast.Name):
-            preceding = [
-                call for call in call_assignments.get(config.id, [])
-                if call.lineno < trainer_call.lineno
-            ]
-            config = preceding[-1] if preceding else None
-        if not (isinstance(config, ast.Call) and _get_func_name(config) == "CPOConfig"):
-            return _UNREAD
-        if any(k.arg is None for k in config.keywords):  # CPOConfig(**kw)
-            return _UNREAD
-        return _extract_kwargs(config, scope=scope).get("loss_type")
-    return None
+    config: Optional[ast.AST] = next(
+        (kw.value for kw in trainer_call.keywords if kw.arg == "args"), None
+    )
+    if config is None and len(trainer_call.args) >= 2:
+        config = trainer_call.args[1]
+    if config is None:
+        return None
+    if isinstance(config, ast.Name):
+        preceding = [
+            value for value in name_bindings.get(config.id, [])
+            if value.lineno < trainer_call.lineno
+        ]
+        config = preceding[-1] if preceding else None
+    if not (isinstance(config, ast.Call) and _get_func_name(config) == "CPOConfig"):
+        return _UNREAD
+    if any(k.arg is None for k in config.keywords):  # CPOConfig(**kw)
+        return _UNREAD
+    return _extract_kwargs(config, scope=scope).get("loss_type")
 
 
 def _get_func_name(node: ast.Call) -> Optional[str]:
