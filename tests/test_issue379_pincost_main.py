@@ -158,9 +158,9 @@ def test_no_cost_or_an_inverted_cost_fails(monkeypatch, capsys, tmp_path, scenar
         ("loss_offset", "loss is not bit-exact before timing"),
         ("inf_loss", "produced a non-finite loss before timing"),
         ("inf_grads", "gradient is non-finite"),
-        ("wrong_first", "failed gradient correctness on repetition 1"),
+        ("wrong_first", "pin=False failed gradient correctness across all repetitions"),
         ("lying_pinned", "requested pin=False, but runtime reports pinned=True"),
-        ("wrong_after_first", "failed gradient correctness on repetition 2"),
+        ("wrong_after_first", "pin=False failed gradient correctness across all repetitions"),
     ],
 )
 def test_an_arm_that_fails_its_gate_is_never_reported(
@@ -176,7 +176,7 @@ def test_wrong_pinned_arm_is_reported_but_can_still_be_timed(
 ):
     code, out = _run(monkeypatch, capsys, tmp_path, "pinned_wrong_after_first")
     assert code == 0, out
-    assert "gradients    pin=True 4/4,0/4,0/4 WRONG" in out
+    assert "gradients pin=True 4/4,0/4,0/4 WRONG" in out
     assert "RESULT: historical-control pinning cost relationship reproduced" in out
 
 def test_an_invalid_timing_exits_3(monkeypatch, capsys, tmp_path):
