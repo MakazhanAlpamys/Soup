@@ -48,6 +48,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Optional Laya typed-decision reward integration; kept separate from the core
+# and training stacks because it is only imported when training.laya_reward is used.
+laya = ["laya>=0.3.11,<0.4"]
 # v0.71.0 — heavy training stack. `pip install 'soup-cli[train]'` to fine-tune.
 # These were core dependencies through v0.70.0.
 train = [
