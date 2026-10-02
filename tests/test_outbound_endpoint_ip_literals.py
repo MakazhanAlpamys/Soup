@@ -23,7 +23,11 @@ from types import SimpleNamespace
 
 import pytest
 
-_REFUSED = "private/link-local/reserved IP hosts are not allowed"
+_REFUSED = (
+    "private/link-local/reserved IP hosts are not allowed "
+    "(SSRF protection); address the server by its hostname"
+)
+_WILDCARD_HINT = "0.0.0.0 is ambiguous; use 127.0.0.1 or localhost"
 
 # The host part of the URL, as written in its authority.
 _NON_PUBLIC_HOSTS = [
@@ -40,7 +44,6 @@ _NON_PUBLIC_HOSTS = [
     pytest.param("0x0a000001", id="hex-v4"),
     pytest.param("012.0.0.1", id="octal-v4"),
     pytest.param("169.254.169.254.", id="trailing-dot"),
-    pytest.param("0.0.0.0", id="unspecified-v4"),
     pytest.param("[::]", id="unspecified-v6"),
     pytest.param("224.0.0.1", id="multicast-v4"),
     # RFC 6598 shared address space: neither is_private nor is_global.
@@ -333,6 +336,16 @@ class TestRemoteHttpKeepsItsMessage:
         assert sent == []
 
 
+class TestWildcardIpHint:
+    """0.0.0.0 gets a specific hint in generate and chat-proxy validators."""
+
+    @pytest.mark.parametrize("validator", [_generate_openai, _generate_server])
+    def test_generate_refuses_with_wildcard_hint(self, validator, sent):
+        with pytest.raises(ValueError, match=_WILDCARD_HINT):
+            validator("https://0.0.0.0/")
+        assert sent == []
+
+
 class TestShipJudgeModelFlag:
     @pytest.fixture
     def out(self, monkeypatch) -> io.StringIO:
@@ -417,7 +430,7 @@ class TestChatProxy:
         resp = post(f"https://{host}")
         assert resp.status_code == 400, resp.text
         detail = resp.json()["detail"]
-        assert detail == f"endpoint: {_REFUSED} (SSRF protection)"
+        assert detail == f"endpoint: {_REFUSED}"
         assert sent == []
 
     @pytest.mark.parametrize("host", _ALLOWED_HOSTS)
@@ -431,6 +444,13 @@ class TestChatProxy:
         resp = post("http://0.0.0.0:8000")
         assert resp.status_code == 400, resp.text
         assert resp.json()["detail"] == "HTTP only allowed for localhost endpoints"
+        assert sent == []
+
+    def test_unspecified_address_over_https_gets_wildcard_hint(self, post, sent):
+        """0.0.0.0 over HTTPS gets a specific actionable hint, not the generic refusal."""
+        resp = post("https://0.0.0.0/")
+        assert resp.status_code == 400, resp.text
+        assert resp.json()["detail"] == f"endpoint {_WILDCARD_HINT}"
         assert sent == []
 
     def test_loopback_range_over_http_is_dispatched(self, post, sent):
@@ -571,7 +591,7 @@ class TestTheSharedHelper:
 
         with pytest.raises(ValueError) as info:
             refuse_private_ip_literal(host, label="vLLM URL")
-        assert str(info.value) == f"vLLM URL: {_REFUSED} (SSRF protection)"
+        assert str(info.value) == f"vLLM URL: {_REFUSED}"
 
     def test_mapped_loopback_does_not_depend_on_the_interpreter(self, monkeypatch):
         """Whether ``IPv6Address.is_loopback`` looks through an IPv4-mapped address

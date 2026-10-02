@@ -1051,7 +1051,7 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
 
         from fastapi.responses import StreamingResponse
 
-        from soup_cli.utils.net_guard import refuse_private_ip_literal
+        from soup_cli.utils.net_guard import WILDCARD_IP_HINT, refuse_private_ip_literal
 
         # Validate messages
         if not req.messages:
@@ -1086,6 +1086,11 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
             raise HTTPException(
                 status_code=400,
                 detail="Only HTTP (localhost) or HTTPS endpoints allowed",
+            )
+        if parsed.hostname == "0.0.0.0":
+            raise HTTPException(
+                status_code=400,
+                detail=f"endpoint {WILDCARD_IP_HINT}",
             )
         try:
             refuse_private_ip_literal(parsed.hostname, label="endpoint")

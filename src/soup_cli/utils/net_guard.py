@@ -44,6 +44,7 @@ import ipaddress
 
 # Loopback hosts that may legitimately use plain HTTP (dev / self-hosted).
 LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+WILDCARD_IP_HINT = "0.0.0.0 is ambiguous; use 127.0.0.1 or localhost"
 
 
 def _ascii_spellings(host: str) -> list[str]:
@@ -171,5 +172,6 @@ def refuse_private_ip_literal(host: str | None, *, label: str) -> None:
         return
     if is_private_or_link_local(clean):
         raise ValueError(
-            f"{label}: private/link-local/reserved IP hosts are not allowed (SSRF protection)"
+            f"{label}: private/link-local/reserved IP hosts are not allowed "
+            f"(SSRF protection); address the server by its hostname"
         )
