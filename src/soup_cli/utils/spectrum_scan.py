@@ -612,7 +612,7 @@ def _materialized_matches_hf_snapshot(
         source_path = os.path.join(source_dir, name)
         if not os.path.islink(source_path):
             return None
-        blob_id = os.path.basename(os.path.realpath(source_path))
+        blob_id = _hf_blob_id(source_path)
         metadata_path = os.path.join(
             materialized_dir,
             ".cache",
@@ -635,6 +635,38 @@ def _materialized_matches_hf_snapshot(
     return existing
 
 
+def _hf_blob_id(snapshot_path: str) -> str:
+    """The per-repo ``blobs/<etag>`` name a snapshot link points at.
+
+    Not the final target: huggingface_hub >= 1.32 may chain that entry to its
+    cache-wide Xet store, whose file is named by the Xet hash instead.
+    """
+    return os.path.basename(os.readlink(snapshot_path))
+
+
+def _hf_shared_blob_root(repo_root: str) -> Optional[str]:
+    """The cache-wide ``<cache>/blobs`` store of huggingface_hub >= 1.32, if marked.
+
+    Per-repo ``blobs/<etag>`` entries of Xet downloads are relative symlinks into
+    it; huggingface_hub writes the ``.huggingface-shared-blobs`` marker file.
+    Like huggingface_hub's ``is_shared_blobs_dir``, neither the directory nor the
+    marker may be a link: a linked store points somewhere else.
+    """
+    store = os.path.join(os.path.dirname(repo_root), "blobs")
+    marker = os.path.join(store, ".huggingface-shared-blobs")
+    try:
+        store_stat = os.lstat(store)
+        marker_stat = os.lstat(marker)
+    except OSError:
+        return None
+    if not stat.S_ISDIR(store_stat.st_mode) or not stat.S_ISREG(marker_stat.st_mode):
+        return None
+    reparse = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+    if getattr(store_stat, "st_file_attributes", 0) & reparse:
+        return None
+    return os.path.realpath(store)
+
+
 def _hf_snapshot_revision(source_dir: str) -> Optional[str]:
     """Commit carried by a canonical ``snapshots/<sha>`` cache directory."""
     source = os.path.realpath(os.path.expanduser(source_dir))
@@ -652,8 +684,10 @@ def _snapshot_materialization_entries(
     """Validate and list cached files before any destination is created.
 
     Canonical Hugging Face snapshots contain symlinks into their sibling
-    ``blobs`` directory.  Only those links are followed: a crafted snapshot
-    cannot turn Soup's regular-file copy into an arbitrary-file disclosure.
+    ``blobs`` directory, whose Xet entries may in turn link into the
+    cache-wide shared blob store.  Only links resolving into one of those two
+    stores are followed: a crafted snapshot cannot turn Soup's regular-file
+    copy into an arbitrary-file disclosure.
     """
     from soup_cli.utils.paths import is_under
 
@@ -661,7 +695,7 @@ def _snapshot_materialization_entries(
     if not os.path.isdir(source):
         raise FileNotFoundError(f"cached snapshot directory not found: {source_dir}")
 
-    blob_root = None
+    blob_roots: list[str] = []
     if source_revision is not None:
         repo_root = os.path.dirname(os.path.dirname(source))
         expected = os.path.realpath(
@@ -672,6 +706,10 @@ def _snapshot_materialization_entries(
         blob_root = os.path.realpath(os.path.join(repo_root, "blobs"))
         if not os.path.isdir(blob_root):
             raise FileNotFoundError("cached Hugging Face blob store is missing")
+        blob_roots.append(blob_root)
+        shared_root = _hf_shared_blob_root(repo_root)
+        if shared_root is not None:
+            blob_roots.append(shared_root)
 
     entries: list[Tuple[str, str, Optional[str]]] = []
     for root, dirnames, filenames in os.walk(source, followlinks=False):
@@ -689,12 +727,12 @@ def _snapshot_materialization_entries(
             blob_id = None
             if os.path.islink(snapshot_path):
                 resolved = os.path.realpath(snapshot_path)
-                if blob_root is not None and not is_under(resolved, blob_root):
+                if blob_roots and not any(is_under(resolved, r) for r in blob_roots):
                     raise ValueError(
                         f"cached snapshot file {relative!r} points outside the "
                         "Hugging Face blob store"
                     )
-                blob_id = os.path.basename(resolved)
+                blob_id = _hf_blob_id(snapshot_path)
             else:
                 resolved = snapshot_path
             if not os.path.isfile(resolved):
