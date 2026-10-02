@@ -381,3 +381,50 @@ class TestReasons:
         rows = [{"prompt": long_prompt, "completion": "done"} for _ in range(12)]
         _run_live(tmp_path, monkeypatch, rows, _gens(adapter_gen=_recording(seen)))
         assert max(len(prompt) for prompt in seen) > 3000
+
+
+def test_dpo_target_is_the_chosen_answer(tmp_path, monkeypatch):
+    # JSON in `chosen`, prose in `rejected`: the format probe only fires if chosen is the target.
+    rows = [
+        {"prompt": f"Give json {i}", "chosen": json.dumps({"n": i}), "rejected": f"plain {i}"}
+        for i in range(12)
+    ]
+    report, _ = _run_live(tmp_path, monkeypatch, rows, _gens())  # adapter never emits JSON
+    assert report.scores["format"].verdict == "MAJOR", report.scores["format"]
+
+
+def test_rows_are_read_before_the_model_loads(tmp_path, monkeypatch):
+    import soup_cli.utils.diagnose.live as live
+
+    order: list = []
+    real_analyse = live._analyse_rows
+
+    def analyse(rows):
+        order.append("rows")
+        return real_analyse(rows)
+
+    def fake_pair(base, adapter=None, **kw):
+        order.append("model")
+        return _gens()
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "d.jsonl").write_text(
+        "\n".join(json.dumps({"prompt": f"p{i}", "completion": f"c{i}"}) for i in range(12)),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(live, "_analyse_rows", analyse)
+    monkeypatch.setattr(live, "load_adapter_pair", fake_pair)
+    live.run_live_diagnose(run_id="r", base="b", adapter="a", dataset_path="d.jsonl")
+    assert order == ["rows", "model"]
+
+
+def test_a_null_byte_prompt_is_skipped_not_fatal(tmp_path, monkeypatch):
+    rows = [
+        {"prompt": f"Write story number {i}.", "completion": f"Once upon a time {i}."}
+        for i in range(12)
+    ]
+    rows[0]["prompt"] = "nul\x00byte"
+    collapsed = _gens(adapter_multi=lambda prompt, k: ["same reply"] * k)
+    report, _ = _run_live(tmp_path, monkeypatch, rows, collapsed)
+    assert report.scores["mode_collapse"].verdict == "MAJOR", report.scores["mode_collapse"]
+    assert report.extras["rows_skipped"] == "1 unreadable"
