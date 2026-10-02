@@ -24,6 +24,7 @@ from typing import List, Mapping, Optional, Tuple
 from urllib.parse import urlparse
 
 from soup_cli.utils.net_guard import LOOPBACK_HOSTS as _LOOPBACK_HOSTS
+from soup_cli.utils.net_guard import WILDCARD_IP_HINT as _WILDCARD_IP_HINT
 from soup_cli.utils.net_guard import is_private_or_link_local as _is_private_or_link_local
 
 _MAX_WEBHOOK_URL_LEN = 4096
@@ -63,9 +64,7 @@ def validate_webhook_url(url: object, *, allow_private_hosts: bool = False) -> s
         raise ValueError("webhook URL is missing a host")
     host = parsed.hostname or ""
     if host == "0.0.0.0":
-        raise ValueError(
-            "webhook URL 0.0.0.0 is ambiguous; use 127.0.0.1 or localhost"
-        )
+        raise ValueError(f"webhook URL {_WILDCARD_IP_HINT}")
     # SSRF gate — runs for BOTH http and https. Nesting this inside the
     # http-only branch (the pre-fix bug) let ``https://169.254.169.254`` and
     # any ``https://10.x`` / ``192.168.x`` sail straight through to the return.

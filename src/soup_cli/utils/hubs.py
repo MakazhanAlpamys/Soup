@@ -26,6 +26,7 @@ from typing import Callable, Mapping, Optional, Tuple
 from urllib.parse import urlparse
 
 from soup_cli.utils.net_guard import LOOPBACK_HOSTS as _LOOPBACK_HOSTS
+from soup_cli.utils.net_guard import WILDCARD_IP_HINT as _WILDCARD_IP_HINT
 from soup_cli.utils.net_guard import is_private_or_link_local as _is_private_or_link_local
 
 _LOG = logging.getLogger(__name__)
@@ -180,9 +181,7 @@ def validate_hub_endpoint(endpoint: str, *, hub: str | None = None) -> str:
 
     host = parsed.hostname or ""
     if host == "0.0.0.0":
-        raise ValueError(
-            f"{label} 0.0.0.0 is ambiguous; use 127.0.0.1 or localhost"
-        )
+        raise ValueError(f"{label} {_WILDCARD_IP_HINT}")
     host_clean = host.lower().rstrip(".")
     if parsed.scheme == "http" and host_clean not in _LOOPBACK_HOSTS:
         if _is_private_or_link_local(host):
