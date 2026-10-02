@@ -68,6 +68,12 @@ def spill_layers_for(n_layers: int, k: int, budget_k: int) -> int:
     return n_layers - resident_layers
 
 
+def fits_in_ram(need_bytes: int, free_gb: Optional[float]) -> bool:
+    """V3's RAM row: pinning ``need_bytes`` must leave ``V3_MARGIN_GB`` free. Unknown free
+    memory never fits: pinning blind can take the whole box (and its peers) down."""
+    return free_gb is not None and need_bytes / 1e9 + V3_MARGIN_GB <= free_gb
+
+
 def _drain() -> None:
     from soup_cli.utils.layer_stream_runtime import drain_stale_cuda_error
 
@@ -317,8 +323,8 @@ def mode_timing(args, model, runtime, config, sink, torch_dtype, meta) -> None:
     call = l2l_schedule.capture_layer_call(model, pool_mbs[0])
     step = l2l_schedule.L2LStep(model, runtime, call)
     element = torch.empty((), dtype=torch_dtype).element_size()
-    free_gb = meta["v3"]["free_gb"] or 0.0
-    fits = {k: _store_bytes(config, args, k, element) / 1e9 + V3_MARGIN_GB <= free_gb
+    free_gb = meta["v3"]["free_gb"]
+    fits = {k: fits_in_ram(_store_bytes(config, args, k, element), free_gb)
             for k in ks + [args.cd_k]}
     for rnd, mode, arm, k in plan_timing_arms(ks, args.rounds, args.cd_k):
         inst.nocopy = arm in ("B", "D")
@@ -332,7 +338,7 @@ def mode_timing(args, model, runtime, config, sink, torch_dtype, meta) -> None:
         elif not fits[k]:
             need_gb = _store_bytes(config, args, k, element) / 1e9
             result = {"skipped": f"V3: k={k} needs {need_gb:.1f} GB + {V3_MARGIN_GB} GB, "
-                                 f"{free_gb:.1f} GB free",
+                                 f"{free_gb} GB free",
                       "step_s_mean": None}
         else:
             store, reason = allocate_store(**_store_kwargs(config, args, k, torch_dtype))
@@ -372,8 +378,17 @@ def mode_spill(args, model, runtime, config, sink, torch_dtype, meta) -> None:
         base = {"kind": "arm", "mode": "l2l", "arm": "A", "k": args.spill_k, "round": rnd,
                 "variant": variant, "skipped": None, "store": None}
         layers = spill_layers if variant == "spill" else 0
-        store, reason = allocate_store(**_store_kwargs(config, args, args.spill_k, torch_dtype,
-                                                       spill_layers=layers))
+        element = torch.empty((), dtype=torch_dtype).element_size()
+        resident = _store_bytes(config, args, args.spill_k, element)
+        resident = resident * (int(config.num_hidden_layers) - layers) // int(
+            config.num_hidden_layers)
+        store, reason = None, None
+        if not fits_in_ram(resident, meta["v3"]["free_gb"]):
+            reason = (f"V3: {resident / 1e9:.1f} GB pinned + {V3_MARGIN_GB} GB margin, "
+                      f"{meta['v3']['free_gb']} GB free")
+        else:
+            store, reason = allocate_store(**_store_kwargs(
+                config, args, args.spill_k, torch_dtype, spill_layers=layers))
         if store is None:
             result = {"skipped": reason, "step_s_mean": None}
         elif layers and not store.stats.direct:
@@ -441,11 +456,15 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
           f"{'v3':<16}{meta['v3']}")
     sink = stream_probe.Sink(args.out, meta)
     if args.dry_run:
-        store, reason = allocate_store(**_store_kwargs(config, args, biggest, torch_dtype))
-        print(f"dry run: pinned store for k={biggest} "
-              f"{'allocated' if store is not None else 'FAILED: ' + str(reason)}")
-        if store is not None:
-            store.close()
+        if fits_in_ram(need, meta["v3"]["free_gb"]):
+            store, reason = allocate_store(**_store_kwargs(config, args, biggest, torch_dtype))
+            print(f"dry run: pinned store for k={biggest} "
+                  f"{'allocated' if store is not None else 'FAILED: ' + str(reason)}")
+            if store is not None:
+                store.close()
+        else:
+            print(f"dry run: k={biggest} needs {need / 1e9:.1f} GB pinned + {V3_MARGIN_GB} GB; "
+                  f"{meta['v3']['free_gb']} GB free — NOT allocated (V3 would skip it)")
         runtime.close()
         return 0
     if args.mode == "correctness":

@@ -725,3 +725,10 @@ def test_observe_stops_the_watch_when_the_body_raises(probe):
     with pytest.raises(ValueError, match="boom"):
         probe.observe(lambda: (_ for _ in ()).throw(ValueError("boom")), interval=0.01)
     assert not any(t.name == "l2l-suspend-watch" for t in threading.enumerate())
+
+
+def test_fits_in_ram_keeps_the_margin(probe):
+    gib8 = 8 * 1024**3
+    assert probe.fits_in_ram(gib8, free_gb=8.59 + 4.0 + 0.01) is True
+    assert probe.fits_in_ram(gib8, free_gb=8.59 + 3.9) is False
+    assert probe.fits_in_ram(gib8, free_gb=None) is False
