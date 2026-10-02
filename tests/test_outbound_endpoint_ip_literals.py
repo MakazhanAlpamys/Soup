@@ -183,6 +183,12 @@ def _online_dpo_trainer(base: str) -> None:
     )
 
 
+def _ship_judge_model(base: str) -> None:
+    from soup_cli.commands.ship import _validate_judge_model_url
+
+    _validate_judge_model_url(f"{base}/Qwen2.5")
+
+
 _VALIDATORS = [
     pytest.param(_vllm_url, id="vllm-url"),
     pytest.param(_vllm_generate, id="vllm-generate"),
@@ -268,12 +274,13 @@ class TestPublicAndLoopbackStillPass:
         "validator",
         [
             _vllm_url, _vllm_generate, _generate_openai, _generate_server, _judge_api_base,
-            _judge_evaluator, _online_dpo_field,
+            _judge_evaluator, _online_dpo_field, _gate_suite_task, _ship_judge_model,
+            _online_dpo_trainer,
         ],
     )
     def test_ipv6_loopback_over_http(self, validator, sent):
-        """``::1`` is loopback for these gates. The eval-gate suite, ``soup ship`` and
-        the online-DPO trainer accept only ``localhost`` and ``127.0.0.1`` over http."""
+        """``::1`` is loopback for every outbound gate: all of them accept it over
+        http through the shared ``LOOPBACK_HOSTS`` set (#1548)."""
         try:
             validator("http://[::1]:8000")
         except _RequestAttemptedError:
