@@ -647,10 +647,12 @@ Soup provides two controls to bound activation memory:
 
 
 Set `distill_mode: sequence` (default `token`) to train on the teacher's **generated
-continuations** instead of per-token logit matching — a hard-label, cross-tokenizer-friendly
+continuations** instead of per-token logit matching - a hard-label, cross-tokenizer-friendly
 KD that works when student and teacher do not share a vocabulary. `sequence` mode is mutually
 exclusive with the cross-tokenizer `uld_strategy` logit path (they are different objectives over
-the same task; the trainer rejects the combination at setup). (v0.71.12)
+the same task; the trainer rejects the combination at setup). Rows with no prompt turn are
+skipped, the count and first positions are printed at setup, a split left with no usable row is
+refused before training, and a refusal names the row's position in your data. (v0.71.12)
 
 
 ## Sequence Classification

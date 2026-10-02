@@ -384,6 +384,7 @@ def _map_distill_rows(
     format_row: Any,
     split: str,
     max_length: int,
+    trust_source_index: bool = False,
 ) -> Any:
     """Tokenize distill rows and attach human-facing row number to causal-loss
     target failures (#1242).
@@ -403,7 +404,7 @@ def _map_distill_rows(
                 ensure_causal_loss_target(labels, max_length=max_length)
             return formatted
         except NoCausalLossTargetError as exc:
-            source_idx = example.get("_source_index")
+            source_idx = example.get("_source_index") if trust_source_index else None
             if source_idx is not None:
                 row_num = int(source_idx) + 1
                 msg = str(exc)
@@ -784,6 +785,7 @@ class DistillTrainerWrapper:
             format_row=format_row,
             split="train",
             max_length=int(cfg.data.max_length),
+            trust_source_index=sequence_mode,
         )
         eval_ds = None
         if "val" in dataset and dataset["val"]:
@@ -792,6 +794,7 @@ class DistillTrainerWrapper:
                 format_row=format_row,
                 split="val",
                 max_length=int(cfg.data.max_length),
+                trust_source_index=sequence_mode,
             )
 
         output_dir = Path(cfg.output)
