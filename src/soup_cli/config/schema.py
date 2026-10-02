@@ -982,11 +982,26 @@ class DataConfig(BaseModel):
         # tokenized_path is meaningful regardless of format (Axolotl `empty`
         # type expects the cache to be the source of truth). But the
         # pre_tokenized format implies the path must be set.
-        if self.format == "pre_tokenized" and not self.tokenized_path:
-            raise ValueError(
-                "format='pre_tokenized' requires data.tokenized_path to point "
-                "at a cache directory produced by `soup data preprocess`."
-            )
+        if self.format == "pre_tokenized":
+            if not self.tokenized_path:
+                raise ValueError(
+                    "format='pre_tokenized' requires data.tokenized_path to point "
+                    "at a cache directory produced by `soup data preprocess`."
+                )
+            conflicts = []
+            if self.add_new_tokens:
+                conflicts.append("data.add_new_tokens")
+            if self.new_special_tokens:
+                conflicts.append("data.new_special_tokens")
+            if self.prompt_strategy:
+                conflicts.append("data.prompt_strategy")
+            if conflicts:
+                raise ValueError(
+                    "format='pre_tokenized' cannot be combined with "
+                    + ", ".join(conflicts)
+                    + "; soup data preprocess never applies it, so the cached ids "
+                    "do not contain it. Remove it, or train from the source format."
+                )
         return self
 
     @field_validator("remove_unused_columns", mode="after")
@@ -4932,6 +4947,16 @@ class SoupConfig(BaseModel):
                 "The appended blocks are zero-initialised and trained, which the "
                 "block-expansion path only supports on an unquantized base. "
                 "Set quantization: none."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_v042_pre_tokenized_modality(self) -> "SoupConfig":
+        if self.data.format == "pre_tokenized" and self.modality != "text":
+            raise ValueError(
+                "data.format='pre_tokenized' cannot be combined with "
+                f"modality={self.modality!r}; soup data preprocessing does not "
+                "apply modality transforms to cached ids"
             )
         return self
 

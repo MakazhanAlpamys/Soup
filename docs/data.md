@@ -894,7 +894,6 @@ reports them as ignored.
 
 
 **AOT preprocessing:**
-
 ```bash
 # Tokenize once, reuse the cache across runs.
 soup data preprocess soup.yaml --output ./.soup-tokenized
@@ -904,6 +903,12 @@ soup data preprocess soup.yaml --output ./.soup-tokenized
 #     format: pre_tokenized
 #     tokenized_path: ./.soup-tokenized/<16-char-cache-key>
 ```
+
+Pre-tokenized caches contain the ids produced by soup data preprocessing.
+Because preprocessing does not apply a non-text modality (`vision`, `audio`,
+or `audio_out`), `data.add_new_tokens`, `data.new_special_tokens`, or
+`data.prompt_strategy`, those combinations are refused at config load instead
+of being silently skipped.
 
 **Document ingestion (PDF / DOCX / MD / TXT → JSONL):**
 
