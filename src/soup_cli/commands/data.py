@@ -1987,7 +1987,12 @@ def unregister_data(
 @app.command(name="from-traces")
 def from_traces_cmd(
     logs: str = typer.Option(
-        ..., "--logs", help="Path to JSONL trace log (or directory for soup-serve)",
+        ..., "--logs",
+        help=(
+            "Trace source: a JSONL file for langchain/openai, or the directory "
+            "`soup serve --trace-log` writes for soup-serve (a single file is "
+            "refused)"
+        ),
     ),
     format: str = typer.Option(
         ..., "--format", help="Trace format: langchain | openai | soup-serve",
@@ -2061,6 +2066,21 @@ def from_traces_cmd(
     if not logs_path.exists():
         console.print(f"[red]--logs not found: {logs}[/]")
         raise typer.Exit(1)
+    if format == "soup-serve" and not logs_path.is_dir():
+        # #1530: the soup-serve reader walks a directory of *.jsonl logs (one
+        # per `soup serve` session); pointed at a single file it silently read
+        # nothing and the run ended in a green "Wrote 0 preference pair(s)",
+        # exit 0, and an empty output file a pipeline would train from.
+        # Refuse — the smaller of the two fixes the issue proposed — and name
+        # the option and the shape the reader expects.
+        console.print(
+            f"[red]--logs '{_escape(logs)}' is not a directory: --format "
+            "soup-serve reads the directory `soup serve --trace-log` writes "
+            "(one *.jsonl per session), not a single file. Point --logs at "
+            "that directory, or read a single JSONL with --format langchain "
+            "or openai.[/]"
+        )
+        raise typer.Exit(1)
 
     output_path = Path(output)
     if not _under_cwd(output_path):
@@ -2101,6 +2121,27 @@ def from_traces_cmd(
 
     trace_list = list(trace_iter)
     pairs = list(build_pairs(trace_list, signal=signal))
+    if not pairs and not trace_list:
+        # #1530: reading zero traces used to fall straight through to the same
+        # green "Wrote 0 preference pair(s)" as a completed harvest. Say so and
+        # name the path. The zero-pair EXIT CODE is a design question the
+        # maintainer has left open, so it is deliberately unchanged here.
+        if format == "soup-serve":
+            reason = "the directory holds no readable *.jsonl trace files"
+        elif logs_path.is_dir():
+            # The file readers never opened anything here, so "no line
+            # parsed" would misreport a shape problem as a content problem.
+            reason = (
+                f"--logs is a directory; --format {format} reads a "
+                "single JSONL file"
+            )
+        else:
+            article = "an" if format == "openai" else "a"
+            reason = f"no line parsed as {article} {format} record"
+        console.print(
+            f"[yellow]Read 0 trace(s) from --logs '{_escape(logs)}' as format "
+            f"{format}: {reason}. The output file will be empty.[/]"
+        )
     if not pairs and trace_list:
         # #1440: reading traces that match no pair mode used to print a normal
         # green "Wrote 0 preference pair(s)" and exit 0, so an empty output file
