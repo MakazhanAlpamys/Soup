@@ -25,6 +25,7 @@ from soup_cli.utils.diagnose._common import (
     tokenize,
 )
 from soup_cli.utils.diagnose.report import FailureScore, classify_score
+from soup_cli.utils.diagnose.runner import not_run_score
 
 
 def split_prefix(
@@ -134,11 +135,9 @@ def score_memorization(
         if scanned >= 1000:
             break
     if not echoes:
-        return FailureScore(
-            mode="memorization",
-            score=1.0,
-            verdict="OK",
-            evidence="no rows with text+suffix; nothing to check",
+        return not_run_score(
+            "memorization",
+            "no row long enough to split into a prefix and a suffix",
         )
     echo_rate = sum(echoes) / len(echoes)
     score = max(0.0, min(1.0, 1.0 - echo_rate))
