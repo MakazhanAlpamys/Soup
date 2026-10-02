@@ -116,7 +116,9 @@ class TestLocalBaseThatIsNotMxfp4:
             _loader_config(base)
 
         # The directory name, not the absolute path.
-        assert str(tmp_path) not in str(raised.value)
+        # The message shows the name with repr(), which doubles a Windows
+        # path's backslashes: undo that so the check can fail there too.
+        assert str(tmp_path) not in str(raised.value).replace("\\\\", "\\")
 
     def test_a_local_base_of_another_format_is_refused(self, tmp_path):
         base = Path(_tiny_llama(tmp_path / "other", mxfp4=False))
@@ -169,3 +171,43 @@ class TestKbitPrep:
 
         weight = prepared.model.layers[0].self_attn.q_proj.weight
         assert weight.dtype == torch.float32
+
+
+_TRAINER_DIR = Path(__file__).resolve().parent.parent / "src" / "soup_cli" / "trainer"
+
+
+@pytest.mark.parametrize("filename", ["sft.py", "online_dpo.py"])
+def test_sft_and_online_dpo_keep_mxfp4_out_of_kbit_prep(filename):
+    """The two trainers `_TRAINER_FILES` in test_v0405_part_a.py does not list."""
+    import re
+
+    src = (_TRAINER_DIR / filename).read_text(encoding="utf-8")
+    assert re.search(r'\(\s*"4bit"\s*,\s*"8bit"\s*\)', src)
+    assert not re.search(r'\(\s*"4bit"\s*,\s*"8bit"\s*,\s*"mxfp4"\s*\)', src)
+
+
+class TestHardwareFit:
+    """The pre-flight prices what is loaded: a dequantized model is bf16."""
+
+    @staticmethod
+    def _weights_gb(quant: str) -> float:
+        from soup_cli.utils.hardware_fit import HardwareFitInput, estimate_peak_vram_gb
+
+        return estimate_peak_vram_gb(
+            HardwareFitInput(
+                params_b=20.9,
+                seq_len=2048,
+                batch_size=1,
+                optimizer="adamw_torch",
+                quant=quant,
+                peft="lora",
+                gradient_checkpointing=True,
+            )
+        ).weights_gb
+
+    def test_mxfp4_weights_are_priced_as_bf16(self):
+        assert self._weights_gb("mxfp4") == pytest.approx(self._weights_gb("none"))
+
+    def test_a_gpt_oss_20b_sized_base_does_not_pass_as_a_12_gb_load(self):
+        # 20.9B parameters at 2 bytes each; 0.55 bytes each said about 11.5 GB.
+        assert self._weights_gb("mxfp4") == pytest.approx(41.8, rel=0.08)
