@@ -715,7 +715,11 @@ def _generate_openai(
     if api_base:
         from urllib.parse import urlparse
 
-        from soup_cli.utils.net_guard import LOOPBACK_HOSTS, refuse_private_ip_literal
+        from soup_cli.utils.net_guard import (
+            LOOPBACK_HOSTS,
+            WILDCARD_IP_HINT,
+            refuse_private_ip_literal,
+        )
 
         parsed = urlparse(api_base)
         is_local = parsed.hostname in LOOPBACK_HOSTS
@@ -724,6 +728,8 @@ def _generate_openai(
                 f"api_base must use HTTPS for remote APIs (got {parsed.scheme}://). "
                 "HTTP is only allowed for localhost."
             )
+        if parsed.hostname == "0.0.0.0":
+            raise ValueError(f"api_base {WILDCARD_IP_HINT}")
         refuse_private_ip_literal(parsed.hostname, label="api_base")
 
     if generation_prompt is None:
@@ -858,7 +864,11 @@ def _generate_server(
     if api_base:
         from urllib.parse import urlparse
 
-        from soup_cli.utils.net_guard import LOOPBACK_HOSTS, refuse_private_ip_literal
+        from soup_cli.utils.net_guard import (
+            LOOPBACK_HOSTS,
+            WILDCARD_IP_HINT,
+            refuse_private_ip_literal,
+        )
 
         parsed = urlparse(api_base)
         if parsed.scheme not in ("http", "https"):
@@ -871,6 +881,8 @@ def _generate_server(
                 f"api_base must use HTTPS for remote APIs (got {parsed.scheme}://). "
                 "HTTP is only allowed for localhost."
             )
+        if parsed.hostname == "0.0.0.0":
+            raise ValueError(f"api_base {WILDCARD_IP_HINT}")
         refuse_private_ip_literal(parsed.hostname, label="api_base")
 
     # Strip trailing /v1 if present (we add it to the endpoint path)
