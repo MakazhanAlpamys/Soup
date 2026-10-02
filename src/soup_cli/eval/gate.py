@@ -93,6 +93,8 @@ class GateTask(BaseModel):
         if value is None:
             return None
         # Allowlist of schemes — SSRF hardening consistent with the project.
+        from soup_cli.utils.net_guard import LOOPBACK_HOSTS, refuse_private_ip_literal
+
         parsed = urlparse(value)
 
         if parsed.scheme == "ollama":
@@ -101,12 +103,10 @@ class GateTask(BaseModel):
         if parsed.scheme == "https":
             # A private IP literal is refused when the suite is parsed, so a
             # suite file cannot name one any more than --judge-model can.
-            from soup_cli.utils.net_guard import refuse_private_ip_literal
-
             refuse_private_ip_literal(parsed.hostname, label="judge_model URL")
             return value
 
-        if (parsed.scheme == "http" and parsed.hostname in {"localhost", "127.0.0.1"}):
+        if parsed.scheme == "http" and parsed.hostname in LOOPBACK_HOSTS:
             return value
 
         raise ValueError(
@@ -410,6 +410,8 @@ def _parse_judge_url(judge_model: str) -> tuple[str, str, Optional[str]]:
       ``https://judge.example.com/m`` -> ("server", "m", "https://judge.example.com")
     """
 
+    from soup_cli.utils.net_guard import LOOPBACK_HOSTS
+
     parsed = urlparse(judge_model)
 
     if parsed.scheme == "ollama":
@@ -423,10 +425,7 @@ def _parse_judge_url(judge_model: str) -> tuple[str, str, Optional[str]]:
             default_provider = "openai"
         else:
             default_provider = "server"
-    elif (
-        parsed.scheme == "http"
-        and parsed.hostname in ("localhost", "127.0.0.1")
-    ):
+    elif parsed.scheme == "http" and parsed.hostname in LOOPBACK_HOSTS:
         default_provider = "server"
     else:
         raise ValueError(

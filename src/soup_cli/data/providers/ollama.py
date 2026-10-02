@@ -51,8 +51,8 @@ def validate_ollama_url(base_url: str) -> None:
     # 0.0.0.0 is the bind-any wildcard, NOT loopback — rejected to match the
     # newer SSRF validators (validate_hub_endpoint / validate_otlp_endpoint /
     # validate_webhook_url). v0.71.6 #232 hardening (now reachable via Magpie).
-    local_hosts = ("localhost", "127.0.0.1", "::1")
-    if parsed.hostname not in local_hosts:
+    from soup_cli.utils.net_guard import LOOPBACK_HOSTS
+    if parsed.hostname not in LOOPBACK_HOSTS:
         raise ValueError(
             f"Ollama URL must be localhost (got {parsed.hostname}). "
             "Remote Ollama instances are not supported for security reasons."

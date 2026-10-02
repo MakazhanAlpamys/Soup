@@ -25,7 +25,7 @@ _LOG = logging.getLogger(__name__)
 
 _MAX_ENDPOINT_LEN = 2048
 _CTRL_RE = re.compile(r"[\x00-\x1f\x7f]")
-_LOOPBACK = frozenset({"localhost", "127.0.0.1", "::1"})
+from soup_cli.utils.net_guard import LOOPBACK_HOSTS as _LOOPBACK
 _SCHEMES = frozenset({"http", "https"})
 _COUNTRY_RE = re.compile(r"^[A-Za-z]{3}$")
 _DEFAULT_COUNTRY = "USA"
