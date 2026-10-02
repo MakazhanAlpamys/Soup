@@ -585,11 +585,13 @@ def _infer_asr(
             hyp = transcribe(resolved)
         except (ValueError, OSError, ImportError) as exc:
             skipped += 1
-            # Escape + control-strip the dataset-derived filename AND the
-            # exception (whose message embeds that filename) before printing.
-            name = for_terminal(Path(str(audio)).name)
+            # Quote the dataset-derived filename first, then escape and
+            # control-strip it (repr() after the escape would double the
+            # escape's backslash and make a tag live again); the exception,
+            # whose message embeds that filename, is escaped too.
+            name = for_terminal(repr(Path(str(audio)).name))
             console.print(
-                f"[yellow]Skipped {name!r}: {for_terminal(str(exc))}[/]"
+                f"[yellow]Skipped {name}: {for_terminal(str(exc))}[/]"
             )
             continue
         rec = {"audio": audio, "transcription": hyp}
@@ -603,9 +605,9 @@ def _infer_asr(
                 row_wer = wer(ref, hyp)
                 row_cer = cer(ref, hyp)
             except ValueError as exc:
-                name = for_terminal(Path(str(audio)).name)
+                name = for_terminal(repr(Path(str(audio)).name))
                 console.print(
-                    f"[yellow]Metric skipped for {name!r}: "
+                    f"[yellow]Metric skipped for {name}: "
                     f"{for_terminal(str(exc))}[/]"
                 )
             else:
