@@ -11,11 +11,16 @@ the line. The order that works is quote first, escape second:
 ``for_terminal(repr(x))``.
 
 This ratchet is deliberately narrow. In every tracked module under
-``src/soup_cli``, at any scope, it flags exactly two spellings:
+``src/soup_cli`` it flags exactly these spellings:
 
 * an f-string replacement field with the ``!r`` conversion whose value is a
-  call to an escaping helper, and
-* ``repr(<call to an escaping helper>)``.
+  call to an escaping helper, and ``repr(<call to an escaping helper>)``, at
+  any scope;
+* the same two applied to a plain name -- ``{name!r}`` / ``repr(name)`` --
+  when that name is assigned from a call to an escaping helper in the same
+  scope (``name = for_terminal(x)`` ... ``{name!r}``). A nested function or
+  class is its own scope, so a closure is not followed, and any such
+  assignment marks the name for the whole scope.
 
 An escaping helper is a name the module binds to ``rich.markup.escape`` or
 ``soup_cli.utils.terminal.for_terminal`` (``as`` aliases and plain
@@ -109,16 +114,17 @@ class _EscapingNames:
         return False
 
 
-def repr_of_escaped_lines(source: str) -> list[int]:
-    """Line numbers of every ``{helper(...)!r}`` and ``repr(helper(...))``."""
-    tree = ast.parse(source)
-    names = _EscapingNames(tree)
+_SCOPES = (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)
+
+
+def _reprs_of(nodes, matches) -> list[int]:
+    """Lines of ``{x!r}`` / ``repr(x)`` among ``nodes`` where ``matches(x)``."""
     lines: list[int] = []
-    for node in ast.walk(tree):
+    for node in nodes:
         if (
             isinstance(node, ast.FormattedValue)
             and node.conversion == ord("r")
-            and names.is_escaping_call(node.value)
+            and matches(node.value)
         ):
             lines.append(node.value.lineno)
         elif (
@@ -126,9 +132,64 @@ def repr_of_escaped_lines(source: str) -> list[int]:
             and isinstance(node.func, ast.Name)
             and node.func.id == "repr"
             and len(node.args) == 1
-            and names.is_escaping_call(node.args[0])
+            and matches(node.args[0])
         ):
             lines.append(node.lineno)
+    return lines
+
+
+def _scope_nodes(scope: ast.AST) -> list[ast.AST]:
+    """Every node inside ``scope`` that does not belong to a nested scope."""
+    found: list[ast.AST] = []
+    stack = list(ast.iter_child_nodes(scope))
+    while stack:
+        node = stack.pop()
+        found.append(node)
+        if not isinstance(node, _SCOPES):
+            stack.extend(ast.iter_child_nodes(node))
+    return found
+
+
+def _escaped_names(nodes, names: _EscapingNames) -> set[str]:
+    """Names assigned from a call to an escaping helper among ``nodes``."""
+    escaped: set[str] = set()
+    for node in nodes:
+        if isinstance(node, ast.Assign) and names.is_escaping_call(node.value):
+            escaped.update(t.id for t in node.targets if isinstance(t, ast.Name))
+        elif (
+            isinstance(node, ast.AnnAssign)
+            and node.value is not None
+            and isinstance(node.target, ast.Name)
+            and names.is_escaping_call(node.value)
+        ):
+            escaped.add(node.target.id)
+    return escaped
+
+
+def repr_of_escaped_lines(source: str) -> list[int]:
+    """Line numbers of every ``repr()`` taken of escaped text.
+
+    ``{helper(...)!r}`` / ``repr(helper(...))`` anywhere, plus ``{name!r}`` /
+    ``repr(name)`` where ``name`` is assigned from a helper call in the same
+    scope.
+    """
+    tree = ast.parse(source)
+    names = _EscapingNames(tree)
+    lines = _reprs_of(ast.walk(tree), names.is_escaping_call)
+    for scope in ast.walk(tree):
+        if not isinstance(scope, _SCOPES):
+            continue
+        nodes = _scope_nodes(scope)
+        escaped = _escaped_names(nodes, names)
+        if escaped:
+            lines.extend(
+                _reprs_of(
+                    nodes,
+                    lambda value, escaped=escaped: (
+                        isinstance(value, ast.Name) and value.id in escaped
+                    ),
+                )
+            )
     return sorted(lines)
 
 
@@ -197,6 +258,54 @@ class TestTheDetector:
         ids=[
             "quote-then-escape", "escape-without-repr", "plain-repr", "re-escape",
             "html-escape", "strip-only",
+        ],
+    )
+    def test_other_spellings_are_not_flagged(self, source: str) -> None:
+        assert repr_of_escaped_lines(source) == [], source
+
+
+class TestTheDetectorFollowsAssignedNames:
+    """``name = for_terminal(x)`` followed by ``{name!r}`` in the same scope."""
+
+    @pytest.mark.parametrize(
+        "source",
+        [
+            "def warn(audio):\n"
+            "    from soup_cli.utils.terminal import for_terminal\n"
+            "    name = for_terminal(audio)\n"
+            "    return f'[yellow]Skipped {name!r}[/]'\n",
+            "from rich.markup import escape\nname = escape(value)\nmsg = 'x ' + repr(name)\n",
+            "from rich.markup import escape\nname: str = escape(value)\nmsg = f'{name!r}'\n",
+            "from rich.markup import escape\n"
+            "class Report:\n"
+            "    label = escape(value)\n"
+            "    line = f'{label!r}'\n",
+        ],
+        ids=["function-scope", "module-scope-explicit-repr", "annotated", "class-scope"],
+    )
+    def test_each_spelling_is_flagged(self, source: str) -> None:
+        assert len(repr_of_escaped_lines(source)) == 1, source
+
+    @pytest.mark.parametrize(
+        "source",
+        [
+            "from soup_cli.utils.terminal import for_terminal\n"
+            "name = for_terminal(repr(value))\nmsg = f'{name}'\n",
+            "from rich.markup import escape\nname = escape(value)\nmsg = f'{name}'\n",
+            "from rich.markup import escape\n"
+            "def first(value):\n"
+            "    name = escape(value)\n"
+            "    return name\n"
+            "def second(name):\n"
+            "    return f'{name!r}'\n",
+            "name = value.strip()\nmsg = f'{name!r}'\n",
+            "import re\nname = re.escape(value)\nmsg = f'{name!r}'\n",
+            "from soup_cli.utils.terminal import for_terminal\n"
+            "_safe = for_terminal\nmsg = f'{_safe!r}'\n",
+        ],
+        ids=[
+            "quoted-first", "escaped-without-repr", "other-scope", "plain-assignment",
+            "re-escape", "function-alias",
         ],
     )
     def test_other_spellings_are_not_flagged(self, source: str) -> None:

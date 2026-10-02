@@ -131,9 +131,10 @@ class TestAttestVerifyBackendName:
         )
         out = buffer.getvalue()
         assert result.exit_code == 3, (out, repr(result.exception))
-        assert "is not cryptographically verifiable" in out, out
-        assert "'[/]x" in out, out
-        assert ESC not in out and CSI_C1 not in out, repr(out)
+        # The quoted form is repr()'s, so the two controls arrive as their
+        # escape text and the tag as literal brackets.
+        quoted = "'[/]x" + BACKSLASH + "x1b" + BACKSLASH + "x9b'"
+        assert f"Signature backend {quoted} is not cryptographically verifiable" in out, out
 
     def test_an_ordinary_backend_name_is_still_shown_quoted(
         self, tmp_path, monkeypatch
@@ -265,6 +266,43 @@ class TestAdapterBaseModelName:
         out = buffer.getvalue()
         assert "--trust-remote-code is enabled for" in out, out
         _assert_shown_literally(out)
+
+
+class TestEvalBenchmarkBaseModel:
+    """``soup eval benchmark`` reads the base model from the adapter config.
+
+    ``lm_eval`` is made unimportable, so the command stops at its own
+    "not installed" message, which comes right after the line under test.
+    """
+
+    def test_the_detected_base_model_line(self, tmp_path, monkeypatch) -> None:
+        from soup_cli.cli import app
+        from soup_cli.commands import eval as eval_cmd
+
+        adapter = _adapter_dir(tmp_path)
+        monkeypatch.setitem(sys.modules, "lm_eval", None)
+        buffer = _swap_console(monkeypatch, eval_cmd)
+        result = runner.invoke(app, ["eval", "benchmark", "--model", str(adapter)])
+        out = buffer.getvalue()
+        assert result.exit_code == 1, (out, repr(result.exception))
+        assert isinstance(result.exception, SystemExit), repr(result.exception)
+        assert "lm-eval not installed" in out, out
+        assert "LoRA adapter detected. Base model: " + SHOWN in out, out
+        _assert_shown_literally(out)
+
+    def test_a_refused_base_model_is_quoted_literally(self, tmp_path, monkeypatch) -> None:
+        """A ',' or '=' in the base model is refused before lm-eval sees it,
+        and the refusal quotes the value back."""
+        from soup_cli.cli import app
+        from soup_cli.commands import eval as eval_cmd
+
+        adapter = _adapter_dir(tmp_path, base_model="org/m,[/]x")
+        buffer = _swap_console(monkeypatch, eval_cmd)
+        result = runner.invoke(app, ["eval", "benchmark", "--model", str(adapter)])
+        out = buffer.getvalue()
+        assert result.exit_code == 1, (out, repr(result.exception))
+        assert isinstance(result.exception, SystemExit), repr(result.exception)
+        assert "Refusing to evaluate:" in out and "('org/m,[/]x')" in out, out
 
 
 # ---------------------------------------------------------------------------
@@ -437,6 +475,53 @@ class TestSftMediaPathWarnings:
         out = buffer.getvalue()
         assert "cannot open audio: clips/" + SHOWN in out, out
         _assert_shown_literally(out)
+
+
+# ---------------------------------------------------------------------------
+# soup infer --task asr: a dataset row's audio file name in the skip warnings
+# ---------------------------------------------------------------------------
+
+
+class TestInferAsrAudioName:
+    """The skip and metric-skip warnings quote the row's audio file name.
+
+    The name was escaped and then quoted (``name = for_terminal(...)``, then
+    ``{name!r}``): ``repr()`` doubled the backslash the escape added, so
+    ``[b]`` became a live tag. Quoting first keeps it text.
+    """
+
+    NAME = "[b]a.wav"
+
+    def _run(self, tmp_path, monkeypatch, row: dict, transcriber):
+        from soup_cli.cli import app
+        from soup_cli.commands import infer as infer_cmd
+
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "in.jsonl").write_text(json.dumps(row) + "\n", encoding="utf-8")
+        monkeypatch.setattr(infer_cmd, "_ASR_TRANSCRIBER_OVERRIDE", transcriber)
+        buffer = _swap_console(monkeypatch, infer_cmd)
+        result = runner.invoke(
+            app,
+            ["infer", "--task", "asr", "--model", "m", "--input", "in.jsonl",
+             "--output", "out.jsonl"],
+        )
+        return result, buffer.getvalue()
+
+    def test_a_skipped_row(self, tmp_path, monkeypatch) -> None:
+        def _cannot_decode(path):
+            raise OSError("cannot decode")
+
+        result, out = self._run(tmp_path, monkeypatch, {"audio": self.NAME}, _cannot_decode)
+        # The only row was skipped, which the command reports with exit 2.
+        assert result.exit_code == 2, (out, repr(result.exception))
+        assert "Skipped '[b]a.wav': cannot decode" in out, out
+
+    def test_a_row_whose_metric_is_skipped(self, tmp_path, monkeypatch) -> None:
+        # A reference over the WER/CER input cap is transcribed but unscored.
+        row = {"audio": self.NAME, "text": "word " * 300_000}
+        result, out = self._run(tmp_path, monkeypatch, row, lambda path: "hello")
+        assert result.exit_code == 0, (out, repr(result.exception))
+        assert "Metric skipped for '[b]a.wav':" in out, out
 
 
 # ---------------------------------------------------------------------------
