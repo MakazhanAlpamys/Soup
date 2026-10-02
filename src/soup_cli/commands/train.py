@@ -1933,8 +1933,9 @@ def _write_annex_xi(out_path: str, run_id: str, cfg, *, energy=None) -> None:
     )
 
     modality = getattr(cfg, "modality", "text") or "text"
-    energy_kwh = float(getattr(energy, "energy_kwh", 0.0)) if energy is not None else 0.0
-    co2_kg = float(getattr(energy, "co2_kg", 0.0)) if energy is not None else 0.0
+    # #1446: without --track-energy nothing was measured; say so instead of 0.000.
+    energy_kwh = float(getattr(energy, "energy_kwh", 0.0)) if energy is not None else None
+    co2_kg = float(getattr(energy, "co2_kg", 0.0)) if energy is not None else None
     raw_train = getattr(cfg.data, "train", "") or ""
     # #443 — pass the raw str|list through so top-domain extraction
     # aggregates across every interleaved dataset, instead of stringifying
@@ -1952,7 +1953,7 @@ def _write_annex_xi(out_path: str, run_id: str, cfg, *, energy=None) -> None:
         task=str(cfg.task),
         dataset_summary=train_display,
         modalities=(modality,),
-        train_compute_flops=0.0,
+        train_compute_flops=None,  # #1446: Soup does not measure FLOPs; never claim 0
         train_energy_kwh=energy_kwh,
         train_co2_kg=co2_kg,
         top_domains=top_domains,

@@ -16,14 +16,17 @@ Atomic write via ``tempfile.mkstemp + os.replace`` under cwd containment
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import re
 import secrets
+import uuid
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, Mapping, Optional, Tuple
 
 from soup_cli.utils.paths import atomic_write_text
+from soup_cli.utils.spdx_license_ids import canonical_spdx_id
 
 if TYPE_CHECKING:
     from soup_cli.utils.energy import EnergyMeasurement
@@ -181,13 +184,47 @@ def _energy_annotations(entry: BomEntry, annotation_date: str) -> list[dict]:
     ]
 
 
+_SPDX_EXPRESSION_RE = re.compile(r"\s(OR|AND|WITH)\s", re.IGNORECASE)
+
+
+def _license_choice(value: Optional[str]) -> list[dict]:
+    """CycloneDX 1.6 ``licenses``: a canonical SPDX id in ``license.id``, an SPDX
+    expression (``A OR B``) in ``expression``, anything else in ``license.name`` (#1446)."""
+    if not value:
+        return []
+    if _SPDX_EXPRESSION_RE.search(value):
+        return [{"expression": value}]
+    canonical = canonical_spdx_id(value)
+    if canonical is not None:
+        return [{"license": {"id": canonical}}]
+    return [{"license": {"name": value}}]
+
+
+_LICENSE_REF_SAFE_RE = re.compile(r"[^A-Za-z0-9.-]+")
+
+
+def _spdx_license_expression(value: Optional[str]) -> tuple[str, Optional[dict]]:
+    """SPDX 2.3 ``licenseConcluded`` / ``licenseDeclared``: a canonical id, an expression
+    as written, or a ``LicenseRef-`` with its ``hasExtractedLicensingInfos`` entry (#1446)."""
+    if not value:
+        return "NOASSERTION", None
+    if _SPDX_EXPRESSION_RE.search(value):
+        return value, None
+    canonical = canonical_spdx_id(value)
+    if canonical is not None:
+        return canonical, None
+    suffix = _LICENSE_REF_SAFE_RE.sub("-", value).strip("-")
+    if not suffix:  # nothing idstring-safe survived: name it by content instead
+        suffix = hashlib.sha256(value.encode("utf-8")).hexdigest()[:12]
+    ref = f"LicenseRef-{suffix}"
+    return ref, {"licenseId": ref, "name": value, "extractedText": value}
+
+
 def build_cyclonedx_bom(entry: BomEntry) -> dict:
     """Render a CycloneDX 1.6 ML-BOM dict (in-memory)."""
     if not isinstance(entry, BomEntry):
         raise TypeError(f"entry must be BomEntry, got {type(entry).__name__}")
-    licenses: list[dict] = []
-    if entry.license:
-        licenses.append({"license": {"id": entry.license}})
+    licenses = _license_choice(entry.license)
 
     components: list[dict] = [
         {
@@ -238,7 +275,7 @@ def build_cyclonedx_bom(entry: BomEntry) -> dict:
     doc = {
         "bomFormat": "CycloneDX",
         "specVersion": "1.6",
-        "serialNumber": f"urn:uuid:{secrets.token_hex(16)}",
+        "serialNumber": uuid.uuid4().urn,  # #1446: RFC 4122, as the 1.6 schema requires
         "version": 1,
         "metadata": {
             "timestamp": entry.created_at,
@@ -266,14 +303,15 @@ def build_spdx_bom(entry: BomEntry) -> dict:
     if not isinstance(entry, BomEntry):
         raise TypeError(f"entry must be BomEntry, got {type(entry).__name__}")
     spdx_id_main = "SPDXRef-Model"
+    license_expression, extracted_license = _spdx_license_expression(entry.license)
     pkg = {
         "SPDXID": spdx_id_main,
         "name": entry.name,
         "versionInfo": entry.version,
         "downloadLocation": "NOASSERTION",
         "filesAnalyzed": False,
-        "licenseConcluded": entry.license or "NOASSERTION",
-        "licenseDeclared": entry.license or "NOASSERTION",
+        "licenseConcluded": license_expression,
+        "licenseDeclared": license_expression,
         "copyrightText": "NOASSERTION",
         "primaryPackagePurpose": "AI-MODEL",
         "annotations": [
@@ -319,6 +357,8 @@ def build_spdx_bom(entry: BomEntry) -> dict:
         "packages": [pkg, pkg_base],
         "relationships": relationships,
     }
+    if extracted_license is not None:
+        doc["hasExtractedLicensingInfos"] = [extracted_license]
     if entry.data_sha:
         doc["packages"].append({
             "SPDXID": "SPDXRef-Data",
@@ -331,9 +371,11 @@ def build_spdx_bom(entry: BomEntry) -> dict:
             "primaryPackagePurpose": "SOURCE",
             "checksums": [{"algorithm": "SHA256", "checksumValue": entry.data_sha}],
         })
+        # #1446: SPDX 2.3 reads `A BUILD_DEPENDENCY_OF B` as "A is a build dependency
+        # of B": the training data is the dependency, the model the dependent.
         relationships.append({
-            "spdxElementId": spdx_id_main,
-            "relatedSpdxElement": "SPDXRef-Data",
+            "spdxElementId": "SPDXRef-Data",
+            "relatedSpdxElement": spdx_id_main,
             "relationshipType": "BUILD_DEPENDENCY_OF",
         })
     return doc
