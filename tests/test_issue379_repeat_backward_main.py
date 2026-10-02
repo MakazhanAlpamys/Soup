@@ -99,11 +99,12 @@ def _run(monkeypatch, streamed, reference=None, sync=True):
         "prepare_shards",
         lambda weights, shards: ({}, "llama"),
     )
+    arms = []
     monkeypatch.setattr(
         module,
         "build_streamed_arm",
         lambda weights, shards, index, arch, arm, buffers: (
-            streamed,
+            arms.append(arm) or streamed,
             _Runtime(),
             lambda: None,
         ),
@@ -121,35 +122,37 @@ def _run(monkeypatch, streamed, reference=None, sync=True):
             "--seq", "8",
         ],
     )
-    return module.main()
+    return module.main(), arms
 
 
 def test_defect_from_the_second_backward_is_reproduced(monkeypatch):
-    assert _run(monkeypatch, _Toy(wrong_from=2)) == 0
+    code, arms = _run(monkeypatch, _Toy(wrong_from=2))
+    assert code == 0
+    assert arms == ["control"]
 
 
 def test_defect_from_the_first_backward_is_still_the_defect(monkeypatch):
-    assert _run(monkeypatch, _Toy(wrong_from=1)) == 0
+    assert _run(monkeypatch, _Toy(wrong_from=1))[0] == 0
 
 
 def test_healthy_streaming_is_not_reproduced(monkeypatch):
-    assert _run(monkeypatch, _Toy()) == 1
+    assert _run(monkeypatch, _Toy())[0] == 1
 
 
 def test_changed_forward_is_not_the_defect(monkeypatch):
-    assert _run(monkeypatch, _Toy(wrong_from=2, loss_shift=1.0e-3)) == 1
+    assert _run(monkeypatch, _Toy(wrong_from=2, loss_shift=1.0e-3))[0] == 1
 
 
 def test_non_finite_loss_is_an_invalid_measurement(monkeypatch):
-    assert _run(monkeypatch, _Toy(wrong_from=2, loss_shift=float("nan"))) == 3
+    assert _run(monkeypatch, _Toy(wrong_from=2, loss_shift=float("nan")))[0] == 3
 
 
 def test_non_finite_gradients_are_an_invalid_measurement(monkeypatch):
-    assert _run(monkeypatch, _Toy(wrong_from=2, grad_factor=float("inf"))) == 3
+    assert _run(monkeypatch, _Toy(wrong_from=2, grad_factor=float("inf")))[0] == 3
 
 
 def test_unsynced_adapters_are_not_the_defect(monkeypatch):
-    assert _run(monkeypatch, _Toy(wrong_from=2), sync=False) == 1
+    assert _run(monkeypatch, _Toy(wrong_from=2), sync=False)[0] == 1
 
 
 def test_empty_and_mismatched_gradient_maps_are_invalid():
