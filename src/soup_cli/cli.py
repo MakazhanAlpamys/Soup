@@ -98,6 +98,7 @@ app = typer.Typer(
 
 # Register sub-commands
 app.command()(init.init)
+app.command(name="wizard")(init.wizard)
 app.command()(train.train)
 app.command()(chat.chat)
 app.command()(cost.cost)
