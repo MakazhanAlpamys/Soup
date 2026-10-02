@@ -40,8 +40,16 @@ run_correctness f2 "$F2" disk 2
 date -u +"block 3 start %FT%TZ" | tee -a "$LOG/session.txt"
 "$PY" "$H" --mode timing --label F2 --weights "$F2" --tier disk \
   --out "$OUT/timing.json" > "$LOG/timing.log" 2>&1
+if [ $? -eq 3 ]; then
+  echo "STOPPED: block 3 refused at its start (V1/V3), see $LOG/timing.log" | tee -a "$LOG/session.txt"
+  exit 3
+fi
 date -u +"block 4 start %FT%TZ" | tee -a "$LOG/session.txt"
 "$PY" "$H" --mode spill --label F2 --weights "$F2" --tier disk \
   --out "$OUT/spill.json" > "$LOG/spill.log" 2>&1
+if [ $? -eq 3 ]; then
+  echo "STOPPED: block 4 refused at its start (V1/V3), see $LOG/spill.log" | tee -a "$LOG/session.txt"
+  exit 3
+fi
 date -u +"done %FT%TZ" | tee -a "$LOG/session.txt"
 "$PY" benchmarks/harness/l2l_rule.py "$OUT" | tee "$OUT/verdict.md"

@@ -69,9 +69,6 @@ def arm_value(rows: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
         "spread": spread,
         "tok_s": measured[0]["tokens_per_step"] / value,
         "peak": max(rec["peak_alloc_gb"] for rec in measured),
-        "loads": sum(rec.get("layer_loads_per_step", 0.0) + rec.get("large_loads_per_step", 0.0)
-                     for rec in measured) / 2,
-        "bytes": sum(rec.get("bytes_moved_per_step", 0.0) for rec in measured) / 2,
     }
 
 
@@ -79,21 +76,37 @@ def _gate(status: str, detail: str) -> Dict[str, str]:
     return {"status": status, "detail": detail}
 
 
+def _first(payload: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    records = (payload or {}).get("records") or []
+    return records[0] if records else None
+
+
+def _not_exact(rec: Optional[Dict[str, Any]]) -> Optional[str]:
+    """Why a correctness record cannot be judged (None when it can)."""
+    if rec is None:
+        return "no correctness record (a missing file, or a block that crashed)"
+    if rec.get("skipped"):
+        return f"skipped: {rec['skipped']}"
+    if rec.get("deterministic_error"):
+        return f"deterministic mode raised: {rec['deterministic_error']}"
+    a_vs_a = rec.get("a_vs_a") or {}
+    if not (a_vs_a.get("equal") and rec.get("a_vs_a_losses_equal")):
+        return f"GA vs GA not exact (max |d| {float(a_vs_a.get('max_abs', float('nan'))):.3e})"
+    if not rec.get("l2l"):
+        return "no L2L comparison in the record"
+    return None
+
+
 def _g1_fixture(default: Optional[Dict[str, Any]], det: Optional[Dict[str, Any]],
                 name: str) -> Dict[str, str]:
-    def exact(rec: Dict[str, Any]) -> bool:
-        return (rec["a_vs_a"]["equal"] and rec["a_vs_a_losses_equal"]
-                and not rec.get("deterministic_error"))
-
-    if default is None:
-        return _gate(NONE, f"{name}: no correctness file")
-    chosen = default["records"][0]
-    if not exact(chosen):
-        chosen = det["records"][0] if det else None
-        if chosen is None or not exact(chosen):
-            worst = default["records"][0]["a_vs_a"]["max_abs"]
-            return _gate(NONE, f"{name}: GA vs GA not exact (max |d| {worst:.3e}), "
-                               "deterministic re-run missing or not exact either")
+    chosen = _first(default)
+    why = _not_exact(chosen)
+    if why is not None:
+        det_rec = _first(det)
+        det_why = _not_exact(det_rec) if det is not None else "missing"
+        if det_why is not None:
+            return _gate(NONE, f"{name}: {why}; deterministic re-run: {det_why}")
+        chosen = det_rec
     zero = chosen["a_vs_a"]["all_zero"]
     if zero:
         return _gate(FAIL, f"{name}: all-zero reference gradients {zero[:3]}")
@@ -130,15 +143,27 @@ def evaluate(results_dir: str) -> Dict[str, Any]:
     v1 = {"ok": meta.get("direct_io") is True, "detail": f"direct_io={meta.get('direct_io')}"}
     v3 = {"ok": bool((meta.get("v3") or {}).get("ok")), "detail": str(meta.get("v3"))}
 
+    def work(mode: str, arm: str) -> Optional[Tuple[float, float]]:
+        """Mean loads and bytes per step over the rounds that ran. Timing validity (V4,
+        V5, V6) does not enter: V2 is about the work, and a gate that reads an arm's
+        time already carries that arm's own validity."""
+        rows = [rec for rec in _rows(recs, mode, arm, 1)
+                if not rec.get("skipped") and rec.get("step_s_mean")]
+        if not rows:
+            return None
+        loads = sum(rec.get("layer_loads_per_step", 0.0) + rec.get("large_loads_per_step", 0.0)
+                    for rec in rows) / len(rows)
+        moved = sum(rec.get("bytes_moved_per_step", 0.0) for rec in rows) / len(rows)
+        return loads, moved
+
     def same_work(arm: str) -> Tuple[bool, str]:
         """V2: L2L at k=1 moves exactly the shipped batch-1 step's loads and bytes."""
-        l2l, plain = arms[("l2l", arm, 1)], arms[("plain", arm, 1)]
-        if not (l2l["valid"] and plain["valid"]):
-            return False, f"{arm}: an arm is invalid"
-        ok = (abs(l2l["loads"] - plain["loads"]) <= V2_LOADS
-              and abs(l2l["bytes"] - plain["bytes"]) <= V2_BYTES)
-        return ok, (f"{arm}: loads {l2l['loads']:.1f} vs {plain['loads']:.1f}, "
-                    f"bytes {l2l['bytes'] / 1e9:.3f} vs {plain['bytes'] / 1e9:.3f} GB")
+        l2l, plain = work("l2l", arm), work("plain", arm)
+        if l2l is None or plain is None:
+            return False, f"{arm}: L2L at k=1 or the shipped step has no measured round"
+        ok = abs(l2l[0] - plain[0]) <= V2_LOADS and abs(l2l[1] - plain[1]) <= V2_BYTES
+        return ok, (f"{arm}: loads {l2l[0]:.1f} vs {plain[0]:.1f}, "
+                    f"bytes {l2l[1] / 1e9:.3f} vs {plain[1] / 1e9:.3f} GB")
 
     (ok_a, detail_a), (ok_b, detail_b) = same_work("A"), same_work("B")
     v2 = {"ok": ok_a and ok_b, "detail": f"{detail_a}; {detail_b}"}

@@ -699,13 +699,13 @@ def test_store_allocation_failure_becomes_a_skipped_arm(probe, monkeypatch):
         raise RuntimeError("CUDA error: out of memory")
 
     monkeypatch.setattr(probe.l2l_activations, "ActivationStore", boom)
-    monkeypatch.setattr(probe, "_drain", lambda: calls.append("drained"))
+    monkeypatch.setattr(probe, "_recover", lambda: calls.append("recovered"))
     store, reason = probe.allocate_store(
         n_layers=4, k=2, chunk_shape=(1, 8, 64), dtype=torch.float32, device="cpu", pin=False
     )
     assert store is None
     assert "out of memory" in reason
-    assert calls == ["drained"]
+    assert calls == ["recovered"]  # drain the stale error AND release the cached pinned blocks
 
 def test_observe_attaches_stamps_watch_and_foreign_readers(probe, monkeypatch):
     snaps = iter([
@@ -732,3 +732,121 @@ def test_fits_in_ram_keeps_the_margin(probe):
     assert probe.fits_in_ram(gib8, free_gb=8.59 + 4.0 + 0.01) is True
     assert probe.fits_in_ram(gib8, free_gb=8.59 + 3.9) is False
     assert probe.fits_in_ram(gib8, free_gb=None) is False
+
+
+# --------------------------------------------------------------------------
+# final-review fix pass (2026-10-02)
+# --------------------------------------------------------------------------
+def test_v2_ignores_timing_validity_of_the_k1_arms(rule, tmp_path):
+    """I1: V2 is a loads/bytes identity. A 10% round spread on the shipped step
+    voids that arm's time (V4), but no gate reads P1's time, so G2-G4 stand."""
+    def spread(records):
+        for rec in records:
+            if (rec["mode"], rec["arm"], rec["round"]) == ("plain", "A", 1):
+                rec["step_s_mean"] = 17.1 * 1.10
+    out = rule.evaluate(_write(tmp_path, timing=_timing(patch=[spread])))
+    assert out["validity"]["V2"]["ok"] is True
+    assert out["verdict"] == "BUILD STEP 1"
+
+
+def test_v2_fails_when_the_shipped_step_never_ran(rule, tmp_path):
+    def skip(records):
+        for rec in records:
+            if rec["mode"] == "plain":
+                rec["skipped"] = "never ran"
+                rec["step_s_mean"] = None
+    out = rule.evaluate(_write(tmp_path, timing=_timing(patch=[skip])))
+    assert out["validity"]["V2"]["ok"] is False
+    assert out["gates"]["G2"]["status"] == "no verdict"
+
+
+def _rec_file(*records):
+    return {"meta": {}, "records": list(records)}
+
+
+def test_g1_no_verdict_when_the_deterministic_rerun_raised(rule, tmp_path):
+    """I2: the probe writes no a_vs_a when deterministic mode raises."""
+    det = _rec_file({"kind": "correctness", "fixture": "F1", "k": 4, "deterministic": True,
+                     "deterministic_error": "an op does not have a deterministic implementation"})
+    out = rule.evaluate(_write(tmp_path, f1=_corr("F1", a_vs_a=False), f1_det=det))
+    assert out["gates"]["G1"]["status"] == "no verdict"
+    assert "deterministic" in out["gates"]["G1"]["detail"]
+
+
+def test_g1_no_verdict_on_an_empty_correctness_file(rule, tmp_path):
+    """I2: a block that crashed leaves Sink's first flush, records == []."""
+    out = rule.evaluate(_write(tmp_path, f2=_rec_file()))
+    assert out["gates"]["G1"]["status"] == "no verdict"
+
+
+def test_g1_no_verdict_on_a_skipped_correctness_record(rule, tmp_path):
+    reason = "activation store allocation failed: CUDA error: out of memory"
+    skipped = _rec_file({"kind": "correctness", "fixture": "F2", "k": 2, "deterministic": False,
+                         "skipped": reason})
+    out = rule.evaluate(_write(tmp_path, f2=skipped))
+    assert out["gates"]["G1"]["status"] == "no verdict"
+    assert "skipped" in out["gates"]["G1"]["detail"]
+
+
+def test_start_refusal_names_the_failing_row(probe):
+    """I4: a block whose V1/V3 already fail at its start cannot reach a verdict."""
+    v3_bad = {"ok": False, "ram_ok": False, "gpu_ok": True, "free_gb": 9.0, "need_gb": 10.7}
+    assert probe.start_refusal("timing", v3_bad, True, "disk").startswith("V3")
+    assert "V1" in probe.start_refusal("spill", {"ok": True}, False, "disk")
+    assert probe.start_refusal("timing", {"ok": True}, True, "disk") is None
+    assert probe.start_refusal("timing", {"ok": True}, None, "ram") is None
+    assert probe.start_refusal("correctness", {"ok": False}, False, "disk") is None
+
+
+def test_close_survives_a_spill_file_held_by_another_process(acts, tmp_path, monkeypatch):
+    """M2: an indexer or scanner holding the file must not crash the block."""
+    store = _store(acts, tmp_path, spill_layers=1)
+
+    def held(path):
+        raise PermissionError(13, "The process cannot access the file", path)
+
+    monkeypatch.setattr(acts.os, "remove", held)
+    store.close()
+    assert store.stats.spill_left_behind == str(tmp_path / "spill.bin")
+
+
+def test_release_arm_state_drops_the_zero_weight_cache_after_c_and_d(probe):
+    """M3: the nodequant arms cache a zero weight per shape on the GPU (~1.1 GB on
+    the 70B shape); later arms must not carry it."""
+    class Inst:
+        def __init__(self):
+            self._zero_cache = {(1, 2): object()}
+
+    for arm, emptied in (("A", False), ("B", False), ("C", True), ("D", True)):
+        inst = Inst()
+        probe.release_arm_state(inst, arm)
+        assert (not inst._zero_cache) is emptied, arm
+
+
+def test_fits_in_ram_also_needs_commit(probe):
+    """M4: pinned memory is charged against Windows commit as well."""
+    gib8 = 8 * 1024**3
+    assert probe.fits_in_ram(gib8, free_gb=20.0, commit_gb=10.0) is False
+    assert probe.fits_in_ram(gib8, free_gb=20.0, commit_gb=13.0) is True
+    assert probe.fits_in_ram(gib8, free_gb=20.0) is True
+
+
+def test_the_l2l_step_calls_each_layer_twice_per_micro_batch(sched, acts, streamed):
+    """M9: one no-grad forward and one forward under grad per (layer, micro-batch).
+    The wrapper's checkpoint left on would add a recompute: three calls, not two."""
+    model, runtime = streamed
+    mbs = _micro_batches(2)
+    step = sched.L2LStep(model, runtime, sched.capture_layer_call(model, mbs[0]))
+    calls = []
+    original = runtime.prefetcher.advance
+
+    def counting(idx):
+        calls.append(idx)
+        return original(idx)
+
+    runtime.prefetcher.advance = counting
+    try:
+        step.run(mbs, _cpu_store(acts, 2))
+    finally:
+        runtime.prefetcher.advance = original
+    assert len(calls) == 2 * 2 * 3

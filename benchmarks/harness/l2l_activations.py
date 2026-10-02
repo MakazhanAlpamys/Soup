@@ -81,6 +81,16 @@ class SpillBackend:
 
     direct = False
     path = ""
+    left_behind: Optional[str] = None
+
+    def _remove(self) -> None:
+        """Best effort: an indexer or scanner holding the file must not crash the arm."""
+        if not os.path.exists(self.path):
+            return
+        try:
+            os.remove(self.path)
+        except OSError:
+            self.left_behind = self.path
 
     def write(self, offset: int, buf: Any) -> None:
         raise NotImplementedError
@@ -114,8 +124,8 @@ class BufferedSpillFile(SpillBackend):
             if handle is not None:
                 handle.close()
         self._writer = self._reader = None
-        if remove and os.path.exists(self.path):
-            os.remove(self.path)
+        if remove:
+            self._remove()
 
 
 def _open_unbuffered(path: str) -> io.FileIO:
@@ -207,8 +217,8 @@ class DirectSpillFile(SpillBackend):
             if handle is not None:
                 handle.close()
         self._writer = self._reader = None
-        if remove and os.path.exists(self.path):
-            os.remove(self.path)
+        if remove:
+            self._remove()
 
 
 class _Ring:
@@ -249,6 +259,7 @@ class StoreStats:
     bytes_read: int = 0
     put_wait_s: float = 0.0
     get_wait_s: float = 0.0
+    spill_left_behind: Optional[str] = None
 
 
 Key = Tuple[int, int]
@@ -473,4 +484,5 @@ class ActivationStore:
         for thread in self._threads:
             thread.join(timeout=30)
         self._spill.close(remove=True)
+        self.stats.spill_left_behind = self._spill.left_behind
         self._spill = None

@@ -68,16 +68,50 @@ def spill_layers_for(n_layers: int, k: int, budget_k: int) -> int:
     return n_layers - resident_layers
 
 
-def fits_in_ram(need_bytes: int, free_gb: Optional[float]) -> bool:
-    """V3's RAM row: pinning ``need_bytes`` must leave ``V3_MARGIN_GB`` free. Unknown free
-    memory never fits: pinning blind can take the whole box (and its peers) down."""
-    return free_gb is not None and need_bytes / 1e9 + V3_MARGIN_GB <= free_gb
+def fits_in_ram(need_bytes: int, free_gb: Optional[float],
+                commit_gb: Optional[float] = None) -> bool:
+    """V3's RAM row: pinning ``need_bytes`` must leave ``V3_MARGIN_GB`` of physical memory
+    AND of Windows commit (page-locked memory is charged to both). Unknown free memory
+    never fits: pinning blind can take the whole box, and its peers, down."""
+    need_gb = need_bytes / 1e9 + V3_MARGIN_GB
+    if free_gb is None or need_gb > free_gb:
+        return False
+    return commit_gb is None or need_gb <= commit_gb
 
 
-def _drain() -> None:
-    from soup_cli.utils.layer_stream_runtime import drain_stale_cuda_error
+def _recover() -> None:
+    """The shipped #901 recovery: drain the stale CUDA error AND return the page-locked
+    blocks a partial store left in torch's host cache, so a failed k=16 does not keep
+    ~8 GB pinned on a shared box for the rest of the block."""
+    from soup_cli.utils.layer_stream_runtime import recover_from_failed_page_lock
 
-    drain_stale_cuda_error()
+    recover_from_failed_page_lock()
+
+
+def start_refusal(mode: str, v3: Optional[Dict[str, Any]], direct_io: Any,
+                  tier: str) -> Optional[str]:
+    """Why a timing or spill block cannot reach a verdict before its first arm (V3, V1)."""
+    if mode not in ("timing", "spill"):
+        return None
+    if not (v3 or {}).get("ok"):
+        return f"V3 fails at the block's start: {v3}"
+    if tier == "disk" and direct_io is not True:
+        return f"V1 fails: the disk source reads through the page cache (direct_io={direct_io})"
+    return None
+
+
+def release_arm_state(inst: Any, arm: str) -> None:
+    """The nodequant arms (C, D) cache one zero weight per shape on the GPU (~1.1 GB on
+    the 70B shape). Drop it, so every later arm sees the VRAM the earlier ones saw."""
+    if arm not in ("C", "D"):
+        return
+    inst._zero_cache.clear()
+    try:
+        import torch
+    except ImportError:
+        return
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
 
 
 def allocate_store(**kwargs: Any) -> Tuple[Optional[Any], Optional[str]]:
@@ -85,7 +119,7 @@ def allocate_store(**kwargs: Any) -> Tuple[Optional[Any], Optional[str]]:
     try:
         return l2l_activations.ActivationStore(**kwargs), None
     except (RuntimeError, OSError) as exc:
-        _drain()
+        _recover()
         return None, f"activation store allocation failed: {exc}"
 
 
@@ -117,6 +151,12 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument("--spill-dir", default="D:/soup-l2l-spill")
     parser.add_argument("--deterministic", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument(
+        "--allow-invalid",
+        action="store_true",
+        help="run a timing/spill block even when V1/V3 already fail at its start "
+             "(its gates will have no verdict); the default exits 3",
+    )
     parser.add_argument("--out", required=True)
     parser.add_argument("--label", default="")
     args = parser.parse_args(argv)
@@ -136,11 +176,13 @@ def v3_check(need_bytes: int, gpu_used_before_mib: Optional[int]) -> Dict[str, A
     pids = l2l_box.gpu_compute_pids() or []
     foreign = [pid for pid in pids if pid != os.getpid()]
     free = mem["avail_phys_gb"]
+    commit = mem["commit_avail_gb"]
     need_gb = need_bytes / 1e9
-    ram_ok = free is not None and free >= need_gb + V3_MARGIN_GB
+    ram_ok = fits_in_ram(need_bytes, free, commit)
     gpu_ok = gpu_used_before_mib is not None and gpu_used_before_mib <= V3_GPU_IDLE_MIB
     return {
-        "free_gb": free, "need_gb": need_gb, "margin_gb": V3_MARGIN_GB,
+        "free_gb": free, "commit_avail_gb": commit, "need_gb": need_gb,
+        "margin_gb": V3_MARGIN_GB,
         "gpu_used_before_build_mib": gpu_used_before_mib, "gpu_pids": pids,
         "foreign_gpu_pids": foreign, "ram_ok": ram_ok, "gpu_ok": gpu_ok and not foreign,
         "ok": ram_ok and gpu_ok and not foreign,
@@ -324,7 +366,8 @@ def mode_timing(args, model, runtime, config, sink, torch_dtype, meta) -> None:
     step = l2l_schedule.L2LStep(model, runtime, call)
     element = torch.empty((), dtype=torch_dtype).element_size()
     free_gb = meta["v3"]["free_gb"]
-    fits = {k: fits_in_ram(_store_bytes(config, args, k, element), free_gb)
+    commit_gb = meta["v3"]["commit_avail_gb"]
+    fits = {k: fits_in_ram(_store_bytes(config, args, k, element), free_gb, commit_gb)
             for k in ks + [args.cd_k]}
     for rnd, mode, arm, k in plan_timing_arms(ks, args.rounds, args.cd_k):
         inst.nocopy = arm in ("B", "D")
@@ -354,6 +397,7 @@ def mode_timing(args, model, runtime, config, sink, torch_dtype, meta) -> None:
                     store.close()
                     del store
         sink.add("arm", {**base, **result})
+        release_arm_state(inst, arm)
         print(f"{label:<22} " + (f"SKIPPED {result['skipped']}" if result.get("skipped") else
               f"{result['tok_per_s']:7.1f} tok/s  step {result['step_s_mean']:.3f} s  "
               f"peak {result['peak_alloc_gb']:.3f} GB  void {result['suspend']['void']}"))
@@ -383,7 +427,7 @@ def mode_spill(args, model, runtime, config, sink, torch_dtype, meta) -> None:
         resident = resident * (int(config.num_hidden_layers) - layers) // int(
             config.num_hidden_layers)
         store, reason = None, None
-        if not fits_in_ram(resident, meta["v3"]["free_gb"]):
+        if not fits_in_ram(resident, meta["v3"]["free_gb"], meta["v3"]["commit_avail_gb"]):
             reason = (f"V3: {resident / 1e9:.1f} GB pinned + {V3_MARGIN_GB} GB margin, "
                       f"{meta['v3']['free_gb']} GB free")
         else:
@@ -455,8 +499,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     print(f"{'shard_dir':<16}{shard_dir}\n{'direct_io':<16}{direct_io}\n"
           f"{'v3':<16}{meta['v3']}")
     sink = stream_probe.Sink(args.out, meta)
+    refusal = start_refusal(args.mode, meta["v3"], direct_io, stats["tier"])
     if args.dry_run:
-        if fits_in_ram(need, meta["v3"]["free_gb"]):
+        print(f"dry run: a real {args.mode} block would "
+              + (f"be REFUSED: {refusal}" if refusal else "start"))
+        if fits_in_ram(need, meta["v3"]["free_gb"], meta["v3"]["commit_avail_gb"]):
             store, reason = allocate_store(**_store_kwargs(config, args, biggest, torch_dtype))
             print(f"dry run: pinned store for k={biggest} "
                   f"{'allocated' if store is not None else 'FAILED: ' + str(reason)}")
@@ -467,6 +514,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                   f"{meta['v3']['free_gb']} GB free — NOT allocated (V3 would skip it)")
         runtime.close()
         return 0
+    if refusal and not args.allow_invalid:
+        meta["refused"] = refusal
+        sink.payload["meta"] = meta
+        sink.flush()
+        runtime.close()
+        print(f"REFUSED (exit 3): {refusal}. --allow-invalid runs it anyway, without a verdict.")
+        return 3
     if args.mode == "correctness":
         mode_correctness(args, model, runtime, config, sink, torch_dtype)
     elif args.mode == "timing":

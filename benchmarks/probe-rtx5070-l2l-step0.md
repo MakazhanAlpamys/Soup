@@ -237,6 +237,11 @@ bash benchmarks/harness/l2l_session.sh          # blocks 1-4, one process each, 
 python benchmarks/harness/l2l_rule.py benchmarks/results/probe-rtx5070/l2l   # §5/§6 tables
 ```
 
+A timing or spill block whose V1 or V3 row already fails at its start exits 3 and the
+session stops there: its gates could only be "no verdict", and running it anyway is the
+owner's call (`--allow-invalid`). A failed page-lock releases the blocks it left pinned
+(the shipped #901 recovery) before the arm is recorded as skipped.
+
 ## 5. Results
 
 Pending.
