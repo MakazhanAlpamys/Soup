@@ -77,3 +77,11 @@ def test_no_probe_prints_no_table(dataset: Path, fake_probe: dict) -> None:
     assert result.exit_code == 0, result.output
     assert fake_probe == {"baselines": 0, "lora": 0, "proximity": 0}
     assert "ROI deltas" not in result.output
+
+
+def test_plain_probe_prints_the_roi_table(dataset: Path, fake_probe: dict) -> None:
+    result = CliRunner().invoke(app, ["advise", "run", str(dataset), "--probe"])
+    assert result.exit_code == 0, result.output
+    # --probe alone is the heuristic probe: no model, so no proximity measurement.
+    assert fake_probe == {"baselines": 1, "lora": 1, "proximity": 0}
+    assert "ROI deltas" in result.output
