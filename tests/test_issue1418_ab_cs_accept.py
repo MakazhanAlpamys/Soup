@@ -8,12 +8,14 @@ at 0.5 standard deviations and 889 at 0.2 to say so.
 The reject rule is unchanged. The accept rule now reads the same mixture the
 other way: shift the treatment by a candidate difference delta0 and the Bayes
 factor for "delta0 is the difference" is a martingale when delta0 is the true
-one, so the differences it has not rejected at ``1 / beta`` form a confidence
+one, so the differences it has not rejected at ``1 / alpha`` form a confidence
 sequence that covers the true difference at every look with probability at
-least ``1 - beta``. ``accept_h0`` comes once that sequence lies inside
+least ``1 - alpha``. ``accept_h0`` comes once that sequence lies inside
 (-effect_size, +effect_size), so a true difference of ``effect_size`` or more
-ends in ``accept_h0`` in at most a ``beta`` share of runs, however often the
-operator looks. The sweep is benchmarks/gate-1418-ab-cs-accept.md.
+ends in ``accept_h0`` in at most an ``alpha`` share of runs, however often the
+operator looks. ``alpha`` bounds both wrong verdicts, and ``beta`` is retired:
+passed, it is ignored with a warning. The sweep is
+benchmarks/gate-1418-ab-cs-accept.md.
 """
 
 from __future__ import annotations
@@ -144,8 +146,8 @@ class TestAcceptRule:
             got = _step(_CONTROL, _TREATMENT, effect_size=effect_size)
             assert got.decision == decision, width
 
-    @pytest.mark.parametrize(("alpha", "beta"), [(0.05, 0.2), (0.01, 0.1), (0.2, 0.05)])
-    def test_the_sequence_is_at_coverage_one_minus_beta(self, alpha, beta, monkeypatch):
+    @pytest.mark.parametrize("alpha", [0.05, 0.01, 0.2])
+    def test_the_sequence_is_at_coverage_one_minus_alpha(self, alpha, monkeypatch):
         from soup_cli.utils import ab_test
 
         levels = []
@@ -157,8 +159,8 @@ class TestAcceptRule:
 
         monkeypatch.setattr(ab_test, "_nig_confidence_half_width", spy)
         monkeypatch.setattr(ab_test, "_nig_log_bayes_factor", lambda **_: 0.0)
-        _step(_CONTROL, _TREATMENT, alpha=alpha, beta=beta)
-        assert levels == [beta]
+        _step(_CONTROL, _TREATMENT, alpha=alpha)
+        assert levels == [alpha]
 
     def test_a_reject_wins_when_both_rules_fire(self, monkeypatch):
         """A difference that is real but smaller than effect_size is reported as real."""
@@ -205,7 +207,7 @@ def _accepts(outcomes):
 
 class TestUnderPeeking:
     @pytest.mark.parametrize(
-        ("ratio", "beta", "shift", "seed"),
+        ("ratio", "alpha", "shift", "seed"),
         [
             (0.5, 0.20, 1.0, 4101),
             (0.5, 0.20, -1.0, 4102),
@@ -213,17 +215,17 @@ class TestUnderPeeking:
             (2.0, 0.10, -1.0, 4104),
         ],
     )
-    def test_a_difference_of_effect_size_is_accepted_in_at_most_beta_of_runs(
-        self, ratio, beta, shift, seed
+    def test_a_difference_of_effect_size_is_accepted_in_at_most_alpha_of_runs(
+        self, ratio, alpha, shift, seed
     ):
         """The full sweep (20,000 runs per ratio, to 1000 rows): gate-1418-ab-cs-accept.md."""
         np = pytest.importorskip("numpy")
         reps = 2000
         sim = _simulate(
-            np, ratio=ratio, shift_in_effects=shift, reps=reps, seed=seed, alpha=0.05, beta=beta
+            np, ratio=ratio, shift_in_effects=shift, reps=reps, seed=seed, alpha=alpha
         )
         rate = len(_accepts(sim["outcomes"])) / reps
-        assert rate <= beta + 3 * math.sqrt(beta * (1 - beta) / reps), rate
+        assert rate <= alpha + 3 * math.sqrt(alpha * (1 - alpha) / reps), rate
 
     def test_with_no_difference_accept_comes_far_sooner_than_under_1265(self):
         """1 standard deviation: 82 pairs on average under the old rule (1000-row runs)."""
@@ -241,28 +243,79 @@ class TestUnderPeeking:
 
 
 class TestWording:
-    def test_alpha_plus_beta_refusal_gives_the_reason(self):
-        from soup_cli.utils.ab_test import MsprtConfig
-
-        with pytest.raises(ValueError) as exc:
-            MsprtConfig(metric="judge_score", alpha=0.05, beta=0.95)
-        message = str(exc.value)
-        assert "coin flip" in message
-        assert "log(beta / (1 - alpha))" not in message
-
-    def test_beta_help_says_what_it_bounds(self):
+    def test_beta_help_says_it_is_retired(self):
         from soup_cli.cli import app
         from tests.test_issue1265_ab_nig import runner
 
         result = runner.invoke(app, ["ab", "--help"])
         assert result.exit_code == 0, (result.output, repr(result.exception))
         out = _plain(result.output)
-        assert "ends in accept_h0 in at most this share of runs" in out
+        assert "Retired (#1418)" in out
+        assert "accept_h0, each in at most this share of runs" in out
 
     def test_the_accept_panel_names_the_effect_size_and_confidence(self, tmp_path, monkeypatch):
         rows = [0.80, 0.83, 0.77, 0.81, 0.79, 0.84, 0.78, 0.82, 0.80, 0.76] * 3
-        result = _run_cli(tmp_path, monkeypatch, rows, rows, ("--beta", "0.1"))
+        result = _run_cli(tmp_path, monkeypatch, rows, rows, ("--alpha", "0.1"))
         assert result.exit_code == 0, (result.output, repr(result.exception))
         out = _plain(result.output)
         assert "decision accept_h0" in out
         assert "smaller than --effect-size 0.1, at confidence 0.9" in out
+
+
+# ---------------------------------------------------------------------------
+# --beta is retired: ignored, and never silently
+# ---------------------------------------------------------------------------
+
+_ROWS = [0.80, 0.83, 0.77, 0.81, 0.79, 0.84, 0.78, 0.82, 0.80, 0.76] * 3
+_LOWER = [x - 0.1 for x in _ROWS]
+
+
+class TestRetiredBeta:
+    @pytest.mark.parametrize("beta", [0.01, 0.2, 0.95])
+    def test_a_passed_beta_warns_and_changes_no_verdict(self, beta):
+        from soup_cli.config.deprecation import SoupConfigDeprecationWarning
+
+        for control, treatment in ((_ROWS, _ROWS), (_ROWS, _LOWER), (_CONTROL, _TREATMENT)):
+            for n in (7, 12, 20, len(control)):
+                want = _step(control[:n], treatment[:n])
+                with pytest.warns(SoupConfigDeprecationWarning) as record:
+                    got = _step(control[:n], treatment[:n], beta=beta)
+                assert got == want, (beta, n)
+                message = str(record[0].message)
+                assert message.startswith("beta no longer does anything (#1418)")
+                assert "lower alpha" in message and "will refuse it" in message
+
+    def test_no_beta_no_warning(self, recwarn):
+        from soup_cli.utils.ab_test import MsprtConfig
+
+        assert MsprtConfig(metric="judge_score").beta is None
+        assert not [w for w in recwarn if "beta" in str(w.message)]
+
+    def test_alpha_plus_beta_past_1_is_no_longer_refused(self):
+        """#1339's check guarded the old accept boundary; with beta unused it went."""
+        from soup_cli.config.deprecation import SoupConfigDeprecationWarning
+        from soup_cli.utils.ab_test import MsprtConfig
+
+        with pytest.warns(SoupConfigDeprecationWarning):
+            MsprtConfig(metric="judge_score", alpha=0.05, beta=0.95)
+
+    def test_the_cli_says_what_changed_and_points_at_alpha(self, tmp_path, monkeypatch, recwarn):
+        without = _run_cli(tmp_path, monkeypatch, _ROWS, _ROWS, ())
+        result = _run_cli(tmp_path, monkeypatch, _ROWS, _ROWS, ("--beta", "0.95"))
+        # Said once, by the CLI: --beta is not passed on, so MsprtConfig does not
+        # warn a second time.
+        assert not [w for w in recwarn if "no longer does anything" in str(w.message)]
+        assert result.exit_code == 0, (result.output, repr(result.exception))
+        out = _plain(result.output)
+        assert "Warning: --beta no longer does anything (#1418)" in out
+        assert "at level --alpha" in out and "lower --alpha" in out
+        assert "will refuse it" in out
+        assert out.count("no longer does anything") == 1
+        # And it is ignored: the verdict is the one without --beta.
+        assert "decision accept_h0" in out
+        assert "decision accept_h0" in _plain(without.output)
+
+    def test_the_cli_without_beta_does_not_warn(self, tmp_path, monkeypatch):
+        result = _run_cli(tmp_path, monkeypatch, _ROWS, _ROWS, ())
+        assert result.exit_code == 0, (result.output, repr(result.exception))
+        assert "no longer does anything" not in _plain(result.output)
