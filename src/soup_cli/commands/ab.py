@@ -40,9 +40,10 @@ def ab(
     beta: float = typer.Option(
         0.20, "--beta",
         help=(
-            "Type-II error (false negative) rate (0, 1). Not the power: a power "
-            "of 0.95 is --beta 0.05. alpha + beta must stay below 1, or the "
-            "test accepts H0 on no evidence either way."
+            "Type-II error (false negative) rate (0, 1): a true difference of "
+            "--effect-size or more ends in accept_h0 in at most this share of "
+            "runs, kept for a test re-run after every new row. Not the power: a "
+            "power of 0.95 is --beta 0.05. alpha + beta must stay below 1."
         ),
     ),
     effect_size: float = typer.Option(
@@ -136,8 +137,9 @@ def ab(
     elif verdict.decision == "accept_h0":
         console.print(
             Panel(
-                "[yellow]No significant difference. Treatment is not "
-                "distinguishable from control at the configured effect size.[/]",
+                "[yellow]No significant difference: any difference between treatment "
+                f"and control on {escape(canonical)} is smaller than --effect-size "
+                f"{cfg.effect_size:g}, at confidence {1.0 - cfg.beta:g}.[/]",
                 border_style="yellow",
             )
         )
