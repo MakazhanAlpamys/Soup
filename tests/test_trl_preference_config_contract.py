@@ -79,13 +79,62 @@ def _pref_rows(n=8):
     return [{"prompt": "hi", "chosen": " good answer", "rejected": " bad"} for _ in range(n)]
 
 
+_MAX_SEQUENCE_LENGTH = 64
+_MAX_PROMPT_LENGTH = _MAX_SEQUENCE_LENGTH // 2
+_OVERLONG_PROMPT_WORDS = 161
+
+
 def _long_pref_rows(n=8):
-    prompt = " ".join(["hello"] * 161)
+    prompt = " ".join(["hello"] * _OVERLONG_PROMPT_WORDS)
     return [{"prompt": prompt, "chosen": " good answer", "rejected": " bad"} for _ in range(n)]
 
 
 def _kto_rows(n=8):
     return [{"prompt": "hi", "completion": " good answer", "label": i % 2 == 0} for i in range(n)]
+
+
+def _long_kto_rows(n=8):
+    prompt = " ".join(["hello"] * _OVERLONG_PROMPT_WORDS)
+    return [{"prompt": prompt, "completion": " good answer", "label": i % 2 == 0} for i in range(n)]
+
+
+#: Every word here is a single token in the tiny tokenizer, so the completion is
+#: this many tokens long — comfortably over ``_MAX_SEQUENCE_LENGTH`` on its own.
+_LONG_COMPLETION_WORDS = 100
+_LONG_COMPLETION = " " + " ".join(["answer"] * _LONG_COMPLETION_WORDS)
+
+#: The label used to mask prompt tokens out of the completion loss.
+_IGNORE_LABEL = -100
+
+
+def _mixed_kto_rows(n=8):
+    """Half the rows overflow on the prompt, half on the completion.
+
+    The prompt-heavy rows are the regression: TRL slices the answer to fit
+    ``max_length`` before Soup's cap runs, so a wrapper that re-derives the
+    completion from TRL's own truncated column keeps only the trailing EOS. The
+    completion-heavy rows exercise the ordinary answer-truncation path.
+    """
+    long_prompt = " ".join(["hello"] * _OVERLONG_PROMPT_WORDS)
+    rows = []
+    for i in range(n):
+        if i % 2 == 0:
+            rows.append({"prompt": long_prompt, "completion": " good answer", "label": True})
+        else:
+            rows.append({"prompt": "hi", "completion": _LONG_COMPLETION, "label": False})
+    return rows
+
+
+def _mixed_pref_rows(n=8):
+    """BCO's preference-shaped analogue of :func:`_mixed_kto_rows`."""
+    long_prompt = " ".join(["hello"] * _OVERLONG_PROMPT_WORDS)
+    rows = []
+    for i in range(n):
+        if i % 2 == 0:
+            rows.append({"prompt": long_prompt, "chosen": " good answer", "rejected": " bad"})
+        else:
+            rows.append({"prompt": "hi", "chosen": _LONG_COMPLETION, "rejected": " bad"})
+    return rows
 
 
 #: KTO refuses `per_device_train_batch_size == 1` outright — its KL term is
@@ -100,6 +149,7 @@ _ROWS = {
     "orpo": _pref_rows,
     "simpo": _pref_rows,
 }
+_PREPARED_ROW_MULTIPLIER = {"bco": 2}
 
 #: task -> (wrapper import path, the trl config class its `setup()` builds).
 #: The config class is named so a failure says *which* trl API moved, rather
@@ -132,7 +182,11 @@ def _cfg(weights, out_dir, task):
                 "task": task,
                 "backend": "transformers",
                 "modality": "text",
-                "data": {"train": "train.jsonl", "max_length": 64, "chat_template": "chatml"},
+                "data": {
+                    "train": "train.jsonl",
+                    "max_length": _MAX_SEQUENCE_LENGTH,
+                    "chat_template": "chatml",
+                },
                 "training": {
                     "batch_size": _MIN_BATCH.get(task, 1),
                     "quantization": "none",
@@ -191,24 +245,34 @@ class TestEveryPreferenceTrainerReachesALiveTrlTrainer:
         wrapper = _build(tmp_path, monkeypatch, task)
         args = wrapper.trainer.args
         if config_accepts(type(args), "max_prompt_length"):
-            assert args.max_prompt_length == 32, (task, args.max_prompt_length)
+            assert args.max_prompt_length == _MAX_PROMPT_LENGTH, (task, args.max_prompt_length)
         else:
             assert not hasattr(args, "max_prompt_length"), (
                 f"{task}: installed trl does not accept `max_prompt_length` as a "
                 f"keyword, yet the built config has the attribute — the capability "
                 f"probe and the object disagree"
             )
-        assert args.max_length == 64, (task, args.max_length)
+        assert args.max_length == _MAX_SEQUENCE_LENGTH, (task, args.max_length)
 
-    @pytest.mark.parametrize("task", ("dpo", "orpo"))
+    @pytest.mark.parametrize(
+        ("task", "rows_factory"),
+        (
+            ("bco", _long_pref_rows),
+            ("dpo", _long_pref_rows),
+            ("ipo", _long_pref_rows),
+            ("kto", _long_kto_rows),
+            ("orpo", _long_pref_rows),
+            ("simpo", _long_pref_rows),
+        ),
+    )
     def test_removed_prompt_cap_is_enforced_on_the_effective_batch(
-        self, tmp_path, monkeypatch, task
+        self, tmp_path, monkeypatch, task, rows_factory
     ):
         """TRL 0.29 must not turn ``data.max_length`` into a cosmetic field.
 
         The assertion is on the tensors the model receives, not the config or
         an intermediate column: 0.29 accepted ``max_length=64`` while emitting
-        164/165-token DPO/ORPO batches from this exact 161-token prompt.
+        over-length batches from this exact 161-token prompt.
         """
         from soup_cli.trainer._trl_compat import config_accepts
 
@@ -220,18 +284,77 @@ class TestEveryPreferenceTrainerReachesALiveTrlTrainer:
         monkeypatch.chdir(tmp_path)
         cfg = _cfg(weights, tmp_path / "out", task)
         wrapper = getattr(importlib.import_module(module), cls_name)(cfg, device="cpu")
-        wrapper.setup({"train": _long_pref_rows(8)})
+        wrapper.setup({"train": rows_factory(8)})
 
         if config_accepts(type(wrapper.trainer.args), "max_prompt_length"):
             pytest.skip("installed TRL still enforces its own prompt cap")
 
-        assert len(wrapper.trainer.train_dataset) == 8
+        expected_rows = 8 * _PREPARED_ROW_MULTIPLIER.get(task, 1)
+        assert len(wrapper.trainer.train_dataset) == expected_rows
         batch = next(iter(wrapper.trainer.get_train_dataloader()))
         sequence_keys = [key for key in batch if key.endswith("input_ids")]
         assert sequence_keys, batch.keys()
-        assert all(batch[key].shape[-1] <= 64 for key in sequence_keys), {
+        assert all(batch[key].shape[-1] <= _MAX_SEQUENCE_LENGTH for key in sequence_keys), {
             key: tuple(batch[key].shape) for key in sequence_keys
         }
+
+    @pytest.mark.parametrize(
+        ("task", "rows_factory"),
+        (
+            ("kto", _mixed_kto_rows),
+            ("bco", _mixed_pref_rows),
+        ),
+    )
+    def test_unpaired_completion_content_survives_the_cap(
+        self, tmp_path, monkeypatch, task, rows_factory
+    ):
+        """The cap must keep the *content* of the completion, not just its shape.
+
+        The shape check above passes even when the completion is empty — an
+        over-length prompt makes TRL slice the answer away inside
+        ``completion_input_ids`` before Soup's cap runs, so a row can be exactly
+        ``max_length`` tokens yet train on nothing but a trailing EOS. This
+        asserts, per row, that the unmasked completion tokens are the real
+        leading answer tokens (``answer_input_ids``), including at least one
+        non-EOS token.
+
+        The assertion reads content off ``completion_labels``, never off
+        ``answer_input_ids`` itself: that column is TRL scratch the loss ignores
+        and Soup does not cap, so a generic ``*input_ids <= max_length`` sweep
+        would wrongly flag it on the long-completion rows.
+        """
+        from soup_cli.trainer._trl_compat import config_accepts
+
+        module, cls_name, _ = _WRAPPERS[task]
+        import importlib
+
+        from transformers import AutoTokenizer
+
+        weights = _tiny_llama_dir(tmp_path)
+        _write_tiny_tokenizer(weights)
+        monkeypatch.chdir(tmp_path)
+        eos_id = AutoTokenizer.from_pretrained(weights).eos_token_id
+        cfg = _cfg(weights, tmp_path / "out", task)
+        wrapper = getattr(importlib.import_module(module), cls_name)(cfg, device="cpu")
+        wrapper.setup({"train": rows_factory(8)})
+
+        if config_accepts(type(wrapper.trainer.args), "max_prompt_length"):
+            pytest.skip("installed TRL still enforces its own prompt cap")
+
+        dataset = wrapper.trainer.train_dataset
+        assert "answer_input_ids" in dataset.column_names, dataset.column_names
+        for index, row in enumerate(dataset):
+            completion_ids = list(row["completion_input_ids"])
+            labels = list(row["completion_labels"])
+            assert len(completion_ids) <= _MAX_SEQUENCE_LENGTH, (task, index, len(completion_ids))
+            unmasked = [tok for tok, lab in zip(completion_ids, labels) if lab != _IGNORE_LABEL]
+            non_eos = [tok for tok in unmasked if tok != eos_id]
+            assert non_eos, (
+                f"{task} row {index}: the capped completion is EOS-only — the answer "
+                f"was truncated away before the cap, so the row trains on nothing"
+            )
+            answer = list(row["answer_input_ids"])
+            assert non_eos == answer[: len(non_eos)], (task, index, non_eos, answer)
 
 
 class TestTheCanaryCoversWhatItClaims:
@@ -302,3 +425,59 @@ class TestTheTrlBoundsAreConsistentWithTheCode:
             f"public/experimental resolver — the [train] bounds and the code "
             f"disagree: {broken}"
         )
+
+
+class TestKtoTruncatesThePromptFromTheEnd:
+    """KTOConfig exposes no ``truncation_mode`` field, so KTO caps its prompt
+    with ``DEFAULT_PROMPT_TRUNCATION_MODE``. That must be ``keep_end`` — TRL's
+    own historical direction for KTO/BCO/CPO/ORPO — because a chat template puts
+    the generation header (the assistant turn the completion continues) at the
+    END of the prompt; ``keep_start`` would cut it off.
+    """
+
+    def test_the_kto_cap_keeps_the_prompt_tail_not_its_head(self):
+        from datasets import Dataset
+
+        from soup_cli.trainer._trl_compat import (
+            DEFAULT_PROMPT_TRUNCATION_MODE,
+            enforce_preference_sequence_limit,
+        )
+
+        assert DEFAULT_PROMPT_TRUNCATION_MODE == "keep_end"
+
+        eos_id = 999
+        prompt = list(range(100, 116))  # 16 distinct, order-revealing prompt tokens
+        answer = [200, 201]
+        max_prompt_length = 4
+        max_length = 8
+        dataset = Dataset.from_dict(
+            {
+                "prompt_input_ids": [prompt],
+                "prompt_attention_mask": [[1] * len(prompt)],
+                "answer_input_ids": [answer],
+                "answer_attention_mask": [[1] * len(answer)],
+                "completion_input_ids": [prompt + answer + [eos_id]],
+                "completion_attention_mask": [[1] * (len(prompt) + len(answer) + 1)],
+                "completion_labels": [[_IGNORE_LABEL] * len(prompt) + answer + [eos_id]],
+            }
+        )
+
+        capped = enforce_preference_sequence_limit(
+            dataset,
+            max_length=max_length,
+            max_prompt_length=max_prompt_length,
+            truncation_mode=DEFAULT_PROMPT_TRUNCATION_MODE,
+        )[0]
+
+        tail = prompt[-max_prompt_length:]
+        head = prompt[:max_prompt_length]
+        assert list(capped["prompt_input_ids"]) == tail
+        assert list(capped["prompt_input_ids"]) != head
+        # the completion's masked prompt span must keep the same tail, so the
+        # generation header survives on the sequence the model is trained on
+        masked = [
+            tok
+            for tok, label in zip(capped["completion_input_ids"], capped["completion_labels"])
+            if label == _IGNORE_LABEL
+        ]
+        assert masked == tail
