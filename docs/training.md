@@ -1605,6 +1605,8 @@ training:
   quantization: 4bit
 ```
 
+**Batch size.** KTO needs a per-device `batch_size` of at least 2: TRL's KL term is degenerate at batch 1, so `batch_size: 1` is refused when the config is loaded. `batch_size: auto` never resolves below 2, and `soup local-rl train --train-method kto` writes `batch_size: 2`. Raise `gradient_accumulation_steps` for a larger effective batch.
+
 **KTO data format:**
 ```json
 {"prompt": "What is 2+2?", "completion": "4", "label": true}

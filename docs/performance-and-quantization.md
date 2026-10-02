@@ -654,7 +654,7 @@ prints this advice when it sees you accumulating.
 - `quantization` other than `none` or `4bit` → other formats cannot be streamed into a pooled buffer
 - `backend: unsloth` / `backend: mlx` → streaming replaces the model-load path those backends own
 - `task` other than `sft` / `dpo` / `orpo` / `simpo` / `kto` → named explicitly. `grpo` and `ppo` are refused **permanently**, not pending: generation rollouts re-read every layer once per generated token, which destroys the amortisation streaming depends on
-- `task: kto` with `batch_size: 1` → TRL's KL term is degenerate at batch 1; refused when the config is read rather than minutes later after sharding
+- `task: kto` with `batch_size: 1` → TRL's KL term is degenerate at batch 1; refused when the config is read (this applies to every KTO run, not only to streaming) rather than minutes later after sharding
 - `lora.use_dora` / `lora.use_vera` / `lora.init_strategy` other than `random` → these initialise from the real base weight, which is on the meta device under streaming
 - `moe_expert_quant` → expert quantization runs only in the resident model-construction path and would otherwise be silently ignored
 - `unfrozen_parameters`, `lisa_enabled`, `packing`, `multipack`, `use_fsdp2_compile`, `train_router_only`, `expand_layers` → each independently rewrites or re-freezes the same layers
