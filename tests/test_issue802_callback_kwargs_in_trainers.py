@@ -162,6 +162,23 @@ class TestBuildSoupTrainerCallback:
         assert callback.run_id == "test-run"
         assert callback.output_dir == "/tmp/output"
 
+    def test_builder_passes_eval_gate_to_callback(self) -> None:
+        config = SoupConfig(
+            base="sshleifer/tiny-gpt2",
+            task="sft",
+            data={"train": "train.jsonl", "format": "chatml"},
+            training={
+                "eval_gate": {
+                    "enabled": True,
+                    "suite": "evals/gate.yaml",
+                }
+            },
+        )
+        assert config.training.eval_gate is not None
+
+        callback = build_soup_trainer_callback(MagicMock(), config=config)
+
+        assert callback.eval_gate_config is config.training.eval_gate
 
     def test_unsupported_trainers_do_not_instantiate_callback(self) -> None:
         for filename in UNSUPPORTED_CALLBACK_TRAINERS:

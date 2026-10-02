@@ -1058,6 +1058,54 @@ class TestAutoEvalAfterTraining:
                 "test_run",
             )
 
+    def test_auto_eval_runs_only_on_the_main_process(self, monkeypatch):
+        from soup_cli.commands.train import _run_auto_eval_after_training
+        from soup_cli.config.schema import EvalConfig
+
+        monkeypatch.setenv("RANK", "1")
+        with patch("soup_cli.commands.eval.benchmark") as bench:
+            _run_auto_eval_after_training(
+                EvalConfig(auto_eval=True, benchmarks=["mmlu"]),
+                "out",
+                "run-1",
+            )
+        bench.assert_not_called()
+
+    def test_auto_eval_failure_prints_what_failed(self, capsys):
+        from soup_cli.commands.train import _run_auto_eval_after_training
+        from soup_cli.config.schema import EvalConfig
+
+        with patch(
+            "soup_cli.commands.eval.benchmark",
+            side_effect=RuntimeError("benchmark exploded"),
+        ):
+            _run_auto_eval_after_training(
+                EvalConfig(auto_eval=True, benchmarks=["mmlu"]),
+                "out",
+                "run-1",
+            )
+
+        out = " ".join(_strip_ansi(capsys.readouterr().out).split())
+        assert "Auto-eval benchmark failed" in out
+        assert "benchmark exploded" in out
+
+    def test_custom_eval_uses_the_saved_output_and_its_failure_does_not_raise(self):
+        from soup_cli.commands.train import _run_auto_eval_after_training
+        from soup_cli.config.schema import EvalConfig
+
+        with patch(
+            "soup_cli.commands.eval.custom",
+            side_effect=RuntimeError("custom exploded"),
+        ) as custom:
+            _run_auto_eval_after_training(
+                EvalConfig(auto_eval=True, custom_tasks="tasks.jsonl"),
+                "/tmp/saved-adapter",
+                "run-1",
+            )
+
+        assert custom.call_args.kwargs["model"] == "/tmp/saved-adapter"
+        assert custom.call_args.kwargs["tasks"] == "tasks.jsonl"
+
     def test_auto_eval_runs_on_the_adapter_this_run_saved(
         self, tmp_path, monkeypatch
     ):

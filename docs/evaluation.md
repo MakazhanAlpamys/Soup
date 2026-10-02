@@ -810,6 +810,9 @@ remain valid.
 ```
 
 ### Auto-Eval Config (soup.yaml)
+```bash
+pip install "soup-cli[eval]"
+```
 
 ```yaml
 eval:
