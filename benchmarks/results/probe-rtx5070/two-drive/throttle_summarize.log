@@ -1,0 +1,4 @@
+sequence 'throttle' in C:\Users\user\projects\Soup-sustain\benchmarks\results\probe-rtx5070\two-drive: outcome stopped: throttle_r0_c void twice; no verdict
+no valid arm on record
+  row 1 validity: fires: no valid arm: ['r0 c', 'r0 d', 'r0 both', 'r1 both', 'r1 d', 'r1 c']; protocol: stopped: throttle_r0_c void twice; no verdict
+  VERDICT  C: NO VERDICT   D: NO VERDICT

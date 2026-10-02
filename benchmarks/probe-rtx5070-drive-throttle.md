@@ -26,11 +26,21 @@ and foreign-reader check from two_drive_sustained.py, unchanged.
 
 # Probe - does either drive slow down by itself under sustained reading? (follows R4)
 
-**Status: rule committed before the run; results pending.** No arm has run. The reader and driver
-have been exercised only on synthetic arms (`--selftest`) and in two dry runs that read no cache
-file: 2026-10-01 (pre-arm check not met, another session held 4746 MiB of GPU memory) and
-2026-10-02 (not met, the laptop was on battery at 74%). The only look at the cache folders was the
-listing of §1 (names and sizes).
+**Status: NO VERDICT (§2 row 1), 2026-10-02.** The rule (§2) was committed in `3a324993`,
+before the run. The sequence stopped in its first position. C-ALONE round 0 was void twice: Windows
+Search's indexer (`SearchIndexer.exe`) read 2.37 GB and then 1.82 GB during the arm, over §4's 1 GB
+foreign-reader bar. No D-ALONE or BOTH arm ran (§5.1, §6).
+
+Descriptive only, from the two void attempts (§5.4):
+
+- read from rest for 300 s, C: had no dip;
+- read again straight after, C: fell to about 2.6 GB/s for 11-12 s, three times, about once a
+  minute. Each drop is too short to be an episode.
+
+Before the run, the reader and driver had been exercised only on synthetic arms (`--selftest`) and
+in two dry runs that read no cache file. On 2026-10-01 the pre-arm check was not met (another
+session held 4746 MiB of GPU memory). On 2026-10-02 at 14:30 it was not met either (the laptop was
+on battery at 74%).
 
 ---
 
@@ -373,8 +383,237 @@ folder and lists no cache folder; it stamps once and prints the six reader comma
 
 ## 5. Results
 
-Pending. No arm has run.
+One sequence ran on 2026-10-02, from worktree HEAD `3a324993`. The driver's `worktree_state` found
+`src/` and `benchmarks/harness` clean. It stopped in its first position. Every number below is
+quoted from the committed `throttle_*` files in `results/probe-rtx5070/two-drive/`. Times are
+local (UTC+5).
+
+### 5.1 How it ran, and how it stopped
+
+- **Pre-flight, 21:11-21:12.**
+  - `soup_cli.__file__` resolved to `Soup-sustain\src\soup_cli\__init__.py`.
+  - `--selftest`: "all assertions passed".
+  - `--check-files`: C: 84 files, 82 spans of 400 MiB (34.4 GB); D: 41 files, 40 spans (16.8 GB);
+    both "ok".
+  - `--dry-run` at 21:12:05, into a scratch folder: pre-arm check met. AC on, battery 45% and
+    charging, commit headroom 26.94 GiB, GPU 0 MiB with no compute apps, 5 Python processes.
+- **The run.** `--run-prefix throttle` was invoked at 21:12:32 as one background job with a
+  2-hour limit (7,200,000 ms). Its stdout is `throttle_driver_stdout.log`.
+- **Position 0, C-ALONE round 0, attempt 1.** The process ran 21:12:37-21:17:40 and read for
+  300.0 s from 21:12:40. **Void**: `foreign reader: SearchIndexer.exe(26528) 2.37 GB`. The driver
+  renamed its files `throttle_r0_c_void.json` / `.log`.
+- **Attempt 2, the re-run in the same position.** The pre-arm check held at once, and the process
+  ran 21:17:43-21:22:48, reading for 300.1 s from 21:17:46. No rest came before it; §1's 30 s rest
+  comes before every *position* but the first. **Void**: `foreign reader: SearchIndexer.exe(26528)
+  1.82 GB`. Its files are `throttle_r0_c_void2.json` / `.log`.
+- **The stop.** A second void in one position stops the sequence (§4). The driver recorded
+  `stopped: throttle_r0_c void twice; no verdict`, with all six positions not run, and exited with
+  code 4 at 21:22:49. No D-ALONE or BOTH arm ran.
+- **No second sequence.** A re-run under a new `--run-prefix` was not started. The brief for this
+  window said to stop and record when no valid sequence came out of §4's own handling.
+  `--summarize --run-prefix throttle` was run at 21:24 (`throttle_summarize.log`).
+
+### 5.2 The two attempts (both void)
+
+Both attempts read the one-root cache on C: (`pool_spans` 82, `pool_bytes` 34,393,292,800).
+They passed every instrument condition of row 1:
+
+- `pinned` True;
+- only C: read;
+- byte check OK;
+- pool at least 16 GB;
+- at least 285 s of reading;
+- a best 5-s bin of at least 3.5 GB/s;
+- PDH missing in 0 of 60 bins.
+
+They failed only the environment condition on foreign readers.
+
+| attempt | read from | read s | spans | passes | bytes | own mean GB/s | PDH mean GB/s | own 5-s bins min-max (median) | PDH 5-s bins min-max | dip bins | episodes |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| 1 (`_void`) | 21:12:40 | 300.0 | 2,786 | 33.98 | 1,168.5 GB | 3.895 | 3.894 | 3.645-4.042 (3.896) | 3.518-4.058 | 0 | 0 |
+| 2 (`_void2`) | 21:17:46 | 300.1 | 2,781 | 33.91 | 1,166.4 GB | 3.888 | 3.877 | 2.559-4.272 (4.039) | 2.570-4.222 | 6 | 0 |
+
+At 1 s:
+
+- attempt 1: own 3.28-4.41 GB/s (median 3.88), PDH 3.31-4.56.
+- attempt 2: own 2.16-4.61 (median 4.00), PDH 0.42-4.75.
+- The two lowest PDH seconds are each attempt's first sample (3.31 and 0.42 at second 0, against
+  3.67 and 3.81 by the reader's own clock).
+
+### 5.3 Every 5-s bin, C: (GB/s, from the arm's first read)
+
+Attempt 1, the reader's own rate:
+3.645, 3.868, 3.849, 3.894, 3.929, 3.788, 4.002, 3.850, 4.020, 3.909, 3.935, 3.883, 3.864, 4.019,
+3.809, 4.015, 3.802, 3.945, 3.895, 3.845, 3.928, 3.803, 3.997, 3.794, 3.939, 3.926, 3.874, 3.882,
+3.830, 3.952, 3.809, 3.955, 3.932, 3.728, 3.913, 3.798, 3.918, 3.854, 3.964, 3.898, 3.910, 3.928,
+3.863, 3.929, 3.807, 3.988, 3.885, 3.960, 3.839, 3.823, 3.969, 3.787, 4.008, 3.826, 3.991, 3.892,
+3.916, 4.042, 3.888, 3.984
+
+Attempt 1, PDH:
+3.518, 3.902, 3.729, 3.983, 3.909, 3.859, 3.986, 3.823, 4.058, 3.824, 3.990, 3.898, 3.844, 4.036,
+3.819, 4.010, 3.794, 3.957, 3.902, 3.863, 3.917, 3.814, 3.975, 3.807, 3.895, 3.980, 3.896, 3.813,
+3.914, 3.897, 3.843, 3.948, 3.931, 3.698, 3.952, 3.818, 3.895, 3.862, 3.940, 3.853, 3.994, 3.925,
+3.844, 3.942, 3.824, 3.918, 3.888, 3.997, 3.856, 3.812, 3.958, 3.840, 3.953, 3.834, 4.027, 3.828,
+3.925, 4.035, 3.927, 3.963
+
+Attempt 2, the reader's own rate (the bins below 3.0 in bold):
+3.868, 3.982, 4.002, 3.982, 4.184, 4.073, 4.155, 4.125, 3.776, 4.053, 4.017, 4.130, 4.062, 4.077,
+4.118, 3.963, 4.164, 3.968, 4.056, 4.135, 3.898, 4.116, 3.975, 4.123, 4.125, 3.941, 4.081, 3.911,
+3.773, **2.559, 2.657**, 3.937, 4.187, 4.033, 4.081, 4.272, 3.959, 4.091, 3.988, 4.191, 4.070,
+**2.648, 2.623**, 3.516, 3.914, 4.209, 4.144, 4.012, 4.079, 4.050, 4.019, 4.048, 3.441, **2.623,
+2.638**, 4.040, 4.225, 4.037, 3.955, 4.149
+
+Attempt 2, PDH:
+3.186, 3.973, 3.938, 4.017, 4.195, 3.994, 4.212, 4.135, 3.891, 3.908, 4.050, 4.121, 4.074, 4.067,
+4.134, 3.957, 4.133, 3.931, 4.117, 4.129, 3.861, 4.172, 3.952, 4.159, 4.102, 3.906, 4.073, 3.901,
+3.880, **2.570, 2.658**, 3.895, 4.171, 4.004, 4.162, 4.143, 4.081, 4.030, 3.974, 4.222, 4.110,
+**2.762, 2.592**, 3.423, 3.949, 4.156, 4.110, 4.071, 4.060, 4.029, 4.114, 3.912, 3.747, **2.637,
+2.604**, 3.916, 4.203, 4.113, 3.892, 4.139
+
+The 1-s values of both instruments are in `throttle_driver.json` (`runs[*].analysis.drives.c`).
+
+### 5.4 Attempt 2's three short drops (descriptive; they set no row)
+
+Attempt 2 has six dip bins, in three pairs: 145-155 s, 205-215 s and 265-275 s. Each pair is two
+bins (10 s). An episode needs three (15 s), so the rule finds none.
+
+| drop | 1-s seconds below 3.0 GB/s (own) | local | own 1-s min / mean | C: read continuously when it began | CPU in its 5-s bins | C: writes in its 5-s bins |
+|---|---|---|---|---|---|---|
+| 1 | 144-154 s (11 s) | 21:20:10-21:20:21 | 2.16 / 2.609 | 450.8 s | 3.2-19.1% | 0.0-11.9 MB/s |
+| 2 | 205-215 s (11 s) | 21:21:11-21:21:22 | 2.56 / 2.638 | 511.8 s | 0.0-14.6% | 0.2-6.4 MB/s |
+| 3 | 263-274 s (12 s) | 21:22:09-21:22:21 | 2.53 / 2.634 | 569.8 s | 2.6-18.0% | 0.0-9.2 MB/s |
+
+- **Spacing.** The starts are 61 and 58 s apart.
+- **Continuous reading.** C: was read from 21:12:40 (attempt 1's first read) with one gap of
+  6.8 s, between attempt 1's last read and attempt 2's first. That gap is under the rule's 120 s,
+  so the reading counts as continuous.
+- **Other seconds.** A single second below 3.0 GB/s also fell at 44 s (2.93, 21:18:30), and
+  attempt 1's lowest second was 3.28 GB/s at 166 s. Attempt 1, read from rest, had no bin below
+  3.645 GB/s.
+- **Against the sustained record, as numbers only.** There each stretch was 25-30 s long, 69-70 s
+  apart, at 2.40-2.62 GB/s, on both drives at once, in STRIPED steps. Here, on C: read alone with no
+  GPU work, each drop is 11-12 s long, about 60 s apart, at 2.53-2.70 GB/s (one second at 2.16).
+
+### 5.5 Box state, the during-arm samples and the per-process capture
+
+**Power, suspend and commit.**
+
+- **AC** at every 2-s sample of both attempts.
+- **The battery charged** from 46% to 54% (attempt 1) and from 54% to 61% (attempt 2).
+- **No suspend.** The largest gap between power samples was 2.019 s in both attempts.
+- **Commit headroom** was at least 22.473 GiB (attempt 1) and 24.426 GiB (attempt 2) at every
+  sample.
+
+**The stamps.** Every stamp read:
+
+- GPU at 0 MiB with no compute apps;
+- ASPM AC index 2;
+- `soup_cli.__file__` under `Soup-sustain\src`.
+
+The Python process count read 5 before attempt 1, 7 after it and before attempt 2, and 6 after
+attempt 2. Which processes those were is not captured.
+
+**PDH over each whole attempt.**
+
+| attempt | C: read GB/s mean / max | D: read GB/s mean / max | C: write MB/s mean / max | CPU % mean / max | pages/s mean |
+|---|---|---|---|---|---|
+| 1 | 3.851 / 4.563 | 0.000 / 0.000 | 2.15 / 32.80 | 10.1 / 26.8 | 181 |
+| 2 | 3.842 / 4.752 | 0.000 / 0.000 | 1.92 / 26.55 | 8.6 / 30.6 | 100 |
+
+**GPU (10-s `nvidia-smi`).** This probe runs no compute; the reader holds only a CUDA context.
+
+- attempt 1: SM 180-1417 MHz, 44-48 °C, 3.5-12.1 W;
+- attempt 2: SM 0-2557 MHz, 46-49 °C, 3.6-12.8 W;
+- throttle reasons `0x0000000000000004` or `0x0000000000000400` in every sample.
+
+**Top readers, from the after stamps.** No capture failed. Each list is read / write bytes:
+
+- **Attempt 1:**
+  - `SearchIndexer.exe` (26528), 2,374.6 / 202.4 MB;
+  - `codex.exe` (9972), 237.9 / 50.3 MB;
+  - `Code.exe` (2748), 68.9 / 4.2 MB;
+  - `svchost.exe` (16716), 66.3 / 0.0 MB;
+  - `ChatGPT.exe` (25148), 49.5 / 0.7 MB;
+  - `audiodg.exe` (36876, new), 36.6 / 0.0 MB;
+  - `NVDisplay.Container.exe` (3872), 26.4 / 26.4 MB;
+  - `svchost.exe` (3984), 13.3 / 1.5 MB.
+- **Attempt 2:**
+  - `SearchIndexer.exe` (26528), 1,821.5 / 155.3 MB;
+  - `NVDisplay.Container.exe` (3872), 246.7 / 286.6 MB;
+  - `codex.exe` (9972), 156.7 / 30.5 MB;
+  - `svchost.exe` (16716), 122.9 / 0.0 MB;
+  - `svchost.exe` (21332), 63.0 / 27.4 MB;
+  - `MoUsoCoreWorker.exe` (23788, new), 47.5 / 2.6 MB;
+  - `Code.exe` (2748), 15.3 / 0.8 MB;
+  - `svchost.exe` (3984), 11.5 / 3.3 MB.
+
+The full lists are in `throttle_box_state.log`. The capture names survivors only.
+
+**The indexer, beyond the capture.** These are read-only observations, not part of any condition.
+
+- `SearchIndexer.exe` (26528) had been running since 2026-10-01 18:11:55. At 21:18:08 its
+  cumulative read count was 41.9 GB.
+- Over 21:18:08-21:18:18, inside attempt 2, it read 0.1 MB, so its reads came in bursts.
+- Its bytes are not visible in the volume counters. In attempt 1, C: PDH mean minus the reader's
+  own mean is -0.001 GB/s, where 2.37 GB over 300 s would add 0.008 GB/s. In attempt 2 it is
+  -0.011 GB/s. D: read 0.000 throughout.
+- So what the per-process counter charged to the indexer did not appear as extra disk reads on C:
+  or D: at this precision. It may have been served from the cache, or not been disk I/O at all;
+  that is not established. The bar counts process read bytes, and it fired as written.
+
+**System log, 21:10-21:23.** It holds no disk, storage, NTFS, thermal, power-source or sleep
+event.
+
+- One Kernel-Power 566 (a session unlock) at 21:18:20, inside attempt 2.
+- One DCOM permission warning at 21:13:53, inside attempt 1.
+- Windows Update activity during and just after attempt 2: the IsolationSession service's start
+  type changed at 21:20:27 and 21:20:57, update downloads started at 21:21:21 (twice) and 21:21:55,
+  a Store app update (WhatsApp) failed with 0x80073D02 at 21:21:35-21:21:44, and the Photos app
+  update installed at 21:23:06-21:23:07, after attempt 2 ended.
+- None of these falls at the start of a drop: they began at 21:20:10, 21:21:11 and 21:22:09.
+
+**Activity of this probe's operator during the attempts, disclosed.** None of it is in either
+capture.
+
+- During attempt 1, a read-only analysis script (one short Python process) read about 0.9 MB of
+  the sustained record's committed JSON files.
+- Over 21:18:08-21:18:18, during attempt 2, one PowerShell query read the indexer's counters.
+- A monitor read the driver's stdout log every 30 s.
+
+Also running, from other sessions: an idle watcher script, a merge-polling loop and a short
+GitHub-posting script (network only), and two editor language servers.
+
+### 5.6 Anomalies, as measured
+
+1. **Both voids came from Windows Search's indexer**, which read 2.37 GB and 1.82 GB in bursts
+   during the two attempts. Those reads are not visible as disk reads on C: or D: (§5.5). No such
+   reader appeared in the sustained record's arms, whose largest was 834.7 MB (`chrome.exe`, in
+   the build).
+2. **Attempt 2's three 11-12 s drops on C: alone**, at 2.53-2.70 GB/s and about 60 s apart. They
+   began after 7.5 minutes of continuous reading. The rested attempt 1 had none. They are too short
+   to be episodes, and both arms are void (§5.4).
+3. **Outside its drops, attempt 2 read faster than attempt 1**: median 5-s bin 4.039 against
+   3.896 GB/s.
 
 ## 6. Verdict
 
-Pending.
+**NO VERDICT, C: and D: (row 1).** The first position was void twice, and the sequence stopped
+there.
+
+| row | inputs | result |
+|---|---|---|
+| 1: a validity condition fails, a position has no valid arm, or the driver did not finish | C-ALONE round 0 was void twice: the foreign-reader condition, `SearchIndexer.exe` (26528) at 2.37 GB and 1.82 GB against the 1 GB bar. The driver stopped (`throttle_r0_c void twice; no verdict`). `--summarize`: "no valid arm: ['r0 c', 'r0 d', 'r0 both', 'r1 both', 'r1 d', 'r1 c']; protocol: stopped: throttle_r0_c void twice; no verdict" | **fires: NO VERDICT** |
+| 2-5 | none | not reached |
+
+**What the void attempts show. This is NOT a verdict and cannot stand in for one.**
+
+- Read from rest for 300 s, C: had no dip.
+- Read again straight after, C: dropped to about 2.6 GB/s for 11-12 s, three times, about once a
+  minute. The drops began 7.5 minutes into the continuous reading.
+- Under the rule those drops are not episodes (two bins, not three).
+- D: was never read alone or with C:.
+
+A verdict needs a complete sequence: a new `--run-prefix` (`throttle2`), on AC with the lid open,
+and the foreign-reader condition met in every arm. Whether that means pausing Windows Search or
+excluding the cache folders from it during the run is a change to the box, not to the rule. It is
+the owner's call.
