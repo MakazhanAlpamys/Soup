@@ -81,3 +81,5 @@ h1 ratio 3.0: 130 s
 h1 ratio 5.0: 132 s
 gate-1265 replay: 0 of 50 cells differ from the recorded counts
 wrote benchmarks/results/gate-1418-ab-cs-accept/h1-part3.json
+== check, after the #1418 review moved the shipped rule to level alpha (cs-alpha); counts unchanged, no re-sweep
+self-check: max rel diff 0.0e+00 over 45 points vs _nig_confidence_half_width; 0 of 32 msprt_step runs differ
