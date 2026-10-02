@@ -6,6 +6,7 @@ fp32. ``keep_trainable_dtype_on_resume`` restores the pre-resume dtypes.
 """
 from __future__ import annotations
 
+import contextlib
 from types import SimpleNamespace
 
 import pytest
@@ -34,6 +35,70 @@ def _trainer(model, calls):
     return trainer
 
 
+class _FakeTrainer:
+    """Mirrors transformers.Trainer: train() reloads through _load_from_checkpoint."""
+
+    def __init__(self, model):
+        self.model = model
+        self.args = SimpleNamespace(fp16=False, bf16=True, should_save=True)
+        self.state = SimpleNamespace(log_history=[], global_step=4)
+        self.dtypes_in_train = None
+
+    def _load_from_checkpoint(self, resume_from_checkpoint, model=None):
+        for param in self.model.parameters():  # what load_adapter's autocast does
+            param.data = param.data.to(torch.float32)
+
+    def train(self, *, resume_from_checkpoint):
+        if resume_from_checkpoint is not None:
+            self._load_from_checkpoint(resume_from_checkpoint)
+        self.dtypes_in_train = {p.dtype for p in self.model.parameters() if p.requires_grad}
+
+    def save_model(self, output):
+        pass
+
+
+def _wrapper(monkeypatch, tmp_path, trainer):
+    from soup_cli.config.schema import SoupConfig
+    from soup_cli.trainer.sft import SFTTrainerWrapper
+    from soup_cli.utils import ebft_gdpo, peft_wiring
+
+    for name in (
+        "attach_loraplus_optimizer",
+        "attach_lorafa_optimizer",
+        "attach_relora_callback",
+        "attach_lisa_callback",
+        "attach_curriculum_callback",
+        "attach_plugin_callback",
+    ):
+        monkeypatch.setattr(peft_wiring, name, lambda *args, **kwargs: None)
+    monkeypatch.setattr(ebft_gdpo, "attach_ebft_compute_loss", lambda *args: None)
+
+    wrapper = object.__new__(SFTTrainerWrapper)
+    wrapper.config = SoupConfig(
+        base="org/model", task="sft", data={"train": "data.jsonl"}, training={}
+    )
+    wrapper._quest_metadata = None
+    wrapper._output_dir = str(tmp_path)
+    wrapper.trainer = trainer
+    wrapper.tokenizer = SimpleNamespace(save_pretrained=lambda output: None)
+    wrapper._training_context = lambda context: contextlib.ExitStack()
+    wrapper._report_rewind = lambda: None
+    return wrapper
+
+
+def test_sft_train_keeps_the_adapter_dtype_across_a_resume(monkeypatch, tmp_path):
+    trainer = _FakeTrainer(_model())
+    _wrapper(monkeypatch, tmp_path, trainer).train(resume_from_checkpoint="ckpt")
+    assert trainer.dtypes_in_train == {torch.bfloat16}
+
+
+def test_sft_train_without_resume_leaves_the_loader_alone(monkeypatch, tmp_path):
+    trainer = _FakeTrainer(_model())
+    _wrapper(monkeypatch, tmp_path, trainer).train(resume_from_checkpoint=None)
+    assert "_load_from_checkpoint" not in vars(trainer)
+    assert trainer.dtypes_in_train == {torch.bfloat16}
+
+
 def test_trainable_dtype_restored_after_load():
     calls = []
     trainer = _trainer(_model(), calls)
@@ -44,17 +109,28 @@ def test_trainable_dtype_restored_after_load():
     assert trainer.model[1].bias.dtype == torch.bfloat16
 
 
-def test_frozen_params_left_to_the_loader():
-    trainer = _trainer(_model(), [])
+def test_frozen_params_really_keep_the_loader_dtype():
+    model = _model()
+    model[0].to(torch.bfloat16)  # frozen starts bf16, the loader makes it fp32
+    trainer = _FakeTrainer(model)
     keep_trainable_dtype_on_resume(trainer)
     trainer._load_from_checkpoint("ckpt")
-    assert trainer.model[0].weight.dtype == torch.float32
+    assert model[0].weight.dtype == torch.float32
+    assert model[1].weight.dtype == torch.bfloat16
 
 
-def test_explicit_model_argument_is_restored():
-    trainer = _trainer(_model(), [])
+def test_explicit_model_argument_is_the_one_restored():
+    trainer = _FakeTrainer(_model())
+    other = _model()  # a different module with the same parameter names
+    original = trainer._load_from_checkpoint
+
+    def load(resume_from_checkpoint, model=None):
+        original(resume_from_checkpoint)
+        for param in model.parameters():
+            param.data = param.data.to(torch.float32)
+
+    trainer._load_from_checkpoint = load
     keep_trainable_dtype_on_resume(trainer)
-    other = trainer.model
     trainer._load_from_checkpoint("ckpt", other)
     assert other[1].weight.dtype == torch.bfloat16
 
