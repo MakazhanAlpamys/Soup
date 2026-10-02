@@ -90,7 +90,7 @@ class _DeterministicBatchModel:
 class _CharTokenizer:
     """Small tokenizer whose generated answer can depend on prompt content."""
 
-    chat_template = None
+    chat_template = "chars"
     pad_token_id = 0
     eos_token_id = 2
     padding_side = "right"
