@@ -7,7 +7,8 @@
 ## All Commands
 
 ```
-soup init [--template chat|code|...|audio]       Create config
+soup init [--template chat|code|...|audio] [--wizard]  Create config or launch wizard
+soup wizard [--output soup.yaml]                  Launch interactive fine-tuning setup wizard
 soup init --template hipaa|soc2|eu-ai-act|sr-11-7  Compliance-shaped starting config + the commands for that regime (v0.71.35)
 soup autopilot --model <id> --data d.jsonl --goal <g>  Zero-config: pick task/quant/LR/epochs from data + model + goal
 soup advise <data> --goal "..."               Pre-flight decision: PROMPT_ENG / RAG / SFT / DPO / GRPO — run BEFORE spending GPU hours
