@@ -89,3 +89,15 @@ def test_autopilot_yaml_for_a_gptq_base_reloads(tmp_path):
     reloaded = load_config(out)
     assert reloaded.training.quantization == "gptq"
     assert reloaded.training.lora.use_dora is False
+
+
+@pytest.mark.parametrize("quantization", ["gptq", "awq"])
+def test_the_mlx_backend_keeps_its_own_refusal(quantization):
+    """mlx refuses these formats outright; sending the user to `use_dora: false`
+    first would only lead them to that second refusal."""
+    yaml = _yaml(quantization, use_dora=True).replace("task: sft\n", "task: sft\nbackend: mlx\n")
+    with pytest.raises(ValueError) as excinfo:
+        load_config_from_string(yaml)
+    message = str(excinfo.value)
+    assert "not supported on the mlx backend" in message
+    assert "use_dora: false" not in message

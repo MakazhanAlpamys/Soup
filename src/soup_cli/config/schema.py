@@ -5125,6 +5125,8 @@ class SoupConfig(BaseModel):
         """
         from soup_cli.utils.quant_menu import DORA_UNSUPPORTED_FORMATS
 
+        if self.backend == "mlx":
+            return self  # mlx refuses these formats itself, DoRA or not
         quant = self.training.quantization
         if self.training.lora.use_dora and quant in DORA_UNSUPPORTED_FORMATS:
             raise ValueError(

@@ -391,7 +391,8 @@ training:
     use_dora: true  # Enable DoRA
 ```
 
-Works with all training tasks and backends.
+Works with all training tasks on the transformers backend (see the note on
+quantized bases below).
 
 > **Not on GPTQ / AWQ / AQLM / EETQ bases.** peft has no DoRA variant for those
 > layers and raises when the adapter is attached, so `use_dora: true` with
