@@ -26,6 +26,33 @@ def _detect_num_layers(model: Any) -> int:
     return max_layer + 1 if max_layer >= 0 else 0
 
 
+def freeze_layer_cutoff(
+    model: Any,
+    freeze_layers: Optional[int] = None,
+    freeze_ratio: Optional[float] = None,
+) -> Optional[tuple[int, int]]:
+    """Resolve a freeze plan to ``(cutoff, total_layers)``, or ``None``.
+
+    Shared by :func:`freeze_model_layers` (which acts on it) and callers that
+    need the same boundary applied elsewhere in the model-build pipeline
+    (#1432: threading it into the LoRA adapter's ``layers_to_transform`` so
+    ``get_peft_model`` does not re-attach a trainable adapter to a layer this
+    just froze). Layers ``< cutoff`` are the frozen ones. ``None`` means
+    "no plan" or "no numbered layers detected", the caller's own no-op case,
+    not a plan with an empty range.
+    """
+    if freeze_layers is None and freeze_ratio is None:
+        return None
+    total_layers = _detect_num_layers(model)
+    if total_layers == 0:
+        return None
+    if freeze_layers is not None:
+        cutoff = min(freeze_layers, total_layers)
+    else:
+        cutoff = int(total_layers * freeze_ratio)
+    return cutoff, total_layers
+
+
 def freeze_model_layers(
     model: Any,
     freeze_layers: Optional[int] = None,
@@ -41,23 +68,16 @@ def freeze_model_layers(
     Returns:
         Number of parameters frozen.
     """
-    if freeze_layers is None and freeze_ratio is None:
+    plan = freeze_layer_cutoff(model, freeze_layers=freeze_layers, freeze_ratio=freeze_ratio)
+    if plan is None:
+        if freeze_layers is not None or freeze_ratio is not None:
+            logger.warning(
+                "freeze_model_layers: could not detect numbered layers in model "
+                "parameter names. Freezing has no effect. Check that your model "
+                "uses 'layers.N.' or 'h.N.' naming."
+            )
         return 0
-
-    total_layers = _detect_num_layers(model)
-    if total_layers == 0:
-        logger.warning(
-            "freeze_model_layers: could not detect numbered layers in model "
-            "parameter names. Freezing has no effect. Check that your model "
-            "uses 'layers.N.' or 'h.N.' naming."
-        )
-        return 0
-
-    # Determine cutoff
-    if freeze_layers is not None:
-        cutoff = min(freeze_layers, total_layers)
-    else:
-        cutoff = int(total_layers * freeze_ratio)
+    cutoff, _total_layers = plan
 
     # Freeze parameters in layers below cutoff
     frozen_count = 0

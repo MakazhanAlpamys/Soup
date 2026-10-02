@@ -1709,8 +1709,10 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             )
 
         # Freeze training — freeze bottom layers before LoRA
+        # #1432: cutoff re-read below to scope the LoRA adapter to it too.
+        lora_layers_to_transform = None
         if tcfg.freeze_layers is not None or tcfg.freeze_ratio is not None:
-            from soup_cli.utils.freeze import freeze_model_layers
+            from soup_cli.utils.freeze import freeze_layer_cutoff, freeze_model_layers
 
             frozen = freeze_model_layers(
                 self.model,
@@ -1720,6 +1722,20 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             console.print(
                 f"[green]Freeze training:[/] {frozen} parameters frozen"
             )
+            plan = freeze_layer_cutoff(
+                self.model,
+                freeze_layers=tcfg.freeze_layers,
+                freeze_ratio=tcfg.freeze_ratio,
+            )
+            if plan is not None:
+                cutoff, total_layers = plan
+                # #1432: a zero cutoff freezes nothing, but peft still reads
+                # any layers_to_transform list as "restrict to these numbered
+                # layers only", which silently drops a target outside a
+                # numbered layer (embed_tokens, lm_head) even though nothing
+                # was frozen. Leave it unset rather than pass a no-op range.
+                if cutoff:
+                    lora_layers_to_transform = list(range(cutoff, total_layers))
 
         # v0.53.4 #83 — LLaMA Pro block expansion. Run BEFORE LoRA so PEFT's
         # target-module matcher sees the new blocks. Centralised in
@@ -1730,7 +1746,11 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             apply_block_expansion_if_configured,
         )
 
-        apply_block_expansion_if_configured(self.model, tcfg, console)
+        post_expansion_total = apply_block_expansion_if_configured(self.model, tcfg, console)
+        if lora_layers_to_transform is not None:
+            lora_layers_to_transform = list(
+                range(cutoff, max(total_layers, int(post_expansion_total)))
+            )
 
         # v0.71.20 #136 — MoE expert quant. Applied BEFORE get_peft_model so
         # PEFT attaches its adapters to the quantized base (QLoRA-on-experts)
@@ -1829,11 +1849,83 @@ class SFTTrainerWrapper(StreamingSetupMixin):
                 self.model, tcfg, target_modules, console
             )
 
+            # #1432: an empty range means every layer is frozen, refuse
+            # rather than silently build an adapter matching nothing.
+            if lora_layers_to_transform is not None and not lora_layers_to_transform:
+                raise ValueError(
+                    "training.freeze_layers / training.freeze_ratio freezes "
+                    "every decoder layer, leaving no layer for the LoRA "
+                    "adapter to attach to. Reduce freeze_layers/freeze_ratio, "
+                    "or set training.lora.r=0 for full fine-tuning of the "
+                    "(empty) unfrozen range instead."
+                )
+
+            # #1432: peft only applies layers_to_transform when
+            # target_modules is a list, never a regex string, so refuse
+            # rather than silently ship the same bug for that shape.
+            if lora_layers_to_transform is not None and isinstance(target_modules, str):
+                raise ValueError(
+                    "training.freeze_layers / training.freeze_ratio cannot "
+                    "currently be combined with a regex "
+                    f"training.lora.target_modules ({target_modules!r}): peft "
+                    "only restricts layers_to_transform when target_modules "
+                    "is a list of module-name suffixes. Give an explicit "
+                    "training.lora.target_modules list (the module names are "
+                    "in model.named_modules()) instead of a regex, or drop "
+                    "freeze_layers/freeze_ratio."
+                )
+
+            # #1432: peft only applies layers_to_transform to a list target
+            # that lives inside a numbered decoder layer. embed_tokens,
+            # lm_head, or any other target outside the stack silently gets
+            # no adapter otherwise. Refuse by name rather than drop it.
+            if lora_layers_to_transform is not None and isinstance(target_modules, list):
+                from soup_cli.utils.peft_wiring import find_layer_unscoped_targets
+
+                unscoped = find_layer_unscoped_targets(self.model, target_modules)
+                if unscoped:
+                    raise ValueError(
+                        "training.freeze_layers / training.freeze_ratio cannot "
+                        "currently be combined with training.lora.target_modules "
+                        f"naming {unscoped!r}: peft's layers_to_transform only "
+                        "restricts targets that live inside a numbered decoder "
+                        f"layer, so {unscoped!r} would silently get no LoRA "
+                        "adapter. Drop freeze_layers/freeze_ratio, or remove "
+                        f"{unscoped!r} from training.lora.target_modules."
+                    )
+
+            # #1432: target_parameters matching is a separate, layer-unaware
+            # peft path with no layers_to_transform check, same refusal.
+            if lora_layers_to_transform is not None and target_parameters:
+                raise ValueError(
+                    "training.freeze_layers / training.freeze_ratio cannot "
+                    "currently be combined with training.lora.target_parameters "
+                    "(per-parameter LoRA, e.g. fused MoE experts): peft's "
+                    "target_parameters matching does not apply "
+                    "layers_to_transform. Drop freeze_layers/freeze_ratio, or "
+                    "drop target_parameters and use training.lora.target_modules "
+                    "instead."
+                )
+
+            # #1432: VeRA is a separate peft tuner (build_peft_config_spec's
+            # own branch, not the LoraConfig path layers_to_transform is
+            # wired into below), so refuse rather than silently reproduce
+            # the same bug for it.
+            if lora_layers_to_transform is not None and getattr(tcfg.lora, "use_vera", False):
+                raise ValueError(
+                    "training.freeze_layers / training.freeze_ratio cannot "
+                    "currently be combined with training.lora.use_vera: the "
+                    "freeze plan is not wired into the VeRA config path. Drop "
+                    "freeze_layers/freeze_ratio, or drop use_vera and use "
+                    "ordinary LoRA instead."
+                )
+
             lora_config = build_lora_config(
                 tcfg.lora,
                 target_modules=target_modules,
                 target_parameters=target_parameters,
                 task_type=TaskType.CAUSAL_LM,
+                layers_to_transform=lora_layers_to_transform,
             )
             # v0.39.0 Part D / v0.40.6 #67 — surgical PEFT patches via shared helpers.
             from soup_cli.utils.peft_wiring import (
