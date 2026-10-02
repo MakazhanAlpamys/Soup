@@ -703,14 +703,14 @@ soup eval judge --target responses.jsonl --model llama3.1 --provider ollama
 # A row whose judge call keeps failing (429 after the retries, a timeout, a reply with no
 # choices) is skipped and counted; the other rows are still scored, shown and saved (#1447).
 # A judge that is down stops the run: once 3 requests in a row have spent their retries
-# unanswered, it is not asked again for 60 s. `soup eval judge` prints one message naming the judge
-# URL and how many items were not judged, shows the scores from before the outage without
-# saving them, and exits 1, so a long run costs 9 s of backoff, not 3 s per row. One reply
-# resets the count, and a 4xx or an unusable reply counts as a reply. `soup data
-# from-traces --judge` stops the same way and writes no output; `soup data best-of-n` and
-# `soup ship --task-mode pairwise`, which already stopped at the first unanswered request,
-# now say how many prompts or pairs were left. A judge-ranked training run keeps going: it
-# asks the judge once a minute, and the first reply resumes the judging (#1522).
+# unanswered, `soup eval judge` prints one message naming the judge URL and how many items
+# were not judged, shows the scores from before the outage without saving them, and exits 1,
+# so a long run costs 9 s of backoff, not 3 s per row. One reply resets the count, and a 4xx
+# or an unusable reply counts as a reply. `soup data from-traces --judge` stops the same way
+# and writes no output; `soup data best-of-n` and `soup ship --task-mode pairwise`, which
+# already stopped at the first unanswered request, now say how many prompts or pairs were
+# left. A judge-ranked training run is unchanged: it keeps asking, and resumes on the first
+# reply (#1522).
 
 # Auto-eval after training (configure in soup.yaml)
 soup eval auto --config soup.yaml

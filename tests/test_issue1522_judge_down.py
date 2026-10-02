@@ -26,6 +26,7 @@ from soup_cli.eval.judge import (
     JudgeDownError,
     JudgeEvaluator,
     JudgeUnavailableError,
+    make_judge_reward_func,
     pairwise_winrate,
 )
 from tests.conftest import strip_ansi
@@ -100,17 +101,22 @@ def _judge_rows(evaluator: JudgeEvaluator, rows: int) -> list[Exception]:
 
 class TestJudgeDownCounter:
     def test_a_dead_judge_costs_the_first_rows_backoff_and_no_more(self, evaluator, no_sleep):
+        # The way every row-by-row caller uses it: a failed row is skipped, and
+        # the run stops at the first JudgeDownError.
+        skipped = 0
         with mock.patch("httpx.post", side_effect=_refused) as post:
-            errors = _judge_rows(evaluator, 1000)
+            with pytest.raises(JudgeDownError):
+                for index in range(1000):
+                    try:
+                        evaluator.evaluate(f"q{index}", "a")
+                    except JudgeDownError:
+                        raise
+                    except JudgeUnavailableError:
+                        skipped += 1
 
-        assert len(errors) == 1000
-        # Only the first JUDGE_DOWN_AFTER rows were sent, and only they slept.
+        assert skipped == JUDGE_DOWN_AFTER - 1
         assert post.call_count == JUDGE_DOWN_AFTER * ATTEMPTS
         assert no_sleep == ONE_REQUEST_BACKOFF * JUDGE_DOWN_AFTER
-        assert [type(exc) for exc in errors[: JUDGE_DOWN_AFTER - 1]] == [
-            JudgeUnavailableError
-        ] * (JUDGE_DOWN_AFTER - 1)
-        assert all(isinstance(exc, JudgeDownError) for exc in errors[JUDGE_DOWN_AFTER - 1:])
 
     def test_the_error_names_the_redacted_url_and_the_run_of_failures(self, no_sleep):
         evaluator = JudgeEvaluator(
@@ -168,16 +174,13 @@ class TestJudgeDownCounter:
         assert not any(isinstance(exc, JudgeDownError) for exc in errors)
 
     def test_pairwise_and_pointwise_calls_share_the_count(self, evaluator, no_sleep):
-        with mock.patch("httpx.post", side_effect=_refused) as post:
+        with mock.patch("httpx.post", side_effect=_refused):
             for _ in range(JUDGE_DOWN_AFTER - 1):
-                with pytest.raises(JudgeUnavailableError):
+                with pytest.raises(JudgeUnavailableError) as excinfo:
                     evaluator.evaluate("q", "a")
+                assert not isinstance(excinfo.value, JudgeDownError)
             with pytest.raises(JudgeDownError):
                 evaluator.compare_pair("q", "a", "b")
-            with pytest.raises(JudgeDownError):
-                evaluator.compare_pair("q", "a", "b")
-
-        assert post.call_count == JUDGE_DOWN_AFTER * ATTEMPTS
 
     def test_each_evaluator_counts_its_own_judge(self, no_sleep):
         dead = JudgeEvaluator(provider="server", model="judge", api_base=JUDGE_BASE)
@@ -187,32 +190,15 @@ class TestJudgeDownCounter:
         with mock.patch("httpx.post", return_value=_reply(200, SCORED)):
             assert other.evaluate("q", "a").weighted_score == 4.0
 
-    def test_a_judge_that_comes_back_is_asked_again_after_the_recheck_interval(
-        self, evaluator, no_sleep, monkeypatch
-    ):
-        # A judge-ranked training run keeps one evaluator for hours: a short
-        # outage must not end the judging for good.
-        clock = [1000.0]
-        monkeypatch.setattr(judge_mod, "_monotonic", lambda: clock[0])
+    def test_a_judge_that_stays_down_is_still_asked(self, evaluator, no_sleep):
+        # No cooldown: a caller that carries on gets a real request each time,
+        # so the first reply after an outage is seen.
         with mock.patch("httpx.post", side_effect=_refused) as post:
-            _judge_rows(evaluator, JUDGE_DOWN_AFTER)
-            clock[0] += judge_mod.JUDGE_DOWN_RECHECK_SECONDS - 1
-            with pytest.raises(JudgeDownError):
-                evaluator.evaluate("q", "a")
-            assert post.call_count == JUDGE_DOWN_AFTER * ATTEMPTS  # not asked
+            errors = _judge_rows(evaluator, JUDGE_DOWN_AFTER + 2)
 
-            clock[0] += 1
-            with pytest.raises(JudgeDownError):
-                evaluator.evaluate("q", "a")
-            assert post.call_count == (JUDGE_DOWN_AFTER + 1) * ATTEMPTS  # asked once
-            with pytest.raises(JudgeDownError):
-                evaluator.evaluate("q", "a")
-            assert post.call_count == (JUDGE_DOWN_AFTER + 1) * ATTEMPTS  # and not again
-
-        clock[0] += judge_mod.JUDGE_DOWN_RECHECK_SECONDS
-        with mock.patch("httpx.post", return_value=_reply(200, SCORED)):
-            assert evaluator.evaluate("q", "a").weighted_score == 4.0
-            assert evaluator.evaluate("q", "a").weighted_score == 4.0
+        assert post.call_count == (JUDGE_DOWN_AFTER + 2) * ATTEMPTS
+        assert all(isinstance(exc, JudgeDownError) for exc in errors[JUDGE_DOWN_AFTER - 1:])
+        assert f"{JUDGE_DOWN_AFTER + 2} requests in a row" in str(errors[-1])
 
     def test_down_error_is_an_unavailable_error_and_survives_pickle(self):
         err = JudgeDownError("3 requests in a row failed", url=f"{JUDGE_BASE}/v1/chat/completions")
@@ -222,6 +208,22 @@ class TestJudgeDownCounter:
         clone = pickle.loads(pickle.dumps(told))
         assert type(clone) is JudgeDownError
         assert str(clone) == str(told) and clone.url == told.url
+
+
+# ---------------------------------------------------------------------------
+# Online DPO: a failure is a score, so a short outage must not outlast itself
+# ---------------------------------------------------------------------------
+
+
+def test_a_short_outage_does_not_leave_a_judge_ranked_run_unranked(evaluator, no_sleep):
+    ok = _reply(200, SCORED)
+    # three requests in a row are refused, then the judge answers every request
+    steps = [*[_refused] * (JUDGE_DOWN_AFTER * ATTEMPTS), *[ok] * 20]
+    reward = make_judge_reward_func(evaluator)
+    with mock.patch("httpx.post", side_effect=_script(*steps)):
+        scores = reward(["q"] * 10, ["a"] * 10)
+    assert scores[:3] == [0.0, 0.0, 0.0]
+    assert scores[3:] == [4.0] * 7, scores
 
 
 # ---------------------------------------------------------------------------

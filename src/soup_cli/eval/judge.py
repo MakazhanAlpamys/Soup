@@ -22,13 +22,10 @@ logger = logging.getLogger(__name__)
 JUDGE_MAX_RETRIES = 2
 JUDGE_MAX_BACKOFF_SECONDS = 30.0
 # #1522: this many requests in a row with their retries spent, and the judge is
-# down. The evaluator stops asking instead of backing off again for every row.
+# down. The evaluator says so, and a caller working through rows stops there
+# instead of backing off again for every row.
 JUDGE_DOWN_AFTER = 3
-# A long run (a judge-ranked training run) outlives a short outage, so a judge
-# that is down is asked once more after this long; any reply clears it.
-JUDGE_DOWN_RECHECK_SECONDS = 60.0
 _sleep = time.sleep  # patched by tests
-_monotonic = time.monotonic  # patched by tests
 
 
 def _redact_url(url: str) -> str:
@@ -80,10 +77,11 @@ class JudgeUnavailableError(RuntimeError):
 class JudgeDownError(JudgeUnavailableError):
     """``JUDGE_DOWN_AFTER`` requests in a row went unanswered: stop the run (#1522).
 
-    Raised by the request that completes the run of failures and, without
-    asking the judge again, by every later call on the same evaluator for the
-    next ``JUDGE_DOWN_RECHECK_SECONDS``. A caller that skips a failed row and
-    carries on must let this one through.
+    Raised by the request that completes the run of failures and by each
+    unanswered one after it. The evaluator keeps asking, so a caller that
+    skips a failed row and carries on must let this one through; a caller that
+    maps a failure to a score (the Online DPO adapters) resumes on the first
+    reply.
     """
 
 
@@ -380,11 +378,8 @@ def _compute_weighted_score(scores: dict[str, float], rubric: dict) -> float:
 class JudgeEvaluator:
     """Configurable LLM-as-a-judge evaluator."""
 
-    # #1522: requests in a row whose retries were spent, the last such failure,
-    # and when it happened.
+    # #1522: requests in a row whose retries were spent.
     _spent_in_a_row = 0
-    _last_failure = ""
-    _last_failure_at = 0.0
 
     def __init__(
         self,
@@ -494,11 +489,6 @@ class JudgeEvaluator:
             "max_tokens": 1024,
         }
 
-        if (
-            self._spent_in_a_row >= JUDGE_DOWN_AFTER
-            and _monotonic() - self._last_failure_at < JUDGE_DOWN_RECHECK_SECONDS
-        ):
-            raise self._down(url)  # no request, no backoff: it has not answered
         try:
             reply = _judge_request(url, payload, headers)
         except JudgeUnavailableError as exc:
@@ -506,21 +496,16 @@ class JudgeEvaluator:
                 self._spent_in_a_row = 0  # a refusal or a bad reply is an answer
                 raise
             self._spent_in_a_row += 1
-            self._last_failure = exc.detail
-            self._last_failure_at = _monotonic()
             if self._spent_in_a_row >= JUDGE_DOWN_AFTER:
-                raise self._down(url) from exc
+                raise JudgeDownError(
+                    f"{self._spent_in_a_row} requests in a row failed, the last with "
+                    f"{exc.detail}",
+                    url=url,
+                    retries_spent=True,
+                ) from exc
             raise
         self._spent_in_a_row = 0
         return reply
-
-    def _down(self, url: str) -> JudgeDownError:
-        return JudgeDownError(
-            f"{self._spent_in_a_row} requests in a row failed, the last with "
-            f"{self._last_failure}; not asking again",
-            url=url,
-            retries_spent=True,
-        )
 
 
 def _retry_delay(retry_after: Optional[str], attempt: int) -> float:
