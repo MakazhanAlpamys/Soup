@@ -3308,7 +3308,8 @@ class TrainingConfig(BaseModel):
         le=1000,
         description=(
             "Freeze first N layers (from bottom). Train only remaining layers. "
-            "Applied by task sft and tts only; refused on the other tasks."
+            "Applied by tasks sft and tts (on the transformers text path); "
+            "refused on the other tasks."
         ),
     )
     freeze_ratio: Optional[float] = Field(
@@ -3317,7 +3318,8 @@ class TrainingConfig(BaseModel):
         lt=1.0,
         description=(
             "Freeze this fraction of layers (0.75 = freeze 75% from bottom). "
-            "Applied by task sft and tts only; refused on the other tasks."
+            "Applied by tasks sft and tts (on the transformers text path); "
+            "refused on the other tasks."
         ),
     )
     # v0.71.23 #266 — Spectrum targeted training: full FT of selected params
