@@ -8,12 +8,15 @@ Verifies that:
 3. SFT with packing / multipack and pretrain with packing scale warmup to the
    real packed step count.
 4. Unpacked SFT control matches the expected warmup within one step.
-5. All 15 wrappers resolve warmup_steps as the configured fraction.
+5. All 15 wrappers resolve warmup_steps as the configured fraction without multiplying
+   warmup_ratio into a step count.
 """
 
 from __future__ import annotations
 
+import ast
 import math
+from pathlib import Path
 
 import pytest
 import torch
@@ -22,12 +25,31 @@ from transformers import LlamaConfig, LlamaForCausalLM, PreTrainedTokenizerFast
 
 from soup_cli.config.loader import load_config_from_string
 from soup_cli.utils.warmup import resolve_trainer_warmup_steps
+from tests import test_trl_preference_config_contract as contract
 
 WORDS = ["<pad>", "<s>", "</s>", "<unk>", "apple", "banana", "cherry", "date"]
+TRAINER_DIR = Path(__file__).resolve().parent.parent / "src" / "soup_cli" / "trainer"
+WARMUP_WRAPPERS = (
+    "asr",
+    "bco",
+    "classifier",
+    "distill",
+    "dpo",
+    "embedding",
+    "grpo",
+    "ipo",
+    "kto",
+    "online_dpo",
+    "orpo",
+    "pretrain",
+    "reward_model",
+    "sft",
+    "simpo",
+)
 
 
 @pytest.fixture(scope="module")
-def tiny_llama_model(tmp_path_factory) -> str:
+def tiny_llama_model(tmp_path_factory: pytest.TempPathFactory) -> str:
     tmp = tmp_path_factory.mktemp("tiny_llama")
     raw = Tokenizer(models.BPE())
     raw.pre_tokenizer = pre_tokenizers.Whitespace()
@@ -73,29 +95,49 @@ class TestWarmupHelper:
         assert resolve_trainer_warmup_steps(0.5) == 0.5
         assert resolve_trainer_warmup_steps(None) == 0.0
 
+    def test_invalid_ratio_rejected(self) -> None:
+        with pytest.raises(ValueError, match="warmup_ratio must be in"):
+            resolve_trainer_warmup_steps(-0.01)
+        with pytest.raises(ValueError, match="warmup_ratio must be in"):
+            resolve_trainer_warmup_steps(1.0)
+        with pytest.raises(ValueError, match="warmup_ratio must be in"):
+            resolve_trainer_warmup_steps(1.5)
+
 
 class TestGRPOWarmup:
     @pytest.mark.parametrize(
-        ("prompts", "batch", "accum", "gens", "ratio"),
+        ("prompts", "batch", "accum", "gens", "ratio", "epochs"),
         [
-            (40, 4, 1, 4, 0.5),
-            (40, 8, 1, 8, 0.5),
-            (64, 4, 4, 4, 0.1),
+            (40, 4, 1, 4, 0.5, 1),
+            (40, 8, 1, 8, 0.5, 1),
+            (64, 4, 4, 4, 0.1, 1),
+            (40, 4, 1, 4, 0.25, 2),
         ],
     )
     def test_grpo_warmup_matches_real_steps(
-        self, tiny_llama_model: str, prompts: int, batch: int, accum: int, gens: int, ratio: float
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        tiny_llama_model: str,
+        prompts: int,
+        batch: int,
+        accum: int,
+        gens: int,
+        ratio: float,
+        epochs: int,
     ) -> None:
         from soup_cli.trainer.grpo import GRPOTrainerWrapper
 
+        monkeypatch.chdir(tmp_path)
+        out_dir = str(tmp_path / "out-grpo").replace("\\", "/")
         cfg = load_config_from_string(
             f"base: {tiny_llama_model}\ntask: grpo\n"
             "data: {train: ./unused.jsonl, max_length: 64}\n"
-            f"training:\n  epochs: 1\n  batch_size: {batch}\n"
+            f"training:\n  epochs: {epochs}\n  batch_size: {batch}\n"
             f"  gradient_accumulation_steps: {accum}\n"
             f"  num_generations: {gens}\n  warmup_ratio: {ratio}\n  reward_fn: accuracy\n"
             "  quantization: none\n  lora: {r: 4, alpha: 8, target_modules: [q_proj, v_proj]}\n"
-            "output: ./out-grpo-test\n"
+            f"output: {out_dir}\n"
         )
         row = {
             "messages": [
@@ -107,25 +149,33 @@ class TestGRPOWarmup:
         wrapper = GRPOTrainerWrapper(cfg, device="cpu")
         wrapper.setup({"train": rows})
         trainer = wrapper.trainer
-        steps = len(trainer.get_train_dataloader()) // accum
+        steps = (len(trainer.get_train_dataloader()) // accum) * epochs
         expected_warmup = math.ceil(steps * ratio)
         resolved_warmup = trainer.args.get_warmup_steps(steps)
         assert resolved_warmup == expected_warmup
         assert trainer.args.warmup_steps == ratio
 
         # Mutation check: the old row-count formula would have shrunk warmup by gens
-        old_formula_steps = int(math.ceil(prompts / batch / accum) * ratio)
+        old_formula_steps = int(math.ceil(prompts / batch / accum) * epochs * ratio)
         if gens > 1:
             assert resolved_warmup > old_formula_steps
 
 
 class TestSFTWarmup:
     @pytest.mark.parametrize("packing_mode", ["none", "packing", "multipack"])
+    @pytest.mark.parametrize("epochs", [1, 2])
     def test_sft_warmup_scales_to_packed_optimizer_steps(
-        self, tiny_llama_model: str, packing_mode: str
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        tiny_llama_model: str,
+        packing_mode: str,
+        epochs: int,
     ) -> None:
         from soup_cli.trainer.sft import SFTTrainerWrapper
 
+        monkeypatch.chdir(tmp_path)
+        out_dir = str(tmp_path / f"out-sft-{packing_mode}-{epochs}").replace("\\", "/")
         extra = ""
         if packing_mode == "packing":
             extra = "  packing: true\n"
@@ -135,10 +185,10 @@ class TestSFTWarmup:
         cfg = load_config_from_string(
             f"base: {tiny_llama_model}\ntask: sft\n"
             "data: {train: ./unused.jsonl, format: chatml, max_length: 64}\n"
-            "training:\n  epochs: 1\n  batch_size: 1\n  gradient_accumulation_steps: 1\n"
+            f"training:\n  epochs: {epochs}\n  batch_size: 1\n  gradient_accumulation_steps: 1\n"
             "  lr: 1.0e-3\n  warmup_ratio: 0.5\n"
             "  scheduler: cosine\n  quantization: none\n"
-            f"{extra}  lora: {{r: 4, alpha: 8}}\noutput: ./out-sft-test\n"
+            f"{extra}  lora: {{r: 4, alpha: 8}}\noutput: {out_dir}\n"
         )
         rows = [
             {
@@ -152,7 +202,7 @@ class TestSFTWarmup:
         wrapper = SFTTrainerWrapper(cfg, device="cpu")
         wrapper.setup({"train": rows})
         trainer = wrapper.trainer
-        steps = len(trainer.get_train_dataloader())
+        steps = len(trainer.get_train_dataloader()) * epochs
         resolved_warmup = trainer.args.get_warmup_steps(steps)
         expected_warmup = math.ceil(steps * 0.5)
         assert resolved_warmup == expected_warmup
@@ -160,15 +210,22 @@ class TestSFTWarmup:
 
 
 class TestPretrainWarmup:
-    def test_pretrain_warmup_ratio_preserved(self, tiny_llama_model: str) -> None:
+    def test_pretrain_warmup_ratio_preserved(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        tiny_llama_model: str,
+    ) -> None:
         from soup_cli.trainer.pretrain import PretrainTrainerWrapper
 
+        monkeypatch.chdir(tmp_path)
+        out_dir = str(tmp_path / "out-pretrain").replace("\\", "/")
         cfg = load_config_from_string(
             f"base: {tiny_llama_model}\ntask: pretrain\n"
             "data: {train: ./unused.jsonl, max_length: 64}\n"
             "training:\n  epochs: 1\n  batch_size: 2\n  gradient_accumulation_steps: 1\n"
             "  lr: 1.0e-3\n  warmup_ratio: 0.25\n"
-            "  quantization: none\n  lora: {r: 4, alpha: 8}\noutput: ./out-pretrain-test\n"
+            f"  quantization: none\n  lora: {{r: 4, alpha: 8}}\noutput: {out_dir}\n"
         )
         rows = [{"text": f"apple {w} banana"} for w in WORDS[4:] * 4]
         wrapper = PretrainTrainerWrapper(cfg, device="cpu")
@@ -179,96 +236,30 @@ class TestPretrainWarmup:
         assert trainer.args.get_warmup_steps(steps) == math.ceil(steps * 0.25)
 
 
-class TestAllTrainerWrappersWarmupFraction:
-    @pytest.mark.parametrize(
-        "module_name, class_name, task_name",
-        [
-            ("soup_cli.trainer.sft", "SFTTrainerWrapper", "sft"),
-            ("soup_cli.trainer.grpo", "GRPOTrainerWrapper", "grpo"),
-            ("soup_cli.trainer.pretrain", "PretrainTrainerWrapper", "pretrain"),
-            ("soup_cli.trainer.dpo", "DPOTrainerWrapper", "dpo"),
-            ("soup_cli.trainer.orpo", "ORPOTrainerWrapper", "orpo"),
-            ("soup_cli.trainer.kto", "KTOTrainerWrapper", "kto"),
-            ("soup_cli.trainer.bco", "BCOTrainerWrapper", "bco"),
-            ("soup_cli.trainer.online_dpo", "OnlineDPOTrainerWrapper", "online_dpo"),
-            ("soup_cli.trainer.ipo", "IPOTrainerWrapper", "ipo"),
-            ("soup_cli.trainer.simpo", "SimPOTrainerWrapper", "simpo"),
-            ("soup_cli.trainer.reward_model", "RewardModelTrainerWrapper", "reward_model"),
-            ("soup_cli.trainer.classifier", "ClassifierTrainerWrapper", "classifier"),
-            ("soup_cli.trainer.distill", "DistillTrainerWrapper", "distill"),
-            ("soup_cli.trainer.asr", "AsrTrainerWrapper", "asr"),
-            ("soup_cli.trainer.embedding", "EmbeddingTrainerWrapper", "embedding"),
-        ],
+@pytest.mark.parametrize("task", contract._ALL_SIX)
+def test_live_preference_trainer_carries_the_warmup_fraction(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, task: str
+) -> None:
+    wrapper = contract._build(tmp_path, monkeypatch, task)
+    assert wrapper.trainer.args.warmup_steps == pytest.approx(0.03), (
+        task,
+        wrapper.trainer.args.warmup_steps,
     )
-    def test_wrapper_passes_configured_warmup_fraction(
-        self, tiny_llama_model: str, module_name: str, class_name: str, task_name: str
-    ) -> None:
-        import importlib
 
-        mod = importlib.import_module(module_name)
-        wrapper_cls = getattr(mod, class_name)
 
-        # Prepare task-appropriate data and config
-        if task_name in {"dpo", "orpo", "kto", "bco", "ipo", "simpo", "reward_model"}:
-            extra_cfg = "data: {train: ./unused.jsonl, format: pairs}\n"
-            rows = [{"prompt": "what is apple?", "chosen": "a fruit", "rejected": "a car"}] * 4
-        elif task_name == "classifier":
-            extra_cfg = "data: {train: ./unused.jsonl}\nclassifier: {num_labels: 2}\n"
-            rows = [{"text": "great fruit", "label": 1}] * 4
-        elif task_name == "embedding":
-            extra_cfg = "data: {train: ./unused.jsonl}\nembedding: {pooling: mean}\n"
-            rows = [{"anchor": "apple", "positive": "fruit"}] * 4
-        elif task_name == "distill":
-            extra_cfg = (
-                f"data: {{train: ./unused.jsonl}}\n"
-                f"distill: {{teacher: {tiny_llama_model}}}\n"
+@pytest.mark.parametrize("name", WARMUP_WRAPPERS)
+def test_wrapper_source_passes_the_ratio_not_a_row_count_estimate(name: str) -> None:
+    tree = ast.parse((TRAINER_DIR / f"{name}.py").read_text(encoding="utf-8"))
+    calls = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and getattr(node.func, "id", None) == "resolve_trainer_warmup_steps"
+    ]
+    assert len(calls) == 1, f"{name}: expected one resolve_trainer_warmup_steps call"
+    assert ast.unparse(calls[0].args[0]) == "tcfg.warmup_ratio", name
+    for node in ast.walk(tree):
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Mult):
+            assert "warmup_ratio" not in ast.unparse(node), (
+                f"{name}: warmup_ratio is multiplied into a step count again"
             )
-            rows = [{"prompt": "what is apple?", "response": "a fruit"}] * 4
-        elif task_name == "asr":
-            extra_cfg = "data: {train: ./unused.jsonl}\n"
-            rows = [{"audio": "dummy.wav", "text": "apple"}] * 4
-        elif task_name == "grpo":
-            extra_cfg = (
-                "data: {train: ./unused.jsonl}\n"
-                "training:\n  reward_fn: accuracy\n  num_generations: 2\n"
-            )
-            prompt_row = {
-                "messages": [
-                    {"role": "user", "content": "what is apple ?"},
-                    {"role": "assistant", "content": "apple"},
-                ]
-            }
-            rows = [prompt_row] * 4
-        elif task_name == "sft":
-            extra_cfg = "data: {train: ./unused.jsonl, format: chatml}\n"
-            rows = [
-                {
-                    "messages": [
-                        {"role": "user", "content": "hi"},
-                        {"role": "assistant", "content": "bye"},
-                    ]
-                }
-            ] * 4
-        else:
-            extra_cfg = "data: {train: ./unused.jsonl}\n"
-            rows = [{"text": "apple banana"}] * 4
-
-        yaml_text = (
-            f"base: {tiny_llama_model}\ntask: {task_name}\n"
-            f"{extra_cfg}"
-            "training:\n  epochs: 1\n  batch_size: 2\n  gradient_accumulation_steps: 1\n"
-            "  lr: 1.0e-3\n  warmup_ratio: 0.35\n"
-            "  quantization: none\n  lora: {r: 4, alpha: 8}\noutput: ./out-all-test\n"
-        )
-        try:
-            cfg = load_config_from_string(yaml_text)
-        except Exception:
-            pytest.skip(f"Config load not supported in minimal environment for task {task_name}")
-
-        try:
-            wrapper = wrapper_cls(cfg, device="cpu")
-            # If setup needs external audio files or special deps, skip gracefully
-            wrapper.setup({"train": rows})
-            assert wrapper.trainer.args.warmup_steps == 0.35
-        except (ImportError, NotImplementedError, FileNotFoundError, ValueError) as exc:
-            pytest.skip(f"Task {task_name} requires hardware/deps/model not present: {exc}")

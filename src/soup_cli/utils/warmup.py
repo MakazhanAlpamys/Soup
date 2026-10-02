@@ -50,46 +50,16 @@ def compute_warmup_steps(
     return max(MIN_WARMUP, min(MAX_WARMUP, raw))
 
 
-_PATCHED_WARMUP = False
-
-
-def _patch_training_arguments_get_warmup_steps() -> None:
-    global _PATCHED_WARMUP
-    if _PATCHED_WARMUP:
-        return
-    try:
-        from transformers import TrainingArguments
-    except ImportError:
-        return
-
-    def _safe_get_warmup_steps(self: TrainingArguments, num_training_steps: int) -> int:
-        if self.warmup_steps >= 1:
-            return int(self.warmup_steps)
-        if self.warmup_steps <= 0:
-            return 0
-        raw = num_training_steps * self.warmup_steps
-        if raw < 0.5:
-            return 0
-        return math.ceil(raw)
-
-    TrainingArguments.get_warmup_steps = _safe_get_warmup_steps
-    _PATCHED_WARMUP = True
-
-
 def resolve_trainer_warmup_steps(warmup_ratio: float | int | None) -> float:
     """Return the warmup fraction to pass to HF TrainingArguments(warmup_steps=...).
 
-    HuggingFace TrainingArguments interprets warmup_steps in [0, 1) as a warmup
-    ratio over the actual number of optimizer steps executed by the trainer:
+    HuggingFace TrainingArguments interprets a float ``warmup_steps`` in [0, 1) as
+    a warmup ratio over the actual number of optimizer steps executed by the trainer:
         warmup_steps = math.ceil(num_training_steps * warmup_steps)
-
-    When num_training_steps * warmup_steps < 1.0 (e.g. single-step runs or tiny
-    datasets with default 0.03 ratio), standard ceil() forces warmup_steps=1,
-    which evaluates step 0 with lr=0.0 and starves the run. We lazily patch
-    get_warmup_steps on TrainingArguments to yield 0 warmup steps when the
-    configured fraction amounts to less than 1 full step.
     """
-    _patch_training_arguments_get_warmup_steps()
     if warmup_ratio is None:
         return 0.0
-    return float(warmup_ratio)
+    val = float(warmup_ratio)
+    if not (0.0 <= val < 1.0):
+        raise ValueError(f"warmup_ratio must be in [0.0, 1.0), got {val}")
+    return val
