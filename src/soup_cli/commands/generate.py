@@ -715,11 +715,17 @@ def _generate_openai(
     if api_base:
         from urllib.parse import urlparse
 
-        from soup_cli.utils.net_guard import LOOPBACK_HOSTS, refuse_private_ip_literal
+        from soup_cli.utils.net_guard import (
+            LOOPBACK_HOSTS,
+            UNSPECIFIED_HOST_HINT,
+            refuse_private_ip_literal,
+        )
 
         parsed = urlparse(api_base)
         is_local = parsed.hostname in LOOPBACK_HOSTS
         if not is_local and parsed.scheme != "https":
+            if parsed.hostname == "0.0.0.0":
+                raise ValueError(f"api_base {UNSPECIFIED_HOST_HINT}")
             raise ValueError(
                 f"api_base must use HTTPS for remote APIs (got {parsed.scheme}://). "
                 "HTTP is only allowed for localhost."
@@ -858,7 +864,11 @@ def _generate_server(
     if api_base:
         from urllib.parse import urlparse
 
-        from soup_cli.utils.net_guard import LOOPBACK_HOSTS, refuse_private_ip_literal
+        from soup_cli.utils.net_guard import (
+            LOOPBACK_HOSTS,
+            UNSPECIFIED_HOST_HINT,
+            refuse_private_ip_literal,
+        )
 
         parsed = urlparse(api_base)
         if parsed.scheme not in ("http", "https"):
@@ -867,6 +877,8 @@ def _generate_server(
             )
         is_local = parsed.hostname in LOOPBACK_HOSTS
         if not is_local and parsed.scheme != "https":
+            if parsed.hostname == "0.0.0.0":
+                raise ValueError(f"api_base {UNSPECIFIED_HOST_HINT}")
             raise ValueError(
                 f"api_base must use HTTPS for remote APIs (got {parsed.scheme}://). "
                 "HTTP is only allowed for localhost."
