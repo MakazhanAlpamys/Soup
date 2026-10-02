@@ -3321,13 +3321,21 @@ class TrainingConfig(BaseModel):
         default=None,
         ge=1,
         le=1000,
-        description="Freeze first N layers (from bottom). Train only remaining layers.",
+        description=(
+            "Freeze first N layers (from bottom). Train only remaining layers. "
+            "Applied by tasks sft and tts (on the transformers text path); "
+            "refused on the other tasks."
+        ),
     )
     freeze_ratio: Optional[float] = Field(
         default=None,
         gt=0.0,
         lt=1.0,
-        description="Freeze this fraction of layers (0.75 = freeze 75% from bottom).",
+        description=(
+            "Freeze this fraction of layers (0.75 = freeze 75% from bottom). "
+            "Applied by tasks sft and tts (on the transformers text path); "
+            "refused on the other tasks."
+        ),
     )
     # v0.71.23 #266 — Spectrum targeted training: full FT of selected params
     unfrozen_parameters: Optional[List[str]] = Field(
@@ -4738,6 +4746,11 @@ UNSLOTH_SETUP_TASKS: frozenset[str] = frozenset({
     "sft", "dpo", "grpo", "ppo", "kto", "orpo", "simpo", "ipo", "bco", "preference",
     "pretrain", "embedding", "tts",
 })
+
+#: #1497 — the tasks whose trainer reads ``training.freeze_layers`` /
+#: ``training.freeze_ratio``: ``SFTTrainerWrapper._setup_transformers``, which
+#: ``tts`` inherits. Every other trainer ignores both, so they are refused there.
+FREEZE_APPLYING_TASKS: frozenset[str] = frozenset({"sft", "tts"})
 
 #: The bitsandbytes values: ``4bit`` was the default, so every config Soup dumped
 #: for these tasks carries one of them literally (#795 review).
@@ -7884,6 +7897,30 @@ class SoupConfig(BaseModel):
                 "(#1223)"
             )
         return self
+
+    @model_validator(mode="after")
+    def _validate_freeze_is_applied(self) -> "SoupConfig":
+        """#1497 — ``freeze_layers`` / ``freeze_ratio`` loaded on every task, but
+        only the trainers in :data:`FREEZE_APPLYING_TASKS` freeze anything: on the
+        others the run trained every layer without a word. Placed after the #795
+        resolver and before the #1357 backend refusal, which stays last."""
+        if self.task in FREEZE_APPLYING_TASKS:
+            return self
+        tcfg = self.training
+        fields = [
+            f"training.{name}"
+            for name in ("freeze_layers", "freeze_ratio")
+            if getattr(tcfg, name) is not None
+        ]
+        if not fields:
+            return self
+        named = " and ".join(fields)
+        verb, keys = ("are", "both keys") if len(fields) > 1 else ("is", "the key")
+        raise ValueError(
+            f"{named} {verb} not applied by task={self.task!r}: only task='sft' (and "
+            "'tts', which trains through the SFT trainer) freezes layers, so this run "
+            f"would train every layer. Use task: sft, or remove {keys}."
+        )
 
     @model_validator(mode="after")
     def _validate_unsloth_has_a_setup(self) -> "SoupConfig":
