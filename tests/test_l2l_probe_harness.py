@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import importlib.util
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -195,3 +196,96 @@ def test_spill_layers_without_a_factory_is_refused(acts):
 def test_direct_spill_refuses_an_unaligned_size(acts, tmp_path):
     with pytest.raises(ValueError, match="multiple of 4096"):
         acts.DirectSpillFile(str(tmp_path / "x.bin"), 4096 + 512)
+
+
+# --------------------------------------------------------------------------
+# l2l_box
+# --------------------------------------------------------------------------
+@pytest.fixture()
+def box():
+    return _load("l2l_box")
+
+
+class _FakeClock:
+    def __init__(self, times):
+        self.times = list(times)
+
+    def __call__(self):
+        return self.times.pop(0)
+
+
+def test_steady_samples_are_not_void(box):
+    watch = box.SuspendWatch(clock=_FakeClock([0, 2, 4, 6]), power=lambda: True)
+    for _ in range(4):
+        watch.sample()
+    report = watch.report()
+    assert report["samples"] == 4
+    assert report["max_gap_s"] == pytest.approx(2.0)
+    assert report["void"] is False
+
+
+def test_gap_over_limit_voids(box):
+    watch = box.SuspendWatch(clock=_FakeClock([0, 2, 33]), power=lambda: True)
+    for _ in range(3):
+        watch.sample()
+    assert watch.report()["max_gap_s"] == pytest.approx(31.0)
+    assert watch.report()["void"] is True
+
+
+def test_battery_sample_voids(box):
+    power = iter([True, False, True])
+    watch = box.SuspendWatch(clock=_FakeClock([0, 2, 4]), power=lambda: next(power))
+    for _ in range(3):
+        watch.sample()
+    assert watch.report()["battery_samples"] == 1
+    assert watch.report()["void"] is True
+
+
+def test_unknown_power_is_recorded_not_void(box):
+    watch = box.SuspendWatch(clock=_FakeClock([0, 2]), power=lambda: None)
+    watch.sample()
+    watch.sample()
+    assert watch.report()["unknown_power_samples"] == 2
+    assert watch.report()["void"] is False
+
+
+def test_thread_start_stop_takes_samples(box):
+    watch = box.SuspendWatch(interval=0.01, power=lambda: True)
+    watch.start()
+    time.sleep(0.1)
+    report = watch.stop()
+    assert report["samples"] >= 3
+    assert not any(t.name == "l2l-suspend-watch" for t in threading.enumerate())
+
+
+def test_box_stamp_has_the_keys(box):
+    stamp = box.box_stamp()
+    for key in ("unix", "avail_phys_gb", "commit_avail_gb", "ac", "gpu_pids",
+                "gpu_mem_used_mib", "python_processes"):
+        assert key in stamp
+
+def test_foreign_readers_flags_heavy_other_processes(box):
+    before = {10: {"name": "a.exe", "read": 0}, 11: {"name": "b.exe", "read": 5},
+              99: {"name": "python.exe", "read": 0}}
+    after = {10: {"name": "a.exe", "read": 2_000_000_000}, 11: {"name": "b.exe", "read": 6},
+             99: {"name": "python.exe", "read": 3_000_000_000},
+             12: {"name": "SearchIndexer.exe", "read": 1_500_000_000}}
+    heavy = box.foreign_readers(before, after, own_pids={99}, threshold=1_000_000_000)
+    assert [(row["pid"], row["name"]) for row in heavy] == [
+        (10, "a.exe"), (12, "SearchIndexer.exe"),
+    ]
+    assert heavy[0]["read_bytes"] == 2_000_000_000
+
+
+def test_foreign_readers_is_none_without_snapshots(box):
+    assert box.foreign_readers(None, {}, own_pids=set()) is None
+
+
+def test_process_read_bytes_sees_this_process(box):
+    import os
+
+    snapshot = box.process_read_bytes()
+    if snapshot is None:
+        pytest.skip("psutil is not installed")
+    assert os.getpid() in snapshot
+    assert snapshot[os.getpid()]["read"] >= 0
