@@ -3,7 +3,8 @@
 #1265 accepts H0 once the normal-inverse-gamma Bayes factor falls to log(beta / (1 - alpha)).
 #1418 keeps the Bayes factor for reject_h0 and accepts once the always-valid confidence
 sequence for the difference, the same mixture inverted, lies inside (-effect_size,
-+effect_size). This script measures the two against each other, and the `--beta` options.
++effect_size). This script measures the two against each other, at the two levels the
+sequence could run at; #1418 ships level alpha and retires `--beta`.
 
 Procedure, as in `ab_nig_sweep.py` (effect_size 0.1, sigma = effect_size / ratio, k = 5
 held-out rows per arm, a look after every pair from pair 7 on, the first terminal verdict
@@ -18,14 +19,15 @@ Designs (`|alpha|beta` in the keys; reject_h0 at log(1/alpha) in all of them, te
 - `nig`: the same with the accept hold #1265 shipped (tested pooled sd > 3 x held-out sd).
   The baseline: today's rule.
 - `cs`: accept once the confidence sequence at coverage 1 - beta lies inside +-effect_size,
-  with the hold. What #1418 ships (`--beta` is the sequence's level).
-- `cs-alpha`: the same at coverage 1 - alpha, with the hold (`--beta` retired). Keyed under
-  every beta, though beta does not enter it.
+  with the hold (`--beta` as the sequence's level: measured in the record, not shipped).
+- `cs-alpha`: the same at coverage 1 - alpha, with the hold. What #1418 ships (`--beta`
+  retired). Keyed under every beta, though beta does not enter it.
 - `cs-nohold`: `cs` without the hold.
 
 Recorded per design: runs whose first verdict is reject_h0, of them with diff > 0, runs whose
 first verdict is accept_h0, and the sum of pairs at stop.
 
+`check` runs only the self-check, so the shipped rule can be re-checked without a sweep.
 Run it in parts (each part writes one JSON file), then merge:
   python benchmarks/harness/ab_cs_accept_sweep.py run --mode h0 --ratios 0.1,0.2 --out h0-1.json
   python benchmarks/harness/ab_cs_accept_sweep.py report h0-1.json h1-1.json ...
@@ -110,7 +112,7 @@ def first_verdicts(reject, accept, diff, horizons) -> dict:
 
 
 def self_check(rng: np.random.Generator) -> str:
-    """The vectorised half-width and the cs design equal the shipped code."""
+    """The vectorised half-width and the cs-alpha design equal the shipped code."""
     try:
         from soup_cli.utils.ab_test import (
             PRIOR_SCALE_ROWS,
@@ -143,12 +145,11 @@ def self_check(rng: np.random.Generator) -> str:
         control = rng.normal(0.0, sigma, size=(8, 150))
         treatment = rng.normal(shift, sigma, size=(8, 150))
         stat, diff, (rows, pooled, prior), hold = tested(control, treatment)
-        width = half_width(rows, pooled, prior, 0.20)
+        width = half_width(rows, pooled, prior, 0.05)
         accept = np.concatenate([np.zeros((8, HELD), bool), np.abs(diff[:, HELD:]) + width
                                  < EFFECT_SIZE], axis=1) & ~hold
         reject = stat >= math.log(1.0 / 0.05)
-        config = MsprtConfig(metric="judge_score", alpha=0.05, beta=0.20,
-                             effect_size=EFFECT_SIZE)
+        config = MsprtConfig(metric="judge_score", alpha=0.05, effect_size=EFFECT_SIZE)
         for run in range(8):
             hits = np.flatnonzero(reject[run] | accept[run])
             want = None
@@ -328,6 +329,8 @@ def main() -> None:
     run.add_argument("--runs", type=int, default=100_000, help="runs per ratio")
     run.add_argument("--out", required=True)
     run.set_defaults(func=cmd_run)
+    check = sub.add_parser("check", help="only the self-check against the shipped code")
+    check.set_defaults(func=lambda _: print(self_check(np.random.default_rng(1418))))
     report = sub.add_parser("report", help="merge JSON parts and print the tables")
     report.add_argument("parts", nargs="+")
     report.set_defaults(func=cmd_report)
