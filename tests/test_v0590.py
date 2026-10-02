@@ -174,6 +174,16 @@ class TestBomSpec:
         # AI profile annotation
         pkgs = doc.get("packages", [])
         assert any(p.get("primaryPackagePurpose") == "AI-MODEL" for p in pkgs)
+        # Verify relationships: model DERIVED_FROM base, data BUILD_DEPENDENCY_OF model
+        rels = doc.get("relationships", [])
+        derived = [r for r in rels if r["relationshipType"] == "DERIVED_FROM"]
+        assert len(derived) == 1
+        assert derived[0]["spdxElementId"] == "SPDXRef-Model"
+        assert derived[0]["relatedSpdxElement"] == "SPDXRef-Base"
+        build_dep = [r for r in rels if r["relationshipType"] == "BUILD_DEPENDENCY_OF"]
+        assert len(build_dep) == 1
+        assert build_dep[0]["spdxElementId"] == "SPDXRef-Data"
+        assert build_dep[0]["relatedSpdxElement"] == "SPDXRef-Model"
 
     def test_render_bom_format_dispatch(self):
         from soup_cli.utils.bom import BomEntry, render_bom
