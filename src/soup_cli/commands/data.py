@@ -2128,7 +2128,7 @@ def from_traces_cmd(
     if judge:
         # v0.40.3 (#33 (a)) — LLM-judge confidence filter.
         from soup_cli.data.traces.quality import judge_filter_pairs
-        from soup_cli.eval.judge import VALID_PROVIDERS, JudgeEvaluator
+        from soup_cli.eval.judge import VALID_PROVIDERS, JudgeDownError, JudgeEvaluator
 
         # Friendly early validation matches the existing CLI conventions —
         # fall through to the constructor only after the obvious typo is caught.
@@ -2161,6 +2161,9 @@ def from_traces_cmd(
             filtered, report = judge_filter_pairs(
                 pairs, judge=judge_evaluator, min_confidence=min_confidence,
             )
+        except JudgeDownError as exc:
+            console.print(f"[red]--judge stopped:[/] {for_terminal(exc)}")
+            raise typer.Exit(1) from exc
         except (TypeError, ValueError) as exc:
             console.print(f"[red]--judge runtime error:[/] {_escape(str(exc))}")
             raise typer.Exit(1) from exc
@@ -3951,6 +3954,13 @@ def best_of_n(
                 checkpoint_path, index=index, sft=row, dpo=pair
             )
         except bon.BestOfNRuntimeError as exc:
+            from soup_cli.eval.judge import JudgeUnavailableError
+
+            if isinstance(exc.__cause__, JudgeUnavailableError):
+                lost = exc.__cause__.for_rows(
+                    len(prompt_list) - index, len(prompt_list), "prompts"
+                )
+                console.print(f"[red]{for_terminal(lost)}[/]")
             console.print(
                 f"[red]Best-of-N stopped after {index}/{len(prompt_list)} prompts.[/]\n"
                 f"Resume with [bold]--resume[/]; checkpoint: "
