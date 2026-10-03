@@ -117,6 +117,20 @@ def _parse_ascii_ip_literal(
 # spelling: that part fills every byte the earlier parts did not.
 _INET_ATON_LAST_PART_MAX = {1: 0xFFFFFFFF, 2: 0xFFFFFF, 3: 0xFFFF, 4: 0xFF}
 
+# What C's ``isspace()`` calls whitespace in the C locale: the C parsers stop
+# there and read only the text before it.
+_C_SPACE = frozenset(" \t\n\v\f\r")
+
+
+# The digits each base accepts. ``int(digits, base)`` is not a substitute: it
+# also takes its own radix prefix, so ``int("0xa", 16)`` would let a second
+# prefix through, and it takes "_" separators and surrounding space.
+_INET_ATON_DIGITS = {
+    10: frozenset("0123456789"),
+    8: frozenset("01234567"),
+    16: frozenset("0123456789abcdefABCDEF"),
+}
+
 
 def _inet_aton_part(part: str) -> int | None:
     """One dot-separated part, read like C ``strtoul(part, &end, 0)`` would."""
@@ -127,16 +141,11 @@ def _inet_aton_part(part: str) -> int | None:
     if part[0] == "0" and len(part) > 1:
         if part[1] in "xX":
             base, digits = 16, part[2:]
-            if not digits:
-                return 0  # "0x" is a complete (zero) hex number to strtoul
         else:
             base, digits = 8, part[1:]
-    if not digits.isalnum():
-        return None  # int() would take "_" separators and surrounding space
-    try:
-        return int(digits, base)
-    except ValueError:
-        return None
+    if not digits or not set(digits) <= _INET_ATON_DIGITS[base]:
+        return None  # includes a bare "0x", which needs at least one hex digit
+    return int(digits, base)
 
 
 def inet_aton(text: str) -> int | None:
@@ -150,7 +159,15 @@ def inet_aton(text: str) -> int | None:
     the C library's, the result does not depend on the platform: Windows
     refuses ``0xffffffff``, ``4294967295`` and ``0377.0377.0377.0377`` where
     glibc reads ``255.255.255.255`` (#1550).
+
+    Like the C parsers, the text ends at the first ASCII whitespace and only
+    what precedes it is read, so ``"10.0.0.1 x"`` is ``10.0.0.1`` while
+    ``"10.0.0.1x"`` is not an address at all.
     """
+    for i, ch in enumerate(text):
+        if ch in _C_SPACE:
+            text = text[:i]
+            break
     parts = text.split(".")
     if not 1 <= len(parts) <= 4:
         return None

@@ -50,12 +50,19 @@ INET_ATON_TABLE = [
     ("1.0x10000", "1.1.0.0"),
     ("10.0x0.1", "10.0.0.1"),
     ("0", "0.0.0.0"),
-    ("0x", "0.0.0.0"),  # a complete (zero) hex number to strtoul
     ("00", "0.0.0.0"),
     ("167772161", "10.0.0.1"),
     ("0xa000001", "10.0.0.1"),
     ("012.0.0.1", "10.0.0.1"),
     ("0xC0.0xA8.0x1.0x1", "192.168.1.1"),
+    # The text ends at the first ASCII whitespace; the prefix is the address.
+    ("10.0.0.1 x", "10.0.0.1"),
+    ("10.1 x", "10.0.0.1"),
+    ("167772161 x", "10.0.0.1"),
+    ("10.0.0.1\x0bx", "10.0.0.1"),  # vertical tab
+    ("10.0.0.1 ", "10.0.0.1"),
+    ("127.0.0.1 x", "127.0.0.1"),  # still loopback
+    ("1 ", "0.0.0.1"),
 ]
 
 NOT_INET_ATON = [
@@ -71,14 +78,22 @@ NOT_INET_ATON = [
     "0x1g",
     "+1",
     "-1",
-    " 1",
-    "1 ",
+    " 1",  # leading space is not skipped: the prefix is empty
+    " ",
     "1_0",  # int() would take the separator; C does not
     "0_x",
     "١",  # ARABIC-INDIC DIGIT ONE: int() would take it; C does not
     "localhost",
     "evil.example.com",
     "1.2.3.4a",
+    "10.0.0.1x",  # no whitespace to end the text: the whole string is read
+    # A radix prefix is written once. int(digits, base) would take a second
+    # one, and a bare "0x" needs at least one hex digit after it.
+    "0x",
+    "0x.1",
+    "0x0xa.1",  # int("0xa", 16)
+    "00o12.0.0.1",  # int("0o12", 8)
+    "0X0X1",
 ]
 
 
