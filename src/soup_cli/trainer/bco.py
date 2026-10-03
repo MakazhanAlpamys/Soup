@@ -10,7 +10,6 @@ Each row is internally split into two rows for TRL's BCOTrainer
 
 from __future__ import annotations
 
-import math
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
@@ -186,12 +185,10 @@ class BCOTrainerWrapper:
             output_dir = output_dir / cfg.experiment_name
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        # --- Calculate warmup steps from ratio ---
-        total_steps = (
-            math.ceil(len(train_ds) / batch_size / tcfg.gradient_accumulation_steps)
-            * tcfg.epochs
-        )
-        warmup_steps = int(total_steps * tcfg.warmup_ratio)
+        # --- Calculate warmup steps from ratio (#1431) ---
+        from soup_cli.utils.warmup import resolve_trainer_warmup_steps
+
+        warmup_steps = resolve_trainer_warmup_steps(tcfg.warmup_ratio)
 
         # --- BCO config ---
         _bf16, _fp16 = bf16_fp16_flags(self.device)

@@ -178,6 +178,7 @@ def _cfg(weights, out_dir, task, **training_over):
         "batch_size": _MIN_BATCH.get(task, 1),
         "quantization": "none",
         "epochs": 1,
+        "warmup_ratio": 0.0,
         "logging_steps": 1,
         "save_steps": 1000,
         "lora": {"r": 4, "alpha": 8, "target_modules": ["q_proj", "v_proj"]},

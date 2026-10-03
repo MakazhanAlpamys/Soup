@@ -740,11 +740,10 @@ class DistillTrainerWrapper:
         output_dir.mkdir(parents=True, exist_ok=True)
 
         batch_size = tcfg.batch_size if tcfg.batch_size != "auto" else 4
-        total_steps = (
-            math.ceil(len(train_ds) / batch_size / tcfg.gradient_accumulation_steps)
-            * tcfg.epochs
-        )
-        warmup_steps = int(total_steps * tcfg.warmup_ratio)
+        # --- Calculate warmup steps from ratio (#1431) ---
+        from soup_cli.utils.warmup import resolve_trainer_warmup_steps
+
+        warmup_steps = resolve_trainer_warmup_steps(tcfg.warmup_ratio)
 
         _bf16, _fp16 = bf16_fp16_flags(self.device)
         args = TrainingArguments(

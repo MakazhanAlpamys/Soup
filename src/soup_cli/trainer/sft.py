@@ -931,14 +931,10 @@ class SFTTrainerWrapper(StreamingSetupMixin):
         if tcfg.quantization_aware == "quest":
             self._setup_quest(train_ds)
 
-        # --- Calculate warmup steps from ratio ---
-        import math
+        # --- Calculate warmup steps from ratio (#1431) ---
+        from soup_cli.utils.warmup import resolve_trainer_warmup_steps
 
-        total_steps = (
-            math.ceil(len(train_ds) / batch_size / tcfg.gradient_accumulation_steps)
-            * tcfg.epochs
-        )
-        warmup_steps = int(total_steps * tcfg.warmup_ratio)
+        warmup_steps = resolve_trainer_warmup_steps(tcfg.warmup_ratio)
 
         # --- Training args ---
         # v0.33.0 #58: auto_mixed_precision wires pick_mixed_precision()
