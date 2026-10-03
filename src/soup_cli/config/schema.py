@@ -1272,9 +1272,10 @@ class TrainingConfig(BaseModel):
     freeze_trainable_layers: Optional[int] = Field(
         default=None,
         description=(
-            "LLaMA Pro: applies only together with expand_layers and is "
-            "refused without it. A positive value freezes every parameter "
-            "except the appended blocks. Magnitude capped at 1000. "
+            "LLaMA Pro: applies only together with expand_layers, must equal "
+            "it, and is refused otherwise. It freezes every parameter of the "
+            "original model so only the appended blocks train; it does not "
+            "select top-N or bottom-N layers. Magnitude capped at 1000. "
             "(v0.41.0)"
         ),
     )
@@ -4152,15 +4153,32 @@ class TrainingConfig(BaseModel):
             raise ValueError(
                 "expand_layers requires freeze_trainable_layers (LLaMA Pro "
                 "freezes the original layers and trains only the new blocks). "
-                "Set freeze_trainable_layers: <signed int>."
+                f"Set freeze_trainable_layers: {self.expand_layers}."
             )
         if self.expand_layers is None and self.freeze_trainable_layers is not None:
             raise ValueError(
                 "freeze_trainable_layers only applies together with "
-                "expand_layers (LLaMA Pro block expansion), where a positive "
-                "value trains only the appended blocks. Without expand_layers "
-                "nothing reads it, so the run trains as if it were unset. "
-                "Remove it, or set expand_layers: <int> to append new blocks."
+                "expand_layers (LLaMA Pro block expansion), where it must equal "
+                "expand_layers and trains only the appended blocks. Without "
+                "expand_layers nothing reads it, so the run trains as if it were "
+                "unset. Remove it, or set expand_layers: <int> to append new blocks."
+            )
+        if (
+            self.expand_layers is not None
+            and self.freeze_trainable_layers is not None
+            and self.freeze_trainable_layers != self.expand_layers
+        ):
+            # #1409: the value was only ever read for its sign, so 1, 2 and 4
+            # trained the same appended blocks and 0 or a negative value
+            # silently trained the whole expanded model.
+            raise ValueError(
+                f"freeze_trainable_layers: {self.freeze_trainable_layers} does not "
+                f"match expand_layers: {self.expand_layers}. With expand_layers "
+                "set, freeze_trainable_layers freezes every parameter of the "
+                "original model and trains only the appended blocks. It does not "
+                "select the top-N or bottom-N layers, and 0 or a negative value "
+                "does not switch the freeze off. "
+                f"Set freeze_trainable_layers: {self.expand_layers}."
             )
         # The expand_layers + quantization rule is enforced by
         # SoupConfig._validate_expand_layers_quantization, which runs after
