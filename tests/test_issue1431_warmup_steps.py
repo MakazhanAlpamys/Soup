@@ -263,3 +263,29 @@ def test_wrapper_source_passes_the_ratio_not_a_row_count_estimate(name: str) -> 
             assert "warmup_ratio" not in ast.unparse(node), (
                 f"{name}: warmup_ratio is multiplied into a step count again"
             )
+    has_arg = any(
+        (
+            isinstance(node, ast.keyword)
+            and node.arg == "warmup_steps"
+            and getattr(node.value, "id", None) == "warmup_steps"
+        )
+        or (
+            isinstance(node, ast.Dict)
+            and any(
+                getattr(k, "value", None) == "warmup_steps"
+                and getattr(v, "id", None) == "warmup_steps"
+                for k, v in zip(node.keys, node.values)
+            )
+        )
+        for node in ast.walk(tree)
+    )
+    assert has_arg, f"{name}: warmup_steps argument not passed in source"
+
+
+def test_short_run_at_default_ratio_gets_one_warmup_step(tmp_path: Path) -> None:
+    from transformers import TrainingArguments
+
+    args = TrainingArguments(output_dir=str(tmp_path / "out"), warmup_steps=0.03)
+    assert args.get_warmup_steps(10) == 1
+    assert args.get_warmup_steps(33) == 1
+    assert args.get_warmup_steps(34) == 2
