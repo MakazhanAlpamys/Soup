@@ -40,6 +40,10 @@ logger = logging.getLogger(__name__)
 _PATCH_MARKER = "_soup_fast_lora_single_projection"
 _ORIGINAL_FORWARD_MARKER = "_soup_fast_lora_original_forward"
 _HAD_INSTANCE_FORWARD_MARKER = "_soup_fast_lora_had_instance_forward"
+# When two patchers want one projection, the group kernel takes it, whichever
+# was patched first: shared-X Q/K/V owns q/k/v and the fused SwiGLU MLP owns
+# gate/up/down. A group patcher releases this kernel from the projections it
+# takes and marks them with _GROUP_PATCH_OWNER_MARKER, which this one skips.
 _GROUP_PATCH_OWNER_MARKER = "_soup_fast_lora_group_owner"
 _FORWARD_OWNER_MARKER = "_soup_fast_lora_forward_owner"
 _OWNER = "single"

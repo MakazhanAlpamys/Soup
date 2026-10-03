@@ -1,15 +1,17 @@
-"""#1165 — Fast-LoRA patchers unpatch back to the model they started from.
+"""#1165 — two Fast-LoRA patchers on one model compose by a stated precedence and
+unpatch back to the model they started from.
 
-Two kernels patched on one model and unpatched in either order leave no
-``forward`` instance attribute and no marker behind, with the same autograd
-nodes and logits as before; the single-projection kernel used to write its
-captured bound method back as an instance attribute. Unpatching a kernel that
-is not installed changes nothing.
+The group kernels own their projections: shared-X Q/K/V owns q/k/v and the fused
+SwiGLU MLP owns gate/up/down, whichever was patched first. The single-projection
+kernel keeps every other LoRA linear. Unpatching any of them, in any order,
+leaves no ``forward`` instance attribute and no marker behind, and unpatching a
+kernel that is not installed changes nothing.
 """
 
 from __future__ import annotations
 
 import itertools
+import types
 
 import pytest
 
@@ -106,7 +108,8 @@ def test_two_kernels_unpatch_to_the_starting_model(patched, unpatched):
         PATCHERS[name][0](model)
     for name in unpatched:
         PATCHERS[name][1](model)
-    assert _structure(model) == start
+    # No module keeps an instance forward or a marker attribute.
+    assert _structure(model) == start == ([], [])
     assert _kernels(model) == start_kernels
     assert torch.allclose(_logits(model), start_logits, atol=1e-6)
 
@@ -129,17 +132,95 @@ def test_an_instance_forward_set_before_patching_comes_back():
     assert q_proj.__dict__["forward"] is own
 
 
-def test_a_forward_installed_over_the_kernel_is_left_in_place():
-    import types
-
+def test_a_forward_installed_over_the_single_projection_kernel_stays():
     model = _model()
-    q_proj = _layer(model).self_attn.q_proj
     fast_lora.patch_fast_lora_single_projection(model)
-    replacement = lambda _self, x: torch.zeros_like(x)  # noqa: E731
+    q_proj = _layer(model).self_attn.q_proj
+
+    def replacement(self, x, *args, **kwargs):
+        return x
+
     q_proj.forward = types.MethodType(replacement, q_proj)
-    fast_lora.unpatch_fast_lora_single_projection(model)
-    assert q_proj.forward.__func__ is replacement
+    assert fast_lora.unpatch_fast_lora_single_projection(model) == len(TARGETS)
+    # The kernel gives up its markers, not a forward that is no longer its own.
+    assert q_proj.__dict__["forward"].__func__ is replacement
     assert not [k for k in vars(q_proj) if k.startswith("_soup_")]
+
+
+def test_mlp_leaves_projections_another_group_owns():
+    model = _model()
+    mlp = _layer(model).mlp
+    setattr(mlp.gate_proj, fast_lora._GROUP_PATCH_OWNER_MARKER, "another-group")
+    assert fast_lora_mlp.patch_fast_lora_mlp(model) == 0
+    assert "forward" not in vars(mlp)
+    assert getattr(mlp.gate_proj, fast_lora._GROUP_PATCH_OWNER_MARKER) == "another-group"
+    for proj in (mlp.up_proj, mlp.down_proj):
+        assert not [k for k in vars(proj) if k.startswith("_soup_")]
+
+
+@pytest.mark.parametrize("order", [("single", "qkv"), ("qkv", "single")])
+def test_qkv_owns_q_k_v_in_either_order(order):
+    model = _model()
+    for name in order:
+        PATCHERS[name][0](model)
+    kernels = _kernels(model)
+    assert {kernels[p] for p in ("q_proj", "k_proj", "v_proj")} == {"_FastLoraQKVBackward"}
+    assert kernels["o_proj"] == "_FastLoraSingleProjectionBackward"
+
+
+@pytest.mark.parametrize("order", [("single", "mlp"), ("mlp", "single")])
+def test_mlp_owns_gate_up_down_in_either_order(order):
+    model = _model()
+    for name in order:
+        PATCHERS[name][0](model)
+    mlp = _layer(model).mlp
+    assert _kernels(model)["mlp"] == "_FastLoraSwiGLUBackward"
+    for proj in (mlp.gate_proj, mlp.up_proj, mlp.down_proj):
+        assert "forward" not in vars(proj), "a single-projection override under the MLP kernel"
+
+
+def test_the_group_kernel_takes_over_from_the_single_projection_one():
+    model = _model()
+    assert fast_lora.patch_fast_lora_single_projection(model) == 7
+    assert fast_lora_qkv.patch_fast_lora_qkv(model) == 1
+    assert fast_lora_mlp.patch_fast_lora_mlp(model) == 1
+    # Only o_proj is still the single-projection kernel's to restore.
+    assert fast_lora.unpatch_fast_lora_single_projection(model) == 1
+
+
+@pytest.mark.parametrize(
+    "group, taken",
+    [
+        ("qkv", ("self_attn.q_proj", "self_attn.k_proj", "self_attn.v_proj")),
+        ("mlp", ("mlp.gate_proj", "mlp.up_proj", "mlp.down_proj")),
+    ],
+)
+def test_unpatching_a_group_kernel_does_not_bring_the_single_one_back(group, taken):
+    model = _model()
+    start_kernels = _kernels(model)
+    fast_lora.patch_fast_lora_single_projection(model)
+    PATCHERS[group][0](model)
+    assert PATCHERS[group][1](model) == 1
+
+    layer = _layer(model)
+    for path in taken:
+        proj = layer.get_submodule(path)
+        assert "forward" not in vars(proj), path
+        assert not [k for k in vars(proj) if k.startswith("_soup_")], path
+    kernels = _kernels(model)
+    # What the group kernel took is peft's again; o_proj is still the
+    # single-projection kernel's, with the other group's three projections.
+    for name in ("q_proj", "k_proj", "v_proj") if group == "qkv" else ("mlp",):
+        assert kernels[name] == start_kernels[name]
+    assert kernels["o_proj"] == "_FastLoraSingleProjectionBackward"
+    assert fast_lora.unpatch_fast_lora_single_projection(model) == 4
+
+
+def test_the_single_projection_kernel_skips_what_a_group_kernel_owns():
+    model = _model()
+    fast_lora_qkv.patch_fast_lora_qkv(model)
+    fast_lora_mlp.patch_fast_lora_mlp(model)
+    assert fast_lora.patch_fast_lora_single_projection(model) == 1
 
 
 @pytest.mark.parametrize(
