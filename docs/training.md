@@ -1316,7 +1316,7 @@ An answer phrase's number is read from its own clause: `The answer is 41 apples,
 41, because the clause ends at the comma. A clause that names **more than one distinct value** is
 a hedge and states no answer: `The answer is either 41 or 42.`, `Answer: 41 or 42`,
 `The answer is 42 (or 43).` and `the answer is 41, 42 or 43` score 0.0 against every gold, and a
-gold written that way is refused. A justification inline or after punctuation ends the clause
+gold written that way is refused. A `because` / `since` inline or after punctuation ends the clause
 (`The answer is 42 because 6*7=42.` and `The answer is 42, because 6*7=42.` both read 42),
 while parenthetical justifications belong to the clause and hedge it (`The answer is 42 (6*7=42).`).
 The same value twice is not a hedge (`42 (i.e. 42.0)`), and the digits of one bracketed or LaTeX

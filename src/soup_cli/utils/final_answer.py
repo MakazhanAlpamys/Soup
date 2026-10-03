@@ -38,8 +38,7 @@ answer, so a completion that hedges scores 0.0 and a gold that hedges is refused
 inline or after punctuation ends the clause (``42 because 6*7=42`` and ``42, because 6*7=42`` both
 answer 42), while parenthetical justifications belong to the clause and hedge it (``42 (6*7=42)``).
 One value, even repeated (``42 or 42.0``), is the clause's number; a clause with no digits at all
-falls back to
-a completion's last number.
+falls back to a completion's last number.
 
 A text that states no explicit answer is free text. A reference is then its whole value, which
 must fit on one line (a bare answer such as ``"42"`` or ``"Paris"``). A completion reads as its

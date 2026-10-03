@@ -210,6 +210,23 @@ class TestTheConnectiveBoundaryItself:
         assert parse_completion(completion).text == "Paris"
         assert _scores(completion, "Paris") == (1.0, 1.0)
 
+    @pytest.mark.parametrize("word", ["as", "As", "AS"])
+    def test_as_does_not_end_the_clause(self, word):
+        # The ruling on #1328: not `as`, which appears inside answers. Without a cut the clause
+        # keeps 6 and 7 next to 42: still a hedge.
+        completion = f"The answer is 42 {word} 6*7=42."
+        assert parse_completion(completion) is None
+        assert _scores(completion, "42") == (0.0, 0.0)
+
+    @pytest.mark.parametrize("connective", ["because", "Because", "since", "SINCE"])
+    def test_a_connective_that_ends_the_text_ends_the_clause(self, connective):
+        # A completion cut off at max_tokens right after the connective: no character follows it,
+        # which must neither crash the reward nor stop it reading 42.
+        completion = f"The answer is 42 {connective}"
+        assert parse_completion(completion).number == Decimal(42)
+        assert _scores(completion, "42") == (1.0, 1.0)
+        assert parse_completion(completion + "\n6*7=42").number == Decimal(42)
+
 
 class TestAnAnswerThatBeginsWithAConnective:
     """The connective ends a clause that has an answer in it; it never empties one."""
