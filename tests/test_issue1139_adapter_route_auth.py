@@ -72,6 +72,10 @@ def test_the_token_gates_the_adapter_listing_but_not_the_model_list():
     assert client.get("/v1/adapters", headers=_bearer(TOKEN)).status_code == 200
 
 
+def test_no_token_on_a_lan_bind_refuses_the_adapter_routes():
+    assert _client(LAN_HOST, None).post("/v1/adapters/activate/chat").status_code == 401
+
+
 def test_the_host_guard_runs_before_the_token_check():
     client = _client(LAN_HOST, TOKEN)
 
@@ -124,7 +128,7 @@ def _route_httpx_to(monkeypatch, client: TestClient) -> list:
 
     sent = []
 
-    def post(url, headers=None, timeout=None):
+    def post(url, headers=None, timeout=None, **_options):
         sent.append(dict(headers or {}))
         return client.post(url, headers=headers or {})
 
@@ -144,8 +148,8 @@ def test_the_loop_token_reaches_a_server_started_with_it(deploy_env, monkeypatch
     assert sent == [_bearer(TOKEN)]
 
 
-@pytest.mark.parametrize("token", [None, "wrong"], ids=["missing", "wrong"])
-def test_a_refused_activate_names_the_credential(deploy_env, monkeypatch, token):
+@pytest.mark.parametrize("token", [None, "wrong-0xC0FFEE"], ids=["missing", "wrong"])
+def test_a_refused_activate_names_the_credential(deploy_env, monkeypatch, caplog, token):
     import soup_cli.utils.loop_stages as ls
 
     _route_httpx_to(monkeypatch, _client(LAN_HOST, TOKEN))
@@ -160,6 +164,9 @@ def test_a_refused_activate_names_the_credential(deploy_env, monkeypatch, token)
     assert "SOUP_TOOL_AUTH_TOKEN" in out["notes"]
     expected = "rejected the tool token" if token else "requires its tool token"
     assert expected in out["notes"]
+    if token:
+        assert token not in out["notes"]
+        assert token not in caplog.text
 
 
 def test_no_token_sends_no_authorization_header(deploy_env, monkeypatch):
@@ -219,3 +226,45 @@ def test_the_token_is_masked_in_the_audit_log():
 
     assert TOKEN not in " ".join(masked)
     assert "--tool-auth-token" in masked
+
+
+def test_the_activate_post_ignores_environment_proxies(monkeypatch):
+    import socket
+    import threading
+
+    import soup_cli.utils.loop_stages as ls
+
+    hits = []
+    proxy = socket.socket()
+    proxy.bind(("127.0.0.1", 0))
+    proxy.listen(1)
+    proxy.settimeout(3)
+
+    def accept_one():
+        try:
+            conn, _ = proxy.accept()
+        except OSError:
+            return
+        hits.append(conn.recv(65536))
+        conn.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+        conn.close()
+
+    thread = threading.Thread(target=accept_one, daemon=True)
+    thread.start()
+
+    dead = socket.socket()
+    dead.bind(("127.0.0.1", 0))
+    dead_port = dead.getsockname()[1]
+    dead.close()  # nothing listens here, so only a proxy could answer
+
+    monkeypatch.setattr(ls, "_DEPLOY_POSTER", None)
+    monkeypatch.setenv("HTTP_PROXY", f"http://127.0.0.1:{proxy.getsockname()[1]}")
+    monkeypatch.delenv("NO_PROXY", raising=False)
+    monkeypatch.delenv("no_proxy", raising=False)
+    monkeypatch.setenv(ls.TOOL_AUTH_TOKEN_ENV, "proxy-leak-token")
+
+    assert ls._post_activate(f"http://127.0.0.1:{dead_port}", "chat") is False
+
+    proxy.close()
+    thread.join(5)
+    assert not hits, "the tool token must not be sent to an environment proxy"

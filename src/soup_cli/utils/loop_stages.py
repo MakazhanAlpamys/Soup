@@ -324,7 +324,9 @@ def _post_activate(endpoint: str, name: str) -> bool:
     token = os.environ.get(TOOL_AUTH_TOKEN_ENV)
     headers = {"Authorization": f"Bearer {token}"} if token else {}
     try:
-        resp = httpx.post(url, headers=headers, timeout=5.0)
+        # trust_env=False: an HTTP_PROXY would otherwise receive the Bearer token
+        # in clear text on the loopback http case.
+        resp = httpx.post(url, headers=headers, timeout=5.0, trust_env=False)
     except Exception:  # noqa: BLE001 — deploy must never crash the loop
         return False
     if resp.status_code == 401:
