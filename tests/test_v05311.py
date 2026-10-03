@@ -1309,6 +1309,7 @@ class TestOnARealTrlTrainer:
             "data: {train: ./unused.jsonl, format: dpo, max_length: 64}\n"
             "training:\n  epochs: 1\n  batch_size: 2\n  quantization: none\n"
             "  preference_loss_weights: {simpo: 0.7, orpo: 0.3}\n"
+            "  orpo_beta: 0.4\n  simpo_gamma: 1.5\n"
             "  lora: {r: 4, alpha: 8, dropout: 0.0}\noutput: ./out\n"
         )
         rows = [
@@ -1326,8 +1327,12 @@ class TestOnARealTrlTrainer:
         chosen, rejected = type(trainer).concatenated_forward(
             trainer, trainer.model, batch,
         )[:2]
+        # The config's own fields, not their defaults: ORPO's alpha is
+        # `training.orpo_beta`, and reading a hardcoded 1.0 here is the bug
+        # this test existed to catch (#1425 review).
+        assert float(trainer.simpo_gamma) == 1.5  # the SimPO wrapper's own
         simpo = trainer.cpo_loss(chosen, rejected)[0].mean()
-        orpo = compute_orpo_term(chosen, rejected, 1.0)
+        orpo = compute_orpo_term(chosen, rejected, 0.4)  # training.orpo_beta
         assert float(blended) == pytest.approx(float(0.7 * simpo + 0.3 * orpo), rel=1e-6)
         blended.backward()
         assert any(
@@ -1374,6 +1379,77 @@ class TestOnARealTrlTrainer:
             batch = trainer._prepare_inputs(next(iter(trainer.get_train_dataloader())))
             losses.append(float(trainer.compute_loss(trainer.model, batch)))
         assert losses[0] != pytest.approx(losses[1], rel=1e-9), (field, losses)
+
+    def test_the_same_weights_in_either_order_train_the_same_objective(
+        self, tmp_path, monkeypatch,
+    ):
+        """SimPO's beta must come from the config, not the primary trainer.
+
+        Under an ORPO primary, `trainer.beta` is `orpo_beta` (0.7 here), so a
+        beta read off the trainer would silently scale SimPO's term by it. Only
+        a real trainer exposes that attribute, which is why the fake-trainer
+        test cannot catch this one (#1425 review).
+        """
+        from soup_cli.config.loader import load_config_from_string
+        from soup_cli.trainer.preference import PreferenceTrainerWrapper
+
+        losses = []
+        for i, weights in enumerate(("{simpo: 0.5, orpo: 0.5}", "{orpo: 0.5, simpo: 0.5}")):
+            sub = tmp_path / f"r{i}"
+            sub.mkdir()
+            monkeypatch.chdir(sub)
+            base = self._tiny_model_dir(sub)
+            cfg = load_config_from_string(
+                f"base: {base.as_posix()}\ntask: preference\n"
+                "data: {train: ./unused.jsonl, format: dpo, max_length: 64}\n"
+                "training:\n  epochs: 1\n  batch_size: 2\n  quantization: none\n"
+                f"  preference_loss_weights: {weights}\n"
+                "  orpo_beta: 0.7\n  simpo_gamma: 2.0\n"
+                "  lora: {r: 4, alpha: 8, dropout: 0.0}\noutput: ./out\n"
+            )
+            wrapper = PreferenceTrainerWrapper(cfg, device="cpu")
+            wrapper.setup({"train": [
+                {"prompt": "what is one plus one ?", "chosen": "two",
+                 "rejected": "one plus one is three"},
+                {"prompt": "hello there", "chosen": "hi there hello", "rejected": "no"},
+            ]})
+            trainer = wrapper.trainer
+            batch = trainer._prepare_inputs(next(iter(trainer.get_train_dataloader())))
+            losses.append(float(trainer.compute_loss(trainer.model, batch)))
+        assert losses[0] == pytest.approx(losses[1], rel=1e-6), losses
+
+    def test_the_setup_line_says_the_terms_are_margin_only(self, tmp_path, monkeypatch, capsys):
+        """Someone reading a training log never sees the docs (#1425 review).
+
+        Under (b) the blend's terms carry no NLL, so the `Multi-objective
+        preference loss:` line has to say so itself.
+        """
+        from soup_cli.config.loader import load_config_from_string
+        from soup_cli.trainer.preference import PreferenceTrainerWrapper
+
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("COLUMNS", "200")  # rich wraps, the phrase must not split
+
+        def build(weights):
+            cfg = load_config_from_string(
+                "base: ./unused\ntask: preference\n"
+                "data: {train: ./unused.jsonl, format: dpo, max_length: 64}\n"
+                "training:\n  epochs: 1\n  batch_size: 2\n  quantization: none\n"
+                f"  preference_loss_weights: {weights}\n"
+                "  lora: {r: 4, alpha: 8, dropout: 0.0}\noutput: ./out\n"
+            )
+            PreferenceTrainerWrapper(cfg, device="cpu")._build_multi_objective()
+            return capsys.readouterr().out
+
+        out = build("{simpo: 0.6, orpo: 0.4}")
+        assert "Multi-objective preference loss" in out, out
+        assert "preference terms only, without the NLL term" in out, out
+
+        # A blend that will refuse anyway has no reason to claim anything about
+        # its terms, and must not print the note.
+        out = build("{simpo: 0.6, dpo: 0.4}")
+        assert "Multi-objective preference loss" in out, out
+        assert "preference terms only" not in out, out
 
     def test_setup_installs_the_capture_and_the_blend(self, tmp_path, monkeypatch):
         """The two wrappers `setup()` must install, without building a trainer.
@@ -1434,9 +1510,9 @@ class TestOnARealTrlTrainer:
         assert params["simpo"]["beta"] != 7.0, params
 
     def test_the_default_beta_matches_the_one_the_wrappers_build(self):
-        """`DEFAULT_BETA` stands in for trl's config default, because no Soup
-        wrapper sets beta explicitly. If trl moves it, this blend's scale moves
-        silently — so pin the number against trl itself."""
+        """`DEFAULT_BETA` stands in for trl's CPOConfig default (the SimPO wrapper
+        sets no beta). Read the dataclass default itself: constructing a config
+        resolves bf16 and raises on a CPU-only runner."""
         from soup_cli.trainer._trl_compat import resolve_trl_symbol
         from soup_cli.utils.preference_combine import DEFAULT_BETA
 
@@ -1445,14 +1521,10 @@ class TestOnARealTrlTrainer:
         except Exception as exc:  # noqa: BLE001 — a broken trl is not a failure
             pytest.skip(f"this environment cannot import a trl CPO config: {exc}")
 
-        fields = {f.name for f in cpo_config_cls.__dataclass_fields__.values()}
-        if "beta" not in fields:
+        field = cpo_config_cls.__dataclass_fields__.get("beta")
+        if field is None:
             pytest.skip("trl's CPOConfig no longer names a beta")
-        assert cpo_config_cls(beta=DEFAULT_BETA).beta == DEFAULT_BETA
-        assert DEFAULT_BETA == 0.1, (
-            "trl's CPOConfig beta default moved; re-derive DEFAULT_BETA and the "
-            "blend's scale from the new value"
-        )
+        assert field.default == DEFAULT_BETA, (field.default, DEFAULT_BETA)
 
 
 # ---------------------------------------------------------------------------

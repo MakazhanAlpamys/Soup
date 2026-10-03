@@ -37,13 +37,14 @@ REF_MODEL_LOSSES: frozenset = frozenset({"dpo", "ipo"})
 REF_FREE_LOSSES: frozenset = frozenset({"simpo", "orpo"})
 UNPAIRED_LOSSES: frozenset = frozenset({"bco"})
 
-#: The beta every Soup preference wrapper builds with. Soup has no ``beta``
-#: schema field — ``simpo.py`` leaves CPOConfig's own default in place and
-#: ``dpo.py`` likewise — so this is the value trl's `CPOConfig` / `DPOTrainer`
-#: carry, NOT ``training.orpo_beta`` (``orpo.py:211`` uses that one). Reading
-#: beta off the primary trainer made the blend's objective depend on which loss
-#: happened to be named first (#1425 review); ``tests/test_v05311.py`` pins this
-#: constant against trl so a default change cannot drift silently.
+#: The beta the Soup SimPO wrapper builds with. Soup has no `beta` schema field
+#: for SimPO — `simpo.py` leaves `CPOConfig`'s own default in place — so this is
+#: the value trl's `CPOConfig` carries. DPO and IPO have their own fields
+#: (`dpo_beta`, `ipo_tau`), so `blend_loss_params` reads those instead; this
+#: constant is only SimPO's fallback. Reading beta off the primary trainer made
+#: the blend's objective depend on which loss happened to be named first
+#: (#1425 review); `tests/test_v05311.py` pins it against trl so a default change
+#: cannot drift silently.
 DEFAULT_BETA: float = 0.1
 
 #: Fallbacks for the two knobs `params` may omit. These mirror the schema
@@ -233,16 +234,18 @@ def blend_loss_params(cfg) -> dict:
     objective. Config is the only place these are unambiguous.
 
     ``training.orpo_beta`` is ORPO's odds-ratio weight, so it becomes ORPO's
-    ``alpha`` here; ``training.simpo_gamma`` is SimPO's margin. Beta has no
-    schema field — every Soup wrapper leaves trl's default in place — so it
-    comes from :data:`DEFAULT_BETA` rather than off a trainer.
+    ``alpha`` here; ``training.simpo_gamma`` is SimPO's margin. DPO and IPO
+    have real beta fields (``dpo_beta``, ``ipo_tau``) that ``dpo.py`` and
+    ``ipo.py`` already pass to trl — read those too, or their terms would carry
+    a beta no config can reach (#1425 review). Only SimPO has no field of its
+    own, so it falls back to :data:`DEFAULT_BETA`.
     """
     tcfg = getattr(cfg, "training", None)
     if tcfg is None:  # defensive — a config always has `training`
         return {}
     return {
-        "dpo": {"beta": DEFAULT_BETA},
-        "ipo": {"beta": DEFAULT_BETA},
+        "dpo": {"beta": float(getattr(tcfg, "dpo_beta", DEFAULT_BETA))},
+        "ipo": {"beta": float(getattr(tcfg, "ipo_tau", DEFAULT_BETA))},
         "simpo": {
             "beta": DEFAULT_BETA,
             "gamma": float(getattr(tcfg, "simpo_gamma", DEFAULT_SIMPO_GAMMA)),

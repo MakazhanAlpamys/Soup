@@ -149,6 +149,7 @@ class PreferenceTrainerWrapper:
         from rich.console import Console as _Console
 
         from soup_cli.utils.preference_combine import (
+            REF_FREE_LOSSES,
             describe_blend,
             validate_weight_compat,
         )
@@ -179,7 +180,13 @@ class PreferenceTrainerWrapper:
             raise ValueError(f"unknown primary preference loss: {primary!r}")
         _Console().print(
             f"[cyan]Multi-objective preference loss:[/] {describe_blend(weights)} "
-            f"(primary: {primary})"
+            f"(primary: {primary}"
+            + (
+                "; simpo/orpo are preference terms only, without the NLL term"
+                if set(weights) <= REF_FREE_LOSSES
+                else ""
+            )
+            + ")"
         )
         self._active_weights = dict(weights)
         return PrimaryWrapper(inner_cfg, **kwargs)

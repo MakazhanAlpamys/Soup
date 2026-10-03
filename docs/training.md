@@ -932,8 +932,8 @@ Mix DPO / SimPO / ORPO / IPO terms in one training run by setting
 task: preference
 training:
   preference_loss_weights:
-    dpo: 0.6
-    simpo: 0.4
+    simpo: 0.6
+    orpo: 0.4
 ```
 
 The combine wrapper computes a weighted sum via the in-tree
@@ -946,7 +946,7 @@ built:
 | Blend | Result on trl 0.29 |
 | --- | --- |
 | `simpo` + `orpo` | Trains. The CPO (SimPO) and ORPO trainers both return their per-sequence log-probs. |
-| anything naming `dpo` or `ipo` | Stops at the first step and names the terms. Those trainers compute log-probs inline and publish only means, so there is no hook to read — and they need a frozen reference model this path does not build. |
+| anything naming `dpo` or `ipo` | Stops at the first step and names the terms. They need a frozen reference model this path does not build, so there are no reference log-probs to read — and their own trainers compute log-probs inline, publishing only means. |
 | `bco` mixed with anything | Rejected at config load (data format incompatible). |
 
 **What a term is.** In a blend, `simpo` and `orpo` are their *preference terms
@@ -1260,12 +1260,12 @@ training:
 
 Gated to DPO-family tasks (`dpo`, `ipo`, or `preference` with `preference_loss in {dpo, ipo}`); transformers backend only. `dpo_ref_regen_epochs` is refused at config load: it never regenerated the reference. With LoRA there is no separate reference model to copy into, and the DPO-family trainers cannot run with `lora.r: 0`. The wiring is tracked in [#1345](https://github.com/MakazhanAlpamys/Soup/issues/1345).
 
-### Multi-objective preference loss (schema-only in v0.40.0)
+### Multi-objective preference loss
 
 ```yaml
 task: preference
 training:
-  preference_loss_weights: {dpo: 0.7, bco: 0.3}
+  preference_loss_weights: {simpo: 0.7, orpo: 0.3}
 ```
 
 Schema validates 2–5 entries summing to 1, and rejects `bco` mixed with a
