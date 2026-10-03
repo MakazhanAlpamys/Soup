@@ -29,6 +29,15 @@ are seen, which is what keeps the guarantee exact. The boundaries are
 `reject_h0` reports its direction, `better` or `worse`, from the metric's
 polarity in `HIGHER_IS_BETTER`. Record: benchmarks/gate-1265-ab-nig.md.
 
+#1419 added a hold on `accept_h0` (see ACCEPT_HOLD_SPREAD_RATIO) which fixes the
+wrong accepts after a saturated start but, because the held-out rows are fixed,
+can leave a run at `continue` for the whole dataset with its statistic already
+past the accept boundary. That state is reported, not fixed, here (#1524): the
+verdict carries `accept_held` and the two spreads, so the panel can advise
+dropping or reordering the saturated rows rather than collecting more samples
+that provably cannot help. The accept rule itself is unchanged; a real fix
+belongs with the statistic (#1418), which has no held-out prior to go stale.
+
 Two known limitations:
 1. Single metric per pass — multi-metric correction (Bonferroni / Holm)
    is operator-controlled. The CLI accepts one metric at a time.
@@ -185,6 +194,14 @@ class MsprtVerdict:
     ``direction`` is ``"better"`` or ``"worse"`` (the treatment relative to
     control, by the metric's polarity) on a ``reject_h0``, and ``None`` on
     ``accept_h0`` / ``continue``.
+
+    ``accept_held`` is ``True`` only when ``ACCEPT_HOLD_SPREAD_RATIO`` is what
+    keeps the verdict at ``continue`` (#1524), and then ``held_out_spread`` and
+    ``tested_spread`` carry the two pooled standard deviations the 3x rule
+    compared. Both are ``None`` on every other verdict: there is no hold, so
+    there is nothing to report, and a consumer must not print the note for a
+    run it does not describe. All three are additive, so a verdict from before
+    this change still reads as "not held".
     """
 
     decision: str
@@ -194,6 +211,10 @@ class MsprtVerdict:
     mean_control: float
     mean_treatment: float
     direction: str | None = None
+    accept_held: bool = False
+    held_out_spread: float | None = None
+    tested_spread: float | None = None
+    held_out_rows: int = 0
 
     def __post_init__(self) -> None:
         if self.decision not in _VALID_DECISIONS:
@@ -212,6 +233,53 @@ class MsprtVerdict:
             raise ValueError(
                 f"only a reject_h0 verdict has a direction; got {self.direction!r} "
                 f"with decision {self.decision!r}"
+            )
+        if isinstance(self.accept_held, bool) is False:
+            raise TypeError(f"accept_held must be a bool, got {self.accept_held!r}")
+        # #1524 - the hold only ever fires on the accept branch, so a terminal
+        # decision claiming to be held is a caller bug, not a verdict.
+        if self.accept_held and self.decision != "continue":
+            raise ValueError(
+                f"only a continue verdict can be held by the spread rule; got "
+                f"accept_held=True with decision {self.decision!r}"
+            )
+        for name in ("held_out_spread", "tested_spread"):
+            value = getattr(self, name)
+            if value is None:
+                continue
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise TypeError(f"{name} must be a number or None, got {value!r}")
+            if not math.isfinite(value) or value < 0.0:
+                raise ValueError(
+                    f"{name} must be a finite spread >= 0, got {value!r}"
+                )
+        if self.accept_held and (self.held_out_spread is None or self.tested_spread is None):
+            missing = [
+                name
+                for name in ("held_out_spread", "tested_spread")
+                if getattr(self, name) is None
+            ]
+            raise ValueError(
+                f"a held verdict must carry both spreads; missing {', '.join(missing)}"
+            )
+        # No hold, no explanation: the spreads only exist to explain one.
+        if not self.accept_held and (
+            self.held_out_spread is not None or self.tested_spread is not None
+        ):
+            raise ValueError(
+                "held_out_spread / tested_spread are only meaningful with "
+                f"accept_held=True; got them with accept_held={self.accept_held!r}"
+            )
+        if isinstance(self.held_out_rows, bool) or not isinstance(self.held_out_rows, int):
+            raise TypeError(f"held_out_rows must be an int, got {self.held_out_rows!r}")
+        if self.held_out_rows < 0:
+            raise ValueError(
+                f"held_out_rows must be >= 0, got {self.held_out_rows}"
+            )
+        if self.accept_held and self.held_out_rows < 1:
+            raise ValueError(
+                "a held verdict must say how many rows were held out; got "
+                f"held_out_rows={self.held_out_rows}"
             )
 
 
@@ -429,6 +497,13 @@ def msprt_step(
 
     ``mean_control`` / ``mean_treatment`` and the row counts cover every row;
     the statistic and the direction use the rows after the held-out ones.
+
+    A ``continue`` may carry ``accept_held`` (#1524): when the 3x spread rule is
+    what is keeping the accept back, the verdict reports it and names both
+    spreads. That case is reported rather than fixed here — the held-out rows
+    are fixed, so a saturated warm-up is never released by more rows — because
+    a real fix belongs with the statistic (#1418), which has no held-out prior to
+    go stale.
     """
     ctrl = _validate_sample_list(control, arm="control")
     treat = _validate_sample_list(treatment, arm="treatment")
@@ -437,7 +512,16 @@ def msprt_step(
     if n_c and n_t:
         _require_finite_means(config.metric, ctrl, treat, sum(ctrl) / n_c, sum(treat) / n_t)
 
-    def verdict(llr: float = 0.0, decision: str = "continue", direction: str | None = None):
+    def verdict(
+        llr: float = 0.0,
+        decision: str = "continue",
+        direction: str | None = None,
+        *,
+        accept_held: bool = False,
+        held_out_spread: float | None = None,
+        tested_spread: float | None = None,
+        held_out_rows: int = 0,
+    ):
         return MsprtVerdict(
             decision=decision,
             log_likelihood_ratio=llr,
@@ -446,6 +530,10 @@ def msprt_step(
             mean_control=sum(ctrl) / n_c if n_c else 0.0,
             mean_treatment=sum(treat) / n_t if n_t else 0.0,
             direction=direction,
+            accept_held=accept_held,
+            held_out_spread=held_out_spread,
+            tested_spread=tested_spread,
+            held_out_rows=held_out_rows,
         )
 
     held = _held_out_rows(ctrl, treat)
@@ -502,8 +590,21 @@ def msprt_step(
         # accept back until the spreads agree; a reject is never held back, so
         # the Type-I bound is unchanged.
         held_out_sd = config.effect_size / standardised_effect
-        if math.sqrt(pooled_variance) > ACCEPT_HOLD_SPREAD_RATIO * held_out_sd:
-            return verdict(llr)
+        tested_sd = math.sqrt(pooled_variance)
+        if tested_sd > ACCEPT_HOLD_SPREAD_RATIO * held_out_sd:
+            # #1524 - the held-out rows are fixed, so once the hold fires no
+            # amount of extra data of the same kind releases it: the run stays
+            # at `continue` however many rows arrive, with a log_likelihood_ratio
+            # already below the accept boundary. Say so on the verdict, with the
+            # two spreads that decided it, so the panel can advise something the
+            # operator can act on instead of "collect more samples".
+            return verdict(
+                llr,
+                accept_held=True,
+                held_out_spread=held_out_sd,
+                tested_spread=tested_sd,
+                held_out_rows=held,
+            )
         return verdict(llr, "accept_h0")
     return verdict(llr)
 
