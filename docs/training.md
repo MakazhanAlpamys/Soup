@@ -92,12 +92,18 @@ they do not evaluate by default, and they do not withhold rows either:
 `data.val_split` is ignored, every row trains, and the run prints a one-line note
 saying so. On `grpo`, set `training.eval_steps` to hold the split out and
 evaluate it; TRL generates completions for the held-out prompts and logs
-`eval_loss` with the evaluation rewards. On `grpo` that `eval_loss` (the Val
-loss row and the tracker's `val_loss`) is TRL's policy objective on the
-held-out completions, not a likelihood: advantages are normalised within each
-group, so it stays near zero, can be negative, and does not measure held-out
-quality. The held-out reward is `eval_reward`, in the `log_history` of each
-checkpoint's `trainer_state.json`. TRL needs whole groups of
+`eval_loss` with the evaluation rewards. On `grpo` the run's validation number
+is the held-out reward, `eval_reward` (the mean reward over the held-out
+completions, higher is better): the live panel shows it as `Val reward`, the
+tracker stores it in the `val_reward` column of the metrics table, and the
+training event stream carries it as `val_reward` (#1389). TRL's `eval_loss` on
+`grpo` is its policy objective at importance ratio 1, not a likelihood:
+advantages are normalised within each group, so it stays near zero, can be
+negative, and does not measure held-out quality. It is not recorded or shown as
+a loss: a `grpo` run's `val_loss` series is empty, and `Val loss` does not
+appear. The per-task choice lives in `VALIDATION_METRICS` in
+`utils/eval_schedule.py`; every other task records `eval_loss` as `val_loss`.
+TRL needs whole groups of
 `num_generations` completions in an evaluation batch, so `grpo` evaluates at the
 largest multiple of `num_generations` that fits in the train batch, and says so
 when that differs from the train batch. The evaluation's rewards never reach the
