@@ -39,8 +39,10 @@ logger = logging.getLogger(__name__)
 
 _PATCH_MARKER = "_soup_fast_lora_single_projection"
 _ORIGINAL_FORWARD_MARKER = "_soup_fast_lora_original_forward"
+_HAD_INSTANCE_FORWARD_MARKER = "_soup_fast_lora_had_instance_forward"
 _GROUP_PATCH_OWNER_MARKER = "_soup_fast_lora_group_owner"
 _FORWARD_OWNER_MARKER = "_soup_fast_lora_forward_owner"
+_OWNER = "single"
 
 __all__ = [
     "patch_fast_lora_single_projection",
@@ -404,6 +406,7 @@ def _make_patched_forward(original_forward: Any) -> Any:
         )
         return out if work_x is x else out.to(input_dtype)
 
+    setattr(_fast_lora_single_forward, _FORWARD_OWNER_MARKER, _OWNER)
     return _fast_lora_single_forward
 
 
@@ -429,20 +432,30 @@ def patch_fast_lora_single_projection(model: Any) -> int:
 
     for child in targets:
         setattr(child, _ORIGINAL_FORWARD_MARKER, child.forward)
+        setattr(child, _HAD_INSTANCE_FORWARD_MARKER, "forward" in vars(child))
         setattr(child, _PATCH_MARKER, True)
         child.forward = types.MethodType(_make_patched_forward(child.forward), child)
     return len(targets)
 
 
+def _release_single_projection(child: Any) -> bool:
+    """Give ``child`` back the forward it had before this kernel; ``True`` if it had it.
+
+    A forward someone else installed over this kernel's is left in place.
+    """
+    if not getattr(child, _PATCH_MARKER, False):
+        return False
+    if getattr(child.forward, _FORWARD_OWNER_MARKER, None) == _OWNER:
+        if getattr(child, _HAD_INSTANCE_FORWARD_MARKER, False):
+            child.forward = getattr(child, _ORIGINAL_FORWARD_MARKER)
+        else:
+            del child.forward
+    for attr in (_ORIGINAL_FORWARD_MARKER, _HAD_INSTANCE_FORWARD_MARKER, _PATCH_MARKER):
+        if attr in vars(child):
+            delattr(child, attr)
+    return True
+
+
 def unpatch_fast_lora_single_projection(model: Any) -> int:
     """Restore the original peft forwards. Returns the number restored."""
-    restored = 0
-    for child in model.modules():
-        original = getattr(child, _ORIGINAL_FORWARD_MARKER, None)
-        if original is None or not getattr(child, _PATCH_MARKER, False):
-            continue
-        child.forward = original
-        delattr(child, _ORIGINAL_FORWARD_MARKER)
-        delattr(child, _PATCH_MARKER)
-        restored += 1
-    return restored
+    return sum(_release_single_projection(child) for child in list(model.modules()))
