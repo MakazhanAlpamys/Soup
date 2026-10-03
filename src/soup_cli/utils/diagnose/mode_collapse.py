@@ -19,6 +19,7 @@ from soup_cli.utils.diagnose._common import (
     tokenize,
 )
 from soup_cli.utils.diagnose.report import FailureScore, classify_score
+from soup_cli.utils.diagnose.runner import not_run_score
 
 # Generator that emits K completions per prompt; (prompt, k) -> list[str].
 MultiGen = Callable[[str, int], Sequence[str]]
@@ -64,12 +65,7 @@ def score_mode_collapse(
         raise TypeError("adapter_multi_gen must be callable")
     prompts_list = require_prompts(prompts, max_count=2_000)
     if not prompts_list:
-        return FailureScore(
-            mode="mode_collapse",
-            score=1.0,
-            verdict="OK",
-            evidence="no prompts; nothing to check",
-        )
+        return not_run_score("mode_collapse", "no prompts to check")
     diversities = []
     for prompt in prompts_list:
         samples = adapter_multi_gen(prompt, k)

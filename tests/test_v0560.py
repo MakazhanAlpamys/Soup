@@ -333,10 +333,10 @@ class TestFormat:
         with pytest.raises(ValueError, match="kind must be"):
             score_format(["p"], lambda p: "x", kind="alien")
 
-    def test_empty_prompts_ok(self) -> None:
+    def test_empty_prompts_not_run(self) -> None:
         score = score_format([], lambda p: "x", kind="json")
-        assert score.verdict == "OK"
-        assert "nothing to check" in score.evidence
+        assert score.verdict == "NOT_RUN"
+        assert score.score == 0.0
 
     def test_major_when_all_invalid(self) -> None:
         score = score_format(["p"] * 5, lambda p: "not json", kind="json")
@@ -383,7 +383,8 @@ class TestModeCollapse:
 
     def test_empty_prompts(self) -> None:
         score = score_mode_collapse([], lambda p, k: ["x", "y"], k=2)
-        assert score.verdict == "OK"
+        assert score.verdict == "NOT_RUN"
+        assert score.score == 0.0
 
 
 class TestMemorization:
@@ -411,8 +412,8 @@ class TestMemorization:
     def test_skips_rows_without_text(self) -> None:
         rows = [{"not_text": "x"}, "not_a_dict"]
         score = score_memorization(rows, lambda p: "x")
-        assert score.verdict == "OK"
-        assert "no rows" in score.evidence
+        assert score.verdict == "NOT_RUN"
+        assert "prefix and a suffix" in score.evidence
 
     def test_too_many_rows_rejected(self) -> None:
         with pytest.raises(ValueError, match="too many"):

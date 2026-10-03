@@ -18,6 +18,7 @@ from soup_cli.utils.diagnose._common import (
     require_prompts,
 )
 from soup_cli.utils.diagnose.report import FailureScore, classify_score
+from soup_cli.utils.diagnose.runner import not_run_score
 from soup_cli.utils.safe_regex import check_config_regex
 
 _VALID_KINDS = frozenset({"json", "regex", "tool_call"})
@@ -78,12 +79,7 @@ def score_format(
         raise ValueError("kind='regex' requires a non-empty regex_pattern")
     prompts_list = require_prompts(prompts, max_count=10_000)
     if not prompts_list:
-        return FailureScore(
-            mode="format",
-            score=1.0,
-            verdict="OK",
-            evidence="no prompts; nothing to check",
-        )
+        return not_run_score("format", "no prompts to check")
     valid = 0
     for prompt in prompts_list:
         output = call_generator(adapter_gen, prompt)
