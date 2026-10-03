@@ -1085,6 +1085,7 @@ class StreamingSetupMixin:
         prevent the measurement that exists to overrule it.
         """
         from soup_cli.utils.layer_stream import (
+            CUBLAS_WORKSPACE_HANDLES_PER_STREAMED_STEP,
             LOGITS_BYTES_PER_ELEMENT,
             accumulation_advice,
             calibrated_logits_bytes_per_element,
@@ -1092,6 +1093,7 @@ class StreamingSetupMixin:
             estimate_logits_bytes,
             estimate_stream_peak_vram,
             forecast_stream_throughput,
+            measure_cublas_workspace_bytes,
             resolve_available_vram_bytes,
         )
         from soup_cli.utils.layer_stream_runtime import measure_gemm_tflops
@@ -1125,6 +1127,14 @@ class StreamingSetupMixin:
         # calibrated_logits_bytes_per_element() is floored at LOGITS_BYTES_PER_ELEMENT,
         # so forwarding it here can only raise the budget, never lower it (issue #348).
         calibrated = calibrated_logits_bytes_per_element()
+        # #1407 -- the two cuBLAS workspaces a step holds are counted by
+        # torch.cuda.max_memory_allocated(), which is the quantity this budget
+        # claims to predict, so they are charged explicitly. Sized from the device
+        # this run is on and from CUBLAS_WORKSPACE_CONFIG, which PyTorch reads for
+        # the same allocation. Resolved BEFORE the fit decision and named in the
+        # panel, because the free figure below is read before the first matmul and
+        # so has had neither workspace subtracted from it.
+        cublas_workspace = measure_cublas_workspace_bytes(self.device)
         predicted = estimate_stream_peak_vram(
             layer_bytes=layer_bytes,
             buffers=tcfg.stream_buffers,
@@ -1138,6 +1148,7 @@ class StreamingSetupMixin:
             batch_size=rows,
             logits_bytes_per_element=calibrated,
             large_layer_bytes=large_layer_bytes,
+            cublas_workspace_bytes=cublas_workspace,
         )
         logits = estimate_logits_bytes(
             vocab_size=vocab, seq_len=seq_len, batch_size=rows, bytes_per_element=calibrated
@@ -1153,6 +1164,14 @@ class StreamingSetupMixin:
             lines.append(
                 f"  logits       calibrated {calibrated:.3f} B/element on this stack, "
                 f"above the shipped {LOGITS_BYTES_PER_ELEMENT:.0f}: budget raised to match"
+            )
+        if cublas_workspace:
+            # Named, not folded silently into the total: it is the one term whose
+            # size comes from the card rather than from the model, so an operator
+            # whose prediction moved needs to be able to see which term moved it.
+            lines.append(
+                f"  cuBLAS       {cublas_workspace / 1e6:.2f} MB of workspaces "
+                f"({CUBLAS_WORKSPACE_HANDLES_PER_STREAMED_STEP} handles)"
             )
 
         if not on_cuda:
