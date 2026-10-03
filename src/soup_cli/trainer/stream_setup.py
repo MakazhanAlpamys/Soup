@@ -1134,7 +1134,12 @@ class StreamingSetupMixin:
         # the same allocation. Resolved BEFORE the fit decision and named in the
         # panel, because the free figure below is read before the first matmul and
         # so has had neither workspace subtracted from it.
-        cublas_workspace = measure_cublas_workspace_bytes(self.device)
+        #
+        # getattr, not self.device: this mixin is also driven by harnesses that
+        # call the budget path without a device, and a pre-flight must not raise
+        # on one (#348 drives it that way). Off-CUDA the probe returns 0 anyway,
+        # because there is no workspace without a device.
+        cublas_workspace = measure_cublas_workspace_bytes(getattr(self, "device", None))
         predicted = estimate_stream_peak_vram(
             layer_bytes=layer_bytes,
             buffers=tcfg.stream_buffers,

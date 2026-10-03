@@ -67,7 +67,7 @@ class TestParseCublasWorkspaceConfig:
     def test_sums_size_times_count_in_kib(self, config, expected):
         assert parse_cublas_workspace_config(config) == expected
 
-    def test_pyTorchs_documented_default_parses_to_its_own_default(self):
+    def test_the_documented_default_parses_to_the_device_default(self):
         """``:4096:2:16:8`` is the default PyTorch documents, and it must land on
         the same number the device rule produces -- otherwise an operator who sets
         it to the documented value silently changes the charge."""
