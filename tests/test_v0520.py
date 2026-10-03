@@ -1055,9 +1055,11 @@ class TestTddReviewGaps:
 
     @pytest.mark.parametrize("task", ["grpo", "pretrain", "ppo", "embedding", "tts"])
     def test_reasoning_effort_task_gate_full_matrix(self, task):
-        # ``pretrain`` is in the SFT-family allowlist so it should accept.
-        # All other non-SFT-family tasks must reject.
-        sft_family = {"sft", "pretrain", "distill", "classifier", "reranker", "cross_encoder"}
+        # #806: accepted only where the SFT formatter that injects it runs
+        # (sft, tts through sft's setup, distill); pretrain never reads it.
+        from soup_cli.config.schema import REASONING_EFFORT_AWARE_TASKS
+
+        sft_family = REASONING_EFFORT_AWARE_TASKS
         # Need backend / modality / data to be valid; for tts we also need family.
         extra = ""
         modality = ""
