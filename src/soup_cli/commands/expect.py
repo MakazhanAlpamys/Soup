@@ -87,7 +87,8 @@ def expect_cmd(
 ) -> None:
     """Run an expectations suite against a JSONL dataset.
 
-    Exit 0 = suite passed. Exit 2 = gate failed. Exit 3 = usage/input error.
+    Exit 0 = suite passed. Exit 1 = judge unreachable.
+    Exit 2 = gate failed. Exit 3 = usage/input error.
     """
     from soup_cli.utils.expectations import (
         build_pairwise_judge_fn,
