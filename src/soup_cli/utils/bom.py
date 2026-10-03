@@ -332,8 +332,8 @@ def build_spdx_bom(entry: BomEntry) -> dict:
             "checksums": [{"algorithm": "SHA256", "checksumValue": entry.data_sha}],
         })
         relationships.append({
-            "spdxElementId": spdx_id_main,
-            "relatedSpdxElement": "SPDXRef-Data",
+            "spdxElementId": "SPDXRef-Data",
+            "relatedSpdxElement": spdx_id_main,
             "relationshipType": "BUILD_DEPENDENCY_OF",
         })
     return doc
