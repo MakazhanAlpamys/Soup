@@ -1311,10 +1311,11 @@ answer is, in this order of precedence:
 2. the content of the last `\boxed{}` (a space before the brace and nested braces such as
    `\boxed{\frac{1}{2}}` are fine);
 3. what follows the last `The answer is` or `Answer:` (also `**Answer**:`, and the answer may be
-   on the next line), up to the end of its clause: a `. `, `, ` or `; ` outside brackets. A comma
-   or semicolon that a number follows continues a list instead (`41, 42 or 43`), and a
-   parenthetical aside belongs to the clause. So `The answer is Washington, D.C.` reads
-   `Washington`, `The answer is 42 (six times seven).` reads `42`, and `The answer is (3, 4).`
+   on the next line), up to the end of its clause: a `. `, `, ` or `; ` outside brackets, or at
+   the connective `because` or `since` (case-insensitive, requiring whitespace on both sides; not `as`).
+   A comma or semicolon that a number follows continues a list instead (`41, 42 or 43`), and a
+   parenthetical aside belongs to the clause. So `The answer is Washington, D.C.`
+   reads `Washington`, `The answer is 42 (six times seven).` reads `42`, and `The answer is (3, 4).`
    reads `(3, 4)`.
 
 A box outranks a phrase, and a `\boxed{}` or phrase that comes after a `####` line outranks it (the
@@ -1328,8 +1329,9 @@ An answer phrase's number is read from its own clause: `The answer is 41 apples,
 41, because the clause ends at the comma. A clause that names **more than one distinct value** is
 a hedge and states no answer: `The answer is either 41 or 42.`, `Answer: 41 or 42`,
 `The answer is 42 (or 43).` and `the answer is 41, 42 or 43` score 0.0 against every gold, and a
-gold written that way is refused. Every number in the clause counts, a justification's too:
-`The answer is 42 because 6*7=42.` is a hedge, while `The answer is 42, because 6*7=42.` reads 42.
+gold written that way is refused. A `because` / `since` inline or after punctuation ends the clause
+(`The answer is 42 because 6*7=42.` and `The answer is 42, because 6*7=42.` both read 42),
+while parenthetical justifications belong to the clause and hedge it (`The answer is 42 (6*7=42).`).
 The same value twice is not a hedge (`42 (i.e. 42.0)`), and the digits of one bracketed or LaTeX
 answer (`(3, 4)`, `\begin{pmatrix} 3 \\ 4 \end{pmatrix}`, `\frac{14}{3}`, `2^{10}`) or of a time
 or a ratio (`3:45`, `1:1,000`) are not separate values; such an answer is compared as text.
