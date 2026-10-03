@@ -18,6 +18,7 @@ import json
 import os
 import stat
 import sys
+import uuid
 from pathlib import Path
 
 import pytest
@@ -121,6 +122,7 @@ class TestBomSpec:
         assert doc["bomFormat"] == "CycloneDX"
         assert doc["specVersion"] == "1.6"
         assert doc["serialNumber"].startswith("urn:uuid:")
+        uuid.UUID(doc["serialNumber"].removeprefix("urn:uuid:"))  # validates RFC 4122 UUID format
         assert doc["metadata"]["component"]["name"] == "adapter-v1"
         assert doc["metadata"]["component"]["version"] == "0.1.0"
         # ML-BOM: component should have type machine-learning-model
@@ -148,7 +150,7 @@ class TestBomSpec:
         doc = build_cyclonedx_bom(entry)
         license_field = doc["metadata"]["component"].get("licenses", [])
         assert len(license_field) >= 1
-        assert license_field[0]["license"]["id"].lower() == "apache-2.0"
+        assert license_field[0]["license"]["name"].lower() == "apache-2.0"
 
     def test_spdx_shape(self):
         from soup_cli.utils.bom import BomEntry, build_spdx_bom

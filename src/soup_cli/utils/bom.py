@@ -20,6 +20,7 @@ import json
 import math
 import re
 import secrets
+import uuid
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, Mapping, Optional, Tuple
 
@@ -187,7 +188,7 @@ def build_cyclonedx_bom(entry: BomEntry) -> dict:
         raise TypeError(f"entry must be BomEntry, got {type(entry).__name__}")
     licenses: list[dict] = []
     if entry.license:
-        licenses.append({"license": {"id": entry.license}})
+        licenses.append({"license": {"name": entry.license}})
 
     components: list[dict] = [
         {
@@ -238,7 +239,7 @@ def build_cyclonedx_bom(entry: BomEntry) -> dict:
     doc = {
         "bomFormat": "CycloneDX",
         "specVersion": "1.6",
-        "serialNumber": f"urn:uuid:{secrets.token_hex(16)}",
+        "serialNumber": f"urn:uuid:{uuid.uuid4()}",
         "version": 1,
         "metadata": {
             "timestamp": entry.created_at,
