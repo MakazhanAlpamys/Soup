@@ -121,6 +121,16 @@ soup loop replay iter-20260515T120000-abcdef01 --extract ./iter-dump
 # Background subprocess (writes PID, no shell)
 soup loop watch --detach
 
+# The deploy stage activates the adapter on SOUP_LOOP_SERVE_ENDPOINT. A server
+# started with --tool-auth-token requires that token on the adapter routes, so
+# give the loop the same one: --tool-auth-token, or SOUP_TOOL_AUTH_TOKEN to keep
+# it out of the shell history. A --detach child gets it through its environment
+# (so does the train stage's `soup train` child, which ignores it). soup serve has
+# no TLS and the loop refuses plain http off-loopback, so run the loop on the
+# serving box against loopback, or put a TLS-terminating proxy in front.
+soup serve --model base-model --adapters chat=./chat --host 0.0.0.0 --tool-auth-token "$TOKEN" &
+SOUP_LOOP_SERVE_ENDPOINT=http://127.0.0.1:8000 SOUP_TOOL_AUTH_TOKEN="$TOKEN" soup loop watch --detach
+
 # Promote a canary at 5% traffic with auto-rollback on MAJOR verdict
 soup loop canary registry://candidate --traffic 5% --autoroll-on-regress
 
