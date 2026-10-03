@@ -123,6 +123,18 @@ scale. k = 5 keeps almost all of k = 8's power for 3 fewer rows.
 - **Row order matters for the held-out rows.** The first k rows of each arm, in file order,
   set the scale. If an arm's first rows are all identical, more rows are held out until one
   differs; this depends only on the held-out rows, so the guarantee is unchanged.
+- **These sweeps predate the accept hold.** `ACCEPT_HOLD_SPREAD_RATIO` (#1419) was added after
+  this record was written, so every number above is from a run with the hold OFF. On Gaussian
+  rows the two spreads agree, so the hold changes almost no verdict — 2 of the 600 seeded runs in
+  `tests/test_issue1265_ab_nig.py`, one only in the number of rows it took and one rejecting
+  instead of accepting, which is the safe direction — and the conclusions here carry over. The
+  timing figures in particular were not measured with it on.
+- **A hold that fires on a saturated warm-up is never released by more rows.** The held-out
+  rows are fixed, so a run can sit at `continue` for the whole dataset with its
+  `log_likelihood_ratio` already past the accept boundary. `soup ab` now reports that state
+  (`accept_held` plus the two spreads, in the panel and in the JSON verdict) instead of only
+  advising more samples (#1524). The real fix belongs with the statistic — a confidence
+  sequence has no held-out prior to go stale (#1418).
 
 ## Environment
 
