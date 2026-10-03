@@ -114,6 +114,53 @@ def get_moe_target_modules(model) -> Optional[list[str]]:
     return targets
 
 
+def find_fused_expert_parameters(model) -> list[str]:
+    """Fused routed-expert tensors, as the suffixes peft's ``target_parameters`` match.
+
+    On transformers 5 an MoE layer holds all its experts as 3-D parameters on one
+    module (``mlp.experts.gate_up_proj`` of shape ``(experts, in, out)``), not as
+    one ``nn.Linear`` per expert, so module-name discovery cannot reach them
+    (#1421). This looks at the parameters: a 3-D tensor whose module path has an
+    ``experts`` component. The suffix starts at the component before ``experts``
+    (``mlp.experts.gate_up_proj``, ``block_sparse_moe.experts.down_proj``), which
+    is what peft matches with ``key.endswith("." + target)``. A shared expert's
+    ``gate_proj.weight`` is 2-D and is not one of these.
+
+    A stand-in with no parameters (a namespace or a mock) yields ``[]``.
+    """
+    try:
+        named = list(model.named_parameters())
+    except Exception:  # noqa: BLE001 - a stand-in for a model has no parameters
+        return []
+    found = set()
+    for name, param in named:
+        if getattr(param, "ndim", 0) != 3 or not isinstance(name, str):
+            continue
+        parts = name.split(".")
+        expert_indices = [i for i, part in enumerate(parts[:-1]) if "experts" in part.lower()]
+        if not expert_indices:
+            continue
+        start = max(expert_indices[-1] - 1, 0)
+        found.add(".".join(parts[start:]))
+    return sorted(found)
+
+
+class MoeLoraTargets(list):
+    """The module targets ``moe_lora`` resolved, plus the fused expert parameters.
+
+    A list, so every trainer's ``target_modules`` plumbing is unchanged; the
+    ``target_parameters`` ride along and :func:`peft_wiring.build_lora_config`
+    merges them into the ``LoraConfig`` -- the one call every trainer makes before
+    ``get_peft_model``, the same route :class:`peft_wiring.UnmappedTargets` takes.
+    """
+
+    __slots__ = ("target_parameters",)
+
+    def __init__(self, modules, target_parameters=()):
+        super().__init__(modules)
+        self.target_parameters = list(target_parameters)
+
+
 def peft_routes_lora_to_fused_params(model, target_modules) -> bool:
     """Will peft turn THESE targets into ``target_parameters`` on THIS model?
 
@@ -173,16 +220,19 @@ def peft_routes_lora_to_fused_params(model, target_modules) -> bool:
     return bool(getattr(probe, "target_parameters", None))
 
 
-def _refuse_dropout_on_fused_experts(model, tcfg, target_modules) -> None:
+def _refuse_dropout_on_fused_experts(model, tcfg, target_modules, fused_parameters=()) -> None:
     """Stop before peft does, naming the flag that caused it (#798).
 
-    Only when peft would really route these targets onto fused parameters. The
-    first version of this check asked the model whether fused expert parameters
-    existed anywhere, which refused Mixtral and MiniMax configs that peft
-    accepts, with a message describing a mechanism that does not apply to them.
+    Only when fused parameters will really be targeted: the ones Soup now names
+    itself (#1421), or the ones peft's own name conversion rewrites the module
+    targets into. Until #1421 Mixtral and MiniMax were not refused, because
+    nothing reached their experts; now that ``moe_lora`` targets them, peft's
+    ``ParamWrapper`` refuses dropout there too.
     """
     dropout = getattr(getattr(tcfg, "lora", None), "dropout", 0) or 0
-    if dropout == 0 or not peft_routes_lora_to_fused_params(model, target_modules):
+    if dropout == 0:
+        return
+    if not fused_parameters and not peft_routes_lora_to_fused_params(model, target_modules):
         return
     raise ValueError(
         f"training.moe_lora=true needs training.lora.dropout: 0.0 on this model "
@@ -207,13 +257,19 @@ def resolve_moe_lora_targets(model, tcfg, target_modules, console=None):
     Returns ``target_modules`` unchanged when the flag is off, the model is not
     MoE, or no expert modules are found, so a non-MoE base is untouched.
 
+    Otherwise returns a :class:`MoeLoraTargets`: the module patterns already
+    resolved (an ``auto`` list is kept, so Qwen3.5's ``in_proj_qkv`` /
+    ``out_proj`` survive) plus the attention and expert-FFN names, and, on a
+    transformers-5 model whose routed experts are fused 3-D tensors, those
+    tensors as ``target_parameters`` for peft -- the only way to adapt them, and
+    the one that does not depend on peft's per-architecture name conversion
+    (#1421: Mixtral, MiniMax, Qwen2-MoE and Qwen3.5-MoE got attention-only LoRA).
+
     Raises:
-        ValueError: peft would route these targets onto fused expert parameters
-            AND ``lora.dropout`` is non-zero. It adapts those through
-            ``lora.ParamWrapper``, which refuses any dropout; letting the attach
-            proceed gets the user peft's message with no mention of the flag that
-            caused it. Architectures peft does not route this way (Mixtral,
-            MiniMax) are NOT refused -- they attach fine, and adapt no experts.
+        ValueError: fused expert parameters will be targeted AND ``lora.dropout``
+            is non-zero. peft adapts those through ``lora.ParamWrapper``, which
+            refuses any dropout; letting the attach proceed gets the user peft's
+            message with no mention of the flag that caused it.
     """
     if not getattr(tcfg, "moe_lora", False):
         return target_modules
@@ -222,12 +278,16 @@ def resolve_moe_lora_targets(model, tcfg, target_modules, console=None):
     moe_targets = get_moe_target_modules(model)
     if not moe_targets:
         return target_modules
-    _refuse_dropout_on_fused_experts(model, tcfg, moe_targets)
+    fused = find_fused_expert_parameters(model)
+    modules = list(target_modules) if isinstance(target_modules, list) else []
+    modules.extend(name for name in moe_targets if name not in modules)
+    _refuse_dropout_on_fused_experts(model, tcfg, modules, fused)
     if console is not None:
-        console.print(
-            f"[green]ScatterMoE LoRA:[/] targeting {len(moe_targets)} module patterns"
-        )
-    return moe_targets
+        line = f"[green]ScatterMoE LoRA:[/] targeting {len(modules)} module patterns"
+        if fused:
+            line += f" and {len(fused)} fused expert parameter(s): {', '.join(fused)}"
+        console.print(line)
+    return MoeLoraTargets(modules, fused)
 
 
 def get_moe_info(model) -> dict:

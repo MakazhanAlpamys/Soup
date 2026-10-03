@@ -468,6 +468,22 @@ def build_peft_config_spec(
     }
 
 
+def _with_moe_parameters(target_modules: Any, target_parameters: Any) -> Any:
+    """Add the fused expert parameters ``moe_lora`` resolved (#1421).
+
+    ``resolve_moe_lora_targets`` returns a ``MoeLoraTargets`` list that carries
+    them as ``target_parameters``; merging here, rather than at each call site,
+    is what makes every MoE-wired trainer adapt the experts without passing a new
+    argument. An explicit ``lora.target_parameters`` list is kept and extended.
+    """
+    extra = getattr(target_modules, "target_parameters", None)
+    if not extra:
+        return target_parameters
+    merged = list(target_parameters) if isinstance(target_parameters, (list, tuple)) else []
+    merged.extend(name for name in extra if name not in merged)
+    return merged
+
+
 def _settle_unmapped(target_modules: Any, target_parameters: Any) -> Any:
     """Refuse an unmappable ``auto`` here, where the final targets are known.
 
@@ -507,6 +523,7 @@ def build_lora_config(
     """
     import peft
 
+    target_parameters = _with_moe_parameters(target_modules, target_parameters)
     target_modules = _settle_unmapped(target_modules, target_parameters)
     spec = build_peft_config_spec(
         lora_cfg,
