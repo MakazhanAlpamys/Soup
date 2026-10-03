@@ -1955,7 +1955,8 @@ training:
   mod_capacity_factor: 0.125
 
   # LLaMA Pro: append zero-initialised identity decoder blocks and train only the new
-  # ones (freeze_trainable_layers freezes the originals). Needs quantization: none.
+  # ones (freeze_trainable_layers must equal expand_layers and freezes the
+  # originals). Needs quantization: none.
   expand_layers: 4
   freeze_trainable_layers: 4
 ```
