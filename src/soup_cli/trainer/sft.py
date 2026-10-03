@@ -1282,6 +1282,8 @@ class SFTTrainerWrapper(StreamingSetupMixin):
 
     def _setup_quest(self, train_ds: Any) -> None:
         """Calibrate and install #674's explicit mixed fake-quant route."""
+        from pathlib import Path
+
         from soup_cli.trainer.stream_setup import _distributed_launch
 
         if self.deepspeed_config or self.fsdp_config or _distributed_launch():
@@ -1291,14 +1293,38 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             )
         from soup_cli.utils.quest import (
             CALIBRATION_EXAMPLES,
+            METADATA_NAME,
             calibrate_activation_scales,
             calibration_rows_sha256,
             install_mixed_quest,
+            load_metadata,
             resolve_base_model_identity,
+            restore_mixed_quest,
             validate_cuda_hardware,
         )
 
         gpu_name, capability = validate_cuda_hardware()
+        declaration = getattr(self.model.config, "soup_quest", None)
+        source = Path(self.config.base)
+        if declaration is not None or (source / METADATA_NAME).is_file():
+            if not source.is_dir():
+                raise ValueError(
+                    "QuEST continuation requires a local artifact with its metadata sidecar"
+                )
+            base_identity = resolve_base_model_identity(self.config.base)
+            before = getattr(self, "_quest_base_identity_before", None)
+            if before is not None and before != base_identity:
+                raise ValueError("QuEST local base changed while the model was loading")
+            metadata = load_metadata(source)
+            if declaration != metadata:
+                raise ValueError("QuEST config declaration does not match the mandatory sidecar")
+            restore_mixed_quest(self.model, metadata)
+            self._quest_metadata = metadata
+            console.print(
+                "[green]QuEST continuation:[/] restored the artifact's fixed calibration "
+                "and 168 W4 / 161 A4 + 7 A16 route"
+            )
+            return
         console.print(
             "[cyan]QuEST calibration:[/] selecting fixed activation clips on "
             "the first 32 tokenized training rows"

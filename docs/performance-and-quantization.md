@@ -182,9 +182,15 @@ fingerprint route because code loaded from elsewhere would not be covered.
 Local tokenizers declaring `fast_tokenizer_files` are also refused because
 their versioned tokenizer JSON files are not covered by this fingerprint.
 
+To continue training from a local QuEST artifact, set `base` to its directory
+and keep `training.quantization_aware: quest`. Soup restores the artifact's
+clipping table and route instead of recalibrating on the new training rows.
+The sidecar must match the declaration in `config.json`; missing or inconsistent
+metadata is refused. This preserves the inherited metadata format and provenance.
+
 Format-v1 sidecars remain readable. Since they did not record a content hash,
-their first resume still compares the original base path string; a successful
-resume writes v2 metadata for subsequent checkpoints. A v1 artifact cannot
+resuming from the original base still compares its path string; that route
+writes v2 metadata for subsequent checkpoints. A v1 artifact cannot
 prove that a relocated base is the same one, and existing v1 sidecars may
 already disclose the old local path.
 Because generic Transformers cannot infer fake-quant execution from the master
