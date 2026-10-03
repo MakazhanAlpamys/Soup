@@ -316,6 +316,14 @@ def diagnose(
             "Without it such a run exits 3."
         ),
     ),
+    require_all_modes: bool = typer.Option(
+        False,
+        "--require-all-modes",
+        help=(
+            "With --evidence: a mode missing from the file is NOT_RUN instead of a "
+            "neutral OK, so the run exits 3 unless --allow-not-run (#1525)."
+        ),
+    ),
     shuffle_seed: Optional[int] = typer.Option(
         None,
         "--shuffle-seed",
@@ -335,6 +343,13 @@ def diagnose(
         raise typer.BadParameter("run_id must be a non-empty string")
     if "\x00" in run_id or len(run_id) > 512:
         raise typer.BadParameter("run_id has a null byte or is too long")
+
+    if require_all_modes and (not evidence_path or base_model is not None):
+        console.print(
+            "[red]Error:[/] --require-all-modes only applies to --evidence runs "
+            "(not with --base-model)."
+        )
+        raise typer.Exit(code=EXIT_USAGE_ERROR)
 
     # v0.71.17 #254 — validate the citation style up front (a typo surfaces
     # before any model load). Reuses the closed allowlist validator.
@@ -408,9 +423,10 @@ def diagnose(
                 raise typer.Exit(code=1)
             extras[key_s[:256]] = value_s[:256]
 
-    # Fill missing modes with neutral OK + advisory.
-    for mode in FAILURE_MODES:
-        scores.setdefault(mode, neutral_score(mode, "no evidence"))
+    # Fill missing modes with neutral OK + advisory (NOT_RUN with --require-all-modes).
+    if not require_all_modes:
+        for mode in FAILURE_MODES:
+            scores.setdefault(mode, neutral_score(mode, "no evidence"))
 
     report = build_report(
         run_id=run_id,
@@ -419,6 +435,7 @@ def diagnose(
         scores=scores,
         soup_version=__version__,
         extras=extras,
+        missing_as_not_run=require_all_modes,
     )
     _emit_report(report, output=output, badge=badge, attach_to_registry=attach_to_registry)
     _exit_for(report, allow_not_run)
