@@ -360,7 +360,7 @@ directly comparable.
 
 | Mode | What it catches | Score range |
 |------|-----------------|-------------|
-| `forgetting` | Catastrophic forgetting on domain hold-out prompts or built-in benchmark | Δ accuracy vs base, tolerance band |
+| `forgetting` | Catastrophic forgetting on domain hold-out prompts or built-in general-knowledge prompts | Δ accuracy vs base, tolerance band |
 | `refusal` | Refusal-rate regression on harmful / benign probe sets | abs(Δ harmful) + abs(Δ benign) |
 | `format` | JSON / regex / tool-call validity drift | fraction of valid outputs |
 | `mode_collapse` | Diversity collapse at T=0 and T=1 | pairwise n-gram Jaccard distance |

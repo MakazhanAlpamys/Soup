@@ -295,6 +295,28 @@ class TestForgettingProbeHoldout:
         report = live.run_live_diagnose(run_id="r", base="b", adapter="a")
         assert report.scores["forgetting"].verdict == "NOT_RUN", report.scores["forgetting"]
 
+    def test_holdout_capped_at_probe_prompts(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """With 15 holdout rows, adapter is asked exactly the first 12."""
+        monkeypatch.chdir(tmp_path)
+        holdout_file = tmp_path / "holdout.jsonl"
+        rows = [{"prompt": f"holdout_prompt_{i}", "completion": f"c_{i}"} for i in range(15)]
+        _write_jsonl(holdout_file, rows)
+
+        asked: list[str] = []
+
+        def adapter_gen(prompt: str) -> str:
+            asked.append(prompt)
+            return "x"
+
+        self._stub_pair(monkeypatch, adapter_gen)
+        live.run_live_diagnose(
+            run_id="r", base="b", adapter="a", holdout_path=str(holdout_file)
+        )
+        holdout_asked = [p for p in asked if p.startswith("holdout_prompt_")]
+        assert holdout_asked == [f"holdout_prompt_{i}" for i in range(12)]
+
     def test_cli_accepts_holdout_option(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

@@ -272,7 +272,7 @@ def run_live_diagnose(
 
     rows: List[Mapping[str, object]] = []
     if dataset_path:
-        rows = _load_dataset_rows(dataset_path, label="dataset path")
+        rows = _load_dataset_rows(dataset_path)
 
     holdout_rows: List[Mapping[str, object]] = []
     if holdout_path:
