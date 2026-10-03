@@ -12,9 +12,14 @@ Verifies that the rendered Lambda controller:
 
 from __future__ import annotations
 
+import os
+import shutil
 import subprocess
+import sys
 import types
 from pathlib import Path
+
+import pytest
 
 from soup_cli.cloud.lambda_labs import render_lambda_stub
 
@@ -81,8 +86,8 @@ def _exec_controller(
     return rc, terminations
 
 
-def _run_controller(tmp_path: Path, monkeypatch, ssh_reply):
-    """Exec the rendered controller with a fake clock; ssh_reply(call_no, now) -> (rc, out, err)."""
+def _run_controller(tmp_path: Path, monkeypatch, ssh_reply, scp_reply=None):
+    """Exec controller with a fake clock; ssh_reply(call_no, now) -> (rc, out, err)."""
     key = tmp_path / "lambda-key"
     key.write_text("test-only", encoding="utf-8")
     monkeypatch.chdir(tmp_path)
@@ -98,7 +103,7 @@ def _run_controller(tmp_path: Path, monkeypatch, ssh_reply):
     ns: dict[str, object] = {"__name__": "controller"}
     exec(stub, ns)
     clock = {"now": 0.0}
-    seen = {"ssh": 0, "terminate": 0, "printed": []}
+    seen = {"ssh": 0, "scp": 0, "terminate": 0, "printed": []}
 
     def fake_request(api_key, path, *, method="GET", payload=None):
         if path.endswith("/launch"):
@@ -109,7 +114,9 @@ def _run_controller(tmp_path: Path, monkeypatch, ssh_reply):
 
     def fake_run(argv, **kw):
         if argv[0] == "scp":
-            return subprocess.CompletedProcess(argv, 0, "", "")
+            seen["scp"] += 1
+            rc = 0 if scp_reply is None else scp_reply(seen["scp"], clock)
+            return subprocess.CompletedProcess(argv, rc, "", "")
         seen["ssh"] += 1
         assert seen["ssh"] < 100_000, "controller is polling without bound"
         return subprocess.CompletedProcess(argv, *ssh_reply(seen["ssh"], clock["now"]))
@@ -361,3 +368,113 @@ class TestLambdaSshResilience:
         rc, seen, _ = _run_controller(tmp_path, monkeypatch, reply)
         assert rc == 0, seen["printed"]
         assert seen["terminate"] == 1
+
+    def test_two_ten_minute_outages_separated_by_a_good_poll_do_not_end_the_run(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        unreachable = (
+            255, "", "ssh: connect to host 192.0.2.1 port 22: Network is unreachable"
+        )
+        state = {"good_at": None}
+
+        def reply(call_no, now):
+            if now < 600:
+                return unreachable
+            if state["good_at"] is None:
+                state["good_at"] = now
+                return (0, "RUNNING\n", "")
+            if now < state["good_at"] + 605:
+                return unreachable
+            return (0, "0\n", "")
+
+        rc, seen, _ = _run_controller(tmp_path, monkeypatch, reply)
+        assert rc == 0, seen["printed"]
+        assert seen["terminate"] == 1
+
+    def test_a_long_copy_that_fails_once_is_retried(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        def scp(attempt, clock):
+            if attempt == 1:
+                clock["now"] += 1200  # a 20-minute copy that drops near the end
+                return 1
+            return 0
+
+        rc, seen, _ = _run_controller(
+            tmp_path, monkeypatch, lambda n, now: (0, "0\n", ""), scp_reply=scp
+        )
+        assert rc == 0, seen["printed"]
+        assert seen["scp"] == 2
+
+
+def _rendered_poll_command(tmp_path: Path, monkeypatch) -> str:
+    """The exact remote command the rendered controller sends over ssh."""
+    commands = []
+    key = tmp_path / "lambda-key"
+    key.write_text("test-only", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("LAMBDA_API_KEY", "secret")
+    monkeypatch.setenv("LAMBDA_SSH_KEY_NAME", "my-key")
+    monkeypatch.setenv("LAMBDA_SSH_PRIVATE_KEY", str(key))
+    stub = render_lambda_stub(
+        "base: gpt2\ndata:\n  train: data.jsonl\noutput: ./out\n",
+        gpu="a100",
+        output_dir="./out",
+        soup_version="0.75.1",
+    )
+    ns = {"__name__": "controller"}
+    exec(stub, ns)
+
+    def fake_run(argv, **kw):
+        if argv[0] == "ssh":
+            commands.append(argv[-1])
+            return subprocess.CompletedProcess(argv, 0, "0\n", "")
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    ns["_request_json"] = lambda *a, **k: {"data": {"instance_ids": ["instance-1"]}}
+    ns["_wait_for_ip"] = lambda *_: "192.0.2.1"
+    ns["_wait_for_termination"] = lambda *_: None
+    ns["time"] = types.SimpleNamespace(sleep=lambda s: None, monotonic=lambda: 0.0)
+    ns["subprocess"] = types.SimpleNamespace(
+        run=fake_run, TimeoutExpired=subprocess.TimeoutExpired
+    )
+    ns["print"] = lambda *a, **k: None
+    assert ns["main"]() == 0
+    return commands[0]
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32" or shutil.which("sh") is None, reason="needs a POSIX sh"
+)
+@pytest.mark.parametrize(
+    ("cloud_init", "exit_file", "expected"),
+    [
+        ("status: running", None, "RUNNING"),
+        ("status: running", "0\n", "RUNNING"),
+        ("status: not started", None, "RUNNING"),
+        ("status: done", None, "MISSING"),
+        ("status: done", "", "MISSING"),
+        ("status: done", "0\n", "0"),
+        ("status: error", "1\n", "1"),
+    ],
+)
+def test_the_remote_poll_command_reports_cloud_init_state(
+    tmp_path: Path, monkeypatch, cloud_init: str, exit_file: str | None, expected: str
+) -> None:
+    command = _rendered_poll_command(tmp_path, monkeypatch)
+    exit_path = tmp_path / "soup.exit"
+    assert "/home/ubuntu/soup.exit" in command
+    command = command.replace("/home/ubuntu/soup.exit", exit_path.as_posix())
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake = fake_bin / "cloud-init"
+    fake.write_text(f"#!/bin/sh\necho '{cloud_init}'\n", encoding="utf-8", newline="\n")
+    fake.chmod(0o755)
+    if exit_file is not None:
+        exit_path.write_text(exit_file, encoding="utf-8", newline="\n")
+    env = dict(os.environ, PATH=f"{fake_bin.as_posix()}{os.pathsep}{os.environ['PATH']}")
+    out = subprocess.run(
+        ["sh", "-c", command], capture_output=True, text=True, env=env, check=False
+    )
+    assert out.returncode == 0, out.stderr
+    assert out.stdout.strip() == expected
