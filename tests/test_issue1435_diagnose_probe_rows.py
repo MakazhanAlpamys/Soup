@@ -16,7 +16,7 @@ from soup_cli.utils.diagnose.memorization import split_prefix
 from tests.conftest import strip_ansi
 from tests.test_issue1435_diagnose_not_run import DATASET_MODES, _cli, _gens, _run_live
 
-SKIPPABLE = ("forgetting", "format", "mode_collapse")
+SKIPPABLE = ("format", "mode_collapse")
 
 
 def _words(tag: str, count: int = 24) -> str:
@@ -86,16 +86,16 @@ class TestAlpaca:
     def test_input_is_joined_to_the_instruction(self, tmp_path, monkeypatch):
         seen: list = []
 
-        def base_gen(prompt):
+        def adapter_multi(prompt, k):
             seen.append(prompt)
-            return "ok"
+            return [f"adapter{j} p{j}q r{j}s" for j in range(k)]
 
         rows = [
             {"instruction": "Translate to French:", "input": f"Good morning {i}",
              "output": f"Bonjour {i}"}
             for i in range(12)
         ]
-        _run_live(tmp_path, monkeypatch, rows, _gens(base_gen=base_gen))
+        _run_live(tmp_path, monkeypatch, rows, _gens(adapter_multi=adapter_multi))
         assert "Translate to French:\nGood morning 0" in seen
 
     def test_alpaca_without_input_still_works(self, tmp_path, monkeypatch):
@@ -121,15 +121,15 @@ class TestFlatAndMixedRows:
     def test_mixed_formats_in_one_file(self, tmp_path, monkeypatch):
         seen: list = []
 
-        def base_gen(prompt):
+        def adapter_multi(prompt, k):
             seen.append(prompt)
-            return "ok"
+            return [f"adapter{j} p{j}q r{j}s" for j in range(k)]
 
         rows = []
         for i in range(6):
             rows.append(_sharegpt(i))
             rows.append({"instruction": f"Say {i}", "input": "now", "output": f"Said {i}"})
-        report, _ = _run_live(tmp_path, monkeypatch, rows, _gens(base_gen=base_gen))
+        report, _ = _run_live(tmp_path, monkeypatch, rows, _gens(adapter_multi=adapter_multi))
         assert not _not_run_modes(report)
         # Both halves reach the probes, not just the format that used to be readable.
         assert any(prompt.startswith("question 0") for prompt in seen)
@@ -235,6 +235,14 @@ def _recording(seen: list):
     return gen
 
 
+def _recording_multi(seen: list):
+    def gen(prompt, k):
+        seen.append(prompt)
+        return [f"adapter{j} p{j}q r{j}s" for j in range(k)]
+
+    return gen
+
+
 class TestRobustness:
     def test_malformed_tool_schema_row_does_not_crash(self, tmp_path, monkeypatch):
         bad = {"messages": [{"role": "user", "content": "hi"}],
@@ -257,7 +265,8 @@ class TestRobustness:
     def test_tool_calling_rows_give_a_pair_from_the_final_reply(self, tmp_path, monkeypatch):
         seen: list = []
         rows = [TOOL_ROW] * 12
-        report, _ = _run_live(tmp_path, monkeypatch, rows, _gens(base_gen=_recording(seen)))
+        gens = _gens(adapter_multi=_recording_multi(seen))
+        report, _ = _run_live(tmp_path, monkeypatch, rows, gens)
         assert not _not_run_modes(report)
         assert any("Weather in Paris?" in prompt for prompt in seen)
         assert "rows_skipped" not in report.extras
@@ -278,7 +287,8 @@ class TestOtherFormats:
         seen: list = []
         rows = [{"prompt": f"Pick one {i}", "chosen": f"good {i}", "rejected": f"bad {i}"}
                 for i in range(12)]
-        report, _ = _run_live(tmp_path, monkeypatch, rows, _gens(base_gen=_recording(seen)))
+        gens = _gens(adapter_multi=_recording_multi(seen))
+        report, _ = _run_live(tmp_path, monkeypatch, rows, gens)
         assert "Pick one 0" in seen
         assert not _not_run_modes(report)
 
@@ -286,7 +296,8 @@ class TestOtherFormats:
         seen: list = []
         rows = [{"prompt": f"Rate {i}", "completion": f"fine {i}", "label": True}
                 for i in range(12)]
-        report, _ = _run_live(tmp_path, monkeypatch, rows, _gens(base_gen=_recording(seen)))
+        gens = _gens(adapter_multi=_recording_multi(seen))
+        report, _ = _run_live(tmp_path, monkeypatch, rows, gens)
         assert "Rate 0" in seen
         assert not _not_run_modes(report)
 
@@ -297,7 +308,7 @@ class TestOtherFormats:
             {"role": "assistant", "content": f"first answer {i}"},
             {"role": "user", "content": f"second question {i}"},
             {"role": "assistant", "content": f"second answer {i}"}]} for i in range(12)]
-        _run_live(tmp_path, monkeypatch, rows, _gens(base_gen=_recording(seen)))
+        _run_live(tmp_path, monkeypatch, rows, _gens(adapter_multi=_recording_multi(seen)))
         assert "first question 0" in seen
         assert not any("second question" in prompt for prompt in seen)
 
@@ -305,7 +316,7 @@ class TestOtherFormats:
         seen: list = []
         rows = [{"instruction": f"Say {i}", "output": f"Said {i}", "system": "Be terse."}
                 for i in range(12)]
-        _run_live(tmp_path, monkeypatch, rows, _gens(base_gen=_recording(seen)))
+        _run_live(tmp_path, monkeypatch, rows, _gens(adapter_multi=_recording_multi(seen)))
         assert "Be terse.\nSay 0" in seen
 
     def test_raft_rows_still_feed_citation_the_raw_rows(self, tmp_path, monkeypatch):
@@ -373,7 +384,7 @@ class TestReasons:
         ]
         report, _ = _run_live(tmp_path, monkeypatch, rows, _gens())
         assert report.extras["rows_skipped"] == "12 need audio or image"
-        assert "an image or audio" in report.scores["forgetting"].evidence
+        assert "an image or audio" in report.scores["format"].evidence
 
     def test_over_long_rows_still_reach_memorization(self, tmp_path, monkeypatch):
         seen: list = []
