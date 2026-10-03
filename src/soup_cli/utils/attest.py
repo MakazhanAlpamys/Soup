@@ -97,10 +97,14 @@ def build_slsa_provenance(s: AttestationStatement) -> dict[str, Any]:
     invocation_id = str(s.invocation.get("invocation_id", ""))[:_MAX_INVOCATION_ID_LEN]
     started_on = str(s.invocation.get("started_on", s.created_at))[:64]
     finished_on = str(s.invocation.get("finished_on", s.created_at))[:64]
+    external_params: dict[str, Any] = {"stage": s.stage}
+    command = s.invocation.get("command")
+    if command:
+        external_params["command"] = str(command)
     return {
         "buildDefinition": {
             "buildType": "https://soup.local/build/v1",
-            "externalParameters": {"stage": s.stage},
+            "externalParameters": external_params,
             "internalParameters": {},
             "resolvedDependencies": materials_resolved,
         },

@@ -380,6 +380,10 @@ class TestAttestation:
         prov = build_slsa_provenance(s)
         assert prov["buildDefinition"]["buildType"].endswith("/build/v1")
         assert prov["runDetails"]["builder"]["id"] == "soup-cli@0.59.0"
+        # Verify invocation command reaches externalParameters (issue #1446 sub-bug 1)
+        ext = prov["buildDefinition"]["externalParameters"]
+        assert ext["stage"] == "train"
+        assert ext["command"] == "soup train"
 
     def test_subject_sha_must_be_64_hex(self):
         from soup_cli.utils.attest import AttestationStatement
