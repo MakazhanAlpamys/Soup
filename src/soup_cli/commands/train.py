@@ -908,7 +908,30 @@ def train(
                 f"[red]Invalid --cloud / --gpu:[/] {markup_escape(str(exc))}"
             )
             raise typer.Exit(2) from exc
+        # #1430: --push-as and --gate are handled after this branch, so they
+        # would be dropped with no message. Refuse rather than run without them.
+        dropped = [name for name, on in (("--push-as", push_as), ("--gate", gate)) if on]
+        if dropped:
+            console.print(
+                f"[red]{markup_escape(', '.join(dropped))} is not supported with "
+                f"--cloud:[/] both run locally, against local files and a local "
+                "HF repo, and a cloud run would silently ignore them. Run "
+                "without --cloud, or drop the flag."
+            )
+            raise typer.Exit(2)
         try:
+            # #1430: the stub carries the *effective* config — the loaded object
+            # with every override above already applied — because embedding the
+            # file's text loses them. Refuse inputs the stub cannot carry while
+            # this is still free: a paid boot cannot fix a missing data file.
+            import yaml
+
+            from soup_cli.cloud._shipped import refuse_unshipped_inputs
+
+            refuse_unshipped_inputs(cfg)
+            effective_yaml = yaml.safe_dump(
+                cfg.model_dump(mode="json"), sort_keys=False, allow_unicode=True,
+            )
             # We call the generic-shaped plan function dynamically
             plan_func = getattr(cloud_mod, f"plan_{cloud}_run", None)
             if plan_func is None:
@@ -918,6 +941,7 @@ def train(
                 gpu=gpu,
                 output_dir=cfg.output,
                 soup_version=_soup_version,
+                config_yaml=effective_yaml,
             )
             stub_realpath = cloud_mod.write_stub(plan)
         except (ValueError, TypeError) as exc:

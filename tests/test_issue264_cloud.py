@@ -3,9 +3,12 @@ from pathlib import Path
 import pytest
 
 _SOUP_YAML = (
+    # A Hub id, not a local file: `--cloud` ships only the config, so a config
+    # naming a local data file is refused at plan time (#1430). These tests are
+    # about cloud plumbing, and the data is never fetched at plan time.
     "base: hf-internal-testing/tiny-random-gpt2\n"
     "task: sft\n"
-    "data:\n  train: data.jsonl\n  format: chatml\n"
+    "data:\n  train: teknium/OpenHermes-2.5\n  format: chatml\n"
     "output: ./out\n"
 )
 
