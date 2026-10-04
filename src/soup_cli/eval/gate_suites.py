@@ -94,11 +94,13 @@ DEFAULT_GENERAL_SUITE: Tuple[str, ...] = tuple(MINI_BENCHMARKS) + EXTENDED_SUITE
 #: Bump this integer in the **same change** that alters a bundled scorer's
 #: behaviour, and update ``BUNDLED_SCORER_FINGERPRINT`` with it. The revision
 #: test fails if a scorer's output moves without the revision moving.
-BUNDLED_SCORER_REVISION: int = 3
+BUNDLED_SCORER_REVISION: int = 4
 
 #: SHA-256 of deterministic ``score_bundled_suite`` outputs under the fixed
-#: fingerprint corpus in ``bundled_scorer_fingerprint``. Locked to revision 3;
-#: update together with ``BUNDLED_SCORER_REVISION``.
+#: fingerprint corpus in ``bundled_scorer_fingerprint``. Locked to revision 4;
+#: update together with ``BUNDLED_SCORER_REVISION``. Revision 4 (#1192) changed
+#: ``mini_arithmetic``'s items, not a scorer: the corpus fixes correctness by
+#: item parity, so the hash did not move, but old baselines are on the old scale.
 BUNDLED_SCORER_FINGERPRINT: str = (
     "80992ac0369233b36d82e41c6f2baff510f6331a6647329fa139c4a99259d5c4"
 )

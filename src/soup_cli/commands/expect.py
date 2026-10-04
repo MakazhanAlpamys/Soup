@@ -44,8 +44,8 @@ def _load_jsonl_rows(data_path: str) -> List[Mapping[str, object]]:
     if os.path.getsize(real) > _MAX_DATA_BYTES:
         raise ValueError(f"data file exceeds {_MAX_DATA_BYTES} bytes")
     rows: List[Mapping[str, object]] = []
-    skipped = 0
-    with open(real, "r", encoding="utf-8") as handle:
+    uncheckable: List[str] = []
+    with open(real, "r", encoding="utf-8-sig") as handle:
         for line_no, line in enumerate(handle, start=1):
             if not line.strip():
                 continue
@@ -54,13 +54,24 @@ def _load_jsonl_rows(data_path: str) -> List[Mapping[str, object]]:
             try:
                 row = json.loads(line)
             except json.JSONDecodeError:
-                skipped += 1
+                uncheckable.append(f"line {line_no}: malformed JSON")
                 continue
             if isinstance(row, dict):
                 rows.append(row)
-    if skipped:
-        console.print(
-            f"[yellow]Note: skipped {skipped} malformed JSONL line(s)[/]"
+            else:
+                uncheckable.append(f"line {line_no}: not a JSON object")
+    if uncheckable:
+        shown = uncheckable[:10]
+        more = f" (+{len(uncheckable) - 10} more)" if len(uncheckable) > 10 else ""
+        raise ValueError(
+            f"refusing {data_path}: {len(uncheckable)} line(s) could not be checked: "
+            + "; ".join(shown)
+            + more
+        )
+    if not rows:
+        raise ValueError(
+            f"refusing {data_path}: no checkable rows were found; "
+            "a run that checked zero rows cannot pass"
         )
     return rows
 

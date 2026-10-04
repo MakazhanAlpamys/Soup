@@ -31,7 +31,7 @@ def search_recipes(
     task: Optional[str] = None,
     size: Optional[str] = None,
 ) -> List[RecipeMeta]:
-    """Search recipes by keyword, task, or model size."""
+    """Search recipes by keyword, task, or model."""
     results = []
     for name, recipe in RECIPES.items():
         if task and recipe.task != task:
@@ -48,7 +48,7 @@ def search_recipes(
 
 
 # ---------------------------------------------------------------------------
-# Recipe catalog (174 recipes)
+# Recipe catalog (170 recipes)
 # ---------------------------------------------------------------------------
 
 RECIPES: Dict[str, RecipeMeta] = {
@@ -917,9 +917,9 @@ output: ./output
     "llama4-scout-17b-sft": RecipeMeta(
         model="meta-llama/Llama-4-Scout-17B-16E-Instruct",
         task="sft",
-        size="17B",
+        size="109B",
         tags=("llama", "llama4", "sft", "chat", "instruction"),
-        description="Llama 4 Scout 17B SFT with LoRA (4bit)",
+        description="Llama 4 Scout 17B active SFT with LoRA (4bit)",
         yaml_str="""\
 base: meta-llama/Llama-4-Scout-17B-16E-Instruct
 task: sft
@@ -945,9 +945,9 @@ output: ./output
     "llama4-scout-17b-dpo": RecipeMeta(
         model="meta-llama/Llama-4-Scout-17B-16E-Instruct",
         task="dpo",
-        size="17B",
+        size="109B",
         tags=("llama", "llama4", "dpo", "alignment", "preference"),
-        description="Llama 4 Scout 17B DPO alignment",
+        description="Llama 4 Scout 17B active DPO alignment",
         yaml_str="""\
 base: meta-llama/Llama-4-Scout-17B-16E-Instruct
 task: dpo
@@ -974,9 +974,9 @@ output: ./output
     "llama4-scout-17b-grpo": RecipeMeta(
         model="meta-llama/Llama-4-Scout-17B-16E-Instruct",
         task="grpo",
-        size="17B",
+        size="109B",
         tags=("llama", "llama4", "grpo", "reasoning"),
-        description="Llama 4 Scout 17B GRPO reasoning training",
+        description="Llama 4 Scout 17B active GRPO reasoning training",
         yaml_str="""\
 base: meta-llama/Llama-4-Scout-17B-16E-Instruct
 task: grpo
@@ -1153,7 +1153,7 @@ output: ./output
     "deepseek-v3-7b-sft": RecipeMeta(
         model="deepseek-ai/DeepSeek-V3-0324",
         task="sft",
-        size="7B",
+        size="685B",
         tags=("deepseek", "sft", "moe", "mixture-of-experts"),
         description="DeepSeek V3 SFT with MoE LoRA",
         yaml_str="""\
@@ -1302,9 +1302,9 @@ output: ./output
     "llama4-scout-tools": RecipeMeta(
         model="meta-llama/Llama-4-Scout-17B-16E-Instruct",
         task="sft",
-        size="17B",
+        size="109B",
         tags=("llama", "llama4", "sft", "tool-calling", "agentic", "function-calling"),
-        description="Llama 4 Scout 17B tool-calling / function-calling SFT",
+        description="Llama 4 Scout 17B active tool-calling / function-calling SFT",
         yaml_str="""\
 base: meta-llama/Llama-4-Scout-17B-16E-Instruct
 task: sft
@@ -2770,9 +2770,9 @@ output: ./output
     "glm-4.6-sft": RecipeMeta(
         model="zai-org/GLM-4.6",
         task="sft",
-        size="9B",
+        size="357B",
         tags=("glm", "zai-org", "chat", "instruction"),
-        description="GLM 4.6 instruction tuning with LoRA",
+        description="GLM 4.6 MoE instruction tuning with LoRA",
         yaml_str="""\
 base: zai-org/GLM-4.6
 task: sft
@@ -2798,9 +2798,9 @@ output: ./output
     "glm-5-sft": RecipeMeta(
         model="zai-org/GLM-5",
         task="sft",
-        size="9B",
+        size="754B",
         tags=("glm", "zai-org", "chat", "next-gen"),
-        description="GLM 5 SFT (next-gen GLM family)",
+        description="GLM 5 MoE SFT (next-gen GLM family)",
         yaml_str="""\
 base: zai-org/GLM-5
 task: sft
@@ -2889,9 +2889,9 @@ output: ./output
     "minimax-m2-sft": RecipeMeta(
         model="MiniMaxAI/MiniMax-M2",
         task="sft",
-        size="9B",
+        size="230B",
         tags=("minimax", "chat", "instruction"),
-        description="MiniMax M2 SFT instruction tuning",
+        description="MiniMax M2 MoE SFT instruction tuning",
         yaml_str="""\
 base: MiniMaxAI/MiniMax-M2
 task: sft
@@ -3076,6 +3076,7 @@ output: ./output
         yaml_str="""\
 base: mistralai/Mistral-Medium-3.5-128B
 task: sft
+modality: vision
 
 data:
   train: ./data/train.jsonl
@@ -3305,7 +3306,7 @@ output: ./output
     "voxtral-sft": RecipeMeta(
         model="mistralai/Voxtral-Mini-3B-2507",
         task="sft",
-        size="3B",
+        size="4.7B",
         tags=("mistral", "voxtral", "audio", "multimodal"),
         description="Voxtral Mini 3B audio SFT",
         yaml_str="""\
@@ -3513,47 +3514,20 @@ training:
 output: ./output
 """,
     ),
-    "spark-tts": RecipeMeta(
-        model="SparkAudio/Spark-TTS-0.5B",
-        task="tts",
-        size="0.5B",
-        tags=("tts", "spark", "audio_out", "v0.52.0"),
-        description="Spark-TTS — live (v0.71.20)",
-        yaml_str="""\
-base: SparkAudio/Spark-TTS-0.5B
-task: tts
-modality: audio_out
-
-data:
-  train: ./data/tts_train.jsonl
-  format: audio
-  audio_dir: ./data/audio
-  max_length: 2048
-
-training:
-  epochs: 3
-  lr: 5e-5
-  batch_size: auto
-  tts_family: spark
-
-output: ./output
-""",
-    ),
     "oute-tts": RecipeMeta(
         model="OuteAI/OuteTTS-0.3-500M",
         task="tts",
         size="0.5B",
         tags=("tts", "oute", "audio_out", "emotion", "v0.52.0"),
-        description="Oute-TTS with emotion conditioning — live (v0.71.20)",
+        description="OuteTTS v0.3 pre-encoded SFT; raw-audio live codec refused by upstream pin",
         yaml_str="""\
 base: OuteAI/OuteTTS-0.3-500M
 task: tts
 modality: audio_out
 
 data:
-  train: ./data/tts_train.jsonl
-  format: audio
-  audio_dir: ./data/audio
+  train: ./data/tts_pre_encoded.jsonl
+  format: chatml
   max_length: 2048
 
 training:
@@ -4951,11 +4925,18 @@ output: ./output
         tags=("minimax", "sft", "moe", "large", "multi-gpu"),
         description=(
             "MiniMax M3 MoE SFT (428B / 23B active). MiniMax Community License "
-            "- commercial use requires a separate agreement. Multi-GPU recommended."
+            "- commercial use requires a separate agreement. Multi-GPU recommended. "
+            "Loads through the vision path, whose processor is custom code: run "
+            "soup train --trust-remote-code."
         ),
         yaml_str="""\
 base: MiniMaxAI/MiniMax-M3
 task: sft
+# A vision-language checkpoint (minimax_m3_vl): only the image-text class builds
+# it. target_modules: auto attaches to the language tower alone (#1102), so the
+# fine-tune stays textual (#1145). The vision collator supervises every token,
+# prompt included: train_on_responses_only is not applied on this path (#1156).
+modality: vision
 
 data:
   train: ./data/train.jsonl
@@ -4968,132 +4949,11 @@ training:
   batch_size: 1
   gradient_accumulation_steps: 16
   lora:
-    dropout: 0.0        # peft's ParamWrapper refuses dropout on fused MoE experts (#798)
+    dropout: 0.0        # kept from the moe_lora version; this recipe now targets no experts (#1145)
     r: 32
     alpha: 64
     target_modules: auto
   quantization: 4bit
-  moe_lora: true
-  moe_aux_loss_coeff: 0.01
-  gradient_checkpointing: true
-
-output: ./output
-""",
-    ),
-    "minimax-m3-dpo": RecipeMeta(
-        model="MiniMaxAI/MiniMax-M3",
-        task="dpo",
-        size="428B",
-        tags=("minimax", "dpo", "alignment", "preference", "moe", "large", "multi-gpu"),
-        description=(
-            "MiniMax M3 MoE DPO alignment (428B / 23B active). MiniMax Community License "
-            "- commercial use requires a separate agreement. Multi-GPU recommended."
-        ),
-        yaml_str="""\
-base: MiniMaxAI/MiniMax-M3
-task: dpo
-
-data:
-  train: ./data/preference_train.jsonl
-  format: dpo
-  max_length: 4096
-
-training:
-  epochs: 1
-  lr: 5e-6
-  batch_size: 1
-  gradient_accumulation_steps: 16
-  lora:
-    dropout: 0.0        # peft's ParamWrapper refuses dropout on fused MoE experts (#798)
-    r: 32
-    alpha: 64
-    target_modules: auto
-  quantization: 4bit
-  dpo_beta: 0.1
-  moe_lora: true
-  moe_aux_loss_coeff: 0.01
-  gradient_checkpointing: true
-
-output: ./output
-""",
-    ),
-    "mistral-large-3-sft": RecipeMeta(
-        model="mistralai/Mistral-Large-3-675B-Instruct-2512",
-        task="sft",
-        size="675B",
-        tags=("mistral", "mistral-large", "sft", "moe", "large", "multi-gpu"),
-        description=(
-            "Mistral Large 3 MoE SFT (Apache-2.0, 675B / 41B active, multimodal). "
-            "Requires multi-node DeepSpeed."
-        ),
-        yaml_str="""\
-base: mistralai/Mistral-Large-3-675B-Instruct-2512
-task: sft
-
-data:
-  train: ./data/train.jsonl
-  format: auto
-  max_length: 4096
-
-training:
-  epochs: 1
-  lr: 5e-6
-  batch_size: 1
-  gradient_accumulation_steps: 32
-  lora:
-    dropout: 0.0        # peft's ParamWrapper refuses dropout on fused MoE experts (#798)
-    r: 32
-    alpha: 64
-    target_modules: auto
-  quantization: 4bit
-  moe_lora: true
-  moe_aux_loss_coeff: 0.01
-  gradient_checkpointing: true
-
-output: ./output
-""",
-    ),
-    "mistral-large-3-dpo": RecipeMeta(
-        model="mistralai/Mistral-Large-3-675B-Instruct-2512",
-        task="dpo",
-        size="675B",
-        tags=(
-            "mistral",
-            "mistral-large",
-            "dpo",
-            "alignment",
-            "preference",
-            "moe",
-            "large",
-            "multi-gpu",
-        ),
-        description=(
-            "Mistral Large 3 MoE DPO alignment "
-            "(Apache-2.0, 675B / 41B active, multimodal). Requires multi-node DeepSpeed."
-        ),
-        yaml_str="""\
-base: mistralai/Mistral-Large-3-675B-Instruct-2512
-task: dpo
-
-data:
-  train: ./data/preference_train.jsonl
-  format: dpo
-  max_length: 4096
-
-training:
-  epochs: 1
-  lr: 5e-6
-  batch_size: 1
-  gradient_accumulation_steps: 32
-  lora:
-    dropout: 0.0        # peft's ParamWrapper refuses dropout on fused MoE experts (#798)
-    r: 32
-    alpha: 64
-    target_modules: auto
-  quantization: 4bit
-  dpo_beta: 0.1
-  moe_lora: true
-  moe_aux_loss_coeff: 0.01
   gradient_checkpointing: true
 
 output: ./output

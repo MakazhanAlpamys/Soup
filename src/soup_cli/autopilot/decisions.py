@@ -259,9 +259,16 @@ def decide_quantization(
 
 
 def decide_peft(
-    data_size: int, model_size_b: float, vram_gb: float,
+    data_size: int,
+    model_size_b: float,
+    vram_gb: float,
+    quantization: str | None = None,
 ) -> dict[str, Any]:
-    """Pick a LoRA rank and settings based on dataset + model + VRAM."""
+    """Pick a LoRA rank and settings based on dataset + model + VRAM.
+
+    ``quantization`` is the format chosen for the base. peft cannot apply DoRA
+    to GPTQ / AWQ / AQLM / EETQ layers, so DoRA stays off for those.
+    """
     if data_size < 1000:
         rank = 8
     elif data_size < 10_000:
@@ -271,6 +278,8 @@ def decide_peft(
         rank = 32
     alpha = rank * 2
     use_dora = data_size > 100_000 and vram_gb >= 2.0 * model_size_b
+    if quantization in ("gptq", "awq", "aqlm", "eetq"):
+        use_dora = False
     return {
         "r": rank,
         "alpha": alpha,

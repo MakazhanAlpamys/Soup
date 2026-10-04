@@ -157,6 +157,15 @@ MOE_TEXT_LORA_TARGETS: dict[str, Any] = {
     # text tower MiniMax-M3's wrapper exposes, and a config loaded without the
     # wrapper reaches the resolver as this type instead of ``minimax_m3_vl``.
     "minimax_m3_vl_text": ("q_proj", "k_proj", "v_proj", "o_proj"),
+    # Mistral 3.5 (``mistralai/Mistral-Medium-3.5-128B``, shipped in
+    # ``mistral-medium-3-5-sft``): a vision-language wrapper (model_type
+    # "mistral3") containing a Pixtral vision encoder and a Mistral text tower.
+    # The vision tower defines its own attention projections under
+    # ``model.vision_tower.transformer.layers.<N>.attention.(q|k|v|o)_proj``,
+    # so target_modules: auto must be scoped to ``language_model`` via regex.
+    # Measured on the meta device: adapts 8 modules on a 2-layer skeleton,
+    # 0 in the vision tower (#1395).
+    "mistral3": r".*language_model\..*\.self_attn\.(q_proj|k_proj|v_proj|o_proj)",
 }
 
 #: Entries of :data:`MOE_TEXT_LORA_TARGETS` that cover only PART of the decoder,
@@ -1144,6 +1153,49 @@ def attach_grpo_stability_callback(trainer: Any, tcfg: Any) -> bool:
         logger.debug("attach_grpo_stability_callback rejected: %s", exc)
         return False
     trainer.add_callback(callback)
+    return True
+
+
+def ensure_grpo_stability_callback(trainer: Any) -> bool:
+    """Ensure the stability callback is attached for the gradient watchdog.
+
+    #342 — ``on_pre_optimizer_step`` in ``GRPOStabilityCallback`` must run
+    unconditionally.  ``attach_grpo_stability_callback`` only attaches when
+    stability knobs are set.  This function is a no-op if the callback is
+    already attached; otherwise it attaches with all stability knobs at
+    their defaults (inactive) so only the gradient watchdog hooks fire.
+
+    The public ``add_callback`` API is the primary capability gate.
+    ``callback_handler`` is treated as optional because it is an internal
+    ``Trainer`` implementation detail and may be absent on test doubles or
+    future TRL versions.
+    """
+    from soup_cli.monitoring.grpo_stability_callback import (
+        GRPOStabilityCallback,
+    )
+
+    add_callback = getattr(trainer, "add_callback", None)
+    if not callable(add_callback):
+        return False
+
+    # Optional duplicate-detection via the private callback list.
+    handler = getattr(trainer, "callback_handler", None)
+    callbacks = getattr(handler, "callbacks", None) if handler is not None else None
+    if callbacks is not None:
+        try:
+            for cb in callbacks:
+                if isinstance(cb, GRPOStabilityCallback):
+                    return False  # already wired — watchdog will fire
+        except TypeError:
+            pass
+
+    # Attach with defaults: all stability knobs inactive, watchdog active.
+    callback = GRPOStabilityCallback()
+    try:
+        add_callback(callback)
+    except Exception as exc:  # noqa: BLE001 — best-effort callback attachment
+        logger.debug("ensure_grpo_stability_callback add_callback failed: %s", exc)
+        return False
     return True
 
 

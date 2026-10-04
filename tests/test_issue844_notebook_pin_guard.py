@@ -176,3 +176,29 @@ class TestEveryImportInTheNotebookStillResolves:
             "notebook (or the pinned version) before merging:\n"
             + "\n".join(failures)
         )
+
+
+class TestTheNotebookRunsOnAModernHostedRuntime:
+    """#1543: a fresh 2-GPU runtime with a current huggingface-hub broke two cells."""
+
+    def test_one_gpu_is_selected_before_torch_is_imported(self):
+        env_idx = torch_idx = None
+        for idx, src in enumerate(_code_cell_sources()):
+            if env_idx is None and "CUDA_VISIBLE_DEVICES" in src:
+                env_idx = idx
+            if torch_idx is None and re.search(r"^\s*(import torch|from torch)\b", src, re.M):
+                torch_idx = idx
+        assert env_idx is not None, (
+            "no cell sets CUDA_VISIBLE_DEVICES: on a 2-GPU runtime layer streaming "
+            "refuses to start (it cannot run under nn.DataParallel)"
+        )
+        assert torch_idx is not None and env_idx <= torch_idx, (
+            "CUDA_VISIBLE_DEVICES is only read when CUDA initialises, so it must be "
+            "set in a cell at or before the first cell that imports torch"
+        )
+
+    def test_the_install_cell_caps_huggingface_hub_below_the_shared_blob_store(self):
+        # huggingface_hub >= 1.32 keeps Xet blobs in a cache-wide store that
+        # soup-cli 0.75.0 treats as an escape (#1509). Drop this assertion together
+        # with the pin when the notebook moves to a release that carries the fix.
+        assert re.search(r"huggingface-hub\s*<\s*1\.32", _install_cell_source())

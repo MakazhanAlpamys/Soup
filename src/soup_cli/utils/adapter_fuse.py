@@ -46,8 +46,21 @@ def merge_adapter_to_dense(
     for ``out_dir``. An in-place ``save_pretrained`` over a just-loaded model
     directory fails on Windows (error 1224 — the source ``.safetensors`` is
     still memory-mapped by the loaded weights), so the temp-dir swap is the
-    cross-platform-safe path, and it also makes the destination replacement
-    atomic.
+    cross-platform-safe path. A pre-existing ``out_dir`` is renamed aside
+    rather than deleted, and only removed once the staged model has taken
+    its place; if the final swap itself then fails (disk full, a lock held
+    on the staging dir), the renamed-aside copy is put back before the error
+    propagates. If that restore also fails, neither artifact is deleted:
+    both the previous model (at the renamed-aside path) and the newly merged
+    model (at the staging path) are left on disk and named in the raised
+    error, so a failure here can never destroy the last complete copy —
+    worst case it leaves two, at paths the caller can recover by hand.
+    If renaming the previous model aside fails in the first place, ``out_dir``
+    is left unchanged, the staging dir is kept, and the raised error names it.
+
+    Guarantee: whichever way the swap ends, ``out_dir`` is never left holding
+    a partial model, and a complete copy of the previous model and/or of the
+    newly merged model always survives on disk at a path the caller is told.
 
     ``out_dir`` is re-validated immediately before the swap: the training
     subprocess that produced ``adapter_dir`` may have run for hours, so the
@@ -90,30 +103,82 @@ def merge_adapter_to_dense(
     parent = os.path.dirname(os.path.abspath(out_dir)) or "."
     os.makedirs(parent, exist_ok=True)
     staging = tempfile.mkdtemp(prefix=".fuse_", dir=parent)
+    backup: str | None = None
+    keep_staging = False
     try:
         try:
             merged.save_pretrained(staging)
             tokenizer.save_pretrained(staging)
         finally:
             # Drop every reference so Windows releases the out_dir mmap before
-            # we remove it; otherwise rmtree(out_dir) also hits error 1224.
+            # we rename it aside; otherwise the rename also hits error 1224.
             del merged, base, tokenizer
             gc.collect()
             release_cuda()
         # Re-validate the swap target IMMEDIATELY before the destructive
-        # rmtree/replace — the model load + merge + save above took minutes, a
+        # rename/replace — the model load + merge + save above took minutes, a
         # real window in which a junction/symlink could be planted at out_dir
         # (the entry-time check is now stale). enforce_* refuses symlinks AND
-        # Windows reparse points, so rmtree cannot be redirected outside cwd.
+        # Windows reparse points, so the rename cannot be redirected outside cwd.
         enforce_under_cwd_and_no_symlink(out_dir, "fused output dir")
         if os.path.isdir(out_dir):
-            shutil.rmtree(out_dir)
-        os.replace(staging, out_dir)
+            # Rename the previous model ASIDE instead of deleting it. The
+            # actual swap below can still fail (AV/indexer holding the
+            # staging dir, disk full), and until it succeeds the old model
+            # is the only good copy there is.
+            backup = os.path.join(
+                parent, f".{os.path.basename(os.path.normpath(out_dir))}.old-{os.getpid()}"
+            )
+            try:
+                os.replace(out_dir, backup)
+            except OSError as backup_exc:
+                # Renaming the previous model aside failed (the same AV /
+                # indexer lock the swap below guards against), so out_dir was
+                # never touched and still holds the old model. Staging is now
+                # the only copy of the new merge: keep it and name it.
+                keep_staging = True
+                raise RuntimeError(
+                    f"failed to move the previous model at '{out_dir}' aside "
+                    f"({backup_exc!r}); it is unchanged, and the newly merged "
+                    f"model is intact at '{staging}' — move it into place "
+                    f"manually"
+                ) from backup_exc
+        try:
+            os.replace(staging, out_dir)
+        except BaseException as swap_exc:
+            # The swap itself failed: put the previous model straight back
+            # before anything else runs, so this failure never leaves
+            # neither copy in place.
+            if backup is not None:
+                try:
+                    os.replace(backup, out_dir)
+                except OSError as restore_exc:
+                    # The restore ALSO failed: out_dir now holds neither
+                    # copy. Do not guess which of staging/backup to keep —
+                    # keep both on disk and name them in the error, so the
+                    # outer handler below must not rmtree(staging) either.
+                    keep_staging = True
+                    raise RuntimeError(
+                        f"failed to swap the merged model into '{out_dir}' "
+                        f"({swap_exc!r}), and restoring the previous model "
+                        f"from '{backup}' also failed ({restore_exc!r}); "
+                        f"the previous model is intact at '{backup}' and the "
+                        f"newly merged model is intact at '{staging}' — move "
+                        f"one of them into place manually"
+                    ) from restore_exc
+                backup = None
+            raise
+        if backup is not None:
+            shutil.rmtree(backup, ignore_errors=True)
     except BaseException:
         # A half-written staging dir (disk full, interrupted save) must not be
         # orphaned next to the model — it would silently accumulate a full
-        # model's worth of bytes per failed run.
-        shutil.rmtree(staging, ignore_errors=True)
+        # model's worth of bytes per failed run. But if the swap AND the
+        # restore both failed above, staging is the only copy of the new
+        # model left anywhere: keep it, and let the RuntimeError above name
+        # it instead of deleting it here.
+        if not keep_staging:
+            shutil.rmtree(staging, ignore_errors=True)
         raise
 
 
