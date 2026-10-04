@@ -614,6 +614,14 @@ batch 1–8 and two sequence lengths: **worst error 0.85%, and it never under-pr
 the only safe direction for a number allowed to stop a run. The refusal names the two
 knobs that actually scale it (`training.batch_size`, `data.max_length`).
 
+That grid was measured on a compute-capability-8.6 card, whose two default cuBLAS workspaces
+(8,320 KiB each) are inside the fitted constant. A streamed step holds one cuBLAS workspace
+per handle-stream pair — two of them: the forward thread's and autograd CUDA thread's — and
+on Hopper/Blackwell (compute capability 9–12) PyTorch sizes each at 32 MiB. The pre-flight
+charges the excess over the fitted baseline (2 × (32 MiB − 8,320 KiB) = 50.1 MB there),
+honouring `CUBLAS_WORKSPACE_CONFIG` when set; `training.stream_vram_probe` remains the
+measured gate that covers whatever the formula still misses (issue #1407).
+
 Refusing rather than warning is deliberate. On Linux an over-budget step is a hard OOM.
 On Windows it is worse: WDDM silently spills to host memory and the run merely becomes an
 order of magnitude slower — measured here as a 9.27 GB peak on a 4.29 GB card with **no
