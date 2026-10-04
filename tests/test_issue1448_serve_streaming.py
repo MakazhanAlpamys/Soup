@@ -5,11 +5,18 @@ Acceptance criteria:
 - The output constraint (logits processor) reaches generation on the streaming path.
 """
 
+from __future__ import annotations
+
+import json
+from unittest import mock
 from unittest.mock import MagicMock, patch
 
+import pytest
 from fastapi.testclient import TestClient
 
+import soup_cli.commands.serve as serve
 from soup_cli.commands.serve import _create_app
+from soup_cli.utils import structured_output
 
 
 def _make_app(**kwargs):
@@ -83,3 +90,52 @@ def test_streaming_forwards_logits_processors():
     mock_generate.assert_called_once()
     _, kwargs = mock_generate.call_args
     assert kwargs.get("logits_processor") == [dummy_processor]
+
+
+REGEX = {"kind": "regex", "pattern": "a+"}
+
+
+def _sse_text(body: str) -> str:
+    return "".join(
+        json.loads(line[len("data: "):])["choices"][0]["delta"].get("content", "")
+        for line in body.splitlines()
+        if line.startswith("data: {") and '"choices"' in line
+    )
+
+
+@pytest.mark.parametrize(
+    "parser, raw, visible",
+    [
+        ("deepseek-r1", "<think>plan</think>aaa and more", "aaa and more"),
+        ("openthinker", "<|begin_of_thought|>t<|end_of_thought|>aaa", "aaa"),
+        (None, "<think>kept</think>aaa", "<think>kept</think>aaa"),
+    ],
+)
+def test_streaming_matches_non_streaming(parser, raw, visible):
+    seen, built_for = [], []
+
+    def fake_generate(model, tokenizer, messages, **kwargs):
+        seen.append((kwargs.get("logits_processor"), kwargs.get("ngram_config")))
+        return (raw, 3, 2)
+
+    def fake_build(constraint, tokenizer):
+        built_for.append(constraint)
+        return ["processor-for", constraint]
+
+    ngram = object()
+    with mock.patch.object(serve, "_generate_response", fake_generate), \
+            mock.patch.object(structured_output, "build_logits_processors", fake_build):
+        client = TestClient(serve._create_app(
+            model_obj=object(), tokenizer=object(), device="cpu", model_name="m",
+            max_tokens_default=8, output_constraint=REGEX, reasoning_parser=parser,
+            ngram_config=ngram,
+        ))
+        body = {"model": "m", "messages": [{"role": "user", "content": "hi"}]}
+        plain = client.post("/v1/chat/completions", json=body)
+        streamed = client.post("/v1/chat/completions", json={**body, "stream": True})
+
+    assert plain.status_code == streamed.status_code == 200
+    assert plain.json()["choices"][0]["message"]["content"] == visible
+    assert _sse_text(streamed.text) == visible
+    assert built_for == [REGEX, REGEX]
+    assert seen[0] == seen[1] == (["processor-for", REGEX], ngram)
