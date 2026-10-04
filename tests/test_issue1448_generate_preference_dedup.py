@@ -13,6 +13,7 @@ from typer.testing import CliRunner
 
 from soup_cli.cli import app
 from soup_cli.commands.generate import _row_to_text
+from tests.conftest import strip_ansi
 
 
 def test_row_to_text_preference_stable_key():
@@ -71,7 +72,7 @@ def test_preference_dedup_with_drops_repeated_rows(tmp_path, monkeypatch):
         ])
 
     assert result.exit_code == 0, result.output
-    assert "2 removed" in result.output or "Duplicates" in result.output
+    assert "2 removed" in strip_ansi(result.output) or "Duplicates" in strip_ansi(result.output)
 
     out_file = tmp_path / "out.jsonl"
     assert out_file.exists()
