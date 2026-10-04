@@ -311,9 +311,10 @@ def serve(
         "--tool-auth-token",
         help=(
             "Require 'Authorization: Bearer <token>' on the code-exec tool "
-            "endpoints (/v1/tools/python, /v1/tools/web_search). Strongly "
-            "recommended whenever --host is not loopback, since those "
-            "endpoints run caller-supplied Python in a best-effort sandbox."
+            "endpoints (/v1/tools/*) and the adapter routes (GET /v1/adapters, "
+            "/v1/adapters/activate, /v1/adapters/deactivate). Required whenever "
+            "--host is not loopback, since the tool endpoints run "
+            "caller-supplied code in a best-effort sandbox."
         ),
     ),
 ):
@@ -1667,11 +1668,12 @@ def _create_app(
     """Create the FastAPI application with OpenAI-compatible endpoints.
 
     Args:
-        auth_token: optional Bearer-token gate for the v0.53.7 tool
-            endpoints (``/v1/tools/python`` + ``/v1/tools/web_search``).
-            When ``None`` (default), endpoints inherit the server's
-            loopback-only CORS trust boundary. When set, callers must
-            supply ``Authorization: Bearer <token>``.
+        auth_token: optional Bearer-token gate for the tool endpoints
+            (``/v1/tools/*``) and the adapter routes (``GET /v1/adapters``,
+            ``/v1/adapters/activate/{name}``, ``/v1/adapters/deactivate``).
+            When ``None`` (default), those routes are served on a loopback
+            bind only and refused with 401 on any other. When set, callers
+            must supply ``Authorization: Bearer <token>``.
     """
     import secrets as _secrets
     import threading as _threading

@@ -208,12 +208,29 @@ def watch_cmd(
         False, "--pack-cans",
         help="Pack each iteration as a v0.26 Soup Can + Registry entry (v0.71.4).",
     ),
+    tool_auth_token: Optional[str] = typer.Option(
+        None,
+        "--tool-auth-token",
+        envvar="SOUP_TOOL_AUTH_TOKEN",
+        help=(
+            "The soup serve --tool-auth-token value, sent as a Bearer token when the "
+            "deploy stage activates an adapter. Defaults to $SOUP_TOOL_AUTH_TOKEN, "
+            "which keeps it out of the shell history."
+        ),
+    ),
 ) -> None:
     """Run the harvest → train → gate → deploy daemon."""
     if detach and foreground:
         console.print("[red]--detach and --foreground are mutually exclusive[/]")
         raise typer.Exit(code=2)
     state = _safe_read()  # ensure state exists before forking
+    if tool_auth_token:
+        # The deploy stage reads the token from the environment, as it reads
+        # SOUP_LOOP_SERVE_ENDPOINT; a --detach child inherits it from there
+        # rather than from argv, where any local user could read it (#1139).
+        from soup_cli.utils.loop_stages import TOOL_AUTH_TOKEN_ENV
+
+        os.environ[TOOL_AUTH_TOKEN_ENV] = tool_auth_token
     if detach:
         argv = [
             sys.executable,
