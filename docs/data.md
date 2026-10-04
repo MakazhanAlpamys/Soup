@@ -611,9 +611,10 @@ soup migrate --from llamafactory config.yaml --dry-run
 ```
 
 Automatically maps model, LoRA, training params, quantization, and task type. Warns about unsupported features.
-IPython lines in a notebook (`!pip install ...`, `%env ...`, a `%%capture` cell) are skipped, so an
-unmodified Unsloth notebook reads as the Python it contains; a real syntax error is reported with its
-code cell and line.
+IPython lines in a notebook are skipped, so an unmodified Unsloth notebook reads as the Python it
+contains: `!pip install ...` and `%env ...` lines (a `!` line continued with a trailing backslash counts
+as one line), a `%%capture` header (its body is still read), and a `%%bash` cell whole; a real syntax
+error is reported with its code cell and line.
 
 An axolotl `rl:` value with no Soup task (for example `rl: ebft`) stops the migration: `soup migrate` exits 1 and names the value instead of writing a `task: sft` config.
 

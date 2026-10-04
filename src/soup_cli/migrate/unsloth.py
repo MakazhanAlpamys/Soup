@@ -5,6 +5,7 @@ Uses AST parsing only — never exec/eval on notebook code.
 
 import ast
 import json
+import warnings
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -39,10 +40,14 @@ _TASK_FORMAT_MAP = {
 
 
 def _parses(source: str) -> bool:
-    try:
-        ast.parse(source)
-    except SyntaxError:
-        return False
+    # Only the real parse reports an invalid escape in the notebook; the probes
+    # would repeat each SyntaxWarning with a cell-local line number (#1583 review).
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", SyntaxWarning)
+        try:
+            ast.parse(source)
+        except SyntaxError:
+            return False
     return True
 
 
@@ -94,12 +99,20 @@ def _strip_ipython_magics(cell_source: str) -> str:
             return "".join(_blank(line) for line in lines)
         out = [_blank(line) for line in lines[: first_index + 1]]
         lines = lines[first_index + 1 :]
+    continued = False
     for line in lines:
+        if continued:
+            # IPython joins a magic line ending in a backslash with the next line
+            # (18 of the 82 public Unsloth GRPO notebooks install that way).
+            out.append(_blank(line))
+            continued = line.rstrip("\r\n").endswith("\\")
+            continue
         replacement = None
         if line.lstrip().startswith(("!", "%")):
             # ponytail: re-parsing the prefix per magic line is O(n^2) in a cell's
             # lines; notebook cells are short. Track bracket depth if that ever matters.
             replacement = _neutralise_magic(line, "".join(out))
+            continued = replacement is not None and line.rstrip("\r\n").endswith("\\")
         out.append(line if replacement is None else replacement)
     return "".join(out)
 

@@ -85,6 +85,24 @@ class TestMagicsAreSkipped:
         assert _migrate(tmp_path, _LOAD, cell, _GRPO) == clean
 
 
+    def test_a_backslash_continued_magic_is_one_magic(self, tmp_path: Path) -> None:
+        # IPython joins a `!` line ending in a backslash with the lines after it;
+        # 18 of the 82 official Unsloth GRPO notebooks (gpt-oss among them) install
+        # that way, and only the first line was blanked (maintainer's review).
+        cell = (
+            "%%capture\n"
+            "import os\n"
+            "if 'COLAB_' in ''.join(os.environ):\n"
+            "    !uv pip install -qqq \\\n"
+            "        \"torch>=2.8.0\" {_numpy} \\\n"
+            "        unsloth\n"
+            "!uv pip install --no-deps -qqq \\\n"
+            "    trl==0.22.2\n"
+        )
+        clean = _migrate(tmp_path, _LOAD, _GRPO)
+        assert _migrate(tmp_path, cell, _LOAD, _GRPO) == clean
+        assert _strip_ipython_magics(cell).count("\n") == cell.count("\n")
+
     def test_a_magic_under_nested_headers_is_still_a_magic(self, tmp_path: Path) -> None:
         # CodeRabbit on the first head: a one-space probe satisfies `if a:` but not the
         # nested `    if b:`; probing at the magic's own indentation does.
@@ -114,7 +132,16 @@ class TestContinuationLinesAreNotMagics:
         "    % 2\n"
     )
 
-    def test_a_parsing_cell_is_returned_byte_for_byte(self) -> None:
+    def test_a_parsing_cell_is_returned_byte_for_byte(self, monkeypatch) -> None:
+        # The parse-first shortcut is the whole guarantee here: a cell that parses is
+        # never probed line by line (pinned per the review; removing the shortcut
+        # gives the same output, so only this catches it).
+        from soup_cli.migrate import unsloth as mod
+
+        def never(*args, **kwargs):
+            raise AssertionError("a parsing cell was probed line by line")
+
+        monkeypatch.setattr(mod, "_neutralise_magic", never)
         assert _strip_ipython_magics(self._CONT) == self._CONT
 
     def test_continuations_survive_even_in_a_cell_that_needs_transforming(self) -> None:
