@@ -215,6 +215,14 @@ measured a 0.086344 nat/target gap to fixed FP, with a paired 95% interval of
 - not upstream QuEST numerical parity;
 - not packed INT4, and not a speed or memory-efficiency claim.
 
+The [post-fit development record](../benchmarks/quest-674-postfit-development-results.md)
+preserves a selected research continuation with a Q/strongest-FP response-NLL
+ratio of 1.038367 and paired gap of +0.078519 nat/target on the same, now
+selection-spent, 704-row panel. It uses a research CE/KL adapter around native
+SFT; this objective is not exposed as a public QuEST CLI recipe. The gap's paired
+95% interval remains above zero, so `training_quality_validated` stays false.
+The record also retains unsuccessful follow-ups and checkpoint hash bindings.
+
 The implementation keeps FP32 masters. The Hadamard and fake-quant grid arithmetic
 run under the trainer's CUDA autocast: BF16 by default on the Ampere-or-newer GPUs
 this route requires. `training.auto_mixed_precision: true` is refused for QuEST
