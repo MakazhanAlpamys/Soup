@@ -963,7 +963,7 @@ class TestSaveFormats:
         )
         assert on["bnb_4bit_use_double_quant"] is True
         # ``forced`` still quantizes every Linear (empty skip list) — unchanged.
-        assert on["bnb_4bit_skip_modules"] == []
+        assert "bnb_4bit_skip_modules" not in on
         assert on["llm_int8_skip_modules"] == []
 
     def test_merge_4bit_rejects_non_bool_double_quant(self):

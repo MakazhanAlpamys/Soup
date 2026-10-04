@@ -288,7 +288,6 @@ def _build_merge_4bit_bnb_kwargs(
         # 4-bit and 8-bit quantization. Passing an empty list ensures no
         # module (including lm_head) is skipped.
         bnb_kwargs["llm_int8_skip_modules"] = []
-        bnb_kwargs["bnb_4bit_skip_modules"] = []
     return bnb_kwargs
 
 
@@ -305,11 +304,11 @@ def merge_4bit(
 
     Unsloth ``merged_4bit`` / ``4bit_forced`` recipe — no
     dequant → merge → requant cycle. ``forced=True`` quantizes ALL linear
-    layers including embeddings; default ``False`` follows BNB's default
-    skip-modules behaviour. ``double_quant`` mirrors
-    ``training.bnb_4bit_use_double_quant`` (#321) so the save path agrees with
-    the resident and streamed loaders; it defaults True to match shipped
-    behaviour.
+    layers (including ``lm_head``; embeddings are not quantized); default
+    ``False`` follows BNB's default skip-modules behaviour. ``double_quant``
+    mirrors ``training.bnb_4bit_use_double_quant`` (#321) so the save path
+    agrees with the resident and streamed loaders; it defaults True to match
+    shipped behaviour.
     """
     if not isinstance(forced, bool):
         raise TypeError(f"forced must be bool, got {type(forced).__name__}")
@@ -334,10 +333,21 @@ def merge_4bit(
 
     import torch
     from transformers import (  # type: ignore[import-not-found]
+        AutoConfig,
         AutoModelForCausalLM,
         AutoTokenizer,
         BitsAndBytesConfig,
     )
+
+    if forced:
+        cfg = AutoConfig.from_pretrained(
+            merged_dir, trust_remote_code=trust_remote_code
+        )
+        if getattr(cfg, "tie_word_embeddings", False):
+            raise ValueError(
+                "4bit_forced cannot quantize models with tie_word_embeddings=True: "
+                "a tied lm_head shares embedding weights which 4-bit Linear cannot hold."
+            )
 
     dtype_map = {
         "float16": torch.float16,
