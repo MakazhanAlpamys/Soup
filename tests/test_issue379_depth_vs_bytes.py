@@ -1,3 +1,5 @@
+from argparse import Namespace
+
 import pytest
 
 from benchmarks.harness.depth_vs_bytes import (
@@ -138,3 +140,89 @@ def test_live_sweep_builds_recorded_shapes(tmp_path, monkeypatch):
     assert any("17408" in command for command in generated)
     assert any("18432" in command for command in generated)
     assert len(measured) == 8
+
+
+def _row(mib, counts, quant="nf4", depth=48, total=192):
+    return {
+        "depth": depth,
+        "quant": quant,
+        "layer_mib": mib,
+        "exact_counts": counts,
+        "total": total,
+    }
+
+
+def test_bracket_needs_a_point_on_each_side():
+    bf16 = _row(935.0, [128] * 3, quant="bf16", depth=32, total=128)
+    no_below = [_row(171.5, [192, 8, 8]), _row(179.3, [8, 8, 8]), bf16]
+    assert not depth_vs_bytes_verdict(no_below)
+    no_above = [_row(105.0, [192] * 3), _row(163.8, [192] * 3), bf16]
+    assert not depth_vs_bytes_verdict(no_above)
+
+
+def test_above_bracket_point_must_be_wrong_after_the_first_read():
+    rows = recorded_rows()
+    rows[1]["exact_counts"] = [8, 192, 192]
+    assert not depth_vs_bytes_verdict(rows)
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("depth", 0, "positive integer"),
+        ("quant", "fp8", "nf4 or bf16"),
+        ("total", 0, "positive integer"),
+        ("exact_counts", [192, 192], "three reads"),
+        ("exact_counts", [300, 300, 300], "out of range"),
+    ],
+)
+def test_malformed_rows_fail_closed(field, value, message):
+    rows = recorded_rows()
+    rows[0][field] = value
+    with pytest.raises(MeasurementInvalidError, match=message):
+        depth_vs_bytes_verdict(rows)
+
+
+def test_live_sweep_uses_the_recorded_layer_shape(tmp_path, monkeypatch):
+    """The recorded sweep uses hidden 5120 with 40 heads and 10 KV heads."""
+    from benchmarks.harness import depth_vs_bytes
+
+    commands = []
+
+    def fake_run(command, *, check):
+        assert check
+        commands.append(command)
+        __import__("pathlib").Path(command[command.index("--out") + 1]).mkdir(parents=True)
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+    monkeypatch.setattr(
+        depth_vs_bytes,
+        "_measure_checkpoint",
+        lambda weights, shards, quant: {
+            "layer_mib": 200.0,
+            "exact_counts": [1, 0, 0],
+            "total": 1,
+        },
+    )
+    depth_vs_bytes.run_live_sweep(tmp_path)
+    for command in commands:
+        assert command[command.index("--heads") + 1] == "40"
+        assert command[command.index("--kv-heads") + 1] == "10"
+
+
+@pytest.mark.parametrize("error", [RuntimeError("runtime"), ValueError("setup")])
+def test_live_measurement_setup_errors_are_invalid(monkeypatch, tmp_path, error):
+    from benchmarks.harness import depth_vs_bytes
+
+    monkeypatch.setattr(
+        depth_vs_bytes,
+        "parse_args",
+        lambda: Namespace(self_test=False, measure=True, work_dir=tmp_path, records=None),
+    )
+    monkeypatch.setattr("torch.cuda.is_available", lambda: True)
+    monkeypatch.setattr(
+        depth_vs_bytes,
+        "run_live_sweep",
+        lambda work_dir: (_ for _ in ()).throw(error),
+    )
+    assert depth_vs_bytes.main() == 3
