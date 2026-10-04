@@ -140,6 +140,11 @@ def infer(
             "modelers. Non-HF hubs require the matching SDK (v0.53.10 #152)."
         ),
     ),
+    cuda_graphs: bool = typer.Option(
+        False,
+        "--cuda-graphs",
+        help="Experimental CUDA graph decode for resident, unquantized Qwen2/Llama models.",
+    ),
 ):
     """Run batch inference on a JSONL file of prompts."""
     # v0.53.10 #152 — pre-fetch base from a non-HF hub before any resolution.
@@ -166,6 +171,10 @@ def infer(
     # v0.71.32 — ASR (Whisper) transcription branch. Diverts before the chat
     # model-resolution path; _infer_asr owns its own Whisper load + output.
     if task == "asr":
+        if cuda_graphs is True:
+            raise typer.BadParameter(
+                "--cuda-graphs supports text generation only. Omit --cuda-graphs for --task asr"
+            )
         # Validate --asr-task up front: a typo would otherwise be passed to
         # whisper.generate(task=...) and fail INSIDE every row (100k confusing
         # per-row skips instead of one upfront rejection).
@@ -238,6 +247,14 @@ def infer(
     model_obj, tokenizer = _load_model(
         model_target, base, device, trust_remote_code, is_local=(model_kind == "local"),
     )
+    if cuda_graphs is True:
+        from soup_cli.utils.cuda_graphs import cuda_graph_generation_kwargs
+
+        try:
+            cuda_graph_generation_kwargs(model_obj)
+        except RuntimeError as exc:
+            console.print(f"[red]{for_terminal(_with_omit_hint(str(exc)))}[/]")
+            raise typer.Exit(1) from exc
     console.print("[green]Model loaded.[/]\n")
 
     # Output path containment — defence-in-depth (project policy v0.20.0+).
@@ -249,6 +266,9 @@ def infer(
             "[red]--output must stay under the current working directory.[/]"
         )
         raise typer.Exit(1)
+
+    if cuda_graphs is True:
+        _warm_cuda_graphs(model_obj, tokenizer, prompts, max_tokens)
 
     # Run inference — stream results to disk as they are generated
     output_path = Path(output_file)
@@ -271,10 +291,16 @@ def infer(
 
         for prompt_text in prompts:
             messages = [{"role": "user", "content": prompt_text}]
-            response, token_count = _generate(
-                model_obj, tokenizer, messages,
-                max_tokens=max_tokens, temperature=temperature,
-            )
+            try:
+                response, token_count = _generate(
+                    model_obj, tokenizer, messages,
+                    max_tokens=max_tokens, temperature=temperature,
+                    **({"cuda_graphs": True} if cuda_graphs is True else {}),
+                )
+            except Exception as exc:
+                if cuda_graphs is not True:
+                    raise
+                raise _cuda_graph_failure(exc) from exc
 
             result = {
                 "prompt": prompt_text,
@@ -559,11 +585,13 @@ def _infer_asr(
             hyp = transcribe(resolved)
         except (ValueError, OSError, ImportError) as exc:
             skipped += 1
-            # Escape + control-strip the dataset-derived filename AND the
-            # exception (whose message embeds that filename) before printing.
-            name = for_terminal(Path(str(audio)).name)
+            # Quote the dataset-derived filename first, then escape and
+            # control-strip it (repr() after the escape would double the
+            # escape's backslash and make a tag live again); the exception,
+            # whose message embeds that filename, is escaped too.
+            name = for_terminal(repr(Path(str(audio)).name))
             console.print(
-                f"[yellow]Skipped {name!r}: {for_terminal(str(exc))}[/]"
+                f"[yellow]Skipped {name}: {for_terminal(str(exc))}[/]"
             )
             continue
         rec = {"audio": audio, "transcription": hyp}
@@ -577,9 +605,9 @@ def _infer_asr(
                 row_wer = wer(ref, hyp)
                 row_cer = cer(ref, hyp)
             except ValueError as exc:
-                name = for_terminal(Path(str(audio)).name)
+                name = for_terminal(repr(Path(str(audio)).name))
                 console.print(
-                    f"[yellow]Metric skipped for {name!r}: "
+                    f"[yellow]Metric skipped for {name}: "
                     f"{for_terminal(str(exc))}[/]"
                 )
             else:
@@ -638,13 +666,15 @@ def _load_model(
     is_local: Optional[bool] = None,
 ) -> tuple:
     """Load a model and tokenizer (reuses diff.py pattern)."""
-    import torch
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
+    from soup_cli.utils.gpu import resolve_inference_device_map_and_dtype
     from soup_cli.utils.trust_remote import (
         model_requires_trust_remote_code,
         resolve_trust_remote_code,
     )
+
+    device_map, torch_dtype = resolve_inference_device_map_and_dtype(device)
 
     if is_local is None:
         try:
@@ -691,16 +721,16 @@ def _load_model(
         base_obj = AutoModelForCausalLM.from_pretrained(
             base_model,
             trust_remote_code=trc,
-            device_map="auto",
-            torch_dtype=torch.float16,
+            device_map=device_map,
+            torch_dtype=torch_dtype,
         )
         model_obj = PeftModel.from_pretrained(base_obj, model_path)
     else:
         model_obj = AutoModelForCausalLM.from_pretrained(
             model_path,
             trust_remote_code=trc,
-            device_map="auto",
-            torch_dtype=torch.float16,
+            device_map=device_map,
+            torch_dtype=torch_dtype,
         )
 
     model_obj.eval()
@@ -709,6 +739,7 @@ def _load_model(
 
 def _generate(
     model, tokenizer, messages, max_tokens=256, temperature=0.7,
+    cuda_graphs: bool = False, min_tokens: int | None = None,
 ) -> tuple[str, int]:
     """Generate a response from the model. Returns (text, token_count)."""
     import torch
@@ -732,9 +763,69 @@ def _generate(
         if temperature > 0:
             gen_kwargs["temperature"] = temperature
             gen_kwargs["top_p"] = 0.9
+        if min_tokens:
+            gen_kwargs["min_new_tokens"] = min_tokens
+        if cuda_graphs:
+            from soup_cli.utils.cuda_graphs import cuda_graph_generation_kwargs
+
+            gen_kwargs.update(cuda_graph_generation_kwargs(model))
         outputs = model.generate(**gen_kwargs)
 
     new_tokens = outputs[0][input_ids.shape[1]:]
     token_count = new_tokens.shape[0]
     response_text = tokenizer.decode(new_tokens, skip_special_tokens=True).strip()
     return response_text, token_count
+
+
+def _count_prompt_tokens(tokenizer, prompt_text: str) -> int:
+    """Tokens in the chat-templated prompt: the length the static cache must hold."""
+    from soup_cli.utils.vllm import encode_chat_prompt
+
+    inputs = encode_chat_prompt(
+        [{"role": "user", "content": prompt_text}], tokenizer,
+        fallback_on_error=False, return_tensors="pt",
+    )
+    return int(inputs["input_ids"].shape[1])
+
+
+def _longest_prompt(tokenizer, prompts: list[str]) -> str:
+    return max(prompts, key=lambda text: _count_prompt_tokens(tokenizer, text))
+
+
+def _with_omit_hint(message: str) -> str:
+    """Every --cuda-graphs refusal ends by naming the way out."""
+    if "omit --cuda-graphs" in message.lower():
+        return message
+    return f"{message.rstrip('. ')}. Omit --cuda-graphs."
+
+
+def _cuda_graph_failure(exc: BaseException) -> typer.Exit:
+    console.print(
+        f"[red]Generation failed with --cuda-graphs: {for_terminal(str(exc))}. "
+        "Omit --cuda-graphs to use normal generation.[/]"
+    )
+    return typer.Exit(1)
+
+
+# Graph trees warm up on a compiled function's first call, record on the second and
+# replay from the third; decode forwards are new tokens minus one (prefill is eager).
+_CUDA_GRAPH_WARMUP_TOKENS = 4
+
+
+def _warm_cuda_graphs(model, tokenizer, prompts: list[str], max_tokens: int) -> None:
+    """Capture once, on the longest prompt, before any output is written.
+
+    Transformers sizes a static cache as max(this request, every earlier one), so
+    warming on the longest prompt means no later request changes the cache shape and
+    recompiles. Greedy, so it consumes none of the sampling RNG the real rows use, and
+    held to a few tokens past EOS so the graph is recorded even on a short answer.
+    """
+    console.print("[dim]Compiling CUDA graph decode (a one-time warm-up)...[/]")
+    messages = [{"role": "user", "content": _longest_prompt(tokenizer, prompts)}]
+    try:
+        _generate(
+            model, tokenizer, messages, max_tokens=max_tokens, temperature=0.0, cuda_graphs=True,
+            min_tokens=min(max_tokens, _CUDA_GRAPH_WARMUP_TOKENS),
+        )
+    except Exception as exc:
+        raise _cuda_graph_failure(exc) from exc

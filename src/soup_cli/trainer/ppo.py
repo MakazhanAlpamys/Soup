@@ -7,6 +7,8 @@ clipped surrogate objectives with a KL penalty against a frozen reference model.
 Full RLHF pipeline:  SFT → Reward Model → PPO
 """
 
+import math
+import os
 import time
 from pathlib import Path
 from typing import Any, Mapping, Optional
@@ -18,6 +20,7 @@ from soup_cli.config.schema import SoupConfig
 from soup_cli.data.chat_templates import apply_chat_template_override
 from soup_cli.trainer.loss_summary import summarize_training_loss
 from soup_cli.utils.gpu import (
+    bf16_fp16_flags,
     estimate_batch_size,
     model_size_from_name,
     resolve_device_map,
@@ -33,6 +36,9 @@ def _set_ppo_training_kwargs(
     ppo_kwargs: dict[str, object],
     ppo_config_cls: type,
     tcfg: Any,
+    *,
+    total_steps: int | None = None,
+    device: str = "cpu",
 ) -> dict[str, str]:
     """Forward Soup's three PPO schedules across TRL parameter renames."""
     from soup_cli.trainer._trl_compat import config_accepts, kl_penalty_kwargs
@@ -55,6 +61,28 @@ def _set_ppo_training_kwargs(
     for name in kl_kwargs:
         applied["kl_coef"] = name
 
+    if total_steps is not None:
+        from soup_cli.utils.layer_stream import should_enable_hf_gradient_checkpointing
+
+        use_bf16, use_fp16 = bf16_fp16_flags(device)
+        training_kwargs = {
+            "warmup_steps": int(total_steps * tcfg.warmup_ratio),
+            "weight_decay": tcfg.weight_decay,
+            "max_grad_norm": tcfg.max_grad_norm,
+            "optim": tcfg.optimizer,
+            "lr_scheduler_type": tcfg.scheduler,
+            "logging_steps": tcfg.logging_steps,
+            "save_steps": tcfg.save_steps,
+            "bf16": use_bf16,
+            "fp16": use_fp16,
+            "gradient_checkpointing": should_enable_hf_gradient_checkpointing(
+                tcfg.gradient_checkpointing, stream_layers=tcfg.stream_layers
+            ),
+        }
+        for name, value in training_kwargs.items():
+            if config_accepts(ppo_config_cls, name):
+                ppo_kwargs[name] = value
+
     return applied
 
 
@@ -68,6 +96,45 @@ def _effective_ppo_setting(
     if field is None:
         return f"{fallback} (not forwarded)"
     return getattr(config, field, kwargs[field])
+
+
+def _unsupported_rl_flags(tcfg) -> list[str]:
+    """The RL-signal flags PPO cannot feed on the experimental trl API (#1441)."""
+    flags = []
+    if getattr(tcfg, "reward_hack_detector", None) is not None:
+        flags.append("reward_hack_detector")
+    if getattr(tcfg, "echo_trap_enabled", False):
+        flags.append("echo_trap_enabled")
+    if getattr(tcfg, "reward_hack_mitigation", "off") != "off":
+        flags.append("reward_hack_mitigation")
+    return flags
+
+
+def refuse_unfed_rl_flags(tcfg, *, is_experimental: bool) -> None:
+    """Refuse RL-signal flags PPO cannot feed, before anything is loaded.
+
+    #1441: the experimental ``PPOTrainer`` takes no ``reward_funcs`` — its
+    reward comes from the reward model it calls internally — so the wrappers
+    built at :282-299 were dropped on the floor. The buffer was still created,
+    and because the buffer object existed, the detector's ``on_log`` fallback
+    returned early, so nothing was ever written *and* nothing was ever read from
+    trl's logs. A run with a detector, a mitigation mode or the echo trap was
+    announced, loaded and inert.
+
+    Refusing beats a dead callback: the run stops before the model load, and the
+    message names every flag that was set.
+    """
+    if not is_experimental:
+        return
+    flags = _unsupported_rl_flags(tcfg)
+    if not flags:
+        return
+    raise ValueError(
+        f"task: ppo cannot use {', '.join(flags)}: this trl's experimental "
+        "PPOTrainer takes no reward functions, so the reward/completion signal "
+        "these callbacks read is never captured. They are wired on GRPO only. "
+        "Remove the flag(s), or run task: grpo where the signal buffer is fed."
+    )
 
 
 class PPOTrainerWrapper:
@@ -119,8 +186,6 @@ class PPOTrainerWrapper:
 
     def setup(self, dataset: dict):
         """Load model, tokenizer, reward model/fn, apply LoRA, create PPO trainer."""
-        from datasets import Dataset
-
         # Import PPOTrainer/PPOConfig — trl >=0.28 moved to trl.experimental
         ppo_trainer_cls, ppo_config_cls, is_experimental = _import_ppo_classes()
 
@@ -132,10 +197,45 @@ class PPOTrainerWrapper:
         cfg = self.config
         tcfg = cfg.training
 
+        # #1441 — refuse before anything is loaded, including `datasets` and the
+        # model. These callbacks read a signal buffer the experimental
+        # PPOTrainer leaves empty, so a run with them is announced and inert.
+        refuse_unfed_rl_flags(tcfg, is_experimental=is_experimental)
+
+        # Deferred below the refusal: a config that cannot run at all should say
+        # which flag stopped it, not fail on an unrelated import first.
+        from datasets import Dataset
+
         # #353: seed before the model and any adapter are built.
         apply_training_seed(tcfg)
 
         use_unsloth = cfg.backend == "unsloth"
+
+        # --- Batch size ---
+        batch_size = tcfg.batch_size
+        if batch_size == "auto":
+            from soup_cli.utils.gpu import get_gpu_info
+
+            gpu_info = get_gpu_info()
+            model_size = model_size_from_name(cfg.base)
+            batch_size = estimate_batch_size(
+                model_params_b=model_size,
+                seq_length=cfg.data.max_length,
+                gpu_memory_bytes=gpu_info["memory_total_bytes"],
+                quantization=tcfg.quantization,
+                lora_r=tcfg.lora.r,
+            )
+            # PPO needs memory for policy + ref model + reward model → conservative
+            batch_size = max(1, batch_size // 4)
+            console.print(f"[green]Auto batch size (PPO):[/] {batch_size}")
+
+        # #1391: a train set smaller than one rollout batch never reaches a
+        # step. _prepare_ppo_dataset turns every row into exactly one prompt,
+        # so the count is known before any model is loaded.
+        if is_experimental:
+            _check_one_rollout_batch(
+                len(dataset["train"]), batch_size, tcfg.gradient_accumulation_steps
+            )
 
         # --- Load reward source ---
         self._setup_reward(cfg, tcfg)
@@ -156,24 +256,6 @@ class PPOTrainerWrapper:
             f" / {total:,} total ({pct:.2f}%)"
         )
 
-        # --- Batch size ---
-        batch_size = tcfg.batch_size
-        if batch_size == "auto":
-            from soup_cli.utils.gpu import get_gpu_info
-
-            gpu_info = get_gpu_info()
-            model_size = model_size_from_name(cfg.base)
-            batch_size = estimate_batch_size(
-                model_params_b=model_size,
-                seq_length=cfg.data.max_length,
-                gpu_memory_bytes=gpu_info["memory_total_bytes"],
-                quantization=tcfg.quantization,
-                lora_r=tcfg.lora.r,
-            )
-            # PPO needs memory for policy + ref model + reward model → conservative
-            batch_size = max(1, batch_size // 4)
-            console.print(f"[green]Auto batch size (PPO):[/] {batch_size}")
-
         # --- Dataset ---
         train_data = _prepare_ppo_dataset(dataset["train"], tokenizer=self.tokenizer)
         train_ds = Dataset.from_list(train_data)
@@ -191,6 +273,10 @@ class PPOTrainerWrapper:
             )
 
         train_ds = train_ds.map(_tokenize_ppo, batched=True)
+        # #1391: trl's PPOTrainer pads every column with DataCollatorWithPadding and
+        # never drops unused ones, so the prompt_text strings crash the collator.
+        # The manual (trl<0.28) loop below still reads prompt_text from _train_ds.
+        trl_train_ds = train_ds.select_columns(["input_ids", "attention_mask"])
 
         # --- Output dir ---
         output_dir = Path(cfg.output)
@@ -216,8 +302,12 @@ class PPOTrainerWrapper:
 
         ppo_params = inspect.signature(ppo_config_cls).parameters
 
+        total_steps = math.ceil(
+            len(train_ds) / batch_size / tcfg.gradient_accumulation_steps
+        ) * tcfg.epochs
         applied_ppo_fields = _set_ppo_training_kwargs(
-            ppo_kwargs, ppo_config_cls, tcfg
+            ppo_kwargs, ppo_config_cls, tcfg,
+            total_steps=total_steps, device=self.device,
         )
 
         if "cliprange" in ppo_params:
@@ -360,7 +450,7 @@ class PPOTrainerWrapper:
                 "model": self.model,
                 "ref_model": None,
                 "reward_model": reward_model_obj,
-                "train_dataset": train_ds,
+                "train_dataset": trl_train_ds,
                 "value_model": value_model_obj,
             }
             # LoRA+ (#724/#745): inject so the eagerly-built scheduler binds to it.
@@ -380,9 +470,9 @@ class PPOTrainerWrapper:
                 "processing_class": self.tokenizer,
             }
             if "train_dataset" in ppo_trainer_params:
-                trainer_kwargs["train_dataset"] = train_ds
+                trainer_kwargs["train_dataset"] = trl_train_ds
             elif "dataset" in ppo_trainer_params:
-                trainer_kwargs["dataset"] = train_ds
+                trainer_kwargs["dataset"] = trl_train_ds
             if reward_funcs and "reward_funcs" in ppo_trainer_params:
                 trainer_kwargs["reward_funcs"] = reward_funcs
             # Pass ref/reward/value models if required positionally
@@ -449,7 +539,7 @@ class PPOTrainerWrapper:
             task="ppo",
         )
 
-        # v0.40.6 #67 — ReLoRA callback (magnitude-prune LoRA every N steps).
+        # v0.40.6 #67 — ReLoRA merge-and-reinitialize restart callback.
         # LoRA+ (#724/#745) is wired ABOVE via constructor injection, not here:
         # PPO's trainer builds its scheduler eagerly, so the optimizer has to be
         # passed to the constructor rather than attached after it.
@@ -466,6 +556,7 @@ class PPOTrainerWrapper:
 
         self._output_dir = str(output_dir)
         self._train_ds = train_ds
+        self._trl_train_ds = trl_train_ds
         self._batch_size = batch_size
         self._num_epochs = tcfg.epochs
         self._max_length = cfg.data.max_length
@@ -718,9 +809,9 @@ class PPOTrainerWrapper:
         # If dataset wasn't accepted by constructor, set it on the trainer
         if not self._dataset_in_constructor:
             if hasattr(self.trainer, "train_dataset"):
-                self.trainer.train_dataset = self._train_ds
+                self.trainer.train_dataset = self._trl_train_ds
             elif hasattr(self.trainer, "dataset"):
-                self.trainer.dataset = self._train_ds
+                self.trainer.dataset = self._trl_train_ds
 
         if display:
             from soup_cli.monitoring.callback import (
@@ -773,13 +864,21 @@ class PPOTrainerWrapper:
                 self.trainer.train()
         duration = time.time() - start
 
-        # Save final model (LoRA adapter)
-        self.trainer.save_model(self._output_dir)
+        if self.config.training.relora_steps is None:
+            self.trainer.save_model(self._output_dir)
+        else:
+            from soup_cli.utils.peft_wiring import save_model_with_relora
+
+            save_model_with_relora(
+                self.trainer, self._output_dir, self.config.training.relora_steps
+            )
         self.tokenizer.save_pretrained(self._output_dir)
 
-        # Extract metrics
+        # Extract metrics. trl's PPO trainer (0.29) logs per-step losses under
+        # ``loss/policy_avg`` rather than ``loss``; the key is declared here
+        # instead of guessed (see #1413).
         logs = self.trainer.state.log_history
-        loss_summary = summarize_training_loss(logs)
+        loss_summary = summarize_training_loss(logs, loss_key="loss/policy_avg")
 
         hours = int(duration // 3600)
         minutes = int((duration % 3600) // 60)
@@ -869,8 +968,14 @@ class PPOTrainerWrapper:
 
         duration = time.time() - start
 
-        # Save final model (LoRA adapter)
-        self.model.save_pretrained(self._output_dir)
+        if self.config.training.relora_steps is None:
+            self.trainer.save_model(self._output_dir)
+        else:
+            from soup_cli.utils.peft_wiring import save_model_with_relora
+
+            save_model_with_relora(
+                self.trainer, self._output_dir, self.config.training.relora_steps
+            )
         self.tokenizer.save_pretrained(self._output_dir)
 
         # Extract metrics
@@ -924,6 +1029,29 @@ class PPOTrainerWrapper:
             rewards = [torch.tensor(0.0) for _ in range(num_samples)]
 
         return rewards
+
+
+def _world_size() -> int:
+    try:
+        return max(1, int(os.environ.get("WORLD_SIZE", "1") or "1"))
+    except (TypeError, ValueError):
+        return 1
+
+
+def _check_one_rollout_batch(rows: int, batch_size: int, grad_accum: int) -> None:
+    """#1391: trl's PPO DataLoader uses ``drop_last=True`` with one rollout batch
+    (``batch_size * gradient_accumulation_steps`` rows per process) and repeats it
+    with ``while True``, so a smaller train set spins forever without a step."""
+    processes = _world_size()
+    needed = batch_size * grad_accum * processes
+    if rows < needed:
+        per_process = f" x {processes} processes" if processes > 1 else ""
+        raise ValueError(
+            f"PPO needs at least one rollout batch of training prompts: the train set "
+            f"has {rows} rows, but batch_size={batch_size} x "
+            f"gradient_accumulation_steps={grad_accum}{per_process} = {needed}. "
+            f"Add prompts, or lower batch_size / gradient_accumulation_steps."
+        )
 
 
 def _import_ppo_classes():

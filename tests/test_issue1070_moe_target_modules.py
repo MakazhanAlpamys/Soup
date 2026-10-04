@@ -4,7 +4,7 @@
 returned ``None`` for everything else, delegating to peft. peft has no default
 for any MoE ``model_type`` Soup ships a recipe for, so the attach did not fall
 back -- it raised ``No target_modules passed but also no target_parameters
-found``, and every one of the 31 shipped MoE recipes uses ``target_modules:
+found``, and every one of the 33 shipped MoE recipes uses ``target_modules:
 auto``.
 
 Measured on peft 0.20 / transformers 5.16.1, shrunk real models on CPU, before
@@ -433,16 +433,9 @@ EXCLUDED_MOE_BASES = {
 
 #: Bases a MoE-flagged recipe names whose config.json cannot be read. Their
 #: recipes keep failing, now with Soup's named refusal instead of peft's.
-UNRESOLVABLE_MOE_RECIPE_BASES = {
-    "mistralai/Mistral-Large-3-675B-Instruct-2512": (
-        "the repo exists and lists consolidated-*.safetensors but has no "
-        "config.json (404), so AutoConfig cannot load it at all"
-    ),
-    "moonshotai/Kimi-K2": (
-        "401 unauthenticated, while moonshotai/Kimi-K2.5 and Kimi-K2.6 resolve "
-        "from the same org -- gated or gone, not decidable from here"
-    ),
-}
+#: Mistral-Large-3 was the one entry: its repo has no config.json, and #1145
+#: removed its two recipes rather than point them at a third-party conversion.
+UNRESOLVABLE_MOE_RECIPE_BASES: dict = {}
 
 
 def _record():
@@ -532,19 +525,23 @@ class TestTheRatchet:
         assert all("unresolvable" in record[b] for b in UNRESOLVABLE_MOE_RECIPE_BASES)
         assert set(UNRESOLVABLE_MOE_RECIPE_BASES) <= _flagged_bases()
         assert len(EXCLUDED_MOE_BASES) == 1
-        assert len(UNRESOLVABLE_MOE_RECIPE_BASES) == 2
+        assert len(UNRESOLVABLE_MOE_RECIPE_BASES) == 0  # #1145
 
     def test_the_record_has_the_measured_shape(self):
         """If regeneration silently lost bases or experts, the tests above would
         pass while checking less. Pinned to the numbers the reviewer derived
-        independently: 117 bases, 20 MoE, 6 of them flagless, 11 model types."""
+        independently: 113 bases, 23 MoE, 8 of them flagless, 13 model types.
+        #1145 removed the Mistral-Large-3 recipes, whose base was unreadable
+        (not MoE-counted), so 112 bases; and MiniMax-M3 became flagless (its SFT
+        recipe loads through the vision path without moe_lora, its DPO recipe was
+        removed), so 9 flagless."""
         moe = _moe_bases()
         flagless = [b for b in moe if b not in _flagged_bases()]
 
-        assert len(_record()) == 116
-        assert len(moe) == 20
-        assert len(flagless) == 6, sorted(flagless)
-        assert len({info["model_type"] for info in moe.values()}) == 11
+        assert len(_record()) == 112
+        assert len(moe) == 23
+        assert len(flagless) == 9, sorted(flagless)
+        assert len({info["model_type"] for info in moe.values()}) == 13
 
 
 #: Text SFT/pretrain and the preference/RL trainers; #1148's six are driven in test_issue1099.

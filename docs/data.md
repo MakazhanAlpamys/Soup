@@ -104,12 +104,15 @@ soup data clean raw_data.jsonl --strip-boilerplate --repair-code --repair-json -
 ### Cleaning Rules & Defaults:
 - **Default (Safe & Non-Destructive):**
   1. **Control Characters & Whitespace:** Strips C0 controls (`\x00-\x1f`), zero-width spaces (`\u200b-\u200d`, `\ufeff`), and normalizes CRLF/CR to Unix LF.
-  2. **Empty & Degenerate Turns:** Drops rows where the assistant turn is empty or shorter than `--min-tokens`.
+  2. **Empty & Degenerate Turns:** Drops rows where the assistant turn is empty or shorter than `--min-tokens`. A turn that carries tool calls is exempt: its payload is the calls, and `"content": ""` is what the tool-calling format writes on a call-only turn.
 - **Opt-In Heuristic Repairs (Flags):**
   1. `--strip-boilerplate`: Strips canned preambles (*"Certainly! As an AI language model..."*) and sign-offs (*"I hope this helps!"*) across multiple passes.
   2. `--repair-code`: Auto-closes unclosed triple backtick (```` ``` ````) code fences in assistant completions.
   3. `--repair-json`: Unwraps markdown code blocks from JSON arguments and repairs trailing commas in tool calls.
   4. `--prune-echo`: Drops rows where the assistant merely repeats the user prompt verbatim.
+  5. `--drop-invalid-json`: Drops rows with a tool call whose arguments still do not parse as JSON (after `--repair-json`, when both are set).
+
+  `--repair-json` and `--drop-invalid-json` read every call the tool-calling loader reads: the row's top-level `tool_calls` and each assistant turn's `tool_calls`, in the documented `{"function": {"name": ..., "arguments": ...}}` shape or flat. Arguments given as a JSON object are left as they are.
 
 Supports all standard formats: `chatml`, `alpaca`, `sharegpt`, `dpo`, `kto`, and `tool-calling`.
 
@@ -154,6 +157,26 @@ soup data canary insert train.jsonl -o canaried.jsonl --count 16 --manifest secr
 # 2. train on canaried.jsonl as usual, then:
 soup data canary check --manifest secrets.json --base ./my-model --adapter ./lora
 ```
+
+`insert` writes the canaries in the dataset's own format, so the loader keeps them:
+`--format auto` (the default) detects it from the first 100 rows, as `data.format: auto`
+does (a file that mixes shapes is refused, see Data Formats). Alpaca, sharegpt and chatml are supported, each with the carrier as the prompt
+and the secret as the trained response. Every other format is refused: dpo, kto and
+embedding have no single supervised response, plaintext trains on raw text rather
+than the chat turn `check` scores, tool-calling puts a tool-schema system turn
+before the prompt, which `check` does not render, and the multimodal formats need a
+real image or audio file per row. `-o` takes `.jsonl`, or `.json` for a JSON array.
+
+`insert` spreads the canaries through the file rather than appending them: the file is
+cut into one equal stretch per canary, and each canary goes to a random row of its own
+stretch (`--seed` fixes the rows). The dataset's own rows keep their order. The
+loader holds out the file's last rows as validation (`data.val_split`, 0.1 by default),
+and a canary there is never trained on, so appending put every canary out of reach
+from 135 rows on. Spread, a held-out tail of
+`data.val_split` holds about that share of them: `insert` prints how many of them the
+default split trains on, and the manifest records each canary's row in the written file
+(`"row"`, counted from 0) and the file's row count (`"rows"`). Set `data.val_split: 0`
+for a run where every canary must be trained on.
 
 `check` measures the model's loss on each inserted secret and ranks it against
 never-inserted **controls** drawn from the same secret space and sharing the same
@@ -208,6 +231,9 @@ expectations:
   - {name: expect_no_refusal_pattern}
 EOF
 soup expect data.jsonl suite.yaml   # exit 2 on suite failure
+# Inspects ChatML, ShareGPT, DPO (chosen/rejected), KTO (completion), Alpaca,
+# and sentence embedding formats. Fails closed if any row yields zero extractable text.
+# Malformed or non-object lines and files with no checkable rows are refused with exit 3.
 
 # Magpie synthetic data — chat-template-prefix harvest (live, v0.71.6)
 soup data gen-magpie --base meta-llama/Llama-3.1-8B-Instruct \
@@ -362,7 +388,7 @@ soup ingest --source langfuse --pull --since 7d --output traces.jsonl
 
 - **What one row is.** One output row per `GENERATION` observation in the window — the unit that carries a model, the exact input it was given and the output it produced — read from Langfuse's Observations API v2 (`/api/public/traces` is removed from Langfuse Cloud on 2026-11-16) and checked again on each observation, so a server that ignores the `type` filter cannot turn spans or tool calls into rows — they are counted as skipped in the summary. A row's `trace_id` is the observation id. The API returns plain-text input and output as-is but structured values (chat message lists, objects) as JSON inside a string; those are decoded, and a chat message list becomes a `prompt` of every message's content joined by newlines (system prompt included), the same flattening `parse_langfuse` applies to a `{"messages": [...]}` export. An agent trace therefore yields one row per LLM call it made; its spans and tool calls yield none. Generations with no input or no output are skipped and counted in the summary line, so a pull that matched nothing usable says so instead of writing an empty file silently.
 - **Credentials.** Read from the environment only, never from a flag, so they never reach the audit log's argv. `LANGFUSE_BASE_URL` is honoured before `LANGFUSE_HOST`, the same precedence as the Langfuse SDK. The key pair is not written to the output, the console, debug logs or error messages.
-- **Host checks.** HTTPS only. The host goes through the same SSRF validator as `--slack-url`; a private, link-local or loopback address (self-hosted Langfuse) additionally needs `--allow-private-host`. Redirects are refused rather than followed with credentials attached.
+- **Host checks.** HTTPS only. The host goes through the same SSRF validator as `--slack-url`; a private, link-local, shared (`100.64.0.0/10`), site-local (`fec0::/10`) or loopback address (self-hosted Langfuse) additionally needs `--allow-private-host`. Redirects are refused rather than followed with credentials attached.
 - **Bounds.** `--since` accepts `30m` / `24h` / `7d` up to `365d` (default `7d`). Each request is bounded by a 30 s wall-clock deadline covering the connect and the whole response — a server that drip-feeds bytes cannot outlast it — and a response is capped at 64 MiB. Pages hold 100 generations; if results are still pending after `--max-pages` pages (default 100, max 10 000), the command stops with exit 1 and writes nothing — the output streams to a staging file, so an earlier file at `--output` is left untouched. HTTP 429 is retried up to 5 times, honouring `Retry-After` with a 60 s ceiling, and a pagination cursor the server repeats stops the pull instead of spending the rest of the page budget.
 - **Without `--pull`** nothing changes: the pull code is not imported and no connection is opened.
 
@@ -401,7 +427,7 @@ soup data active-sample --input traces.jsonl --output for-review.jsonl --budget 
 
 The output JSONL is a drop-in prompt set for `soup eval human` (v0.19). Budget is bounded `[1, 100 000]`.
 
-**Webhooks (v0.71.5).** `soup ingest`, `soup prune-prompt`, `soup ab`, and `soup data active-sample` all accept `--slack-url` / `--discord-url` and POST a one-line summary on completion through the same SSRF-hardened validator as `soup drift-alarm` (scheme allowlist, loopback-only HTTP, RFC1918 / link-local / reserved / multicast rejected; the post never raises, so a flaky webhook can't fail the command). `soup ab` only fires when the sequential test actually decides (`reject_h0` / `accept_h0`), not while it's still `continue`-ing.
+**Webhooks (v0.71.5).** `soup ingest`, `soup prune-prompt`, `soup ab`, and `soup data active-sample` all accept `--slack-url` / `--discord-url` and POST a one-line summary on completion through the same SSRF-hardened validator as `soup drift-alarm` (scheme allowlist, loopback-only HTTP, RFC1918 / link-local / shared `100.64.0.0/10` / site-local `fec0::/10` / reserved / multicast rejected; the post never raises, so a flaky webhook can't fail the command). `soup ab` only fires when the sequential test actually decides (`reject_h0` / `accept_h0`), not while it's still `continue`-ing.
 
 
 ## Synthetic Data Generation
@@ -424,6 +450,11 @@ soup data generate --prompt "..." --seed examples.jsonl --count 100
 # Use a local OpenAI-compatible server (soup serve, Ollama, etc.)
 soup data generate --prompt "..." --provider server --api-base http://localhost:11434/v1
 ```
+
+With `--provider server`, `openai` or `vllm`, `--api-base` takes plain HTTP only for loopback
+(`localhost`, `127.0.0.1`, `::1`) and HTTPS for any other host; `--provider ollama` stays
+loopback-only. A private, link-local or reserved IP literal is refused on either scheme, so
+address a server on your network by its hostname.
 
 ### Multi-Provider Support
 
@@ -454,7 +485,9 @@ soup data generate --prompt "..." --template qa --context document.txt
 # Preference data (DPO/KTO/ORPO)
 soup data generate --prompt "..." --template preference --pref-task dpo
 
-# Chain-of-thought reasoning (GRPO)
+# Chain-of-thought reasoning (GRPO). `math` rows end with `#### <number>`, so the
+# `accuracy` / `verifiable` math rewards can read the gold; `logic` / `code` rows
+# end with an `Answer: <answer>` line.
 soup data generate --prompt "..." --template reasoning --domain math
 ```
 
@@ -492,12 +525,14 @@ soup data augment ./data/train.jsonl --strategy translate --lang es,fr,de \
 soup data augment ./data/train.jsonl --strategy style --styles formal,casual \
   --output ./data/train_styled.jsonl
 
-# Local provider (Ollama / vLLM) — loopback-only, pick the model + base URL
+# Local provider (Ollama, loopback-only) — pick the model + base URL
 soup data augment ./data/train.jsonl --strategy rephrase --count 2 \
   --provider ollama --model qwen2.5:0.5b --output ./data/train_local.jsonl
 ```
 
-Works with any provider supported by `soup data generate` (OpenAI, Ollama, vLLM, local server). `--model` and `--base-url` select a specific local model/endpoint; the Ollama/vLLM paths are loopback-only (SSRF-hardened). `--count` is capped at 10; `--lang` and `--styles` each capped at 10 entries × 32 chars.
+Works with `--provider ollama` (the default), `anthropic` or `vllm`. `--model` and `--base-url` select a specific model/endpoint. The Ollama path is loopback-only; the vLLM path takes plain HTTP only for loopback and HTTPS for a remote server, and refuses a private, link-local or reserved IP literal (SSRF-hardened). `--count` is capped at 10; `--lang` and `--styles` each capped at 10 entries × 32 chars.
+
+A provider call that fails (transport error, non-200 status, malformed response) or returns an empty reply never becomes a row: that variant is dropped. The summary reports `N of M provider calls failed` with the first error, and the command exits 1 without writing the output file when no call produced a usable row.
 
 
 ## Trace-to-Preference
@@ -509,20 +544,50 @@ Harvest DPO / KTO-ready preference pairs from your production inference logs —
 soup data from-traces --logs ./logs/langchain.jsonl \
   --format langchain --signal thumbs_up --output prefs.jsonl
 
-# OpenAI API logs + regeneration signal (second response wins)
+# OpenAI API logs + regeneration signal (last response wins). The signal is
+# `regenerations`; `regeneration` is refused by the CLI (#1440).
 soup data from-traces --logs ./logs/openai.jsonl \
-  --format openai --signal regeneration --output prefs.jsonl
+  --format openai --signal regenerations --output prefs.jsonl
 
-# Soup-serve logs + user-edit signal (edited response wins over original)
-soup data from-traces --logs ./logs/soup-serve.jsonl \
-  --format soup_serve --signal user_edit --output prefs.jsonl
+# Soup-serve logs + user-edit signal (edited response wins over original).
+# `--logs` is a DIRECTORY of *.jsonl: the soup-serve parser reads a directory,
+# and returns nothing for a single file (#1440).
+soup data from-traces --logs ./traces \
+  --format soup-serve --signal user_edit --output prefs.jsonl
 
 # Preview generated pairs before training
 soup data review prefs.jsonl --sample 10
 ```
 
-**Supported log formats:** `langchain`, `openai`, `soup_serve`
-**Supported signals:** `thumbs_up` (rating-based), `regeneration` (latest wins), `user_edit` (edited wins)
+**Supported log formats:** `langchain`, `openai`, `soup-serve`
+**Supported signals:** `thumbs_up` (rating-based), `regenerations` (latest wins), `user_edit` (edited wins)
+
+**The `soup-serve` record shape.** The parser reads a top-level `signal` in the
+canonical vocabulary, falling back to a nested `feedback.rating` (`up` / `down`)
+for older logs:
+
+```json
+{"prompt": "Q", "output": "Good", "signal": "thumbs_up"}
+{"prompt": "Q", "output": "Bad",  "signal": "thumbs_down"}
+{"prompt": "Q", "output": "Raw",  "signal": "user_edit", "edited_output": "Polished"}
+```
+
+Who writes what:
+
+- `soup ingest` is a producer. It writes `thumbs_up`, `thumbs_down` or `none`, under
+  the field name `trace_id` rather than `id`, so its output feeds this command
+  directly.
+- `user_edit` and `regenerated` rows come from **your own** pipeline. `signal:
+  user_edit` has to accompany the edit field: a record with `edited_output` but no
+  `signal` reads as "no trace carried a signal". The edit itself is read from
+  `edited_output`, `edited_response`, or a nested `feedback.edited_output`.
+- `soup serve --trace-log` records carry **no signal yet** (`ts`, `prompt`,
+  `response`, `latency_ms`, `tokens`), so a harvest of that directory reports the
+  diagnostic below rather than a silent 0.
+
+When traces are read but none pair, the command prints how many it read, which
+signal it wanted and which signals were present, instead of reporting a normal
+write of 0 pairs.
 
 Trace files are capped at 100,000 lines to prevent OOM on production logs. A PII warning panel appears on every run — redact sensitive fields before harvesting.
 
@@ -553,6 +618,16 @@ An axolotl `rl:` value with no Soup task (for example `rl: ebft`) stops the migr
 ## Data Formats
 
 Soup supports these formats (auto-detected). Files can be JSONL, JSON, CSV, Parquet, or TXT.
+
+**Auto-detection.** It reads the first 100 rows, not just the first. Each row resolves
+to the richest format its keys fit. If every row agrees, that format is used. A file
+that mixes `chatml` and `tool-calling` rows loads as `tool-calling` (the plain rows
+convert as ordinary chat turns). Every other mix (`sharegpt` with `llava`, `chatml`
+with `audio`, `plaintext` with `asr`, or two unrelated shapes) is refused with a message
+naming both shapes and the row where each first appears, because converting the file
+with either one would drop the other's keys or rows; set `data.format` to choose. Rows
+after the first 100 are not inspected; `soup data validate` lists every row the chosen
+format drops.
 
 **Alpaca:**
 ```json
@@ -600,6 +675,15 @@ Or use `.txt` files directly (one document per line).
 {"anchor": "What is Python?", "positive": "Python is a programming language."}
 {"anchor": "What is Python?", "positive": "A programming language.", "negative": "A type of snake."}
 ```
+
+With `embedding_loss: contrastive` (the default), each row's negatives are the other rows' positives in the same batch, so a batch needs at least two rows: `batch_size: 1` is refused at config load, `batch_size: auto` resolves to at least 2, and the last partial batch of each epoch is dropped. This also applies when `triplet` falls back to contrastive because the rows have no `negative`. Use `triplet` with a `negative` on every row, or `cosine`, to train at batch size 1.
+
+**Cross-Encoder (paired sequence classification - `data.format: cross_encoder`):**
+```json
+{"text_a": "What is Python?", "text_b": "Python is a programming language.", "label": 1}
+{"question": "What is Python?", "answer": "Python is a programming language.", "label": 1}
+```
+Reads paired text columns (`text_a`/`text_b` or `question`/`answer`) carrying a `label` field. Gated strictly to `task: cross_encoder` (`format: auto` resolves to `cross_encoder` for this task) to preserve global format detection for other tasks.
 
 **Audio (speech + conversation):**
 ```json
@@ -885,7 +969,9 @@ prints `Warning: N of M rows dropped` with the first row's index and the
 converter's reason. For a local file it also prints the `soup data validate`
 command that lists them all. The
 count agrees with `soup data validate` for the same file. Before #1181 the rows
-were dropped without a word.
+were dropped without a word. If a load ends with zero training rows, `soup train`
+stops with exit 1 before loading the model, `--dry-run` included, naming the format
+the rows were read as and the first row's drop reason (#1217).
 
 
 ## Demo Datasets (`soup data demo`)
@@ -1129,8 +1215,11 @@ command prints a warning whenever this mode is active.
 
 Live provider-call failures are counted: if every attempted call for an `llm_text`
 or `judge` node fails, the command names the endpoint and exits 1. Partial failures
-keep usable rows and report their count in the completion summary, while a provider
-that legitimately returns an empty completion still counts as a successful call.
+keep usable rows and report their count in the completion summary, while an `llm_text`
+provider that legitimately returns an empty completion still counts as a successful call.
+A live `judge` node reads the first word of each reply: `OK` keeps the row, `REJECT`
+or `NOT OK` drops it, and a reply with neither, an empty one included, is dropped and
+counted as a failed call.
 
 Six node kinds now run live: **seed** (JSONL load), **llm_text** (LLM generation via
 Ollama, Anthropic, or vLLM), **code** (execution via RLVR sandbox), **judge** (binary scoring),
@@ -1166,6 +1255,11 @@ turn), `unknown_roles`, and `truncation_risk` (p95 rendered length vs
 `data.max_length`). `--train-on-responses-only` / `--train-on-messages-with-train-field`
 select the same masking strategy `soup train` would use, so the report and
 `--show-mask` preview can never disagree about what's actually trained.
+`--mask-history` (default off, matching `data.mask_history`) narrows the
+assistant-only mask to the **last** assistant turn, exactly like the
+soup.yaml flag of the same name; it is refused with
+`--no-train-on-responses-only` or `--train-on-messages-with-train-field`,
+the same combinations `soup.yaml` refuses.
 
 
 ## Preference-Data Linter (`soup data lint`)

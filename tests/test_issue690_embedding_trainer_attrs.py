@@ -95,7 +95,7 @@ def _embedding_wrapper(tmp_path, monkeypatch, *, precision=None):
                     "max_length": 64,
                 },
                 "training": {
-                    "batch_size": 1,
+                    "batch_size": 2,
                     "quantization": "none",
                     "epochs": 1,
                     "logging_steps": 1,

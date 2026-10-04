@@ -1,13 +1,14 @@
 """Training-prefix echo probe (v0.56.0).
 
 Given a training row's first ``prefix_fraction`` of tokens, the probe
-asks the adapter to continue. If the adapter's continuation Jaccard-
-overlaps the held-out suffix above a threshold, that's a memorization
-signal. Score = 1 - mean(echo_rate) so 1.0 = healthy / no echo.
+asks the adapter to continue. If enough of the adapter's continuation
+tokens occur in the held-out suffix, that's a memorization signal.
+Score = 1 - mean(echo_rate) so 1.0 = healthy / no echo.
 """
 
 from __future__ import annotations
 
+from collections import Counter
 from typing import Mapping, Optional, Sequence
 
 from soup_cli.utils.diagnose._common import (
@@ -16,7 +17,6 @@ from soup_cli.utils.diagnose._common import (
     decode_ids,
     encode_ids,
     extract_row_text,
-    jaccard,
     merge_evidence,
     require_finite_unit,
     require_str,
@@ -46,9 +46,7 @@ def split_prefix(
     return _split_with_resolved(text, fraction, tok)
 
 
-def _split_with_resolved(
-    text: str, fraction: float, tok: Optional[object]
-) -> tuple[str, str]:
+def _split_with_resolved(text: str, fraction: float, tok: Optional[object]) -> tuple[str, str]:
     """Core split given an ALREADY-resolved tokenizer (or None for whitespace).
 
     Separated so :func:`score_memorization` can resolve the tokenizer ONCE and
@@ -58,6 +56,9 @@ def _split_with_resolved(
         tokens = text.split()
         if not tokens:
             return ("", "")
+        if len(tokens) <= 1 and len(text) > 1:
+            cut = max(1, int(len(text) * fraction))
+            return (text[:cut], text[cut:])
         cut = max(1, int(len(tokens) * fraction))
         return (" ".join(tokens[:cut]), " ".join(tokens[cut:]))
     ids = encode_ids(tok, text)
@@ -84,7 +85,9 @@ def score_memorization(
     the echo-overlap are computed over sub-word tokens (resolved ONCE up front,
     not per row) instead of whitespace words — catching BPE-level memorization
     that whitespace tokenisation misses. The live ``soup diagnose`` wiring of
-    ``--tokenizer`` lands with the live probe runner (#165).
+    ``--tokenizer`` lands with the live probe runner (#165). Overlap uses
+    clipped completion-bigram precision against the suffix, so the live
+    generation cap does not make longer rows harder to flag.
     """
     if not isinstance(training_rows, Sequence):
         raise TypeError("training_rows must be a sequence of dicts")
@@ -95,7 +98,13 @@ def score_memorization(
     tok = resolve_tokenizer(tokenizer) if tokenizer is not None else None
 
     def _overlap_tokens(value: str) -> list:
-        return subword_tokens(tok, value) if tok is not None else tokenize(value)
+        if tok is not None:
+            sub = subword_tokens(tok, value)
+            if len(sub) >= 2:
+                return list(zip(sub[:-1], sub[1:]))
+            return sub
+        words = tokenize(value)
+        return list(zip(words[:-1], words[1:])) if len(words) >= 2 else words
 
     echoes = []
     scanned = 0
@@ -109,7 +118,18 @@ def score_memorization(
             continue
         scanned += 1
         completion = call_generator(adapter_gen, prefix)
-        overlap = jaccard(_overlap_tokens(completion), _overlap_tokens(suffix))
+        tok_comp = _overlap_tokens(completion)
+        tok_suff = _overlap_tokens(suffix)
+        if not tok_comp or not tok_suff:
+            overlap = 0.0
+        else:
+            # A live completion is capped, while the held-out suffix is not.
+            # Completion precision detects reproduced suffix spans without
+            # diluting the score as the untouched suffix grows.
+            completion_counts = Counter(tok_comp)
+            suffix_counts = Counter(tok_suff)
+            matched = sum((completion_counts & suffix_counts).values())
+            overlap = matched / len(tok_comp)
         echoes.append(1.0 if overlap >= echo_threshold else 0.0)
         if scanned >= 1000:
             break

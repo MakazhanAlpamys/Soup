@@ -128,12 +128,30 @@ A minimal `expectations.yaml` for the second step:
 expectations:
   - name: expect_no_pii
   - name: expect_token_length_between
-    min_tokens: 1
-    max_tokens: 512
+    args:
+      min_tokens: 1
+      max_tokens: 512
 ```
 
 Supported names: `expect_no_pii`, `expect_token_length_between`,
 `expect_no_refusal_pattern`, `expect_chosen_preferred_over_rejected_by_judge`.
+Arguments go under `args:`. An entry key other than `name` / `args`, or an
+argument the expectation does not take (`max_token`), is refused when the suite
+loads (exit 3), so a mistyped bound cannot silently run on the defaults. A
+top-level key other than `expectations` (a `fail_fast:` or a `name:` label
+beside it) is refused the same way, naming the key.
+
+Scanned fields per format:
+- ChatML / tool-calling / audio: every `messages[].content` (string or text parts), tool-call arguments (per message and top-level `tool_calls`), and `tools[].function.description`.
+- ShareGPT / LLaVA / ShareGPT4V: every `conversations[].value`.
+- Alpaca: `instruction`, `input`, `output`, `system`, `response`.
+- DPO: `prompt`, `chosen`, `rejected` (string or message list). KTO: `prompt`, `completion`.
+- Embedding: `anchor`, `positive`, `negative` (string or list).
+- Plaintext / ASR: `text`. RAFT: `query`, `golden_doc`, `distractor_docs`, `answer`. PRM: `prompt`, `completions`. input_output: `segments[].text`.
+
+`expect_no_refusal_pattern` reads only the assistant side: assistant/gpt turns, DPO `chosen`, KTO `completion`, Alpaca `output`/`response`, RAFT `answer`, PRM `completions`, `segments` with `label: true`, and `text` for plaintext rows. A row with text but no assistant side passes it.
+
+Empty-text safeguard: rows containing no extractable text fail closed on all expectation gates to prevent unparseable or blank rows from passing CI. Malformed JSON lines and valid JSON that is not an object are refused as an input error (exit 3) with their line numbers, a UTF-8 BOM is stripped the way the training loader strips it, and a file that yields no checkable rows is refused rather than passed.
 
 Every path is shell-quoted and validated to stay under the repo root, so the
 rendered workflow is injection-safe. Edit the paths to match your repo.

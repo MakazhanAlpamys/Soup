@@ -9,7 +9,8 @@
 > VRAM is bounded by one layer instead of the whole model. Add `quantization: 4bit` and an
 > 8B base fits a 4 GB card. Works for `sft` and, from v0.72.4, for `dpo` / `orpo` /
 > `simpo` / `kto` — DPO's reference model is the same streamed base with its adapters
-> switched off, so it costs no extra weights — see
+> switched off, so it needs no second copy of the model (on an untied checkpoint `dpo` and
+> `kto` still hold one copy of the output head per step) — see
 > [Layer Streaming](performance-and-quantization.md#layer-streaming-beta-v0720-nf4-v0722-disk--wider-archs-v0723-preference-losses-v0724).
 
 **Contents:**
@@ -48,9 +49,77 @@
 - [Knowledge Distillation (BETA, v0.52.0)](#knowledge-distillation-beta-v0520)
 - [EBFT + GDPO (BETA, v0.52.0)](#ebft--gdpo-beta-v0520)
 - [gpt-oss `reasoning_effort` + `train_on_eot` (v0.52.0)](#gpt-oss-reasoning_effort--train_on_eot-v0520)
+- [Validation split & evaluation (`training.eval_steps`)](#validation-split--evaluation-trainingeval_steps)
 - [Seeds & reproducibility (`training.seed`)](#seeds--reproducibility-trainingseed)
 - [Rewind — which row spiked the loss (`soup rewind`)](#rewind--which-row-spiked-the-loss-soup-rewind)
 - [Full fine-tuning (`lora.r: 0`)](#full-fine-tuning-lorar-0)
+
+---
+
+## Validation split & evaluation (`training.eval_steps`)
+
+`data.val_split` (default `0.1`) holds that share of the rows out of training,
+and the run evaluates them:
+
+```yaml
+data:
+  val_split: 0.1    # the default
+training:
+  eval_steps: 50    # optional; unset = evaluate at the end of every epoch
+```
+
+- **Default: every epoch.** At the end of each epoch the trainer runs one pass
+  over the validation split and records `eval_loss`. It shows up as the **Val
+  loss** row on the live panel, is stored as `val_loss` in the run's metrics in
+  the experiment tracker, and is streamed as `TrainEvent.val_loss` to the Web UI.
+  The pass is a forward over the held-out rows, a few percent of the run at the
+  default split.
+- **`training.eval_steps: N`** evaluates every N optimizer steps instead,
+  counted after gradient accumulation like `save_steps`. The last step is
+  evaluated too when it is not a multiple of N, so a value larger than the run
+  still evaluates once.
+- **Batch size.** The evaluation runs at the resolved per-device train batch
+  (after `batch_size: auto`), not Hugging Face's default of 8, so a card sized
+  to train fits the evaluation too. Layer-streamed runs (`stream_layers: true`)
+  evaluate the same way, streaming the frozen layers as a training step does.
+- **`val_split: 0`** trains on every row and evaluates nothing, unless the data
+  brings its own validation split: an HF-hub dataset's `validation` split, or a
+  pre-tokenized cache's `val` / `validation` split.
+
+**Generation-based tasks (`grpo`, `ppo`, `online_dpo`).** Evaluating them means
+generating completions, which costs about as much per row as training on it. So
+they do not evaluate by default, and they do not withhold rows either:
+`data.val_split` is ignored, every row trains, and the run prints a one-line note
+saying so. On `grpo`, set `training.eval_steps` to hold the split out and
+evaluate it; TRL generates completions for the held-out prompts and logs
+`eval_loss` with the evaluation rewards. On `grpo` that `eval_loss` (the Val
+loss row and the tracker's `val_loss`) is TRL's policy objective on the
+held-out completions, not a likelihood: advantages are normalised within each
+group, so it stays near zero, can be negative, and does not measure held-out
+quality. The held-out reward is `eval_reward`, in the `log_history` of each
+checkpoint's `trainer_state.json`. TRL needs whole groups of
+`num_generations` completions in an evaluation batch, so `grpo` evaluates at the
+largest multiple of `num_generations` that fits in the train batch, and says so
+when that differs from the train batch. The evaluation's rewards never reach the
+reward-hack detector, the mitigation controller or the echo-trap detector: they
+read training generations only. `ppo` and `online_dpo` refuse
+`training.eval_steps`: TRL's PPO loop never calls `evaluate()`, and online DPO's
+`evaluate()` crashes on prompt-only rows. A generation-based evaluation for
+those two is a separate feature.
+
+**Refused at config load.** `training.eval_steps` on `backend: mlx` (mlx-lm
+evaluates the split on its own cadence, #739), on `task: unlearn` (it trains on
+`forget_set` / `retain_set` and has no validation split), and with
+`val_split: 0` on local files or remote URIs, where there would be nothing to
+evaluate.
+
+**Evaluated but not tracked: `prm` and `moe_lora_routing`.** They attach no live
+training callback (#802), so their `eval_loss` reaches the trainer's log history
+and not the experiment tracker.
+
+Until #1223 no trainer on the transformers backend scheduled an evaluation: the
+default split was held out of training and never used, and `val_loss` stayed
+empty.
 
 ---
 
@@ -373,7 +442,9 @@ soup train --config soup.yaml
 # Cross-tokenizer distillation for DIFFERENT tokenizers, e.g. Llama -> Mistral,
 # no shared vocab needed (v0.71.18). Aligns student/teacher token sequences
 # over decoded character spans, so you can distill a GPT-2 BPE student from a
-# Llama SentencePiece teacher.
+# Llama SentencePiece teacher. A student token with no teacher counterpart
+# (a byte-fallback piece, an empty piece, a student-only special token) has
+# no target and is left out of the loss.
 #   training:
 #     uld_strategy: wasserstein_aligned
 
@@ -433,14 +504,14 @@ tokenizer-specific rather than vocabulary-agnostic.
 
 ### Closed-loop reward-hacking auto-mitigation (v0.71.26)
 
-The detectors above *halt*; `training.reward_hack_mitigation` (or the `--reward-hack-mitigation` flag) makes the trainer *self-correct* mid-run. It requires `reward_hack_detector` on a `grpo`/`ppo` transformers run, and has four modes:
+The detectors above *halt*; `training.reward_hack_mitigation` (or the `--reward-hack-mitigation` flag) makes the trainer *self-correct* mid-run. It requires `reward_hack_detector` on a `grpo` transformers run, and has four modes:
 
 - **`log_only`** — observe only. Appends a per-step `mitigation_log.jsonl` under the run's output dir (the InfoRM/ensemble drop, the OK/WARN/HACK verdict, reward mean/std, completion-length trend, repetition) and provably never mutates β. Run this first to *see* hacking before you let a controller act on it.
 - **`kl_control`** — a reversible **bang-bang + hysteresis** controller. When a multi-signal vote (`reward_hack_signals`: the detector drop + `length_trend` + `repetition`) stays above `reward_hack_trip_band` for `reward_hack_dwell_steps`, it multiplies β by `reward_hack_kl_gain` (clamped to `[reward_hack_beta_floor > 0, reward_hack_beta_ceil]`, never crossing 0); after `reward_hack_release_patience` below-band steps it relaxes β back toward the floor. Dwell + release-patience stop it flapping. β is written to **both** `trainer.beta` and `trainer.args.beta` so it takes effect on stock GRPO *and* Soup's GRPO variants (and `trainer.args.kl_coef` on PPO).
 - **`pid_lagrangian`** — a **PID-Lagrangian** controller (Stooke et al. 2020) that holds the hacking signal at `reward_hack_signal_target` (Kp/Ki/Kd with integral anti-windup via `reward_hack_integral_clamp`), plus an **escalation ladder**: raise β → after `reward_hack_rollback_patience` persistent-HACK steps roll back to the last-good RL checkpoint (needs `rl_checkpoint_save_every_steps`) → after `reward_hack_max_recovery_attempts` rollbacks, early-stop with a plain-English give-up explanation.
 - **Anti-gaming hardening** (any control mode): `reward_hack_signal_smoothing` (`ema`/`median` over `reward_hack_smoothing_window`), `reward_hack_conservative_on_disagreement` (when detectors disagree, keep KL high + guard against a bimodal reward-distribution collapse), and `reward_hack_reward_shaping` (subtract a bounded `reward_hack_shaping_strength` penalty on the gamed proxy — `length`/`repetition`/`sentinel` — over the reward-fn seam).
 
-**Scope:** proof-of-mechanism only. Validated on SmolLM2-135M + a synthetic length-hacking task on a single RTX 3050 (all four modes live, including a real mid-run rollback). PPO ships **BETA** — the buffer + `kl_coef` mutation are wired and unit-tested, but the on-GPU proof is GRPO-only. Whether the loop suppresses hacking without collapsing true reward on 7B+ with a real reward model is an open, community-validatable question. `reward_hack_mitigation ∈ {kl_control, pid_lagrangian}` is mutually exclusive with `ref_model_ema_alpha` (both drive the KL/ref dynamics).
+**Scope:** proof-of-mechanism only. Validated on SmolLM2-135M + a synthetic length-hacking task on a single RTX 3050 (all four modes live, including a real mid-run rollback). The on-GPU proof is GRPO-only. **On `task: ppo` the reward-hacking and echo-trap flags are refused** (`reward_hack_detector`, `reward_hack_mitigation`, `echo_trap_enabled`): the trl PPO trainer this build supports takes no reward functions, so the reward/completion signal those callbacks read is never captured, and a run carrying them would be announced and then inert. Whether the loop suppresses hacking without collapsing true reward on 7B+ with a real reward model is an open, community-validatable question. `reward_hack_mitigation ∈ {kl_control, pid_lagrangian}` is mutually exclusive with `ref_model_ema_alpha` (both drive the KL/ref dynamics).
 
 Every detector composes with v0.34 `soup why` (anomaly explainer), v0.32 spike recovery, and the v0.53.11 #127 `GRPOStabilityCallback` so a single GRPO run can have InfoRM + echo-trap + spike-recovery + in-place ref-model EMA all active simultaneously without duplicating trajectory / state collection. The reward-hack and echo-trap callbacks read the per-step rewards through a shared, thread-safe capture buffer (Soup wraps your reward functions so it never has to monkeypatch TRL); `rm_ensemble` needs ≥2 reward functions to compute a divergence. The MiniLLM teacher-mix is an offline distribution-blend analog of the paper's on-policy teacher-mixed *sampling*, and ULD compares the distributions after clamping teacher ids to the teacher vocab (correct for same-family / extended-vocab pairs; a genuinely different tokenization needs a sequence-alignment step). The reference-model EMA (`--ref-model-ema-alpha`) updates in place — no full `state_dict` round-trip — so it is cheap at 70B+ scale.
 
@@ -476,6 +547,21 @@ soup eval unlearning <run-id> --benchmark tofu --evidence evidence.json --output
 
 `task: unlearn` is live (v0.71.9): it loads a LoRA-wrapped policy, a frozen reference copy (NPO / RMU), and the forget / retain JSONL sets, then optimises the per-method loss — NPO's `(2/β)·mean(-logσ(-β·(π_logp − ref_logp)))` drives the policy's forget-set log-prob below the reference (= forgetting), while the retain set anchors capability. Run NPO/SimNPO **with** a `retain_set` — without one the policy has no utility anchor and Soup warns loudly.
 
+Unlearning honors `training.optimizer`, `scheduler`, `warmup_ratio`, `weight_decay`,
+`max_grad_norm`, `batch_size` and `gradient_accumulation_steps`. The default
+`batch_size: auto` resolves to 1 for unlearning rather than to the memory estimate
+the other trainers use, so a config makes the same number of updates on any card. This
+memory-constrained loop processes one example at a time and accumulates gradients
+for `batch_size * gradient_accumulation_steps` examples per optimizer update;
+a final partial group is averaged by its actual size. `initial_loss` and
+`final_loss` remain unscaled per-example losses, and `total_steps` and the 2,000-step
+budget continue to count examples rather than optimizer updates.
+
+`data.max_length` now controls forget and retain tokenization instead of the old
+256-token cap. Its default is 2,048, so existing configurations can use more memory
+and take longer. Set `data.max_length: 256` to retain the old sequence-length limit,
+or explicitly choose a value that fits the model and device.
+
 Three orthogonal axes: **Forget Quality** (pre/post forget-loss delta), **Model Utility** (retain-accuracy preserved), **PrivLeak** (membership-inference AUC distance from 0.5). Bundled mini-fixtures for all three benchmarks ship in the box (v0.71.1 added MUSE + WMDP alongside the existing TOFU set), so `--benchmark muse|wmdp` runs without supplying evidence. The WMDP forget-set probes ship **redacted** (placeholder prompts + `REFUSED` responses) — Soup never bundles verbatim hazardous-knowledge content.
 
 
@@ -506,7 +592,7 @@ soup train
 
 ## Knowledge Distillation
 
-Train a small student model to match a larger teacher's output distribution.
+Train a small student model to match a larger teacher's output distribution. Every train/val row must keep at least one causal-loss target after truncation at `data.max_length`, and a row without one is refused at setup by split and row number, as SFT does.
 
 ```yaml
 base: HuggingFaceTB/SmolLM2-135M
@@ -596,7 +682,7 @@ modality: text
 backend: transformers
 
 data:
-  train: ./data/labelled.jsonl   # rows: {"text": "...", "label": "spam"} or {"text": "...", "label": [0, 1, 0]}
+  train: ./data/labelled.jsonl   # rows: {"text": "...", "label": "spam"} or {"text": "...", "label": [0, 2]}
   max_length: 256
 
 training:
@@ -607,6 +693,11 @@ training:
   lr: 2e-5
   batch_size: 32
 ```
+
+**Row shapes by task:**
+- `task: classifier`: Single-input sequences via `{"text": "sample", "label": 1}` or `{"text": "sample", "label": "spam"}` (also accepts ChatML rows carrying `label`). Multi-label datasets pass lists of active label indices or names: `{"text": "sample", "label": [0, 2]}` or `{"text": "sample", "label": ["ham", "promo"]}`.
+- `task: reranker`: Query and document text via `{"text": "query doc", "label": "relevant"}` (or an integer class index).
+- `task: cross_encoder`: Paired inputs via `{"text_a": "query", "text_b": "doc", "label": 1}` or `{"question": "query", "answer": "doc", "label": 1}`.
 
 Routes `classifier` / `reranker` / `cross_encoder` through
 `AutoModelForSequenceClassification`. Multi-label heads cap at 1024 entries per
@@ -702,9 +793,9 @@ reference policy, where trl's own GRPO loss puts it: trl's per-token estimator
 same way as that variant's policy term. `rft` applies it only to the accepted
 completions it trains on. The β that the reward-hack controller sets at runtime
 (`kl_control` / `pid_lagrangian`) reaches every variant the same way.
-`grpo_beta` must be greater than zero, so a KL-free run, the setting the DAPO
-paper uses, cannot be configured yet
-([#1247](https://github.com/MakazhanAlpamys/Soup/issues/1247)).
+Set `grpo_beta: 0` for a KL-free run (no KL penalty against the reference policy,
+skipping the reference forward pass entirely), as used by the published DAPO and
+Dr. GRPO recipes ([#1247](https://github.com/MakazhanAlpamys/Soup/issues/1247)).
 
 With a non-zero `grpo_beta`, a variant run logs the same `kl` metric as trl's stock
 loss: the batch mean of that per-token estimate over the completion tokens (over the
@@ -831,7 +922,9 @@ The judge is Soup's own OpenAI-compatible `JudgeEvaluator` adapted to TRL's
 B,A orders agree). Recipe: `online-dpo-smollm2-135m`. Proof-of-mechanism was
 validated on SmolLM2-135M with a synthetic judge (not a production RLHF claim; #286).
 An `https://` judge URL uses `OPENAI_API_KEY` only when its host is `api.openai.com`; other
-hosts are called as an OpenAI-compatible server without that key.
+hosts are called as an OpenAI-compatible server without that key. An `online_dpo_judge` whose
+host is a private, link-local or reserved IP literal is refused when soup.yaml loads (loopback
+stays allowed); address an internal judge by its hostname.
 
 A pair the judge cannot rank is left out of the loss: a tie, a failed or unreadable judge
 call, or a verdict that changes when the two completions are swapped. Such a pair adds no
@@ -860,10 +953,14 @@ training:
     simpo: 0.4
 ```
 
-The combine wrapper reads policy + reference summed log-probs from the inner
-TRL trainer's per-batch inputs and computes a true weighted sum via the
-in-tree `compute_dpo_term` / `compute_simpo_term` / `compute_orpo_term` /
-`compute_ipo_term` kernels. BCO cannot be mixed with paired losses (data
+The combine wrapper computes a weighted sum via the in-tree
+`compute_dpo_term` / `compute_simpo_term` / `compute_orpo_term` /
+`compute_ipo_term` kernels. **On trl 0.29 no preference trainer puts the
+per-sequence log-probs those kernels need on the batch**, so a blend currently
+stops at the first step and names the terms it could not compute. Until the
+wrapper reads the logits from the trainer's own forward pass, do not configure
+`preference_loss_weights`: remove it and set `training.preference_loss` to the
+single loss you want. BCO cannot be mixed with paired losses (data
 format incompatible — rejected at config load).
 
 
@@ -1151,7 +1248,7 @@ unified surface is additive.
 
 ### KL-controlled DPO variants
 
-Anneal β over training, periodically refresh the reference model:
+Anneal β over training with `dpo_beta_schedule`:
 
 ```yaml
 task: dpo   # or task: preference + preference_loss: dpo, or task: ipo
@@ -1159,12 +1256,9 @@ training:
   dpo_beta: 0.1
   dpo_beta_schedule: linear   # linear | cosine | exponential
   dpo_beta_end: 0.01
-  dpo_ref_regen_epochs: 2     # copy student → ref model every 2 epochs
 ```
 
-Both controls are gated to DPO-family tasks (`dpo`, `ipo`, or
-`preference` with `preference_loss in {dpo, ipo}`); transformers
-backend only.
+Gated to DPO-family tasks (`dpo`, `ipo`, or `preference` with `preference_loss in {dpo, ipo}`); transformers backend only. `dpo_ref_regen_epochs` is refused at config load: it never regenerated the reference. With LoRA there is no separate reference model to copy into, and the DPO-family trainers cannot run with `lora.r: 0`. The wiring is tracked in [#1345](https://github.com/MakazhanAlpamys/Soup/issues/1345).
 
 ### Multi-objective preference loss (schema-only in v0.40.0)
 
@@ -1174,11 +1268,11 @@ training:
   preference_loss_weights: {dpo: 0.7, bco: 0.3}
 ```
 
-Schema validates 2–5 entries summing to 1. Live runtime weighted-loss
-combination is wired in v0.40.1; v0.40.0 fails fast with an actionable
-`NotImplementedError` if you actually try to train (same stub-then-live
-pattern as v0.27.0 MII / v0.37.0 multipack / v0.38.0 quant menu /
-v0.39.0 ReLoRA).
+Schema validates 2–5 entries summing to 1, and rejects `bco` mixed with a
+paired loss at config load. The runtime blend is **not** live on trl 0.29: the
+config loads, then training stops at the first step naming the terms it could
+not compute (see [Weighted Multi-Objective Preference Loss](#weighted-multi-objective-preference-loss)).
+Set `training.preference_loss` for a single loss.
 
 
 ## GRPO Training (Reasoning)
@@ -1197,7 +1291,7 @@ data:
 training:
   epochs: 3
   lr: 1e-5
-  grpo_beta: 0.1
+  grpo_beta: 0.1  # KL penalty; 0 = KL-free (DAPO / Dr. GRPO)
   num_generations: 4
   reward_fn: accuracy   # or 'format', or path to custom .py
   lora:
@@ -1213,6 +1307,13 @@ soup init --template reasoning
 # Train
 soup train --config soup.yaml
 ```
+
+**Gradient watchdog (#342).** If non-finite gradients (NaN or Inf) appear during
+a GRPO run, the optimizer step is skipped: weights and optimizer state are
+unchanged, and the step still counts toward the step total and the LR schedule.
+The skipped-step count is logged at the end of the run (as a console warning
+when the fraction exceeds 5%) and persisted in `trainer_state.json` so
+`soup adapters audit` can see it.
 
 **Built-in reward functions:**
 - `accuracy` — 1.0 when the completion's final answer matches the gold's, else 0.0 (no partial credit)
@@ -1245,17 +1346,26 @@ a hedge and states no answer: `The answer is either 41 or 42.`, `Answer: 41 or 4
 gold written that way is refused. Every number in the clause counts, a justification's too:
 `The answer is 42 because 6*7=42.` is a hedge, while `The answer is 42, because 6*7=42.` reads 42.
 The same value twice is not a hedge (`42 (i.e. 42.0)`), and the digits of one bracketed or LaTeX
-answer (`(3, 4)`, `\frac{14}{3}`, `2^{10}`) or of a time or a ratio (`3:45`, `1:1,000`) are not
-separate values; such an answer is compared as text. `\boxed{}` and `####` answers are compared
-whole, so a list there is one answer, and it can only match a gold that is the same list.
+answer (`(3, 4)`, `\begin{pmatrix} 3 \\ 4 \end{pmatrix}`, `\frac{14}{3}`, `2^{10}`) or of a time
+or a ratio (`3:45`, `1:1,000`) are not separate values; such an answer is compared as text.
+`\boxed{}` and `####` answers are compared whole, so a list there is one answer, and it can only
+match a gold that is the same list.
 
 A numeric gold is compared by value, so `#### 1,000`, `\boxed{1000}` and `The answer is $1000.`
 all match a gold of `1000`. Any other gold (`\frac{14}{3}`, `p - q`, `Paris`) is compared as text,
 ignoring case and whitespace, `$`, `\(...\)` and `\[...\]`, `\left` / `\right`, and `\dfrac` /
 `\tfrac` versus `\frac`; so `\boxed{\dfrac{14}{3}}` matches a gold of `\frac{14}{3}`. Both sides
-also drop the trailing punctuation `. , ; : !`, LaTeX thousands separators such as `1{,}000`, and a
-Unicode minus sign. Units, `^\circ`, `\text{}` and `x = ` prefixes are not stripped, and nothing is
-evaluated (`\frac{1}{2}` does not equal `0.5`).
+also drop the trailing punctuation `. , ; : !`, LaTeX thousands separators such as `1{,}000`, the
+LaTeX spacing commands `\,` `\!` `\;` `\:` and `\ `, and a Unicode minus sign. A `\\` row break is
+kept whole, so a matrix matches however its rows are spaced. One `\text{}` / `\textbf{}` /
+`\mathrm{}` / `\mbox{}` wrapper is unwrapped to its contents, `^\circ` / `^{\circ}` / `°` are
+dropped, a compact `\frac` argument is braced to match whether it is a single bare character or
+an already-braced group, with or without a space before it (`\frac12`, `\frac1{2}`, `\frac{1}2`,
+`\frac 34` and `\frac9{19}` all read `\frac{N}{D}`), and a one-letter variable prefix reads its
+right-hand side (`x = 7` reads `7`, on either side), though when both sides name a variable and
+the names differ (`x = 3` against `y = 3`), the pair scores 0.0, since a directrix or an
+asymptote's variable is part of its answer. Units are still not stripped (`42 apples` against
+`42`), and nothing is evaluated (`\frac{1}{2}` does not equal `0.5`).
 
 For GRPO, Soup preserves source dataset columns and TRL passes them to reward functions as
 keyword arguments. An Alpaca `output` or the final assistant turn in ShareGPT/ChatML is also
@@ -1417,6 +1527,8 @@ training:
 ]}
 ```
 
+Add a top-level `tools` list (OpenAI function schemas) to put the schemas in front of the model as a system turn; with `format: auto`, a row with `messages` and `tools` is detected as tool-calling. Multi-turn trajectories keep their order: each assistant turn keeps its `tool_calls` and each `tool` turn its `tool_call_id`. The older shape, with the calls in a top-level `tool_calls` list, still loads: those calls become one assistant turn after `messages`.
+
 Arguments are parsed as JSON only — never `eval()`. `soup eval custom` can score tool-call accuracy (function name + argument JSON equality).
 
 ```bash
@@ -1477,6 +1589,12 @@ output: ./output_ppo
 controls optimization passes within each PPO update. Soup forwards both values,
 plus `ppo_kl_penalty`, to the active TRL `PPOConfig` names and prints the
 effective schedule during setup.
+
+One PPO rollout batch is `batch_size` x `gradient_accumulation_steps` prompts on
+every process, and TRL drops a partial batch, so the train set needs at least
+`batch_size` x `gradient_accumulation_steps` x the number of processes rows.
+A smaller one would never reach a step, so `soup train` refuses it before loading
+any model and names the row count and both settings.
 
 PPO supports two reward sources:
 - **Reward model** (`reward_model`): pre-trained reward model (from step 2)
@@ -1591,8 +1709,9 @@ data:
 training:
   citation_faithful: true        # enable citation precision/recall scoring
   citation_style: bracket        # cite as [doc-1] inline
-  citation_recall_threshold: 0.8 # gate final save on recall >= 80%
 ```
+
+`training.citation_recall_threshold` is validated but nothing gates a save or a run on it. Setting it warns in v0.76 and is refused as of v0.77 (#761).
 
 ```jsonl
 # RAFT JSONL row shape
@@ -1738,13 +1857,18 @@ that pairing — then Soup resamples to 16 kHz and calls the
 Transformers-native `HKUSTAudio/xcodec2-hf` codec, and
 renders the resulting ids as `<|s_ID|>` between Llasa's speech-generation
 boundary tokens. Audio remains duration/byte-capped and is read through an
-`O_NOFOLLOW` fd. Spark and Oute remain dependency-gated pending their #265
-slice. Sesame CSM fails earlier with an architecture-specific message because
+`O_NOFOLLOW` fd. Spark and Oute raw-audio live encoding now fails closed:
+Spark-TTS has no installable `sparktts` package and its official environment pins
+Torch/Transformers below Soup's supported stack; current `outetts` pins
+Transformers 4.52.3 and Oute preparation also needs transcript/word alignment.
+For those two families, pre-encode in the upstream environment and train the
+resulting codec-token chat with `data.format: chatml`. Sesame CSM fails earlier
+with an architecture-specific message because
 its 32 parallel Mimi codebooks require a native multimodal trainer, not a
 codec-string adapter.
 
-Four ready-made codec-string recipes ship: `orpheus-tts-sft`, `llasa-tts`,
-`spark-tts`, `oute-tts` — copy with `soup recipes use <name>`. Cross-validators
+Three ready-made codec-string recipes ship: `orpheus-tts-sft`, `llasa-tts`,
+`oute-tts` — copy with `soup recipes use <name>`. Cross-validators
 reject the `mlx` backend, `modality != audio_out`, and emotion tags outside the
 per-family allowlist.
 
@@ -1821,10 +1945,16 @@ training:
   epochs: 1
 ```
 
-The gate is the only trainable parameter; it is saved as `mole_gate.pt` alongside the run.
+The gate is the only trainable parameter; it is saved as `mole_gate.pt` alongside the run, saved into every `checkpoint-N`, and restored by `--resume`.
+It trains as an fp32 master weight on every device, so its gradient and AdamW moments are
+fp32 too, even where the frozen base loads in bf16 (on CUDA), and `mole_gate.pt` is saved in
+fp32: a `Linear(hidden, N)` of `4 x hidden x N` bytes, about 7 KB for the example above and
+2 MiB at hidden 8192 with 64 adapters. A bf16 gate with no fp32 copy would round most AdamW
+steps away at the default `lr` (#1266).
 `compute_loss` runs N+1 forwards per step (base + each adapter under `torch.no_grad()`, blended
-by the per-token gate weights) so step time scales with the number of task adapters. Training
-only — there is no serve-time MoLE path yet. (v0.71.12)
+by the per-token gate weights) so step time scales with the number of task adapters. To serve
+the trained router, see `soup serve --mole` in [Serving and Export](serving-and-export.md).
+(v0.71.12)
 
 
 ## Architecture Knobs — Mixture-of-Depths, LLaMA Pro, LongLoRA
@@ -1840,7 +1970,7 @@ training:
   mod_capacity_factor: 0.125
 
   # LLaMA Pro: append zero-initialised identity decoder blocks and train only the new
-  # ones (freeze_trainable_layers freezes the originals).
+  # ones (freeze_trainable_layers freezes the originals). Needs quantization: none.
   expand_layers: 4
   freeze_trainable_layers: 4
 ```

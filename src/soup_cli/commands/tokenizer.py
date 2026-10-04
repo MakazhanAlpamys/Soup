@@ -163,7 +163,7 @@ def train(
     output_path = Path(output_real)
 
     try:
-        from tokenizers import Tokenizer, models, pre_tokenizers, trainers
+        from tokenizers import Tokenizer, decoders, models, pre_tokenizers, trainers
     except ImportError as exc:
         console.print(
             "[red]The 'tokenizers' package is required.[/]\n"
@@ -194,6 +194,15 @@ def train(
         seen.add(tok)
         cleaned.append(tok)
 
+    # A byte-level BPE needs the 256-byte initial alphabet plus every
+    # special token to fit inside --vocab-size, or the trainer errors out
+    # (or silently drops merges). Checked after the special tokens are known.
+    if vocab_size < _MIN_VOCAB_SIZE + len(cleaned) + 1:
+        raise typer.BadParameter(
+            f"--vocab-size must be >= {_MIN_VOCAB_SIZE + len(cleaned) + 1} "
+            f"(256-byte alphabet + {len(cleaned)} special tokens + merges)"
+        )
+
     console.print(
         Panel(
             f"Input:        [bold]{resolved_input.name}[/]\n"
@@ -204,12 +213,18 @@ def train(
         )
     )
 
-    tokenizer = Tokenizer(models.BPE(unk_token="<unk>"))
+    # Complete byte-level BPE: no unk_token (the 256-byte alphabet can
+    # encode anything), a matching ByteLevel decoder so decode() reverses
+    # the pre-tokenizer, and the full byte alphabet seeded into the trainer
+    # so unseen characters (accents, emoji, other scripts) never map to <unk>.
+    tokenizer = Tokenizer(models.BPE())
     tokenizer.pre_tokenizer = pre_tokenizers.ByteLevel(add_prefix_space=False)
+    tokenizer.decoder = decoders.ByteLevel()
     trainer = trainers.BpeTrainer(
         vocab_size=vocab_size,
         min_frequency=min_frequency,
         special_tokens=cleaned,
+        initial_alphabet=pre_tokenizers.ByteLevel.alphabet(),
         show_progress=False,
     )
     tokenizer.train_from_iterator(texts, trainer=trainer)

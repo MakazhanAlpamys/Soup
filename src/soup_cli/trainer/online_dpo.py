@@ -307,6 +307,9 @@ class OnlineDPOTrainerWrapper:
             bf16=_bf16,
             fp16=_fp16,
             report_to=self.report_to,
+            # #1204: both were stored on the wrapper and never reached the config
+            deepspeed=self.deepspeed_config,
+            **(self.fsdp_config or {}),
             **training_seed_kwargs(tcfg),
             beta=tcfg.dpo_beta,
             loss_type=tcfg.online_dpo_loss_type,

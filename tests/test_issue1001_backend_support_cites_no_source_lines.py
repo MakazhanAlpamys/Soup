@@ -59,6 +59,12 @@ def test_the_fsdp2_compile_reason_names_the_refusal_that_soup_train_runs():
 
     train_source = (_SRC / "commands" / "train.py").read_text(encoding="utf-8")
     assert "validate_fsdp2_compile_config(" in train_source
+    # #1213 — trainer resolution moved into the shared dispatch, so the ordering
+    # claim is now "the refusal runs before the wrapper is built". Both halves
+    # are checked: the call in train.py, and the resolve_trainer call inside the
+    # function that train.py reaches through.
     assert train_source.index("validate_fsdp2_compile_config(") < train_source.index(
-        "resolve_trainer("
+        "build_trainer("
     )
+    dispatch_source = (_SRC / "trainer" / "dispatch.py").read_text(encoding="utf-8")
+    assert "resolve_trainer(" in dispatch_source

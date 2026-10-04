@@ -197,7 +197,7 @@ training:
     alpha: 16
 ```
 
-Works with all training tasks: SFT, DPO, GRPO, PPO, KTO, ORPO, SimPO, IPO, and Pretrain. If unsloth is installed but not enabled, Soup will suggest it automatically.
+Works with the tasks that have an unsloth setup: SFT (text; SFT vision and audio still run the transformers setup), DPO, GRPO, PPO, KTO, ORPO, SimPO, IPO, BCO, preference, Pretrain, Embedding and TTS. The others (`reward_model`, `prm`, `classifier`, `reranker`, `cross_encoder`, `distill`, `unlearn`, `moe_lora_routing`, `online_dpo` and `asr`) have no unsloth setup, so `backend: unsloth` is refused at config load for them (#1357). If unsloth is installed but not enabled, Soup will suggest it automatically.
 
 > **Tip:** Soup auto-detects unsloth. When installed, you'll see a hint during `soup train` if you haven't enabled it yet.
 
@@ -365,6 +365,8 @@ writes that shape. This is a weights-only warm start — mlx-lm's LoRA trainer
 exposes no optimizer state or step count, so the resumed run starts counting
 from step 0 regardless of how far the checkpoint got.
 
+`task: unlearn` refuses `--resume` / `--hf-resume`, because it writes no checkpoints.
+
 
 ## Run Management & Cleanup
 
@@ -504,6 +506,10 @@ soup sweep --config soup.yaml --param lr=1e-5,2e-5 --param epochs=2,3 --dry-run
 soup sweep --config soup.yaml --param lr=1e-5,2e-5,5e-5 --early-stop 1.5
 ```
 
+Every arm builds the trainer `soup train` builds for the config's `task` and
+`backend`, so an arm on a `task: distill` config distills, and an arm on
+`backend: mlx` uses the MLX wrapper.
+
 
 ## Model Comparison
 
@@ -546,6 +552,16 @@ soup doctor [--nccl]
 ```
 
 Shows: Python version, GPU availability, system resources (RAM/Disk), all dependency versions, and fix suggestions. Use `--nccl` to measure and check multi-GPU communication bandwidth against expected hardware ceilings.
+
+### GPU diagnostics
+
+When an NVIDIA GPU is available, `soup doctor` reports its compute capability
+and architecture family, whether the installed PyTorch build contains native
+or PTX support for that architecture, and the hardware/software gates for
+BF16, FP8, and NVFP4. A missing architecture warning includes a CUDA-enabled
+PyTorch reinstall hint based on the CUDA version reported by the driver. When
+the driver version cannot be mapped to a supported wheel, the hint remains
+actionable without constructing a `whl/None` URL.
 
 
 ## Version Info
@@ -879,8 +895,12 @@ Five-question wizard input → fully-validated `soup.yaml`. Literal allowlists o
 
 ## Standalone Sweep Config
 
+`--config` stays the base `soup.yaml` to train against; `--sweep-config` points at a
+separate file holding the strategy, run count, seed and swept parameters, in place of
+repeating `--param` on the command line.
+
 ```bash
-soup sweep --config sweep.yaml
+soup sweep --config soup.yaml --sweep-config sweep.yaml
 ```
 
 ```yaml
@@ -894,6 +914,17 @@ params:
 ```
 
 Strict scalar allowlist on values (`str` / `int` / `float` / `bool`); `_MAX_FILE_BYTES=256KB`, `_MAX_PARAM_KEYS=32`, `_MAX_VALUES_PER_KEY=64`; `SweepSpec.params` is `MappingProxyType[str, Tuple[Any, ...]]` for genuine immutability.
+
+`--param` and `--sweep-config` are mutually exclusive. With `--sweep-config`:
+
+- The file's `strategy` and `seed` win over `--strategy`.
+- A non-zero `n_runs` wins over `--max-runs`; `0` or absent falls back to `--max-runs`.
+- `n_runs` only caps the run count, so a grid smaller than `n_runs` runs every combination
+  (the example above is 3 x 3 = 9, so it runs 9 trials, not 20).
+- `seed` seeds the random sampler.
+
+A file that omits `strategy`, combined with `--strategy random --max-runs 2` on the command
+line, silently runs grid, because the file's default `grid` wins over both flags.
 
 
 ## Alternative Model Hubs (ModelScope / Modelers)
@@ -1117,6 +1148,11 @@ soup env check
 ## Hardware-Fit Calculator
 
 Given (params, seq_len, batch_size, optimizer, quant, peft, gradient_checkpointing), the analytical predictor returns a 5-bucket peak-VRAM breakdown (weights / optimizer / gradients / activations / overhead) and an OK/OOM verdict with a 10% safety margin.
+
+For `soup train`, `params_b` is derived by `model_size_from_name`:
+- A local checkpoint path is measured directly from safetensors metadata headers.
+- A Hub id is parsed: e.g. `72B`, `8x7B` → `46.7` total, `17B-16E` → `109` total, with active-parameter markers (`-A22B`) ignored.
+- An id with no size token (e.g. `DeepSeek-V3`, `Kimi-K2`, `GLM-5`, `MiniMax-M2`) still falls back to `7B`, which under-predicts these models (they have 229B to 1T parameters). Point `base:` at a local download to have the checkpoint measured instead.
 
 ```python
 from soup_cli.utils.hardware_fit import HardwareFitInput, decide_hardware_fit

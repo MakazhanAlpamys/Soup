@@ -12,6 +12,7 @@ Supported formats:
 - embedding: {"anchor": ..., "positive": ..., "negative": ...} — sentence embedding pairs/triplets
 - audio: {"audio": ..., "messages": [...]} — audio + conversation for speech models
 - tool-calling: {"messages": [...], "tools": [...], "tool_calls": [...]} — function-calling training
+  (the calls may instead sit on the assistant turns: the OpenAI fine-tuning shape)
 """
 
 import json
@@ -35,36 +36,71 @@ FORMAT_SIGNATURES = {
     # v0.71.32 — ASR (Whisper): audio path + reference transcript.
     "asr": {"audio", "text"},
     "plaintext": {"text"},
-    "tool-calling": {"messages", "tools", "tool_calls"},
+    # #1217: top-level "tool_calls" is optional; the OpenAI fine-tuning shape
+    # carries "tools" at the top level and the calls inside assistant turns.
+    "tool-calling": {"messages", "tools"},
 }
 
+# #1424: detection reads a bounded prefix of the file, not just row 0. A first
+# row that happens to lack an optional key (e.g. a text-only LLaVA row) must
+# not pick the converter for the WHOLE file and silently drop that key from
+# every row that has it. The cap keeps detection O(1)-ish on huge files.
+MAX_DETECT_ROWS = 100
 
-def detect_format(data: list[dict]) -> str:
-    """Auto-detect dataset format from first few rows."""
-    if not data:
-        raise ValueError("Empty dataset - cannot detect format")
+# Check more specific formats first (llava/sharegpt4v before sharegpt).
+# tool-calling (messages+tools) is checked BEFORE audio
+# (audio+messages): a row carrying both would otherwise match audio first
+# and silently drop its tools/tool_calls. tool-calling before chatml
+# (signature is a superset of chatml). asr ({audio, text}) is checked
+# BEFORE plaintext ({text}) — its signature is a superset, so plaintext
+# would otherwise win and silently drop the audio path. plaintext last.
+_CHECK_ORDER = [
+    "alpaca", "llava", "sharegpt4v", "kto", "dpo", "embedding",
+    "tool-calling", "audio", "asr", "sharegpt", "chatml", "plaintext",
+]
 
-    sample = data[0]
-    keys = set(sample.keys())
 
-    # Check more specific formats first (llava/sharegpt4v before sharegpt).
-    # tool-calling (messages+tools+tool_calls) is checked BEFORE audio
-    # (audio+messages): a row carrying both would otherwise match audio first
-    # and silently drop its tools/tool_calls. tool-calling before chatml
-    # (signature is a superset of chatml). asr ({audio, text}) is checked
-    # BEFORE plaintext ({text}) — its signature is a superset, so plaintext
-    # would otherwise win and silently drop the audio path. plaintext last.
-    check_order = [
-        "alpaca", "llava", "sharegpt4v", "kto", "dpo", "embedding",
-        "tool-calling", "audio", "asr", "sharegpt", "chatml", "plaintext",
-    ]
-    for fmt in check_order:
-        required_keys = FORMAT_SIGNATURES[fmt]
-        if required_keys.issubset(keys):
+def _richest_format(keys: set[str]) -> Optional[str]:
+    """First format in :data:`_CHECK_ORDER` whose signature fits ``keys``.
+
+    The check order is most-specific-first, so this is the richest format the
+    row's keys could be: a row with ``image`` + ``conversations`` is ``llava``,
+    a row with only ``conversations`` is ``sharegpt``.
+    """
+    for fmt in _CHECK_ORDER:
+        if FORMAT_SIGNATURES[fmt].issubset(keys):
             return fmt
+    return None
 
-    raise ValueError(
-        f"Cannot detect format. Keys found: {keys}. "
+
+def _richer_family_member(a: str, b: str) -> Optional[str]:
+    """Return ``a`` or ``b`` with the strictly larger signature, else ``None``.
+
+    The richer format's signature is a superset of the poorer one's, so a row
+    matching the richer signature also matches the poorer — that is what defines
+    a richer/poorer pair of the same family (llava/sharegpt,
+    tool-calling/chatml, audio/chatml, asr/plaintext). Two unrelated shapes
+    (e.g. alpaca and chatml) share no such relation and must not be merged.
+    """
+    if FORMAT_SIGNATURES[a] > FORMAT_SIGNATURES[b]:
+        return a
+    if FORMAT_SIGNATURES[b] > FORMAT_SIGNATURES[a]:
+        return b
+    return None
+
+
+def _cannot_detect_message(row: object, index: int) -> str:
+    """The existing unrecognised-keys error, naming the offending row.
+
+    ``row`` may be any JSON value, not just an object, so a bare scalar or array
+    is described by its type rather than by keys it does not have.
+    """
+    if isinstance(row, dict):
+        found = f"Keys found: {set(row.keys())}. "
+    else:
+        found = f"Row is a {type(row).__name__}, not an object. "
+    return (
+        f"Cannot detect format at row {index}. {found}"
         f"Expected one of: alpaca (instruction, output), "
         f"sharegpt (conversations), chatml (messages), "
         f"dpo (prompt, chosen, rejected), "
@@ -72,8 +108,113 @@ def detect_format(data: list[dict]) -> str:
         f"llava/sharegpt4v (image, conversations), "
         f"embedding (anchor, positive), "
         f"audio (audio, messages), "
-        f"tool-calling (messages, tools, tool_calls), "
+        f"tool-calling (messages, tools), "
         f"plaintext (text)"
+    )
+
+
+def detect_format(data: list[dict]) -> str:
+    """Auto-detect dataset format from a bounded prefix of rows.
+
+    Reads up to :data:`MAX_DETECT_ROWS` rows — not just the first — because a
+    single first row missing an optional key must not force the poorer
+    converter on the whole file and silently drop that key everywhere (#1424).
+
+    Each sampled row resolves to its richest format (the first match in the
+    check order). If every row agrees, that format is returned — a uniform file
+    detects exactly as before. If they disagree the file is *mixed*:
+
+    - a richer/poorer pair of the same family (llava/sharegpt,
+      tool-calling/chatml, audio/chatml, asr/plaintext) upgrades to the richer
+      format, but only when its converter accepts the poorer rows too;
+    - otherwise (an unrelated pair, or a richer converter that rejects the
+      poorer rows) detection raises, naming both shapes and the row where each
+      was first seen and telling the user to set ``data.format`` explicitly.
+
+    Raises:
+    - ``ValueError`` on empty data, or when no row in the prefix matches any
+      format signature. A row that matches no signature is skipped and reported
+      like the converters do (#1217) rather than refusing the whole file. A file
+      that mixes shapes is also refused, naming both shapes and the row where
+      each was first seen.
+    """
+    if not data:
+        raise ValueError("Empty dataset - cannot detect format")
+
+    sampled = data[:MAX_DETECT_ROWS]
+    # First row index at which each richest format was seen, in sample order.
+    first_seen: dict[str, int] = {}
+    # The richest format of every sampled row, aligned with `sampled`.
+    row_formats: list[str] = []
+    ignored: list[int] = []
+    for index, row in enumerate(sampled):
+        # A JSONL line can be any JSON value, not just an object, so a bare
+        # scalar or array is skipped exactly as the converters drop it (#1217)
+        # instead of crashing on .keys().
+        fmt = _richest_format(set(row.keys())) if isinstance(row, dict) else None
+        if fmt is None:
+            # #1217: a row matching no signature is skipped by the converters
+            # rather than fatal, so detection ignores it here too and drops it
+            # from the decision. Refusing on one bad row would restore the
+            # "zero row stop" behaviour #1217 removed; the loader's own drop
+            # warning is what tells the user which row it was.
+            ignored.append(index)
+            row_formats.append("")
+            continue
+        row_formats.append(fmt)
+        first_seen.setdefault(fmt, index)
+
+    if not first_seen:
+        # Nothing in the prefix matched, so there is no format to resolve.
+        first_ignored = ignored[0]
+        raise ValueError(_cannot_detect_message(sampled[first_ignored], first_ignored))
+
+    if len(first_seen) == 1:
+        return next(iter(first_seen))
+
+    # The sampled rows disagree: this file is mixed.
+    ordered = sorted(first_seen.items(), key=lambda item: item[1])
+    if len(ordered) == 2:
+        (fmt_a, idx_a), (fmt_b, idx_b) = ordered
+        richer = _richer_family_member(fmt_a, fmt_b)
+        if richer is not None:
+            if richer == fmt_a:
+                poorer, poorer_idx, richer_idx = fmt_b, idx_b, idx_a
+            else:
+                poorer, poorer_idx, richer_idx = fmt_a, idx_a, idx_b
+            poorer_rows = [
+                row for row, fmt in zip(sampled, row_formats) if fmt == poorer
+            ]
+            # The richer converter must accept EVERY poorer row, and must
+            # convert it to the same messages the poorer one would: the
+            # tool-calling converter rebuilds each message from role, content,
+            # tool_calls and tool_call_id, so a chatml row whose messages carry
+            # name or weight converts "successfully" but loses them. An upgrade
+            # that silently drops a field is the defect this change exists to fix.
+            upgrades = all(
+                format_to_messages(row, richer) is not None
+                and format_to_messages(row, richer) == format_to_messages(row, poorer)
+                for row in poorer_rows
+            )
+            if upgrades:
+                # The richer converter handles the poorer rows too, so upgrading
+                # keeps every row's fields instead of dropping the poorer ones.
+                return richer
+            missing = sorted(FORMAT_SIGNATURES[richer] - FORMAT_SIGNATURES[poorer])
+            missing_text = ", ".join(f"'{key}'" for key in missing)
+            raise ValueError(
+                f"Cannot detect format: this dataset mixes '{poorer}' (row "
+                f"{poorer_idx}) and '{richer}' (row {richer_idx}). They are the "
+                f"same family, but the richer '{richer}' converter rejects the "
+                f"'{poorer}' rows — they have no {missing_text} key — so no "
+                f"single format covers every row. Set data.format explicitly."
+            )
+
+    shapes = " and ".join(f"'{fmt}' (row {idx})" for fmt, idx in ordered)
+    raise ValueError(
+        f"Cannot detect format: this dataset mixes unrelated shapes {shapes}. "
+        f"Converting every row with one of them would silently drop the other's "
+        f"fields. Set data.format explicitly."
     )
 
 
@@ -88,6 +229,8 @@ VALID_FORMATS = (
     "raft",
     # v0.71.32 — ASR (Whisper): {"audio": path, "text": transcript}.
     "asr",
+    # Issue #1219 — Cross-encoder paired text classification.
+    "cross_encoder",
 )
 
 # A malformed row makes a converter raise one of these; the drop contract is
@@ -136,6 +279,8 @@ def _dispatch_conversion(row: dict, fmt: str) -> dict:
         return _convert_raft(row)
     elif fmt == "asr":
         return _convert_asr(row)
+    elif fmt == "cross_encoder":
+        return _convert_cross_encoder(row)
     else:
         return _convert_vision(row)
 
@@ -352,6 +497,39 @@ def _convert_asr(row: dict) -> dict:
     return {"audio": audio, "text": text}
 
 
+def _convert_cross_encoder(row: dict) -> dict:
+    """Convert cross-encoder paired row (Issue #1219).
+
+    Input:  {"text_a": ..., "text_b": ..., "label": ...}
+        or: {"question": ..., "answer": ..., "label": ...}
+    Output: dict with the pair fields and optional label preserved.
+    """
+    if "text_a" in row and "text_b" in row:
+        a, b = row["text_a"], row["text_b"]
+        if not isinstance(a, str) or not isinstance(b, str):
+            raise TypeError(
+                "cross_encoder rows require 'text_a' and 'text_b' to be str; "
+                f"got text_a={type(a).__name__}, text_b={type(b).__name__}"
+            )
+        res = {"text_a": a, "text_b": b}
+    elif "question" in row and "answer" in row:
+        q, ans = row["question"], row["answer"]
+        if not isinstance(q, str) or not isinstance(ans, str):
+            raise TypeError(
+                "cross_encoder rows require 'question' and 'answer' to be str; "
+                f"got question={type(q).__name__}, answer={type(ans).__name__}"
+            )
+        res = {"question": q, "answer": ans}
+    else:
+        raise ValueError(
+            "cross_encoder row requires 'text_a' + 'text_b' (or 'question' + "
+            f"'answer'). Row keys: {sorted(row)!r}"
+        )
+    if "label" in row:
+        res["label"] = row["label"]
+    return res
+
+
 def _convert_vision(row: dict) -> dict:
     """Convert LLaVA / ShareGPT4V vision format to unified messages + image.
 
@@ -375,43 +553,17 @@ def _convert_vision(row: dict) -> dict:
     return result
 
 
-def _convert_tool_calling(row: dict) -> dict:
-    """Normalize tool-calling row to unified messages format.
+def _normalize_tool_calls(tool_calls: object, field: str) -> list[dict]:
+    """Validate a ``tool_calls`` list and return it in the unified shape.
 
-    Input:
-        {
-            "messages": [{"role": "user", "content": ...}],
-            "tools": [{"type": "function", "function": {...}}, ...],
-            "tool_calls": [{"function": {"name": ..., "arguments": "json-string"}}],
-        }
-
-    Output (unified format — tool schema embedded in system message,
-    tool_calls attached to final assistant turn):
-        {
-            "messages": [
-                {"role": "system", "content": "<tool schema description>"},
-                {"role": "user", "content": "..."},
-                {"role": "assistant", "content": "", "tool_calls": [...]},
-            ]
-        }
-
-    Security: every tool_call's 'arguments' must be JSON-parseable. Tool schemas
-    must be a list of dicts. Invalid rows raise ValueError and are mapped to None
-    by the outer handler.
+    Each call keeps ``function.name`` and ``function.arguments`` (a dict is
+    serialized, a string must parse as JSON), plus its ``id`` and ``type`` when
+    the source carries them: a ``tool`` turn's ``tool_call_id`` refers to that
+    ``id``, and some chat templates render it.
     """
-    tools = row["tools"]
-    tool_calls = row["tool_calls"]
-
-    if not isinstance(tools, list):
-        raise ValueError("tool-calling 'tools' must be a list")
     if not isinstance(tool_calls, list):
-        raise ValueError("tool-calling 'tool_calls' must be a list")
-
-    for tool in tools:
-        if not isinstance(tool, dict):
-            raise ValueError("tool-calling tool entries must be dicts")
-
-    normalized_tool_calls = []
+        raise ValueError(f"tool-calling '{field}' must be a list")
+    normalized = []
     for call in tool_calls:
         if not isinstance(call, dict):
             raise ValueError("tool_calls entries must be dicts")
@@ -434,45 +586,138 @@ def _convert_tool_calling(row: dict) -> dict:
             args_str = json.dumps(args)
         else:
             raise ValueError("tool_calls 'arguments' must be str or dict")
-        normalized_tool_calls.append({
-            "function": {"name": name, "arguments": args_str},
-        })
+        entry: dict = {}
+        for key in ("id", "type"):
+            if call.get(key) is not None:
+                if not isinstance(call[key], str):
+                    raise ValueError(f"tool_calls '{key}' must be a string")
+                entry[key] = call[key]
+        entry["function"] = {"name": name, "arguments": args_str}
+        normalized.append(entry)
+    return normalized
+
+
+def _convert_tool_calling(row: dict) -> dict:
+    """Normalize tool-calling row to unified messages format.
+
+    Two input shapes are accepted (#1217):
+
+    - calls nested in the conversation (the OpenAI fine-tuning shape, and what
+      ``soup agent synth`` writes): assistant turns carry their own
+      ``tool_calls`` and ``tool`` turns their ``tool_call_id``;
+    - the legacy single-call shape: the calls sit in a top-level ``tool_calls``
+      list and become one assistant turn appended after ``messages``.
+
+        {
+            "messages": [{"role": "user", "content": ...}, ...],
+            "tools": [{"type": "function", "function": {...}}, ...],  # optional
+            "tool_calls": [{"function": {"name": ..., "arguments": "json-string"}}],
+        }
+
+    Output (unified format: the tool schema, when ``tools`` is non-empty, embedded
+    in a leading system message; messages in source order, each assistant turn
+    keeping its own tool_calls):
+        {
+            "messages": [
+                {"role": "system", "content": "<tool schema description>"},
+                {"role": "user", "content": "..."},
+                {"role": "assistant", "content": "", "tool_calls": [...]},
+                {"role": "tool", "content": "...", "tool_call_id": "..."},
+                {"role": "assistant", "content": "..."},
+            ]
+        }
+
+    The top-level ``tool_calls`` is appended only when no assistant turn
+    already carries calls, so a multi-turn trajectory is never reordered into
+    "answer first, call afterwards".
+
+    Security: every tool_call's 'arguments' must be JSON-parseable. Tool schemas
+    must be a list of dicts. Invalid rows raise ValueError and are mapped to None
+    by the outer handler.
+    """
+    tools = row.get("tools")
+    if isinstance(tools, str):
+        # Some exported datasets store the schema list as a JSON string, since
+        # per-tool parameter schemas differ from row to row.
+        try:
+            tools = json.loads(tools)
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                f"tool-calling 'tools' is a string that is not JSON: {exc}"
+            ) from exc
+    if tools is not None:
+        if not isinstance(tools, list):
+            raise ValueError("tool-calling 'tools' must be a list")
+        for tool in tools:
+            if not isinstance(tool, dict):
+                raise ValueError("tool-calling tool entries must be dicts")
+
+    top_level_calls = row.get("tool_calls")
+    legacy_tool_calls = (
+        [] if top_level_calls is None
+        else _normalize_tool_calls(top_level_calls, "tool_calls")
+    )
 
     original_messages = row["messages"]
     if not isinstance(original_messages, list) or not original_messages:
         raise ValueError("tool-calling 'messages' must be a non-empty list")
 
-    tool_schema_descriptions = []
-    for tool in tools:
-        function_def = tool.get("function", {})
-        tool_name = function_def.get("name", "unknown")
-        description = function_def.get("description", "")
-        params = function_def.get("parameters", {})
-        tool_schema_descriptions.append(
-            f"- {tool_name}: {description}\n  parameters: {json.dumps(params)}"
-        )
+    messages: list[dict] = []
+    if tools:
+        tool_schema_descriptions = []
+        for tool in tools:
+            function_def = tool.get("function", {})
+            tool_name = function_def.get("name", "unknown")
+            description = function_def.get("description", "")
+            params = function_def.get("parameters", {})
+            tool_schema_descriptions.append(
+                f"- {tool_name}: {description}\n  parameters: {json.dumps(params)}"
+            )
+        messages.append({
+            "role": "system",
+            "content": (
+                "You have access to the following tools. When a tool call is "
+                "needed, respond with a function call in JSON.\n\n"
+                + "\n".join(tool_schema_descriptions)
+            ),
+        })
 
-    system_content = (
-        "You have access to the following tools. When a tool call is needed, "
-        "respond with a function call in JSON.\n\n"
-        + "\n".join(tool_schema_descriptions)
-    )
-
-    messages: list[dict] = [{"role": "system", "content": system_content}]
+    has_nested_calls = False
     for msg in original_messages:
         if not isinstance(msg, dict) or "role" not in msg:
             raise ValueError("tool-calling messages must be dicts with 'role'")
-        if msg["role"] == "system":
+        role = msg["role"]
+        if role == "system" and tools:
             # Merge user system message into our synthesized system content
             messages[0]["content"] = msg.get("content", "") + "\n\n" + messages[0]["content"]
             continue
-        messages.append({"role": msg["role"], "content": msg.get("content", "")})
+        content = msg.get("content", "")
+        calls = []
+        if role == "assistant" and msg.get("tool_calls") is not None:
+            calls = _normalize_tool_calls(msg["tool_calls"], "messages.tool_calls")
+        if calls and content is None:
+            # The OpenAI shape writes "content": null on a call-only turn.
+            content = ""
+        # Any other null content would render as the literal text "None" in a
+        # chat template, so the row is dropped, as the other converters do.
+        out = {
+            "role": role,
+            "content": _require_str_content(content, f"tool-calling {role} content"),
+        }
+        if calls:
+            has_nested_calls = True
+            out["tool_calls"] = calls
+        elif role == "tool" and msg.get("tool_call_id") is not None:
+            if not isinstance(msg["tool_call_id"], str):
+                raise ValueError("tool-calling 'tool_call_id' must be a string")
+            out["tool_call_id"] = msg["tool_call_id"]
+        messages.append(out)
 
-    if normalized_tool_calls:
+    if legacy_tool_calls and not has_nested_calls:
         messages.append({
             "role": "assistant",
             "content": "",
-            "tool_calls": normalized_tool_calls,
+            "tool_calls": legacy_tool_calls,
         })
 
     return {"messages": messages}

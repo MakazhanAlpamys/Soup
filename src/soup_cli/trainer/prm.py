@@ -17,6 +17,7 @@ per project policy — ``python -m soup_cli.cli --help`` must not pull torch.
 from __future__ import annotations
 
 import logging
+import math
 import time
 from functools import lru_cache
 from pathlib import Path
@@ -26,7 +27,14 @@ from rich.console import Console
 
 from soup_cli.config.schema import SoupConfig
 from soup_cli.trainer.loss_summary import summarize_training_loss
-from soup_cli.utils.gpu import bf16_fp16_flags, resolve_base_load_dtype
+from soup_cli.utils.eval_schedule import training_eval_kwargs
+from soup_cli.utils.gpu import (
+    bf16_fp16_flags,
+    estimate_batch_size,
+    get_gpu_info,
+    model_size_from_name,
+    resolve_base_load_dtype,
+)
 from soup_cli.utils.mixed_precision import align_trainable_dtype_for_fp16
 from soup_cli.utils.seeding import apply_training_seed, training_seed_kwargs
 
@@ -285,8 +293,17 @@ class PRMTrainerWrapper:
             f"head=Linear({hidden_size}, 1)"
         )
 
-    def train(self, **_kwargs) -> dict:
+    def train(
+        self,
+        display=None,
+        tracker=None,
+        run_id=None,
+        resume_from_checkpoint: Optional[str] = None,
+        **_kwargs,
+    ) -> dict:
         """Run training with the PRM Trainer subclass."""
+        # #802 contract: display, tracker, and run_id are accepted for caller
+        # uniformity but not wired here.
         if self.model is None:
             raise RuntimeError("PRMTrainerWrapper.train() called before setup()")
         from datasets import Dataset
@@ -313,19 +330,39 @@ class PRMTrainerWrapper:
                 self._dataset["val"], self.tokenizer, cfg.data.max_length
             )
 
-        # v0.53.11 review fix (python-review HIGH) — bool is subclass of int,
-        # so explicit bool reject before isinstance(int).
-        if isinstance(tcfg.batch_size, bool) or not isinstance(tcfg.batch_size, int):
-            bs = 1
-        else:
-            bs = tcfg.batch_size
+        batch_size = tcfg.batch_size
+        if batch_size == "auto":
+            gpu_info = get_gpu_info()
+            batch_size = estimate_batch_size(
+                model_params_b=model_size_from_name(cfg.base),
+                seq_length=cfg.data.max_length,
+                gpu_memory_bytes=gpu_info["memory_total_bytes"],
+                quantization=tcfg.quantization,
+                lora_r=tcfg.lora.r,
+            )
+            console.print(f"[green]Auto batch size (PRM):[/] {batch_size}")
+        bs = int(batch_size)
+        total_steps = math.ceil(
+            len(train_rows) / bs / tcfg.gradient_accumulation_steps
+        ) * tcfg.epochs
+        warmup_steps = int(total_steps * tcfg.warmup_ratio)
         use_bf16, use_fp16 = bf16_fp16_flags(self.device, allow_mps_bf16=True)
+        from soup_cli.utils.layer_stream import should_enable_hf_gradient_checkpointing
+
         args = TrainingArguments(
             output_dir=str(output_dir),
             num_train_epochs=tcfg.epochs,
             per_device_train_batch_size=bs,
             gradient_accumulation_steps=tcfg.gradient_accumulation_steps,
             learning_rate=tcfg.lr,
+            warmup_steps=warmup_steps,
+            gradient_checkpointing=should_enable_hf_gradient_checkpointing(
+                tcfg.gradient_checkpointing, stream_layers=tcfg.stream_layers
+            ),
+            weight_decay=tcfg.weight_decay,
+            max_grad_norm=tcfg.max_grad_norm,
+            optim=tcfg.optimizer,
+            lr_scheduler_type=tcfg.scheduler,
             logging_steps=tcfg.logging_steps,
             save_steps=tcfg.save_steps,
             save_total_limit=3,
@@ -334,7 +371,9 @@ class PRMTrainerWrapper:
             report_to=self.report_to,
             remove_unused_columns=False,
             deepspeed=self.deepspeed_config,
+            **(self.fsdp_config or {}),  # #1204: --fsdp was stored and dropped
             **training_seed_kwargs(tcfg),
+            **training_eval_kwargs(cfg, eval_rows, batch_size=bs),
         )
 
         prm_trainer_cls = make_prm_trainer_class(Trainer)
@@ -361,6 +400,7 @@ class PRMTrainerWrapper:
             from soup_cli.utils.deepspeed import attach_empty_param_group_guard
 
             attach_empty_param_group_guard(self.trainer)
+
         console.print("[green]Starting PRM training...[/]")
         start = time.time()
         align_trainable_dtype_for_fp16(
@@ -368,7 +408,7 @@ class PRMTrainerWrapper:
             fp16=getattr(self.trainer.args, "fp16", False),
             bf16=getattr(self.trainer.args, "bf16", False),
         )
-        result = self.trainer.train()
+        result = self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)
         self.trainer.save_model(str(output_dir))
         # v0.71.30 — save the tokenizer alongside the model so the PRM
         # checkpoint is loadable standalone (soup shrink / PRMScorer /
