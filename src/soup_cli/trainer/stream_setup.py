@@ -43,6 +43,25 @@ console = Console()
 _PROBE_DEFERRAL_CEILING = 4.0
 
 
+def _stream_compute_capability() -> Optional[int]:
+    """Major compute capability of the current CUDA device, or ``None``.
+
+    Read lazily (torch is not imported at module top here), and only used to
+    pick the cuBLAS workspace size for the VRAM budget: PyTorch asks cuBLAS
+    for 32 MiB per handle-stream pair on compute capability 9-12 and
+    8,320 KiB below that (#1407). No CUDA → ``None`` → the sub-9 default,
+    which the budget only reaches on CUDA anyway.
+    """
+    try:
+        import torch
+
+        if not torch.cuda.is_available():
+            return None
+        return torch.cuda.get_device_capability()[0]
+    except Exception:
+        return None
+
+
 def _stream_source_line(stats: dict) -> str:
     """The source half of the ``Layer streaming ready:`` line, from ``runtime.stats()``.
 
@@ -57,9 +76,7 @@ def _stream_source_line(stats: dict) -> str:
 
     pinned = "pinned" if stats["pinned"] else "pageable"
     if stats["tier"] == TIER_RAM:
-        return f"{stats['store_bytes'] / 1e9:.2f} GB {pinned} RAM store" + _page_locked_note(
-            stats
-        )
+        return f"{stats['store_bytes'] / 1e9:.2f} GB {pinned} RAM store" + _page_locked_note(stats)
     # Since #974 the staging lives in the same power-of-two arenas as the RAM
     # store, so the disk tier can say what was page-locked too.
     return (
@@ -1206,6 +1223,7 @@ class StreamingSetupMixin:
             estimate_stream_peak_vram,
             forecast_stream_throughput,
             resolve_available_vram_bytes,
+            stream_cublas_workspaces_bytes,
         )
         from soup_cli.utils.layer_stream_runtime import measure_gemm_tflops
 
@@ -1238,6 +1256,16 @@ class StreamingSetupMixin:
         # calibrated_logits_bytes_per_element() is floored at LOGITS_BYTES_PER_ELEMENT,
         # so forwarding it here can only raise the budget, never lower it (issue #348).
         calibrated = calibrated_logits_bytes_per_element()
+        # #1407 — the fitted slack constant carries a compute-capability-8.6
+        # baseline of cuBLAS workspaces; charge the excess of THIS stack's
+        # workspaces (32 MiB per pair on Hopper/Blackwell, or whatever
+        # CUBLAS_WORKSPACE_CONFIG sizes) so the formula-only path stops
+        # under-predicting there.
+        cublas_workspaces = (
+            stream_cublas_workspaces_bytes(compute_capability=_stream_compute_capability())
+            if on_cuda
+            else 0
+        )
         predicted = estimate_stream_peak_vram(
             layer_bytes=layer_bytes,
             buffers=tcfg.stream_buffers,
@@ -1251,6 +1279,7 @@ class StreamingSetupMixin:
             batch_size=rows,
             logits_bytes_per_element=calibrated,
             large_layer_bytes=large_layer_bytes,
+            cublas_workspaces_bytes=cublas_workspaces,
         )
         logits = estimate_logits_bytes(
             vocab_size=vocab, seq_len=seq_len, batch_size=rows, bytes_per_element=calibrated
@@ -1266,6 +1295,11 @@ class StreamingSetupMixin:
             lines.append(
                 f"  logits       calibrated {calibrated:.3f} B/element on this stack, "
                 f"above the shipped {LOGITS_BYTES_PER_ELEMENT:.0f}: budget raised to match"
+            )
+        if cublas_workspaces:
+            lines.append(
+                f"  cuBLAS       {cublas_workspaces / 1e6:.1f} MB of workspace above the "
+                f"fitted baseline charged to the peak (issue #1407)"
             )
 
         if not on_cuda:
