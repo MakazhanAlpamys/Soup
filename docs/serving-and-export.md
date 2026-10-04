@@ -16,7 +16,6 @@
 - [Soup Quantize — Ergonomic Export Alias](#soup-quantize--ergonomic-export-alias)
 - [Llama.cpp Proxy](#llamacpp-proxy)
 - [Tail-Latency Stats + Tool-Call Timer](#tail-latency-stats--tool-call-timer)
-- [Web UI Plugin Registry + Env Knobs](#web-ui-plugin-registry--env-knobs)
 - [Deploy Autopilot](#deploy-autopilot)
 - [Agent Forge](#agent-forge)
 - [HF Space SDK Auto-Pick](#hf-space-sdk-auto-pick)
@@ -745,21 +744,6 @@ with ToolCallTimer(buffer, name="fetch_url") as timer:
 ```
 
 Pure-Python EMA + linear-interp percentiles (DoS cap: `MAX_SAMPLES=1_000_000`). `ToolOutputsBuffer` is a thread-safe `collections.deque(maxlen=1000)` ring with truncated previews; `ToolCallTimer` records duration / output / error per invocation for tool-calling SFT runs.
-
-
-## Web UI Plugin Registry + Env Knobs
-
-```python
-# src/soup_cli/ui/plugins/my_tab.py
-from soup_cli.ui.plugins import register_tab
-
-def render_my_tab(request) -> str:
-    return "<div>my tab body</div>"
-
-register_tab(name="my-tab", title="My Tab", render=render_my_tab)
-```
-
-Drop-in plugin registry with kebab-case name allowlist, 32-tab cap, idempotent re-register. Plus `API_HOST` / `API_PORT` / `API_KEY` / `GRADIO_HOST` / `GRADIO_PORT` env knobs for FastAPI + Gradio surfaces.
 
 
 ## Deploy Autopilot
