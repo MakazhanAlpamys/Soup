@@ -29,10 +29,20 @@ _REGISTRY_MARKERS = (
     "Web UI Plugin Registry",
 )
 
-#: The routes the Web UI serves today, read from ``ui/app.py`` before the removal.
+#: The public names of the removed module.
+_REMOVED_NAMES = ("register_tab", "list_tabs", "get_tab", "clear_tabs", "load_plugins", "TabSpec")
+
+#: Every route ``ui/app.py`` declares with a decorator, plus the ``/static`` mount, read
+#: before the removal. FastAPI's own documentation routes (``/docs``, ``/redoc``,
+#: ``/openapi.json``) are left out: ``create_app`` turns them on only for a loopback host.
 _ROUTES_TODAY = {
     "/",
+    "/static",
+    "/api/health",
     "/api/auth/ticket",
+    "/api/chat/send",
+    "/api/tool-outputs",
+    "/api/train/stream",
     "/api/runs",
     "/api/runs/compare",
     "/api/runs/{run_id}",
@@ -62,11 +72,27 @@ def _files(root: Path, suffixes: tuple[str, ...]):
 
 class TestTheRegistryIsGone:
     def test_the_module_cannot_be_imported(self):
-        with pytest.raises(ModuleNotFoundError):
-            importlib.import_module("soup_cli.ui.plugins")
+        # A checkout that ran the old tests keeps an ignored plugins/__pycache__/ after the
+        # pull, and Python then imports the directory as an empty namespace package.
+        try:
+            module = importlib.import_module("soup_cli.ui.plugins")
+        except ModuleNotFoundError:
+            return
+        assert module.__spec__.origin is None, module.__spec__.origin
+        assert [name for name in _REMOVED_NAMES if hasattr(module, name)] == []
 
-    def test_the_package_directory_is_gone(self):
-        assert not (_SRC / "soup_cli" / "ui" / "plugins").exists()
+    def test_no_source_file_is_left_in_the_package_directory(self):
+        plugins_dir = _SRC / "soup_cli" / "ui" / "plugins"
+        leftovers = (
+            sorted(
+                str(path.relative_to(plugins_dir))
+                for path in plugins_dir.rglob("*")
+                if path.is_file() and "__pycache__" not in path.parts
+            )
+            if plugins_dir.is_dir()
+            else []
+        )
+        assert leftovers == []
 
     def test_nothing_under_src_names_it(self):
         hits = [
