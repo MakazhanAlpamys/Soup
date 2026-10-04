@@ -3457,28 +3457,31 @@ class TrainingConfig(BaseModel):
             raise ValueError("LISA integer fields must be int, not bool")
         return v
 
-    # v0.72.0 BETA — Layer streaming. The frozen base lives in CPU RAM and is
-    # streamed into a small pool of pre-allocated VRAM buffers one decoder
-    # layer at a time, so peak VRAM is bounded by ONE layer instead of the
-    # whole model. Only the LoRA adapters, their grads and optimizer state stay
-    # resident. See soup_cli.utils.layer_stream.
+   # v0.72.0 BETA - Layer Streaming. The frozen base lives in CPU RAM or NVMe
+    # disk tier and is streamed into a small pool of pre-allocated VRAM buffers
+    # one decoder layer at a time, so peak VRAM is bounded by ONE layer instead
+    # of the whole model. Only the LoRA adapters, their grads and optimizer state
+    # stay resident. See soup_cli.utils.layer_stream.
     stream_layers: bool = Field(
         default=False,
         description=(
-            "BETA — stream the frozen base layer-by-layer from CPU RAM so a "
-            "model larger than VRAM can be fine-tuned. sft + transformers + "
-            "text + quantization=none only; batch_size 1, no gradient "
-            "accumulation. Slower than resident training, but these models did "
-            "not run on the card at all."
+            "BETA — stream the frozen base one decoder layer at a time from CPU RAM "
+            "or an NVMe disk tier (see stream_source), so a model larger than VRAM can "
+            "be fine-tuned with LoRA. Tasks: "
+            + ", ".join(sorted(set(_STREAM_SUPPORTED_TASKS) | set(_STREAM_ROLLOUT_TASKS)))
+            + " (grpo and ppo are refused permanently); backend transformers, modality text; "
+            "quantization none or 4bit (NF4); a concrete batch_size (not 'auto'), "
+            "gradient accumulation is allowed. Slower than resident training, but these "
+            "models did not run on the card at all."
         ),
     )
     stream_source: Literal["auto", "ram", "disk"] = Field(
         default="auto",
         description=(
-            "Where the streamed base lives. 'ram' (the only tier implemented in "
-            "v0.72.0) pins the base in CPU RAM; 'disk' is the v0.72.3 overflow "
-            "tier; 'auto' picks RAM only when the store fits free-RAM headroom "
-            "and the store plus resident extras fits the physical RAM ceiling."
+            "Where the streamed base lives. 'ram' pins the base in CPU RAM; "
+            "'disk' is the v0.72.3 overflow tier; 'auto' picks RAM only when the "
+            "store fits free-RAM headroom and the store plus resident extras fits "
+            "the physical RAM ceiling."
         ),
     )
     stream_ngram_source: Literal["auto", "ram", "disk"] = Field(
@@ -5186,8 +5189,9 @@ class SoupConfig(BaseModel):
         if (
             self.data.chat_template is not None
             and self.task in unsupported
-            # Streaming supports only SFT/pretrain and has its own task-specific
-            # rejection below; keep that more actionable error when enabled.
+            # Streaming supports tasks in _STREAM_SUPPORTED_TASKS and _STREAM_ROLLOUT_TASKS;
+            # pretrain is refused by streaming; keep that more actionable error when enabled.
+            
             and not self.training.stream_layers
         ):
             raise ValueError(
@@ -6279,10 +6283,7 @@ class SoupConfig(BaseModel):
     def _validate_stream_layers_compat(self) -> "SoupConfig":
         """v0.72.0 BETA — layer-streaming compatibility gates.
 
-        Scope is deliberately narrow for the first cut: RAM tier, bf16, sft,
-        Llama/Qwen, batch 1, no gradient accumulation. Every refusal names the
-        release that lifts it, so a rejected config tells the user what to wait
-        for rather than just saying no.
+        Validate layer streaming compatibility: supported task set, transformers backend, text modality, quantization (none or 4bit NF4), concrete batch size, gradient accumulation, and mutual exclusions.
         """
         tcfg = self.training
         if not tcfg.stream_layers:

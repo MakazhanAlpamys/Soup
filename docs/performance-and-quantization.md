@@ -403,7 +403,7 @@ Not compatible with unsloth (own memory manager) or mlx. Wired across every tran
 
 ## Layer Streaming (BETA, v0.72.0; NF4 v0.72.2; disk + wider archs v0.72.3; preference losses v0.72.4)
 
-Stream frozen base-model decoder layers ONE at a time from CPU RAM into small VRAM buffers instead of keeping the whole base resident. Peak VRAM is bounded by the size of a single layer, not the entire model — so models that don't fit resident on your GPU can now train at all.
+Stream frozen base-model decoder layers ONE at a time from CPU RAM , or from an NVMe disk tier when the base does not fit in RAM into small VRAM buffers instead of keeping the whole base resident. Peak VRAM is bounded by the size of a single layer, not the entire model — so models that don't fit resident on your GPU can now train at all.
 
 ```yaml
 training:
@@ -649,21 +649,23 @@ accum 1→4, where raising batch cost 0.842 → 2.28 GB). So the rule is: **rais
 `batch_size` until the VRAM pre-flight refuses, then accumulate for the rest.** Soup
 prints this advice when it sees you accumulating.
 
-**Rejected at config load (each names the release that lifts it):**
-- `batch_size: "auto"` → OOM-probes a resident model that streaming never loads; explicit batch sizes allowed (v0.72.3)
-- `quantization` other than `none` or `4bit` → other formats cannot be streamed into a pooled buffer
-- `backend: unsloth` / `backend: mlx` → streaming replaces the model-load path those backends own
-- `task` other than `sft` / `dpo` / `orpo` / `simpo` / `kto` → named explicitly. `grpo` and `ppo` are refused **permanently**, not pending: generation rollouts re-read every layer once per generated token, which destroys the amortisation streaming depends on
-- `task: kto` with `batch_size: 1` → TRL's KL term is degenerate at batch 1; refused when the config is read (this applies to every KTO run, not only to streaming) rather than minutes later after sharding
-- `lora.use_dora` / `lora.use_vera` / `lora.init_strategy` other than `random` → these initialise from the real base weight, which is on the meta device under streaming
-- `moe_expert_quant` → expert quantization runs only in the resident model-construction path and would otherwise be silently ignored
-- `unfrozen_parameters`, `lisa_enabled`, `packing`, `multipack`, `use_fsdp2_compile`, `train_router_only`, `expand_layers` → each independently rewrites or re-freezes the same layers
-- `stream_source` / `stream_ngram_source` / `stream_buffers` / `stream_read_ahead` / `stream_vram_override` / `stream_vram_probe` / `stream_disk_kind` / `stream_pin` set while `stream_layers: false` → a footgun, refused
-- a non-default `stream_read_ahead` beside `stream_source: ram` → refused. The read-ahead reader belongs to the NVMe disk tier and `ram` never falls back to it, so the setting would validate, be documented, and reach nothing. The default is accepted, because a default is not a decision
-- a disk-tier run whose host staging (`stream_read_ahead` layers, plus one slot each for the embedding and an untied `lm_head`) plus the resident extras will not fit the free-RAM headroom → refused by name, naming the depth to lower. Refused rather than clamped: a depth you set is a decision, and silently lowering it would hand back a slower run than the one you configured
-- more than 8 distinct layer shapes in one shard index → refused. Staging is allocated per shape and a shape with one member takes a full slot at any depth, so an index whose every layer differed would hold most of the model in staging at once — page-locked when the box allows it and `stream_pin` is not false, a loud pageable fallback otherwise, and a refusal only under `stream_pin: true` on a CUDA target — which is what the disk tier exists to avoid. A real model has one to three
-- `stream_vram_probe` on any task other than `sft` → the probe runs a plain causal-LM step, which *is* the SFT step but is not a preference loss. Measured at one matching shape it is conservative there too (6.02 GB against a real DPO step's 5.30 GB, +13.5%), but one shape is not a validation, so it is not offered for `dpo`/`orpo`/`simpo`/`kto` yet
-- an architecture outside the supported list (llama / qwen2 / qwen3, including qwen3_5_moe text aliases / qwen4_exp text / mistral / gemma / gemma2 / gemma3_text / phi / phi3) → named explicitly
+**Refused at config load:**
+- `batch_size: "auto"` → OOM-probes a resident model that streaming never loads; explicit batch sizes are required
+- `quantization` other than `none` or `4bit` → other formats cannot be streamed into a pooled buffer.
+- `backend: unsloth` / `backend: mlx` → streaming replaces the model-load path those backends own.
+- `modality` other than text -> streaming supports text models only.
+- `task` other than `sft` / `dpo` / `orpo` / `simpo` / `kto` → named explicitly; `grpo` and `ppo` are refused **permanently**, not pending: generation rollouts re-read every layer once per generated token, which destroys the amortisation streaming depends on.
+- `task: kto` with `batch_size: 1` -> TRL's KL term is degenerate at batch 1; refused when the config is read (this applies to every KTO run, not only to streaming) rather than minutes later after sharding.
+- `lora.r <= 0` or missing -> LoRA is required for layer streaming.
+- LoRA target on `lm_head` or `embed_tokens` -> streaming does not support adapters on the streamed head or embeddings.
+- `lora.use_dora` / `lora.use_vera` / `lora.init_strategy` other than `random` -> these initialise from the real base weight, which is on the meta device under streaming.
+- `moe_expert_quant` / `quantization_aware` / `fp8_attention` / `nvfp4` -> mutually exclusive with layer streaming.
+- `unfrozen_parameters`, `lisa_enabled`, `packing`, `multipack`, `use_fsdp2_compile`, `train_router_only`, `expand_layers`, `relora_steps` -> each independently rewrites or re-freezes the same layers.
+
+**Refused at setup, before the first training step:**
+- Unsupported model architecture -> model architecture not in the supported streaming allowlist.
+- More than 8 distinct layer shapes -> layer shapes exceed pooled buffer uniformity limits.
+- Disk-tier host-staging fit -> free RAM does not fit the required host staging buffer.
 
 **Config example:**
 

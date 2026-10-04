@@ -276,7 +276,7 @@ def stream_arch_of(config: Any) -> str:
         raise ValueError(
             f"layer streaming does not support model_type={raw_family!r}. "
             f"Supported: {', '.join(SUPPORTED_STREAM_ARCHS)}. "
-            f"More architectures land in v0.72.3."
+            
         )
     return family
 
