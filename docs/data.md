@@ -427,7 +427,7 @@ soup data active-sample --input traces.jsonl --output for-review.jsonl --budget 
 
 The output JSONL is a drop-in prompt set for `soup eval human` (v0.19). Budget is bounded `[1, 100 000]`.
 
-**Webhooks (v0.71.5).** `soup ingest`, `soup prune-prompt`, `soup ab`, and `soup data active-sample` all accept `--slack-url` / `--discord-url` and POST a one-line summary on completion through the same SSRF-hardened validator as `soup drift-alarm` (scheme allowlist, loopback-only HTTP, RFC1918 / link-local / shared `100.64.0.0/10` / site-local `fec0::/10` / reserved / multicast rejected; the post never raises, so a flaky webhook can't fail the command). `soup ab` only fires when the sequential test actually decides (`reject_h0` / `accept_h0`), not while it's still `continue`-ing.
+**Webhooks (v0.71.5).** `soup ingest`, `soup prune-prompt`, `soup ab`, and `soup data active-sample` all accept `--slack-url` / `--discord-url` and POST a one-line summary on completion through the same SSRF-hardened validator as `soup drift-alarm` (scheme allowlist, loopback-only HTTP, RFC1918 / link-local / shared `100.64.0.0/10` / site-local `fec0::/10` / reserved / multicast rejected, as is a host written only as numbers that is not a valid IPv4 address; the post never raises, so a flaky webhook can't fail the command). `soup ab` only fires when the sequential test actually decides (`reject_h0` / `accept_h0`), not while it's still `continue`-ing.
 
 
 ## Synthetic Data Generation
@@ -454,7 +454,8 @@ soup data generate --prompt "..." --provider server --api-base http://localhost:
 With `--provider server`, `openai` or `vllm`, `--api-base` takes plain HTTP only for loopback
 (`localhost`, `127.0.0.1`, `::1`) and HTTPS for any other host; `--provider ollama` stays
 loopback-only. A private, link-local or reserved IP literal is refused on either scheme, so
-address a server on your network by its hostname.
+address a server on your network by its hostname. A host written only as numbers that is not a
+valid IPv4 address (`10.0.0.256`, `4294967296`) is refused as well.
 
 ### Multi-Provider Support
 
@@ -530,7 +531,7 @@ soup data augment ./data/train.jsonl --strategy rephrase --count 2 \
   --provider ollama --model qwen2.5:0.5b --output ./data/train_local.jsonl
 ```
 
-Works with `--provider ollama` (the default), `anthropic` or `vllm`. `--model` and `--base-url` select a specific model/endpoint. The Ollama path is loopback-only; the vLLM path takes plain HTTP only for loopback and HTTPS for a remote server, and refuses a private, link-local or reserved IP literal (SSRF-hardened). `--count` is capped at 10; `--lang` and `--styles` each capped at 10 entries × 32 chars.
+Works with `--provider ollama` (the default), `anthropic` or `vllm`. `--model` and `--base-url` select a specific model/endpoint. The Ollama path is loopback-only; the vLLM path takes plain HTTP only for loopback and HTTPS for a remote server, and refuses a private, link-local or reserved IP literal and a host written only as numbers that is not a valid IPv4 address (SSRF-hardened). `--count` is capped at 10; `--lang` and `--styles` each capped at 10 entries × 32 chars.
 
 A provider call that fails (transport error, non-200 status, malformed response) or returns an empty reply never becomes a row: that variant is dropped. The summary reports `N of M provider calls failed` with the first error, and the command exits 1 without writing the output file when no call produced a usable row.
 

@@ -625,7 +625,7 @@ soup serve --model ./output \
   --trace-endpoint http://localhost:4317
 ```
 
-The OTLP endpoint is SSRF-hardened: only http/https schemes, plain HTTP only for loopback (`localhost`/`127.0.0.1`/`::1`), and RFC1918 / link-local / shared `100.64.0.0/10` / site-local `fec0::/10` / `0.0.0.0` all rejected via `ipaddress.ip_address`. When the SDK is missing the flag is a no-op with a warning — the server starts fine without spans.
+The OTLP endpoint is SSRF-hardened: only http/https schemes, plain HTTP only for loopback (`localhost`/`127.0.0.1`/`::1`), and RFC1918 / link-local / shared `100.64.0.0/10` / site-local `fec0::/10` / `0.0.0.0` all rejected via `ipaddress.ip_address`; a host written only as numbers that is not a valid IPv4 address is rejected too. When the SDK is missing the flag is a no-op with a warning — the server starts fine without spans.
 
 > **Note:** `max_tokens` is capped at 16,384 per request. Error details are never exposed in HTTP responses.
 
