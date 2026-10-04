@@ -171,16 +171,19 @@ class TestCompareePairMethod:
         monkeypatch.setattr(ev, "_call_llm", lambda prompt: '{"winner": "B"}')
         assert ev.compare_pair("p", "x", "y") == 1
 
-    def test_compare_pair_llm_failure_is_tie(self, monkeypatch):
-        from soup_cli.eval.judge import JudgeEvaluator
+    def test_compare_pair_llm_failure_propagates(self, monkeypatch):
+        # #1447: a failed judge call is not a tie. It used to return -1 here,
+        # which scored a dead judge as a measured 0.5 win-rate downstream.
+        from soup_cli.eval.judge import JudgeEvaluator, JudgeUnavailableError
 
         ev = JudgeEvaluator(provider="ollama", model="m")
 
         def _boom(prompt):
-            raise RuntimeError("network down")
+            raise JudgeUnavailableError("network down", url="http://localhost:11434")
 
         monkeypatch.setattr(ev, "_call_llm", _boom)
-        assert ev.compare_pair("p", "x", "y") == -1
+        with pytest.raises(JudgeUnavailableError):
+            ev.compare_pair("p", "x", "y")
 
 
 # ---------------------------------------------------------------------------

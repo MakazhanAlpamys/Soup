@@ -494,6 +494,23 @@ def _default_train_fn(
             pass
 
 
+def validate_min_pairs(value: object) -> int:
+    """``--min-pairs`` of the nightly train, checked the same way whether the
+    run is ad-hoc (``--once``) or rendered into a scheduler unit (#1448)."""
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError("min_pairs must be int")
+    if value < 1 or value > _MAX_MIN_PAIRS:
+        raise ValueError(f"min_pairs must be in [1, {_MAX_MIN_PAIRS}]")
+    return value
+
+
+def validate_output_dir(value: object) -> str:
+    """``--output`` of the nightly train (see :func:`validate_min_pairs`)."""
+    if not isinstance(value, str) or not value or "\x00" in value:
+        raise ValueError("output_dir must be a non-empty NUL-free string")
+    return value
+
+
 def run_nightly_train(
     config: LocalRLConfig,
     *,
@@ -522,12 +539,8 @@ def run_nightly_train(
         raise TypeError("config must be LocalRLConfig")
     if not isinstance(once, bool):
         raise TypeError("once must be bool")
-    if isinstance(min_pairs, bool) or not isinstance(min_pairs, int):
-        raise TypeError("min_pairs must be int")
-    if min_pairs < 1 or min_pairs > _MAX_MIN_PAIRS:
-        raise ValueError(f"min_pairs must be in [1, {_MAX_MIN_PAIRS}]")
-    if not isinstance(output_dir, str) or not output_dir or "\x00" in output_dir:
-        raise ValueError("output_dir must be a non-empty NUL-free string")
+    validate_min_pairs(min_pairs)
+    validate_output_dir(output_dir)
 
     runner = train_fn if train_fn is not None else _default_train_fn
     if not callable(runner):
@@ -607,6 +620,8 @@ __all__ = [
     "validate_local_rl_backend",
     "validate_local_rl_train_method",
     "validate_db_path",
+    "validate_min_pairs",
+    "validate_output_dir",
     "LocalRLConfig",
     "DpoPair",
     "NightlyTrainResult",

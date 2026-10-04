@@ -162,7 +162,11 @@ def cost(
         raise typer.Exit(1)
 
     if json_output:
-        console.print(json.dumps(results, indent=2), highlight=False)
+        # Plain stdout, not console.print: Rich folds a document wider than the
+        # console (80 columns when piped) and reads "[...]" as markup, so a long
+        # record is split and a bracketed value such as "[v2]" is dropped or
+        # raises MarkupError. Matches the other machine-readable paths (#1468).
+        typer.echo(json.dumps(results, indent=2))
         return
 
     table = Table(title="Training Cost Estimate", title_justify="left", box=None, padding=(0, 2))

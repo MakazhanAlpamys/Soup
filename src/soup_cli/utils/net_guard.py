@@ -46,6 +46,33 @@ import ipaddress
 LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
 
 
+def _ascii_spellings(host: str) -> list[str]:
+    """``host`` plus the ASCII forms an HTTP client may turn it into.
+
+    A client IDNA-encodes a non-ASCII host before it resolves it: urllib and
+    :mod:`socket` through the stdlib codec (IDNA 2003, whose nameprep step
+    NFKC-folds and drops characters such as the soft hyphen), httpx through the
+    ``idna`` package (IDNA 2008). Both treat U+3002, U+FF0E and U+FF61 as label
+    separators, so text that is not an IP literal as written -- ``10.0.0.1``
+    with U+3002 IDEOGRAPHIC FULL STOP in place of each dot, for instance -- can
+    be one once encoded. A form that fails to encode is skipped.
+    """
+    if host.isascii():
+        return [host]
+    spellings = [host]
+    try:
+        spellings.append(host.encode("idna").decode("ascii"))
+    except UnicodeError:
+        pass
+    try:
+        import idna  # noqa: PLC0415 — the encoder httpx uses; optional here
+
+        spellings.append(idna.encode(host.lower()).decode("ascii"))
+    except (ImportError, UnicodeError):  # idna.IDNAError is a UnicodeError
+        pass
+    return spellings
+
+
 def parse_ip_literal(host: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
     """Parse ``host`` as an IP literal, or ``None`` if it isn't one.
 
@@ -55,7 +82,22 @@ def parse_ip_literal(host: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address
     library :func:`socket.inet_aton`.  The latter is a pure in-process
     string parser — no DNS lookup is performed. A hostname (``"localhost"``,
     ``"evil.example.com"``) returns ``None`` rather than being resolved.
+
+    A non-ASCII host is also read in the ASCII forms a client would connect to
+    (see :func:`_ascii_spellings`), and the first form that is an IP literal is
+    returned, so ``10.0.0.1`` written with ideographic full stops parses as
+    ``10.0.0.1``.
     """
+    for spelling in _ascii_spellings(host):
+        addr = _parse_ascii_ip_literal(spelling)
+        if addr is not None:
+            return addr
+    return None
+
+
+def _parse_ascii_ip_literal(
+    host: str,
+) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
     import socket  # noqa: PLC0415 — lazy import (stdlib, negligible cost)
 
     clean_host = host.rstrip(".")
@@ -77,6 +119,13 @@ def is_private_or_link_local(host: str) -> bool:
     multicast / unspecified IP — the union of every guard's policy in this
     repo, since consolidating stops being safe the moment a caller's
     predicate is quietly narrower than the shared one it now uses.
+
+    Also any address ``ipaddress`` does not consider globally reachable
+    (``not is_global``) — that adds RFC 6598 shared address space,
+    ``100.64.0.0/10``, which is neither ``is_private`` nor ``is_global`` —
+    and the deprecated IPv6 site-local block ``fec0::/10``, which
+    ``ipaddress`` still reports as global. ``is_reserved`` stays: NAT64
+    ``64:ff9b::/96`` IS ``is_global``.
     """
     addr = parse_ip_literal(host)
     if addr is None:
@@ -91,4 +140,36 @@ def is_private_or_link_local(host: str) -> bool:
         or addr.is_unspecified
         or addr.is_reserved
         or addr.is_multicast
+        or not addr.is_global
+        or getattr(addr, "is_site_local", False)
     )
+
+
+def refuse_private_ip_literal(host: str | None, *, label: str) -> None:
+    """Raise ``ValueError`` if an outbound endpoint's host is a non-public IP.
+
+    ``host`` is a URL's ``hostname``. It is refused when it is an IP literal, in
+    any spelling :func:`parse_ip_literal` accepts (IPv4-mapped IPv6 included),
+    that :func:`is_private_or_link_local` classifies as non-public, on every
+    scheme. Loopback stays allowed, because a server on the same machine
+    (Ollama, vLLM, ``soup serve``) is a supported target. A hostname passes
+    unchanged and is NOT resolved, so this narrows which addresses a URL can
+    name directly; it does not make internal services unreachable by name. An
+    empty or missing host passes too: the caller's scheme check owns that case.
+    ``label`` names the setting in the message.
+    """
+    clean = (host or "").strip().lower().rstrip(".")
+    if clean.startswith("[") and clean.endswith("]"):
+        clean = clean[1:-1]
+    if not clean or clean in LOOPBACK_HOSTS:
+        return
+    addr = parse_ip_literal(clean)
+    if addr is None:
+        return
+    mapped = getattr(addr, "ipv4_mapped", None)
+    if (mapped if mapped is not None else addr).is_loopback:
+        return
+    if is_private_or_link_local(clean):
+        raise ValueError(
+            f"{label}: private/link-local/reserved IP hosts are not allowed (SSRF protection)"
+        )

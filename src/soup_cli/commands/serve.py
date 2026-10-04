@@ -26,6 +26,7 @@ logger = logging.getLogger(__name__)
 console = Console()
 
 
+
 def _validate_adapter_name(name: str) -> bool:
     """Validate adapter name: alphanumeric + hyphens only."""
     if not name:
@@ -99,7 +100,13 @@ def serve(
     device: Optional[str] = typer.Option(
         None,
         "--device",
-        help="Device: cuda, mps, cpu. Auto-detected if not set.",
+        help=(
+            "Device: cuda, cuda:<index>, mps or cpu. Auto-detected if not set. "
+            "With the transformers backend, cpu loads on the CPU in float32 "
+            "(unless --kv-cache-type bf16/f16 picks the dtype); cuda:<index> "
+            "and mps are pinned to that device; cuda uses device_map=auto, "
+            "all in float16."
+        ),
     ),
     max_tokens_default: int = typer.Option(
         512,
@@ -454,6 +461,18 @@ def serve(
             )
             raise typer.Exit(code=2)
 
+    if device:
+        from rich.markup import escape as _rich_escape
+
+        from soup_cli.utils.gpu import resolve_inference_device_map_and_dtype
+
+        device = device.strip().lower()
+        try:
+            resolve_inference_device_map_and_dtype(device)
+        except ValueError as exc:
+            console.print(f"[red]--device:[/] {_rich_escape(str(exc))}")
+            raise typer.Exit(code=2) from exc
+
     # v0.53.10 #152 — pre-fetch base from a non-HF hub before serve starts.
     if hub and hub != "hf":
         from soup_cli.utils.hubs import apply_hub_to_cli_model
@@ -695,7 +714,7 @@ def serve(
     console.print(
         Panel(
             f"Model:   [bold]{model_path}[/]\n"
-            + (f"Base:    [bold]{base_model}[/]\n" if is_adapter else "")
+            + (f"Base:    [bold]{for_terminal(base_model)}[/]\n" if is_adapter else "")
             + f"Device:  [bold]{device}[/]\n"
             f"Type:    [bold]{'LoRA adapter' if is_adapter else 'Full model'}[/]\n"
             f"Backend: [bold]{backend_label}[/]"
@@ -1343,16 +1362,23 @@ def _load_model(
     """Load model and tokenizer.
 
     ``kv_cache_dtype`` (v0.71.14 #140) selects the model compute dtype so the
-    transformers DynamicCache runs in it: ``"bfloat16"`` → bf16, else the
-    default float16. The bf16/f16 ``kv_cache_type`` values map here; q8_0 uses
+    transformers DynamicCache runs in it: ``"bfloat16"`` → bf16, ``"float16"``
+    → fp16, else the default (float16; float32 on ``device="cpu"``). The
+    bf16/f16 ``kv_cache_type`` values map here; q8_0 uses
     a quantized cache via generate kwargs and leaves the model dtype unchanged.
     """
     import torch
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
-    load_dtype = (
-        torch.bfloat16 if kv_cache_dtype == "bfloat16" else torch.float16
-    )
+    from soup_cli.utils.gpu import resolve_inference_device_map_and_dtype
+
+    device_map, default_dtype = resolve_inference_device_map_and_dtype(device)
+    if kv_cache_dtype == "bfloat16":
+        load_dtype = torch.bfloat16
+    elif kv_cache_dtype == "float16":
+        load_dtype = torch.float16
+    else:
+        load_dtype = default_dtype
 
     console.print("[dim]Loading tokenizer...[/]")
     tokenizer = AutoTokenizer.from_pretrained(
@@ -1364,11 +1390,11 @@ def _load_model(
     if is_adapter:
         from peft import PeftModel
 
-        console.print(f"[dim]Loading base model: {base_model}...[/]")
+        console.print(f"[dim]Loading base model: {for_terminal(base_model)}...[/]")
         base = AutoModelForCausalLM.from_pretrained(
             base_model,
             trust_remote_code=trust_remote_code,
-            device_map="auto",
+            device_map=device_map,
             torch_dtype=load_dtype,
         )
         console.print(f"[dim]Loading LoRA adapter: {model_path}...[/]")
@@ -1378,7 +1404,7 @@ def _load_model(
         model_obj = AutoModelForCausalLM.from_pretrained(
             model_path,
             trust_remote_code=trust_remote_code,
-            device_map="auto",
+            device_map=device_map,
             torch_dtype=load_dtype,
         )
 
@@ -1452,9 +1478,10 @@ def _load_draft_model(speculative_model: str, device: str):
     import os
     import re
 
-    import torch
     from rich.markup import escape
     from transformers import AutoModelForCausalLM
+
+    from soup_cli.utils.gpu import resolve_inference_device_map_and_dtype
 
     # SSRF protection: block URL-based model paths
     if re.match(r'^https?://', speculative_model):
@@ -1473,11 +1500,12 @@ def _load_draft_model(speculative_model: str, device: str):
 
         assert_safe_top_level_weights(speculative_model)
 
+    device_map, dtype = resolve_inference_device_map_and_dtype(device)
     console.print(f"[dim]Loading draft model: {escape(speculative_model)}...[/]")
     draft = AutoModelForCausalLM.from_pretrained(
         speculative_model,
-        device_map="auto" if device != "cpu" else "cpu",
-        torch_dtype=torch.float16 if device != "cpu" else torch.float32,
+        device_map=device_map,
+        torch_dtype=dtype,
     )
     draft.eval()
     return draft

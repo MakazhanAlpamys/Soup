@@ -106,18 +106,23 @@ class TestAugmentStrategies:
         with pytest.raises(ValueError):
             augment_style([{"x": "y"}], provider=FakeProvider(), styles=[])
 
-    def test_provider_exception_propagates(self):
-        """When provider raises, augment propagates the error (fail-loud)."""
+    def test_provider_exception_drops_row_and_counts_failure(self):
+        """A failing provider call drops the row instead of writing an
+        unrewritten/empty field, and is counted in ``stats`` (#1274)."""
         from soup_cli.data.augment import augment_rephrase
+        from soup_cli.utils.data_forge import ForgeJudgeStats
 
         class FailingProvider:
             def generate(self, prompt: str, max_tokens: int = 512) -> str:
                 raise RuntimeError("provider down")
 
-        with pytest.raises(RuntimeError, match="provider down"):
-            augment_rephrase(
-                [{"instruction": "x"}], provider=FailingProvider(), count=1,
-            )
+        stats = ForgeJudgeStats()
+        augmented = augment_rephrase(
+            [{"instruction": "x"}], provider=FailingProvider(), count=1, stats=stats,
+        )
+        assert augmented == []
+        assert (stats.calls, stats.failures) == (1, 1)
+        assert stats.first_error == "provider down"
 
 
 # ---------------------------------------------------------------------------

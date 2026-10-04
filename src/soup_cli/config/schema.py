@@ -395,6 +395,8 @@ class DataConfig(BaseModel):
         "raft",
         # v0.71.32 — ASR (Whisper): rows are {"audio": path, "text": transcript}
         "asr",
+        # Issue #1219 — Cross-encoder paired sequence classification
+        "cross_encoder",
     ] = Field(
         default="auto",
         description="Data format",
@@ -1270,9 +1272,10 @@ class TrainingConfig(BaseModel):
     freeze_trainable_layers: Optional[int] = Field(
         default=None,
         description=(
-            "LLaMA Pro: signed int. Positive = train only top-N decoder "
-            "layers; negative = train only bottom-N. Magnitude capped at "
-            "1000. (v0.41.0)"
+            "LLaMA Pro: applies only together with expand_layers and is "
+            "refused without it. A positive value freezes every parameter "
+            "except the appended blocks. Magnitude capped at 1000. "
+            "(v0.41.0)"
         ),
     )
     # v0.41.0 Part C schema / v0.71.12 #84 live — Mixture-of-Depths routing.
@@ -1543,7 +1546,12 @@ class TrainingConfig(BaseModel):
     @field_validator("online_dpo_judge", mode="before")
     @classmethod
     def _validate_online_dpo_judge_field(cls, value: Any) -> Optional[str]:
-        """v0.71.31 — shape-only validation (SSRF enforced at trainer setup)."""
+        """v0.71.31 — shape validation; the full SSRF policy runs at trainer setup.
+
+        A private / link-local / reserved IP literal in an http(s) judge URL is
+        refused here as well, so a shared soup.yaml naming one fails at load
+        instead of after the model download.
+        """
         if value is None:
             return None
         if isinstance(value, bool) or not isinstance(value, str):
@@ -1556,6 +1564,16 @@ class TrainingConfig(BaseModel):
             raise ValueError("online_dpo_judge must not contain null bytes")
         if len(value) > 512:
             raise ValueError("online_dpo_judge must be <= 512 chars")
+        from urllib.parse import urlparse
+
+        from soup_cli.utils.net_guard import refuse_private_ip_literal
+
+        try:
+            parsed = urlparse(value)
+        except ValueError as exc:
+            raise ValueError("online_dpo_judge is not a valid URL") from exc
+        if parsed.scheme in ("http", "https"):
+            refuse_private_ip_literal(parsed.hostname, label="online_dpo_judge")
         return value
 
     # v0.71.32 — ASR (Whisper) fine-tuning knobs.
@@ -4136,6 +4154,19 @@ class TrainingConfig(BaseModel):
                 "freezes the original layers and trains only the new blocks). "
                 "Set freeze_trainable_layers: <signed int>."
             )
+        if self.expand_layers is None and self.freeze_trainable_layers is not None:
+            raise ValueError(
+                "freeze_trainable_layers only applies together with "
+                "expand_layers (LLaMA Pro block expansion), where a positive "
+                "value trains only the appended blocks. Without expand_layers "
+                "nothing reads it, so the run trains as if it were unset. "
+                "Remove it, or set expand_layers: <int> to append new blocks."
+            )
+        # The expand_layers + quantization rule is enforced by
+        # SoupConfig._validate_expand_layers_quantization, which runs after
+        # _resolve_quantization_for_unhonouring_tasks so it reads the resolved
+        # value (an unset quantization on a #795 task has resolved to none by
+        # then and must not be refused here on its unresolved 4bit default).
         return self
 
     @model_validator(mode="after")
@@ -4170,6 +4201,34 @@ class TrainingConfig(BaseModel):
                 f"training.use_lorafa uses an AdamW-based gradient projection and is "
                 f"incompatible with training.optimizer={self.optimizer!r}. Leave optimizer "
                 f"unset (defaulting to adamw) or use 'adamw_torch'."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_loraplus_compat(self) -> "TrainingConfig":
+        """#1210 — refuse LoRA+ combinations that could only fail after the model loads.
+
+        build_loraplus_optimizer (called by attach_loraplus_optimizer and by PPO's
+        constructor injection) asks Trainer.get_optimizer_cls_and_kwargs(args) for the
+        optimizer without a model, and transformers builds these three only from one.
+        """
+        if self.loraplus_lr_ratio is None:
+            return self
+        if self.optimizer in ("apollo_adamw", "lomo", "adalomo"):
+            raise ValueError(
+                f"training.loraplus_lr_ratio cannot be combined with "
+                f"training.optimizer={self.optimizer!r}: LoRA+ builds its optimizer "
+                f"without the model, and transformers can only build {self.optimizer} "
+                f"from the model. Use an optimizer transformers can build without the "
+                f"model (for example adamw_torch) or remove loraplus_lr_ratio."
+            )
+        # build_loraplus_optimizer also refuses this at runtime; here it fails
+        # before the model is downloaded.
+        if self.use_galore:
+            raise ValueError(
+                "training.loraplus_lr_ratio and training.use_galore are mutually exclusive: "
+                "LoRA+ tunes LoRA A/B matrices while GaLore projects full-parameter "
+                "gradients. Enable one, not both."
             )
         return self
 
@@ -4860,6 +4919,51 @@ class SoupConfig(BaseModel):
         )
 
     @model_validator(mode="after")
+    def _validate_expand_layers_scope(self) -> "SoupConfig":
+        """#1325 - ``training.expand_layers`` (LLaMA Pro) is wired only in the
+        transformers text SFT/pretrain ``_setup_transformers`` paths. Every
+        other task/backend/modality accepts the fields and then silently
+        trains the unexpanded model, so refuse at load with the actual
+        task/backend/modality in the message."""
+        tcfg = self.training
+        if tcfg.expand_layers is None:
+            return self
+        if not (
+            self.task in {"sft", "pretrain"}
+            and self.backend == "transformers"
+            and self.modality == "text"
+        ):
+            raise ValueError(
+                "training.expand_layers (LLaMA Pro) is only wired for task "
+                "sft/pretrain on backend transformers with modality text; got "
+                f"task={self.task!r}, backend={self.backend!r}, "
+                f"modality={self.modality!r}. Remove expand_layers and "
+                "freeze_trainable_layers."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_expand_layers_quantization(self) -> "SoupConfig":
+        """v0.41.0 Part C — expand_layers requires an unquantized base.
+
+        Runs after ``_resolve_quantization_for_unhonouring_tasks`` so it reads the
+        RESOLVED quantization. For the #795 unhonoured tasks an unset
+        ``quantization`` has resolved to ``none`` by now, so a minimal config for
+        those tasks (which defaults the field to ``4bit``) is not wrongly refused;
+        the check fires only when the base actually trains quantised.
+        """
+        tcfg = self.training
+        if tcfg.expand_layers is not None and tcfg.quantization != "none":
+            raise ValueError(
+                "training.expand_layers (LLaMA Pro block expansion) requires "
+                f"training.quantization: none, but it is {tcfg.quantization!r}. "
+                "The appended blocks are zero-initialised and trained, which the "
+                "block-expansion path only supports on an unquantized base. "
+                "Set quantization: none."
+            )
+        return self
+
+    @model_validator(mode="after")
     def _validate_quest_first_slice(self) -> "SoupConfig":
         """Keep #674 on the one route supported by the measured prototype."""
         tcfg = self.training
@@ -5422,6 +5526,10 @@ class SoupConfig(BaseModel):
                     "model's native CSM/AutoProcessor training path until Soup has "
                     "a dedicated CSM trainer."
                 )
+            if self.data.format == "audio" and tcfg.tts_family in {"spark", "oute"}:
+                from soup_cli.utils.tts_codec import incompatible_live_codec_error
+
+                raise ValueError(str(incompatible_live_codec_error(tcfg.tts_family)))
             if tcfg.tts_emotion is not None:
                 try:
                     validate_emotion_tag(tcfg.tts_emotion, family=tcfg.tts_family)
@@ -5504,6 +5612,16 @@ class SoupConfig(BaseModel):
             raise ValueError(
                 "training.classifier_lora requires task in "
                 "(classifier, reranker, cross_encoder); "
+                f"got task={self.task!r}"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_cross_encoder_format(self) -> "SoupConfig":
+        """#1219 - only the cross_encoder trainer reads pair rows."""
+        if self.data.format == "cross_encoder" and self.task != "cross_encoder":
+            raise ValueError(
+                "data.format='cross_encoder' requires task='cross_encoder'; "
                 f"got task={self.task!r}"
             )
         return self
@@ -7169,6 +7287,9 @@ class SoupConfig(BaseModel):
 
         ``unlearn`` is refused in :meth:`_validate_unlearn_compat` for a
         different reason (it has an adapter but no ``Trainer`` optimizer).
+
+        The ``mlx`` backend is refused separately, in
+        :meth:`_validate_loraplus_backend` (#1324), after the MLX task gate.
         """
         tcfg = self.training
         if tcfg.loraplus_lr_ratio is None:
@@ -7400,6 +7521,32 @@ class SoupConfig(BaseModel):
             "is not yet implemented (upstream mlx-lm does not expose a "
             f"training helper). Use backend=transformers for task={self.task}."
         )
+
+    @model_validator(mode="after")
+    def _validate_loraplus_backend(self) -> "SoupConfig":
+        """#1324: ``loraplus_lr_ratio`` is not implemented on ``backend: mlx``.
+
+        MLX builds its LoRA adapter with ``mlx_lm``'s ``linear_to_lora_layers``
+        and its optimizer from a single learning rate (``plan_optimizer`` in
+        ``trainer/mlx_optim.py`` takes no parameter groups), so the ratio would
+        validate, print nothing in ``soup doctor --config``, and train A and B
+        at one learning rate. ``unsloth`` reaches the transformers wrappers'
+        ``attach_loraplus_optimizer`` call, so it stays allowed (#1080).
+
+        Defined after :meth:`_validate_mlx_task_support` and
+        :meth:`_validate_loraplus_has_a_trainable_lora_b` on purpose: a task
+        MLX cannot run, or one with no LoRA B matrix on any backend, is refused
+        for that reason first, so "use backend: transformers" below always
+        leads to a config that loads.
+        """
+        if self.backend == "mlx" and self.training.loraplus_lr_ratio is not None:
+            raise ValueError(
+                "Refused: training.loraplus_lr_ratio is not implemented on "
+                "backend='mlx' (the MLX optimizer uses one "
+                "learning rate for every LoRA tensor). Remove "
+                "training.loraplus_lr_ratio, or use backend: transformers."
+            )
+        return self
 
     @model_validator(mode="after")
     def _validate_uld_compat(self) -> "SoupConfig":

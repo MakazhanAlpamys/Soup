@@ -7,6 +7,8 @@ import hashlib
 import inspect
 import json
 import os
+import site
+import subprocess
 import sys
 import venv
 from pathlib import Path
@@ -309,6 +311,76 @@ def test_real_child_process_captures_full_trajectory_and_exits(monkeypatch, tmp_
     assert events[-1] == "clear_cache"
 
 
+def _venv_python(venv_dir):
+    return venv_dir / ("Scripts/python.exe" if sys.platform == "win32" else "bin/python")
+
+
+def _link_parent_site_packages(venv_dir: Path) -> None:
+    """#1408: a child venv created with system_site_packages=True from inside a
+    venv only sees the *base* interpreter's site-packages (sys.base_prefix),
+    not the outer venv's -- so third-party dependencies installed in the outer
+    venv per CONTRIBUTING (e.g. pydantic) are not importable in the child and
+    the worker exits before writing anything. Point the child at the parent's
+    site-packages (plus the src/ root) with a .pth file so the imports
+    resolve."""
+    if sys.prefix == sys.base_prefix:
+        return  # suite runs on a bare interpreter; the child already sees it
+    src_root = os.fspath(Path(__file__).resolve().parent.parent / "src")
+    entries = [p for p in [*site.getsitepackages(), src_root] if os.path.isdir(p)]
+    if not entries:
+        return
+    if sys.platform == "win32":
+        child_site = venv_dir / "Lib" / "site-packages"
+    else:
+        child_site = (
+            venv_dir
+            / f"lib/python{sys.version_info.major}.{sys.version_info.minor}"
+            / "site-packages"
+        )
+    (child_site / "soup-test-parent-packages.pth").write_text(
+        "\n".join(entries) + "\n", encoding="utf-8"
+    )
+
+
+def test_link_parent_site_packages_exposes_the_parents_packages_to_the_child(
+    monkeypatch, tmp_path
+):
+    """#1408: a package that lives only in the parent's site-packages must become
+    importable in a child venv made with system_site_packages=True."""
+    parent_site = tmp_path / "parent-site-packages"
+    parent_site.mkdir()
+    (parent_site / "soup_parent_only_pkg.py").write_text("VALUE = 7\n", encoding="utf-8")
+    venv_dir = tmp_path / "worker-venv"
+    venv.create(venv_dir, with_pip=False, system_site_packages=True)
+    probe = [
+        os.fspath(_venv_python(venv_dir)),
+        "-c",
+        "import soup_parent_only_pkg as module; print(module.VALUE)",
+    ]
+
+    before = subprocess.run(probe, capture_output=True, text=True, timeout=60)
+    assert before.returncode != 0, "the child must not see the parent-only package yet"
+
+    # behave as if the suite ran from a venv whose site-packages is `parent_site`
+    monkeypatch.setattr(sys, "prefix", os.fspath(tmp_path / "outer-venv"))
+    monkeypatch.setattr(site, "getsitepackages", lambda: [os.fspath(parent_site)])
+    _link_parent_site_packages(venv_dir)
+
+    after = subprocess.run(probe, capture_output=True, text=True, timeout=60)
+    assert after.returncode == 0, after.stderr
+    assert after.stdout.strip() == "7"
+
+
+def test_link_parent_site_packages_writes_nothing_on_a_bare_interpreter(monkeypatch, tmp_path):
+    venv_dir = tmp_path / "worker-venv"
+    venv.create(venv_dir, with_pip=False, system_site_packages=True)
+    monkeypatch.setattr(sys, "prefix", sys.base_prefix)
+
+    _link_parent_site_packages(venv_dir)
+
+    assert not list(venv_dir.rglob("*.pth"))
+
+
 def test_worker_verification_survives_a_real_venv_launcher(monkeypatch, tmp_path):
     """#898's positive acceptance criterion -- the six real-child tests above
     pass when the worker is spawned through a Windows venv -- had no
@@ -321,8 +393,21 @@ def test_worker_verification_survives_a_real_venv_launcher(monkeypatch, tmp_path
     run, just not a discriminating one on that platform)."""
     venv_dir = tmp_path / "worker-venv"
     venv.create(venv_dir, with_pip=False, system_site_packages=True)
+    _link_parent_site_packages(venv_dir)
     venv_python = venv_dir / ("Scripts/python.exe" if sys.platform == "win32" else "bin/python")
     assert venv_python.is_file()
+
+    # #1408: name the missing dependency instead of surfacing an empty
+    # "worker exited with 1:" when the .pth link is absent or broken.
+    probe = subprocess.run(
+        [os.fspath(venv_python), "-c", "import pydantic"],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert probe.returncode == 0, (
+        f"worker-venv cannot import the suite's dependencies: {probe.stderr}"
+    )
 
     plan, teacher_root, tokenizer_root, dataset_root = _local_plan(tmp_path)
     fake_root = _write_fake_mlx_runtime(tmp_path)

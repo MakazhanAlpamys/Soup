@@ -23,7 +23,10 @@ FAILURE_MODES: Tuple[str, ...] = (
     "citation",
 )
 
-VERDICTS: Tuple[str, ...] = ("OK", "MINOR", "MAJOR")
+# ``NOT_RUN`` = a requested probe produced no measurement (#1435). It is not a
+# pass: it ranks above MINOR in ``overall_verdict`` so an unmeasured probe can
+# never read as OK.
+VERDICTS: Tuple[str, ...] = ("OK", "MINOR", "MAJOR", "NOT_RUN")
 
 # Thresholds (lower bound for verdict). Score >= 0.85 → OK; >= 0.60 → MINOR.
 _OK_THRESHOLD: float = 0.85
@@ -59,7 +62,11 @@ def classify_score(score: float) -> str:
 
 @dataclass(frozen=True)
 class FailureScore:
-    """Per-mode score with an OK / MINOR / MAJOR verdict + evidence line."""
+    """Per-mode score with an OK / MINOR / MAJOR / NOT_RUN verdict + evidence line.
+
+    ``NOT_RUN`` carries ``score == 0.0`` (no measurement was made) and is exempt
+    from the score/verdict agreement check.
+    """
 
     mode: str
     score: float
@@ -75,7 +82,10 @@ class FailureScore:
         expected = classify_score(self.score)
         if not isinstance(self.verdict, str) or self.verdict not in VERDICTS:
             raise ValueError(f"verdict must be one of {VERDICTS}, got {self.verdict!r}")
-        if self.verdict != expected:
+        if self.verdict == "NOT_RUN":
+            if float(self.score) != 0.0:
+                raise ValueError("a NOT_RUN score must be 0.0 (no measurement was made)")
+        elif self.verdict != expected:
             raise ValueError(
                 f"verdict {self.verdict!r} disagrees with score "
                 f"{self.score} (expected {expected!r})"
@@ -88,15 +98,26 @@ class FailureScore:
             raise ValueError("evidence too long (max 4096 chars)")
 
 
+def evidence_default_score(entry: Mapping[str, object]) -> float:
+    """Score assumed when an evidence entry omits ``score``.
+
+    ``NOT_RUN`` entries carry no measurement, so they default to 0.0 (the only
+    score ``FailureScore`` accepts for them); everything else defaults to 1.0.
+    Shared by the CLI, ``train --diagnose-gate`` and the MCP evidence parsers.
+    """
+    return 0.0 if entry.get("verdict") == "NOT_RUN" else 1.0
+
+
 def overall_verdict(scores: Mapping[str, FailureScore]) -> str:
     """Worst-case across all modes; empty → ``OK``.
 
-    Used as the headline badge value. MAJOR wins, then MINOR, then OK.
+    Used as the headline badge value. MAJOR wins, then NOT_RUN (an unmeasured
+    probe is worse than a known MINOR), then MINOR, then OK.
     """
     if not isinstance(scores, Mapping):
         raise TypeError("scores must be Mapping[str, FailureScore]")
     worst = "OK"
-    rank = {"OK": 0, "MINOR": 1, "MAJOR": 2}
+    rank = {"OK": 0, "MINOR": 1, "NOT_RUN": 2, "MAJOR": 3}
     for value in scores.values():
         if not isinstance(value, FailureScore):
             raise TypeError("every entry must be FailureScore")
