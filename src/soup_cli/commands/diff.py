@@ -10,6 +10,8 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
+from soup_cli.utils.terminal import for_terminal
+
 console = Console()
 
 
@@ -126,7 +128,7 @@ def diff(
     results = []
     for idx, prompt_text in enumerate(prompt_list):
         console.print(f"[bold]--- Prompt {idx + 1}/{len(prompt_list)} ---[/]")
-        console.print(f"[dim]{prompt_text}[/]\n")
+        console.print(f"[dim]{for_terminal(prompt_text)}[/]\n")
 
         messages = [{"role": "user", "content": prompt_text}]
 
@@ -141,14 +143,14 @@ def diff(
 
         # Side-by-side display
         panel_a = Panel(
-            response_a or "[dim]<empty>[/]",
-            title=f"[blue]Model A: {path_a.name}[/]",
+            for_terminal(response_a) if response_a else "[dim]<empty>[/]",
+            title=f"[blue]Model A: {for_terminal(path_a.name)}[/]",
             border_style="blue",
             width=console.width // 2 - 1,
         )
         panel_b = Panel(
-            response_b or "[dim]<empty>[/]",
-            title=f"[green]Model B: {path_b.name}[/]",
+            for_terminal(response_b) if response_b else "[dim]<empty>[/]",
+            title=f"[green]Model B: {for_terminal(path_b.name)}[/]",
             border_style="green",
             width=console.width // 2 - 1,
         )

@@ -974,9 +974,9 @@ def human(
 
         # Display for human judgment
         console.print(f"\n[bold]--- Prompt {idx + 1}/{len(prompts)} ---[/]")
-        console.print(Panel(prompt_text, title="Prompt", border_style="dim"))
-        console.print(Panel(resp_a, title="[blue]Response A[/]"))
-        console.print(Panel(resp_b, title="[magenta]Response B[/]"))
+        console.print(Panel(for_terminal(prompt_text), title="Prompt", border_style="dim"))
+        console.print(Panel(for_terminal(resp_a), title="[blue]Response A[/]"))
+        console.print(Panel(for_terminal(resp_b), title="[magenta]Response B[/]"))
 
         # Get human choice
         while True:
