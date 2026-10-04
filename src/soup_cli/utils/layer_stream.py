@@ -18,6 +18,7 @@ stay resident.
 """
 
 import math
+import os
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Optional, Sequence, Tuple, Union
 
@@ -184,6 +185,98 @@ OPTIMIZER_BYTES_PER_PARAM = 16
 #: and a 0.5B model alike, so it is charged as a constant rather than scaled.
 STREAM_FIXED_SLACK_BYTES = 13_500_000
 
+#: cuBLAS workspace size (in KiB) per handle-stream pair below compute
+#: capability 9 — PyTorch's documented default ``:4096:2:16:8``
+#: (4096 x 2 + 16 x 8 KiB). The 13.5 MB slack above was fitted on an
+#: RTX 3050 (compute capability 8.6) WITH two such workspaces already live,
+#: so they are implicitly part of that constant.
+CUBLAS_WORKSPACE_KIB_BELOW_CC9 = 4096 * 2 + 16 * 8  # 8_320
+
+#: cuBLAS workspace size per handle-stream pair on compute capability 9-12
+#: (Hopper, Blackwell): PyTorch's current source asks cuBLAS for 32 MiB there.
+CUBLAS_WORKSPACE_BYTES_CC9_AND_ABOVE = 32 * 1024 * 1024
+
+#: A streamed training step holds two cuBLAS workspaces: one for the thread
+#: that runs the forward, one for autograd's CUDA thread that runs the backward
+#: (the second appears with the first backward). Handles come from a
+#: ``thread_local`` pool, so the autograd thread gets its own; both are
+#: allocated through the caching allocator and therefore counted by
+#: ``torch.cuda.max_memory_allocated()`` — the quantity this estimator predicts
+#: (#1407).
+CUBLAS_WORKSPACE_PAIRS_PER_STEP = 2
+
+
+def _parse_cublas_workspace_config(config: str) -> int:
+    """Bytes of one cuBLAS workspace from a ``CUBLAS_WORKSPACE_CONFIG`` value.
+
+    The format is ``:SIZE:COUNT[:SIZE:COUNT]...`` with SIZE in KiB; the total
+    is the sum of ``SIZE x COUNT`` over all segments and ``:0:0`` means no
+    workspace at all. PyTorch reads the variable once per process, so this
+    value must be captured in the environment the run actually started with.
+    """
+    total_kib = 0
+    parts = config.strip().split(":")
+    if len(parts) < 3 or len(parts) % 2 == 0:
+        raise ValueError(
+            "CUBLAS_WORKSPACE_CONFIG must look like :SIZE:COUNT[:SIZE:COUNT] "
+            "with sizes in KiB; got {config!r}"
+        )
+    try:
+        for size, count in zip(parts[1::2], parts[2::2]):
+            total_kib += int(size) * int(count)
+    except ValueError as exc:
+        raise ValueError(
+            f"CUBLAS_WORKSPACE_CONFIG must look like :SIZE:COUNT[:SIZE:COUNT] "
+            f"with integer sizes/counts; got {config!r}"
+        ) from exc
+    return total_kib * 1024
+
+
+def cublas_workspace_bytes(
+    config: Optional[str] = None, *, compute_capability: Optional[int] = None
+) -> int:
+    """Bytes of ONE cuBLAS handle-stream workspace for this stack.
+
+    ``CUBLAS_WORKSPACE_CONFIG`` wins when set (the operator sized the workspace
+    deliberately, and PyTorch honours it whatever the device). Otherwise
+    PyTorch's device rule applies: 32 MiB per pair on compute capability 9-12
+    (Hopper, Blackwell), the ``:4096:2:16:8`` default (8,320 KiB) below that.
+    The rule is mirrored, not read from torch, so it can go stale if PyTorch
+    changes its thresholds — the arithmetic is pinned on CPU in
+    ``tests/test_issue1407_cublas_workspaces.py``.
+    """
+    if config is None:
+        config = os.environ.get("CUBLAS_WORKSPACE_CONFIG") or None
+    if config is not None:
+        return _parse_cublas_workspace_config(config)
+    if compute_capability is None:
+        return CUBLAS_WORKSPACE_KIB_BELOW_CC9 * 1024
+    if compute_capability in (9, 10, 11, 12):
+        return CUBLAS_WORKSPACE_BYTES_CC9_AND_ABOVE
+    return CUBLAS_WORKSPACE_KIB_BELOW_CC9 * 1024
+
+
+def stream_cublas_workspaces_bytes(
+    config: Optional[str] = None, *, compute_capability: Optional[int] = None
+) -> int:
+    """Bytes ``estimate_stream_peak_vram`` charges for cuBLAS workspaces.
+
+    ``STREAM_FIXED_SLACK_BYTES`` was fitted on a compute-capability-8.6 card
+    with two default 8,320 KiB workspaces live, so that baseline is already
+    inside the constant. Only the EXCESS of the current stack's workspaces over
+    the fitted baseline is charged here: on the fitted card this is 0 (the grid
+    in ``tests/test_v07203.py`` stays pinned), on Hopper/Blackwell it is
+    2 x (32 MiB - 8,320 KiB) = 50,069,504 bytes, and a smaller
+    ``CUBLAS_WORKSPACE_CONFIG`` contributes 0 because the slack then covers it.
+    The residual 2 x 8,320 KiB on a Hopper-class card stays uncharged — the
+    trade-off that keeps the fitted constant honest rather than re-derived on
+    hardware this project does not own (#1407).
+    """
+    baseline = CUBLAS_WORKSPACE_KIB_BELOW_CC9 * 1024
+    size = cublas_workspace_bytes(config, compute_capability=compute_capability)
+    return CUBLAS_WORKSPACE_PAIRS_PER_STEP * max(0, size - baseline)
+
+
 #: Fraction of the *measured same-session GEMM ceiling* that real streamed
 #: training actually reached on the dev box: 68% (Llama-3.1-8B NF4, 5.26 of
 #: 7.74 TFLOPS) up to ~100% (small models, fully pinned store). A forecast
@@ -305,6 +398,7 @@ DISK_KINDS = (_NVME, "ssd", "hdd", "unknown")
 #: thunk form so the ~9 s Windows probe is paid only when the tier decision
 #: actually depends on the answer.
 DiskKind = Union[str, Callable[[], str]]
+
 
 @dataclass(frozen=True)
 class DiskClassification:
@@ -707,11 +801,16 @@ def _probe_disk_kind(path: str) -> DiskClassification:
                 return DiskClassification("unknown")
             out = subprocess.run(
                 [
-                    shell, "-NoProfile", "-NonInteractive", "-Command",
-                    "Get-PhysicalDisk | Select-Object MediaType,BusType "
-                    "| ConvertTo-Json -Compress",
+                    shell,
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-Command",
+                    "Get-PhysicalDisk | Select-Object MediaType,BusType | ConvertTo-Json -Compress",
                 ],
-                capture_output=True, text=True, timeout=60, check=False,
+                capture_output=True,
+                text=True,
+                timeout=60,
+                check=False,
             )
             if out.returncode != 0 or not out.stdout.strip():
                 return DiskClassification("unknown")
@@ -774,9 +873,7 @@ def choose_tier(
     that are actually about to use the disk tier.
     """
     physical_limit = (
-        None
-        if total_ram_bytes is None
-        else total_ram_bytes * PHYSICAL_RAM_TIER_HEADROOM
+        None if total_ram_bytes is None else total_ram_bytes * PHYSICAL_RAM_TIER_HEADROOM
     )
     resident_store_bytes = store_bytes + int(resident_bytes)
     fits_available_ram = resident_store_bytes < free_ram_bytes * headroom
@@ -812,9 +909,7 @@ def choose_tier(
         )
     )
     resident_note = (
-        ""
-        if resident_bytes == 0
-        else f" plus {resident_bytes / 1e9:.1f} GB of resident extras"
+        "" if resident_bytes == 0 else f" plus {resident_bytes / 1e9:.1f} GB of resident extras"
     )
     raise ValueError(
         f"layer streaming needs NVMe or more RAM: the base needs "
@@ -1202,14 +1297,20 @@ def estimate_stream_peak_vram(
     dtype: str = "bfloat16",
     logits_bytes_per_element: Optional[float] = None,
     large_layer_bytes: int = 0,
+    cublas_workspaces_bytes: int = 0,
 ) -> int:
     """Predicted ``torch.cuda.max_memory_allocated()`` for a streaming step.
 
     Assembles the GATE 2 terms. Validated against 10 real runs across two models
     (a 3.1x vocab contrast), batch 1..8 and two sequence lengths: **worst
     absolute error 0.85%, and it never under-predicts** — the only safe direction
-    for a number that is allowed to refuse a run. An independent check against
-    the published v0.72.2 Llama-3.1-8B NF4 row (untied embeddings, different
+    for a number that is allowed to refuse a run. That grid was measured on a
+    compute-capability-8.6 card (two default 8,320 KiB cuBLAS workspaces live);
+    the pre-flight additionally charges the EXCESS of the current stack's cuBLAS
+    workspaces over that baseline via ``cublas_workspaces_bytes`` (#1407), so on
+    Hopper/Blackwell the residual 2 x 8,320 KiB is covered by the fitted
+    constant only to the extent that it over-predicts. An independent check
+    against the published v0.72.2 Llama-3.1-8B NF4 row (untied embeddings, different
     quantisation, different session, nothing fitted to it) brackets it at +7.5%.
 
     ``extras_bytes`` contains only the genuinely resident non-decoder weights.
@@ -1234,6 +1335,7 @@ def estimate_stream_peak_vram(
         + extras_bytes
         + estimate_optimizer_bytes(adapter_params)
         + STREAM_FIXED_SLACK_BYTES
+        + cublas_workspaces_bytes
         + estimate_activation_bytes(
             hidden_size=hidden_size,
             intermediate_size=intermediate_size,
@@ -1357,9 +1459,7 @@ def decide_measured_fit(
     )
 
 
-def resolve_available_vram_bytes(
-    *, measured_bytes: int, override_bytes: Optional[int]
-) -> int:
+def resolve_available_vram_bytes(*, measured_bytes: int, override_bytes: Optional[int]) -> int:
     """The free-VRAM figure the pre-flight fit check measures against.
 
     ``mem_get_info()`` is a device-level driver query, so it cannot see a
@@ -1394,9 +1494,7 @@ def accumulation_advice(*, batch_size: int, accum: int) -> Optional[str]:
     advice is only worth printing when there might be VRAM headroom to spend.
     """
     if batch_size <= 0 or accum <= 0:
-        raise ValueError(
-            f"batch_size and accum must be positive; got {batch_size}, {accum}"
-        )
+        raise ValueError(f"batch_size and accum must be positive; got {batch_size}, {accum}")
     if accum == 1:
         return None
     return (
@@ -1572,9 +1670,7 @@ def build_stream_plan(
     resident_bytes = int(embed_bytes)
     model_bytes = host_store_bytes + resident_bytes
     physical_limit = (
-        None
-        if total_ram_bytes is None
-        else total_ram_bytes * PHYSICAL_RAM_TIER_HEADROOM
+        None if total_ram_bytes is None else total_ram_bytes * PHYSICAL_RAM_TIER_HEADROOM
     )
     available_budget_exceeded = (
         model_bytes >= available_ram_bytes * RAM_TIER_HEADROOM
