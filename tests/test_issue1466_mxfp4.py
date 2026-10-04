@@ -187,7 +187,7 @@ def test_sft_and_online_dpo_keep_mxfp4_out_of_kbit_prep(filename):
 
 
 class TestHardwareFit:
-    """The pre-flight prices what is loaded: a dequantized model is bf16."""
+    """The hardware-fit calculator prices what is loaded: a dequantized model is bf16."""
 
     @staticmethod
     def _weights_gb(quant: str) -> float:
