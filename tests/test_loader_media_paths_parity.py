@@ -1,4 +1,4 @@
-"""Image and audio paths resolve the same way on every load path (#PR).
+"""Image and audio paths resolve the same way on every load path (#1599).
 
 Only three loaders used to resolve the ``image`` / ``audio`` value of a vision
 or audio row: the single local file, the eager per-file interleave and the
