@@ -22,12 +22,20 @@ def soup_callback_kwargs(
     batch_size: Optional[int] = None,
     output_dir: Optional[str] = None,
     include_eval_gate: bool = True,
+    task: Optional[str] = None,
 ) -> dict[str, Any]:
     """Shared kwargs for :class:`SoupTrainerCallback` across all trainers (#802).
 
     Unifies watchdog, spike recovery, and grad-accum parameters so they cannot
     drift across trainer implementations.
+
+    ``task`` picks the run's validation metric from
+    :data:`soup_cli.utils.eval_schedule.VALIDATION_METRICS` (#1389): every task
+    records ``eval_loss`` as ``val_loss`` unless the table says otherwise, so only
+    a trainer whose evaluation is scored differently (``grpo``: the held-out
+    reward) needs to pass it.
     """
+    from soup_cli.utils.eval_schedule import validation_metric
     resolved_batch = 1
     if batch_size is not None and not isinstance(batch_size, bool):
         try:
@@ -60,6 +68,7 @@ def soup_callback_kwargs(
             tcfg, "gradient_accumulation_steps", 1
         ),
         "grad_accum_current_batch": resolved_batch,
+        "val_metric": validation_metric(task),
     }
     if include_eval_gate:
         kwargs["eval_gate_config"] = getattr(tcfg, "eval_gate", None)
@@ -121,12 +130,21 @@ class _SoupTrainerCallback_body:  # noqa: N801
         grad_accum_total_vram_gb: float = 24.0,
         grad_accum_current_steps: int = 1,
         grad_accum_current_batch: int = 1,
+        val_metric: Optional[object] = None,
     ):
+        from soup_cli.utils.eval_schedule import DEFAULT_VALIDATION_METRIC
+
         self.display = display
         self.tracker = tracker
         self.run_id = run_id
         self.eval_config = eval_config
         self.output_dir = output_dir
+        #: Which evaluation entry is this run's validation number, and under
+        #: what name it is recorded (#1389). ``eval_loss`` -> ``val_loss`` for
+        #: every task but the generation-scored ones; grpo records
+        #: ``eval_reward`` as ``val_reward`` and its ``eval_loss``, the policy
+        #: objective, reaches no sink.
+        self._val_metric = val_metric or DEFAULT_VALIDATION_METRIC
         # HF emits a summary-only ``on_log`` event after the final optimizer
         # step. It has runtime/throughput fields but no loss/LR/grad norm. Keep
         # the last real values so that event cannot reset the dashboards and
@@ -280,8 +298,12 @@ class _SoupTrainerCallback_body:  # noqa: N801
         # `_last_loss` untouched and re-reported the stale training number to
         # every sink at the same step, so the evaluated value existed nowhere.
         # It is kept as a separate series and never folded into `loss`.
-        if logs.get("eval_loss") is not None:
-            self._last_val_loss = logs["eval_loss"]
+        # Which entry that is depends on the task (#1389): `eval_loss` for a
+        # likelihood-scored task, `eval_reward` for grpo, where `eval_loss` is
+        # the policy objective and is deliberately not read.
+        val_key, val_field = self._val_metric.log_key, self._val_metric.field
+        if logs.get(val_key) is not None:
+            self._last_val_loss = logs[val_key]
         loss = self._last_loss
         lr = self._last_lr
         display_grad_norm = self._last_grad_norm
@@ -300,18 +322,18 @@ class _SoupTrainerCallback_body:  # noqa: N801
         # would be inconsistent to reject 0.0 there and accept a carried value
         # here.
         display_val_loss = self._last_val_loss
-        measured_val_loss = logs.get("eval_loss")
+        measured_val_loss = logs.get(val_key)
         speed = logs.get("train_steps_per_second", 0.0)
 
         self.display.update(
             step=step,
             epoch=epoch,
             loss=loss,
-            val_loss=display_val_loss,
             lr=lr,
             grad_norm=display_grad_norm,
             speed=speed,
             gpu_mem=gpu_mem,
+            **{val_field: display_val_loss},
         )
 
         # v0.53.9 #94 — push to the global SSE buffer so the live Web UI
@@ -329,17 +351,19 @@ class _SoupTrainerCallback_body:  # noqa: N801
                     # `is not None`, not truthiness — a real 0.0 loss / lr (e.g.
                     # end of an LR schedule) must not be reported as None.
                     loss=float(loss) if loss is not None else None,
-                    val_loss=(
-                        float(measured_val_loss)
-                        if measured_val_loss is not None
-                        else None
-                    ),
                     lr=float(lr) if lr is not None else None,
                     grad_norm=(
                         float(measured_grad_norm)
                         if measured_grad_norm is not None
                         else None
                     ),
+                    **{
+                        val_field: (
+                            float(measured_val_loss)
+                            if measured_val_loss is not None
+                            else None
+                        )
+                    },
                 )
             )
         except Exception:
@@ -422,11 +446,11 @@ class _SoupTrainerCallback_body:  # noqa: N801
                 step=step,
                 epoch=epoch,
                 loss=loss,
-                val_loss=measured_val_loss,
                 lr=lr,
                 grad_norm=measured_grad_norm,
                 speed=speed,
                 gpu_mem=gpu_mem,
+                **{val_field: measured_val_loss},
             )
 
     def on_epoch_end(
