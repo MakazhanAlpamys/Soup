@@ -149,7 +149,12 @@ def _inet_aton_part(part: str) -> int | None:
             base, digits = 8, part[1:]
     if not digits or not set(digits) <= _INET_ATON_DIGITS[base]:
         return None  # includes a bare "0x", which needs at least one hex digit
-    return int(digits, base)
+    try:
+        return int(digits, base)
+    except ValueError:
+        # int() refuses decimal text longer than sys.get_int_max_str_digits()
+        # (4300 digits by default). A number that long is far out of range.
+        return None
 
 
 def inet_aton(text: str) -> int | None:

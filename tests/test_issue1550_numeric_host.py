@@ -379,3 +379,72 @@ def test_embedded_and_plain_addresses_are_untouched() -> None:
     assert parse_ip_literal("0xa.1") == ipaddress.IPv4Address("10.0.0.1")
     assert parse_ip_literal("::ffff:10.0.0.1") is not None
     assert _refusal("::ffff:10.0.0.1").startswith(f"x: {_NON_PUBLIC}")
+
+
+# --- a number longer than int() converts --------------------------------------
+
+# int() refuses decimal text longer than sys.get_int_max_str_digits() with a
+# ValueError. Such a number is far out of range: it is no address, and the
+# parser says so with None, as it does for every other text it does not read.
+LONG_DECIMAL = [
+    pytest.param("9" * 4301, id="one-part-4301-digits"),
+    pytest.param("9" * 20000, id="one-part-20000-digits"),
+    pytest.param("10." + "9" * 5000, id="last-part-5000-digits"),
+    pytest.param("9" * 5000 + ".0.0.1", id="first-part-5000-digits"),
+]
+
+
+@pytest.fixture
+def default_int_limit():
+    """Pin the interpreter's default limit, whatever the environment set."""
+    import sys
+
+    previous = sys.get_int_max_str_digits()
+    sys.set_int_max_str_digits(4300)
+    yield
+    sys.set_int_max_str_digits(previous)
+
+
+@pytest.mark.usefixtures("default_int_limit")
+@pytest.mark.parametrize("host", LONG_DECIMAL)
+def test_a_number_longer_than_int_converts_is_no_address_and_no_error(host: str) -> None:
+    """The parser answers None; it does not let int()'s ValueError out."""
+    assert inet_aton(host) is None
+    assert parse_ip_literal(host) is None
+
+
+@pytest.mark.usefixtures("default_int_limit")
+@pytest.mark.parametrize("host", LONG_DECIMAL)
+def test_a_very_long_numeric_host_is_refused_like_any_other(host: str) -> None:
+    """Both predicates give their usual answer, with the usual message."""
+    assert is_private_or_link_local(host) is True
+    assert _refusal(host) == f"x: {_NUMERIC}"
+
+
+@pytest.mark.usefixtures("default_int_limit")
+@pytest.mark.parametrize("host", LONG_DECIMAL)
+def test_a_very_long_numeric_host_does_not_raise_in_the_callers(
+    monkeypatch: pytest.MonkeyPatch, host: str
+) -> None:
+    """Callers that return a bool keep returning one."""
+    from soup_cli.utils import trackers
+    from soup_cli.utils.ingest_pull import _is_loopback, _is_private
+    from soup_cli.utils.loop_stages import _endpoint_is_local
+
+    def resolver(name: str, **_kwargs: object) -> list[str]:
+        raise AssertionError("the resolver must not be reached")
+
+    monkeypatch.setattr(trackers, "_resolve_host_ips", resolver)
+    assert _endpoint_is_local(f"https://{host}") is False
+    assert _is_loopback(host) is False
+    assert _is_private(f"https://{host}") is True
+    assert trackers._telemetry_endpoint_is_safe(f"https://{host}/i/v0/e/") is False
+
+
+@pytest.mark.usefixtures("default_int_limit")
+def test_a_long_run_of_zeros_before_a_valid_number_still_reads() -> None:
+    """Length alone refuses nothing: octal and hex text of any length converts."""
+    assert inet_aton("0" * 5000 + "12") == 10
+    assert inet_aton("0x" + "0" * 5000 + "a") == 10
+    assert inet_aton("0x" + "f" * 5000) is None
+    assert inet_aton("0" + "7" * 5000) is None
