@@ -188,7 +188,7 @@ class TestSchemaBlockExpansion:
         match = (
             "requires training.quantization: none"
             if freeze == 4
-            else "freeze_trainable_layers: -?\d+ does not match expand_layers: 4"
+            else r"freeze_trainable_layers: -?\d+ does not match expand_layers: 4"
         )
         with pytest.raises(ValidationError, match=match):
             _sft(
