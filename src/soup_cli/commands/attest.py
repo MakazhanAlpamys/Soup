@@ -343,7 +343,7 @@ def verify_cmd(
 
     if backend != "ed25519" or not sig_hex:
         console.print(
-            f"[yellow]Signature backend {escape(backend or 'unsigned')!r} "
+            f"[yellow]Signature backend {for_terminal(repr(backend or 'unsigned'))} "
             "is not cryptographically verifiable.[/]"
         )
         raise typer.Exit(3)

@@ -63,7 +63,7 @@ class GateTask(BaseModel):
     tasks: Optional[str] = Field(
         default=None, description="JSONL file of custom eval tasks",
     )
-    scorer: Optional[Literal["exact", "contains", "regex", "semantic"]] = Field(
+    scorer: Optional[Literal["exact", "contains", "answer", "regex", "semantic"]] = Field(
         default=None, description="Scorer for type=custom",
     )
     # type=judge
@@ -95,7 +95,15 @@ class GateTask(BaseModel):
         # Allowlist of schemes — SSRF hardening consistent with the project.
         parsed = urlparse(value)
 
-        if parsed.scheme in ("ollama","https"):
+        if parsed.scheme == "ollama":
+            return value
+
+        if parsed.scheme == "https":
+            # A private IP literal is refused when the suite is parsed, so a
+            # suite file cannot name one any more than --judge-model can.
+            from soup_cli.utils.net_guard import refuse_private_ip_literal
+
+            refuse_private_ip_literal(parsed.hostname, label="judge_model URL")
             return value
 
         if (parsed.scheme == "http" and parsed.hostname in {"localhost", "127.0.0.1"}):
@@ -534,7 +542,7 @@ def _run_custom_task(
     """Run a type=custom task and return its aggregate score in [0, 1]."""
     from dataclasses import replace
 
-    from soup_cli.eval.custom import load_eval_tasks, score_task
+    from soup_cli.eval.custom import load_eval_tasks, require_single_answer, score_task
 
     if not task.tasks:
         raise ValueError(f"task '{task.name}' is type=custom but 'tasks' is missing")
@@ -542,6 +550,9 @@ def _run_custom_task(
     if not tasks:
         return 0.0
     # Override scoring if the suite specified one (EvalTask.scoring field)
+    if task.scorer == "answer":
+        for row, eval_task in enumerate(tasks, start=1):
+            require_single_answer(eval_task.expected, f"task '{task.name}' row {row}")
     if task.scorer is not None:
         tasks = [replace(t, scoring=task.scorer) for t in tasks]
     total = 0.0

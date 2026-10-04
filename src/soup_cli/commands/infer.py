@@ -585,11 +585,13 @@ def _infer_asr(
             hyp = transcribe(resolved)
         except (ValueError, OSError, ImportError) as exc:
             skipped += 1
-            # Escape + control-strip the dataset-derived filename AND the
-            # exception (whose message embeds that filename) before printing.
-            name = for_terminal(Path(str(audio)).name)
+            # Quote the dataset-derived filename first, then escape and
+            # control-strip it (repr() after the escape would double the
+            # escape's backslash and make a tag live again); the exception,
+            # whose message embeds that filename, is escaped too.
+            name = for_terminal(repr(Path(str(audio)).name))
             console.print(
-                f"[yellow]Skipped {name!r}: {for_terminal(str(exc))}[/]"
+                f"[yellow]Skipped {name}: {for_terminal(str(exc))}[/]"
             )
             continue
         rec = {"audio": audio, "transcription": hyp}
@@ -603,9 +605,9 @@ def _infer_asr(
                 row_wer = wer(ref, hyp)
                 row_cer = cer(ref, hyp)
             except ValueError as exc:
-                name = for_terminal(Path(str(audio)).name)
+                name = for_terminal(repr(Path(str(audio)).name))
                 console.print(
-                    f"[yellow]Metric skipped for {name!r}: "
+                    f"[yellow]Metric skipped for {name}: "
                     f"{for_terminal(str(exc))}[/]"
                 )
             else:
@@ -664,13 +666,15 @@ def _load_model(
     is_local: Optional[bool] = None,
 ) -> tuple:
     """Load a model and tokenizer (reuses diff.py pattern)."""
-    import torch
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
+    from soup_cli.utils.gpu import resolve_inference_device_map_and_dtype
     from soup_cli.utils.trust_remote import (
         model_requires_trust_remote_code,
         resolve_trust_remote_code,
     )
+
+    device_map, torch_dtype = resolve_inference_device_map_and_dtype(device)
 
     if is_local is None:
         try:
@@ -717,16 +721,16 @@ def _load_model(
         base_obj = AutoModelForCausalLM.from_pretrained(
             base_model,
             trust_remote_code=trc,
-            device_map="auto",
-            torch_dtype=torch.float16,
+            device_map=device_map,
+            torch_dtype=torch_dtype,
         )
         model_obj = PeftModel.from_pretrained(base_obj, model_path)
     else:
         model_obj = AutoModelForCausalLM.from_pretrained(
             model_path,
             trust_remote_code=trc,
-            device_map="auto",
-            torch_dtype=torch.float16,
+            device_map=device_map,
+            torch_dtype=torch_dtype,
         )
 
     model_obj.eval()

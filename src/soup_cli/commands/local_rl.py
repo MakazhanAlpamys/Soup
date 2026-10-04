@@ -222,6 +222,8 @@ def train_cmd(
                 train_method=train_method,
                 hour=hour,
                 minute=minute,
+                min_pairs=min_pairs,
+                output_dir=output,
             )
         except (TypeError, ValueError) as exc:
             console.print(f"[red]{escape(str(exc))}[/]")

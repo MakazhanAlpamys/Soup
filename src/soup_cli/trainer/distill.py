@@ -928,7 +928,9 @@ class DistillTrainerWrapper:
                             student_logits.device
                         )
                     # Per-token decoded strings, trimmed to the real (non-pad)
-                    # length so pad tokens don't pollute the alignment.
+                    # length so pad tokens don't pollute the alignment. Special
+                    # tokens decode to "" as on the teacher side (#1426), so
+                    # they align to nothing and stay out of the loss.
                     s_strings = []
                     s_ids_list = student_ids.tolist()
                     for bi, row in enumerate(s_ids_list):
@@ -936,7 +938,12 @@ class DistillTrainerWrapper:
                             int(s_mask[bi].sum()) if s_mask is not None else len(row)
                         )
                         s_strings.append(
-                            [_student_tokenizer.decode([int(i)]) for i in row[:s_len]]
+                            [
+                                _student_tokenizer.decode(
+                                    [int(i)], skip_special_tokens=True
+                                )
+                                for i in row[:s_len]
+                            ]
                         )
                     t_strings = []
                     for bi, row in enumerate(t_ids.tolist()):

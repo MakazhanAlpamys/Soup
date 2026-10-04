@@ -9,19 +9,25 @@ Soup code executes, so the user has nothing to act on.
 The bound is derived from the CI matrix rather than hardcoded, because a floating
 declaration and a fixed matrix drifting apart is exactly the failure this file
 exists to catch. Widening the matrix and widening the bound must happen together.
+
+The matrix is read from the `plan` job's `RELEASE_MATRIX` literal: the support
+matrix, every cell, which pushes to `release/**` run. The `test` job's own matrix
+is whatever `plan` outputs -- FULL (the same minus Windows and macOS on 3.11) or
+a single QUICK cell -- which is a run-time choice, not the support statement.
 """
 
+import json
 import pathlib
 import re
 
 import pytest
+import yaml
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 PYPROJECT = ROOT / "pyproject.toml"
 CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 
 _REQUIRES_PYTHON = re.compile(r'^requires-python\s*=\s*"([^"]+)"', re.M)
-_MATRIX_LINE = re.compile(r'^\s*python-version:\s*\[([^\]]+)\]', re.M)
 
 
 def _requires_python(text: str) -> str:
@@ -50,12 +56,28 @@ def _parse_bounds(spec: str) -> tuple[tuple[int, int], tuple[int, int]]:
 
 
 def _ci_python_versions() -> list[tuple[int, int]]:
-    """The matrix `python-version` list from the test job in ci.yml."""
-    match = _MATRIX_LINE.search(CI_WORKFLOW.read_text(encoding="utf-8"))
-    assert match, "no `python-version: [...]` matrix found in .github/workflows/ci.yml"
-    versions = re.findall(r"(\d+)\.(\d+)", match.group(1))
-    assert versions, "the python-version matrix parsed to an empty list"
-    return sorted((int(major), int(minor)) for major, minor in versions)
+    """The `python-version` list of the support matrix the `plan` job in ci.yml declares."""
+    workflow = yaml.safe_load(CI_WORKFLOW.read_text(encoding="utf-8"))
+    plan = (workflow.get("jobs") or {}).get("plan") or {}
+    literal = (plan.get("env") or {}).get("RELEASE_MATRIX")
+    assert isinstance(literal, str), (
+        "no `plan.env.RELEASE_MATRIX` JSON literal found in .github/workflows/ci.yml"
+    )
+    matrix = json.loads(literal)
+    assert not {"exclude", "include"} & set(matrix), (
+        "the support matrix must be a plain product, or a listed Python may run nowhere"
+    )
+    versions = matrix.get("python-version")
+    assert versions, "the support matrix has an empty python-version list"
+    parsed = []
+    for version in versions:
+        assert isinstance(version, str), (
+            f"python-version {version!r} must be a JSON string: a number 3.10 reads as 3.1"
+        )
+        match = re.fullmatch(r"(\d+)\.(\d+)", version)
+        assert match, f"python-version {version!r} is not MAJOR.MINOR"
+        parsed.append((int(match.group(1)), int(match.group(2))))
+    return sorted(parsed)
 
 
 class TestRequiresPythonHasAnUpperBound:

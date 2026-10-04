@@ -13,6 +13,8 @@ from rich.console import Console
 from rich.markup import escape
 from rich.panel import Panel
 
+from soup_cli.utils.terminal import for_terminal
+
 console = Console()
 
 SUPPORTED_FORMATS = (
@@ -239,6 +241,18 @@ def export(
         )
         raise typer.Exit(1)
 
+    # --- Resolve and create the destination before any merge/convert work ---
+    # #1445 — a missing output parent used to surface as FileNotFoundError
+    # from mkdtemp AFTER an adapter was merged, and the cleanup then deleted
+    # the merged model. Create the parent up front (what ``_run_convert``
+    # already did for the f16 path) so no finished work is discarded.
+    model_name = Path(model).name
+    if output:
+        output_path = Path(output)
+    else:
+        output_path = Path(model).parent / f"{model_name}.{quant}.gguf"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
     # --- Check if LoRA adapter (needs merge first) ---
     adapter_config_path = model_path / "adapter_config.json"
     is_adapter = adapter_config_path.exists()
@@ -269,12 +283,6 @@ def export(
     _install_convert_deps()
 
     # --- Convert to GGUF ---
-    model_name = Path(model).name
-    if output:
-        output_path = Path(output)
-    else:
-        output_path = Path(model).parent / f"{model_name}.{quant}.gguf"
-
     console.print(
         Panel(
             f"Model:  [bold]{model_path}[/]\n"
@@ -398,7 +406,7 @@ def _merge_adapter(
         requires_remote_code=requires,
     )
 
-    console.print(f"[dim]Loading base model: {base_model}...[/]")
+    console.print(f"[dim]Loading base model: {for_terminal(base_model)}...[/]")
     model = AutoModelForCausalLM.from_pretrained(
         base_model,
         torch_dtype=torch.float16,

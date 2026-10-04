@@ -1225,17 +1225,32 @@ def _hf_dataset_info(dataset_id: str) -> dict:
     }
 
 
+def _datasets_major_version() -> int | None:
+    """Return the installed ``datasets`` package's major version, or None if unreadable."""
+    import re
+
+    try:
+        import datasets
+    except ImportError:
+        return None
+
+    match = re.match(r"(\d+)", str(getattr(datasets, "__version__", "")))
+    return int(match.group(1)) if match else None
+
+
 def _hf_download_dataset(
     dataset_id: str,
     split: str = "train",
     samples: int | None = None,
+    trust_remote_code: bool = False,
 ) -> list[dict]:
     """Download a dataset from HuggingFace Hub and return as list of dicts."""
     from datasets import load_dataset
 
     try:
         ds = load_dataset(
-            dataset_id, split=split, streaming=True, trust_remote_code=False,
+            dataset_id, split=split, streaming=True,
+            trust_remote_code=trust_remote_code,
         )
     except Exception as exc:
         raise ValueError(f"Failed to load dataset {dataset_id}: {exc}") from exc
@@ -1521,20 +1536,34 @@ def download_dataset(
             )
             raise typer.Exit(1)
 
-    from rich.panel import Panel
+    if trust_remote_code:
+        datasets_major = _datasets_major_version()
+        if datasets_major is not None and datasets_major >= 4:
+            console.print(
+                "[red]--trust-remote-code is refused: the installed "
+                f"datasets package (v{datasets_major}.x) dropped "
+                "trust_remote_code support upstream, so it would be silently "
+                "ignored rather than doing what you asked. Install "
+                "datasets<4 if this dataset needs its remote loading "
+                "script, or drop --trust-remote-code if it doesn't.[/]"
+            )
+            raise typer.Exit(1)
 
-    console.print(Panel(
-        "[bold yellow]Warning:[/] Downloading this dataset may execute a "
-        "remote dataset loading script from HuggingFace Hub.\n\n"
-        "Only download datasets from sources you trust.",
-        title="Remote Code Warning",
-        border_style="yellow",
-    ))
+        from rich.panel import Panel
+
+        console.print(Panel(
+            "[bold yellow]Warning:[/] Downloading this dataset may execute a "
+            "remote dataset loading script from HuggingFace Hub.\n\n"
+            "Only download datasets from sources you trust.",
+            title="Remote Code Warning",
+            border_style="yellow",
+        ))
     console.print(f"[dim]Downloading {dataset_id} (split={split})...[/]")
 
     try:
         data = _hf_download_dataset(
             dataset_id, split=split, samples=samples,
+            trust_remote_code=trust_remote_code,
         )
     except ValueError as exc:
         console.print(f"[red]{exc}[/]")
@@ -1696,6 +1725,10 @@ def augment_data(
         console.print(f"[red]{exc}[/]")
         raise typer.Exit(2) from exc
 
+    from soup_cli.utils.data_forge import ForgeJudgeStats
+
+    stats = ForgeJudgeStats()
+
     max_entries = 10
     max_entry_len = 32
 
@@ -1719,17 +1752,38 @@ def augment_data(
             target_langs = _bounded_list(lang, "lang")
             augmented = augment_fn(
                 data, provider=provider_instance,
-                languages=target_langs or None,
+                languages=target_langs or None, stats=stats,
             )
         elif strategy == "style":
             target_styles = _bounded_list(styles, "styles")
             augmented = augment_fn(
                 data, provider=provider_instance, styles=target_styles or None,
+                stats=stats,
             )
         else:
-            augmented = augment_fn(data, provider=provider_instance, count=count)
+            augmented = augment_fn(
+                data, provider=provider_instance, count=count, stats=stats,
+            )
     except ValueError as exc:
         console.print(f"[red]{exc}[/]")
+        raise typer.Exit(1)
+
+    failure_summary = ""
+    if stats.failures:
+        from soup_cli.utils.recipe_run import _provider_endpoint_label
+
+        endpoint = _provider_endpoint_label(provider, base_url or None)
+        failure_summary = (
+            f"{stats.failures} of {stats.calls} provider calls failed for "
+            f"--provider {provider} ({endpoint}); first error: {stats.first_error}"
+        )
+
+    if not augmented and stats.failures:
+        from rich.markup import escape
+
+        console.print(
+            f"[red]No usable rows produced:[/] {escape(failure_summary)}"
+        )
         raise typer.Exit(1)
 
     # Optional dedup
@@ -1754,11 +1808,21 @@ def augment_data(
     )
     written = atomic_write_text(payload, output_path, field="--output")
 
-    console.print(
-        f"[green]Augmentation complete:[/] {len(data)} → {len(final_rows)} "
-        f"({strategy} via {provider})\n"
-        f"  Output: {written}"
-    )
+    if stats.failures:
+        from rich.markup import escape
+
+        console.print(
+            f"[yellow]Augmentation complete with provider failures:[/] "
+            f"{len(data)} → {len(final_rows)} ({strategy} via {provider})\n"
+            f"  Output: {written}"
+        )
+        console.print(f"[yellow]Warning:[/] {escape(failure_summary)}")
+    else:
+        console.print(
+            f"[green]Augmentation complete:[/] {len(data)} → {len(final_rows)} "
+            f"({strategy} via {provider})\n"
+            f"  Output: {written}"
+        )
 
 
 class _AugmentProvider:
@@ -1812,6 +1876,7 @@ def _load_augment_provider(
         canonical,
         model=model or _AUGMENT_DEFAULT_MODELS[canonical],
         base_url=base_url or None,
+        raise_on_error=True,
     )
     return _AugmentProvider(fn)
 
@@ -2034,7 +2099,31 @@ def from_traces_cmd(
         else:  # openai
             trace_iter = parse_openai(events)
 
-    pairs = list(build_pairs(trace_iter, signal=signal))
+    trace_list = list(trace_iter)
+    pairs = list(build_pairs(trace_list, signal=signal))
+    if not pairs and trace_list:
+        # #1440: reading traces that match no pair mode used to print a normal
+        # green "Wrote 0 preference pair(s)" and exit 0, so an empty output file
+        # read as a completed harvest. Name what was read and what was wanted.
+        signals = sorted({t.signal for t in trace_list if t.signal != "none"})
+        console.print(
+            f"[yellow]Read {len(trace_list)} trace(s) but built no pairs for "
+            f"--signal {signal}. "
+            + (
+                f"Signals present: {', '.join(signals)}. "
+                if signals
+                else "No trace carried a signal. "
+            )
+            # The top-level `signal` is a soup-serve-parser fact. The openai and
+            # langchain parsers key on `choices` / `feedback` and never read it,
+            # so naming it there would be advice the reader cannot act on.
+            + (
+                "Check the record shape: `soup ingest` writes a top-level "
+                "`signal`, and `feedback.rating` is still read as a fallback.[/]"
+                if format == "soup-serve"
+                else "Check the record shape against the format's parser.[/]"
+            )
+        )
 
     if judge:
         # v0.40.3 (#33 (a)) — LLM-judge confidence filter.

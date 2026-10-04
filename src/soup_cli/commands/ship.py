@@ -177,12 +177,22 @@ def _validate_judge_model_url(url: str) -> None:
     """SSRF guard for --judge-model: urlparse hostname check (not startswith).
 
     Blocks the ``http://localhost.attacker.com`` prefix-bypass that a bare
-    ``startswith("http://localhost")`` check would allow through.
+    ``startswith("http://localhost")`` check would allow through, and refuses a
+    private / link-local / reserved IP literal as a usage error before any
+    measurement runs.
     """
     from urllib.parse import urlparse
 
+    from soup_cli.utils.net_guard import refuse_private_ip_literal
+
     parsed = urlparse(url)
-    if parsed.scheme in ("ollama", "https"):
+    if parsed.scheme == "ollama":
+        return
+    if parsed.scheme == "https":
+        try:
+            refuse_private_ip_literal(parsed.hostname, label="--judge-model")
+        except ValueError as exc:
+            _fail(str(exc), _EXIT_USAGE)
         return
     if parsed.scheme == "http" and parsed.hostname in ("localhost", "127.0.0.1"):
         return
@@ -1034,21 +1044,22 @@ def _verdict_live(
     # would be an unbounded number of full model passes.
     noise_floor_runs = _validate_noise_floor_flag(noise_floor_runs)
 
+    # Judge modes need a judge model. Validate it BEFORE the base and tuned
+    # models load and before the noise floor is measured (it scores the leg-1
+    # task axis through the judge as well, #403) — a missing or refused judge
+    # URL is a usage error, not a runtime one discovered after a model load.
+    if task_mode == "judge_score":
+        if not judge_model:
+            _fail("--task-mode judge_score needs --judge-model <url>", _EXIT_USAGE)
+        _validate_judge_model_url(judge_model)
+    elif task_mode == "pairwise":
+        if not judge_model:
+            _fail("--task-mode pairwise needs --judge-model <url>", _EXIT_USAGE)
+        _validate_judge_model_url(judge_model)
+
     tuned_id = tuned if tuned else base
     try:
         base_gen, tuned_gen = _resolve_generators(base, tuned, adapter, device, quantization)
-        # Judge modes need a judge model. Validate it BEFORE measuring the
-        # noise floor, which now scores the leg-1 task axis through the judge as
-        # well (#403) — a missing / malformed judge is a usage error (exit 2),
-        # not a runtime one discovered mid-measurement.
-        if task_mode == "judge_score":
-            if not judge_model:
-                _fail("--task-mode judge_score needs --judge-model <url>", _EXIT_USAGE)
-            _validate_judge_model_url(judge_model)
-        elif task_mode == "pairwise":
-            if not judge_model:
-                _fail("--task-mode pairwise needs --judge-model <url>", _EXIT_USAGE)
-            _validate_judge_model_url(judge_model)
 
         measured_floor: Optional[NoiseFloor] = None
         if noise_floor_runs is not None:

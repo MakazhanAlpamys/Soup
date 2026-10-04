@@ -19,6 +19,7 @@ def _auth_header_for(url: str):
     provider, model, base = _parse_judge_url(url)
     evaluator = JudgeEvaluator(provider=provider, model=model, api_base=base)
     with mock.patch("httpx.post") as post:
+        post.return_value.status_code = 200
         post.return_value.json.return_value = {
             "choices": [{"message": {"content": '{"winner": "A"}'}}]
         }

@@ -330,7 +330,7 @@ def advise_run(
         raise typer.Exit(1) from exc
 
     console.print(_render_verdict_panel(verdict, profile_row_count=profile.row_count))
-    if probe:
+    if run_probe:  # #1448 — --probe-model implies --probe; show what it measured.
         console.print(_render_roi_table(roi))
 
     _write_last_verdict(verdict)

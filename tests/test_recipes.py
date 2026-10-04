@@ -58,13 +58,15 @@ class TestRecipeCatalog:
         assert len(results) > 0
 
     def test_search_by_size(self):
-        """search_recipes filters by model size."""
-        from soup_cli.recipes.catalog import search_recipes
+        """search_recipes filters by matching size token against recipe name or model id (#1161)."""
+        from soup_cli.recipes.catalog import RECIPES, search_recipes
 
         results = search_recipes(size="7b")
         assert len(results) > 0
+        names_by_recipe = {id(r): n for n, r in RECIPES.items()}
         for recipe in results:
-            assert "7b" in recipe.size.lower() or "7b" in recipe.model.lower()
+            name = names_by_recipe.get(id(recipe), "")
+            assert "7b" in name.lower() or "7b" in recipe.model.lower()
 
     def test_search_no_results(self):
         """search_recipes returns empty list for no matches."""
@@ -856,115 +858,6 @@ class TestDeepSeekV4ProGrpoRecipe:
         written = (tmp_path / "soup.yaml").read_text(encoding="utf-8")
         assert self.MODEL in written
         assert "task: grpo" in written
-
-
-class TestIssue849LargeMoeDpoRecipes:
-    """Regression coverage for the MiniMax M3 and Mistral Large 3 DPO recipes."""
-
-    RECIPES = {
-        "minimax-m3-dpo": {
-            "model": "MiniMaxAI/MiniMax-M3",
-            "sft": "minimax-m3-sft",
-            "gradient_accumulation_steps": 16,
-            "size": "428B",
-            "license": "MiniMax Community License",
-        },
-        "mistral-large-3-dpo": {
-            "model": "mistralai/Mistral-Large-3-675B-Instruct-2512",
-            "sft": "mistral-large-3-sft",
-            "gradient_accumulation_steps": 32,
-            "size": "675B",
-            "license": "Apache-2.0",
-        },
-    }
-
-    @pytest.mark.parametrize("name,expected", list(RECIPES.items()))
-    def test_recipe_meta_pins_the_model_id(self, name: str, expected: dict) -> None:
-        """Surface 1: pin the catalog metadata without reading the YAML."""
-        from soup_cli.recipes.catalog import get_recipe
-
-        recipe = get_recipe(name)
-        assert recipe is not None, f"{name} is missing from the catalog"
-        assert recipe.model == expected["model"]
-        assert recipe.task == "dpo"
-        assert recipe.size == expected["size"]
-        assert expected["license"] in recipe.description
-
-    @pytest.mark.parametrize("name,expected", list(RECIPES.items()))
-    def test_yaml_base_pins_the_model_id(self, name: str, expected: dict) -> None:
-        """Surface 2: pin the YAML base independently of ``RecipeMeta.model``."""
-        import yaml
-
-        from soup_cli.recipes.catalog import get_recipe
-
-        recipe = get_recipe(name)
-        assert recipe is not None
-        parsed = yaml.safe_load(recipe.yaml_str)
-        assert parsed["base"] == expected["model"]
-        assert parsed["task"] == "dpo"
-
-    @pytest.mark.parametrize("name,expected", list(RECIPES.items()))
-    def test_recipe_loads_with_expected_dpo_moe_shape(
-        self, name: str, expected: dict
-    ) -> None:
-        from soup_cli.config.loader import load_config_from_string
-        from soup_cli.recipes.catalog import get_recipe
-
-        recipe = get_recipe(name)
-        assert recipe is not None
-        config = load_config_from_string(recipe.yaml_str)
-
-        assert config.base == expected["model"]
-        assert config.task == "dpo"
-        assert config.data.train == "./data/preference_train.jsonl"
-        assert config.data.format == "dpo"
-        assert config.data.max_length == 4096
-        assert config.training.epochs == 1
-        assert config.training.lr == 5e-6
-        assert config.training.batch_size == 1
-        assert (
-            config.training.gradient_accumulation_steps
-            == expected["gradient_accumulation_steps"]
-        )
-        assert config.training.lora.r == 32
-        assert config.training.lora.alpha == 64
-        assert config.training.quantization == "4bit"
-        assert config.training.moe_lora is True
-        assert config.training.gradient_checkpointing is True
-        # These equal schema defaults, so deleting either is an equivalent mutation.
-        assert config.training.dpo_beta == 0.1
-        assert config.training.moe_aux_loss_coeff == 0.01
-
-    @pytest.mark.parametrize("name,expected", list(RECIPES.items()))
-    def test_dpo_recipe_matches_its_sft_sibling(self, name: str, expected: dict) -> None:
-        from soup_cli.recipes.catalog import get_recipe
-
-        dpo = get_recipe(name)
-        sft = get_recipe(expected["sft"])
-        assert dpo is not None and sft is not None
-        assert dpo.model == sft.model
-        assert dpo.size == sft.size
-        assert dpo.task == "dpo"
-        assert sft.task == "sft"
-
-    @pytest.mark.parametrize("name,expected", list(RECIPES.items()))
-    def test_show_and_use_recipe(
-        self,
-        name: str,
-        expected: dict,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        show_result = runner.invoke(app, ["recipes", "show", name])
-        assert show_result.exit_code == 0
-        assert expected["model"] in strip_ansi(show_result.output)
-
-        monkeypatch.chdir(tmp_path)
-        use_result = runner.invoke(app, ["recipes", "use", name, "--yes"])
-        assert use_result.exit_code == 0
-        written = (tmp_path / "soup.yaml").read_text(encoding="utf-8")
-        assert expected["model"] in written
-        assert "task: dpo" in written
 
 
 class TestIssue271SmolLM3Recipe:
@@ -1916,6 +1809,8 @@ class TestV025NewRecipes:
         Issue #825 retires the unusable Falcon-E BitNet training recipe -> 175.
         PR #1112 removes sesame-csm-tts -> 174.
         Issue #850 added 2 (deepseek-v4-pro-dpo, deepseek-v4-pro-grpo) -> 176.
+        PR #1113 removes spark-tts -> 173.
+        Issue #1145 removed 3 (mistral-large-3-sft, mistral-large-3-dpo, minimax-m3-dpo) -> 170.
         """
         from soup_cli.recipes.catalog import RECIPES
         from tests.recipe_count import EXPECTED_RECIPE_COUNT, recipe_count_hint

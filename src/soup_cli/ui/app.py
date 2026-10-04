@@ -644,6 +644,7 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
 
             # Validate config before writing to disk
             from soup_cli.config.loader import load_config_from_string
+            from soup_cli.utils.terminal import strip_control
 
             try:
                 load_config_from_string(req.config_yaml)
@@ -651,12 +652,14 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
                 # The loader's own message names the field and the suggestion;
                 # an unknown key now refuses here (#879), so this is where a
                 # Web UI user learns which key. Rendered through escapeHtml().
-                logger.warning("Invalid training config: %s", exc)
+                # The log line goes to the server's terminal, so the key's
+                # control characters are stripped there.
+                logger.warning("Invalid training config: %s", strip_control(exc))
                 raise HTTPException(
                     status_code=400, detail=f"Invalid training configuration: {exc}"
                 )
             except Exception as exc:
-                logger.warning("Invalid training config: %s", exc)
+                logger.warning("Invalid training config: %s", strip_control(exc))
                 raise HTTPException(
                     status_code=400, detail="Invalid training configuration"
                 )
@@ -747,20 +750,29 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
         total = len(raw_data)
         sample = raw_data[: req.limit]
 
-        # Detect format
+        # Detect format. detect_format samples a bounded prefix itself (#1424),
+        # and a file that mixes shapes is refused, so a ValueError here is a
+        # reportable outcome for the explorer rather than a 500: this is where
+        # someone lands after soup train refused the same file.
         from soup_cli.data.formats import detect_format
 
-        fmt = detect_format(raw_data[:5]) if raw_data else "unknown"
+        format_error = None
+        try:
+            fmt = detect_format(raw_data) if raw_data else "unknown"
+        except ValueError as exc:
+            fmt, format_error = "unknown", str(exc)
 
         # Basic stats
         keys = set()
         for entry in sample:
-            keys.update(entry.keys())
+            if isinstance(entry, dict):
+                keys.update(entry.keys())
 
         return {
             "path": str(resolved),
             "total": total,
             "format": fmt,
+            "format_error": format_error,
             "keys": sorted(keys),
             "sample": sample,
         }
@@ -998,6 +1010,7 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
         import yaml
 
         from soup_cli.config.loader import load_config_from_string
+        from soup_cli.utils.terminal import strip_control
 
         # Build YAML from form values
         config_dict = {}
@@ -1013,10 +1026,10 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
             load_config_from_string(yaml_str)
             return {"yaml": yaml_str}
         except ValueError as exc:
-            logger.warning("Config form validation error: %s", exc)
+            logger.warning("Config form validation error: %s", strip_control(exc))
             return {"error": f"Invalid configuration: {exc}"}
         except TypeError as exc:
-            logger.warning("Config form validation error: %s", exc)
+            logger.warning("Config form validation error: %s", strip_control(exc))
             return {"error": "Invalid configuration"}
 
     # --- Chat Proxy ---
@@ -1042,17 +1055,26 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
 
         from fastapi.responses import StreamingResponse
 
+        from soup_cli.utils.net_guard import refuse_private_ip_literal
+
         # Validate messages
         if not req.messages:
             raise HTTPException(status_code=400, detail="messages cannot be empty")
 
-        # SSRF protection: localhost-only HTTP, HTTPS for remote
-        parsed = urlparse(req.endpoint)
+        # SSRF protection: localhost-only HTTP, HTTPS for remote, and no
+        # private / link-local / reserved IP literal on either scheme.
+        # 0.0.0.0 is the bind-any wildcard, not a loopback address.
+        try:
+            parsed = urlparse(req.endpoint)
+        except ValueError:
+            # e.g. an unbalanced or non-IPv6 bracketed host: a bad request,
+            # not a server error.
+            raise HTTPException(status_code=400, detail="endpoint is not a valid URL") from None
         if parsed.scheme == "http":
             import ipaddress as _ipaddr
 
             host = parsed.hostname or ""
-            is_local = host in ("localhost", "0.0.0.0")
+            is_local = host == "localhost"
             if not is_local:
                 try:
                     addr = _ipaddr.ip_address(host)
@@ -1069,6 +1091,12 @@ def create_app(host: str = "127.0.0.1", port: int = 7860):
                 status_code=400,
                 detail="Only HTTP (localhost) or HTTPS endpoints allowed",
             )
+        try:
+            refuse_private_ip_literal(parsed.hostname, label="endpoint")
+        except ValueError as exc:
+            # The message is fixed text (the label is a constant); the
+            # endpoint itself is never echoed back.
+            raise HTTPException(status_code=400, detail=str(exc)) from None
 
         # Validate bounds
         if req.max_tokens > 16384:

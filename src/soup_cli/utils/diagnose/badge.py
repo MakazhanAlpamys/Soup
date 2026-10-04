@@ -15,6 +15,7 @@ _VERDICT_COLOUR = {
     "OK": "#3fb950",       # green
     "MINOR": "#d29922",    # amber
     "MAJOR": "#f85149",    # red
+    "NOT_RUN": "#8b949e",  # grey: a probe that never ran is not a pass (#1435)
 }
 
 
@@ -43,7 +44,13 @@ def render_badge_svg(report: FailureReport) -> str:
         label = _safe(mode.replace("_", " "), max_len=14)
         # Defence-in-depth — even the formatted float passes through
         # `_safe` so a crafted FailureScore subclass cannot inject SVG.
-        score_text = _safe(f"{score.score:.2f}" if score is not None else "—", max_len=8)
+        if score is None:
+            shown = "—"
+        elif score.verdict == "NOT_RUN":
+            shown = "not run"  # the stored 0.00 is a placeholder, not a measurement
+        else:
+            shown = f"{score.score:.2f}"
+        score_text = _safe(shown, max_len=8)
         cells.append(
             f'<rect x="{x}" y="40" width="56" height="36" rx="6" fill="{colour}" />'
             f'<text x="{x + 28}" y="60" font-size="11" fill="#ffffff" '
