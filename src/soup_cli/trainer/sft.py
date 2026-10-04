@@ -1993,27 +1993,60 @@ class SFTTrainerWrapper(StreamingSetupMixin):
 
     def _prepare_vision_dataset(self, dataset: dict):
         """Keep messages + PIL images raw for processor-aware collation."""
+        import io
+        import os
+
         from datasets import Dataset
+        from PIL import Image as PILImage
+
+        def _to_rgb_image(image_raw):
+            if image_raw is None or image_raw == "":
+                return None
+            if isinstance(image_raw, PILImage.Image):
+                try:
+                    return image_raw.convert("RGB")
+                except Exception:
+                    return None
+            if isinstance(image_raw, dict):
+                img_bytes = image_raw.get("bytes")
+                if img_bytes:
+                    try:
+                        return PILImage.open(io.BytesIO(img_bytes)).convert("RGB")
+                    except Exception:
+                        return None
+                img_path = image_raw.get("path")
+                if img_path:
+                    try:
+                        if isinstance(img_path, (str, bytes, os.PathLike)):
+                            require_regular_file(os.fsdecode(img_path))
+                        return PILImage.open(img_path).convert("RGB")
+                    except (FileNotFoundError, OSError, ValueError):
+                        return None
+                return None
+            if isinstance(image_raw, (str, bytes, os.PathLike)):
+                try:
+                    require_regular_file(os.fsdecode(image_raw))
+                    return PILImage.open(image_raw).convert("RGB")
+                except (FileNotFoundError, OSError, ValueError):
+                    return None
+            return None
 
         from soup_cli.utils.paths import require_regular_file
 
         def load_and_format_vision(example):
-            from PIL import Image as PILImage
-
-            image_path = example.get("image", "")
-            image = None
-            if image_path:
-                try:
-                    # Open a file name only when it is a regular file: a FIFO
-                    # or a device would stall the reader.
-                    if isinstance(image_path, (str, bytes, os.PathLike)):
-                        require_regular_file(os.fsdecode(image_path))
-                    image = PILImage.open(image_path).convert("RGB")
-                except (FileNotFoundError, OSError):
-                    console.print(
-                        "[yellow]Warning: cannot open image: "
-                        f"{for_terminal(image_path)}[/]"
-                    )
+            image_raw = example.get("image")
+            image = _to_rgb_image(image_raw)
+            if image is None and image_raw:
+                if isinstance(image_raw, (str, bytes, os.PathLike)):
+                    err_label = str(image_raw)
+                elif isinstance(image_raw, dict) and image_raw.get("path"):
+                    err_label = str(image_raw["path"])
+                else:
+                    err_label = type(image_raw).__name__
+                console.print(
+                    "[yellow]Warning: cannot open image: "
+                    f"{for_terminal(err_label)}[/]"
+                )
 
             result = {"images": []}
             if image is not None:

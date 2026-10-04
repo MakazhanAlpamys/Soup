@@ -1059,6 +1059,9 @@ A relative `image` path resolves against `data.image_dir`, or against the data f
 directory when it is unset. A Hub dataset or a remote URI has no data file directory, so set
 `data.image_dir` when its rows hold image paths; see
 [Data Pipeline Pro](data.md#data-pipeline-pro).
+Decoded in-memory PIL images (such as from a Hugging Face Hub `Image()` column) and Parquet
+image structs (`{"bytes": ..., "path": ...}`) written by `datasets` are also accepted; a struct's
+`path` follows the same directory resolution and path containment rules as a plain path string.
 
 `soup data inspect` automatically shows image statistics (count, formats, missing files) for vision datasets.
 
