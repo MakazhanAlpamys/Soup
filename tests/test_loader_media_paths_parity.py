@@ -1080,6 +1080,10 @@ def test_dos_device_names_are_ordinary_file_names_elsewhere(tmp_path, monkeypatc
         (r"\.\??\UNC\h\s\x.png", True),
         ("/./??/UNC/h/s/x.png", True),
         (r"\x\..\??\UNC\h\s\x.png", True),
+        # The prefix as written, in any separator, when ".." collapses it away.
+        ("/??/../x.png", True),
+        (r"\??/../x.png", True),
+        (r"\??\..\x.png", True),
         ("\\\\", True),
         ("//", True),
         ("///x", True),
@@ -1139,6 +1143,8 @@ def test_dos_device_names_are_a_parameter_of_the_check(value, expected):
     [
         *[(value, True) for value in DEVICE_NAMESPACE_FORMS],
         (r"\\.\NUL", True),
+        ("/??/../x.png", True),
+        (r"\??\..\x.png", True),
         (r"\\host\share\x.png", False),
         ("//host/share/x.png", False),
         (r"\\?\C:\x.png", False),
