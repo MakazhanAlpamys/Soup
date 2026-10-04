@@ -70,6 +70,13 @@ class AttestationStatement:
             raise ValueError("builder_id invalid (null byte or > 256 chars)")
         if not isinstance(self.invocation, Mapping):
             raise ValueError("invocation must be a mapping")
+        command = self.invocation.get("command")
+        if command is not None and len(str(command)) > _MAX_INVOCATION_LEN:
+            # A signed statement must not present a shortened command as the command.
+            raise ValueError(
+                f"invocation command is {len(str(command))} chars; the limit is "
+                f"{_MAX_INVOCATION_LEN}"
+            )
         if not isinstance(self.materials, tuple):
             raise ValueError("materials must be a tuple")
         for mat in self.materials:
@@ -101,7 +108,7 @@ def build_slsa_provenance(s: AttestationStatement) -> dict[str, Any]:
     external_parameters: dict[str, Any] = {"stage": s.stage}
     # #1446: the free-form invocation marker (`soup attest emit --invocation`) is an
     # external parameter of the build in SLSA v1 terms; it used to be dropped.
-    command = str(s.invocation.get("command", "") or "")[:_MAX_INVOCATION_LEN]
+    command = str(s.invocation.get("command", "") or "")  # length refused in __post_init__
     if command:
         external_parameters["invocation"] = command
     return {

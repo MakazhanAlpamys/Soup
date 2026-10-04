@@ -127,6 +127,38 @@ def _compute_lines(md: str) -> list[str]:
     return [line.strip() for line in md.splitlines() if any(label in line for label in _LABELS)]
 
 
+def _plain(text: str) -> str:
+    return re.sub(r"\s+", " ", re.sub(r"\x1b\[[0-9;]*m", "", text))
+
+
+class TestAttestationInvocationLimits:
+    def test_the_statement_printed_without_output_is_verbatim_json(self, monkeypatch) -> None:
+        """Rich parsed `[...]` as markup and folded long lines at 80 columns (CI has
+        no terminal), so the JSON on stdout no longer parsed (review of #1569)."""
+        from rich.console import Console
+
+        monkeypatch.setattr("soup_cli.commands.attest.console", Console(width=80))
+        invocation = "soup train --set lora.target_modules=[q_proj,v_proj] --tag [/x] " + "x" * 80
+        result = CliRunner().invoke(app, ["attest", "emit", "--stage", "train", "--subject", "m",
+                                          "--sha", _SHA, "--invocation", invocation])
+        assert result.exit_code == 0, (result.output, repr(result.exception))
+        text = result.stdout
+        statement = json.loads(text[: text.rindex("}") + 1])
+        params = statement["predicate"]["buildDefinition"]["externalParameters"]
+        assert params["invocation"] == invocation
+
+    def test_an_invocation_over_the_cap_is_refused_not_cut(self, tmp_path, monkeypatch) -> None:
+        monkeypatch.chdir(tmp_path)
+        base = ["attest", "emit", "--stage", "train", "--subject", "m", "--sha", _SHA]
+        ok = CliRunner().invoke(app, [*base, "--invocation", "x" * 4096, "-o", "ok.json"])
+        assert ok.exit_code == 0, ok.output
+        assert _external_parameters(tmp_path / "ok.json")["invocation"] == "x" * 4096
+        too_long = CliRunner().invoke(app, [*base, "--invocation", "x" * 4097, "-o", "no.json"])
+        assert too_long.exit_code == 2, too_long.output
+        assert "4096" in _plain(too_long.output)
+        assert not (tmp_path / "no.json").exists()
+
+
 class TestAnnexNotMeasured:
     @pytest.mark.parametrize("render", [render_annex_xi_markdown, render_annex_xii_markdown])
     def test_unmeasured_values_render_as_not_measured_never_zero(self, render) -> None:
@@ -275,6 +307,37 @@ class TestSpdxLicenseFields:
         assert build_spdx_bom(_entry("???"))["packages"][0]["licenseConcluded"] == ref  # stable
 
 
+class TestLicenseNamesThatOnlyLookLikeExpressions:
+    @pytest.mark.parametrize("given", [
+        "Llama 3.2 Community License and Acceptable Use Policy",
+        "Gemma Terms of Use and Prohibited Use Policy",
+        "Apache 2.0 with Commons Clause",
+        "CC-BY-NC-4.0 or commercial license",
+        "apache-2.0 or mit",
+        "Apache-2.0 OR Llama-Community",
+        "MIT OR",
+        "OR MIT",
+        "(MIT OR Apache-2.0",
+    ])
+    def test_a_name_that_only_looks_like_an_expression_is_a_name(self, given) -> None:
+        licenses = build_cyclonedx_bom(_entry(given))["metadata"]["component"]["licenses"]
+        assert licenses == [{"license": {"name": given}}]
+        concluded = build_spdx_bom(_entry(given))["packages"][0]["licenseConcluded"]
+        assert re.fullmatch(r"LicenseRef-[A-Za-z0-9.-]+", concluded), concluded
+
+    @pytest.mark.parametrize("given,expected", [
+        ("Apache-2.0 OR MIT", "Apache-2.0 OR MIT"),
+        ("apache-2.0 OR mit", "Apache-2.0 OR MIT"),
+        ("(MIT OR Apache-2.0) AND BSD-3-Clause", "(MIT OR Apache-2.0) AND BSD-3-Clause"),
+        ("GPL-2.0-only WITH Classpath-exception-2.0", "GPL-2.0-only WITH Classpath-exception-2.0"),
+        ("Apache-2.0 OR LicenseRef-Llama-Community", "Apache-2.0 OR LicenseRef-Llama-Community"),
+    ])
+    def test_a_real_expression_is_kept_with_canonical_ids(self, given, expected) -> None:
+        licenses = build_cyclonedx_bom(_entry(given))["metadata"]["component"]["licenses"]
+        assert licenses == [{"expression": expected}]
+        assert build_spdx_bom(_entry(given))["packages"][0]["licenseConcluded"] == expected
+
+
 class TestSpdxRelationship:
     def test_data_is_the_build_dependency_of_the_model(self) -> None:
         rels = {(r["spdxElementId"], r["relationshipType"], r["relatedSpdxElement"])
@@ -296,12 +359,14 @@ class TestReceiptDriverVersion:
     def test_cuda_host_records_the_driver_version(self, monkeypatch: pytest.MonkeyPatch) -> None:
         import torch
 
-        from soup_cli.utils import repro_receipt
+        from soup_cli.bench import train_run
 
         monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
         monkeypatch.setattr(torch.cuda, "device_count", lambda: 1)
         monkeypatch.setattr(torch.cuda, "get_device_name", lambda index=0: "NVIDIA test GPU")
-        monkeypatch.setattr(repro_receipt, "_driver_version", lambda: "550.90.07")
+        # one level down, at the bench query the issue points to, so the wrapper's own
+        # body runs (review of #1569: stubbing the wrapper let `return None` through)
+        monkeypatch.setattr(train_run, "_driver_version", lambda: "550.90.07")
         receipt = receipt_to_dict(build_repro_receipt({"torch": 0}, "r1"))
         assert receipt["accelerator_backend"] == "cuda"
         assert receipt["gpu_models"] == ["NVIDIA test GPU"]
@@ -315,9 +380,12 @@ class TestReceiptDriverVersion:
         from soup_cli.utils import repro_receipt
 
         monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
-
-        def _never() -> str:
-            raise AssertionError("nvidia-smi was queried on a host without CUDA")
-
-        monkeypatch.setattr(repro_receipt, "_driver_version", _never)
-        assert receipt_to_dict(build_repro_receipt({"torch": 0}, "r1"))["driver_version"] is None
+        # recorded, not raised: the probe swallows exceptions, so an AssertionError
+        # inside it could never fail this control (review of #1569)
+        calls: list[int] = []
+        monkeypatch.setattr(
+            repro_receipt, "_driver_version", lambda: calls.append(1) or "550.90.07"
+        )
+        receipt = receipt_to_dict(build_repro_receipt({"torch": 0}, "r1"))
+        assert calls == []
+        assert receipt["driver_version"] is None

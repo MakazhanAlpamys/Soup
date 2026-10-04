@@ -184,7 +184,45 @@ def _energy_annotations(entry: BomEntry, annotation_date: str) -> list[dict]:
     ]
 
 
-_SPDX_EXPRESSION_RE = re.compile(r"\s(OR|AND|WITH)\s", re.IGNORECASE)
+_SPDX_OPERATORS = frozenset({"AND", "OR", "WITH"})
+_SPDX_TOKEN_RE = re.compile(r"[()]|[^\s()]+")
+_LICENSE_REF_RE = re.compile(r"(?:DocumentRef-[A-Za-z0-9.-]+:)?LicenseRef-[A-Za-z0-9.-]+")
+
+
+def _spdx_expression(value: str) -> Optional[str]:
+    """``value`` as an SPDX expression with canonical ids, or ``None`` when it is not one.
+
+    SPDX 2.3 Annex D: operators are upper-case and sit between operands, parentheses
+    balance, and every operand is a listed id (optionally with ``+``) or a
+    ``LicenseRef-``. So ``Gemma Terms of Use and Prohibited Use Policy`` or
+    ``Apache 2.0 with Commons Clause`` is a name, not an expression (#1569 review).
+    """
+    tokens = _SPDX_TOKEN_RE.findall(value)
+    if not any(token in _SPDX_OPERATORS for token in tokens):
+        return None
+    out: list[str] = []
+    depth, want_operand = 0, True
+    for token in tokens:
+        if token == "(" and want_operand:
+            depth += 1
+        elif token == ")" and not want_operand and depth:
+            depth -= 1
+        elif token in _SPDX_OPERATORS and not want_operand:
+            want_operand = True
+        elif not want_operand or token in "()" or token in _SPDX_OPERATORS:
+            return None
+        else:
+            want_operand = False
+            if not _LICENSE_REF_RE.fullmatch(token):
+                plus = "+" if token.endswith("+") else ""
+                canonical = canonical_spdx_id(token[: len(token) - len(plus)])
+                if canonical is None:
+                    return None
+                token = canonical + plus
+        out.append(token)
+    if want_operand or depth:
+        return None
+    return re.sub(r"\( | \)", lambda m: m.group(0).strip(), " ".join(out))
 
 
 def _license_choice(value: Optional[str]) -> list[dict]:
@@ -192,8 +230,9 @@ def _license_choice(value: Optional[str]) -> list[dict]:
     expression (``A OR B``) in ``expression``, anything else in ``license.name`` (#1446)."""
     if not value:
         return []
-    if _SPDX_EXPRESSION_RE.search(value):
-        return [{"expression": value}]
+    expression = _spdx_expression(value)
+    if expression is not None:
+        return [{"expression": expression}]
     canonical = canonical_spdx_id(value)
     if canonical is not None:
         return [{"license": {"id": canonical}}]
@@ -208,8 +247,9 @@ def _spdx_license_expression(value: Optional[str]) -> tuple[str, Optional[dict]]
     as written, or a ``LicenseRef-`` with its ``hasExtractedLicensingInfos`` entry (#1446)."""
     if not value:
         return "NOASSERTION", None
-    if _SPDX_EXPRESSION_RE.search(value):
-        return value, None
+    expression = _spdx_expression(value)
+    if expression is not None:
+        return expression, None
     canonical = canonical_spdx_id(value)
     if canonical is not None:
         return canonical, None
