@@ -678,10 +678,13 @@ def stats(
         )
 
 
-def _show_vision_stats(data: list[dict], image_dir: Path) -> None:
+def _show_vision_stats(data: list[dict], image_dir: Path | None = None) -> None:
     """Show image statistics if dataset contains image fields."""
     if not data:
         return
+
+    if image_dir is None:
+        image_dir = Path.cwd()
 
     # Check if this is a vision dataset
     sample = data[0]
