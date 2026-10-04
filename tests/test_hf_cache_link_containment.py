@@ -386,3 +386,64 @@ def test_junction_check_reads_the_mount_point_tag(monkeypatch, reparse_tag, expe
     monkeypatch.setattr(spectrum_scan, "os", SimpleNamespace(lstat=lambda _path: info))
 
     assert spectrum_scan._is_junction("snapshots/extra") is expected
+
+
+# --- the same rule for a local path to a snapshot (#1511) ---------------------------
+#
+# A local snapshot path is copied only when its weights are symlinks, so these need one.
+
+
+@pytest.mark.requires_symlink
+@pytest.mark.parametrize("where", LINK_TARGETS)
+def test_local_snapshot_path_with_a_linked_blob_store_is_refused(
+    tmp_path, monkeypatch, where
+) -> None:
+    from soup_cli.utils.spectrum_scan import resolve_model_weights
+
+    repo = _repo(tmp_path)
+    target = _link_target(tmp_path, repo, where)
+    _link_blob_store(repo, target)
+    (target / "notes.json").write_text(OUTSIDE, encoding="utf-8")
+    snapshot = _link_snapshot(repo, config="notes.json")
+    monkeypatch.setenv("SOUP_SPECTRUM_CACHE_DIR", str(tmp_path / "soup-cache"))
+
+    with pytest.raises(ValueError, match=IS_A_LINK) as refusal:
+        resolve_model_weights(str(snapshot))
+
+    _assert_refused_as_a_link(refusal, repo, tmp_path)
+
+
+@pytest.mark.requires_symlink
+def test_local_snapshot_in_a_plain_folder_cannot_reach_that_folder(tmp_path, monkeypatch) -> None:
+    """No repo folder at all: ``snapshots`` sits in a folder that holds other files."""
+    from soup_cli.utils.spectrum_scan import resolve_model_weights
+
+    folder = tmp_path / "downloads"
+    (folder / "snapshots" / COMMIT).mkdir(parents=True)
+    (folder / WEIGHT_BLOB).write_bytes(WEIGHTS)
+    (folder / "notes.json").write_text(OUTSIDE, encoding="utf-8")
+    (folder / "blobs").symlink_to(folder, target_is_directory=True)
+    snapshot = _link_snapshot(folder, config="notes.json")
+    monkeypatch.setenv("SOUP_SPECTRUM_CACHE_DIR", str(tmp_path / "soup-cache"))
+
+    with pytest.raises(ValueError, match=IS_A_LINK) as refusal:
+        resolve_model_weights(str(snapshot))
+
+    _assert_refused_as_a_link(refusal, folder, tmp_path)
+
+
+@needs_junction
+@pytest.mark.requires_symlink
+def test_local_snapshot_path_with_a_junction_inside_is_refused(tmp_path, monkeypatch) -> None:
+    import _winapi
+
+    from soup_cli.utils.spectrum_scan import resolve_model_weights
+
+    snapshot = _link_snapshot(_repo(tmp_path))
+    _winapi.CreateJunction(str(_outside_directory(tmp_path)), str(snapshot / "extra"))
+    monkeypatch.setenv("SOUP_SPECTRUM_CACHE_DIR", str(tmp_path / "soup-cache"))
+
+    with pytest.raises(ValueError, match="directory junction is not allowed: 'extra'"):
+        resolve_model_weights(str(snapshot))
+
+    assert not _weights_root(tmp_path).exists()
