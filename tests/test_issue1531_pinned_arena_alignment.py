@@ -150,3 +150,76 @@ class TestTheSource:
             assert [r for r in caplog.records if "not sector-aligned" in r.getMessage()]
         finally:
             source.close()
+
+
+class _Console:
+    def __init__(self):
+        self.lines = []
+
+    def print(self, text):
+        self.lines.append(text)
+
+
+@pytest.fixture
+def unalignable(monkeypatch):
+    """Staging that is misaligned whatever the arenas were: the fallback's one case."""
+    real = AsyncDiskSource._allocate_staging
+
+    def shifted(self, region_sizes):
+        arenas, regions = real(self, region_sizes)
+        return arenas, [_misaligned_arena(r.numel()) for r in regions]
+
+    monkeypatch.setattr(AsyncDiskSource, "_allocate_staging", shifted)
+
+
+class TestTheConsoleLine:
+    """A `soup train` user sees the Rich console, not the logger."""
+
+    def _build(self, tmp_path, console, *, pin):
+        from soup_cli.utils.layer_stream_runtime import _build_source
+
+        shard_dir = _shards(tmp_path)
+        return _build_source(
+            shard_dir, N_LAYERS, _spec(shard_dir), pin, console, tier="disk", read_ahead=2
+        )
+
+    @staticmethod
+    def _fallback_lines(console):
+        return [line for line in console.lines if "page cache" in line]
+
+    def test_a_page_cache_fallback_is_said_on_the_console(self, tmp_path, unalignable):
+        console = _Console()
+        source, pinned = self._build(tmp_path, console, pin=False)
+        try:
+            assert source.direct_io is False and pinned is False
+            lines = self._fallback_lines(console)
+            assert len(lines) == 1
+            assert "not sector-aligned" in lines[0] and "direct I/O" in lines[0]
+        finally:
+            source.close()
+
+    def test_a_pinned_source_says_it_too(self, tmp_path, misaligned, unalignable):
+        console = _Console()
+        source, pinned = self._build(tmp_path, console, pin=True)
+        try:
+            assert source.direct_io is False and pinned is True
+            assert len(self._fallback_lines(console)) == 1
+        finally:
+            source.close()
+
+    def test_aligned_staging_says_nothing(self, tmp_path):
+        console = _Console()
+        source, _ = self._build(tmp_path, console, pin=False)
+        try:
+            assert source.staging_aligned is True
+            assert self._fallback_lines(console) == []
+        finally:
+            source.close()
+
+    def test_without_a_console_the_logger_says_it_once(self, tmp_path, unalignable, caplog):
+        with caplog.at_level(logging.WARNING, logger=mod.__name__):
+            source, _ = self._build(tmp_path, None, pin=False)
+        try:
+            assert len([r for r in caplog.records if "not sector-aligned" in r.getMessage()]) == 1
+        finally:
+            source.close()

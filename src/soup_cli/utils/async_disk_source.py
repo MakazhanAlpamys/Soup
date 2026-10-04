@@ -64,6 +64,11 @@ from soup_cli.utils.safetensors_reader import (
 
 logger = logging.getLogger(__name__)
 
+UNALIGNED_STAGING_MESSAGE = (
+    "layer streaming's staging is not sector-aligned on this box; the "
+    "disk tier reads through the page cache instead of direct I/O"
+)
+
 #: How many byte ranges a layer's data section is read as, each by its own
 #: worker thread through its own direct-I/O handle. Measured cold on the
 #: 70B-shaped NF4 store (#974; fresh layers per configuration, Samsung PM9B1
@@ -579,11 +584,11 @@ class AsyncDiskSource:
         for idx, root in enumerate(self._root_of):
             first_of_root.setdefault(root, idx)
         aligned = all(region.data_ptr() % SECTOR_BYTES == 0 for region in self._regions)
+        #: False when the whole source reads through the page cache for this reason;
+        #: ``_build_source`` says so on the console.
+        self.staging_aligned = aligned
         if not aligned:  # _allocate_staging aligns every arena; kept as the safe fallback
-            logger.warning(
-                "layer streaming's staging is not sector-aligned on this box; the "
-                "disk tier reads through the page cache instead of direct I/O"
-            )
+            logger.warning(UNALIGNED_STAGING_MESSAGE)
         self._open_of: Dict[int, Any] = {}
         for root in self._roots:
             self._open_of[root] = self._open_buffered
