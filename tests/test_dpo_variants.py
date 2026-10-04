@@ -22,6 +22,17 @@ from pydantic import ValidationError
 
 from soup_cli.config.schema import SoupConfig
 
+
+def _local_base_model_dir() -> str:
+    """A tiny GPT-2 + tokenizer built locally (no download), standing in for
+    sshleifer/tiny-gpt2 -- #1356 found these real-trainer tests pulling it
+    from the Hub for nothing they check depends on real pretrained weights.
+    Shared and cached across every file that needs one (tests/_tiny_hf_models.py)."""
+    from tests._tiny_hf_models import tiny_model_dir
+
+    return tiny_model_dir("gpt2")
+
+
 # ─── Schema bounds ──────────────────────────────────────────────────────────
 
 
@@ -611,8 +622,9 @@ class TestRealTrainerBetaSchedule:
             for i in range(4)
         ]
         out_dir = (tmp_path / f"out_dpo_{sched}").as_posix()
+        base_dir = Path(_local_base_model_dir()).as_posix()
         cfg = load_config_from_string(f"""
-base: sshleifer/tiny-gpt2
+base: {base_dir}
 task: dpo
 data:
   train: x.jsonl
@@ -648,7 +660,7 @@ def _run_schedule(tmp_path, task, training):
         {"prompt": f"Q{i}?", "chosen": f"A{i} good.", "rejected": f"A{i} bad."} for i in range(4)
     ]
     cfg = load_config_from_string(
-        "base: sshleifer/tiny-gpt2\n"
+        f"base: {Path(_local_base_model_dir()).as_posix()}\n"
         f"task: {task}\n"
         "data:\n  train: x.jsonl\n  max_length: 64\n"
         "training:\n  epochs: 2\n  batch_size: 2\n  quantization: none\n  lr: 1e-4\n"

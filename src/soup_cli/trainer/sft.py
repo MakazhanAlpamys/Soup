@@ -21,8 +21,12 @@ from soup_cli.utils.gpu import (
     resolve_base_load_dtype,
     resolve_device_map,
 )
-from soup_cli.utils.mixed_precision import align_trainable_dtype_for_fp16
+from soup_cli.utils.mixed_precision import (
+    align_trainable_dtype_for_fp16,
+    keep_trainable_dtype_on_resume,
+)
 from soup_cli.utils.seeding import apply_training_seed, training_seed_kwargs
+from soup_cli.utils.terminal import for_terminal
 
 logger = logging.getLogger(__name__)
 
@@ -1995,6 +1999,8 @@ class SFTTrainerWrapper(StreamingSetupMixin):
         """Keep messages + PIL images raw for processor-aware collation."""
         from datasets import Dataset
 
+        from soup_cli.utils.paths import require_regular_file
+
         def load_and_format_vision(example):
             from PIL import Image as PILImage
 
@@ -2002,9 +2008,16 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             image = None
             if image_path:
                 try:
+                    # Open a file name only when it is a regular file: a FIFO
+                    # or a device would stall the reader.
+                    if isinstance(image_path, (str, bytes, os.PathLike)):
+                        require_regular_file(os.fsdecode(image_path))
                     image = PILImage.open(image_path).convert("RGB")
                 except (FileNotFoundError, OSError):
-                    console.print(f"[yellow]Warning: cannot open image: {image_path}[/]")
+                    console.print(
+                        "[yellow]Warning: cannot open image: "
+                        f"{for_terminal(image_path)}[/]"
+                    )
 
             result = {"images": []}
             if image is not None:
@@ -2117,6 +2130,8 @@ class SFTTrainerWrapper(StreamingSetupMixin):
         """Prepare dataset for audio fine-tuning with audio loading."""
         from datasets import Dataset
 
+        from soup_cli.utils.paths import require_regular_file
+
         try:
             import librosa  # noqa: F401
         except ImportError:
@@ -2133,11 +2148,17 @@ class SFTTrainerWrapper(StreamingSetupMixin):
             sampling_rate = 16000
             if audio_path:
                 try:
+                    # Same rule as the vision path: only a regular file is read.
+                    if isinstance(audio_path, (str, bytes, os.PathLike)):
+                        require_regular_file(os.fsdecode(audio_path))
                     audio_array, sampling_rate = librosa.load(
                         audio_path, sr=16000, mono=True,
                     )
                 except (FileNotFoundError, OSError):
-                    console.print(f"[yellow]Warning: cannot open audio: {audio_path}[/]")
+                    console.print(
+                        "[yellow]Warning: cannot open audio: "
+                        f"{for_terminal(audio_path)}[/]"
+                    )
 
             messages = example["messages"]
             if hasattr(self.processor, "apply_chat_template"):
@@ -2303,6 +2324,8 @@ class SFTTrainerWrapper(StreamingSetupMixin):
                 fp16=getattr(self.trainer.args, "fp16", False),
                 bf16=getattr(self.trainer.args, "bf16", False),
             )
+            if resume_from_checkpoint is not None:
+                keep_trainable_dtype_on_resume(self.trainer)
             self.trainer.train(resume_from_checkpoint=resume_from_checkpoint)
         duration = time.time() - start
         self._report_rewind()

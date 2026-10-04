@@ -723,21 +723,18 @@ class RamSource:
             )
 
     @staticmethod
-    def spec_from_shard(shard_dir: str, idx: int = 0) -> Dict[str, Tuple[Tuple[int, ...], str]]:
-        """Shape AND dtype for ONE decoder layer, read from the shard header.
+    def spec_from_path(path: str) -> Dict[str, Tuple[Tuple[int, ...], str]]:
+        """Shape AND dtype for the decoder-layer shard at ``path``, read from its header.
 
-        The dtype is read per tensor rather than taken from ``index.dtype``: an
-        NF4 shard is deliberately mixed — packed nibbles and (under double
-        quant) absmax are ``uint8`` while the nested absmax, the offset and the
-        layernorms are floats. Allocating one dtype across the pool would
-        reinterpret packed bytes as floats.
+        The dtype is read per tensor rather than taken from ``index.dtype``: an NF4 shard is
+        deliberately mixed — packed nibbles and (under double quant) absmax are ``uint8``
+        while the nested absmax, the offset and the layernorms are floats. Allocating one
+        dtype across the pool would reinterpret packed bytes as floats.
         """
         from safetensors import safe_open
 
-        from soup_cli.utils.layer_shard import layer_shard_path
-
         spec: Dict[str, Tuple[Tuple[int, ...], str]] = {}
-        with safe_open(layer_shard_path(shard_dir, idx), framework="pt") as handle:
+        with safe_open(path, framework="pt") as handle:
             for name in handle.keys():
                 sliced = handle.get_slice(name)
                 shape = tuple(int(d) for d in sliced.get_shape())
@@ -750,10 +747,34 @@ class RamSource:
                 spec[name] = (shape, _SAFETENSORS_DTYPES[raw])
         return spec
 
+    @staticmethod
+    def spec_from_shard(shard_dir: str, idx: int = 0) -> Dict[str, Tuple[Tuple[int, ...], str]]:
+        """``spec_from_path`` for layer ``idx`` of a ONE-root cache."""
+        from soup_cli.utils.layer_shard import layer_shard_path
+
+        return RamSource.spec_from_path(layer_shard_path(shard_dir, idx))
+
+    @classmethod
+    def layer_specs_from_paths(
+        cls, paths: Sequence[str]
+    ) -> list[Dict[str, Tuple[Tuple[int, ...], str]]]:
+        """Every decoder layer's spec, one shard path per layer, wherever each file lives.
+
+        The form the setup and ``install_streaming`` use, with ``layer_paths(shard_dir,
+        index)``: on a striped cache (R4) the layers sit on several roots.
+        """
+        return [cls.spec_from_path(path) for path in paths]
+
     @classmethod
     def layer_specs_from_shards(
         cls, shard_dir: str, n_layers: int
     ) -> list[Dict[str, Tuple[Tuple[int, ...], str]]]:
+        """The ONE-root form: every layer under ``shard_dir``. Wrong for a striped cache.
+
+        Kept for one-root callers (tests, the #974 harnesses). The setup goes through
+        :meth:`layer_specs_from_paths` with ``layer_paths(shard_dir, index)``, which knows
+        which root holds each layer.
+        """
         return [cls.spec_from_shard(shard_dir, idx) for idx in range(n_layers)]
 
     @staticmethod
@@ -2790,12 +2811,17 @@ def install_streaming(
     tier: str = "ram",
     read_ahead: int = DEFAULT_STREAM_READ_AHEAD,
     refill_before_backward: bool = False,
+    read_ahead_decision: Any = None,
 ) -> StreamRuntime:
     """Wrap every decoder layer and wire the buffer pool + prefetch scheduler.
 
     ``refill_before_backward`` says the loss runs a second forward before each
     step's backward; an untied output head then hands autograd a private copy
     of its weight (#1049).
+
+    ``read_ahead_decision`` (a ``stripe_roots.ReadAheadDecision``, R4) says how
+    ``read_ahead`` came about, so the page-lock messages advise a depth that is
+    not raised straight back up on a striped cache.
     """
     import torch
 
@@ -2803,7 +2829,7 @@ def install_streaming(
         QUANT_NF4,
         large_shard_path,
         large_weight_role,
-        layer_shard_path,
+        layer_paths,
     )
 
     # PyTorch 2.7+ on Apple Silicon can turn
@@ -2852,7 +2878,9 @@ def install_streaming(
             "no meta decoder weights found — the base was materialised, which "
             "defeats layer streaming entirely"
         )
-    layer_specs = RamSource.layer_specs_from_shards(shard_dir, n_layers)
+    _require_stripe_folders(shard_dir, index)
+    decoder_paths = layer_paths(shard_dir, index)
+    layer_specs = RamSource.layer_specs_from_paths(decoder_paths)
     large_specs = large_layer_specs(shard_dir, index)
     large_keys = tuple(large_specs)
     role_keys = {large_weight_role(key): key for key in large_keys}
@@ -2896,9 +2924,9 @@ def install_streaming(
 
     large_source_indices = {key: n_layers + offset for offset, key in enumerate(large_keys)}
     source_specs = needed_specs_by_layer + [{key: large_specs[key]} for key in large_keys]
-    source_paths = [layer_shard_path(shard_dir, idx) for idx in range(n_layers)] + [
-        large_shard_path(shard_dir, key) for key in large_keys
-    ]
+    source_paths = list(decoder_paths) + [large_shard_path(shard_dir, key) for key in large_keys]
+    placement = tuple(getattr(index, "layer_roots", ()) or ())
+    source_roots = placement + (0,) * len(large_keys) if placement else None
     source, pinned = _build_source(
         shard_dir,
         len(source_specs),
@@ -2909,6 +2937,8 @@ def install_streaming(
         require_pin=require_pin,
         shard_paths=source_paths,
         read_ahead=read_ahead,
+        layer_roots=source_roots,
+        read_ahead_decision=read_ahead_decision,
     )
     pool = LayerBufferPool(
         spec,
@@ -3157,6 +3187,41 @@ def _recover_before_refusing(console: Any) -> None:
         logger.warning("page-lock recovery failed before the refusal: %r", exc)
 
 
+def _require_stripe_folders(shard_dir: str, index: Any) -> None:
+    """Every stripe folder a striped cache reads from is there and is a real folder.
+
+    Refused by name before any header is read: a missing root (an unmounted drive), a missing
+    per-model folder under a present root, and a link or junction at the folder, which would
+    send every read somewhere the cache check never looked.
+    """
+    from soup_cli.utils.layer_shard import stripe_dirs
+    from soup_cli.utils.stripe_roots import STRIPE_DIRS_ENV, stripe_folder_problem
+
+    placement = tuple(getattr(index, "layer_roots", ()) or ())
+    roots = tuple(getattr(index, "stripe_roots", ()) or ())
+    folders = stripe_dirs(shard_dir, roots)[1:]
+    for position, (root, folder) in enumerate(zip(roots, folders), start=1):
+        layers = [idx for idx, owner in enumerate(placement) if owner == position]
+        shown = f"{layers[:8]}{' ...' if len(layers) > 8 else ''}"
+        if not os.path.isdir(root):
+            raise RuntimeError(
+                f"layer streaming's cache keeps decoder layers {shown} on the stripe root "
+                f"{root} (from {STRIPE_DIRS_ENV}), and that folder is not there — a drive "
+                f"that is not mounted, or a drive letter that changed. Reconnect it, or unset "
+                f"{STRIPE_DIRS_ENV} and let Soup re-shard to one root."
+            )
+        problem = stripe_folder_problem(folder, root)
+        if problem is not None:
+            raise RuntimeError(f"layer streaming's cache: {problem}.")
+        if not os.path.isdir(folder):
+            raise RuntimeError(
+                f"layer streaming's cache keeps decoder layers {shown} in {folder} (on a "
+                f"{STRIPE_DIRS_ENV} root), and that folder is gone although its root is there. "
+                f"Let Soup re-shard (the cache check will rebuild it), or unset "
+                f"{STRIPE_DIRS_ENV} to re-shard to one root."
+            )
+
+
 def _build_source(
     shard_dir,
     n_layers,
@@ -3167,6 +3232,8 @@ def _build_source(
     require_pin=False,
     shard_paths=None,
     read_ahead=DEFAULT_STREAM_READ_AHEAD,
+    layer_roots=None,
+    read_ahead_decision=None,
 ):
     """Build the weight source for the chosen tier.
 
@@ -3192,7 +3259,10 @@ def _build_source(
 
     ``read_ahead`` (``training.stream_read_ahead``) is the reader's depth and
     therefore the multiplier on how much host memory is page-locked, which makes
-    lowering it a remedy the RAM tier cannot offer.
+    lowering it a remedy the RAM tier cannot offer. ``read_ahead_decision`` (R4)
+    says how that depth came about; without it the depth is taken as set, over
+    the drives ``layer_roots`` names. Either way the advice names a depth that
+    the N + 1 rule does not raise straight back up.
 
     The second element of the returned tuple means the same thing on both tiers:
     the host-side source memory is page-locked.
@@ -3200,8 +3270,19 @@ def _build_source(
     source_kwargs = {} if shard_paths is None else {"shard_paths": shard_paths}
     if tier == "disk":
         from soup_cli.utils.async_disk_source import AsyncDiskSource
+        from soup_cli.utils.stripe_roots import ReadAheadDecision
 
+        decision = read_ahead_decision or ReadAheadDecision(
+            depth=read_ahead,
+            configured=read_ahead,
+            n_roots=(max(layer_roots) + 1) if layer_roots else 1,
+        )
+        advice = decision.lowering_advice()
         open_kwargs = dict(read_ahead=read_ahead, **source_kwargs)
+        if layer_roots is not None:
+            # R4: which drive each source index lives on. Only the async reader uses it; the
+            # RAM tier reads every file once whatever drive it is on.
+            open_kwargs["layer_roots"] = layer_roots
         if pin:
             try:
                 source = AsyncDiskSource(shard_dir, n_layers, spec, pin=True, **open_kwargs)
@@ -3220,18 +3301,18 @@ def _build_source(
                         "how much gets page-locked. Refusing rather than silently "
                         "degrading to pageable staging, which makes host-to-device "
                         "copies synchronous and costs the ~97% -> ~79% "
-                        "GPU-utilisation overlap pinning buys. Lower "
-                        "training.stream_read_ahead, free RAM, or unset "
-                        "training.stream_pin to allow the pageable fallback."
+                        "GPU-utilisation overlap pinning buys. "
+                        + (f"{advice}, free RAM, " if advice else "Free RAM, ")
+                        + "or unset training.stream_pin to allow the pageable fallback."
                     ) from exc
                 message = (
                     "layer streaming could not page-lock the disk tier's host "
                     f"staging ({type(exc).__name__}); falling back to PAGEABLE "
                     "staging. Host-to-device copies become synchronous, which "
                     "costs overlap — measured GPU utilisation drops from ~97% to "
-                    "~79%. Lower training.stream_read_ahead (its depth is what "
-                    "decides how much is page-locked) or free RAM to keep the "
-                    "pinned staging."
+                    "~79%. The read-ahead depth decides how much is page-locked. "
+                    + (f"{advice}, or free RAM" if advice else "Free RAM")
+                    + " to keep the pinned staging."
                 )
                 if console is not None:
                     console.print(f"[yellow]{message}[/]")
@@ -3335,8 +3416,13 @@ def build_streamed_model(
     weights_dir: Optional[str] = None,
     ngram_source: str = "disk",
     refill_before_backward: bool = False,
+    read_ahead_decision: Any = None,
 ) -> Tuple[Any, StreamRuntime]:
-    """Meta skeleton -> extras -> LoRA -> streaming. No resident base load."""
+    """Meta skeleton -> extras -> LoRA -> streaming. No resident base load.
+
+    ``read_ahead_decision`` (R4) is the setup's ``ReadAheadDecision`` for ``read_ahead``,
+    handed to ``install_streaming`` for its page-lock advice.
+    """
     from peft import get_peft_model
 
     model = build_meta_skeleton(
@@ -3382,6 +3468,7 @@ def build_streamed_model(
             tier=tier,
             read_ahead=read_ahead,
             refill_before_backward=refill_before_backward,
+            read_ahead_decision=read_ahead_decision,
         )
     except BaseException:
         for external in external_sources:

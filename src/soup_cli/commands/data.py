@@ -17,7 +17,7 @@ from soup_cli.data.loader import load_raw_data
 from soup_cli.data.validator import validate_and_stats
 from soup_cli.utils.embed import DEFAULT_EMBED_MODEL, embed_texts
 from soup_cli.utils.exit_codes import EXIT_GATE_FAILED, EXIT_USAGE_ERROR, GateCommand
-from soup_cli.utils.paths import is_under_cwd
+from soup_cli.utils.paths import is_network_or_device_path, is_under_cwd
 from soup_cli.utils.semdedup import DedupReport, greedy_semdedup
 from soup_cli.utils.terminal import for_terminal
 
@@ -693,10 +693,13 @@ def _show_vision_stats(data: list[dict]) -> None:
     existing = 0
     for row in data:
         img_path = row.get("image", "")
-        if not img_path:
+        if not img_path or not isinstance(img_path, str):
             continue
         ext = Path(img_path).suffix.lower()
         extensions[ext] = extensions.get(ext, 0) + 1
+        # A network share or a device path is never looked up, nor counted as found.
+        if is_network_or_device_path(img_path):
+            continue
         if Path(img_path).exists():
             existing += 1
 

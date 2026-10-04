@@ -758,23 +758,30 @@ class TestGRPOVariantRuntimeContract:
     def test_real_trl_grpotrainer_end_to_end_step(self, tmp_path, aten_half_matmuls):
         """End-to-end single step with real trl.GRPOTrainer and tiny model."""
         from datasets import Dataset
-        from transformers import AutoTokenizer, GPT2Config, GPT2LMHeadModel
+        from transformers import GPT2Config, GPT2LMHeadModel
         from trl import GRPOConfig, GRPOTrainer
 
         from soup_cli.trainer.grpo import make_grpo_trainer_variant
+        from tests._tiny_hf_models import build_tokenizer
 
+        # #1356: a tokenizer built locally (no download) stands in for the
+        # real "gpt2" tokenizer -- vocab_size matches it rather than a
+        # hardcoded 50257, since nothing here depends on real BPE merges.
+        # Dropout 0 and a 1-layer/1-head shape are specific to this test
+        # (deterministic, minimal), so the model stays file-local.
+        tokenizer = build_tokenizer(
+            ("Hello", "World", "hello world"), eos="<|endoftext|>"
+        )
         config = GPT2Config(
             n_layer=1,
             n_head=1,
             n_embd=32,
-            vocab_size=50257,
+            vocab_size=len(tokenizer),
             attn_pdrop=0.0,
             resid_pdrop=0.0,
             embd_pdrop=0.0,
         )
         model = GPT2LMHeadModel(config)
-        tokenizer = AutoTokenizer.from_pretrained("gpt2")
-        tokenizer.pad_token = tokenizer.eos_token
         dataset = Dataset.from_dict({"prompt": ["Hello", "World"]})
 
         training_args = GRPOConfig(
