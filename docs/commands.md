@@ -99,7 +99,7 @@ POST /v1/adapters/activate/<name>             Hot-swap active LoRA adapter
 soup sweep --config soup.yaml --param lr=...  Hyperparameter search
 soup sweep --config soup.yaml --sweep-config sweep.yaml  Sweep from a standalone strategy/n_runs/seed/params file
 soup diff --model-a ./a --model-b ./b         Compare two models
-soup data inspect <path>                      View dataset stats
+soup data inspect <path> [--image-dir <dir>]  View dataset stats; optionally override vision image directory
 soup data validate <path>                     Check format (auto-detect)
 soup data doctor <path> --model <id>          Chat-template compat report: 8 checks, OK/MINOR/MAJOR
 soup data doctor <path> --model <id> --show-mask N  Per-token trained/masked colouring via the real collator

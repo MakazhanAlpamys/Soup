@@ -694,7 +694,7 @@ def _show_vision_stats(data: list[dict], image_dir: Path) -> None:
 
     # Collect image file info
     extensions: dict[str, int] = {}
-    entries, _, _ = _resolve_media_entries(
+    entries, _, outside = _resolve_media_entries(
         data, "image", image_dir, source="data.inspect"
     )
 
@@ -719,9 +719,14 @@ def _show_vision_stats(data: list[dict], image_dir: Path) -> None:
     vision_table.add_row("Images referenced", str(has_image))
     vision_table.add_row("Missing image field", str(missing_image))
     vision_table.add_row("Images found on disk", str(existing))
+    vision_table.add_row("Images outside image directory", str(outside))
+
     if extensions:
-        ext_str = ", ".join(f"{ext} ({count})" for ext, count in sorted(extensions.items()))
+        ext_str = ", ".join(
+            f"{ext} ({count})" for ext, count in sorted(extensions.items())
+        )
         vision_table.add_row("Image formats", ext_str)
+
     console.print(vision_table)
 
 

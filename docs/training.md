@@ -1060,7 +1060,7 @@ directory when it is unset. A Hub dataset or a remote URI has no data file direc
 `data.image_dir` when its rows hold image paths; see
 [Data Pipeline Pro](data.md#data-pipeline-pro).
 
-`soup data inspect` automatically shows image statistics (count, formats, missing files) for vision datasets.
+`soup data inspect` resolves image paths the same way, or uses `--image-dir` when provided, and automatically shows image statistics (count, formats, missing files) for vision datasets.
 
 
 ## Audio / Speech Fine-tuning

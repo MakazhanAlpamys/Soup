@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -533,6 +534,62 @@ class TestInitVisionTemplate:
 class TestDataInspectVision:
     """Test data inspect command with vision datasets."""
 
+    @staticmethod
+    def _images_found(output: str) -> int:
+        """Extract the Images found on disk value from Rich output."""
+        ansi_re = re.compile(r"\x1b\[[0-9;]*m")
+        plain = " ".join(ansi_re.sub("", output).split())
+        match = re.search(r"Images found on disk\W+(\d+)", plain)
+        assert match, plain
+        return int(match.group(1))
+
+    @staticmethod
+    def _inspect(*args) -> str:
+        """Run data inspect and return its output."""
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        result = CliRunner().invoke(
+            app, ["data", "inspect", *args, "--rows", "0"]
+        )
+        assert result.exit_code == 0, (
+            result.output,
+            repr(result.exception),
+        )
+        return result.output
+
+    @staticmethod
+    def _vision_layout(
+        root: Path,
+        images=("imgs/a.png", "imgs/b.png"),
+    ) -> tuple[Path, Path]:
+        """Create a vision dataset and its referenced images."""
+        data_dir = root / "proj" / "data"
+        (data_dir / "imgs").mkdir(parents=True)
+
+        for name in ("a.png", "b.png"):
+            (data_dir / "imgs" / name).touch()
+
+        rows = [
+            {
+                "image": img,
+                "conversations": [
+                    {"from": "human", "value": "<image> hi"},
+                    {"from": "gpt", "value": "a picture"},
+                ],
+            }
+            for img in images
+        ]
+
+        dataset = data_dir / "train.jsonl"
+        dataset.write_text(
+            "".join(json.dumps(row) + "\n" for row in rows),
+            encoding="utf-8",
+        )
+
+        return data_dir, dataset
+
     def test_show_vision_stats_with_images(self):
         """_show_vision_stats should detect image fields and show stats."""
         from io import StringIO
@@ -553,7 +610,8 @@ class TestDataInspectVision:
 
         text = output.getvalue()
         assert "Vision Stats" in text
-        assert "2" in text  # 2 images referenced
+        assert "Images referenced" in text
+        assert "2" in text
 
     def test_show_vision_stats_no_images(self):
         """_show_vision_stats should not print anything for non-vision datasets."""
@@ -576,7 +634,6 @@ class TestDataInspectVision:
         """_show_vision_stats should handle empty data gracefully."""
         from soup_cli.commands.data import _show_vision_stats
 
-        # Should not raise
         _show_vision_stats([], Path("."))
 
     def test_show_vision_stats_image_extensions(self):
@@ -601,68 +658,70 @@ class TestDataInspectVision:
         assert ".jpg" in text
         assert ".png" in text
 
-    def test_show_vision_stats_uses_dataset_directory(self, tmp_path, monkeypatch):
-        """Image paths should resolve relative to the dataset directory."""
-        from io import StringIO
+    def test_inspect_counts_images_next_to_the_data_from_any_cwd(
+        self, tmp_path, monkeypatch
+    ):
+        """Inspect should resolve images relative to the dataset directory."""
+        data_dir, _ = self._vision_layout(tmp_path)
 
-        from rich.console import Console
+        monkeypatch.chdir(tmp_path / "proj")
+        assert self._images_found(self._inspect("data/train.jsonl")) == 2
 
-        from soup_cli.commands.data import _show_vision_stats
+        # Reverse case from #1598: the files exist under the cwd,
+        # not next to the data.
+        for name in ("a.png", "b.png"):
+            (data_dir / "imgs" / name).unlink()
 
-        data_dir = tmp_path / "data"
-        image_dir = data_dir / "imgs"
-        image_dir.mkdir(parents=True)
+        elsewhere = tmp_path / "proj" / "elsewhere"
+        (elsewhere / "imgs").mkdir(parents=True)
 
-        (image_dir / "a.png").touch()
-        (image_dir / "b.png").touch()
+        for name in ("a.png", "b.png"):
+            (elsewhere / "imgs" / name).touch()
 
-        monkeypatch.chdir(tmp_path)
+        monkeypatch.chdir(elsewhere)
+        assert self._images_found(self._inspect("../data/train.jsonl")) == 0
 
-        data = [
-            {"image": "imgs/a.png", "conversations": []},
-            {"image": "imgs/b.png", "conversations": []},
-        ]
+    def test_inspect_image_dir_option(self, tmp_path, monkeypatch):
+        """Inspect should use --image-dir when it is provided."""
+        data_dir, dataset = self._vision_layout(tmp_path)
 
-        output = StringIO()
-        with patch("soup_cli.commands.data.console", Console(file=output)):
-            _show_vision_stats(data, data_dir)
+        pics = tmp_path / "pics"
+        (pics / "imgs").mkdir(parents=True)
 
-        text = output.getvalue()
-        assert "Images referenced" in text
-        assert "Images found on disk" in text
-        assert "2" in text
-
-    def test_data_inspect_uses_dataset_directory(self, tmp_path, monkeypatch):
-        """data inspect should resolve images relative to the dataset file."""
-        from typer.testing import CliRunner
-
-        from soup_cli.cli import app
-
-        data_dir = tmp_path / "data"
-        image_dir = data_dir / "imgs"
-        image_dir.mkdir(parents=True)
-
-        (image_dir / "a.png").touch()
-        (image_dir / "b.png").touch()
-
-        dataset = data_dir / "train.jsonl"
-        dataset.write_text(
-            '{"image": "imgs/a.png", "conversations": []}\n'
-            '{"image": "imgs/b.png", "conversations": []}\n'
-        )
+        for name in ("a.png", "b.png"):
+            (data_dir / "imgs" / name).replace(pics / "imgs" / name)
 
         monkeypatch.chdir(tmp_path)
 
-        result = CliRunner().invoke(
-            app,
-            ["data", "inspect", str(dataset), "--rows", "0"],
+        assert self._images_found(self._inspect(str(dataset))) == 0
+        assert (
+            self._images_found(
+                self._inspect(str(dataset), "--image-dir", str(pics))
+            )
+            == 2
         )
 
-        assert result.exit_code == 0
-        assert "Images referenced" in result.stdout
-        assert "Images found on disk" in result.stdout
-        assert "2" in result.stdout
+    def test_inspect_does_not_count_a_path_training_refuses(
+        self, tmp_path, monkeypatch
+    ):
+        """Inspect should reject image paths outside the image directory."""
+        self._vision_layout(
+            tmp_path,
+            images=("imgs/a.png", "../outside.png"),
+        )
 
+        (tmp_path / "proj" / "outside.png").touch()
+
+        monkeypatch.chdir(tmp_path)
+
+        assert (
+            self._images_found(
+                self._inspect(
+                    str(tmp_path / "proj" / "data" / "train.jsonl")
+                )
+            )
+            == 1
+        )
 
 # ─── Doctor Tests ──────────────────────────────────────────────────────────
 
