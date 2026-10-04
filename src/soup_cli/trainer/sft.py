@@ -2004,6 +2004,12 @@ class SFTTrainerWrapper(StreamingSetupMixin):
                 return None
             if isinstance(image_raw, PILImage.Image):
                 try:
+                    try:
+                        img = PILImage.open(image_raw)
+                        if isinstance(img, PILImage.Image):
+                            return img.convert("RGB")
+                    except (AttributeError, TypeError, OSError):
+                        pass
                     return image_raw.convert("RGB")
                 except Exception:
                     return None
