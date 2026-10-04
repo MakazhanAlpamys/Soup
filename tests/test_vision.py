@@ -549,7 +549,7 @@ class TestDataInspectVision:
 
         output = StringIO()
         with patch("soup_cli.commands.data.console", Console(file=output)):
-            _show_vision_stats(data)
+            _show_vision_stats(data, Path("."))
 
         text = output.getvalue()
         assert "Vision Stats" in text
@@ -567,7 +567,7 @@ class TestDataInspectVision:
 
         output = StringIO()
         with patch("soup_cli.commands.data.console", Console(file=output)):
-            _show_vision_stats(data)
+            _show_vision_stats(data, Path("."))
 
         text = output.getvalue()
         assert "Vision" not in text
@@ -577,7 +577,7 @@ class TestDataInspectVision:
         from soup_cli.commands.data import _show_vision_stats
 
         # Should not raise
-        _show_vision_stats([])
+        _show_vision_stats([], Path("."))
 
     def test_show_vision_stats_image_extensions(self):
         """_show_vision_stats should report image file extensions."""
@@ -595,11 +595,73 @@ class TestDataInspectVision:
 
         output = StringIO()
         with patch("soup_cli.commands.data.console", Console(file=output)):
-            _show_vision_stats(data)
+            _show_vision_stats(data, Path("."))
 
         text = output.getvalue()
         assert ".jpg" in text
         assert ".png" in text
+
+    def test_show_vision_stats_uses_dataset_directory(self, tmp_path, monkeypatch):
+        """Image paths should resolve relative to the dataset directory."""
+        from io import StringIO
+
+        from rich.console import Console
+
+        from soup_cli.commands.data import _show_vision_stats
+
+        data_dir = tmp_path / "data"
+        image_dir = data_dir / "imgs"
+        image_dir.mkdir(parents=True)
+
+        (image_dir / "a.png").touch()
+        (image_dir / "b.png").touch()
+
+        monkeypatch.chdir(tmp_path)
+
+        data = [
+            {"image": "imgs/a.png", "conversations": []},
+            {"image": "imgs/b.png", "conversations": []},
+        ]
+
+        output = StringIO()
+        with patch("soup_cli.commands.data.console", Console(file=output)):
+            _show_vision_stats(data, data_dir)
+
+        text = output.getvalue()
+        assert "Images referenced" in text
+        assert "Images found on disk" in text
+        assert "2" in text
+
+    def test_data_inspect_uses_dataset_directory(self, tmp_path, monkeypatch):
+        """data inspect should resolve images relative to the dataset file."""
+        from typer.testing import CliRunner
+
+        from soup_cli.cli import app
+
+        data_dir = tmp_path / "data"
+        image_dir = data_dir / "imgs"
+        image_dir.mkdir(parents=True)
+
+        (image_dir / "a.png").touch()
+        (image_dir / "b.png").touch()
+
+        dataset = data_dir / "train.jsonl"
+        dataset.write_text(
+            '{"image": "imgs/a.png", "conversations": []}\n'
+            '{"image": "imgs/b.png", "conversations": []}\n'
+        )
+
+        monkeypatch.chdir(tmp_path)
+
+        result = CliRunner().invoke(
+            app,
+            ["data", "inspect", str(dataset), "--rows", "0"],
+        )
+
+        assert result.exit_code == 0
+        assert "Images referenced" in result.stdout
+        assert "Images found on disk" in result.stdout
+        assert "2" in result.stdout
 
 
 # ─── Doctor Tests ──────────────────────────────────────────────────────────

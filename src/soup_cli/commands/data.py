@@ -13,11 +13,11 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
-from soup_cli.data.loader import load_raw_data
+from soup_cli.data.loader import _resolve_media_entries, load_raw_data
 from soup_cli.data.validator import validate_and_stats
 from soup_cli.utils.embed import DEFAULT_EMBED_MODEL, embed_texts
 from soup_cli.utils.exit_codes import EXIT_GATE_FAILED, EXIT_USAGE_ERROR, GateCommand
-from soup_cli.utils.paths import is_network_or_device_path, is_under_cwd
+from soup_cli.utils.paths import is_under_cwd
 from soup_cli.utils.semdedup import DedupReport, greedy_semdedup
 from soup_cli.utils.terminal import for_terminal
 
@@ -30,6 +30,9 @@ app = typer.Typer(no_args_is_help=True)
 def inspect(
     path: str = typer.Argument(..., help="Path to dataset file (jsonl, csv, parquet)"),
     rows: int = typer.Option(5, "--rows", "-r", help="Number of sample rows to show"),
+    image_dir: Optional[str] = typer.Option(
+        None, "--image-dir", help="Directory containing referenced images"
+    ),
 ):
     """Inspect a dataset: show stats and sample rows."""
     file_path = Path(path)
@@ -55,7 +58,8 @@ def inspect(
     console.print(stats_table)
 
     # Vision stats (if dataset contains images)
-    _show_vision_stats(data)
+    image_root = Path(image_dir) if image_dir else file_path.parent
+    _show_vision_stats(data, image_root)
 
     # Print sample rows
     if rows > 0 and len(data) > 0:
@@ -674,7 +678,7 @@ def stats(
         )
 
 
-def _show_vision_stats(data: list[dict]) -> None:
+def _show_vision_stats(data: list[dict], image_dir: Path) -> None:
     """Show image statistics if dataset contains image fields."""
     if not data:
         return
@@ -690,16 +694,22 @@ def _show_vision_stats(data: list[dict]) -> None:
 
     # Collect image file info
     extensions: dict[str, int] = {}
+    entries, _, _ = _resolve_media_entries(
+        data, "image", image_dir, source="data.inspect"
+    )
+
     existing = 0
-    for row in data:
-        img_path = row.get("image", "")
-        if not img_path or not isinstance(img_path, str):
+    for row in entries:
+        if row is None:
             continue
+
+        img_path = row.get("image")
+        if not isinstance(img_path, str):
+            continue
+
         ext = Path(img_path).suffix.lower()
         extensions[ext] = extensions.get(ext, 0) + 1
-        # A network share or a device path is never looked up, nor counted as found.
-        if is_network_or_device_path(img_path):
-            continue
+
         if Path(img_path).exists():
             existing += 1
 
