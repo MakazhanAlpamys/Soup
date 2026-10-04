@@ -11,6 +11,7 @@ refused by name.
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 
@@ -48,6 +49,10 @@ def _prm_dir(path: Path, *, with_head: bool = True) -> Path:
 def no_hub_probe(monkeypatch: pytest.MonkeyPatch):
     # The trust-remote-code probe would ask the Hub; the issue's reproduction stubs it too.
     monkeypatch.setattr(prm_reward, "_resolve_trust", lambda base, requested, console: False)
+    # ... and so would the namespace-pin gate inside utils.hubs.snapshot_download (#186).
+    from soup_cli.utils import hubs
+
+    monkeypatch.setattr(hubs, "_hf_repo_metadata", lambda repo_id: None)
 
 
 @pytest.fixture
@@ -152,6 +157,49 @@ class TestLocalPathsUnchanged:
         local = _prm_dir(tmp_path / "my-prm")
         scorer = prm_reward.build_prm_reward_fn(_tcfg("./my-prm"), "cpu", False)
         assert os.path.realpath(scorer.prm_path) == os.path.realpath(local)
+
+    def test_an_existing_local_path_shaped_like_a_repo_id_stays_local(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, no_hub_probe
+    ) -> None:
+        """Review of #1580: every other local value starts with ./ or is absolute, so
+        the order of the two checks was never exercised. `checkpoints/prm` is a
+        directory here before it is an org/name."""
+        import huggingface_hub
+
+        def never(repo_id: str, **kw):
+            raise AssertionError("snapshot_download called for an existing local directory")
+
+        monkeypatch.setattr(huggingface_hub, "snapshot_download", never)
+        monkeypatch.chdir(tmp_path)
+        local = _prm_dir(tmp_path / "checkpoints" / "prm")
+        scorer = prm_reward.build_prm_reward_fn(_tcfg("checkpoints/prm"), "cpu", False)
+        assert os.path.realpath(scorer.prm_path) == os.path.realpath(local)
+
+    def test_a_hub_repo_without_a_head_is_refused_naming_the_configured_value(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, no_hub_probe
+    ) -> None:
+        import huggingface_hub
+
+        target = _prm_dir(tmp_path / "plain-base", with_head=False)
+        monkeypatch.setattr(huggingface_hub, "snapshot_download", lambda repo_id, **kw: str(target))
+        monkeypatch.chdir(tmp_path)
+        with pytest.raises(ValueError, match="my-org/soup-prm-135m") as info:
+            prm_reward.build_prm_reward_fn(_tcfg(_HUB_ID), "cpu", False)
+        assert "not a Soup-trained PRM" in str(info.value)
+
+    @pytest.mark.parametrize("value", ["org/name@main..evil", "org/n\u00e4me", "org/name\n"])
+    def test_an_id_the_hub_would_not_take_is_refused_by_name(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, no_hub_probe, value: str
+    ) -> None:
+        import huggingface_hub
+
+        monkeypatch.setattr(
+            huggingface_hub, "snapshot_download",
+            lambda repo_id, **kw: pytest.fail("the Hub was queried for a malformed id"),
+        )
+        monkeypatch.chdir(tmp_path)
+        with pytest.raises(ValueError, match="neither an existing directory nor a Hub repo id"):
+            prm_reward.build_prm_reward_fn(_tcfg(json.dumps(value)), "cpu", False)
 
     def test_a_local_directory_without_a_head_is_refused_before_training(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, no_hub_probe

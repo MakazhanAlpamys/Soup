@@ -832,7 +832,10 @@ weights would round most updates away at these learning rates (#1235).
 
 Use a trained PRM as the **per-step reward** inside GRPO — the o1-era
 process-supervision signal. Set `training.prm_reward` to a PRM directory (a
-`task=prm` checkpoint) or HF id; the PRM splits each generated completion into
+`task=prm` checkpoint) or a Hub id, `org/name` or `org/name@revision`; a Hub id is
+downloaded (weights, tokenizer and custom-code files) when the reward is built,
+before training, and a repo that is not a Soup-trained PRM (no reward head) is
+refused there, naming the configured value (#1466). The PRM splits each generated completion into
 reasoning steps (newline heuristic), scores every step with its reward head, and
 folds the per-step scores into one scalar reward that GRPO optimises. It
 **replaces** `reward_fn` and rides the existing reward-shaping +

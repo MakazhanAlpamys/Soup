@@ -449,11 +449,15 @@ class TestBuildPrmRewardFn:
         import soup_cli.utils.prm_reward as mod
 
         monkeypatch.setattr(mod, "_resolve_trust", lambda *a, **k: False)
-        # #1466: a Hub id is downloaded when the reward is built; stub the download.
+        # #1466: a Hub id is downloaded when the reward is built; stub the download and
+        # the namespace-pin metadata query it goes through (utils.hubs, #186).
+        from soup_cli.utils import hubs
+
         snapshot = _write_prm_dir(tmp_path / "snapshot")
         monkeypatch.setattr(
             huggingface_hub, "snapshot_download", lambda repo_id, **kw: str(snapshot)
         )
+        monkeypatch.setattr(hubs, "_hf_repo_metadata", lambda repo_id: None)
 
         class _T:
             prm_reward = "some/hf-id-not-on-disk"
