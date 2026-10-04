@@ -233,6 +233,20 @@ def _is_all_numeric(host: str) -> bool:
     return False
 
 
+def _is_one_space(host: str) -> bool:
+    """Whether ``host`` is a single space and nothing else.
+
+    Windows' C library reads that text as the unspecified address, so while
+    the parser used that library the refusing predicates called such a host
+    non-public on Windows. The parser now says it is no address, because
+    nothing precedes the whitespace; the two predicates keep the old answer,
+    on every platform. No other whitespace-only host was ever read as an
+    address, so none is refused here. Read like :func:`_is_all_numeric`: in
+    each ASCII form of the host, without trailing dots.
+    """
+    return any(spelling.rstrip(".") == " " for spelling in _ascii_spellings(host))
+
+
 # IPv6 prefixes that carry an IPv4 address inside them. The inner address is
 # what the packet reaches, so it is classified too, whatever the interpreter's
 # ``ipaddress`` tables say about the outer prefix (6to4 counts as private only
@@ -279,14 +293,16 @@ def is_private_or_link_local(host: str) -> bool:
     Also ``True`` for a host made of numeric labels only that
     :func:`parse_ip_literal` does not read (``4294967296``, ``10.0x.0.1``):
     such a host is not treated as a hostname, see :func:`_is_all_numeric`.
+    And for a host that is a single space, see :func:`_is_one_space`.
     """
     addr = parse_ip_literal(host)
     if addr is None:
         # Hostname — we don't resolve DNS here (the SDK does), so fall
         # back to "treat as public". A malicious DNS record pointing to
         # a private IP is out of scope for this local-tool threat model.
-        # A host written as numbers only is not a hostname, though.
-        return _is_all_numeric(host)
+        # A host written as numbers only is not a hostname, though, and
+        # neither is a host that is one space.
+        return _is_all_numeric(host) or _is_one_space(host)
     return is_non_public_address(addr)
 
 
@@ -328,6 +344,8 @@ def refuse_private_ip_literal(host: str | None, *, label: str) -> None:
     A host made of numeric labels only that is not a valid IPv4 literal is
     neither an address nor a hostname (see :func:`_is_all_numeric`): it is
     refused as well, with a message of its own that does not repeat the host.
+    So is a host that is a single space (see :func:`_is_one_space`); the
+    host is stripped first, so that is a space written inside brackets.
     """
     clean = (host or "").strip().lower().rstrip(".")
     if clean.startswith("[") and clean.endswith("]"):
@@ -340,6 +358,11 @@ def refuse_private_ip_literal(host: str | None, *, label: str) -> None:
             raise ValueError(
                 f"{label}: an all-numeric host that is not a valid IPv4 address "
                 "is not allowed (SSRF protection); use a valid IPv4 address or a hostname"
+            )
+        if _is_one_space(clean):
+            raise ValueError(
+                f"{label}: a host that is a single space is not allowed (SSRF protection); "
+                "use a valid IPv4 address or a hostname"
             )
         return
     mapped = getattr(addr, "ipv4_mapped", None)

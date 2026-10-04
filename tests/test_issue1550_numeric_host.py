@@ -211,7 +211,7 @@ def test_host_with_a_label_that_is_not_a_number_stays_a_hostname(host: str) -> N
     refuse_private_ip_literal(host, label="x")
 
 
-@pytest.mark.parametrize("host", ["", ".", "..", " ", "\t"])
+@pytest.mark.parametrize("host", ["", ".", "..", "\t"])
 def test_host_with_nothing_in_it_is_not_numeric(host: str) -> None:
     """No label at all is not a number either; an empty host is the caller's case."""
     assert is_private_or_link_local(host) is False
@@ -448,3 +448,136 @@ def test_a_long_run_of_zeros_before_a_valid_number_still_reads() -> None:
     assert inet_aton("0x" + "0" * 5000 + "a") == 10
     assert inet_aton("0x" + "f" * 5000) is None
     assert inet_aton("0" + "7" * 5000) is None
+
+
+# --- a host that is one space ---------------------------------------------------
+
+# Windows' C library reads a host of exactly one space as the unspecified
+# address, so while the parser used that library the refusing predicates called
+# such a host non-public there. The pure-Python parser says it is no address:
+# nothing precedes the whitespace. The predicates keep the old answer, on every
+# platform, and nothing else about whitespace changes.
+_ONE_SPACE = (
+    "a host that is a single space is not allowed (SSRF protection); "
+    "use a valid IPv4 address or a hostname"
+)
+
+# One space, in the forms the predicates read a host in: without trailing dots,
+# and in the ASCII form a client folds a non-ASCII host to.
+ONE_SPACE = [
+    pytest.param(" ", id="space"),
+    pytest.param(" .", id="space-trailing-dot"),
+    pytest.param(" ..", id="space-two-trailing-dots"),
+    pytest.param("\u00a0", id="nbsp"),
+    pytest.param("\u3000", id="ideographic-space"),
+    pytest.param("\u00a0.", id="nbsp-trailing-dot"),
+]
+
+# Hosts next to it that the C library never read as an address either.
+NOT_ONE_SPACE = [
+    pytest.param("", id="empty"),
+    pytest.param("\t", id="tab"),
+    pytest.param("  ", id="two-spaces"),
+    pytest.param(" \t", id="space-tab"),
+    pytest.param("\x0b", id="vertical-tab"),
+    pytest.param(" x", id="space-then-letter"),
+    pytest.param(" 1", id="space-then-number"),
+    pytest.param(" 10.0.0.1", id="space-then-address"),
+    pytest.param("\n10.0.0.1", id="newline-then-address"),
+]
+
+
+@pytest.mark.parametrize("host", ONE_SPACE)
+def test_a_one_space_host_counts_as_non_public(host: str) -> None:
+    """The predicate keeps the answer it gave on Windows; the parser reads nothing."""
+    assert parse_ip_literal(host) is None
+    assert is_private_or_link_local(host) is True
+
+
+@pytest.mark.parametrize("host", ["\u00a0", "\u3000"])
+def test_the_two_folded_spaces_are_one_space_to_a_client(host: str) -> None:
+    """The premise of the non-ASCII rows: the stdlib codec folds each to one space."""
+    assert host.encode("idna").decode("ascii") == " "
+
+
+@pytest.mark.parametrize("host", NOT_ONE_SPACE)
+def test_other_whitespace_hosts_are_not_refused_by_the_predicate(host: str) -> None:
+    """Only the one-space host was ever read as an address; the rule adds nothing else."""
+    assert is_private_or_link_local(host) is False
+
+
+def test_trailing_space_after_an_address_still_reads_as_the_address() -> None:
+    """That is the parser's whitespace rule, and it is unchanged."""
+    assert is_private_or_link_local("10.0.0.1 ") is True
+    assert is_private_or_link_local("8.8.8.8 ") is False
+
+
+@pytest.mark.parametrize("host", [None, "", " ", "\t", " .", "\u00a0", "  "])
+def test_refuse_still_passes_a_host_that_is_empty_once_stripped(host: str | None) -> None:
+    """``refuse_private_ip_literal`` strips first; an empty host is the caller's case."""
+    refuse_private_ip_literal(host, label="x")
+
+
+def test_refuse_refuses_the_one_space_host_in_brackets() -> None:
+    """Brackets keep the space from being stripped, so the host reaches the check."""
+    message = _refusal("[ ]")
+    assert message == f"x: {_ONE_SPACE}"
+    assert "[" not in message
+
+
+@pytest.mark.parametrize("host", [" 1", " 10.0.0.1", "\n10.0.0.1", "10.0.0.1 "])
+def test_refuse_reads_the_address_inside_surrounding_whitespace(host: str) -> None:
+    """Stripped, then read: refused as the non-public address it is, as before."""
+    assert _refusal(host).startswith(f"x: {_NON_PUBLIC}")
+
+
+@pytest.mark.parametrize("host", ONE_SPACE)
+def test_the_parser_and_the_local_checks_do_not_read_a_one_space_host(host: str) -> None:
+    """The rule is in the refusing predicates only."""
+    from soup_cli.utils.ingest_pull import _is_loopback
+    from soup_cli.utils.loop_stages import _endpoint_is_local
+
+    assert inet_aton(host) is None
+    assert parse_ip_literal(host) is None
+    assert _is_loopback(host) is False
+    assert _endpoint_is_local(f"https://{host}") is False
+
+
+def test_webhook_refuses_a_one_space_host_unless_private_hosts_are_allowed() -> None:
+    from soup_cli.utils.webhooks import validate_webhook_url
+
+    url = "https:// /hook"
+    with pytest.raises(ValueError, match="private/link-local/reserved hosts are not allowed"):
+        validate_webhook_url(url)
+    assert validate_webhook_url(url, allow_private_hosts=True) == url
+
+
+def test_otlp_endpoint_refuses_a_one_space_host() -> None:
+    from soup_cli.utils.tracing import validate_otlp_endpoint
+
+    with pytest.raises(ValueError, match="is a private / link-local IP"):
+        validate_otlp_endpoint("https:// :4317")
+
+
+def test_langfuse_host_check_counts_a_one_space_host_as_private() -> None:
+    from soup_cli.utils.ingest_pull import _is_private
+
+    assert _is_private("https:// ") is True
+    assert _is_private("https://  ") is False
+
+
+def test_telemetry_refuses_a_one_space_host_without_a_lookup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The static tier decides, as it did while the parser used the C library on Windows."""
+    from soup_cli.utils import trackers
+
+    looked_up: list[str] = []
+
+    def resolver(name: str, **_kwargs: object) -> list[str]:
+        looked_up.append(name)
+        return ["93.184.216.34"]
+
+    monkeypatch.setattr(trackers, "_resolve_host_ips", resolver)
+    assert trackers._telemetry_endpoint_is_safe("https:// /i/v0/e/") is False
+    assert looked_up == []
