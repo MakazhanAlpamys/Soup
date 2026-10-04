@@ -1,3 +1,4 @@
+from argparse import Namespace
 from copy import deepcopy
 from pathlib import Path
 
@@ -188,7 +189,84 @@ def test_live_sweep_builds_recorded_shapes(tmp_path, monkeypatch):
     ]
     assert rows[-1]["role"] == "control"
     assert any("20480" in command for command in generated)
+    control_command = next(command for command in generated if "20480" in command)
+    assert control_command[control_command.index("--kv-heads") + 1] == "10"
 
 
 def test_self_test_exercises_the_full_verdict():
     assert run_self_test() == 0
+
+
+def test_nf4_sweep_needs_a_point_at_or_below_48_layers():
+    rows = recorded_rows()
+    rows[0].update(layers=56, total=224, exact_counts=[224] * 3)
+    assert not layercount_verdict(rows)
+
+
+def test_bf16_sweep_row_is_required_not_just_accepted():
+    rows = [row for row in recorded_rows() if row["quant"] != "bf16"]
+    rows.insert(
+        1,
+        {
+            "layers": 56,
+            "quant": "nf4",
+            "role": "sweep",
+            "layer_mib": 0.01,
+            "exact_counts": [224] * 3,
+            "total": 224,
+        },
+    )
+    assert len(rows) >= 4
+    assert not layercount_verdict(rows)
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"quant": "bf16"},
+        {"layers": 64, "total": 256, "exact_counts": [256, 8, 8]},
+    ],
+)
+def test_control_must_be_the_48_layer_nf4_row(change):
+    rows = recorded_rows()
+    rows[-1].update(change)
+    assert not layercount_verdict(rows)
+
+
+def test_control_must_go_wrong_after_the_first_read():
+    rows = recorded_rows()
+    rows[-1]["exact_counts"] = [8, 192, 192]
+    assert not layercount_verdict(rows)
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("quant", "fp8", "nf4 or bf16"),
+        ("role", "probe", "sweep or control"),
+        ("exact_counts", [192, 192], "three backwards"),
+    ],
+)
+def test_unknown_labels_and_short_reads_fail_closed(field, value, message):
+    rows = recorded_rows()
+    rows[0][field] = value
+    with pytest.raises(MeasurementInvalidError, match=message):
+        layercount_verdict(rows)
+
+
+@pytest.mark.parametrize("error", [RuntimeError("runtime"), ValueError("setup")])
+def test_live_measurement_setup_errors_are_invalid(monkeypatch, tmp_path, error):
+    from benchmarks.harness import layercount
+
+    monkeypatch.setattr(
+        layercount,
+        "parse_args",
+        lambda: Namespace(self_test=False, measure=True, work_dir=tmp_path, records=None),
+    )
+    monkeypatch.setattr("torch.cuda.is_available", lambda: True)
+    monkeypatch.setattr(
+        layercount,
+        "run_live_sweep",
+        lambda work_dir: (_ for _ in ()).throw(error),
+    )
+    assert layercount.main() == 3

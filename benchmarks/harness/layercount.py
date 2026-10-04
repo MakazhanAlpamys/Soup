@@ -131,7 +131,8 @@ def _measure_checkpoint(weights: str, shards: str, quant: str) -> dict[str, Any]
         index, arch = prepare_shards(weights, shards)
         streamed, runtime, restore = build_streamed_arm(weights, shards, index, arch, "control", 2)
     else:
-        probe = build_meta_skeleton(weights, dtype="bfloat16", quant="bf16")
+        runtime_quant = "none"
+        probe = build_meta_skeleton(weights, dtype="bfloat16", quant=runtime_quant)
         arch = bitexact.model_arch_name(probe)
         del probe
         index = shard_checkpoint(
@@ -139,7 +140,7 @@ def _measure_checkpoint(weights: str, shards: str, quant: str) -> dict[str, Any]
             shards,
             dtype="bfloat16",
             arch=arch,
-            quant="bf16",
+            quant=runtime_quant,
             quant_suffixes=(),
             double_quant=True,
             quant_device="cuda",
@@ -154,7 +155,7 @@ def _measure_checkpoint(weights: str, shards: str, quant: str) -> dict[str, Any]
             buffers=2,
             pin=True,
             seed=3,
-            quant="bf16",
+            quant=runtime_quant,
             double_quant=True,
             tier="ram",
         )
@@ -238,7 +239,7 @@ def run_live_sweep(work_dir: Path) -> list[dict[str, Any]]:
                     "--heads",
                     "4" if hidden == 64 else "40",
                     "--kv-heads",
-                    "2" if hidden == 64 else "8",
+                    "2" if hidden == 64 else "10",
                     "--vocab",
                     "128" if hidden == 64 else "1024",
                 ],
@@ -321,7 +322,7 @@ def main() -> int:
                 return 0
             print("ERROR: layer-count control relationship not reproduced")
             return 1
-        except MeasurementInvalidError as exc:
+        except (MeasurementInvalidError, RuntimeError, ValueError) as exc:
             print(f"ERROR: invalid measurement: {exc}")
             return 3
     if args.records is None:
