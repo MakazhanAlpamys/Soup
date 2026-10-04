@@ -46,7 +46,7 @@ def inspect(
     stats_table.add_column("Metric", style="bold")
     stats_table.add_column("Value")
     stats_table.add_row("Total samples", str(result["total"]))
-    stats_table.add_row("Columns", ", ".join(result["columns"]))
+    stats_table.add_row("Columns", ", ".join(for_terminal(col) for col in result["columns"]))
     stats_table.add_row("Avg length (chars)", str(result["avg_length"]))
     stats_table.add_row("Min length", str(result["min_length"]))
     stats_table.add_row("Max length", str(result["max_length"]))
@@ -116,9 +116,9 @@ def validate(
 
         try:
             fmt = detect_format(data)
-            console.print(f"[dim]Auto-detected format: {fmt}[/]")
+            console.print(f"[dim]Auto-detected format: {for_terminal(fmt)}[/]")
         except ValueError as exc:
-            console.print(f"[red]{exc}[/]")
+            console.print(f"[red]{for_terminal(str(exc))}[/]")
             raise typer.Exit(EXIT_USAGE_ERROR)
 
     result = validate_and_stats(data, expected_format=fmt)
@@ -126,13 +126,13 @@ def validate(
     if result["issues"]:
         console.print("[yellow]Issues found:[/]")
         for issue in result["issues"]:
-            console.print(f"  [yellow]![/] {issue}")
+            console.print(f"  [yellow]![/] {for_terminal(issue)}")
     else:
         console.print("[bold green]Dataset is valid![/]")
 
     valid = result["valid_rows"]
     total = result["total"]
-    console.print(f"\n[green]{valid}/{total} rows valid for {fmt} format[/]")
+    console.print(f"\n[green]{valid}/{total} rows valid for {for_terminal(fmt)} format[/]")
 
     if total > 0 and valid == 0:
         console.print("[red]Validation failed: no usable rows remain.[/]")
