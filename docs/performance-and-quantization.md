@@ -863,6 +863,12 @@ metadata request for the regular-file directory. A missing blob or an escaping s
 before the destination is published, rather than leaving a partial checkpoint that the sharder
 could consume. With huggingface_hub 1.32 or later, links into its marked cache-wide store
 (`<cache>/blobs`) are followed too, and any other target is still refused.
+The repo's own `blobs` directory is treated like that store: it has to be a real directory.
+When it is itself a link (a symlink, or a junction on Windows), Soup stops with a message
+naming it instead of following it, so a link in the cache that points outside the cache is
+never followed. To keep a model's files on another disk, move the whole cache or the whole
+repo folder and link that: the snapshot path is resolved first. A junction inside a snapshot
+directory is refused like a directory symlink.
 
 
 ## Correctness First (v0.36.0)
