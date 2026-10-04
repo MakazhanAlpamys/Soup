@@ -175,10 +175,11 @@ class _RangeReaders:
     """
 
     def __init__(self, count: int, name: str = "soup-layer-range"):
-        self._jobs: "queue.Queue[Optional[Tuple[Any, _RangeJob]]]" = queue.Queue()
+        self._jobs: "queue.Queue[Optional[Tuple[Any, _RangeJob, Optional[Any]]]]" = queue.Queue()
         self._name = name
-        # Guards `_threads` / `_starts` / `_closed`: `run` restarts workers on
-        # the reader thread while `close` may run on the consumer's.
+        # Guards `_threads` / `_starts` / `_closed`: `_check_workers` restarts
+        # workers on the reader thread (from `wait`, or the reader's own poll)
+        # while `close` may run on the consumer's.
         self._lock = threading.Lock()
         self._closed = False
         # Per worker SLOT, set as the worker's first statement: a slot whose
@@ -259,35 +260,51 @@ class _RangeReaders:
             job = self._jobs.get()
             if job is None:
                 return
-            work, outcome = job
+            work, outcome, on_done = job
             try:
                 work()
             except BaseException as exc:  # noqa: BLE001 — handed back to the reader
                 outcome.error = exc
             finally:
                 outcome.done.set()
+                if on_done is not None:
+                    try:
+                        on_done()
+                    except BaseException:  # noqa: BLE001 — a wake-up must never kill a worker
+                        logger.debug("layer-stream range completion callback failed", exc_info=True)
 
-    def run(self, works: Sequence[Any]) -> None:
+    def submit(self, works: Sequence[Any], on_done: Optional[Any] = None) -> List[_RangeJob]:
+        """Queue ``works`` and return their outcomes at once.
+
+        ``on_done`` runs on the worker right after each job's outcome is set; the reader passes
+        its wake-up, so it can publish a finished read without blocking on it.
+        """
         outcomes = [_RangeJob() for _ in works]
         for work, outcome in zip(works, outcomes):
-            self._jobs.put((work, outcome))
+            self._jobs.put((work, outcome, on_done))
+        return outcomes
+
+    def wait(self, outcomes: Sequence[_RangeJob]) -> None:
         for outcome in outcomes:
-            # A job queued behind the close sentinels is never taken; polling
-            # the workers' liveness is what turns that into an error rather
-            # than a reader parked forever. The same poll restarts a worker
-            # that died in bootstrap, which would otherwise read as "closed".
+            # A job queued behind the close sentinels is never taken; polling the workers'
+            # liveness is what turns that into an error rather than a reader parked forever.
+            # The same poll restarts a worker that died in bootstrap, which would otherwise
+            # read as "closed".
             while not outcome.done.wait(timeout=1.0):
                 self._check_workers()
         for outcome in outcomes:
             if outcome.error is not None:
                 raise outcome.error
 
+    def run(self, works: Sequence[Any]) -> None:
+        self.wait(self.submit(works))
+
     def close(self, timeout: float = 10.0) -> None:
         """Send every worker its sentinel and wait for them, up to ``timeout`` in
         total — a worker still inside a read outlives it, as the reader thread
         outlives its own bounded join."""
-        # Under the lock, so `run` cannot start a worker after this snapshot;
-        # one sentinel per slot covers a restarted worker as well.
+        # Under the lock, so `_check_workers` cannot start a worker after this
+        # snapshot; one sentinel per slot covers a restarted worker as well.
         with self._lock:
             self._closed = True
             threads = list(self._threads)
@@ -296,6 +313,21 @@ class _RangeReaders:
         deadline = time.monotonic() + timeout
         for thread in threads:
             thread.join(timeout=max(0.0, deadline - time.monotonic()))
+
+
+@dataclass(eq=False)
+class _PendingRead:
+    """A layer read one drive is doing: claimed under the lock, submitted outside it."""
+
+    idx: int
+    slot: int
+    region: Any
+    started_at: float
+    #: None while the reader waits on the slot's drain event, before the ranges are queued.
+    outcomes: Optional[List[_RangeJob]] = None
+
+    def done(self) -> bool:
+        return self.outcomes is not None and all(o.done.is_set() for o in self.outcomes)
 
 
 class AsyncDiskSource:
@@ -322,6 +354,7 @@ class AsyncDiskSource:
         read_ahead: int = DEFAULT_STREAM_READ_AHEAD,
         pin: bool = True,
         read_ranges: int = DEFAULT_STREAM_READ_RANGES,
+        layer_roots: Optional[Sequence[int]] = None,
     ):
         from soup_cli.utils.layer_stream_runtime import RamSource
 
@@ -346,6 +379,7 @@ class AsyncDiskSource:
 
         self._layer_specs = RamSource._normalize_layer_specs(spec, n_layers)
         self._paths = RamSource._normalize_shard_paths(shard_dir, n_layers, shard_paths)
+        self._root_of = self._normalize_layer_roots(layer_roots, int(n_layers))
         self.n_layers = int(n_layers)
         self.read_ahead = read_ahead
         self.read_ranges = read_ranges
@@ -515,28 +549,49 @@ class AsyncDiskSource:
             dst.numel() * dst.element_size() for slot in self._slots for dst in slot.values()
         )
 
-        # Direct I/O when the platform and the volume allow it, decided once
-        # and said out loud: the two paths differ 2.4x cold (#974).
-        self.direct_io = False
+        # Direct I/O when the platform and the volume allow it, decided PER DRIVE and said
+        # out loud: the two paths differ 2.4x cold (#974), and one volume that refuses it must
+        # not drag the other drive to the page cache (R4).
+        self._roots = sorted(set(self._root_of)) or [0]
+        first_of_root: Dict[int, int] = {}
+        for idx, root in enumerate(self._root_of):
+            first_of_root.setdefault(root, idx)
         aligned = all(region.data_ptr() % SECTOR_BYTES == 0 for region in self._regions)
         if not aligned:  # pragma: no cover — cudaHostAlloc hands out page-aligned blocks
             logger.warning(
                 "layer streaming's staging is not sector-aligned on this box; the "
                 "disk tier reads through the page cache instead of direct I/O"
             )
-        elif self.n_layers:
+        self._open_of: Dict[int, Any] = {}
+        for root in self._roots:
+            self._open_of[root] = self._open_buffered
+            if not aligned or root not in first_of_root:
+                continue
+            probe_path = self._paths[first_of_root[root]]
             try:
-                open_direct(self._paths[0]).close()
+                open_direct(probe_path).close()
             except OSError as exc:
                 logger.info(
-                    "layer streaming's disk tier reads through the page cache: direct "
-                    "I/O is unavailable here (%s)",
+                    "layer streaming's disk tier reads %s through the page cache: direct "
+                    "I/O is unavailable there (%s)",
+                    probe_path,
                     exc,
                 )
             else:
-                self.direct_io = True
-        self._open = open_direct if self.direct_io else self._open_buffered
-        self._readers = _RangeReaders(self.read_ranges)
+                self._open_of[root] = open_direct
+        self.direct_io = all(opener is not self._open_buffered for opener in self._open_of.values())
+        # One drive keeps the historical worker names (`soup-layer-range-<n>`), which the
+        # #974 and #1056 tests match on; a striped source names each drive's pool apart, so a
+        # stack dump says which drive a worker serves.
+        self._pools: Dict[int, _RangeReaders] = {
+            root: _RangeReaders(
+                self.read_ranges,
+                name="soup-layer-range" if len(self._roots) == 1 else f"soup-layer-range-r{root}",
+            )
+            for root in self._roots
+        }
+        # The one-drive name, kept: the #1056 tests reach a pool's workers through it.
+        self._readers = self._pools[self._roots[0]]
 
         self._lock = threading.Lock()
         self._ready = threading.Condition(self._lock)
@@ -552,6 +607,11 @@ class AsyncDiskSource:
         # Set and cleared in lockstep with `_in_flight`, under the lock, so the
         # two can never disagree about which layer has been in flight how long.
         self._read_started_at: Optional[float] = None
+        # R4: the read each drive is doing, keyed by root. `_in_flight`, `_read_started_at`
+        # and `_in_flight_batch` are DERIVED from it (see _sync_in_flight), always under the
+        # lock, so the liveness check and get() read one consistent picture.
+        self._pending: Dict[int, _PendingRead] = {}
+        self._in_flight_batch: Tuple[int, ...] = ()
         self._next_slot: List[int] = [0] * len(self._group_slots)
         # Per staging slot: handed to the consumer and not released yet, and
         # the event that says when its copy has drained.
@@ -581,6 +641,19 @@ class AsyncDiskSource:
         self._reader_entered = threading.Event()
         self._reader_starts = 0
         self._start_reader()
+
+    @staticmethod
+    def _normalize_layer_roots(layer_roots: Optional[Sequence[int]], n_layers: int) -> List[int]:
+        """Which drive each layer lives on (R4). ``None`` == every layer on one drive."""
+        if layer_roots is None:
+            return [0] * n_layers
+        roots = list(layer_roots)
+        if len(roots) != n_layers:
+            raise ValueError(f"expected {n_layers} layer roots, but got {len(roots)}")
+        for root in roots:
+            if isinstance(root, bool) or not isinstance(root, int) or root < 0:
+                raise ValueError(f"a layer root must be a non-negative int; got {root!r}")
+        return roots
 
     def _start_reader(self) -> None:
         """Start a reader thread. Lock held, or no other thread exists yet."""
@@ -653,24 +726,24 @@ class AsyncDiskSource:
         return open(path, "rb")
 
     # -- the reader ------------------------------------------------------
-    def _read_layer(self, idx: int, region: Any) -> None:
-        """Read layer ``idx``'s data section into ``region`` as parallel ranges.
+    def _range_works(self, idx: int, region: Any) -> List[Any]:
+        """Layer ``idx``'s data section as parallel range reads into ``region``.
 
-        The one seam a profiler should time: one call per layer read, whatever
-        the ranges do inside it. Every worker opens its own handle — the ranges
-        were taken minutes or hours ago off a file this source deliberately
-        does not keep open — and re-checks the file's identity before reading
-        at those offsets (see ShardIdentity): a same-size replacement would
-        otherwise be read at stale offsets and trained on with no error
-        anywhere; only a SHORTER one surfaces, as a short read.
+        Every worker opens its own handle — the ranges were taken minutes or
+        hours ago off a file this source deliberately does not keep open — and
+        re-checks the file's identity before reading at those offsets (see
+        ShardIdentity): a same-size replacement would otherwise be read at stale
+        offsets and trained on with no error anywhere; only a SHORTER one
+        surfaces, as a short read.
         """
         plan = self._plans[idx]
         path = self._paths[idx]
         expected_identity = self._identities[idx]
+        opener = self._open_of[self._root_of[idx]]
 
         def read_range(start: int, end: int):
             def work() -> None:
-                with self._open(path) as handle:
+                with opener(path) as handle:
                     if identity_of(handle) != expected_identity:
                         raise RuntimeError(
                             f"{path}: layer {idx}'s shard changed on disk since its "
@@ -688,7 +761,21 @@ class AsyncDiskSource:
             return work
 
         ranges = plan_ranges(plan.start, plan.end, self.read_ranges)
-        self._readers.run([read_range(start, end) for start, end in ranges])
+        return [read_range(start, end) for start, end in ranges]
+
+    def _read_layer(self, idx: int, region: Any) -> List[_RangeJob]:
+        """Start layer ``idx``'s read on its own drive's pool; return its ranges' outcomes.
+
+        Still the reader's ONE call per layer read, the seam #974's harness brackets. Since
+        R4 it does not block: the ranges go to the drive's range workers, whose completion
+        callback wakes the reader to publish the layer, so another drive can start a read
+        meanwhile. A bracket around this call therefore times the DISPATCH; the read itself
+        runs from ``_PendingRead.started_at`` until ``_finish_reads`` publishes it. A caller
+        that wants the pre-R4 blocking read waits on the result with the pool's ``wait``.
+        """
+        return self._pools[self._root_of[idx]].submit(
+            self._range_works(idx, region), on_done=self._wake
+        )
 
     def _window_span(self, group: int) -> int:
         """How many of ``group``'s layers its staging can hold at once.
@@ -722,7 +809,7 @@ class AsyncDiskSource:
         step = (layer - anchor) * self._direction.get(group, 1)
         return 0 <= step < self._window_span(group)
 
-    def _claim_slot(self, idx: int) -> Optional[int]:
+    def _claim_slot(self, idx: int, exclude: frozenset = frozenset()) -> Optional[int]:
         """Choose a staging slot to refill with layer ``idx``. Lock held.
 
         Only slots in ``idx``'s spec group are eligible — a decoder buffer
@@ -748,6 +835,11 @@ class AsyncDiskSource:
         still wanted, which in steady state coincides with having nothing to
         fetch — the window being fully resident is what makes ``_plan_queue``
         return empty.
+
+        ``exclude`` names slots claimed for reads still in flight (R4). Such a
+        slot is in neither ``_slot_of`` nor ``_live`` until its read is
+        published, so without it a second drive's read would look at the slot
+        and see it free.
         """
         group = self._group_of[idx]
         flat = self._group_slots[group]
@@ -757,6 +849,7 @@ class AsyncDiskSource:
             (offset, flat[(start + offset) % len(flat)])
             for offset in range(len(flat))
             if not self._live[flat[(start + offset) % len(flat)]]
+            and flat[(start + offset) % len(flat)] not in exclude
         ]
         if not takeable:
             return None
@@ -865,75 +958,137 @@ class AsyncDiskSource:
             nxt += direction
         return plan
 
+    def _sync_in_flight(self) -> None:
+        """Derive the in-flight view from ``_pending``. Lock held.
+
+        ``_in_flight`` and ``_read_started_at`` describe the OLDEST pending read, so the wedge
+        check fires on the read that has waited longest, and a one-drive source reads exactly
+        as before: one pending read, its layer, its start.
+        """
+        reads = sorted(self._pending.values(), key=lambda read: read.started_at)
+        self._in_flight = reads[0].idx if reads else None
+        self._read_started_at = reads[0].started_at if reads else None
+        self._in_flight_batch = tuple(read.idx for read in reads)
+
+    def _claim_reads(self) -> List[Tuple["_PendingRead", Any]]:
+        """Claim the next queued layer for every IDLE drive. Lock held.
+
+        Walks the queue in order. A layer whose drive is busy is skipped — a later layer on
+        another drive may start — but a layer whose drive is idle and which has no slot to
+        land in STOPS the walk: nothing behind it starts ahead of it, which is the demand order
+        the one-drive reader always kept, and the caller parks exactly as before. With every
+        layer on one drive this claims at most the head.
+        """
+        started: List[Tuple[_PendingRead, Any]] = []
+        position = 0
+        while position < len(self._queue):
+            idx = self._queue[position]
+            if idx in self._slot_of or idx in self._in_flight_batch:
+                self._queue.pop(position)
+                continue
+            root = self._root_of[idx]
+            if root in self._pending:
+                position += 1
+                continue
+            busy = frozenset(read.slot for read in self._pending.values())
+            slot = self._claim_slot(idx, exclude=busy)
+            if slot is None:
+                break
+            self._queue.pop(position)
+            draining = self._drain[slot]
+            self._drain[slot] = None
+            # Resolved HERE, under the lock that claimed it: `close()` empties
+            # `_regions` after a join that can time out, and the reader must not
+            # index a list the closer has cleared — the IndexError would land in
+            # `_error` and a later `get` would report "list index out of range"
+            # instead of "closed". The tensor stays alive through this reference.
+            read = _PendingRead(
+                idx=idx, slot=slot, region=self._regions[slot], started_at=time.monotonic()
+            )
+            self._pending[root] = read
+            self._sync_in_flight()
+            started.append((read, draining))
+        return started
+
+    def _finish_reads(self) -> None:
+        """Publish every read whose ranges have all landed; re-raise a failed one. Lock held."""
+        finished = [root for root, read in self._pending.items() if read.done()]
+        for root in finished:
+            read = self._pending.pop(root)
+            for outcome in read.outcomes or ():
+                if outcome.error is not None:
+                    raise outcome.error
+            # Not after close(): the closer clears `_slot_of` under this same lock once the
+            # join returns, and re-populating it would resurrect a slot whose buffers are gone.
+            if not self._closed:
+                # Views are per LAYER: where each tensor sits in the region follows this
+                # layer's own header length.
+                self._slots[read.slot] = self._views(self._plans[read.idx], read.region)
+                self._slot_of[read.idx] = read.slot
+        if finished:
+            self._sync_in_flight()
+            self._ready.notify_all()
+
+    def _check_pools(self) -> None:
+        """Restart range workers that died in bootstrap; raise when a drive has none left.
+        Lock held. This is the poll `_RangeReaders.run` did while it blocked; the reader no
+        longer blocks there."""
+        for root, read in self._pending.items():
+            if read.outcomes is not None and not read.done():
+                self._pools[root]._check_workers()
+
+    def _wake(self) -> None:
+        """A range worker's completion callback: the reader may have a read to publish."""
+        with self._ready:
+            self._ready.notify_all()
+
     def _run(self) -> None:
         try:
             while True:
                 with self._ready:
-                    while not self._queue and not self._closed:
-                        self._ready.wait()
-                    if self._closed:
-                        return
-                    idx = self._queue[0]
-                    if idx in self._slot_of:
-                        self._queue.pop(0)
-                        continue
-                    claimed = self._claim_slot(idx)
-                    if claimed is None:
-                        # Every slot in this group is still handed out. Put the
-                        # request back and wait for a release: the alternative
-                        # is overwriting a buffer the consumer is reading, which
-                        # is the whole defect. This park is not a wedge `get`'s
-                        # two liveness checks would catch — (a) a reader thread
-                        # that exited without recording an error, (b) a single
-                        # read in flight past `_MAX_READ_SECONDS` — because
-                        # nothing is in flight here and the thread stays alive.
-                        # By design: it resumes the moment whoever holds the
-                        # slot calls `release()`, which clears `_live` and
-                        # notifies this same condition, so no check fires for
-                        # it. The target stays at the FRONT of the queue: it is
-                        # still the next thing wanted, it just has nowhere to
-                        # land yet.
-                        logger.debug(
-                            "layer-stream reader parked: every staging slot in "
-                            "layer %d's spec group is still on loan",
-                            idx,
-                        )
+                    while True:
+                        if self._closed:
+                            return
+                        self._finish_reads()
+                        started = self._claim_reads()
+                        if started:
+                            break
+                        if self._queue and not self._pending:
+                            # Every slot in this group is still handed out. Put the
+                            # request back and wait for a release: the alternative
+                            # is overwriting a buffer the consumer is reading, which
+                            # is the whole defect. This park is not a wedge `get`'s
+                            # two liveness checks would catch — (a) a reader thread
+                            # that exited without recording an error, (b) a single
+                            # read in flight past `_MAX_READ_SECONDS` — because
+                            # nothing is in flight here and the thread stays alive.
+                            # By design: it resumes the moment whoever holds the
+                            # slot calls `release()`, which clears `_live` and
+                            # notifies this same condition, so no check fires for
+                            # it. The target stays at the FRONT of the queue: it is
+                            # still the next thing wanted, it just has nowhere to
+                            # land yet.
+                            logger.debug(
+                                "layer-stream reader parked: every staging slot in "
+                                "layer %d's spec group is still on loan",
+                                self._queue[0],
+                            )
+                        # Woken by a demand, a release or a finished range; the timeout is the
+                        # worker-liveness poll the blocking `_RangeReaders.run` used to do.
                         self._ready.wait(timeout=1.0)
-                        continue
-                    self._queue.pop(0)
-                    slot_index = claimed
-                    draining = self._drain[slot_index]
-                    self._drain[slot_index] = None
-                    self._in_flight = idx
-                    self._read_started_at = time.monotonic()
-                    # Resolved HERE, under the lock that claimed it: `close()`
-                    # empties `_regions` after a join that can time out, and
-                    # the reader must not index a list the closer has cleared —
-                    # the IndexError lands in `_error` and a later `get`
-                    # reports "list index out of range" instead of "closed".
-                    # The tensor stays alive through this local reference.
-                    region = self._regions[slot_index]
+                        self._check_pools()
                 # OUTSIDE the lock: the compute thread must be able to call
                 # get() while this waits. The event was recorded on a stream
                 # that already waited on the compute stream, so it depends only
                 # on work the GPU has been handed — never on this process
                 # taking another Python step, which is what makes waiting here
                 # safe rather than a deadlock.
-                if draining is not None:
-                    draining.synchronize()
-                self._read_layer(idx, region)
-                with self._ready:
-                    self._in_flight = None
-                    self._read_started_at = None
-                    # Not after close(): the closer clears `_slot_of` under this
-                    # same lock once the join returns, and re-populating it
-                    # would resurrect a slot whose buffers are gone.
-                    if not self._closed:
-                        # Views are per LAYER: where each tensor sits in the
-                        # region follows this layer's own header length.
-                        self._slots[slot_index] = self._views(self._plans[idx], region)
-                        self._slot_of[idx] = slot_index
-                    self._ready.notify_all()
+                for read, draining in started:
+                    if draining is not None:
+                        draining.synchronize()
+                    outcomes = self._read_layer(read.idx, read.region)
+                    with self._ready:
+                        read.outcomes = outcomes
         except BaseException as exc:  # noqa: BLE001 — handed to the consumer
             self._fail(exc)
 
@@ -941,8 +1096,8 @@ class AsyncDiskSource:
         """Record a reader failure and wake everyone waiting on it."""
         with self._ready:
             self._error = exc
-            self._in_flight = None
-            self._read_started_at = None
+            self._pending = {}
+            self._sync_in_flight()
             self._ready.notify_all()
 
     def _note_direction(self, idx: int) -> None:
@@ -1037,7 +1192,7 @@ class AsyncDiskSource:
                 # prevent. Missing rather than hitting changes nothing about
                 # that split — see `_hold`.
                 self._hold(idx)
-                if self._in_flight != idx and (
+                if idx not in self._in_flight_batch and (
                     not self._queue or self._queue[0] != idx
                 ):
                     # Demand goes to the FRONT: a blocked consumer outranks any
@@ -1118,7 +1273,8 @@ class AsyncDiskSource:
         elapsed = time.monotonic() - started
         if elapsed > _MAX_READ_SECONDS:
             raise RuntimeError(
-                f"layer-stream reader has been reading layer {self._in_flight} for "
+                f"layer-stream reader has been reading layer {self._in_flight} (in flight: "
+                f"{list(self._in_flight_batch)}) for "
                 f"{elapsed:.0f} s, past the {_MAX_READ_SECONDS:.0f} s limit (layer "
                 f"{idx} is waiting behind it). The slowest single layer read ever "
                 f"measured on this tier is 0.662 s, so this is a wedged read, not a "
@@ -1178,7 +1334,10 @@ class AsyncDiskSource:
             self._slot_of = {}
             self._live = []
             self._drain = []
-        self._readers.close()
+            self._pending = {}
+            self._in_flight_batch = ()
+        for pool in self._pools.values():
+            pool.close()
 
     def __del__(self) -> None:
         try:

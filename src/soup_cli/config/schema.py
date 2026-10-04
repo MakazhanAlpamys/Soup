@@ -982,11 +982,26 @@ class DataConfig(BaseModel):
         # tokenized_path is meaningful regardless of format (Axolotl `empty`
         # type expects the cache to be the source of truth). But the
         # pre_tokenized format implies the path must be set.
-        if self.format == "pre_tokenized" and not self.tokenized_path:
-            raise ValueError(
-                "format='pre_tokenized' requires data.tokenized_path to point "
-                "at a cache directory produced by `soup data preprocess`."
-            )
+        if self.format == "pre_tokenized":
+            if not self.tokenized_path:
+                raise ValueError(
+                    "format='pre_tokenized' requires data.tokenized_path to point "
+                    "at a cache directory produced by `soup data preprocess`."
+                )
+            conflicts = []
+            if self.add_new_tokens:
+                conflicts.append("data.add_new_tokens")
+            if self.new_special_tokens:
+                conflicts.append("data.new_special_tokens")
+            if self.prompt_strategy:
+                conflicts.append("data.prompt_strategy")
+            if conflicts:
+                raise ValueError(
+                    "format='pre_tokenized' cannot be combined with "
+                    + ", ".join(conflicts)
+                    + "; soup data preprocess never applies it, so the cached ids "
+                    "do not contain it. Remove it, or train from the source format."
+                )
         return self
 
     @field_validator("remove_unused_columns", mode="after")
@@ -4964,6 +4979,16 @@ class SoupConfig(BaseModel):
         return self
 
     @model_validator(mode="after")
+    def _validate_v042_pre_tokenized_modality(self) -> "SoupConfig":
+        if self.data.format == "pre_tokenized" and self.modality != "text":
+            raise ValueError(
+                "data.format='pre_tokenized' cannot be combined with "
+                f"modality={self.modality!r}; soup data preprocessing does not "
+                "apply modality transforms to cached ids"
+            )
+        return self
+
+    @model_validator(mode="after")
     def _validate_quest_first_slice(self) -> "SoupConfig":
         """Keep #674 on the one route supported by the measured prototype."""
         tcfg = self.training
@@ -6222,6 +6247,35 @@ class SoupConfig(BaseModel):
         return self
 
     @model_validator(mode="after")
+    def _validate_kto_batch_compat(self) -> "SoupConfig":
+        """#1420 — a per-device KTO batch of 1 is invalid, streaming or not.
+
+        TRL's ``KTOTrainer`` refuses ``per_device_train_batch_size=1``
+        ("Actual (not effective) batch size must be > 1") because the KL
+        term degenerates. Soup used to catch this at parse time only for
+        ``stream_layers`` runs (see the note kept in
+        ``_validate_stream_layers_compat``), so a resident KTO config loaded,
+        loaded its model, and only then died inside TRL — after minutes of
+        I/O on a real base. The same refusal now applies to every
+        ``task='kto'`` config, resident or streamed, before anything loads.
+        """
+        if self.backend == "mlx":
+            return self  # _validate_mlx_task_support gives the more basic answer
+        tcfg = self.training
+        if (
+            self.task == "kto"
+            and isinstance(tcfg.batch_size, int)
+            and tcfg.batch_size < 2
+        ):
+            raise ValueError(
+                "task='kto' requires training.batch_size >= 2: TRL's KL term is "
+                "degenerate at a per-device batch of 1. Set batch_size to 2 or "
+                "more and raise gradient_accumulation_steps to keep the "
+                "effective batch size."
+            )
+        return self
+
+    @model_validator(mode="after")
     def _validate_stream_layers_compat(self) -> "SoupConfig":
         """v0.72.0 BETA — layer-streaming compatibility gates.
 
@@ -6353,21 +6407,10 @@ class SoupConfig(BaseModel):
         # budget is exhausted (peak moved 0.842 -> 0.846 GB across accum 1->4).
         # v0.72.4 — KTO's KL term is degenerate at a per-device batch of 1, so
         # TRL refuses it outright ("Actual (not effective) batch size must be
-        # > 1"). Under streaming that ValueError arrives only AFTER the RAM
-        # pre-flight, the checkpoint sharding and — at quantization='4bit' —
-        # the NF4 quantisation pass: minutes of disk I/O on a real base, to
-        # fail on a config that was already invalid. Refuse it at parse time.
-        if (
-            self.task == "kto"
-            and isinstance(tcfg.batch_size, int)
-            and tcfg.batch_size < 2
-        ):
-            raise ValueError(
-                "task='kto' requires training.batch_size >= 2 (TRL's KL term is "
-                "degenerate at batch 1). Checked here rather than in the "
-                "trainer so a streaming run fails before sharding the "
-                "checkpoint, not minutes into it."
-            )
+        # > 1"). Refused at parse time for EVERY task='kto'
+        # config — streaming or resident — by ``_validate_kto_batch_compat``
+        # (#1420); a streaming run therefore still fails before sharding the
+        # checkpoint, not minutes into it.
         if tcfg.lora.r < 1:
             raise ValueError(
                 "training.stream_layers requires LoRA (training.lora.r >= 1) — "

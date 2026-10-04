@@ -8,6 +8,8 @@ import typer
 from rich.console import Console
 from rich.panel import Panel
 
+from soup_cli.utils.terminal import for_terminal
+
 console = Console()
 
 
@@ -110,7 +112,7 @@ def chat(
     console.print(
         Panel(
             f"Model:  [bold]{model_path}[/]\n"
-            + (f"Base:   [bold]{base_model}[/]\n" if is_adapter else "")
+            + (f"Base:   [bold]{for_terminal(base_model)}[/]\n" if is_adapter else "")
             + f"Device: [bold]{device}[/]\n"
             f"Type:   [bold]{'LoRA adapter' if is_adapter else 'Full model'}[/]",
             title="Loading model",
@@ -231,7 +233,7 @@ def _load_model(
     if is_adapter:
         from peft import PeftModel
 
-        console.print(f"[dim]Loading base model: {base_model}...[/]")
+        console.print(f"[dim]Loading base model: {for_terminal(base_model)}...[/]")
         base = AutoModelForCausalLM.from_pretrained(
             base_model,
             trust_remote_code=trust_remote_code,

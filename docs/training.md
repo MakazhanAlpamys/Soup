@@ -547,6 +547,21 @@ soup eval unlearning <run-id> --benchmark tofu --evidence evidence.json --output
 
 `task: unlearn` is live (v0.71.9): it loads a LoRA-wrapped policy, a frozen reference copy (NPO / RMU), and the forget / retain JSONL sets, then optimises the per-method loss — NPO's `(2/β)·mean(-logσ(-β·(π_logp − ref_logp)))` drives the policy's forget-set log-prob below the reference (= forgetting), while the retain set anchors capability. Run NPO/SimNPO **with** a `retain_set` — without one the policy has no utility anchor and Soup warns loudly.
 
+Unlearning honors `training.optimizer`, `scheduler`, `warmup_ratio`, `weight_decay`,
+`max_grad_norm`, `batch_size` and `gradient_accumulation_steps`. The default
+`batch_size: auto` resolves to 1 for unlearning rather than to the memory estimate
+the other trainers use, so a config makes the same number of updates on any card. This
+memory-constrained loop processes one example at a time and accumulates gradients
+for `batch_size * gradient_accumulation_steps` examples per optimizer update;
+a final partial group is averaged by its actual size. `initial_loss` and
+`final_loss` remain unscaled per-example losses, and `total_steps` and the 2,000-step
+budget continue to count examples rather than optimizer updates.
+
+`data.max_length` now controls forget and retain tokenization instead of the old
+256-token cap. Its default is 2,048, so existing configurations can use more memory
+and take longer. Set `data.max_length: 256` to retain the old sequence-length limit,
+or explicitly choose a value that fits the model and device.
+
 Three orthogonal axes: **Forget Quality** (pre/post forget-loss delta), **Model Utility** (retain-accuracy preserved), **PrivLeak** (membership-inference AUC distance from 0.5). Bundled mini-fixtures for all three benchmarks ship in the box (v0.71.1 added MUSE + WMDP alongside the existing TOFU set), so `--benchmark muse|wmdp` runs without supplying evidence. The WMDP forget-set probes ship **redacted** (placeholder prompts + `REFUSED` responses) — Soup never bundles verbatim hazardous-knowledge content.
 
 
@@ -1017,6 +1032,11 @@ training:
 ```json
 {"image": "chart.png", "conversations": [{"from": "human", "value": "<image>\nWhat does this show?"}, {"from": "gpt", "value": "Quarterly revenue."}]}
 ```
+
+A relative `image` path resolves against `data.image_dir`, or against the data file's
+directory when it is unset. A Hub dataset or a remote URI has no data file directory, so set
+`data.image_dir` when its rows hold image paths; see
+[Data Pipeline Pro](data.md#data-pipeline-pro).
 
 `soup data inspect` automatically shows image statistics (count, formats, missing files) for vision datasets.
 
@@ -1607,6 +1627,8 @@ training:
   quantization: 4bit
 ```
 
+**Batch size.** KTO needs a per-device `batch_size` of at least 2: TRL's KL term is degenerate at batch 1, so `batch_size: 1` is refused when the config is loaded. `batch_size: auto` never resolves below 2, and `soup local-rl train --train-method kto` writes `batch_size: 2`. Raise `gradient_accumulation_steps` for a larger effective batch.
+
 **KTO data format:**
 ```json
 {"prompt": "What is 2+2?", "completion": "4", "label": true}
@@ -1657,6 +1679,15 @@ training:
     alpha: 16
   quantization: 4bit
 ```
+
+**Rows whose completion trl truncates away are refused.** trl's CPO trainer
+truncates each answer to `data.max_length` minus the **longer** answer's length,
+so a long `chosen` beside a short `rejected` leaves the short side with zero
+trainable tokens — SimPO's length-normalised log-probability is then 0/0, every
+adapter tensor trains to NaN, and transformers' nan-inf filter reports the loss
+as `0.0`. `soup train` stops before the first step, naming how many rows and
+which, with the `data.max_length` involved. Raise `data.max_length`, balance the
+pair, or drop the row.
 
 
 ## IPO Training (Regularized Preference)

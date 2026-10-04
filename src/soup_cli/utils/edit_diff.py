@@ -345,15 +345,18 @@ def _generate_live_changes(
 
 def render_diff_table(report: DiffReport, console) -> None:
     """Render a diff report as a Rich table."""
-    from rich.markup import escape
     from rich.table import Table
+
+    from soup_cli.utils.terminal import for_terminal
 
     if not isinstance(report, DiffReport):
         raise TypeError("report must be DiffReport")
 
+    # Run ids, probe prompts and model outputs are all text from outside
+    # the program: show markup literally, drop control characters.
     title = (
-        f"Edit diff — {escape(report.before_run_id)} -> "
-        f"{escape(report.after_run_id)}"
+        f"Edit diff \u2014 {for_terminal(report.before_run_id)} -> "
+        f"{for_terminal(report.after_run_id)}"
     )
     table = Table(title=title)
     table.add_column("prompt", overflow="fold")
@@ -372,9 +375,9 @@ def render_diff_table(report: DiffReport, console) -> None:
         for c in report.changes:
             mark = "[green]yes[/]" if c.changed else "[dim]no[/]"
             table.add_row(
-                escape(c.prompt),
-                escape(c.before),
-                escape(c.after),
+                for_terminal(c.prompt),
+                for_terminal(c.before),
+                for_terminal(c.after),
                 mark,
             )
     console.print(table)

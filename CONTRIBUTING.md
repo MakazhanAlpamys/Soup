@@ -528,7 +528,9 @@ as well as Ubuntu, Python 3.10 to 3.12 with 3.11 on Ubuntu only, plus the smoke
 jobs) runs when a maintainer adds the `ci:full` label at approval, and on every
 later push while the label stays. Until then the other `test (...)` checks show
 as *Expected* and the smoke jobs as *skipped*; neither is a failure on your side.
-A PR is merged only when the full matrix is green on its current head.
+A PR is merged only when the full matrix is green on its current head. After the
+merge, `main` runs the same quick set on every commit and the full matrix once a
+night (and on every push to a `release/**` branch).
 
 See `.github/workflows/ci.yml`.
 
