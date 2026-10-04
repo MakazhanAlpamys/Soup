@@ -283,9 +283,11 @@ def _build_merge_4bit_bnb_kwargs(
     }
     if forced:
         # ``forced`` => no skip-modules, so every Linear (incl. lm_head) is
-        # 4-bit quantized. BNB 4-bit uses ``bnb_4bit_skip_modules`` (the
-        # legacy 8-bit name was ``llm_int8_skip_modules`` — only emit it
-        # when the installed BNB exposes the 8-bit kwarg as a fallback).
+        # 4-bit quantized. Transformers' BitsAndBytesConfig reads
+        # ``llm_int8_skip_modules`` for linear layer skipping across both
+        # 4-bit and 8-bit quantization. Passing an empty list ensures no
+        # module (including lm_head) is skipped.
+        bnb_kwargs["llm_int8_skip_modules"] = []
         bnb_kwargs["bnb_4bit_skip_modules"] = []
     return bnb_kwargs
 
