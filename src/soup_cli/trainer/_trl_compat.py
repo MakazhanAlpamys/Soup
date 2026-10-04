@@ -235,3 +235,47 @@ def enforce_preference_sequence_limit(
         "TRL prepared a preference dataset with an unknown token layout; "
         f"cannot enforce max_length={max_length}. Columns: {sorted(columns)}"
     )
+
+
+def preference_rows_with_empty_completion(dataset: Any) -> list[int]:
+    """Row indices that would train on zero completion tokens (#1208).
+
+    trl 0.29's CPO truncation (the SimPO path) slices each answer to
+    ``answer[: max_length - longer_response_length]`` — identical in 0.29.0 and
+    0.29.1 — where ``longer_response_length`` is the *longer* of the two
+    answers. A long ``chosen`` against a short ``rejected`` therefore leaves the
+    short answer with zero tokens, and SimPO's length-normalised
+    log-probability becomes 0/0: every LoRA tensor goes NaN while
+    transformers' ``logging_nan_inf_filter`` reports the loss as 0.0.
+
+    ``CPOTrainer`` tokenises and truncates in ``__init__``, so the dataset handed
+    to a trainer has already been cut: the longer side is exactly
+    ``max_length`` trainable tokens and ``max_length - longer`` is 0. Re-applying
+    that arithmetic here flagged every truncated row, including pairs that train
+    fine (#1208 review, measured: a 64/14 pair refused). The truncation is
+    therefore not re-computed; the question is simply whether one side has no
+    trainable label left, which is what a zero-token completion looks like after
+    the fact.
+
+    Returns the affected row indices; the caller decides between refusing and
+    repairing. An unrecognised layout returns ``[]`` rather than a guess.
+    """
+    columns = set(getattr(dataset, "column_names", ()))
+    if not {"chosen_labels", "rejected_labels"} <= columns:
+        # SimPO only builds a CPOTrainer, whose prepared rows carry these
+        # columns. The DPO ``chosen_ids`` / ``rejected_ids`` shape is that
+        # trainer's collator input, never what a PPO-path dataset looks like.
+        return []
+
+    def completion_len(labels: list[int]) -> int:
+        """Trainable tokens: everything that is not the ``-100`` prompt span."""
+        return sum(1 for label in labels if label != -100)
+
+    return [
+        index
+        for index, row in enumerate(dataset)
+        if min(
+            completion_len(list(row["chosen_labels"])),
+            completion_len(list(row["rejected_labels"])),
+        ) == 0
+    ]

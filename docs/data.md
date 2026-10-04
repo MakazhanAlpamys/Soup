@@ -743,6 +743,28 @@ is forwarded to `datasets.load_dataset(..., streaming=True)` and `buffer_size` s
 that stream, then Soup materialises up to 1M rows — the same shape as remote (#689).
 An all-hub *list* with `streaming: true` is still refused (#459). `buffer_size` shuffles the train split only; a capped validation split takes the first N rows unshuffled.
 
+**Image and audio paths** in `llava` / `sharegpt4v` / `audio` / `asr` rows resolve the same
+way on every load path: a local file, a local or streaming interleave, a remote URI, a Hub
+dataset (both splits) and the `data.replay` file. A relative path resolves against
+`data.image_dir` / `data.audio_dir` when it is set, otherwise against the directory of the
+local file the row came from, and a row whose file lies outside that directory is skipped
+with a warning. A remote URI or a Hub dataset has no such directory, so when its rows hold
+file paths the setting is required: once the rows are read, the load stops with a message
+naming it. `data.image_dir: .` resolves them under the working directory. An image that a
+Hub dataset has already decoded carries no path and is passed on as it is.
+
+A value that names a network share, a device or an extended-length path (`\\host\share\...`,
+`//host/share/...`, `\\?\...`, `\\.\...`, `\??\...`), or that holds a NUL byte, is skipped
+without being looked up, and `soup data inspect` does not look it up either. That includes
+a value beginning with two slashes on Linux and macOS, where `//srv/x.png` would otherwise
+read as `/srv/x.png`, and, on Windows, a DOS device name such as `nul` or `com1`. Write such
+rows relative to the media directory instead, even when the directory itself is on a share.
+
+Before reading a file, the SFT vision and audio paths and the ASR / TTS audio loader check
+that it is a regular file. A directory, FIFO or device gets the SFT path's "cannot open"
+warning, and stops the ASR / TTS loader with an error, as a symlink does. The check is made
+before the file is opened, so a file replaced in between is not caught.
+
 **Multi-dataset interleave** (v0.42.0 schema, wired into training-time loading in #443;
 extended to streaming and HF-hub dataset names in #459):
 
@@ -894,7 +916,6 @@ reports them as ignored.
 
 
 **AOT preprocessing:**
-
 ```bash
 # Tokenize once, reuse the cache across runs.
 soup data preprocess soup.yaml --output ./.soup-tokenized
@@ -904,6 +925,12 @@ soup data preprocess soup.yaml --output ./.soup-tokenized
 #     format: pre_tokenized
 #     tokenized_path: ./.soup-tokenized/<16-char-cache-key>
 ```
+
+Pre-tokenized caches contain the ids produced by soup data preprocessing.
+Because preprocessing does not apply a non-text modality (`vision`, `audio`,
+or `audio_out`), `data.add_new_tokens`, `data.new_special_tokens`, or
+`data.prompt_strategy`, those combinations are refused at config load instead
+of being silently skipped.
 
 **Document ingestion (PDF / DOCX / MD / TXT → JSONL):**
 
