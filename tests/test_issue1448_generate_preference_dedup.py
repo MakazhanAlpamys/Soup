@@ -72,7 +72,7 @@ def test_preference_dedup_with_drops_repeated_rows(tmp_path, monkeypatch):
         ])
 
     assert result.exit_code == 0, result.output
-    assert "2 removed" in strip_ansi(result.output) or "Duplicates" in strip_ansi(result.output)
+    assert "Duplicates: 2 removed" in " ".join(strip_ansi(result.output).split())
 
     out_file = tmp_path / "out.jsonl"
     assert out_file.exists()
@@ -113,3 +113,30 @@ def test_preference_within_run_dedup(tmp_path, monkeypatch):
     assert len(lines) == 2
     assert lines[0] == {"prompt": "P1", "chosen": "C1", "rejected": "R1"}
     assert lines[1] == {"prompt": "P2", "completion": "Comp2", "label": False}
+
+
+def test_preference_dedup_keeps_rows_that_differ_beyond_the_prompt(tmp_path, monkeypatch):
+    """Only exact repeats are dropped: a row that shares the prompt but differs in
+    chosen, rejected, completion or label is a different example and is kept."""
+    monkeypatch.chdir(tmp_path)
+    batch = [
+        {"prompt": "P", "chosen": "C1", "rejected": "R1"},
+        {"prompt": "P", "chosen": "C2", "rejected": "R1"},
+        {"prompt": "P", "chosen": "C1", "rejected": "R2"},
+        {"prompt": "P", "completion": "A", "label": True},
+        {"prompt": "P", "completion": "B", "label": True},
+        {"prompt": "P", "completion": "A", "label": False},
+        {"prompt": "P", "chosen": "C1", "rejected": "R1"},  # the only exact repeat
+    ]
+    with patch("soup_cli.commands.generate._generate_batch", return_value=batch):
+        result = CliRunner().invoke(app, [
+            "data", "generate", "--prompt", "x", "--template", "preference",
+            "--output", "out.jsonl", "--count", "7", "--batch-size", "7",
+            "--provider", "server",
+        ])
+    assert result.exit_code == 0, (result.output, repr(result.exception))
+    rows = [json.loads(line) for line in
+            (tmp_path / "out.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert rows == batch[:6]
+    assert "Duplicates: 1 removed" in " ".join(strip_ansi(result.output).split())
+
