@@ -58,6 +58,16 @@ class TestTheTable:
         assert evaluating == {"grpo"}
         assert evaluating <= set(VALIDATION_METRICS)
 
+    def test_every_recorded_validation_field_is_a_reserved_training_metric(self):
+        """#812 keeps `soup eval against --metric benchmark:<name>` off the metrics
+        table's training columns; a new validation field is one of those columns, or
+        `benchmark:val_reward` would compare two runs' training-time rewards as
+        benchmark scores (review of #1592)."""
+        from soup_cli.utils.eval_gate_hook import _RESERVED_TRAINING_METRICS
+
+        for spec in (DEFAULT_VALIDATION_METRIC, *VALIDATION_METRICS.values()):
+            assert spec.field in _RESERVED_TRAINING_METRICS, spec
+
     def test_every_field_in_the_table_has_a_sink_everywhere(self, tmp_path):
         """The field name is spelled in four places; the table must name a field
         that every sink knows, or the value is written to nothing."""
@@ -192,6 +202,14 @@ class TestThePanel:
         text = display._render().renderable
         assert "Val loss: 1.2500" in text
         assert "Val reward" not in text
+
+    def test_the_reward_row_stays_between_evaluations(self):
+        """The panel's own stickiness, not the callback's carry-forward (the one
+        mutation that survived the first round)."""
+        display = TrainingDisplay(_display_config())
+        display.update(step=1, epoch=0.5, loss=0.4, lr=1e-5, val_reward=15.25)
+        display.update(step=2, epoch=0.6, loss=0.3, lr=1e-5)
+        assert "Val reward: 15.2500" in display._render().renderable
 
     def test_nothing_is_shown_before_an_evaluation(self):
         display = TrainingDisplay(_display_config())
