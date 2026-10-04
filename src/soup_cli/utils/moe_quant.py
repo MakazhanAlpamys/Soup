@@ -165,7 +165,15 @@ def _is_router_param(name: str) -> bool:
 
 
 def _find_expert_linears(model: object) -> list[tuple[str, object]]:
-    """Return ``(name, module)`` pairs for every fused-MoE expert ``nn.Linear``.
+    """Return ``(name, module)`` pairs for every MoE expert block.
+
+    Two layouts (#1421): one ``nn.Linear`` per expert under ``...experts.N.<proj>``
+    (the transformers-4 layout, what the quant path can wrap), and the
+    transformers-5 fused block, one module under ``...experts`` whose own
+    parameters are 3-D tensors (``gate_up_proj`` / ``down_proj``). The fused
+    block is returned as itself, not as a Linear, so the caller can tell the
+    two apart with ``isinstance(module, nn.Linear)``; before #1421 it was
+    invisible here and ``moe_expert_quant`` reported success on nothing.
 
     Pure ``nn.Module`` walk — no bitsandbytes / CUDA. Already-quantized
     bitsandbytes Linears (subclasses of ``nn.Linear``) are skipped so an
@@ -178,13 +186,18 @@ def _find_expert_linears(model: object) -> list[tuple[str, object]]:
 
     found: list[tuple[str, object]] = []
     for name, module in model.named_modules():
-        if _EXPERT_NAME_MARKER not in name or not isinstance(module, nn.Linear):
-            continue
-        if type(module).__name__ in _BNB_LINEAR_CLASS_NAMES:
-            continue
-        if getattr(module, "base_layer", None) is not None:
-            continue
-        found.append((name, module))
+        if isinstance(module, nn.Linear):
+            if _EXPERT_NAME_MARKER not in name:
+                continue
+            if type(module).__name__ in _BNB_LINEAR_CLASS_NAMES:
+                continue
+            if getattr(module, "base_layer", None) is not None:
+                continue
+            found.append((name, module))
+        elif "experts" in name.rsplit(".", 1)[-1].lower() and any(
+            getattr(p, "ndim", 0) == 3 for _, p in module.named_parameters(recurse=False)
+        ):
+            found.append((name, module))
     return found
 
 
@@ -246,10 +259,15 @@ def apply_moe_expert_quant(model: object, quant_format: str) -> int:
     ``RuntimeError`` fires (the real per-expert quant validation stays
     hardware-gated). Returns the number of expert Linears quantized.
     """
+    import torch.nn as nn
+
     canonical = validate_moe_expert_quant(quant_format)
-    expert_linears = _find_expert_linears(model)
-    if not expert_linears:
+    found = _find_expert_linears(model)
+    if any(not isinstance(module, nn.Linear) for _, module in found):
+        # A fused block was found (#1421): nothing here is a Linear to wrap.
         _refuse_fused_experts(model, canonical)
+    expert_linears = [(name, module) for name, module in found if isinstance(module, nn.Linear)]
+    if not expert_linears:
         return 0
 
     try:

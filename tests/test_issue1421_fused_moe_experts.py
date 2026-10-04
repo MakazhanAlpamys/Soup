@@ -302,6 +302,18 @@ class TestTheDropoutRefusalFollowsTheTargets:
 
 
 class TestMoeExpertQuantRefusesFusedExperts:
+    def test_the_expert_scan_finds_the_fused_block(self):
+        """The issue's third criterion: ``_find_expert_linears`` is not empty on a
+        transformers-5 fused model. The block comes back as itself, not as a
+        Linear, which is what the quant path keys its refusal on."""
+        from soup_cli.utils.moe_quant import _find_expert_linears
+
+        found = _find_expert_linears(_model("mixtral"))
+        assert [name for name, _ in found] == [
+            "model.layers.0.mlp.experts", "model.layers.1.mlp.experts"
+        ]
+        assert not any(isinstance(module, torch.nn.Linear) for _, module in found)
+
     def test_a_fused_model_is_refused_by_name_before_any_cuda_check(self):
         with pytest.raises(ValueError) as excinfo:
             apply_moe_expert_quant(_model("mixtral"), "nf4")
