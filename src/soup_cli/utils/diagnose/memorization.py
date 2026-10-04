@@ -8,6 +8,7 @@ Score = 1 - mean(echo_rate) so 1.0 = healthy / no echo.
 
 from __future__ import annotations
 
+import unicodedata
 from collections import Counter
 from typing import Mapping, Optional, Sequence
 
@@ -100,52 +101,81 @@ def score_memorization(
     def _overlap_tokens(value: str) -> list:
         if tok is not None:
             sub = subword_tokens(tok, value)
-            if len(sub) >= 2:
-                return list(zip(sub[:-1], sub[1:]))
-            return sub
-        words = tokenize(value)
-        return list(zip(words[:-1], words[1:])) if len(words) >= 2 else words
+        else:
+            sub = tokenize(value)
+
+        has_word = any(unicodedata.category(ch)[0] in "LMN" for ch in value)
+
+        if not sub and not has_word:
+            sub = [
+                ch
+                for ch in value
+                if unicodedata.category(ch)[0] == "S"
+            ]
+
+        if len(sub) >= 2:
+            return list(zip(sub[:-1], sub[1:]))
+
+        return sub
 
     echoes = []
     scanned = 0
+    skipped_no_tokens = 0
+
     for row in training_rows:
         text = extract_row_text(row)
         if not text:
             continue
+
         # Reuse the once-resolved tokenizer (no per-row re-resolution).
+
         prefix, suffix = _split_with_resolved(text, prefix_fraction, tok)
         if not suffix:
             continue
+
+        tok_suff = _overlap_tokens(suffix)
+        if not tok_suff:
+            skipped_no_tokens += 1
+            continue
+
         scanned += 1
+        # A live completion is capped, while the held-out suffix is not.
         completion = call_generator(adapter_gen, prefix)
         tok_comp = _overlap_tokens(completion)
-        tok_suff = _overlap_tokens(suffix)
-        if not tok_comp or not tok_suff:
+
+        if not tok_comp:
             overlap = 0.0
         else:
-            # A live completion is capped, while the held-out suffix is not.
-            # Completion precision detects reproduced suffix spans without
-            # diluting the score as the untouched suffix grows.
             completion_counts = Counter(tok_comp)
             suffix_counts = Counter(tok_suff)
             matched = sum((completion_counts & suffix_counts).values())
             overlap = matched / len(tok_comp)
+
         echoes.append(1.0 if overlap >= echo_threshold else 0.0)
         if scanned >= 1000:
             break
+
     if not echoes:
         return FailureScore(
             mode="memorization",
             score=1.0,
             verdict="OK",
-            evidence="no rows with text+suffix; nothing to check",
+            evidence=merge_evidence(
+                {
+                    "scanned": scanned,
+                    "skipped_no_tokens": skipped_no_tokens,
+                    "status": "no rows with text+suffix; nothing to check",
+                }
+            ),
         )
+
     echo_rate = sum(echoes) / len(echoes)
     score = max(0.0, min(1.0, 1.0 - echo_rate))
     verdict = classify_score(score)
     evidence = merge_evidence(
         {
             "scanned": scanned,
+            "skipped_no_tokens": skipped_no_tokens,
             "echo_rate": echo_rate,
             "threshold": echo_threshold,
             "prefix_fraction": prefix_fraction,
